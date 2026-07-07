@@ -112,9 +112,16 @@ export default function CityScanner() {
     activeJob: { id: string; city: string; total: number; done: number; pct: number; newFiber: number } | null;
   }>({
     queryKey: ["/api/scanner/state"],
-    queryFn: () => apiRequest("GET", "/api/scanner/state"),
+    queryFn: async () => (await apiRequest("GET", "/api/scanner/state")).json(),
     refetchInterval: scanning ? 3000 : false,
     enabled: scanning,
+  });
+
+  // Persistent address-pool stats (harvest-once, re-scan-for-free engine)
+  const { data: poolStats } = useQuery<{ total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null }>({
+    queryKey: ["/api/scan/pool-stats"],
+    queryFn: async () => (await apiRequest("GET", "/api/scan/pool-stats")).json(),
+    refetchInterval: 8000,
   });
 
   const stopAll = useCallback(() => {
@@ -137,7 +144,7 @@ export default function CityScanner() {
         // SSE unavailable — fall back to polling
         pollRef.current = setInterval(async () => {
           try {
-            const status: ScanJobStatus = await apiRequest("GET", `/api/scan/${id}`);
+            const status: ScanJobStatus = await (await apiRequest("GET", `/api/scan/${id}`)).json();
             setJobStatus(status);
             if (status.status === "done") {
               clearInterval(pollRef.current!); pollRef.current = null;
@@ -180,7 +187,7 @@ export default function CityScanner() {
                 qc.invalidateQueries({ queryKey: ["/api/leads"] });
                 qc.invalidateQueries({ queryKey: ["/api/stats"] });
                 try {
-                  const finalStatus: ScanJobStatus = await apiRequest("GET", `/api/scan/${id}`);
+                  const finalStatus: ScanJobStatus = await (await apiRequest("GET", `/api/scan/${id}`)).json();
                   setJobStatus(finalStatus);
                   toast({
                     title: "Scan complete",
@@ -204,10 +211,10 @@ export default function CityScanner() {
     setPullingAddresses(true);
     setOverpassResult(null);
     try {
-      const result: OverpassResult = await apiRequest(
+      const result: OverpassResult = await (await apiRequest(
         "GET",
         `/api/scan/city-addresses?city=${encodeURIComponent(cityInput.trim())}&state=${encodeURIComponent(stateInput.trim())}`
-      );
+      )).json();
       setOverpassResult(result);
       toast({
         title: `${result.count.toLocaleString()} addresses found`,
@@ -233,7 +240,7 @@ export default function CityScanner() {
       const body: any = { city: cityInput.trim(), state: stateInput.trim() };
       if (overpassResult?.addresses) body.addresses = overpassResult.addresses;
 
-      const { jobId: newJobId, total, city: cityLabel } = await apiRequest("POST", "/api/scan/start-city", body);
+      const { jobId: newJobId, total, city: cityLabel } = await (await apiRequest("POST", "/api/scan/start-city", body)).json();
       setJobId(newJobId);
       setJobStatus({
         id: newJobId, city: cityLabel, zip: "",
@@ -255,6 +262,31 @@ export default function CityScanner() {
     }
     setScanning(false);
   }, [stopAll, jobId]);
+
+  // Re-scan the stored address pool for newly-lit fiber — zero geocoding cost.
+  const rescanPool = useCallback(async () => {
+    stopAll();
+    setScanning(true); setDone(false); setJobStatus(null); setJobId(null);
+    try {
+      const data = await (await apiRequest("POST", "/api/scan/rescan-pool", {})).json();
+      if (!data.jobId) {
+        setScanning(false);
+        toast({ title: data.message || "Nothing to re-scan yet", description: "Run a city scan first to build the address pool." });
+        return;
+      }
+      setJobId(data.jobId);
+      setJobStatus({
+        id: data.jobId, city: "Address pool re-scan", zip: "",
+        status: "running", total: data.total, done: 0, results: [],
+        summary: { new_fiber: 0, tenured_fiber: 0, existing_fiber: 0, copper: 0, no_service: 0, unknown: 0, scanned: 0, remaining: data.total },
+      });
+      toast({ title: "Pool re-scan started", description: `Re-checking ${Number(data.total).toLocaleString()} stored addresses — free, no geocoding` });
+      connectSseStream(data.jobId);
+    } catch (e: any) {
+      setScanning(false);
+      toast({ title: "Failed to start pool re-scan", description: e.message, variant: "destructive" });
+    }
+  }, [stopAll, connectSseStream, toast]);
 
   const results = jobStatus?.results ?? [];
   const summary = jobStatus?.summary;
@@ -388,6 +420,11 @@ export default function CityScanner() {
                 ? <p className="text-sm text-foreground">{overpassResult.count.toLocaleString()} addresses in <span className="font-semibold">{cityInput}, {stateInput}</span></p>
                 : <p className="text-sm text-muted-foreground">Pull addresses first, or scan will use built-in Rockwell list</p>
               }
+              {poolStats && poolStats.total > 0 && (
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Address pool: <span className="font-semibold text-foreground">{poolStats.total.toLocaleString()}</span> stored · <span className="text-teal-400">{poolStats.newFiber.toLocaleString()}</span> new fiber found
+                </p>
+              )}
               {scanning && checkedCount > 0 && (
                 <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate max-w-[280px]">→ {currentAddr}</p>
               )}
@@ -409,6 +446,17 @@ export default function CityScanner() {
                   className="gap-2"
                 >
                   <Square className="w-4 h-4" /> Stop
+                </Button>
+              )}
+              {!scanning && poolStats && poolStats.total > 0 && (
+                <Button
+                  data-testid="button-rescan-pool"
+                  onClick={rescanPool}
+                  variant="outline"
+                  className="gap-2"
+                  title={`Re-scan ${poolStats.total.toLocaleString()} stored addresses for new fiber — no geocoding cost`}
+                >
+                  <RefreshCw className="w-4 h-4" /> Re-scan Pool
                 </Button>
               )}
               {done && results.length > 0 && (

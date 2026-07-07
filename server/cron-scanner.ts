@@ -15,7 +15,7 @@
 
 import nodemailer from "nodemailer";
 import { storage } from "./storage";
-import { getAuthToken } from "./scanner";
+import { getAuthToken, scanAddress } from "./scanner";
 import { proxyFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 
@@ -415,6 +415,64 @@ function msUntilNext2AM(): number {
 
 let cronScheduled = false;
 
+// ── Nightly pool re-scan ──────────────────────────────────────────────────────
+// Re-scans the persistent address pool for newly-lit fiber. Zero geocoding
+// (addresses are already stored), dedups against existing leads, and records the
+// result on each target. This is the cheap, repeatable "detect new fiber over
+// time" engine — the FiberFocus model.
+async function runNightlyPoolRescan(): Promise<void> {
+  const targets = storage.getScanTargetsToRescan(100000);
+  if (!targets.length) { console.log("[cron] Address pool empty — skipping pool re-scan"); return; }
+  console.log(`[cron] Pool re-scan starting: ${targets.length} stored addresses`);
+
+  const norm = (a: string) => (a || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const existing = new Set(storage.getLeads().map((l: any) => norm(l.address)));
+  const newFiberAddrs: string[] = [];
+  const BATCH = 25;
+
+  for (let i = 0; i < targets.length; i += BATCH) {
+    const batch = targets.slice(i, i + BATCH);
+    await Promise.all(batch.map(async (t: any) => {
+      try {
+        const r = await scanAddress(t.address, t.city, t.state, t.zip);
+        const isHot = r.isNewFiber && r.billingStatus === "N" && r.fiberAvailable;
+        const key = norm(t.address);
+        let leadId: number | null = null;
+        if (isHot && !existing.has(key)) {
+          try {
+            const lead = storage.createLead({
+              address: r.address, city: r.city, state: r.state, zip: r.zip,
+              lat: r.lat ?? t.lat ?? undefined, lng: r.lng ?? t.lng ?? undefined,
+              fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
+              billingStatus: r.billingStatus, householdSegmentType: r.householdSegmentType,
+              techType: r.techType, speedTier: r.speedTier, maxDownloadMbps: r.maxDownloadMbps,
+              competitorName: r.competitorName, dfAddressId: r.dfAddressId,
+              leadStatus: "prospect", deploymentNotes: "Nightly pool re-scan — newly-lit fiber.",
+            });
+            leadId = lead.id;
+          } catch { /* duplicate — skip */ }
+          existing.add(key);
+          newFiberAddrs.push(t.address);
+          cronStatus.totalNewFiberFound++;
+        }
+        storage.recordScanTargetResult(t.id, {
+          fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
+          dfAddressId: r.dfAddressId, convertedToLeadId: leadId,
+        });
+      } catch { /* token expiry / timeout — skip this address, keep going */ }
+    }));
+    await new Promise(res => setTimeout(res, 60));
+  }
+
+  console.log(`[cron] Pool re-scan done: ${newFiberAddrs.length} new fiber lead(s) from ${targets.length} addresses`);
+  if (newFiberAddrs.length > 0) {
+    await sendAlertEmail(
+      `🔥 ${newFiberAddrs.length} NEW FIBER lead(s) — HomeFront pool re-scan`,
+      newFiberAlertHtml(newFiberAddrs.length, newFiberAddrs),
+    ).catch(err => console.warn("[cron] Pool re-scan email failed:", err.message));
+  }
+}
+
 export function startNightlyCron() {
   if (cronScheduled) return;
   cronScheduled = true;
@@ -429,6 +487,7 @@ export function startNightlyCron() {
       try {
         await runNightlyCnsScan();
         await runComingSoonCheck();
+        await runNightlyPoolRescan();   // re-scan the stored address pool for new fiber
       } catch (err: any) {
         console.error("[cron] Nightly run failed:", err.message);
       }
@@ -444,4 +503,5 @@ export async function triggerManualScan(): Promise<void> {
   if (cronStatus.isRunning) throw new Error("Cron scan already running");
   runNightlyCnsScan().catch(err => console.error("[cron] Manual scan failed:", err.message));
   runComingSoonCheck().catch(() => {});
+  runNightlyPoolRescan().catch(err => console.error("[cron] Pool re-scan failed:", err.message));
 }
