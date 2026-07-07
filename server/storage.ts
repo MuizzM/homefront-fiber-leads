@@ -96,6 +96,11 @@ export interface IStorage {
   deleteComingSoon(id: number): boolean;
   markComingSoonAvailable(id: number, leadId: number): ComingSoonAddress | undefined;
   markComingSoonChecked(id: number): ComingSoonAddress | undefined;
+  // ── Scan targets (persistent address pool) ───────────────────────────────────
+  upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null }>): number;
+  getScanTargetsToRescan(limit: number): any[];
+  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null }): { prevIsNewFiber: boolean };
+  getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(repId?: number): Commission[];
   getCommissionById(id: number): Commission | undefined;
@@ -154,6 +159,9 @@ export function runMigrations() {
     `ALTER TABLE clock_sessions ADD COLUMN tenant_id INTEGER`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
+    // Persistent address pool — harvest once, re-scan for fiber-status changes
+    `CREATE TABLE IF NOT EXISTS scan_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, city TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'NC', zip TEXT NOT NULL, lat REAL, lng REAL, tenant_id INTEGER, source TEXT, last_fiber_status TEXT, last_is_new_fiber INTEGER NOT NULL DEFAULT 0, last_billing_status TEXT, df_address_id TEXT, scan_count INTEGER NOT NULL DEFAULT 0, last_scanned_at TEXT, converted_to_lead_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -570,6 +578,58 @@ export class Storage implements IStorage {
     return db.update(comingSoonAddresses)
       .set({ lastChecked: new Date().toISOString() })
       .where(eq(comingSoonAddresses.id, id)).returning().get();
+  }
+
+  // ── Scan targets (persistent address pool) ───────────────────────────────────
+  // Insert harvested addresses once; duplicates are ignored (address is UNIQUE),
+  // so the pool grows without re-geocoding. Returns how many NEW rows were added.
+  upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null }>): number {
+    if (!addrs.length) return 0;
+    const stmt = rawDb.prepare(
+      `INSERT OR IGNORE INTO scan_targets (address, city, state, zip, lat, lng, source, tenant_id, created_at)
+       VALUES (@address, @city, @state, @zip, @lat, @lng, @source, @tenantId, datetime('now'))`
+    );
+    const tx = rawDb.transaction((rows: typeof addrs) => {
+      let n = 0;
+      for (const r of rows) {
+        if (!r.address) continue;
+        n += stmt.run({
+          address: r.address, city: r.city ?? "", state: r.state ?? "NC", zip: r.zip ?? "",
+          lat: r.lat ?? null, lng: r.lng ?? null, source: r.source ?? null, tenantId: r.tenantId ?? null,
+        }).changes;
+      }
+      return n;
+    });
+    return tx(addrs);
+  }
+  // Oldest-scanned (and never-scanned) targets first — the re-scan queue.
+  getScanTargetsToRescan(limit: number): any[] {
+    return rawDb.prepare(
+      `SELECT * FROM scan_targets ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC LIMIT ?`
+    ).all(limit);
+  }
+  // Record a fresh scan result. Returns the PREVIOUS is_new_fiber so the caller
+  // can detect a change (was not new fiber → now new fiber = new hot lead).
+  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null }): { prevIsNewFiber: boolean } {
+    const prev = rawDb.prepare("SELECT last_is_new_fiber FROM scan_targets WHERE id = ?").get(id) as any;
+    rawDb.prepare(
+      `UPDATE scan_targets SET last_fiber_status=@fs, last_is_new_fiber=@nf, last_billing_status=@bs,
+         df_address_id=COALESCE(@df, df_address_id),
+         converted_to_lead_id=COALESCE(@lead, converted_to_lead_id),
+         last_scanned_at=datetime('now'), scan_count=scan_count+1 WHERE id=@id`
+    ).run({
+      id, fs: r.fiberStatus ?? null, nf: r.isNewFiber ? 1 : 0, bs: r.billingStatus ?? null,
+      df: r.dfAddressId ?? null, lead: r.convertedToLeadId ?? null,
+    });
+    return { prevIsNewFiber: !!(prev && prev.last_is_new_fiber) };
+  }
+  getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null } {
+    const g = (q: string) => (rawDb.prepare(q).get() as any);
+    const total = g("SELECT COUNT(*) c FROM scan_targets").c;
+    const scanned = g("SELECT COUNT(*) c FROM scan_targets WHERE last_scanned_at IS NOT NULL").c;
+    const newFiber = g("SELECT COUNT(*) c FROM scan_targets WHERE last_is_new_fiber = 1").c;
+    const lastScannedAt = g("SELECT MAX(last_scanned_at) m FROM scan_targets").m ?? null;
+    return { total, scanned, neverScanned: total - scanned, newFiber, lastScannedAt };
   }
 
   // ── Commissions ────────────────────────────────────────────────────────────

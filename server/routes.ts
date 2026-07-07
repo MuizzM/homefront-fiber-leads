@@ -1052,6 +1052,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
     if (addresses.length === 0) return res.status(400).json({ error: "No addresses found for this city" });
 
+    // Persist the FULL harvested set to the address pool (geocoded once → free to
+    // re-scan later). Duplicates are ignored, so the pool only ever grows.
+    try {
+      const src = (providedAddresses?.length) ? "manual" : preferMapbox ? "mapbox" : isRockwell ? "gis" : "overpass";
+      storage.upsertScanTargets(addresses.map((a: any) => ({
+        address: a.address, city: a.city ?? city, state: a.state ?? st,
+        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: src,
+      })));
+    } catch {}
+
     // Dedup against existing leads (normalize suffixes for Court/Ct, Drive/Dr, etc.)
     const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
     const newAddrs = addresses.filter((a: any) => !existingSet.has(normalizeAddrForDedup(a.address || "")));
@@ -1065,6 +1075,40 @@ export function registerRoutes(httpServer: Server, app: Express) {
     scanJobs.set(jobId, job);
     runCityScan(jobId, newAddrs).catch(() => {});
     res.json({ jobId, total: newAddrs.length, city: `${city}, ${st}` });
+  });
+
+  // GET /api/scan/pool-stats — size of the persistent address pool
+  app.get("/api/scan/pool-stats", requireManager, (_req, res) => {
+    res.json(storage.getScanTargetStats());
+  });
+
+  // POST /api/scan/rescan-pool — re-scan the stored address pool for CHANGES.
+  // Uses zero geocoding (addresses are already stored), dedups against existing
+  // leads, and surfaces newly-lit fiber as fresh leads. This is the cheap,
+  // repeatable "detect new fiber" engine (FiberFocus model).
+  app.post("/api/scan/rescan-pool", requireManager, scanLimiter, (req, res) => {
+    const limit = Math.min(Number(req.body?.limit) || 50000, 100000);
+    const targets = storage.getScanTargetsToRescan(limit);
+    if (!targets.length) {
+      return res.status(400).json({ error: "Address pool is empty. Run a city scan first to build it." });
+    }
+    // Only re-check addresses that aren't already leads → surfaces new fiber only.
+    const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
+    const toScan = targets
+      .filter((t: any) => !existingSet.has(normalizeAddrForDedup(t.address || "")))
+      .map((t: any) => ({ address: t.address, city: t.city, state: t.state, zip: t.zip, lat: t.lat, lng: t.lng }));
+    if (!toScan.length) {
+      return res.json({ jobId: null, total: 0, source: "pool", message: "Every pooled address is already a lead — nothing new to check." });
+    }
+    const jobId = `rescan_${Date.now()}`;
+    const job: ScanJob = {
+      id: jobId, city: "Address pool re-scan", zip: "",
+      status: "running", total: toScan.length, done: 0, results: [],
+      startedAt: new Date().toISOString(),
+    };
+    scanJobs.set(jobId, job);
+    runCityScan(jobId, toScan).catch(() => {});
+    res.json({ jobId, total: toScan.length, source: "pool" });
   });
 
   // SSE: real-time scan stream — registered BEFORE :jobId wildcard

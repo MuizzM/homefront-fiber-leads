@@ -300,6 +300,35 @@ export const insertComingSoonSchema = createInsertSchema(comingSoonAddresses).om
 export type InsertComingSoon = z.infer<typeof insertComingSoonSchema>;
 export type ComingSoonAddress = typeof comingSoonAddresses.$inferSelect;
 
+// ── Scan targets — persistent address pool (FiberFocus model) ──────────────────
+// Every address ever harvested is stored here ONCE (geocoded once), then
+// re-scanned over time. Re-scans read from this pool instead of re-harvesting,
+// so geocoding is a one-time cost, and comparing lastIsNewFiber against a fresh
+// scan detects CHANGES (a home that just got fiber) → new hot lead.
+export const scanTargets = sqliteTable("scan_targets", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  address: text("address").notNull().unique(),
+  city: text("city").notNull(),
+  state: text("state").notNull().default("NC"),
+  zip: text("zip").notNull(),
+  lat: real("lat"),
+  lng: real("lng"),
+  tenantId: integer("tenant_id"),
+  source: text("source"),                                  // gis | overpass | mapbox | manual
+  // Last-known scan result (null status = never scanned yet)
+  lastFiberStatus: text("last_fiber_status"),
+  lastIsNewFiber: integer("last_is_new_fiber", { mode: "boolean" }).notNull().default(false),
+  lastBillingStatus: text("last_billing_status"),
+  dfAddressId: text("df_address_id"),
+  scanCount: integer("scan_count").notNull().default(0),
+  lastScannedAt: text("last_scanned_at"),
+  convertedToLeadId: integer("converted_to_lead_id"),      // set when a change promoted it to a lead
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export const insertScanTargetSchema = createInsertSchema(scanTargets).omit({ id: true, createdAt: true });
+export type InsertScanTarget = z.infer<typeof insertScanTargetSchema>;
+export type ScanTarget = typeof scanTargets.$inferSelect;
+
 // ── Commissions ───────────────────────────────────────────────────────────────
 // Track each sale's commission — admin sets rate, rep sees their earnings
 export const commissions = sqliteTable("commissions", {
