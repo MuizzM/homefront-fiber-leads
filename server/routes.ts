@@ -992,7 +992,15 @@ export function registerRoutes(httpServer: Server, app: Express) {
           addresses: addrs,
         });
       } else {
-        const result = await getCityAddresses(city.trim(), st.trim());
+        // Live OSM first; if it fails/empties (public Overpass is flaky), fall
+        // back to the Mapbox grid so "Pull Addresses" always returns something.
+        let result: { addresses: any[]; cityName: string; center: any; bbox: any } | null = null;
+        try { result = await getCityAddresses(city.trim(), st.trim()); } catch { result = null; }
+        if ((!result || result.addresses.length === 0) && mbToken) {
+          const r = await harvestCityAddresses(city.trim(), st.trim(), mbToken);
+          return res.json({ count: r.addresses.length, cityName: `${city}, ${st}`, source: "mapbox", center: null, bbox: null, addresses: r.addresses });
+        }
+        if (!result) throw new Error("Address lookup failed — OpenStreetMap unavailable and no Mapbox token set.");
         res.json({
           count: result.addresses.length,
           cityName: result.cityName,
@@ -1015,36 +1023,40 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const isRockwell = city.trim().toLowerCase().includes("rockwell");
     const mbToken = process.env.MAPBOX_TOKEN ?? "";
 
-    // Address source. FREE sources are the default to avoid Mapbox geocoding
-    // costs: Rockwell uses the local GIS parcel file (0 Mapbox calls), other
-    // cities use Overpass/OpenStreetMap (~1 Mapbox call for the bbox vs. the
-    // thousands the Mapbox grid harvester burns). Pass { source: "mapbox" } to
-    // force the grid harvester for coverage the free sources miss.
+    // Address source, ordered for reliability + low cost. Live OpenStreetMap
+    // (Overpass) is tried first (free, any city, fresh data). If OSM is slow or
+    // sparse we fall back to the Mapbox grid (reliable, one-time cost — then the
+    // pool re-scans for free). The local GIS parcel file is only a last-ditch
+    // safety net for Rockwell. Pass { source: "mapbox" } to skip straight to Mapbox.
     const preferMapbox = req.body.source === "mapbox";
-    let addresses: any[];
+    let addresses: any[] = [];
+    let usedSource = "overpass";
     try {
       if (providedAddresses && Array.isArray(providedAddresses) && providedAddresses.length > 0) {
-        addresses = providedAddresses;
-      } else if (isRockwell && !preferMapbox) {
-        addresses = loadGisAddresses();                                    // FREE — local parcel file
+        addresses = providedAddresses; usedSource = "manual";
       } else if (!preferMapbox) {
-        const result = await getCityAddresses(city.trim(), st.trim());     // FREE — OpenStreetMap
-        addresses = result.addresses;
-      } else if (isRockwell && mbToken) {
-        addresses = await harvestRockwellAddresses(mbToken);               // 💸 Mapbox grid (opt-in)
+        // 1) Live OSM (free) — fails fast (~28s) so it can't hang the scan.
+        try {
+          const result = await getCityAddresses(city.trim(), st.trim());
+          addresses = result.addresses ?? [];
+        } catch { addresses = []; }
+        // 2) Mapbox grid fallback — reliable coverage when OSM is slow/sparse.
+        if (addresses.length === 0 && mbToken) {
+          addresses = isRockwell
+            ? await harvestRockwellAddresses(mbToken)
+            : (await harvestCityAddresses(city.trim(), st.trim(), mbToken)).addresses;
+          usedSource = "mapbox";
+        }
+        // 3) GIS parcel file — last resort for Rockwell only.
+        if (addresses.length === 0 && isRockwell) { addresses = loadGisAddresses(); usedSource = "gis"; }
       } else if (mbToken) {
-        const result = await harvestCityAddresses(city.trim(), st.trim(), mbToken);
-        addresses = result.addresses;
-      } else {
-        const result = await getCityAddresses(city.trim(), st.trim());
-        addresses = result.addresses;
-      }
-      // Safety net: if a free source returns nothing, fall back to Mapbox so a
-      // scan never silently fails on a city OSM doesn't cover well.
-      if ((!addresses || addresses.length === 0) && !preferMapbox && mbToken) {
         addresses = isRockwell
           ? await harvestRockwellAddresses(mbToken)
           : (await harvestCityAddresses(city.trim(), st.trim(), mbToken)).addresses;
+        usedSource = "mapbox";
+      } else {
+        const result = await getCityAddresses(city.trim(), st.trim());
+        addresses = result.addresses;
       }
     } catch (err: any) {
       return res.status(500).json({ error: `Address pull failed: ${err.message}` });
@@ -1055,7 +1067,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     // Persist the FULL harvested set to the address pool (geocoded once → free to
     // re-scan later). Duplicates are ignored, so the pool only ever grows.
     try {
-      const src = (providedAddresses?.length) ? "manual" : preferMapbox ? "mapbox" : isRockwell ? "gis" : "overpass";
+      const src = usedSource;
       storage.upsertScanTargets(addresses.map((a: any) => ({
         address: a.address, city: a.city ?? city, state: a.state ?? st,
         zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: src,

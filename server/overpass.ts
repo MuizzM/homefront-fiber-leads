@@ -93,7 +93,7 @@ export async function pullAddressesFromOverpass(
 
   // Overpass QL — fetch all nodes and ways with house number + street
   const overpassQuery = `
-[out:json][timeout:90];
+[out:json][timeout:25];
 (
   node["addr:housenumber"]["addr:street"](${south},${west},${north},${east});
   way["addr:housenumber"]["addr:street"](${south},${west},${north},${east});
@@ -103,9 +103,14 @@ out center;
 
   const res = await fetch("https://overpass-api.de/api/interpreter", {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Accept": "application/json",
+      // Public Overpass rejects requests without a UA (often a 406/429)
+      "User-Agent": "HomeFrontFiber/1.0 (field sales lead tool)",
+    },
     body: `data=${encodeURIComponent(overpassQuery)}`,
-    signal: AbortSignal.timeout(120000), // 2 min timeout for large cities
+    signal: AbortSignal.timeout(28000), // fail fast — the caller falls back to Mapbox if OSM is slow
   });
 
   if (!res.ok) throw new Error(`Overpass API failed: ${res.status}`);
