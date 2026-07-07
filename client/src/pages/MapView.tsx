@@ -78,7 +78,7 @@ function escapeHtml(v: unknown): string {
 }
 
 // ── Inline popup HTML builder ─────────────────────────────────────────────────
-function buildPopupHTML(lead: MapPin, team: TeamMember[]): string {
+function buildPopupHTML(lead: MapPin, team: TeamMember[], canAssign = true): string {
   const pin = PIN_COLORS[lead.leadStatus] ?? PIN_COLORS.prospect;
   const assignedRep = team.find(m => m.id === lead.assignedRepId);
   const repOptions = team.filter(m => m.active)
@@ -112,14 +112,14 @@ function buildPopupHTML(lead: MapPin, team: TeamMember[]): string {
       <!-- Contact -->
       ${lead.contactName ? `<div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">👤 ${escapeHtml(lead.contactName)}${lead.contactPhone ? ` · ${escapeHtml(lead.contactPhone)}` : ""}</div>` : ""}
 
-      <!-- Assign rep -->
-      <div style="margin-bottom:8px;">
+      <!-- Assign rep (managers/team leads only) -->
+      ${canAssign ? `<div style="margin-bottom:8px;">
         <div style="color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;">Assigned Rep</div>
         <select id="assign-rep-${lead.id}" style="width:100%;background:#1e2430;color:#e2e8f0;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:12px;">
           <option value="">— Unassigned —</option>
           ${repOptions}
         </select>
-      </div>
+      </div>` : ""}
 
       <!-- Quick knock buttons -->
       <div style="margin-bottom:8px;">
@@ -137,11 +137,11 @@ function buildPopupHTML(lead: MapPin, team: TeamMember[]): string {
       <!-- Notes -->
       ${lead.notes ? `<div style="color:#94a3b8;font-size:11px;font-style:italic;border-top:1px solid #1e2430;padding-top:6px;">"${escapeHtml(lead.notes)}"</div>` : ""}
 
-      <!-- Save assign button -->
-      <button
+      <!-- Save assign button (managers/team leads only) -->
+      ${canAssign ? `<button
         onclick="window.__assignRep(${lead.id})"
         style="width:100%;margin-top:8px;background:#f97316;color:white;border:none;border-radius:5px;padding:6px;font-size:12px;font-weight:600;cursor:pointer;"
-      >Save Assignment</button>
+      >Save Assignment</button>` : ""}
     </div>
   `;
 }
@@ -230,6 +230,8 @@ export default function MapView() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const canManage = user?.role === "admin" || user?.role === "manager";
+  // Admin, manager, and team lead can carve out areas and assign them to reps.
+  const canAssign = user?.role === "admin" || user?.role === "manager" || user?.role === "team_lead";
 
   // Territory requests (admin/manager)
   const { data: territoryRequests = [] } = useQuery<{
@@ -585,7 +587,7 @@ export default function MapView() {
         while (Math.abs(e.lngLat.lng - coords[0]) > 180) { coords[0] += e.lngLat.lng > coords[0] ? 360 : -360; }
         new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
           .setLngLat(coords)
-          .setHTML(buildPopupHTML(lead, tm))
+          .setHTML(buildPopupHTML(lead, tm, canAssign))
           .addTo(map);
       });
       map.on("mouseenter", "lead-unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
@@ -681,7 +683,7 @@ export default function MapView() {
       offset: [0, -42], closeButton: true,
       className: "sr-popup",
       maxWidth: "320px",
-    }).setHTML(buildPopupHTML(lead, allTeam));
+    }).setHTML(buildPopupHTML(lead, allTeam, canAssign));
 
     popupsRef.current.set(lead.id, popup);
 
@@ -874,7 +876,7 @@ export default function MapView() {
           if (!lead) return;
           const tm = (window as any).__teamMembers ?? [];
           new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
-            .setLngLat(coords).setHTML(buildPopupHTML(lead, tm)).addTo(map);
+            .setLngLat(coords).setHTML(buildPopupHTML(lead, tm, canAssign)).addTo(map);
         });
         map.on("mouseenter", "lead-unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", "lead-unclustered", () => { map.getCanvas().style.cursor = ""; });
@@ -1209,7 +1211,7 @@ export default function MapView() {
       const tm = (window as any).__teamMembers ?? [];
       new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
         .setLngLat([lead.lng, lead.lat])
-        .setHTML(buildPopupHTML(lead, tm))
+        .setHTML(buildPopupHTML(lead, tm, canAssign))
         .addTo(map);
     }, 950);
   }, []);
@@ -1258,8 +1260,8 @@ export default function MapView() {
 
         {/* Actions */}
         <div className="ml-auto flex items-center gap-1.5">
-          {/* Lasso / bulk select tool — managers + admin */}
-          {canManage && (
+          {/* Lasso / bulk select tool — admin, manager, team lead */}
+          {canAssign && (
             <Button
               size="sm" variant="outline"
               onClick={() => {
@@ -1311,7 +1313,7 @@ export default function MapView() {
             className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
             title="Reset map view"
           ><Home className="w-3 h-3" /></Button>
-          {isAdmin && (
+          {canAssign && (
             <Button
               onClick={() => { setTerritoryDrawMode(!territoryDrawMode); setTerritoryPoints([]); setLassoMode(false); }}
               disabled={!mapReady}
@@ -1326,7 +1328,7 @@ export default function MapView() {
       </div>
 
       {/* Context banners */}
-      {territoryDrawMode && isAdmin && (
+      {territoryDrawMode && canAssign && (
         <div className="px-3 py-2 bg-purple-500/10 border-b border-purple-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
           <span className="text-[11px] text-purple-400">Click map to add polygon points ({territoryPoints.length} pts, min 3)</span>
           <input value={territoryName} onChange={e => setTerritoryName(e.target.value)} placeholder="Territory name…"
@@ -1513,7 +1515,7 @@ export default function MapView() {
                         <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: t.color, opacity: 0.8 }} />
                         <span className="text-[11px] truncate" style={{ color: t.color }}>{t.name}</span>
                         {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total} · {prog.pct}%</span>}
-                        {isAdmin && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} className="opacity-0 group-hover:opacity-100 text-red-400 text-xs">×</button>}
+                        {canAssign && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} className="opacity-0 group-hover:opacity-100 text-red-400 text-xs">×</button>}
                       </div>
                       {prog && prog.total > 0 && (
                         <div className="h-1 rounded-full bg-white/10 mt-0.5 overflow-hidden">

@@ -1636,20 +1636,20 @@ export function registerRoutes(httpServer: Server, app: Express) {
     return res.json(storage.getTerritoriesByRep(user.teamMemberId));
   });
 
-  app.post("/api/territories", requireAdmin, (req, res) => {
+  app.post("/api/territories", requireTeamLead, (req, res) => {
     const parsed = insertTerritorySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     res.status(201).json(storage.createTerritory(parsed.data));
   });
 
-  app.patch("/api/territories/:id", requireAdmin, (req, res) => {
+  app.patch("/api/territories/:id", requireTeamLead, (req, res) => {
     const ttid = (req as any).user?.tenantId ?? undefined;
     const updated = storage.updateTerritory(Number(req.params.id), req.body, ttid);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
   });
 
-  app.delete("/api/territories/:id", requireAdmin, (req, res) => {
+  app.delete("/api/territories/:id", requireTeamLead, (req, res) => {
     const ttid = (req as any).user?.tenantId ?? undefined;
     if (!storage.deleteTerritory(Number(req.params.id), ttid)) return res.status(404).json({ error: "Not found" });
     res.json({ success: true });
