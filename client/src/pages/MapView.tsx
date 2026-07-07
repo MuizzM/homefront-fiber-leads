@@ -321,6 +321,12 @@ export default function MapView() {
   const leads: MapPin[] = mapPinData?.pins ?? [];
   const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"], enabled: !!user });
   const { data: territories = [] } = useQuery<Territory[]>({ queryKey: ["/api/territories"], enabled: !!user });
+  const { data: territoryProgress = [] } = useQuery<{ id: number; knocked: number; total: number; pct: number; sold: number }[]>({
+    queryKey: ["/api/territories/progress"],
+    queryFn: async () => (await apiRequest("GET", "/api/territories/progress")).json(),
+    enabled: !!user,
+    refetchInterval: 30000,
+  });
   // Expose globally so popup onclick handlers can access current data.
   // NOTE: these effects must stay after `team` is declared — their dependency
   // arrays are read during render, so referencing `team` earlier throws a TDZ
@@ -1499,13 +1505,24 @@ export default function MapView() {
                     <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Territories</span>
                     <button onClick={() => setShowTerritories(v => !v)} className="text-[10px] text-white/40 hover:text-white/70">{showTerritories ? "Hide" : "Show"}</button>
                   </div>
-                  {territories.map(t => (
-                    <div key={t.id} className="flex items-center gap-2 mb-1 group">
-                      <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: t.color, opacity: 0.8 }} />
-                      <span className="text-[11px]" style={{ color: t.color }}>{t.name}</span>
-                      {isAdmin && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} className="ml-auto opacity-0 group-hover:opacity-100 text-red-400 text-xs">×</button>}
+                  {territories.map(t => {
+                    const prog = territoryProgress.find(p => p.id === t.id);
+                    return (
+                    <div key={t.id} className="mb-1.5 group">
+                      <div className="flex items-center gap-2">
+                        <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: t.color, opacity: 0.8 }} />
+                        <span className="text-[11px] truncate" style={{ color: t.color }}>{t.name}</span>
+                        {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total} · {prog.pct}%</span>}
+                        {isAdmin && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} className="opacity-0 group-hover:opacity-100 text-red-400 text-xs">×</button>}
+                      </div>
+                      {prog && prog.total > 0 && (
+                        <div className="h-1 rounded-full bg-white/10 mt-0.5 overflow-hidden">
+                          <div className="h-full rounded-full" style={{ width: `${prog.pct}%`, background: t.color }} />
+                        </div>
+                      )}
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

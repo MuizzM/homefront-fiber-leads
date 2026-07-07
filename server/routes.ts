@@ -1655,6 +1655,49 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ success: true });
   });
 
+  // GET /api/territories/progress — canvassing progress per assigned area.
+  // For each territory polygon: how many leads fall inside, and how many have
+  // been knocked (≥1 door knock logged) → "X/Y doors done". No scanning.
+  app.get("/api/territories/progress", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    // Reps only see their own territory's progress; managers/admins see all.
+    const isRep = user?.role === "rep";
+    if (isRep && !user?.teamMemberId) return res.json([]);
+    const territories = isRep ? storage.getTerritoriesByRep(user.teamMemberId) : storage.getTerritories(tid);
+    if (territories.length === 0) return res.json([]);
+
+    const leads = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null);
+    const knockedIds = new Set(storage.getKnocks().map((k: any) => k.leadId));
+    const members = storage.getTeamMembers();
+
+    // Ray-casting point-in-polygon. Polygon points are stored as [lng, lat].
+    const inside = (lat: number, lng: number, poly: [number, number][]) => {
+      let hit = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+        if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) hit = !hit;
+      }
+      return hit;
+    };
+
+    const result = territories.map((t: any) => {
+      let poly: [number, number][] = [];
+      try { poly = JSON.parse(t.polygon); } catch { poly = []; }
+      const within = poly.length >= 3 ? leads.filter((l: any) => inside(l.lat, l.lng, poly)) : [];
+      const total = within.length;
+      const knocked = within.filter((l: any) => knockedIds.has(l.id)).length;
+      const sold = within.filter((l: any) => l.leadStatus === "sold").length;
+      return {
+        id: t.id, name: t.name, color: t.color, repId: t.repId,
+        repName: members.find((m: any) => m.id === t.repId)?.name ?? "Unassigned",
+        total, knocked, sold,
+        pct: total ? Math.round((knocked / total) * 100) : 0,
+      };
+    });
+    res.json(result);
+  });
+
 
   // ── Territory Requests ────────────────────────────────────────────────────
   // Rep submits a request for a new territory
