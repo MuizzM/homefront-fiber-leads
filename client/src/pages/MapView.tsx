@@ -85,14 +85,20 @@ function buildPopupHTML(lead: MapPin, team: TeamMember[]): string {
     .map(m => `<option value="${m.id}" ${m.id === lead.assignedRepId ? "selected" : ""}>${escapeHtml(m.name)}</option>`)
     .join("");
 
+  // Tap the address → open turn-by-turn directions (Maps app on mobile).
+  const dest = (lead.lat && lead.lng)
+    ? `${lead.lat},${lead.lng}`
+    : encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`);
+  const dirUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+
   return `
     <div style="font-family:system-ui,sans-serif;font-size:13px;color:#e2e8f0;min-width:260px;max-width:300px;">
       <!-- Header -->
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
         <div style="width:14px;height:14px;border-radius:50%;background:${pin.bg};border:2px solid ${pin.border};flex-shrink:0;box-shadow:0 0 8px ${pin.bg}80;"></div>
         <div>
-          <div style="font-weight:700;font-size:13px;line-height:1.2;">${escapeHtml(lead.address)}</div>
-          <div style="color:#94a3b8;font-size:11px;">${escapeHtml(lead.city)}, ${escapeHtml(lead.state)} ${escapeHtml(lead.zip)}</div>
+          <a href="${dirUrl}" target="_blank" rel="noopener" style="font-weight:700;font-size:13px;line-height:1.2;color:#5eead4;text-decoration:none;">${escapeHtml(lead.address)} ↗</a>
+          <div style="color:#94a3b8;font-size:11px;">${escapeHtml(lead.city)}, ${escapeHtml(lead.state)} ${escapeHtml(lead.zip)} · <span style="color:#5eead4;">tap address for directions</span></div>
         </div>
       </div>
 
