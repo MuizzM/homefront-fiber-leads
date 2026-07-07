@@ -1,0 +1,144 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* HomeFront Fiber palette — deep navy + teal */
+    /* Navy:  #0F2A44  →  HSL 210 53% 16%  */
+    /* Teal:  #3EA394  →  HSL 172 44% 44%  */
+    /* Light teal: #5FB8A5 → HSL 169 38% 55% */
+    /* Steel: #CBD4DD  →  HSL 210 17% 83%  */
+
+    --background:   210 53% 9%;       /* very dark navy */
+    --foreground:   210 20% 94%;      /* near-white */
+
+    --card:         210 50% 13%;      /* dark navy card */
+    --card-foreground: 210 20% 94%;
+
+    --popover:      210 50% 13%;
+    --popover-foreground: 210 20% 94%;
+
+    --primary:      172 44% 44%;      /* HomeFront Fiber teal #3EA394 */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary:    210 40% 20%;      /* medium navy */
+    --secondary-foreground: 210 20% 80%;
+
+    --muted:        210 40% 17%;
+    --muted-foreground: 210 15% 55%;
+
+    --accent:       169 38% 55%;      /* lighter teal #5FB8A5 */
+    --accent-foreground: 0 0% 100%;
+
+    --destructive:  0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border:       210 35% 22%;
+    --input:        210 35% 22%;
+    --ring:         172 44% 44%;      /* teal ring */
+
+    --radius: 0.5rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Mapbox overrides */
+.mapboxgl-map {
+  border-radius: 0.5rem;
+}
+
+.mapboxgl-popup-content {
+  background: hsl(210 50% 13%) !important;
+  color: hsl(210 20% 94%) !important;
+  border: 1px solid hsl(210 35% 22%) !important;
+  border-radius: 8px !important;
+  padding: 12px 16px !important;
+  font-family: 'Inter', sans-serif !important;
+  font-size: 13px !important;
+  min-width: 200px;
+}
+
+.mapboxgl-popup-tip {
+  border-top-color: hsl(210 50% 13%) !important;
+}
+
+.mapboxgl-ctrl-group {
+  background: hsl(210 50% 13%) !important;
+  border: 1px solid hsl(210 35% 22%) !important;
+}
+
+.mapboxgl-ctrl-group button {
+  background: transparent !important;
+}
+
+.mapboxgl-ctrl-icon {
+  filter: invert(1);
+}
+
+/* Scan animation (used by FiberScanner) */
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+.scan-line {
+  animation: scan-line 2s linear infinite;
+}
+
+/* ── App-wide polish ──────────────────────────────────────────────────────
+   Cross-cutting refinements that lift every page: keyboard focus rings that
+   read on the dark theme, themed scrollbars, tidy text selection, and gentle
+   interaction transitions. Additive only — no layout impact. */
+@layer base {
+  /* Clear, on-brand keyboard focus (mouse clicks stay clean via :focus-visible) */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring) / 0.9);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::selection {
+    background: hsl(var(--primary) / 0.35);
+    color: hsl(var(--foreground));
+  }
+
+  /* Thin, themed scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(210 35% 26%) transparent;
+  }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-thumb { background: hsl(210 35% 26%); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: hsl(210 35% 34%); }
+  *::-webkit-scrollbar-track { background: transparent; }
+
+  /* Snappy, consistent feedback on interactive elements */
+  button, a, [role="button"], [role="tab"], [role="option"] {
+    transition: background-color .15s ease, border-color .15s ease,
+                color .15s ease, opacity .15s ease, transform .12s ease;
+  }
+  button:not(:disabled):active { transform: translateY(0.5px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,48 @@
+# ── Render Blueprint for HomeFront Fiber ──────────────────────────────────────
+# In Render: New → Blueprint → pick this repo. It provisions a web service with a
+# persistent disk. Then set the secret env vars (marked sync:false) in the
+# dashboard and attach your custom domain.
+services:
+  - type: web
+    name: homefront-fiber
+    runtime: node
+    plan: starter                 # $7/mo — required for a persistent disk (free tier has none)
+    region: ohio                  # pick the region closest to your reps
+    buildCommand: npm ci && npm run build
+    startCommand: node dist/index.cjs
+    healthCheckPath: /api/auth/status
+    autoDeploy: true              # redeploy on every push to the connected branch
+    disk:
+      name: data
+      mountPath: /data            # persistent volume — survives redeploys
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATA_DIR             # DB (data.db) + uploads/ live on the persistent disk
+        value: /data
+      - key: TRUST_PROXY
+        value: "1"
+      - key: APP_ORIGIN
+        value: https://portal.homefrontsolutionsllc.com
+      # ── Secrets — set these in the Render dashboard (never commit them) ──
+      - key: MAPBOX_TOKEN
+        sync: false
+      - key: KFS_AUTH_URL
+        sync: false
+      - key: KFS_AUTH_BASIC
+        sync: false
+      - key: SCANNER_SUBMIT_SECRET
+        sync: false
+      - key: PROXY_URL
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SUPER_ADMIN_EMAILS
+        sync: false

@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Apply — Home Front Solutions</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --teal: #3d9e8c;
+    --teal-dark: #2e7d71;
+    --navy: #1b2f4e;
+    --navy-light: #243a5e;
+    --cream: #f5f3ee;
+    --gray-soft: #6b7280;
+    --gray-light: #e5e7eb;
+    --white: #ffffff;
+    --red: #dc2626;
+    --green: #16a34a;
+    --font-display: 'Playfair Display', Georgia, serif;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }
+
+  body {
+    font-family: var(--font-body);
+    background: var(--cream);
+    color: var(--navy);
+    min-height: 100vh;
+  }
+
+  /* ── Nav ── */
+  nav {
+    background: var(--white);
+    border-bottom: 1px solid var(--gray-light);
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    box-shadow: 0 1px 4px rgba(0,0,0,.05);
+  }
+  .nav-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+    color: var(--navy);
+  }
+  .nav-logo img { height: 36px; width: auto; }
+  .nav-logo-text { font-size: 13px; font-weight: 700; line-height: 1.2; }
+  .nav-logo-sub { font-size: 10px; font-weight: 400; color: var(--gray-soft); }
+  .nav-back {
+    font-size: 13px;
+    color: var(--teal);
+    font-weight: 600;
+    text-decoration: none;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: color .2s;
+  }
+  .nav-back:hover { color: var(--teal-dark); }
+
+  /* ── Hero ── */
+  .hero {
+    background: var(--navy);
+    color: var(--white);
+    padding: 56px 24px 48px;
+    text-align: center;
+  }
+  .hero-eyebrow {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--teal);
+    text-transform: uppercase;
+    margin-bottom: 14px;
+  }
+  .hero h1 {
+    font-family: var(--font-display);
+    font-size: clamp(28px, 5vw, 42px);
+    line-height: 1.15;
+    font-weight: 700;
+    color: var(--white);
+    margin-bottom: 16px;
+  }
+  .hero h1 em {
+    font-style: italic;
+    color: var(--teal);
+  }
+  .hero p {
+    font-size: 15px;
+    color: rgba(255,255,255,.7);
+    max-width: 500px;
+    margin: 0 auto;
+    line-height: 1.7;
+  }
+  .hero-stats {
+    display: flex;
+    gap: 32px;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin-top: 32px;
+  }
+  .hero-stat { text-align: center; }
+  .hero-stat-num {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--white);
+  }
+  .hero-stat-label {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: rgba(255,255,255,.45);
+    margin-top: 2px;
+  }
+
+  /* ── Form container ── */
+  .form-wrap {
+    max-width: 640px;
+    margin: -28px auto 60px;
+    padding: 0 16px;
+  }
+  .form-card {
+    background: var(--white);
+    border-radius: 18px;
+    box-shadow: 0 8px 40px rgba(0,0,0,.1);
+    padding: 36px;
+  }
+  .form-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--navy);
+    margin-bottom: 6px;
+  }
+  .form-subtitle {
+    font-size: 13px;
+    color: var(--gray-soft);
+    margin-bottom: 28px;
+    line-height: 1.5;
+  }
+
+  /* ── Section separators ── */
+  .section-label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--teal);
+    margin: 26px 0 14px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--gray-light);
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  /* ── Fields ── */
+  .field-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .field-row.single { grid-template-columns: 1fr; }
+  @media (max-width: 520px) { .field-row { grid-template-columns: 1fr; } }
+
+  .field label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 6px;
+  }
+  .field label .req { color: var(--teal); }
+
+  .field input[type="text"],
+  .field input[type="email"],
+  .field input[type="tel"],
+  .field select,
+  .field textarea {
+    width: 100%;
+    border: 1.5px solid var(--gray-light);
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 14px;
+    font-family: var(--font-body);
+    color: var(--navy);
+    background: var(--white);
+    transition: border-color .2s, box-shadow .2s;
+    outline: none;
+    appearance: none;
+  }
+  .field input:focus,
+  .field select:focus,
+  .field textarea:focus {
+    border-color: var(--teal);
+    box-shadow: 0 0 0 3px rgba(61,158,140,.12);
+  }
+  .field input.error,
+  .field select.error,
+  .field textarea.error {
+    border-color: var(--red);
+  }
+  .field-error {
+    font-size: 11px;
+    color: var(--red);
+    margin-top: 4px;
+    display: none;
+  }
+  .field-error.show { display: block; }
+  .field textarea { resize: vertical; min-height: 80px; }
+
+  /* ── Carrier checkboxes ── */
+  .carrier-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .carrier-opt {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    border: 1.5px solid var(--gray-light);
+    border-radius: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    user-select: none;
+  }
+  .carrier-opt:has(input:checked) {
+    border-color: var(--teal);
+    background: rgba(61,158,140,.06);
+  }
+  .carrier-opt input { display: none; }
+  .carrier-dot {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid var(--gray-light);
+    flex-shrink: 0;
+    transition: all .2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .carrier-opt:has(input:checked) .carrier-dot {
+    background: var(--teal);
+    border-color: var(--teal);
+  }
+  .carrier-dot::after {
+    content: '';
+    display: none;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: white;
+  }
+  .carrier-opt:has(input:checked) .carrier-dot::after { display: block; }
+  .carrier-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--navy);
+  }
+  .carrier-sub { font-size: 11px; color: var(--gray-soft); }
+  .carrier-error {
+    font-size: 11px;
+    color: var(--red);
+    margin-top: 6px;
+    display: none;
+  }
+  .carrier-error.show { display: block; }
+
+  /* ── Experience toggle ── */
+  .toggle-row {
+    display: flex;
+    gap: 10px;
+  }
+  .toggle-opt {
+    flex: 1;
+    border: 1.5px solid var(--gray-light);
+    border-radius: 10px;
+    padding: 10px 14px;
+    text-align: center;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--gray-soft);
+    transition: all .2s;
+    user-select: none;
+  }
+  .toggle-opt.active {
+    border-color: var(--teal);
+    background: rgba(61,158,140,.08);
+    color: var(--teal);
+  }
+
+  /* ── File upload ── */
+  .upload-area {
+    border: 2px dashed var(--gray-light);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    position: relative;
+  }
+  .upload-area:hover {
+    border-color: var(--teal);
+    background: rgba(61,158,140,.04);
+  }
+  .upload-area.has-file {
+    border-color: var(--teal);
+    background: rgba(61,158,140,.06);
+  }
+  .upload-area input[type="file"] {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    width: 100%;
+    height: 100%;
+  }
+  .upload-icon { font-size: 24px; margin-bottom: 6px; }
+  .upload-text { font-size: 13px; font-weight: 600; color: var(--navy); }
+  .upload-sub { font-size: 11px; color: var(--gray-soft); margin-top: 2px; }
+  .upload-filename {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--teal);
+    margin-top: 6px;
+    display: none;
+  }
+  .upload-area.has-file .upload-filename { display: block; }
+
+  /* ── Submit ── */
+  .submit-btn {
+    width: 100%;
+    background: var(--teal);
+    color: var(--white);
+    border: none;
+    border-radius: 12px;
+    padding: 16px 24px;
+    font-size: 15px;
+    font-weight: 700;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: background .2s, transform .1s;
+    margin-top: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+  .submit-btn:hover { background: var(--teal-dark); }
+  .submit-btn:active { transform: scale(.99); }
+  .submit-btn:disabled { background: #94a3b8; cursor: not-allowed; }
+
+  /* ── Spinner ── */
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid rgba(255,255,255,.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    display: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Success / Error states ── */
+  .result-card {
+    display: none;
+    text-align: center;
+    padding: 36px 24px;
+  }
+  .result-card.show { display: block; }
+  .result-icon { font-size: 48px; margin-bottom: 16px; }
+  .result-title { font-family: var(--font-display); font-size: 22px; color: var(--navy); margin-bottom: 10px; }
+  .result-msg { font-size: 14px; color: var(--gray-soft); line-height: 1.7; max-width: 380px; margin: 0 auto; }
+  .result-cta {
+    display: inline-block;
+    margin-top: 20px;
+    background: var(--teal);
+    color: var(--white);
+    text-decoration: none;
+    padding: 10px 22px;
+    border-radius: 99px;
+    font-size: 13px;
+    font-weight: 600;
+    transition: background .2s;
+  }
+  .result-cta:hover { background: var(--teal-dark); }
+
+  /* ── Legal note ── */
+  .legal {
+    text-align: center;
+    font-size: 11px;
+    color: var(--gray-soft);
+    margin-top: 16px;
+    line-height: 1.6;
+  }
+  .legal a { color: var(--teal); text-decoration: none; }
+
+  /* ── Footer ── */
+  footer {
+    background: var(--navy);
+    color: rgba(255,255,255,.45);
+    text-align: center;
+    padding: 20px;
+    font-size: 12px;
+  }
+  footer a { color: rgba(255,255,255,.6); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="https://www.homefrontsolutionsllc.com" class="nav-logo">
+    <img src="https://www.homefrontsolutionsllc.com/logo.png" alt="Home Front Solutions"
+         onerror="this.style.display='none'" />
+    <div>
+      <div class="nav-logo-text">Home Front Solutions</div>
+      <div class="nav-logo-sub">Nationwide Field Sales</div>
+    </div>
+  </a>
+  <a href="https://www.homefrontsolutionsllc.com/careers" class="nav-back">
+    ← Back to Careers
+  </a>
+</nav>
+
+<div class="hero">
+  <div class="hero-eyebrow">Now Hiring · Rockwell & Surrounding Markets</div>
+  <h1>A real career in field sales.<br><em>Built in, not bolted on.</em></h1>
+  <p>Uncapped commission. Paid certification before your first door. A clear path from rep to team lead to area manager.</p>
+  <div class="hero-stats">
+    <div class="hero-stat"><div class="hero-stat-num">$100K+</div><div class="hero-stat-label">First-Year Earnings</div></div>
+    <div class="hero-stat"><div class="hero-stat-num">Paid</div><div class="hero-stat-label">6-Module Training</div></div>
+    <div class="hero-stat"><div class="hero-stat-num">Fast</div><div class="hero-stat-label">Promotion From Within</div></div>
+  </div>
+</div>
+
+<div class="form-wrap">
+  <div class="form-card">
+
+    <!-- Success state (hidden by default) -->
+    <div class="result-card" id="successCard">
+      <div class="result-icon">✅</div>
+      <div class="result-title">Application received!</div>
+      <div class="result-msg">Thank you for applying to Home Front Solutions. Our team reviews every application personally. We'll be in touch within 1–2 business days.</div>
+      <a href="https://www.homefrontsolutionsllc.com/careers" class="result-cta">Back to Careers</a>
+    </div>
+
+    <!-- Error state (hidden by default) -->
+    <div class="result-card" id="errorCard">
+      <div class="result-icon">⚠️</div>
+      <div class="result-title">Something went wrong</div>
+      <div class="result-msg" id="errorMsg">We couldn't submit your application. Please try again or email us directly.</div>
+      <button onclick="resetForm()" class="result-cta" style="border:none;cursor:pointer;">Try Again</button>
+    </div>
+
+    <!-- The form -->
+    <form id="applyForm" novalidate>
+      <div class="form-title">Apply to Join the Team</div>
+      <div class="form-subtitle">Takes about 3 minutes. We review every application — no bots, no automated rejection.</div>
+
+      <!-- Personal Info -->
+      <div class="section-label">Personal Information</div>
+      <div class="field-row">
+        <div class="field">
+          <label>Full Name <span class="req">*</span></label>
+          <input type="text" id="fullName" name="fullName" placeholder="Muizz Muhammad" autocomplete="name" />
+          <div class="field-error" id="fullName-err">Please enter your full name</div>
+        </div>
+        <div class="field">
+          <label>Phone Number <span class="req">*</span></label>
+          <input type="tel" id="phone" name="phone" placeholder="(336) 555-0100" autocomplete="tel" />
+          <div class="field-error" id="phone-err">Please enter a valid phone number</div>
+        </div>
+      </div>
+      <div class="field-row single">
+        <div class="field">
+          <label>Email Address <span class="req">*</span></label>
+          <input type="email" id="email" name="email" placeholder="you@email.com" autocomplete="email" />
+          <div class="field-error" id="email-err">Please enter a valid email address</div>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>City <span class="req">*</span></label>
+          <input type="text" id="city" name="city" placeholder="Rockwell" autocomplete="address-level2" />
+          <div class="field-error" id="city-err">Required</div>
+        </div>
+        <div class="field">
+          <label>ZIP Code <span class="req">*</span></label>
+          <input type="text" id="zip" name="zip" placeholder="28138" autocomplete="postal-code" maxlength="10" />
+          <div class="field-error" id="zip-err">Required</div>
+        </div>
+      </div>
+
+      <!-- Carriers -->
+      <div class="section-label">Which carrier(s) do you want to sell? <span class="req">*</span></div>
+      <div class="carrier-grid">
+        <label class="carrier-opt">
+          <input type="checkbox" name="carriers" value="Kinetic">
+          <div class="carrier-dot"></div>
+          <div><div class="carrier-name">Kinetic</div><div class="carrier-sub">Windstream fiber</div></div>
+        </label>
+        <label class="carrier-opt">
+          <input type="checkbox" name="carriers" value="Brightspeed">
+          <div class="carrier-dot"></div>
+          <div><div class="carrier-name">Brightspeed</div><div class="carrier-sub">Fiber internet</div></div>
+        </label>
+        <label class="carrier-opt">
+          <input type="checkbox" name="carriers" value="Frontier">
+          <div class="carrier-dot"></div>
+          <div><div class="carrier-name">Frontier</div><div class="carrier-sub">Fiber network</div></div>
+        </label>
+        <label class="carrier-opt">
+          <input type="checkbox" name="carriers" value="T-Fiber">
+          <div class="carrier-dot"></div>
+          <div><div class="carrier-name">T-Fiber</div><div class="carrier-sub">T-Mobile fiber</div></div>
+        </label>
+      </div>
+      <div class="carrier-error" id="carriers-err">Select at least one carrier</div>
+
+      <!-- Experience -->
+      <div class="section-label">Sales Experience</div>
+      <div class="field">
+        <label>Do you have prior sales experience?</label>
+        <div class="toggle-row">
+          <div class="toggle-opt active" id="expNo" onclick="setExp(false)">No — I'm new to sales</div>
+          <div class="toggle-opt" id="expYes" onclick="setExp(true)">Yes — I have experience</div>
+        </div>
+        <input type="hidden" id="hasSalesExp" name="hasSalesExperience" value="false" />
+      </div>
+      <div class="field field-row single" id="expDetailsWrap" style="display:none;margin-top:12px;">
+        <div class="field">
+          <label>Tell us a little about your experience</label>
+          <textarea id="salesExpDetails" name="salesExperienceDetails" placeholder="e.g. 2 years door-to-door solar, worked with SunPower..."></textarea>
+        </div>
+      </div>
+
+      <!-- Files -->
+      <div class="section-label">Identity & Photo Verification</div>
+      <div class="field-row">
+        <div class="field">
+          <label>Headshot Photo <span class="req">*</span></label>
+          <div class="upload-area" id="headshotArea">
+            <input type="file" id="headshotFile" name="headshot" accept="image/jpeg,image/png,image/webp" />
+            <div class="upload-icon">🤳</div>
+            <div class="upload-text">Upload Headshot</div>
+            <div class="upload-sub">JPG or PNG, clear face photo</div>
+            <div class="upload-filename" id="headshotName"></div>
+          </div>
+          <div class="field-error" id="headshot-err">Please upload a headshot photo</div>
+        </div>
+        <div class="field">
+          <label>Driver's License or ID <span class="req">*</span></label>
+          <div class="upload-area" id="licenseArea">
+            <input type="file" id="licenseFile" name="license" accept="image/jpeg,image/png,image/webp,application/pdf" />
+            <div class="upload-icon">🪪</div>
+            <div class="upload-text">Upload License / ID</div>
+            <div class="upload-sub">JPG, PNG, or PDF</div>
+            <div class="upload-filename" id="licenseName"></div>
+          </div>
+          <div class="field-error" id="license-err">Please upload your license or ID</div>
+        </div>
+      </div>
+
+      <!-- How did you hear -->
+      <div class="section-label">One More Thing</div>
+      <div class="field">
+        <label>How did you hear about us?</label>
+        <select id="referralSource" name="referralSource">
+          <option value="">Select one…</option>
+          <option value="Indeed">Indeed</option>
+          <option value="LinkedIn">LinkedIn</option>
+          <option value="Instagram">Instagram</option>
+          <option value="Facebook">Facebook</option>
+          <option value="Friend or family">Friend or family</option>
+          <option value="Existing rep referral">Existing rep referral</option>
+          <option value="Google Search">Google Search</option>
+          <option value="Door knock / in person">Door knock / in person</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+
+      <button type="submit" class="submit-btn" id="submitBtn">
+        <span id="submitText">Submit Application →</span>
+        <div class="spinner" id="submitSpinner"></div>
+      </button>
+
+      <div class="legal">
+        By submitting you agree to our
+        <a href="https://www.homefrontsolutionsllc.com" target="_blank">privacy policy</a>.
+        We never sell your information.
+        Your license/ID is used for identity verification only and stored securely.
+      </div>
+    </form>
+
+  </div>
+</div>
+
+<footer>
+  &copy; 2026 Home Front Solutions, LLC &nbsp;·&nbsp;
+  <a href="https://www.homefrontsolutionsllc.com">homefrontsolutionsllc.com</a>
+</footer>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────────────
+// Replace this with your deployed Fiber Scout server URL
+const FIBER_SCOUT_SERVER = "FIBER_SCOUT_SERVER_PLACEHOLDER";
+const API_ENDPOINT = FIBER_SCOUT_SERVER + "/api/onboarding/apply";
+
+// ── Experience toggle ────────────────────────────────────────────────────────
+function setExp(hasExp) {
+  document.getElementById("hasSalesExp").value = hasExp ? "true" : "false";
+  document.getElementById("expYes").classList.toggle("active", hasExp);
+  document.getElementById("expNo").classList.toggle("active", !hasExp);
+  document.getElementById("expDetailsWrap").style.display = hasExp ? "block" : "none";
+}
+
+// ── File upload preview ──────────────────────────────────────────────────────
+function setupUpload(inputId, areaId, nameId) {
+  const input = document.getElementById(inputId);
+  const area = document.getElementById(areaId);
+  const nameEl = document.getElementById(nameId);
+  input.addEventListener("change", () => {
+    if (input.files[0]) {
+      area.classList.add("has-file");
+      nameEl.textContent = "✓ " + input.files[0].name;
+    } else {
+      area.classList.remove("has-file");
+      nameEl.textContent = "";
+    }
+  });
+}
+setupUpload("headshotFile", "headshotArea", "headshotName");
+setupUpload("licenseFile", "licenseArea", "licenseName");
+
+// ── Validation ───────────────────────────────────────────────────────────────
+function showErr(id, show) {
+  const el = document.getElementById(id + "-err");
+  const input = document.getElementById(id);
+  if (!el) return;
+  el.classList.toggle("show", show);
+  if (input) input.classList.toggle("error", show);
+}
+
+function validate() {
+  let valid = true;
+  const fn = document.getElementById("fullName").value.trim();
+  const em = document.getElementById("email").value.trim();
+  const ph = document.getElementById("phone").value.trim();
+  const ci = document.getElementById("city").value.trim();
+  const zp = document.getElementById("zip").value.trim();
+  const carriers = [...document.querySelectorAll("input[name='carriers']:checked")];
+  const headshot = document.getElementById("headshotFile").files[0];
+  const license = document.getElementById("licenseFile").files[0];
+
+  if (!fn) { showErr("fullName", true); valid = false; } else showErr("fullName", false);
+  if (!em || !em.includes("@")) { showErr("email", true); valid = false; } else showErr("email", false);
+  if (!ph || ph.length < 7) { showErr("phone", true); valid = false; } else showErr("phone", false);
+  if (!ci) { showErr("city", true); valid = false; } else showErr("city", false);
+  if (!zp) { showErr("zip", true); valid = false; } else showErr("zip", false);
+  if (carriers.length === 0) {
+    document.getElementById("carriers-err").classList.add("show"); valid = false;
+  } else {
+    document.getElementById("carriers-err").classList.remove("show");
+  }
+  if (!headshot) { showErr("headshot", true); valid = false; } else showErr("headshot", false);
+  if (!license) { showErr("license", true); valid = false; } else showErr("license", false);
+
+  return valid;
+}
+
+// ── Submit ───────────────────────────────────────────────────────────────────
+document.getElementById("applyForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!validate()) return;
+
+  const btn = document.getElementById("submitBtn");
+  const txt = document.getElementById("submitText");
+  const spin = document.getElementById("submitSpinner");
+  btn.disabled = true;
+  txt.textContent = "Submitting…";
+  spin.style.display = "block";
+
+  const carriers = [...document.querySelectorAll("input[name='carriers']:checked")]
+    .map(c => c.value);
+
+  const fd = new FormData();
+  fd.append("fullName", document.getElementById("fullName").value.trim());
+  fd.append("email", document.getElementById("email").value.trim());
+  fd.append("phone", document.getElementById("phone").value.trim());
+  fd.append("city", document.getElementById("city").value.trim());
+  fd.append("zip", document.getElementById("zip").value.trim());
+  fd.append("state", "NC");
+  fd.append("hasSalesExperience", document.getElementById("hasSalesExp").value);
+  fd.append("salesExperienceDetails", document.getElementById("salesExpDetails").value.trim());
+  fd.append("preferredCarriers", carriers.join(","));
+  fd.append("referralSource", document.getElementById("referralSource").value);
+  const headshotFile = document.getElementById("headshotFile").files[0];
+  const licenseFile = document.getElementById("licenseFile").files[0];
+  if (headshotFile) fd.append("headshot", headshotFile);
+  if (licenseFile) fd.append("license", licenseFile);
+
+  try {
+    const r = await fetch(API_ENDPOINT, { method: "POST", body: fd });
+    const d = await r.json();
+
+    if (r.ok && d.success) {
+      document.getElementById("applyForm").style.display = "none";
+      document.getElementById("successCard").classList.add("show");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } else {
+      throw new Error(d.error || "Submission failed");
+    }
+  } catch (err) {
+    document.getElementById("applyForm").style.display = "none";
+    document.getElementById("errorMsg").textContent = err.message || "Submission failed. Please try again.";
+    document.getElementById("errorCard").classList.add("show");
+  } finally {
+    btn.disabled = false;
+    txt.textContent = "Submit Application →";
+    spin.style.display = "none";
+  }
+});
+
+function resetForm() {
+  document.getElementById("errorCard").classList.remove("show");
+  document.getElementById("applyForm").style.display = "block";
+}
+</script>
+</body>
+</html>

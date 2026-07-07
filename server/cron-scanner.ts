@@ -1,0 +1,447 @@
+/**
+ * Nightly CNS Cron + Coming Soon Auto-Promote
+ *
+ * Runs two background jobs at server boot:
+ *
+ * 1. NIGHTLY CNS SCAN (2 AM EST)
+ *    - Scans the top 50,000 CNS numbers for the MS ENV (covers NC/SC/IN/MI)
+ *    - Any NEW FIBER hit with billingStatus=N → instant email alert + create lead
+ *    - Persists last scanned CNS in DB via settings table
+ *
+ * 2. COMING SOON AUTO-PROMOTE (2 AM EST, after CNS scan)
+ *    - Re-checks all addresses in coming_soon_addresses table
+ *    - If householdSegmentType changed to NEW FIBER → promote to lead + email
+ */
+
+import nodemailer from "nodemailer";
+import { storage } from "./storage";
+import { getAuthToken } from "./scanner";
+import { proxyFetch } from "./proxy-fetch";
+import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
+
+// ── Email ──────────────────────────────────────────────────────────────────────
+async function sendAlertEmail(subject: string, html: string) {
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    console.log(`[cron-alert] EMAIL: ${subject}`);
+    return;
+  }
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT ?? 587),
+    secure: false,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+  await transporter.sendMail({
+    from: `"HomeFront Fiber" <${process.env.SMTP_USER}>`,
+    to: process.env.SMTP_USER, // alert goes to admin
+    subject,
+    html,
+  });
+}
+
+const esc = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function newFiberAlertHtml(count: number, addresses: string[]): string {
+  const rows = addresses.slice(0, 20).map(a => `<li style="margin:4px 0;color:#3EA394;">${esc(a)}</li>`).join("");
+  return `
+  <div style="font-family:sans-serif;max-width:500px;margin:auto;padding:36px;background:#0F2A44;color:#fff;border-radius:12px;">
+    <h2 style="color:#3EA394;margin:0 0 4px;font-size:20px">HomeFront Fiber</h2>
+    <p style="color:#CBD4DD;font-size:12px;margin:0 0 20px">Nightly CNS Scan Alert</p>
+    <div style="background:#061624;border:1px solid rgba(62,163,148,0.3);border-radius:8px;padding:20px;margin-bottom:16px;">
+      <p style="margin:0;font-size:28px;font-weight:700;color:#3EA394">${count} NEW FIBER lead${count === 1 ? "" : "s"} found</p>
+      <p style="margin:4px 0 0;color:#CBD4DD;font-size:13px;">Addresses automatically created as Hot Leads</p>
+    </div>
+    <ul style="padding-left:20px;margin:0;">${rows}</ul>
+    ${addresses.length > 20 ? `<p style="color:#CBD4DD;font-size:12px;margin-top:8px;">...and ${addresses.length - 20} more. Log in to view all.</p>` : ""}
+  </div>`;
+}
+
+function comingSoonPromotedHtml(count: number, addresses: string[]): string {
+  const rows = addresses.slice(0, 10).map(a => `<li style="margin:4px 0;color:#f59e0b;">${esc(a)}</li>`).join("");
+  return `
+  <div style="font-family:sans-serif;max-width:500px;margin:auto;padding:36px;background:#0F2A44;color:#fff;border-radius:12px;">
+    <h2 style="color:#3EA394;margin:0 0 4px;font-size:20px">HomeFront Fiber</h2>
+    <p style="color:#CBD4DD;font-size:12px;margin:0 0 20px">Coming Soon → Live Alert</p>
+    <div style="background:#061624;border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:20px;margin-bottom:16px;">
+      <p style="margin:0;font-size:24px;font-weight:700;color:#f59e0b;">${count} address${count === 1 ? "" : "es"} now have fiber!</p>
+      <p style="margin:4px 0 0;color:#CBD4DD;font-size:13px;">Previously "Coming Soon" — now promoted to Hot Lead</p>
+    </div>
+    <ul style="padding-left:20px;margin:0;">${rows}</ul>
+  </div>`;
+}
+
+// ── CNS Nightly Scan ──────────────────────────────────────────────────────────
+// Cron state (in-memory, not persisted)
+export interface CronStatus {
+  lastRunAt: string | null;
+  lastRunResult: string | null;
+  nextRunAt: string | null;
+  isRunning: boolean;
+  totalNewFiberFound: number;
+  totalRunCount: number;
+}
+
+const cronStatus: CronStatus = {
+  lastRunAt: null,
+  lastRunResult: null,
+  nextRunAt: null,
+  isRunning: false,
+  totalNewFiberFound: 0,
+  totalRunCount: 0,
+};
+
+export function getCronStatus(): CronStatus {
+  return { ...cronStatus };
+}
+
+async function lookupCnsDirect(env: string, cns: number, token: string): Promise<{
+  found: boolean;
+  isNewFiber: boolean;
+  address?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  lat?: number | null;
+  lng?: number | null;
+  billingStatus?: string | null;
+  householdSegmentType?: string | null;
+  techType?: string | null;
+  speedTier?: string | null;
+  maxDownloadMbps?: number | null;
+  competitorName?: string | null;
+  addressCatalogDate?: string | null;
+  dfAddressId?: string;
+}> {
+  const dfAddressId = `${env}${String(cns).padStart(7, "0")}`;
+
+  try {
+    const res = await proxyFetch(KFS_SCAN_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": `Bearer ${token}`,
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "device-id": "698ca1e5-f077-4a62-a1e7-e97f484c7231",
+        "Referer": KFS_REFERER,
+        "Origin": KFS_ORIGIN,
+      },
+      body: JSON.stringify({ dfAddressId }),
+      signal: AbortSignal.timeout(8000),
+    });
+
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) throw new Error("TOKEN_EXPIRED");
+      return { found: false, isNewFiber: false };
+    }
+
+    const data = await res.json();
+    if (!data.success || data.validationResult === "AddressNotFound" || !data.address) {
+      return { found: false, isNewFiber: false };
+    }
+
+    const addr = data.address;
+    const segment = addr.householdSegmentType ?? "";
+    const isNewFiber = segment === "NEW FIBER";
+    const kbps = data.broadbandService?.finalQualSpeed;
+    const mbps = kbps ? Math.round(parseInt(kbps) / 1000) : null;
+    let speedTier: string | null = null;
+    if (mbps) {
+      if (mbps >= 2000) speedTier = "2gig";
+      else if (mbps >= 1000) speedTier = "1gig";
+      else if (mbps >= 500) speedTier = "500mbps";
+      else if (mbps >= 300) speedTier = "300mbps";
+      else if (mbps >= 100) speedTier = "100mbps";
+      else speedTier = "sub100mbps";
+    }
+
+    return {
+      found: true,
+      isNewFiber,
+      address: addr.addressLine1,
+      city: addr.city ?? "",
+      state: addr.stateProvinceCd ?? "",
+      zip: addr.postalCd ?? "",
+      lat: addr.geoLat ? parseFloat(addr.geoLat) : null,
+      lng: addr.geoLong ? parseFloat(addr.geoLong) : null,
+      billingStatus: addr.billingStatus ?? null,
+      householdSegmentType: segment || null,
+      techType: data.techType ?? addr.maxQualTechnologyType ?? null,
+      speedTier,
+      maxDownloadMbps: mbps,
+      competitorName: addr.competitorCompanyName ?? null,
+      addressCatalogDate: addr.addressCatalogDt ?? null,
+      dfAddressId,
+    };
+  } catch (err: any) {
+    if (err.message === "TOKEN_EXPIRED") throw err;
+    return { found: false, isNewFiber: false };
+  }
+}
+
+/**
+ * Run the nightly CNS scan for MS ENV (NC/SC/IN/MI)
+ * Scans from (upperLimit - 50000) to upperLimit to catch newest addresses
+ */
+async function runNightlyCnsScan(): Promise<void> {
+  console.log("[cron] Starting nightly CNS scan...");
+  cronStatus.isRunning = true;
+  cronStatus.lastRunAt = new Date().toISOString();
+
+  const ENV = "MS";
+  const UPPER_LIMIT = 3_062_552;
+  const SCAN_COUNT = 50_000;
+  const startCns = UPPER_LIMIT - SCAN_COUNT;
+
+  const newFiberAddresses: string[] = [];
+  let token: string;
+
+  try {
+    token = await getAuthToken();
+  } catch (err: any) {
+    cronStatus.isRunning = false;
+    cronStatus.lastRunResult = `Failed to get auth token: ${err.message}`;
+    console.warn("[cron] Cannot start — no auth token:", err.message);
+    return;
+  }
+
+  let consecutiveErrors = 0;
+
+  for (let cns = startCns; cns <= UPPER_LIMIT; cns++) {
+    // Re-fetch token every 25 min
+    if (cns % 1000 === 0) {
+      try { token = await getAuthToken(); consecutiveErrors = 0; } catch { /* keep existing */ }
+    }
+
+    try {
+      const result = await lookupCnsDirect(ENV, cns, token);
+
+      if (result.found && result.isNewFiber && result.billingStatus === "N") {
+        // HOT LEAD — billingStatus N = no existing subscriber
+        const fullAddress = `${result.address}, ${result.city}, ${result.state} ${result.zip}`;
+        newFiberAddresses.push(fullAddress);
+        cronStatus.totalNewFiberFound++;
+
+        // Save as lead immediately
+        try {
+          storage.createLead({
+            address: result.address!,
+            city: result.city!,
+            state: result.state!,
+            zip: result.zip!,
+            lat: result.lat ?? undefined,
+            lng: result.lng ?? undefined,
+            fiberStatus: "new_fiber",
+            isNewFiber: true,
+            isTenured: false,
+            billingStatus: result.billingStatus,
+            householdSegmentType: result.householdSegmentType,
+            techType: result.techType,
+            speedTier: result.speedTier,
+            maxDownloadMbps: result.maxDownloadMbps,
+            competitorName: result.competitorName,
+            addressCatalogDate: result.addressCatalogDate,
+            dfAddressId: result.dfAddressId,
+            leadStatus: "prospect",
+            deploymentNotes: `Nightly CNS scan: ENV=MS CNS=${cns}. Hot Lead — NEW FIBER, no subscriber.`,
+          });
+        } catch { /* duplicate — skip */ }
+
+        // Send immediate email alert for first hit
+        if (newFiberAddresses.length === 1) {
+          sendAlertEmail(
+            "🔥 NEW FIBER Lead Found — HomeFront Fiber Nightly Scan",
+            newFiberAlertHtml(1, newFiberAddresses)
+          ).catch(err => console.warn("[cron] Email alert failed:", err.message));
+        }
+      }
+
+      consecutiveErrors = 0;
+      // Rate limit: 80ms between requests (750/min — respectful)
+      await new Promise(r => setTimeout(r, 80));
+
+    } catch (err: any) {
+      if (err.message === "TOKEN_EXPIRED") {
+        console.warn("[cron] Token expired mid-scan — stopping for tonight");
+        break;
+      }
+      consecutiveErrors++;
+      if (consecutiveErrors >= 20) {
+        console.warn("[cron] Too many consecutive errors — aborting scan");
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
+  // Summary email if we found multiple
+  if (newFiberAddresses.length > 1) {
+    sendAlertEmail(
+      `🔥 ${newFiberAddresses.length} NEW FIBER Leads — HomeFront Fiber Nightly Scan`,
+      newFiberAlertHtml(newFiberAddresses.length, newFiberAddresses)
+    ).catch(err => console.warn("[cron] Summary email failed:", err.message));
+  }
+
+  cronStatus.isRunning = false;
+  cronStatus.lastRunResult = newFiberAddresses.length > 0
+    ? `Found ${newFiberAddresses.length} new fiber leads`
+    : "No new fiber leads found tonight";
+  cronStatus.totalRunCount++;
+  console.log(`[cron] Nightly scan complete: ${cronStatus.lastRunResult}`);
+}
+
+// ── Coming Soon Auto-Promote ──────────────────────────────────────────────────
+async function runComingSoonCheck(): Promise<void> {
+  console.log("[cron] Checking Coming Soon addresses...");
+
+  let addresses: any[];
+  try {
+    addresses = storage.getComingSoonAddresses();
+  } catch {
+    console.warn("[cron] getComingSoonAddresses failed — Coming Soon table may not exist yet");
+    return;
+  }
+
+  if (addresses.length === 0) {
+    console.log("[cron] No Coming Soon addresses to check");
+    return;
+  }
+
+  let token: string;
+  try {
+    token = await getAuthToken();
+  } catch (err: any) {
+    console.warn("[cron] Cannot check Coming Soon — no auth token:", err.message);
+    return;
+  }
+
+  const promoted: string[] = [];
+
+  for (const cs of addresses) {
+    try {
+      // Re-check via address search
+      const { proxyFetch: pf } = await import("./proxy-fetch");
+      const res = await pf(KFS_SCAN_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "Authorization": `Bearer ${token}`,
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+          "device-id": "698ca1e5-f077-4a62-a1e7-e97f484c7231",
+          "Referer": KFS_REFERER,
+          "Origin": KFS_ORIGIN,
+        },
+        body: JSON.stringify({
+          addressLine1: cs.address,
+          addressLine2: "",
+          city: cs.city,
+          state: cs.state,
+          postalCode: cs.zip,
+        }),
+        signal: AbortSignal.timeout(8000),
+      });
+
+      if (!res.ok) { await new Promise(r => setTimeout(r, 500)); continue; }
+
+      const data = await res.json();
+      if (!data.success || !data.address) { await new Promise(r => setTimeout(r, 300)); continue; }
+
+      const segment = data.address?.householdSegmentType ?? "";
+      const isNewFiber = segment === "NEW FIBER";
+
+      // Update last checked
+      try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
+
+      if (isNewFiber) {
+        // Fiber went live! Promote to lead.
+        const fullAddress = `${cs.address}, ${cs.city}, ${cs.state} ${cs.zip}`;
+        promoted.push(fullAddress);
+
+        try {
+          const lead = storage.createLead({
+            address: cs.address,
+            city: cs.city,
+            state: cs.state,
+            zip: cs.zip,
+            lat: cs.lat ?? undefined,
+            lng: cs.lng ?? undefined,
+            fiberStatus: "new_fiber",
+            isNewFiber: true,
+            isTenured: false,
+            billingStatus: data.address?.billingStatus ?? null,
+            householdSegmentType: segment,
+            techType: data.techType ?? data.address?.maxQualTechnologyType ?? null,
+            leadStatus: "prospect",
+            deploymentNotes: `Coming Soon promoted: fiber went live. Previously in pipeline since ${cs.createdAt}.`,
+          });
+          try { storage.markComingSoonAvailable(cs.id, lead.id); } catch { /* ignore */ }
+        } catch { /* duplicate — still mark available */ }
+
+        // Immediate alert
+        sendAlertEmail(
+          `🟡 Coming Soon → LIVE: ${cs.address}`,
+          comingSoonPromotedHtml(1, [fullAddress])
+        ).catch(() => {});
+      }
+
+      await new Promise(r => setTimeout(r, 200));
+    } catch { /* skip this address */ }
+  }
+
+  if (promoted.length > 0) {
+    console.log(`[cron] Coming Soon promoted ${promoted.length} addresses to leads`);
+    if (promoted.length > 1) {
+      sendAlertEmail(
+        `🟡 ${promoted.length} Coming Soon Addresses Now LIVE — HomeFront Fiber`,
+        comingSoonPromotedHtml(promoted.length, promoted)
+      ).catch(() => {});
+    }
+  } else {
+    console.log("[cron] Coming Soon check complete — no changes");
+  }
+}
+
+// ── Scheduler ─────────────────────────────────────────────────────────────────
+function msUntilNext2AM(): number {
+  const now = new Date();
+  // 2 AM Eastern = 7 AM UTC (EST) or 6 AM UTC (EDT)
+  // Use a simple approach: next 2 AM in the server's local time
+  const next = new Date(now);
+  next.setHours(2, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  return next.getTime() - now.getTime();
+}
+
+let cronScheduled = false;
+
+export function startNightlyCron() {
+  if (cronScheduled) return;
+  cronScheduled = true;
+
+  function scheduleNext() {
+    const ms = msUntilNext2AM();
+    const nextRun = new Date(Date.now() + ms);
+    cronStatus.nextRunAt = nextRun.toISOString();
+    console.log(`[cron] Next nightly scan scheduled at ${nextRun.toLocaleString()}`);
+
+    setTimeout(async () => {
+      try {
+        await runNightlyCnsScan();
+        await runComingSoonCheck();
+      } catch (err: any) {
+        console.error("[cron] Nightly run failed:", err.message);
+      }
+      scheduleNext(); // Schedule next night
+    }, ms);
+  }
+
+  scheduleNext();
+}
+
+// ── Manual trigger (for admin testing) ───────────────────────────────────────
+export async function triggerManualScan(): Promise<void> {
+  if (cronStatus.isRunning) throw new Error("Cron scan already running");
+  runNightlyCnsScan().catch(err => console.error("[cron] Manual scan failed:", err.message));
+  runComingSoonCheck().catch(() => {});
+}
