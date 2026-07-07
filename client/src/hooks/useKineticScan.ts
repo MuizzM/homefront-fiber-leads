@@ -16,7 +16,7 @@ async function getToken(): Promise<string> {
   const now = Date.now();
   if (cachedToken && now < tokenExpiry - 60_000) return cachedToken;
   // Fetch from our own server (server IP is fine for auth)
-  const data = await apiRequest("POST", "/api/kinetic-token", {});
+  const data = await (await apiRequest("POST", "/api/kinetic-token", {})).json();
   cachedToken = (data as any).token;
   tokenExpiry = now + 25 * 60 * 1000; // 25 min
   return cachedToken!;

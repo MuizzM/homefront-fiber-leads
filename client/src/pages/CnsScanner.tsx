@@ -189,9 +189,9 @@ export default function CnsScanner() {
     }
     setStarting(true);
     try {
-      const job: CnsJobDetail = await apiRequest("POST", "/api/cns/jobs", {
+      const job: CnsJobDetail = await (await apiRequest("POST", "/api/cns/jobs", {
         env: selectedEnv, startCns: start, endCns: end,
-      });
+      })).json();
       toast({ title: "CNS scan started", description: `${selectedEnv} · CNS ${fmtCns(start)}–${fmtCns(end)}` });
       refetchJobs();
       connectStream(job.id);
@@ -232,7 +232,7 @@ export default function CnsScanner() {
   const [viewJobId, setViewJobId] = useState<string | null>(null);
   const { data: viewJob } = useQuery<CnsJobDetail>({
     queryKey: ["/api/cns/jobs", viewJobId],
-    queryFn: () => apiRequest("GET", `/api/cns/jobs/${viewJobId}`),
+    queryFn: async () => (await apiRequest("GET", `/api/cns/jobs/${viewJobId}`)).json(),
     enabled: !!viewJobId,
     refetchInterval: viewJobId ? 3000 : false,
   });

@@ -65,7 +65,7 @@ export default function FiberScanner() {
   const checkMutation = useMutation({
     mutationFn: async () => {
       // Route through server /api/check-fiber (uses v2 endpoint — no CORS, no IP ban)
-      const r = await apiRequest("POST", "/api/check-fiber", { address, city, state, zip }) as any;
+      const r = await (await apiRequest("POST", "/api/check-fiber", { address, city, state, zip })).json() as any;
       return {
         address: r.address ?? address,
         city: r.city ?? city,

@@ -98,7 +98,7 @@ export default function USAScanner() {
   // Live scanner state — polled every 3s while scanning (FiberFocus pattern)
   const { data: scannerState } = useQuery<ScannerState>({
     queryKey: ["/api/scanner/state"],
-    queryFn: () => apiRequest("GET", "/api/scanner/state"),
+    queryFn: async () => (await apiRequest("GET", "/api/scanner/state")).json(),
     refetchInterval: activeScan?.status === "scanning" ? 3000 : false,
     enabled: activeScan?.status === "scanning",
   });
@@ -124,7 +124,7 @@ export default function USAScanner() {
           // Polling fallback
           const pollId = setInterval(async () => {
             try {
-              const s = await apiRequest("GET", `/api/scan/${jobId}`);
+              const s = await (await apiRequest("GET", `/api/scan/${jobId}`)).json();
               setActiveScan(prev => prev ? {
                 ...prev,
                 status: s.status === "done" ? "done" : s.status === "error" ? "error" : "scanning",
@@ -193,9 +193,9 @@ export default function USAScanner() {
     setActiveScan({ jobId: "", city: market.city, state: market.state, status: "pulling", total: 0, done: 0, newFiber: 0 });
 
     try {
-      const { jobId, total } = await apiRequest("POST", "/api/scan/start-city", {
+      const { jobId, total } = await (await apiRequest("POST", "/api/scan/start-city", {
         city: market.city, state: market.state, zip: market.zip,
-      });
+      })).json();
       setActiveScan(prev => prev ? { ...prev, jobId, status: "scanning", total } : null);
       toast({
         title: `Scanning ${market.city}, ${market.state}`,
