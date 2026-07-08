@@ -96,15 +96,17 @@ function renderSheet(overrides: Record<string, any> = {}) {
 }
 
 describe("<LeadKnockSheet /> — outcome grid", () => {
-  it("renders the sheet with the address and all 7 outcome buttons", () => {
+  it("renders the sheet with the address and exactly the 6 rep outcome buttons", () => {
     renderSheet();
 
     const sheet = screen.getByTestId("knock-sheet");
     expect(sheet).toHaveTextContent("148 Maple St");
-    // One button per OUTCOMES def — the shared array is the source of truth.
-    for (const o of OUTCOMES) {
+    // Owner's rule: 4-6 buttons max on the rep card. needs_verification stays in
+    // shared/knock.ts for server/history back-compat but is NOT offered to reps.
+    for (const o of OUTCOMES.filter(o => o.key !== "needs_verification")) {
       expect(screen.getByTestId(`knock-outcome-${o.key}`)).toBeInTheDocument();
     }
+    expect(screen.queryByTestId("knock-outcome-needs_verification")).not.toBeInTheDocument();
   });
 
   it("tapping an outcome fires onKnock with that outcome", async () => {
@@ -209,12 +211,16 @@ describe("<LeadKnockSheet /> — chrome and gating", () => {
     expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("renders the assign-rep select only when canAssign", () => {
+  it("renders the assign-rep select only when canAssign AND expanded (peek stays clean)", async () => {
     const reps = [
       { id: 3, name: "Dana Reyes" },
       { id: 4, name: "Malik Byrd" },
     ];
     const first = renderSheet({ canAssign: true, reps, onAssignRep: vi.fn() });
+    // Peek shows knocking essentials only — admin controls live behind expand.
+    expect(screen.queryByTestId("assign-rep-select")).not.toBeInTheDocument();
+    // Tapping the handle toggles peek → expanded (one-hand alternative to drag).
+    await userEvent.click(screen.getByTestId("knock-sheet-handle"));
     expect(screen.getByTestId("assign-rep-select")).toBeInTheDocument();
     first.unmount();
 
@@ -225,5 +231,36 @@ describe("<LeadKnockSheet /> — chrome and gating", () => {
   it("renders nothing when lead is null", () => {
     renderSheet({ lead: null });
     expect(screen.queryByTestId("knock-sheet")).not.toBeInTheDocument();
+  });
+});
+
+describe("<LeadKnockSheet /> — porch-simple peek", () => {
+  it("never shows the word 'Unworked'; a fresh door shows its city instead", () => {
+    renderSheet(); // baseLead: fresh, city Rockwell
+    expect(screen.getByTestId("knock-sheet")).not.toHaveTextContent(/unworked/i);
+    expect(screen.getByTestId("knock-sheet")).toHaveTextContent("Rockwell");
+  });
+
+  it("keeps the note field out of peek; after a save + expand it appears", async () => {
+    const { props } = renderSheet({ savedOutcome: "interested" });
+    // Peek: no form controls, calm card.
+    expect(screen.queryByTestId("knock-note-input")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("knock-sheet-handle")); // expand
+    expect(screen.getByTestId("knock-note-input")).toBeInTheDocument();
+    expect(props).toBeTruthy();
+  });
+
+  it("without a saved outcome there is no note field even when expanded", async () => {
+    renderSheet();
+    await userEvent.click(screen.getByTestId("knock-sheet-handle"));
+    expect(screen.queryByTestId("knock-note-input")).not.toBeInTheDocument();
+  });
+
+  it("shows the 🔥 chip only for hot leads (score ≥ 80)", () => {
+    const hot = renderSheet({ lead: baseLead({ leadScore: 85 }) });
+    expect(screen.getByTestId("knock-hot-chip")).toBeInTheDocument();
+    hot.unmount();
+    renderSheet({ lead: baseLead({ leadScore: 40 }) });
+    expect(screen.queryByTestId("knock-hot-chip")).not.toBeInTheDocument();
   });
 });

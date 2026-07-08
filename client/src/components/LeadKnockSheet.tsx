@@ -9,6 +9,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Check, CloudOff, Loader2, MessageSquare, Navigation, Phone, X } from "lucide-react";
+import { SHEET_PEEK_BASE_PX } from "@/lib/mapPins";
 import {
   OUTCOMES, OUTCOME_META, STATE_COLORS, pinDisplayState, isKnockOutcome,
   type KnockOutcome,
@@ -45,9 +46,10 @@ export interface LeadKnockSheetProps {
 
 type Phase = "pick" | "callback" | "done";
 
-// Peek height: everything a rep needs mid-walk fits above the fold
-// (handle + header + 3-row outcome grid + directions/call/text strip).
-const PEEK_BASE_PX = 372;
+// Peek height: exactly what a rep needs on a porch, nothing below half-clipped
+// (handle + header + 2-row outcome grid + directions/call/text strip).
+// Imported from mapPins so the map's camera padding tracks the sheet lip.
+const PEEK_BASE_PX = SHEET_PEEK_BASE_PX;
 // Tap-vs-drag threshold: header buttons must still receive taps.
 const TAP_SLOP_PX = 6;
 // Dragging further than this below the peek position dismisses the sheet.
@@ -63,8 +65,9 @@ const LIGHT: Record<KnockOutcome, string> = {
   needs_verification: "#94a3b8",
 };
 
-// needs_verification is demoted to its own full-width row — the 2×3 grid stays
-// pure thumb-frequency order.
+// Reps get exactly 6 buttons (owner's rule: 4-6 max, porch-simple), in pure
+// thumb-frequency order. needs_verification stays in shared/knock.ts for
+// server + history back-compat but is not offered on the rep card.
 const GRID_OUTCOMES = OUTCOMES.filter(o => o.key !== "needs_verification");
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -111,9 +114,13 @@ function SaveStateChip({ state, onRetry }: {
       Saved ✓
     </span>
   );
+  // Queued copy says the thing the rep needs to hear — it's safe, keep walking.
+  // The cloud-off icon + amber carry the "offline" part without scary words,
+  // and the chip stays the same width as "Saved ✓" so the header never reflows.
   if (state === "queued") return (
-    <span data-testid="knock-save-state" data-state="queued" className={`${base} bg-amber-500/15 text-amber-400`}>
-      <CloudOff className="w-3 h-3" />Offline — queued
+    <span data-testid="knock-save-state" data-state="queued" aria-label="Saved offline — will sync"
+      className={`${base} bg-amber-500/15 text-amber-400`}>
+      <CloudOff className="w-3 h-3" />Saved ✓
     </span>
   );
   return (
@@ -121,7 +128,7 @@ function SaveStateChip({ state, onRetry }: {
       type="button" data-testid="knock-save-state" data-state="error" onClick={onRetry}
       className={`${base} bg-red-500/15 text-red-400 active:scale-95 transition`}
     >
-      Failed — retry
+      Tap to retry
     </button>
   );
 }
@@ -282,7 +289,8 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
 
   const handleOutcomeTap = (key: KnockOutcome) => {
     if (locked) return;
-    try { navigator.vibrate?.(10); } catch { /* unsupported */ }
+    // A sale gets a double-tick buzz — every sold should feel different in the hand.
+    try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
     if (key === "callback") { setPhase("callback"); return; } // date first, knock second
     armDoubleTapGuard();
     setLocalPick(key);
@@ -455,35 +463,31 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
         onPointerCancel={(e) => endDrag(e, true)}
         onClickCapture={swallowDragClick}
       >
-        <div data-testid="knock-sheet-handle" className="flex justify-center pt-2 pb-1">
+        {/* Tap the handle to toggle peek/expanded — one-hand alternative to the
+            drag (swallowDragClick suppresses this after a real drag). */}
+        <div
+          data-testid="knock-sheet-handle"
+          className="flex justify-center pt-2 pb-1 cursor-pointer"
+          onClick={() => setSnap(s => (s === "peek" ? "expanded" : "peek"))}
+        >
           <div className="w-10 h-1.5 rounded-full bg-muted-foreground/30" />
         </div>
 
-        <div className="flex items-start gap-2 px-4 pb-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 min-w-0">
-              <h2 className="text-base font-semibold text-foreground truncate">{renderedLead.address}</h2>
-              <span
-                data-testid="knock-status-chip"
-                className="shrink-0 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide"
-                style={{ background: `${stateColor}26`, color: stateColor }}
-              >
-                {stateLabel}
-              </span>
-            </div>
-            <p className="text-xs text-muted-foreground truncate mt-0.5">
-              {knocked
-                ? `✓ ${lastLabel} · ${relTime(renderedLead.lastKnockedAt!)} · ${knockN} knock${knockN === 1 ? "" : "s"}`
-                : "Unworked"}
-            </p>
-          </div>
-          <div className="flex items-center gap-1 shrink-0">
+        {/* Two-row header: the address owns row 1 (~20 chars even with every
+            control visible); status context lives quietly on row 2. */}
+        <div className="px-4 pb-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="min-w-0 flex-1 text-[15px] font-semibold text-foreground truncate">{renderedLead.address}</h2>
+            {(renderedLead.leadScore ?? 0) >= 80 && (
+              <span data-testid="knock-hot-chip" aria-label="Hot lead" title={`Hot lead - score ${renderedLead.leadScore}`}
+                className="shrink-0 h-5 px-1.5 rounded-full bg-orange-500/15 text-[11px] leading-5">🔥</span>
+            )}
             <SaveStateChip state={saveState} onRetry={onRetrySave} />
             <button
               type="button"
               data-testid="knock-skip"
               onClick={onSkip}
-              className="h-8 px-2 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
+              className="h-11 px-3 shrink-0 text-xs font-semibold text-muted-foreground hover:text-foreground transition-colors"
             >
               Skip
             </button>
@@ -492,10 +496,33 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
               data-testid="knock-sheet-close"
               onClick={onClose}
               aria-label="Close"
-              className="w-11 h-11 -mr-2 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
+              className="w-11 h-11 -mr-2 shrink-0 flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground transition-colors"
             >
               <X className="w-5 h-5" />
             </button>
+          </div>
+          {/* Row 2: what happened last ("✓ Not Home · 2h ago · 2×"), or where this
+              door is when fresh. The word "Unworked" never appears: a green pin
+              plus a grid of buttons already says "this one's fresh". */}
+          <div className="flex items-center gap-1.5 mt-0.5 min-w-0 text-xs text-muted-foreground">
+            {knocked ? (
+              <>
+                <span
+                  data-testid="knock-status-chip"
+                  className="shrink-0 h-[18px] px-2 rounded-full text-[10px] font-semibold uppercase tracking-wide leading-[18px]"
+                  style={{ background: `${stateColor}26`, color: stateColor }}
+                >
+                  ✓ {lastLabel}
+                </span>
+                <span className="truncate">
+                  {relTime(renderedLead.lastKnockedAt!)}{knockN >= 2 ? ` · ${knockN}×` : ""}
+                </span>
+              </>
+            ) : (
+              <span className="truncate">
+                {[renderedLead.city, [renderedLead.state, renderedLead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -527,18 +554,6 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
                 </button>
               );
             })}
-            <button
-              type="button"
-              data-testid="knock-outcome-needs_verification"
-              onClick={() => handleOutcomeTap("needs_verification")}
-              className="col-span-3 h-10 rounded-xl border border-[#64748b]/40 text-[#94a3b8] bg-transparent text-[13px] font-semibold whitespace-nowrap active:scale-95 transition flex items-center justify-center gap-1"
-              style={selected === "needs_verification"
-                ? { background: OUTCOME_META.needs_verification.color, color: "#ffffff" }
-                : undefined}
-            >
-              {selected === "needs_verification" && <Check className="w-4 h-4 shrink-0" />}
-              {OUTCOME_META.needs_verification.label}
-            </button>
           </div>
         )}
 
@@ -625,14 +640,28 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
         {phase === "done" && (
           <div>
             <div className="flex items-center gap-2">
-              <span
+              {/* A sale physically feels different: one-time pop + emerald glow.
+                  Half a second, zero libraries, no confetti. */}
+              <motion.span
                 data-testid="knock-done-chip"
                 className="inline-flex items-center gap-1.5 h-10 px-3 rounded-xl text-sm font-bold text-white"
                 style={{ background: doneMeta?.color ?? "#64748b" }}
+                {...(savedOutcome === "sold" ? {
+                  initial: { scale: 0.6 },
+                  animate: {
+                    scale: [0.6, 1.1, 1],
+                    boxShadow: [
+                      "0 0 0 0 rgba(16,185,129,0)",
+                      "0 0 28px 6px rgba(16,185,129,0.45)",
+                      "0 0 0 0 rgba(16,185,129,0)",
+                    ],
+                  },
+                  transition: { duration: 0.5, times: [0, 0.6, 1], ease: "easeOut" as const },
+                } : {})}
               >
                 <Check className="w-4 h-4" />
-                {doneMeta?.label ?? "Logged"}
-              </span>
+                {savedOutcome === "sold" ? "Sold 🎉" : (doneMeta?.label ?? "Logged")}
+              </motion.span>
               <button
                 type="button"
                 data-testid="knock-change-outcome"
@@ -670,7 +699,7 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
                 ].join(" ")}
               >
                 {hasNext === false ? (
-                  "All done ✓"
+                  "All done — nice work ✓"
                 ) : (
                   <span className="flex flex-col items-center leading-tight">
                     <span>Next Door</span>
@@ -691,18 +720,23 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
           <div className="mt-2 flex justify-end gap-2">{actionIcons}</div>
         )}
 
-        {/* ── Expanded extras ──────────────────────────────────────────────────── */}
+        {/* ── Expanded extras — NEVER visible at peek. A half-clipped textarea
+               peeking above the fold reads as a form; the peek card must stay
+               calm: address, six buttons, actions, done. ── */}
+        {snap === "expanded" && (
         <div className="mt-4 space-y-4">
+          {/* Notes attach to the knock just logged — before that there's nothing
+              to attach to, so no dead disabled form control: it simply isn't there. */}
+          {savedOutcome && (
           <div>
             <textarea
               ref={noteRef}
               data-testid="knock-note-input"
-              placeholder="Add a note (optional)"
-              disabled={!savedOutcome}
+              placeholder="Note for next time (optional)"
               value={note}
               onChange={handleNoteChange}
               onBlur={() => commitNote(note)}
-              className="w-full min-h-[72px] text-base bg-secondary border border-border rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground disabled:opacity-50 resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+              className="w-full min-h-[72px] text-base bg-secondary border border-border rounded-lg px-3 py-2 text-foreground placeholder:text-muted-foreground resize-none focus:outline-none focus:ring-1 focus:ring-primary"
             />
             {noteSaved && (
               <motion.span
@@ -716,6 +750,7 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
               </motion.span>
             )}
           </div>
+          )}
 
           <div>
             <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">
@@ -759,8 +794,8 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
               </span>
             )}
             {renderedLead.leadScore != null && renderedLead.leadScore >= 80 && (
-              <span className="px-2 py-0.5 rounded-full bg-primary/15 text-primary text-[10px] font-bold">
-                Score {renderedLead.leadScore}
+              <span className="px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 text-[10px] font-bold">
+                🔥 Hot lead
               </span>
             )}
             {renderedLead.contactName && (
@@ -785,6 +820,7 @@ export function LeadKnockSheet(props: LeadKnockSheetProps): JSX.Element | null {
             </select>
           )}
         </div>
+        )}
       </div>
     </div>
   );

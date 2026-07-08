@@ -6,19 +6,27 @@
 import { STATE_COLORS, type PinDisplayState } from "@shared/knock";
 
 // Flat GPU match on the precomputed `ds` feature prop — no nested case logic.
+// MAP-ONLY overrides for terminal states: alpha-dimming muddied into satellite
+// texture, and sold #10b981 read as a green twin of unworked #22c55e at 8px in
+// sunlight. Pre-mixed solid "quiet" hexes (≈45% toward slate) keep edges crisp
+// and unmistakably darker than the bright actionable pins. Buttons/chips keep
+// the vivid STATE_COLORS.
+const MAP_DIM: Record<string, string> = {
+  sold: "#20836d",           // deep sea-green — clearly not "fresh door" green
+  not_interested: "#9a434c", // muted brick — quiet but still reads red
+};
 export const PIN_DS_COLOR: any = [
   "match", ["get", "ds"],
-  ...Object.entries(STATE_COLORS).flatMap(([k, v]) => [k, v]),
+  ...Object.entries(STATE_COLORS).flatMap(([k, v]) => [k, MAP_DIM[k] ?? v]),
   STATE_COLORS.unworked, // fallback
 ];
 
-// Done-vs-left at a glance: only TERMINAL states dim. Actionable knocked states
-// (not_home, follow_up, interested, contacted) stay bright — the rep still owes
-// them a visit. Unworked is brightest.
+// Done-vs-left at a glance: terminal states are quiet via their pre-mixed hue
+// (above), not via alpha. Actionable knocked states (not_home, follow_up,
+// interested, contacted) stay bright — the rep still owes them a visit.
 export const PIN_DS_OPACITY: any = [
   "match", ["get", "ds"],
   "unworked", 0.95,
-  ["sold", "not_interested"], 0.55,
   0.9,
 ];
 
@@ -60,10 +68,14 @@ export const SELECTED_RING_SPEC: any = {
   },
 };
 
-// Peek sheet ≈30vh, capped for tall phones. Recomputed at each snap transition
-// (URL-bar collapse / rotation change innerHeight).
+// Single source for the sheet's peek height — LeadKnockSheet imports this so
+// the camera padding can never drift from the actual sheet lip again.
+export const SHEET_PEEK_BASE_PX = 292;
+
+// Camera bottom padding = peek height + a small margin so the selected pin sits
+// just above the sheet lip; capped at 35vh for short/landscape viewports.
 export const sheetPeekPaddingPx = (): number =>
-  Math.min(Math.round((typeof window !== "undefined" ? window.innerHeight : 800) * 0.30), 320);
+  Math.min(SHEET_PEEK_BASE_PX + 24, Math.round((typeof window !== "undefined" ? window.innerHeight : 800) * 0.35));
 
 // All programmatic camera moves in the rep flow go through this — jumpTo under
 // prefers-reduced-motion and in headless/jsdom (no easeTo) so the camera never

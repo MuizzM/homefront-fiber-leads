@@ -4,7 +4,8 @@ declare const mapboxgl: any;
 import {
   Play, Square, RefreshCw, AlertCircle, Pencil, X,
   DoorOpen, UserCheck, Zap, CalendarClock, PhoneOff, Map as MapIcon, Bell,
-  ChevronRight, Home, Wifi, Signal, Users, Target, Search, LocateFixed, Footprints
+  ChevronRight, Home, Wifi, Signal, Users, Target, Search, LocateFixed, Footprints,
+  Satellite, Moon
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -452,11 +453,9 @@ export default function MapView() {
     (window as any).__closeLeadSheet = () => setSelectedLeadId(null);
     return () => { delete (window as any).__closeLeadSheet; };
   }, []);
-  // Reps open the map on their primary lens: what's left to knock.
-  const repDefaultApplied = useRef(false);
-  useEffect(() => {
-    if (isRep && !repDefaultApplied.current) { repDefaultApplied.current = true; setVisitFilter("unvisited"); }
-  }, [isRep]);
+  // Reps default to ALL pins — a knocked door must never vanish from the map;
+  // it stays visible in its new state (recolored + ✓) so coverage always reads.
+  // "Left"/"Done"/"Follow-ups"/"Sold" are opt-in lenses via the filter chips.
 
   // ── Fetch Mapbox token from server (not in bundle) ──────────────────────────
   const [mapboxToken, setMapboxToken] = useState<string>("");
@@ -707,7 +706,9 @@ export default function MapView() {
         paint: { "text-color": "#ffffff", "text-halo-color": "#0f172a", "text-halo-width": 1.5 },
       });
 
-      // Glow ring for unclustered pins
+      // Glow ring for unclustered pins — inserted BENEATH the pin layer so the
+      // 0.18-alpha halo never washes over the pin or its ✓ (matches the
+      // style-reload block's order).
       map.addLayer({
         id: "lead-unclustered-glow",
         type: "circle",
@@ -715,7 +716,7 @@ export default function MapView() {
         filter: ["!", ["has", "point_count"]],
         minzoom: 12,
         paint: UNCLUSTERED_GLOW_PAINT,
-      });
+      }, "lead-unclustered");
 
       // Selected-pin ring — driven by setFilter (style-thread only, no setData).
       // Added last so it can never be occluded by pins/✓/glow.
@@ -752,6 +753,19 @@ export default function MapView() {
         if (drawToolActive()) return;
         const feats = map.queryRenderedFeatures(e.point);
         if (feats.some((f: any) => f.layer?.id === "lead-unclustered" || f.layer?.id === "lead-clusters")) return;
+        // Fat-finger forgiveness: pins are 16px dots — before treating this as an
+        // empty-map tap, look for a pin within a ±12px box. A near-miss opens the
+        // door the rep aimed at instead of dismissing their sheet mid-flow.
+        const openSheet = (window as any).__openLeadSheet;
+        if (openSheet) {
+          try {
+            const near = map.queryRenderedFeatures(
+              [[e.point.x - 12, e.point.y - 12], [e.point.x + 12, e.point.y + 12]],
+              { layers: ["lead-unclustered"] },
+            );
+            if (near.length) { openSheet(near[0].properties.id); return; }
+          } catch { /* layer not ready */ }
+        }
         // Tapping empty map dismisses the knock sheet (its map stays interactive).
         (window as any).__closeLeadSheet?.();
         const terr = feats.find((f: any) => typeof f.layer?.id === "string" && /^territory-\d+$/.test(f.layer.id));
@@ -912,8 +926,11 @@ export default function MapView() {
     }
 
     if (filterStatus !== "all") leadsToShow = leadsToShow.filter(l => l.leadStatus === filterStatus);
-    // Visit filter — "what's left to knock" is the rep's primary lens
-    if (visitFilter === "unvisited") leadsToShow = leadsToShow.filter(l => !l.visited);
+    // Visit filter — "what's left to knock". Session-knocked doors (ring buffer)
+    // are exempt from the unvisited lens: the pin the rep JUST marked must not
+    // vanish from under their finger mid-sheet — it fades out on the next
+    // re-filter instead. (Ref read, so the dep array stays selection-free.)
+    if (visitFilter === "unvisited") leadsToShow = leadsToShow.filter(l => !l.visited || recentIdsRef.current.includes(l.id));
     else if (visitFilter === "visited") leadsToShow = leadsToShow.filter(l => l.visited);
     const visibleLeads = leadsToShow;
     visibleLeadsRef.current = visibleLeads; // Next Door candidates = what the rep can see
@@ -1712,6 +1729,13 @@ export default function MapView() {
     // masking the genuinely-last few doors.
     let next = nearestUnworkedLead(origin, pins, exclude);
     if (!next) next = nearestUnworkedLead(origin, pins, new Set(selectedLeadId != null ? [selectedLeadId] : []));
+    // Inside the Done/Follow-ups/Sold lenses the visible set has zero routable
+    // doors by definition — fall back to ALL pins and reset the lens so the rep
+    // lands back in active-knocking view instead of a false "all worked".
+    if (!next) {
+      next = nearestUnworkedLead(origin, leads.filter(l => l.lat && l.lng) as any[], new Set(selectedLeadId != null ? [selectedLeadId] : []));
+      if (next) { setVisitFilter("all"); setFilterStatus("all"); }
+    }
     if (!next) { toast({ title: "All doors here are worked — nice job 🎉" }); return; }
     setSelectedLeadId(next.id);
     moveCamera(map, {
@@ -2001,7 +2025,10 @@ export default function MapView() {
         {/* MAP */}
         <div className="relative flex-1 min-w-0">
           <div style={{ position: "absolute", inset: 0 }}>
-            <div ref={mapContainer} style={{ width: "100%", height: "100%" }} />
+            {/* rep-clean-map hides the Mapbox zoom/compass/geolocate button stack on
+                mobile rep screens — pinch-zoom + the locate FAB cover both, and the
+                porch test says every leftover control is clutter. */}
+            <div ref={mapContainer} className={isRep && isMobile ? "rep-clean-map" : undefined} style={{ width: "100%", height: "100%" }} />
           </div>
 
           {!mapReady && !noToken && (
@@ -2102,38 +2129,49 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── Rep filter chips — the field lens: All / Unworked / Follow-ups ── */}
+          {/* ── Rep filter chips — one-tap lenses over the same pins. Radio-style;
+                 knocked doors always stay on the map under "All" (default). ── */}
           {mapReady && isRep && (
-            <div className="absolute top-[104px] left-3 z-20 flex gap-1.5">
+            <div className="absolute top-[104px] left-3 right-3 z-20 flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pb-0.5">
               {([
                 ["all", "All", visitFilter === "all" && filterStatus === "all"],
-                ["unworked", "Unworked", visitFilter === "unvisited" && filterStatus === "all"],
+                ["unworked", "Left", visitFilter === "unvisited" && filterStatus === "all"],
+                ["worked", "Done", visitFilter === "visited" && filterStatus === "all"],
                 ["followups", "Follow-ups", filterStatus === "follow_up"],
+                ["sold", "Sold", filterStatus === "sold"],
               ] as const).map(([key, label, active]) => (
                 <button
                   key={key}
                   data-testid={`filter-chip-${key}`}
+                  aria-pressed={active}
                   onClick={() => {
                     if (key === "all") { setVisitFilter("all"); setFilterStatus("all"); }
                     else if (key === "unworked") { setVisitFilter("unvisited"); setFilterStatus("all"); }
-                    else { setVisitFilter("all"); setFilterStatus("follow_up"); }
+                    else if (key === "worked") { setVisitFilter("visited"); setFilterStatus("all"); }
+                    else if (key === "followups") { setVisitFilter("all"); setFilterStatus("follow_up"); }
+                    else { setVisitFilter("all"); setFilterStatus("sold"); }
                   }}
-                  className={`h-8 px-3 rounded-full text-xs font-semibold border shadow-lg transition-colors ${
-                    active ? "bg-primary/20 border-primary/50 text-primary" : "bg-black/80 backdrop-blur-sm border-white/15 text-white/70 hover:text-white"
+                  // Active = SOLID teal (a 20% tint dies in direct sunlight over satellite)
+                  className={`h-9 px-3 shrink-0 rounded-full text-xs font-semibold border shadow-lg transition-colors active:scale-95 flex items-center ${
+                    active ? "bg-primary border-primary text-white" : "bg-black/80 backdrop-blur-sm border-white/15 text-white/70 hover:text-white"
                   }`}
                 >
+                  {/* Follow-ups/Sold chips teach the pin-color language with a dot */}
+                  {key === "followups" && <span className={`w-1.5 h-1.5 rounded-full mr-1 inline-block ${active ? "bg-white/70" : ""}`} style={active ? undefined : { background: "#f59e0b" }} />}
+                  {key === "sold" && <span className={`w-1.5 h-1.5 rounded-full mr-1 inline-block ${active ? "bg-white/70" : ""}`} style={active ? undefined : { background: "#10b981" }} />}
                   {label}
                 </button>
               ))}
             </div>
           )}
 
-          {/* Offline-queue badge — knocks waiting to sync */}
+          {/* Offline-queue badge — knocks waiting to sync. Hugs the edge on mobile
+              rep screens where the Mapbox control stack is hidden. */}
           {useSheet && queueSnap.pendingCount > 0 && (
             <div data-testid="knock-pending-badge"
-              className="absolute top-3 right-14 z-20 flex items-center gap-1.5 h-8 px-3 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-semibold backdrop-blur-sm shadow-lg">
+              className={`absolute top-3 ${isRep && isMobile ? "right-3" : "right-14"} z-20 flex items-center gap-1.5 h-8 px-3 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-semibold backdrop-blur-sm shadow-lg`}>
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              {queueSnap.pendingCount} queued
+              {queueSnap.pendingCount} to sync
             </div>
           )}
 
@@ -2270,8 +2308,10 @@ export default function MapView() {
           })()}
 
           {/* ── Right control rail — layers + map mode (SalesRabbit/SPOTIO style) ── */}
-          {mapReady && (
-            <div className={`absolute ${isRep ? "top-[150px]" : "top-[110px]"} right-3 z-20 w-40 rounded-xl bg-black/80 backdrop-blur-md border border-white/10 p-2.5 shadow-xl text-white`}>
+          {/* Admin/manager control rail — layer toggles + map modes. Reps get ONE
+              button instead: nothing on their screen that doesn't speed up knocking. */}
+          {mapReady && !isRep && (
+            <div className="absolute top-[110px] right-3 z-20 w-40 rounded-xl bg-black/80 backdrop-blur-md border border-white/10 p-2.5 shadow-xl text-white">
               <div className="text-[9px] uppercase tracking-wider text-white/40 font-semibold mb-1.5">Layers</div>
               {[
                 { key: "leads", label: "Leads", on: showLeads, toggle: () => setShowLeads(v => !v) },
@@ -2295,6 +2335,23 @@ export default function MapView() {
                 ))}
               </div>
             </div>
+          )}
+
+          {/* Rep map-style button — one tap cycles Sat → Street → Dark. Fixed
+              min-width so the pill never resizes between labels; the icon shows
+              the CURRENT mode. */}
+          {mapReady && isRep && (
+            <button
+              data-testid="rep-map-style"
+              onClick={() => setMapStyleMode(m => m === "satellite" ? "streets" : m === "streets" ? "dark" : "satellite")}
+              aria-label={`Map style: ${mapStyleMode === "satellite" ? "Satellite" : mapStyleMode === "streets" ? "Street" : "Dark"}. Tap to switch`}
+              className="absolute top-[152px] right-3 z-20 h-9 min-w-[76px] px-3 rounded-full bg-black/80 backdrop-blur-sm border border-white/15 text-white/90 text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1.5 active:scale-95 transition"
+            >
+              {mapStyleMode === "satellite" ? <Satellite className="w-3.5 h-3.5" />
+                : mapStyleMode === "streets" ? <MapIcon className="w-3.5 h-3.5" />
+                : <Moon className="w-3.5 h-3.5" />}
+              {mapStyleMode === "satellite" ? "Sat" : mapStyleMode === "streets" ? "Street" : "Dark"}
+            </button>
           )}
 
           {/* Locate-me FAB — big thumb target, bottom-right, above zoom controls */}
@@ -2323,9 +2380,11 @@ export default function MapView() {
             </button>
           )}
 
-          {/* Pin legend + filter — bottom left. Hidden for mobile reps: the sheet
-              owns that space, and the filter chips cover the rep's lenses. */}
-          {mapReady && !(isRep && isMobile) && (
+          {/* Pin legend + filter — bottom left, admin/manager only. Reps get the
+              chips instead on every viewport: two filter UIs writing the same
+              state (legend can pick statuses the chips can't show) is confusion,
+              not power. */}
+          {mapReady && !isRep && (
             <div className="absolute bottom-8 left-3 bg-black/85 backdrop-blur-md rounded-xl p-3 z-10 min-w-[150px] shadow-xl border border-white/5">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Filter by status</span>

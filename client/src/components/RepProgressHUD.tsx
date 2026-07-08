@@ -42,7 +42,7 @@ export function RepProgressHUD({ pins, mini, onToggle }: RepProgressHUDProps) {
       if (p.leadStatus === "sold") sold++;
       if (p.leadStatus === "follow_up") followUps++;
     }
-    return { assigned: pins.length, knockedToday, left, sold, followUps };
+    return { knockedToday, left, sold, followUps };
   }, [pins]);
 
   if (mini) {
@@ -53,8 +53,14 @@ export function RepProgressHUD({ pins, mini, onToggle }: RepProgressHUDProps) {
         onClick={onToggle}
         className="flex items-baseline gap-1 h-8 px-3 rounded-full bg-card/90 backdrop-blur-md border border-border shadow-lg whitespace-nowrap transition-[opacity,transform] duration-200 active:scale-95"
       >
-        <span className="text-xs font-semibold tabular-nums text-amber-400">{stats.left}</span>
-        <span className="text-[10px] text-muted-foreground">left</span>
+        {stats.left === 0 ? (
+          <span className="text-xs font-semibold text-emerald-400">Done ✓</span>
+        ) : (
+          <>
+            <span className="text-xs font-bold tabular-nums text-foreground">{stats.left}</span>
+            <span className="text-[10px] text-muted-foreground">left</span>
+          </>
+        )}
       </button>
     );
   }
@@ -64,13 +70,16 @@ export function RepProgressHUD({ pins, mini, onToggle }: RepProgressHUDProps) {
       type="button"
       data-testid="progress-hud"
       onClick={onToggle}
-      className="flex items-center gap-3 h-9 px-3.5 rounded-full bg-card/90 backdrop-blur-md border border-border shadow-lg whitespace-nowrap overflow-x-auto transition-[opacity,transform] duration-200"
+      className="flex items-center gap-3 h-9 px-3.5 rounded-full bg-card/90 backdrop-blur-md border border-border shadow-lg whitespace-nowrap transition-[opacity,transform] duration-200"
     >
-      <Stat testid="progress-stat-assigned" value={stats.assigned} label="assigned" />
+      {/* Four numbers, not five — "assigned" never changed a rep's next step.
+          Effort pair | pipeline pair; "left" is the hero number in bold white so
+          amber uniquely means follow-up everywhere (pins, buttons, HUD). */}
       <Stat testid="progress-stat-knocked" value={stats.knockedToday} label="knocked" />
-      <Stat testid="progress-stat-left" value={stats.left} label="left" valueClass="text-amber-400" />
-      <Stat testid="progress-stat-sold" value={stats.sold} label="sold" valueClass="text-[#34d399]" />
+      <Stat testid="progress-stat-left" value={stats.left} label="left" valueClass="text-foreground font-bold text-[13px]" />
+      <span aria-hidden className="w-px h-3.5 bg-white/15" />
       <Stat testid="progress-stat-followups" value={stats.followUps} label="follow-ups" valueClass="text-[#fbbf24]" />
+      <Stat testid="progress-stat-sold" value={stats.sold} label="sold" valueClass="text-[#34d399]" />
     </button>
   );
 }
