@@ -101,9 +101,9 @@ function AppRoutes() {
             </Guard>
           </Route>
 
-          {/* ── Manager + Admin only ── */}
+          {/* ── Scanner — admin only (scanning spends proxy money) ── */}
           <Route path="/scanner">
-            <Guard role={role} allowed={["admin", "manager"]}>
+            <Guard role={role} allowed={["admin"]}>
               <Scanners />
             </Guard>
           </Route>
@@ -120,17 +120,17 @@ function AppRoutes() {
 
           {/* Old scanner bookmarks land on the right tab of the Scanner hub */}
           <Route path="/city-scan">
-            <Guard role={role} allowed={["admin", "manager"]}>
+            <Guard role={role} allowed={["admin"]}>
               <Scanners initialTab="city" />
             </Guard>
           </Route>
           <Route path="/usa-scan">
-            <Guard role={role} allowed={["admin", "manager"]}>
+            <Guard role={role} allowed={["admin"]}>
               <Scanners initialTab="usa" />
             </Guard>
           </Route>
           <Route path="/cns-scanner">
-            <Guard role={role} allowed={["admin", "manager"]}>
+            <Guard role={role} allowed={["admin"]}>
               <Scanners initialTab="cns" />
             </Guard>
           </Route>

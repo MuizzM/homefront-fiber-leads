@@ -827,7 +827,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // City scan — start. Free sources by default (pool → GIS → Overpass);
   // the Mapbox grid (~2k billable requests for Rockwell) requires an explicit
   // useMapbox:true from an ADMIN — it is never the default.
-  app.post("/api/scan/start", requireManager, scanLimiter, async (req, res) => {
+  // Running a scan hits the Kinetic API through the paid residential proxy, so
+  // only ADMIN can trigger scans (managers/team leads can still view + assign).
+  app.post("/api/scan/start", requireAdmin, scanLimiter, async (req, res) => {
     const { city = "Rockwell", zip = "28138", state = "NC", useMapbox = false } = req.body;
     const jobId = `scan_${Date.now()}`;
     const mapboxToken = process.env.MAPBOX_TOKEN ?? "";
@@ -983,7 +985,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // POST /api/scan/start-city — scan with pre-pulled addresses or pull them fresh
-  app.post("/api/scan/start-city", requireManager, async (req, res) => {
+  app.post("/api/scan/start-city", requireAdmin, async (req, res) => {
     const { city, state, addresses: providedAddresses } = req.body;
     if (!city) return res.status(400).json({ error: "city required" });
     const st = state ?? "NC";
@@ -1067,7 +1069,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // Uses zero geocoding (addresses are already stored), dedups against existing
   // leads, and surfaces newly-lit fiber as fresh leads. This is the cheap,
   // repeatable "detect new fiber" engine (FiberFocus model).
-  app.post("/api/scan/rescan-pool", requireManager, scanLimiter, (req, res) => {
+  app.post("/api/scan/rescan-pool", requireAdmin, scanLimiter, (req, res) => {
     const limit = Math.min(Number(req.body?.limit) || 50000, 100000);
     const targets = storage.getScanTargetsToRescan(limit);
     if (!targets.length) {

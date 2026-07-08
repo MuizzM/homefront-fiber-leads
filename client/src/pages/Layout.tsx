@@ -55,8 +55,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: () => true,                               group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: () => true,                               group: "Field" },
   { href: "/commissions",  label: "Commissions",   icon: DollarSign,   show: () => true,                               group: "Field" },
-  // ── Scan — one hub with City / USA / Nightly tabs ─────────────────────────
-  { href: "/scanner",      label: "Scanner",       icon: Radar,        show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
+  // ── Scan — admin only (scanning spends proxy money) ───────────────────────
+  { href: "/scanner",      label: "Scanner",       icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Applications",  icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
