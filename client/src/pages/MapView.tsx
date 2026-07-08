@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 // mapbox-gl loaded via CDN in index.html — do not bundle
 declare const mapboxgl: any;
 import {
@@ -1215,20 +1215,35 @@ export default function MapView() {
     }, 950);
   }, []);
 
-  const statusCounts = Object.keys(PIN_COLORS).reduce((acc, s) => {
-    acc[s] = leads.filter(l => l.leadStatus === s).length; return acc;
-  }, {} as Record<string, number>);
+  // Memoized so these full-array passes over all leads don't re-run on every
+  // render (the map re-renders ~every 400ms during a scan).
+  const statusCounts = useMemo(() => {
+    const acc: Record<string, number> = {};
+    for (const s of Object.keys(PIN_COLORS)) acc[s] = 0;
+    for (const l of leads) if (acc[l.leadStatus] !== undefined) acc[l.leadStatus]++;
+    return acc;
+  }, [leads]);
 
-  // Sidebar computed
-  const sidebarLeads = leads.filter(l => {
-    const matchStatus = filterStatus === "all" || l.leadStatus === filterStatus;
+  const newFiberCount = useMemo(
+    () => leads.reduce((n, l) => n + (l.fiberStatus === "new_fiber" ? 1 : 0), 0),
+    [leads],
+  );
+  const assignedCount = useMemo(
+    () => leads.reduce((n, l) => n + (l.assignedRepId ? 1 : 0), 0),
+    [leads],
+  );
+
+  const sidebarLeads = useMemo(() => {
     const q = sidebarSearch.toLowerCase();
-    const matchSearch = !q || l.address.toLowerCase().includes(q) || (l.city ?? "").toLowerCase().includes(q);
-    const matchRep = filterRep === "all" ? true
-      : filterRep === "unassigned" ? !l.assignedRepId
-      : l.assignedRepId === Number(filterRep);
-    return matchStatus && matchSearch && matchRep;
-  }).sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
+    return leads.filter(l => {
+      const matchStatus = filterStatus === "all" || l.leadStatus === filterStatus;
+      const matchSearch = !q || l.address.toLowerCase().includes(q) || (l.city ?? "").toLowerCase().includes(q);
+      const matchRep = filterRep === "all" ? true
+        : filterRep === "unassigned" ? !l.assignedRepId
+        : l.assignedRepId === Number(filterRep);
+      return matchStatus && matchSearch && matchRep;
+    }).sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
+  }, [leads, filterStatus, sidebarSearch, filterRep]);
 
   // noToken is true only after we confirmed the token is unavailable (never during load)
   const noToken = mapTokenFailed;
@@ -1248,12 +1263,12 @@ export default function MapView() {
           </div>
           <div className="flex items-center gap-1">
             <Wifi className="w-3 h-3 text-teal-400" />
-            <span className="text-xs font-semibold text-teal-400">{leads.filter(l => l.fiberStatus === "new_fiber").length}</span>
+            <span className="text-xs font-semibold text-teal-400">{newFiberCount}</span>
             <span className="text-xs text-muted-foreground hidden sm:inline"> fiber</span>
           </div>
           <div className="flex items-center gap-1">
             <Users className="w-3 h-3 text-blue-400" />
-            <span className="text-xs text-muted-foreground">{leads.filter(l => l.assignedRepId).length} assigned</span>
+            <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>
           </div>
         </div>
 
@@ -1671,11 +1686,11 @@ export default function MapView() {
             {/* Sidebar footer stats */}
             <div className="px-3 py-2 border-t border-border flex-shrink-0 grid grid-cols-3 gap-1 text-center">
               <div>
-                <div className="text-xs font-bold text-green-400">{leads.filter(l => l.fiberStatus === "new_fiber").length}</div>
+                <div className="text-xs font-bold text-green-400">{newFiberCount}</div>
                 <div className="text-[9px] text-muted-foreground uppercase tracking-wide">New Fiber</div>
               </div>
               <div>
-                <div className="text-xs font-bold text-blue-400">{leads.filter(l => l.assignedRepId).length}</div>
+                <div className="text-xs font-bold text-blue-400">{assignedCount}</div>
                 <div className="text-[9px] text-muted-foreground uppercase tracking-wide">Assigned</div>
               </div>
               <div>

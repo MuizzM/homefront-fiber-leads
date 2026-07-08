@@ -162,6 +162,10 @@ export function runMigrations() {
     // Persistent address pool — harvest once, re-scan for fiber-status changes
     `CREATE TABLE IF NOT EXISTS scan_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, city TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'NC', zip TEXT NOT NULL, lat REAL, lng REAL, tenant_id INTEGER, source TEXT, last_fiber_status TEXT, last_is_new_fiber INTEGER NOT NULL DEFAULT 0, last_billing_status TEXT, df_address_id TEXT, scan_count INTEGER NOT NULL DEFAULT 0, last_scanned_at TEXT, converted_to_lead_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`,
+    // Speed up knock lookups (leaderboard, territory progress, knock history)
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_lead ON knock_log(lead_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_rep ON knock_log(rep_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(lead_status)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
