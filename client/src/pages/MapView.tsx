@@ -1274,7 +1274,7 @@ export default function MapView() {
 
         {/* Actions */}
         <div className="ml-auto flex items-center gap-1.5">
-          {/* Lasso / bulk select tool — admin, manager, team lead */}
+          {/* ── Action tools: assign · territory · scan (blue → purple → orange) ── */}
           {canAssign && (
             <Button
               size="sm" variant="outline"
@@ -1300,8 +1300,8 @@ export default function MapView() {
               disabled={!mapReady}
               className={`h-7 text-xs ${
                 lassoMode
-                  ? "border-orange-500 text-orange-400 bg-orange-500/10"
-                  : "border-orange-500/40 text-orange-400 hover:bg-orange-500/10"
+                  ? "border-blue-500 text-blue-400 bg-blue-500/10"
+                  : "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
               }`}
               title="Lasso: click points around leads, then bulk-assign to rep"
             >
@@ -1309,30 +1309,13 @@ export default function MapView() {
               {lassoMode ? `Lasso (${lassoSelected.length} selected)` : "Lasso"}
             </Button>
           )}
-          {/* Satellite/street toggle */}
-          <Button
-            size="sm" variant="outline"
-            onClick={() => setMapStyleMode(m => m === "dark" ? "satellite" : "dark")}
-            disabled={!mapReady}
-            className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
-            title={mapStyleMode === "satellite" ? "Switch to street" : "Switch to satellite"}
-          >
-            {mapStyleMode === "satellite" ? "🗺 Street" : "🛰 Satellite"}
-          </Button>
-          {/* Reset view */}
-          <Button
-            size="sm" variant="outline"
-            onClick={() => mapRef.current?.flyTo({ center: ROCKWELL_CENTER, zoom: 13, duration: 800 })}
-            disabled={!mapReady}
-            className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
-            title="Reset map view"
-          ><Home className="w-3 h-3" /></Button>
           {canAssign && (
             <Button
               onClick={() => { setTerritoryDrawMode(!territoryDrawMode); setTerritoryPoints([]); setLassoMode(false); setDrawMode(false); }}
               disabled={!mapReady}
               size="sm" variant="outline"
               className={`h-7 text-xs ${territoryDrawMode ? "border-purple-500 text-purple-400 bg-purple-500/10" : "border-purple-500/40 text-purple-400 hover:bg-purple-500/10"}`}
+              title="Territory: draw a polygon and assign it to a rep"
             ><ShieldCheck className="w-3 h-3 mr-1" />{territoryDrawMode ? "Drawing…" : "Territory"}</Button>
           )}
           {/* Draw a box → scan that area for new fiber (admin only) */}
@@ -1342,8 +1325,30 @@ export default function MapView() {
               disabled={!mapReady}
               size="sm" variant="outline"
               className={`h-7 text-xs ${drawMode ? "border-orange-500 text-orange-400 bg-orange-500/10" : "border-orange-500/40 text-orange-400 hover:bg-orange-500/10"}`}
+              title="Scan Area: draw a box to scan for new fiber"
             ><Target className="w-3 h-3 mr-1" />{drawMode ? "Drawing…" : "Scan Area"}</Button>
           )}
+
+          {/* Divider between action tools and view controls */}
+          {(canAssign || isAdmin) && <div className="w-px h-5 bg-border mx-0.5" />}
+
+          {/* ── View controls ── */}
+          <Button
+            size="sm" variant="outline"
+            onClick={() => setMapStyleMode(m => m === "dark" ? "satellite" : "dark")}
+            disabled={!mapReady}
+            className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
+            title={mapStyleMode === "satellite" ? "Switch to street" : "Switch to satellite"}
+          >
+            {mapStyleMode === "satellite" ? "🗺 Street" : "🛰 Satellite"}
+          </Button>
+          <Button
+            size="sm" variant="outline"
+            onClick={() => mapRef.current?.flyTo({ center: ROCKWELL_CENTER, zoom: 13, duration: 800 })}
+            disabled={!mapReady}
+            className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
+            title="Reset map view"
+          ><Home className="w-3 h-3" /></Button>
           <Button size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground" onClick={() => setSidebarOpen(v => !v)} title="Toggle lead list">
             <SlidersHorizontal className="w-3.5 h-3.5" />
           </Button>
@@ -1394,8 +1399,8 @@ export default function MapView() {
       )}
       {/* ── Lasso bulk-assign banner ── */}
       {lassoMode && (
-        <div className="px-3 py-2 bg-orange-500/10 border-b border-orange-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
-          <span className="text-[11px] text-orange-400 font-medium">
+        <div className="px-3 py-2 bg-blue-500/10 border-b border-blue-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
+          <span className="text-[11px] text-blue-400 font-medium">
             ■ Lasso active — click map to draw area
             {lassoPoints.length > 0 && ` (${lassoPoints.length} pts)`}
             {lassoSelected.length > 0 && ` → ${lassoSelected.length} leads selected`}
@@ -1405,7 +1410,7 @@ export default function MapView() {
               <select
                 value={lassoRepId}
                 onChange={e => setLassoRepId(e.target.value)}
-                className="bg-background border border-border rounded px-2 py-0.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-orange-500"
+                className="bg-background border border-border rounded px-2 py-0.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
                 <option value="">Assign to rep…</option>
                 {team.map((m: TeamMember) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -1414,7 +1419,7 @@ export default function MapView() {
                 size="sm"
                 disabled={!lassoRepId || bulkAssignMutation.isPending}
                 onClick={() => bulkAssignMutation.mutate({ leadIds: lassoSelected.map(l => l.id), repId: Number(lassoRepId) })}
-                className="h-6 text-[11px] px-2 bg-orange-600 hover:bg-orange-700 text-white"
+                className="h-6 text-[11px] px-2 bg-blue-600 hover:bg-blue-700 text-white"
               >
                 {bulkAssignMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
               </Button>
@@ -1422,7 +1427,7 @@ export default function MapView() {
           )}
           <Button
             size="sm" variant="ghost"
-            className="text-orange-400/70 h-6 text-[11px] ml-auto"
+            className="text-blue-400/70 h-6 text-[11px] ml-auto"
             onClick={() => {
               setLassoMode(false); setLassoPoints([]); setLassoSelected([]); setLassoRepId("");
               const map = mapRef.current;
@@ -1435,7 +1440,7 @@ export default function MapView() {
             }}
           >Cancel</Button>
           {lassoPoints.length > 0 && (
-            <Button size="sm" variant="ghost" className="text-orange-400/70 h-6 text-[11px]"
+            <Button size="sm" variant="ghost" className="text-blue-400/70 h-6 text-[11px]"
               onClick={() => {
                 setLassoPoints([]); setLassoSelected([]);
                 const map = mapRef.current;
