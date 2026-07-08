@@ -814,18 +814,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ jobId, total: newAddrs.length, source: "overpass", bbox: { minLat, maxLat, minLng, maxLng } });
   });
 
-  // City scan — start (Mapbox-native address harvesting for Rockwell)
+  // City scan — start. Free sources by default (pool → GIS → Overpass);
+  // the Mapbox grid (~2k billable requests for Rockwell) requires an explicit
+  // useMapbox:true from an ADMIN — it is never the default.
   app.post("/api/scan/start", requireManager, scanLimiter, async (req, res) => {
-    const { city = "Rockwell", zip = "28138", state = "NC", useMapbox = true } = req.body;
+    const { city = "Rockwell", zip = "28138", state = "NC", useMapbox = false } = req.body;
     const jobId = `scan_${Date.now()}`;
     const mapboxToken = process.env.MAPBOX_TOKEN ?? "";
 
-    // For Rockwell: use Mapbox reverse-geocoding grid for complete, GIS-free coverage.
-    // For other cities: use Overpass / GIS fallback.
     let addresses: { address: string; city: string; state: string; zip: string; lat: number; lng: number }[];
     const isRockwell = city.toLowerCase().includes("rockwell");
+    const isAdminUser = (req as any).user?.role === "admin";
 
-    if (isRockwell && useMapbox && mapboxToken) {
+    if (isRockwell && useMapbox === true && isAdminUser && mapboxToken) {
       // Start job immediately with estimated total, harvest addresses in background
       const estimatedTotal = getRockwellGridSize() * 3; // ~3 addresses per grid point
       scanJobs.set(jobId, {
@@ -867,12 +868,17 @@ export function registerRoutes(httpServer: Server, app: Express) {
         }
       })();
     } else {
-      // Non-Rockwell city: Overpass → GIS fallback
-      try {
-        const overpass = await getCityAddresses(city, state);
-        addresses = overpass.addresses.length > 0 ? overpass.addresses as any : generateAddresses(zip, city) as any;
-      } catch {
-        addresses = generateAddresses(zip, city) as any;
+      // Free path: pool (already harvested) → Overpass → GIS fallback
+      const pooled = storage.getScanTargetsByCity(city, state);
+      if (pooled.length >= 25) {
+        addresses = pooled as any;
+      } else {
+        try {
+          const overpass = await getCityAddresses(city, state);
+          addresses = overpass.addresses.length > 0 ? overpass.addresses as any : generateAddresses(zip, city) as any;
+        } catch {
+          addresses = generateAddresses(zip, city) as any;
+        }
       }
       scanJobs.set(jobId, {
         id: jobId, city, zip, status: "running",
@@ -898,44 +904,69 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // City scan — poll status + results
   // ── City Address Pull (must be BEFORE :jobId wildcard) ─────────────────────
   // GET /api/scan/city-addresses — For Rockwell uses Mapbox grid; other cities use Overpass
+  // Cost model: geocode ONCE, then reuse forever. Order of preference:
+  //   1. scan_targets pool (already harvested → $0)
+  //   2. Overpass / OpenStreetMap ($0)
+  //   3. Local GIS parcel file, Rockwell only ($0)
+  //   4. Mapbox reverse-geocode grid — ONLY on explicit ?source=mapbox (admin),
+  //      never as a silent fallback. One big-city grid = 10k–100k+ billable
+  //      requests; silent fallbacks here are what caused a 1.1M-request bill.
   app.get("/api/scan/city-addresses", requireManager, async (req, res) => {
     const { city, state } = req.query;
     if (!city || typeof city !== "string") return res.status(400).json({ error: "city required" });
     const st = typeof state === "string" ? state : "NC";
     const isRockwell = city.trim().toLowerCase().includes("rockwell");
     const mbToken = process.env.MAPBOX_TOKEN ?? "";
+    const wantMapbox = req.query.source === "mapbox";
 
     try {
-      if (isRockwell && mbToken) {
-        // Mapbox grid reverse-geocoding — full residential coverage, no GIS file needed
-        const addrs = await harvestRockwellAddresses(mbToken);
-        res.json({
-          count: addrs.length,
-          cityName: "Rockwell, NC",
-          source: "mapbox",
-          center: { lat: 35.549, lng: -80.408 },
-          bbox: { minLat: 35.515, maxLat: 35.582, minLng: -80.455, maxLng: -80.360 },
-          addresses: addrs,
-        });
-      } else {
-        // Live OSM first; if it fails/empties (public Overpass is flaky), fall
-        // back to the Mapbox grid so "Pull Addresses" always returns something.
-        let result: { addresses: any[]; cityName: string; center: any; bbox: any } | null = null;
-        try { result = await getCityAddresses(city.trim(), st.trim()); } catch { result = null; }
-        if ((!result || result.addresses.length === 0) && mbToken) {
-          const r = await harvestCityAddresses(city.trim(), st.trim(), mbToken);
-          return res.json({ count: r.addresses.length, cityName: `${city}, ${st}`, source: "mapbox", center: null, bbox: null, addresses: r.addresses });
-        }
-        if (!result) throw new Error("Address lookup failed — OpenStreetMap unavailable and no Mapbox token set.");
-        res.json({
-          count: result.addresses.length,
-          cityName: result.cityName,
-          source: "overpass",
-          center: result.center,
-          bbox: result.bbox,
-          addresses: result.addresses,
+      // 1) Pool — free, instant
+      const pooled = storage.getScanTargetsByCity(city.trim(), st.trim());
+      if (!wantMapbox && pooled.length >= 25) {
+        return res.json({
+          count: pooled.length, cityName: `${city.trim()}, ${st}`, source: "pool",
+          center: null, bbox: null, addresses: pooled,
         });
       }
+
+      // 4) Explicit Mapbox harvest — admin only, costs real money
+      if (wantMapbox) {
+        if ((req as any).user?.role !== "admin") {
+          return res.status(403).json({ error: "Mapbox harvest is admin-only (it costs per request)" });
+        }
+        if (!mbToken) return res.status(400).json({ error: "MAPBOX_TOKEN not set" });
+        const addrs = isRockwell
+          ? await harvestRockwellAddresses(mbToken)
+          : (await harvestCityAddresses(city.trim(), st.trim(), mbToken)).addresses;
+        return res.json({ count: addrs.length, cityName: `${city.trim()}, ${st}`, source: "mapbox", center: null, bbox: null, addresses: addrs });
+      }
+
+      // 2) Overpass (free)
+      let result: { addresses: any[]; cityName: string; center: any; bbox: any } | null = null;
+      try { result = await getCityAddresses(city.trim(), st.trim()); } catch { result = null; }
+      if (result && result.addresses.length > 0) {
+        return res.json({
+          count: result.addresses.length, cityName: result.cityName, source: "overpass",
+          center: result.center, bbox: result.bbox, addresses: result.addresses,
+        });
+      }
+
+      // 3) GIS parcel file (free, Rockwell only)
+      if (isRockwell) {
+        const gis = loadGisAddresses();
+        if (gis.length > 0) {
+          return res.json({ count: gis.length, cityName: "Rockwell, NC", source: "gis", center: null, bbox: null, addresses: gis });
+        }
+      }
+
+      // Small pool is better than nothing — still free
+      if (pooled.length > 0) {
+        return res.json({ count: pooled.length, cityName: `${city.trim()}, ${st}`, source: "pool", center: null, bbox: null, addresses: pooled });
+      }
+
+      res.status(404).json({
+        error: "No free address source found for this city. OpenStreetMap returned nothing — try again (public Overpass is flaky), or an admin can pass source=mapbox to run a paid Mapbox harvest once.",
+      });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -949,40 +980,42 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const isRockwell = city.trim().toLowerCase().includes("rockwell");
     const mbToken = process.env.MAPBOX_TOKEN ?? "";
 
-    // Address source, ordered for reliability + low cost. Live OpenStreetMap
-    // (Overpass) is tried first (free, any city, fresh data). If OSM is slow or
-    // sparse we fall back to the Mapbox grid (reliable, one-time cost — then the
-    // pool re-scans for free). The local GIS parcel file is only a last-ditch
-    // safety net for Rockwell. Pass { source: "mapbox" } to skip straight to Mapbox.
+    // Address source, ordered for low cost. Free sources ONLY by default:
+    //   pool (already harvested) → live OSM → GIS parcel file (Rockwell).
+    // The paid Mapbox grid never runs as a silent fallback — it needs an
+    // explicit { source: "mapbox" } from an ADMIN. (A single big-city grid is
+    // tens of thousands of billable geocoding requests.)
     const preferMapbox = req.body.source === "mapbox";
+    if (preferMapbox && (req as any).user?.role !== "admin") {
+      return res.status(403).json({ error: "Mapbox harvest is admin-only (it costs per request)" });
+    }
     let addresses: any[] = [];
     let usedSource = "overpass";
     try {
       if (providedAddresses && Array.isArray(providedAddresses) && providedAddresses.length > 0) {
         addresses = providedAddresses; usedSource = "manual";
-      } else if (!preferMapbox) {
-        // 1) Live OSM (free) — fails fast (~28s) so it can't hang the scan.
-        try {
-          const result = await getCityAddresses(city.trim(), st.trim());
-          addresses = result.addresses ?? [];
-        } catch { addresses = []; }
-        // 2) Mapbox grid fallback — reliable coverage when OSM is slow/sparse.
-        if (addresses.length === 0 && mbToken) {
-          addresses = isRockwell
-            ? await harvestRockwellAddresses(mbToken)
-            : (await harvestCityAddresses(city.trim(), st.trim(), mbToken)).addresses;
-          usedSource = "mapbox";
-        }
-        // 3) GIS parcel file — last resort for Rockwell only.
-        if (addresses.length === 0 && isRockwell) { addresses = loadGisAddresses(); usedSource = "gis"; }
-      } else if (mbToken) {
+      } else if (preferMapbox && mbToken) {
         addresses = isRockwell
           ? await harvestRockwellAddresses(mbToken)
           : (await harvestCityAddresses(city.trim(), st.trim(), mbToken)).addresses;
         usedSource = "mapbox";
       } else {
-        const result = await getCityAddresses(city.trim(), st.trim());
-        addresses = result.addresses;
+        // 1) Pool — free, instant, already geocoded
+        const pooled = storage.getScanTargetsByCity(city.trim(), st.trim());
+        if (pooled.length >= 25) {
+          addresses = pooled; usedSource = "pool";
+        }
+        // 2) Live OSM (free) — fails fast (~28s) so it can't hang the scan.
+        if (addresses.length === 0) {
+          try {
+            const result = await getCityAddresses(city.trim(), st.trim());
+            addresses = result.addresses ?? [];
+          } catch { addresses = []; }
+        }
+        // 3) GIS parcel file — free, Rockwell only.
+        if (addresses.length === 0 && isRockwell) { addresses = loadGisAddresses(); usedSource = "gis"; }
+        // 4) Small pool beats nothing — still free.
+        if (addresses.length === 0 && pooled.length > 0) { addresses = pooled; usedSource = "pool"; }
       }
     } catch (err: any) {
       return res.status(500).json({ error: `Address pull failed: ${err.message}` });

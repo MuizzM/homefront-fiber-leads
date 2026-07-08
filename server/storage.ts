@@ -99,6 +99,7 @@ export interface IStorage {
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null }>): number;
   getScanTargetsToRescan(limit: number): any[];
+  getScanTargetsByCity(city: string, state: string): any[];
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null }): { prevIsNewFiber: boolean };
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
@@ -611,6 +612,14 @@ export class Storage implements IStorage {
     return rawDb.prepare(
       `SELECT * FROM scan_targets ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC LIMIT ?`
     ).all(limit);
+  }
+  // Pool lookup by city — lets scans reuse already-harvested addresses instead
+  // of re-geocoding (harvest once, re-scan free).
+  getScanTargetsByCity(city: string, state: string): any[] {
+    return rawDb.prepare(
+      `SELECT address, city, state, zip, lat, lng FROM scan_targets
+       WHERE lower(city) = lower(?) AND lower(state) = lower(?)`
+    ).all(city.trim(), state.trim());
   }
   // Record a fresh scan result. Returns the PREVIOUS is_new_fiber so the caller
   // can detect a change (was not new fiber → now new fiber = new hot lead).

@@ -221,6 +221,20 @@ export async function harvestCityAddresses(
     }
   }
 
+  // ── HARD COST CAP ────────────────────────────────────────────────────────────
+  // Every grid point is one billable Mapbox geocoding request. Refuse runaway
+  // harvests outright — a single uncapped metro grid can be 50k–500k requests.
+  // (Raise via MAPBOX_HARVEST_CAP env if a bigger one-time harvest is truly wanted.)
+  const HARVEST_CAP = Number(process.env.MAPBOX_HARVEST_CAP ?? 5000);
+  if (gridPoints.length > HARVEST_CAP) {
+    throw new Error(
+      `Harvest for "${city}, ${state}" would cost ${gridPoints.length.toLocaleString()} Mapbox geocoding requests ` +
+      `(cap: ${HARVEST_CAP.toLocaleString()}). Use the free Overpass/pool sources, scan a smaller drawn area, ` +
+      `or raise MAPBOX_HARVEST_CAP if you accept the cost.`
+    );
+  }
+  console.log(`[mapbox-harvest] ${city}, ${state}: ${gridPoints.length} geocoding requests (cap ${HARVEST_CAP})`);
+
   // Step 4: Reverse-geocode grid in batches of 30 (faster than Rockwell's 16)
   const BATCH = 30;
   const DELAY = 50; // 50ms — ~600 grid points/sec
