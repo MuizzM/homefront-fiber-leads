@@ -1315,11 +1315,20 @@ export default function MapView() {
           ><Home className="w-3 h-3" /></Button>
           {canAssign && (
             <Button
-              onClick={() => { setTerritoryDrawMode(!territoryDrawMode); setTerritoryPoints([]); setLassoMode(false); }}
+              onClick={() => { setTerritoryDrawMode(!territoryDrawMode); setTerritoryPoints([]); setLassoMode(false); setDrawMode(false); }}
               disabled={!mapReady}
               size="sm" variant="outline"
               className={`h-7 text-xs ${territoryDrawMode ? "border-purple-500 text-purple-400 bg-purple-500/10" : "border-purple-500/40 text-purple-400 hover:bg-purple-500/10"}`}
             ><ShieldCheck className="w-3 h-3 mr-1" />{territoryDrawMode ? "Drawing…" : "Territory"}</Button>
+          )}
+          {/* Draw a box → scan that area for new fiber (admin only) */}
+          {isAdmin && (
+            <Button
+              onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); setTerritoryDrawMode(false); setLassoMode(false); }}
+              disabled={!mapReady}
+              size="sm" variant="outline"
+              className={`h-7 text-xs ${drawMode ? "border-orange-500 text-orange-400 bg-orange-500/10" : "border-orange-500/40 text-orange-400 hover:bg-orange-500/10"}`}
+            ><Target className="w-3 h-3 mr-1" />{drawMode ? "Drawing…" : "Scan Area"}</Button>
           )}
           <Button size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground" onClick={() => setSidebarOpen(v => !v)} title="Toggle lead list">
             <SlidersHorizontal className="w-3.5 h-3.5" />
@@ -1328,6 +1337,30 @@ export default function MapView() {
       </div>
 
       {/* Context banners */}
+      {drawMode && isAdmin && (
+        <div className="px-3 py-2 bg-orange-500/10 border-b border-orange-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
+          <span className="text-[11px] text-orange-400">
+            {scanning ? `Scanning… ${done}/${total} · ${newFound} new fiber found`
+              : drawnBBox ? "Box drawn — scan it for new fiber (hits Kinetic)"
+              : "Drag on the map to draw a box over the area to scan"}
+          </span>
+          {drawnBBox && !scanning && (
+            <Button size="sm"
+              className="bg-orange-500 hover:bg-orange-600 text-white h-6 text-[11px] px-2"
+              onClick={() => startScan("/api/scan/area", {
+                minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat,
+                minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng,
+              })}>
+              <Target className="w-3 h-3 mr-1" /> Scan this area
+            </Button>
+          )}
+          {scanning && (
+            <Button size="sm" variant="ghost" className="text-red-400 h-6 text-[11px]" onClick={() => stopScan()}>Stop</Button>
+          )}
+          <Button size="sm" variant="ghost" className="text-muted-foreground h-6 text-[11px]"
+            onClick={() => { setDrawMode(false); setDrawnBBox(null); if (scanning) stopScan(); }}>Cancel</Button>
+        </div>
+      )}
       {territoryDrawMode && canAssign && (
         <div className="px-3 py-2 bg-purple-500/10 border-b border-purple-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
           <span className="text-[11px] text-purple-400">Click map to add polygon points ({territoryPoints.length} pts, min 3)</span>

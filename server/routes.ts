@@ -866,7 +866,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(loadGisAddresses());
   });
 
-  app.post("/api/scan/area", requireManager, scanLimiter, (req, res) => {
+  app.post("/api/scan/area", requireAdmin, scanLimiter, (req, res) => {
     const { minLat, maxLat, minLng, maxLng, city = "Rockwell", zip = "28138", state = "NC" } = req.body;
     if (minLat == null || maxLat == null || minLng == null || maxLng == null) {
       return res.status(400).json({ error: "minLat, maxLat, minLng, maxLng required" });
