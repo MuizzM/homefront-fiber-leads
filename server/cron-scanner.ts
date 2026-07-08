@@ -190,7 +190,7 @@ async function runNightlyCnsScan(): Promise<void> {
 
   const ENV = "MS";
   const UPPER_LIMIT = 3_062_552;
-  const SCAN_COUNT = 50_000;
+  const SCAN_COUNT = Number(process.env.NIGHTLY_SCAN_COUNT ?? 50_000);
   const startCns = UPPER_LIMIT - SCAN_COUNT;
 
   const newFiberAddresses: string[] = [];
@@ -475,13 +475,29 @@ async function runNightlyPoolRescan(): Promise<void> {
 
 export function startNightlyCron() {
   if (cronScheduled) return;
+
+  // COST GUARD: the nightly scan pushes ~50,000 Kinetic address checks through
+  // the Decodo residential proxy EVERY night — that is billed per GB and is the
+  // main ongoing proxy cost. It stays OFF unless explicitly enabled so an idle
+  // deployment never silently burns proxy bandwidth. Turn on with
+  // ENABLE_NIGHTLY_SCAN=true once you actually want automated overnight scans.
+  if (process.env.ENABLE_NIGHTLY_SCAN !== "true") {
+    cronStatus.nextRunAt = null;
+    cronStatus.lastRunResult = "Nightly auto-scan disabled (set ENABLE_NIGHTLY_SCAN=true to enable)";
+    console.log("[cron] Nightly auto-scan DISABLED — no proxy bandwidth used until ENABLE_NIGHTLY_SCAN=true");
+    return;
+  }
   cronScheduled = true;
+
+  // How many CNS records to sweep per night. Default 50k; lower it to cut the
+  // per-night proxy bandwidth (NIGHTLY_SCAN_COUNT env).
+  const nightlyCount = Number(process.env.NIGHTLY_SCAN_COUNT ?? 50_000);
 
   function scheduleNext() {
     const ms = msUntilNext2AM();
     const nextRun = new Date(Date.now() + ms);
     cronStatus.nextRunAt = nextRun.toISOString();
-    console.log(`[cron] Next nightly scan scheduled at ${nextRun.toLocaleString()}`);
+    console.log(`[cron] Next nightly scan scheduled at ${nextRun.toLocaleString()} (${nightlyCount.toLocaleString()} records)`);
 
     setTimeout(async () => {
       try {

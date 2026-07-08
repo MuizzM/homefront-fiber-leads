@@ -425,7 +425,15 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // ── Map config — returns Mapbox token only to authenticated users ───────────
   // Token is NOT in the frontend bundle; fetched at runtime from the server.
   app.get("/api/config/map", requireAuth, (_req, res) => {
-    const token = process.env.MAPBOX_TOKEN ?? process.env.VITE_MAPBOX_TOKEN ?? "";
+    // The map basemap/pins use a PUBLIC token (pk.…) that is safe to send to the
+    // browser — scope it in Mapbox to URL-restricted "styles:read/tiles:read" only,
+    // NOT geocoding. Keep the secret geocoding token (MAPBOX_TOKEN) server-side so
+    // revoking the geocoding key never blanks the map, and a leaked map token
+    // can't run paid geocoding. Falls back to MAPBOX_TOKEN if no public one is set.
+    const token = process.env.MAPBOX_PUBLIC_TOKEN
+      ?? process.env.VITE_MAPBOX_TOKEN
+      ?? process.env.MAPBOX_TOKEN
+      ?? "";
     if (!token) return res.status(503).json({ error: "Map not configured" });
     res.json({ token });
   });
