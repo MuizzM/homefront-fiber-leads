@@ -47,6 +47,7 @@ export interface IStorage {
   getKnocksByLead(leadId: number): Knock[];
   getKnocksByRep(repId: number): Knock[];
   createKnock(knock: InsertKnock): Knock;
+  getVisitSummary(): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
   // ── Leaderboard ────────────────────────────────────────────────────────────
   getLeaderboard(): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number }[];
   // ── Users ──────────────────────────────────────────────────────────────────
@@ -394,6 +395,19 @@ export class Storage implements IStorage {
   }
   createKnock(knock: InsertKnock): Knock {
     return db.insert(knockLog).values({ ...knock, knockedAt: new Date().toISOString() }).returning().get();
+  }
+
+  // Per-lead visit summary for the map: leadId → { count, lastOutcome, lastAt }.
+  // One grouped query; feeds the "visited" check + last-outcome on each pin.
+  getVisitSummary(): Map<number, { count: number; lastOutcome: string; lastAt: string }> {
+    const rows = rawDb.prepare(
+      `SELECT lead_id AS leadId, COUNT(*) AS count, MAX(knocked_at) AS lastAt,
+              (SELECT outcome FROM knock_log k2 WHERE k2.lead_id = k1.lead_id ORDER BY knocked_at DESC LIMIT 1) AS lastOutcome
+       FROM knock_log k1 GROUP BY lead_id`
+    ).all() as any[];
+    const m = new Map<number, { count: number; lastOutcome: string; lastAt: string }>();
+    for (const r of rows) m.set(r.leadId, { count: r.count, lastOutcome: r.lastOutcome, lastAt: r.lastAt });
+    return m;
   }
 
   // ── Leaderboard ────────────────────────────────────────────────────────────

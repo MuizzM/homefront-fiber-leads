@@ -33,6 +33,10 @@ interface MapPin {
   leadScore: number;
   contactName: string | null;
   contactPhone: string | null;
+  visited?: boolean;
+  knockCount?: number;
+  lastOutcome?: string | null;
+  lastKnockedAt?: string | null;
 }
 
 // Mapbox token is fetched from /api/config/map at runtime — not in bundle
@@ -75,6 +79,16 @@ function escapeHtml(v: unknown): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+// Compact "3m ago / 2h ago / 4d ago" for the visited banner.
+function relTime(iso?: string | null): string {
+  if (!iso) return "";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
 
 // ── Inline popup HTML builder ─────────────────────────────────────────────────
@@ -157,18 +171,24 @@ function buildPopupHTML(
         </div>
       </div>` : ""}
 
-      <!-- One-tap knock logging -->
+      <!-- Visited banner — shows past visits so reps know it's already been hit -->
+      ${lead.visited ? `<div style="display:flex;align-items:center;gap:7px;background:#0f172a;border:1px solid #1e3a2e;border-radius:8px;padding:6px 10px;margin-bottom:9px;font-size:11px;">
+        <span style="color:#22c55e;font-weight:700;">✓ Visited${(lead.knockCount ?? 0) > 1 ? ` ${lead.knockCount}×` : ""}</span>
+        <span style="color:#94a3b8;">last: ${escapeHtml(String(lead.lastOutcome ?? "").replace("_", " "))} · ${relTime(lead.lastKnockedAt)}</span>
+      </div>` : ""}
+
+      <!-- One-tap knock logging — big targets for one-handed field use -->
       <div style="margin-bottom:2px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;">
-          <span style="color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Log Door Knock</span>
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+          <span style="color:#e2e8f0;font-size:11px;font-weight:700;">${lead.visited ? "Update visit" : "Mark this visit"}</span>
           <span style="color:#64748b;font-size:10px;">${knockHint}</span>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
           ${OUTCOME_OPTIONS.map(o => `
             <button
               onclick="window.__knockLead(${lead.id}, '${o.val}', '${knockRep}')"
-              style="background:${o.color}18;color:${o.color};border:1px solid ${o.color}40;border-radius:6px;padding:8px 4px;font-size:12px;font-weight:600;cursor:pointer;text-align:center;"
-              onmousedown="this.style.background='${o.color}33'" onmouseup="this.style.background='${o.color}18'"
+              style="background:${o.color}1f;color:${o.color};border:1px solid ${o.color}55;border-radius:8px;padding:11px 4px;font-size:13px;font-weight:700;cursor:pointer;text-align:center;transition:background .1s;"
+              onmousedown="this.style.background='${o.color}44'" onmouseup="this.style.background='${o.color}1f'" ontouchstart="this.style.background='${o.color}44'" ontouchend="this.style.background='${o.color}1f'"
             >${o.label}</button>
           `).join("")}
         </div>
@@ -415,6 +435,19 @@ export default function MapView() {
         toast({ title: "Assign a rep to this lead first, then log the knock", variant: "destructive" });
         return;
       }
+      // Optimistic: recolor the pin + mark it visited (✓) INSTANTLY, before the
+      // network round-trip — so marking a door feels immediate in the field.
+      const outcomeToStatus: Record<string, string> = {
+        sold: "sold", interested: "interested", callback: "follow_up",
+        not_interested: "not_interested", not_home: "prospect",
+      };
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        if (!old?.pins) return old;
+        return { ...old, pins: old.pins.map((p: MapPin) => p.id === leadId
+          ? { ...p, leadStatus: outcomeToStatus[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: new Date().toISOString() }
+          : p) };
+      });
+      popupsRef.current.get(leadId)?.remove();
       try {
         const wasHome = outcome !== "not_home";
         await apiRequest("POST", `/api/leads/${leadId}/knock`, {
@@ -423,13 +456,12 @@ export default function MapView() {
           outcome,
           knockedAt: new Date().toISOString(),
         });
-        toast({ title: outcome === "sold" ? "🎉 Sale logged!" : `Knock logged: ${outcome.replace("_", " ")}` });
-        qc.invalidateQueries({ queryKey: ["/api/leads"] }); qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+        toast({ title: outcome === "sold" ? "🎉 Sale logged!" : `✓ Marked: ${outcome.replace("_", " ")}` });
         qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
-        // Close popup
-        popupsRef.current.get(leadId)?.remove();
+        qc.invalidateQueries({ queryKey: ["/api/leads"] });
       } catch (e: any) {
-        toast({ title: "Failed to log knock", variant: "destructive" });
+        toast({ title: "Couldn't save — reverting", variant: "destructive" });
+        qc.invalidateQueries({ queryKey: ["/api/leads/map"] }); // roll back to server truth
       }
     };
 
@@ -595,10 +627,22 @@ export default function MapView() {
             "#22c55e"
           ],
           "circle-radius": 8,
-          "circle-stroke-width": 2,
-          "circle-stroke-color": "rgba(255,255,255,0.9)",
-          "circle-opacity": 0.95,
+          // Visited doors get a thicker white ring so "done" reads at a glance
+          "circle-stroke-width": ["case", ["==", ["get", "visited"], 1], 3, 2],
+          "circle-stroke-color": "rgba(255,255,255,0.95)",
+          // Un-visited = bright; visited = dimmed so fresh doors pop
+          "circle-opacity": ["case", ["==", ["get", "visited"], 1], 0.5, 0.95],
         },
+      });
+
+      // Visited ✓ badge — any pin that's been knocked (even "Not Home") shows a
+      // check above it, so reps instantly see which doors they've already hit.
+      map.addLayer({
+        id: "lead-visited-check", type: "symbol", source: "leads-cluster",
+        filter: ["all", ["!", ["has", "point_count"]], ["==", ["get", "visited"], 1]],
+        minzoom: 12,
+        layout: { "text-field": "✓", "text-font": ["Arial Unicode MS Regular"], "text-size": 12, "text-offset": [0, -1.15], "text-allow-overlap": true, "text-ignore-placement": true },
+        paint: { "text-color": "#ffffff", "text-halo-color": "#0f172a", "text-halo-width": 1.5 },
       });
 
       // Glow ring for unclustered pins
@@ -805,7 +849,7 @@ export default function MapView() {
         .map(l => ({
           type: "Feature",
           geometry: { type: "Point", coordinates: [l.lng, l.lat] },
-          properties: { id: l.id, status: l.leadStatus, address: l.address },
+          properties: { id: l.id, status: l.leadStatus, address: l.address, visited: l.visited ? 1 : 0 },
         })),
     });
   }, [leads, team, mapReady, filterStatus, filterRep, canAssign, territories, isAdmin, user, styleEpoch]);
@@ -916,7 +960,15 @@ export default function MapView() {
         map.addLayer({ id: "lead-unclustered", type: "circle", source: "leads-cluster",
           filter: ["!", ["has", "point_count"]], minzoom: 12,
           paint: { "circle-color": ["match",["get","status"],"prospect","#22c55e","contacted","#3b82f6","interested","#8b5cf6","follow_up","#f59e0b","sold","#10b981","not_interested","#ef4444","#22c55e"],
-            "circle-radius": 8, "circle-stroke-width": 2, "circle-stroke-color": "rgba(255,255,255,0.9)", "circle-opacity": 0.95 },
+            "circle-radius": 8,
+            "circle-stroke-width": ["case", ["==", ["get","visited"], 1], 3, 2],
+            "circle-stroke-color": "rgba(255,255,255,0.95)",
+            "circle-opacity": ["case", ["==", ["get","visited"], 1], 0.5, 0.95] },
+        });
+        map.addLayer({ id: "lead-visited-check", type: "symbol", source: "leads-cluster",
+          filter: ["all", ["!", ["has","point_count"]], ["==", ["get","visited"], 1]], minzoom: 12,
+          layout: { "text-field": "✓", "text-font": ["Arial Unicode MS Regular"], "text-size": 12, "text-offset": [0, -1.15], "text-allow-overlap": true, "text-ignore-placement": true },
+          paint: { "text-color": "#ffffff", "text-halo-color": "#0f172a", "text-halo-width": 1.5 },
         });
         map.on("click", "lead-clusters", (e: any) => {
           const features = map.queryRenderedFeatures(e.point, { layers: ["lead-clusters"] });

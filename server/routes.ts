@@ -642,26 +642,36 @@ export function registerRoutes(httpServer: Server, app: Express) {
       return _mapPinCache.pins; // cache hit for admin/manager (no per-user filter)
     }
     const all = storage.getLeads(tenantId, repFilter);
+    // Per-lead visit summary so a rep can SEE which doors they've already hit —
+    // even a "Not Home" (which keeps status=prospect) shows a visited check.
+    const visits = storage.getVisitSummary();
     const pins = all
       .filter((l: any) => l.lat && l.lng)
-      .map((l: any) => ({
-        id: l.id,
-        address: l.address,
-        city: l.city,
-        state: l.state,
-        zip: l.zip,
-        lat: l.lat,
-        lng: l.lng,
-        leadStatus: l.leadStatus,
-        fiberStatus: l.fiberStatus,
-        isNewFiber: l.isNewFiber,
-        assignedRepId: l.assignedRepId,
-        maxDownloadMbps: l.maxDownloadMbps,
-        competitorName: l.competitorName,
-        leadScore: l.leadScore,
-        contactName: l.contactName,
-        contactPhone: l.contactPhone,
-      }));
+      .map((l: any) => {
+        const v = visits.get(l.id);
+        return {
+          id: l.id,
+          address: l.address,
+          city: l.city,
+          state: l.state,
+          zip: l.zip,
+          lat: l.lat,
+          lng: l.lng,
+          leadStatus: l.leadStatus,
+          fiberStatus: l.fiberStatus,
+          isNewFiber: l.isNewFiber,
+          assignedRepId: l.assignedRepId,
+          maxDownloadMbps: l.maxDownloadMbps,
+          competitorName: l.competitorName,
+          leadScore: l.leadScore,
+          contactName: l.contactName,
+          contactPhone: l.contactPhone,
+          visited: !!v,
+          knockCount: v?.count ?? 0,
+          lastOutcome: v?.lastOutcome ?? null,
+          lastKnockedAt: v?.lastAt ?? null,
+        };
+      });
     if (!repFilter && !tenantId) _mapPinCache = { ts: Date.now(), pins };
     return pins;
   }
@@ -1486,6 +1496,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     };
     const newStatus = outcomeToStatus[parsed.data.outcome];
     if (newStatus) storage.updateLead(Number(req.params.id), { leadStatus: newStatus });
+    bustMapCache(); // a knock changes the pin's visited state — refresh the map layer
     // Auto-create pending commission when outcome = sold
     if (parsed.data.outcome === "sold" && parsed.data.repId) {
       try {
