@@ -1,0 +1,28 @@
+# ── Litestream — continuous SQLite backup to S3-compatible object storage ────
+# Streams every change of data.db to Backblaze B2 (or Cloudflare R2) so the
+# database can be restored to any point in time. All values come from env vars
+# set in Railway — nothing secret lives in this file.
+#
+#   LITESTREAM_BUCKET             e.g. hfs-portal-backup
+#   LITESTREAM_ENDPOINT           e.g. https://s3.us-east-005.backblazeb2.com
+#   LITESTREAM_ACCESS_KEY_ID      B2 application key ID
+#   LITESTREAM_SECRET_ACCESS_KEY  B2 application key
+#
+# `exec` runs the app as a child process: Litestream starts replication first,
+# then supervises node — if the app exits, the container exits (Railway restarts).
+
+dbs:
+  - path: ${DATA_DIR}/data.db
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_BUCKET}
+        path: data.db
+        endpoint: ${LITESTREAM_ENDPOINT}
+        access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+        secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+        force-path-style: true
+        # Keep ~3 days of point-in-time restore; snapshot hourly.
+        retention: 72h
+        snapshot-interval: 1h
+
+exec: node dist/index.cjs

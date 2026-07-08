@@ -1,4 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Self-hosted Inter (variable) — Vite bundles the woff2; no Google Fonts request */
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
 
 @tailwind base;
 @tailwind components;
@@ -91,14 +93,13 @@
 
   body {
     @apply bg-background text-foreground;
-    /* Geist — Home Front Solutions brand font; Inter/system fallback while loading */
-    font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
+    font-family: 'Geist Variable', 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
   .font-mono {
-    font-family: 'JetBrains Mono', monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   }
 }
 
@@ -113,7 +114,7 @@
   border: 1px solid hsl(210 35% 22%) !important;
   border-radius: 12px !important;
   padding: 12px 14px !important;
-  font-family: 'Geist', 'Inter', sans-serif !important;
+  font-family: 'Geist Variable', 'Inter Variable', system-ui, sans-serif !important;
   font-size: 13px !important;
   min-width: 200px;
   box-shadow: 0 12px 32px rgba(0,0,0,0.45) !important;
@@ -186,4 +187,20 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Rep field mode: hide the Mapbox control stack (zoom/compass/geolocate buttons)
+   on mobile rep screens — pinch-zoom + the locate FAB cover both, and the porch
+   test says every leftover control is clutter. Applied by MapView on the map
+   container when role=rep && mobile. */
+.rep-clean-map .mapboxgl-ctrl-top-right {
+  display: none;
+}
+
+/* Login page — soft brand glow behind the centered card, built from theme
+   tokens so it tracks light/dark instead of hard-coded hex. */
+.login-backdrop {
+  background:
+    radial-gradient(640px 340px at 50% 30%, hsl(var(--primary) / 0.08), transparent 70%),
+    hsl(var(--background));
 }

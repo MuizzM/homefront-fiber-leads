@@ -10,7 +10,12 @@ import Database from "better-sqlite3";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
 try {
-  const _perfDb = new Database(process.env.DB_PATH ?? "./data.db");
+  // Must resolve to the SAME file as server/db.ts: honor DATA_DIR (the volume
+  // mount in production) — DB_PATH alone here once pointed this handle at a
+  // second ./data.db in the container's cwd.
+  const _perfDb = new Database(
+    process.env.DB_PATH ?? path.join(process.env.DATA_DIR || process.cwd(), "data.db")
+  );
   _perfDb.pragma("journal_mode = WAL");
   _perfDb.pragma("synchronous = NORMAL");
   _perfDb.pragma("cache_size = -65536");  // 64MB page cache
@@ -440,6 +445,18 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 export function registerRoutes(httpServer: Server, app: Express) {
+
+  // ── Health check — used by the hosting platform (Railway) to gate deploys ────
+  // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
+  // fails the check instead of serving a zombie app.
+  app.get("/api/health", (_req, res) => {
+    try {
+      storage.getSession("health-probe"); // any read exercises the DB connection
+      res.json({ ok: true });
+    } catch {
+      res.status(503).json({ ok: false });
+    }
+  });
 
   // ── Map config — returns Mapbox token only to authenticated users ───────────
   // Token is NOT in the frontend bundle; fetched at runtime from the server.

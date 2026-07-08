@@ -6,7 +6,7 @@
          with env(safe-area-inset-bottom) on notched phones -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
     <title>Home Front Solutions</title>
-    <meta name="description" content="Home Front Solutions — direct-to-door field sales. Find new fiber, work territories, close deals." />
+    <meta name="description" content="Home Front Solutions team portal — field map, leads, and territory management." />
     <link rel="icon" type="image/png" href="/hfs-logo.png" />
     <meta name="theme-color" content="#0F2A44" />
     <script>
@@ -18,10 +18,11 @@
         } catch (e) { document.documentElement.classList.add('dark'); }
       })();
     </script>
-    <!-- Brand typography: Geist (matches homefrontsolutionsllc.com), loaded non-blocking -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+    <!-- Fonts are self-hosted (@fontsource-variable/inter, bundled by Vite) — no
+         Google Fonts requests. Mapbox is the only third-party origin; preconnect
+         twice: plain for the script/CSS tags (non-CORS), crossorigin for the
+         library's tile/style fetches. -->
+    <link rel="preconnect" href="https://api.mapbox.com" />
     <link rel="preconnect" href="https://api.mapbox.com" crossorigin />
     <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" media="print" onload="this.media='all'" />
     <script>

@@ -83,9 +83,10 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["var(--font-sans)"],
-        serif: ["var(--font-serif)"],
-        mono: ["var(--font-mono)"],
+        /* Real stacks — the old var(--font-*) custom properties were never defined */
+        sans: ["Geist Variable", "Inter Variable", "system-ui", "-apple-system", "sans-serif"],
+        serif: ["Georgia", "serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
       },
       keyframes: {
         "accordion-down": {

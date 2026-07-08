@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowRight, Mail, ShieldCheck } from "lucide-react";
+import { ArrowRight, Loader2, Mail, ShieldCheck } from "lucide-react";
 
 const API_BASE = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
 
@@ -61,53 +61,47 @@ export default function Login() {
     }
   }
 
-  return (
-    <div
-      className="min-h-screen flex items-center justify-center p-4"
-      style={{ background: "linear-gradient(160deg, #061624 0%, #0F2A44 60%, #0a2035 100%)" }}
-    >
-      {/* Background glow blobs */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none" aria-hidden>
-        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 w-[500px] h-[300px] rounded-full opacity-[0.07]"
-          style={{ background: "#3EA394", filter: "blur(90px)" }} />
-      </div>
+  const inputClasses =
+    "w-full rounded-lg border border-input bg-background text-foreground " +
+    "placeholder:text-muted-foreground/60 transition-colors " +
+    "focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card";
 
-      <div className="relative w-full max-w-[380px]">
+  const buttonClasses =
+    "flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-primary-foreground " +
+    "shadow-lg shadow-primary/20 transition-colors hover:bg-primary/90 " +
+    "disabled:pointer-events-none disabled:opacity-50 " +
+    "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-card";
+
+  return (
+    <div className="login-backdrop min-h-screen flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
 
         {/* Card */}
-        <div
-          className="rounded-2xl p-8 shadow-2xl"
-          style={{
-            background: "rgba(10,32,53,0.9)",
-            border: "1px solid rgba(62,163,148,0.2)",
-            backdropFilter: "blur(16px)",
-          }}
-        >
-          {/* Brand logo */}
-          <div className="text-center mb-8">
+        <div className="rounded-2xl border border-border bg-card p-8 shadow-2xl">
+          {/* Brand */}
+          <div className="mb-10 text-center">
             <img
               src="/hfs-logo-full.png"
               alt="Home Front Solutions"
-              className="mx-auto mb-3 h-24 w-auto object-contain drop-shadow-lg"
-              width={120}
-              height={120}
+              className="mx-auto mb-4 h-20 w-auto object-contain"
+              width={80}
+              height={80}
             />
-            <h1 className="text-xl font-bold text-white tracking-tight">Home Front Solutions</h1>
-            <p className="text-xs mt-1 font-medium tracking-[0.2em] uppercase" style={{ color: "#3EA394" }}>
-              Direct to your door
-            </p>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Home Front Solutions</h1>
+            <p className="mt-1.5 text-sm text-muted-foreground">Team access only</p>
           </div>
 
           {/* Step: email entry */}
           {step === "email" && (
-            <form onSubmit={handleEmailSubmit} className="space-y-5">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#CBD4DD" }}>
-                  Work Email
+            <form onSubmit={handleEmailSubmit} className="space-y-6">
+              <div className="space-y-2">
+                <label htmlFor="login-email" className="block text-sm font-medium text-foreground">
+                  Work email
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4" style={{ color: "#5A6B76" }} />
+                  <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <input
+                    id="login-email"
                     type="email"
                     value={email}
                     onChange={e => setEmail(e.target.value)}
@@ -116,16 +110,10 @@ export default function Login() {
                     autoComplete="email"
                     autoFocus
                     data-testid="input-email"
-                    className="w-full pl-9 pr-4 py-2.5 rounded-lg text-sm text-white placeholder-gray-600 focus:outline-none transition-all"
-                    style={{
-                      background: "rgba(6,22,36,0.8)",
-                      border: "1px solid rgba(62,163,148,0.25)",
-                    }}
-                    onFocus={e => (e.target.style.borderColor = "#3EA394")}
-                    onBlur={e => (e.target.style.borderColor = "rgba(62,163,148,0.25)")}
+                    className={`h-11 pl-9 pr-3 text-sm ${inputClasses}`}
                   />
                 </div>
-                <p className="text-xs mt-2" style={{ color: "#5A6B76" }}>
+                <p className="text-xs text-muted-foreground">
                   We'll send a one-time code to this address.
                 </p>
               </div>
@@ -134,39 +122,34 @@ export default function Login() {
                 type="submit"
                 disabled={loading || !email.trim()}
                 data-testid="button-send-code"
-                className="w-full py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                style={{
-                  background: loading ? "rgba(62,163,148,0.5)" : "linear-gradient(135deg, #3EA394, #5FB8A5)",
-                  color: "white",
-                  boxShadow: "0 4px 20px rgba(62,163,148,0.25)",
-                }}
+                className={buttonClasses}
               >
-                {loading ? "Sending…" : (<>Send Login Code <ArrowRight className="w-4 h-4" /></>)}
+                {loading
+                  ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Sending code…</>)
+                  : (<>Send login code <ArrowRight className="h-4 w-4" aria-hidden /></>)}
               </button>
             </form>
           )}
 
           {/* Step: code entry */}
           {step === "code" && (
-            <form onSubmit={handleCodeSubmit} className="space-y-5">
-              <div className="text-center space-y-1 mb-2">
-                <div
-                  className="w-10 h-10 rounded-full mx-auto flex items-center justify-center mb-3"
-                  style={{ background: "rgba(62,163,148,0.15)", border: "1px solid rgba(62,163,148,0.3)" }}
-                >
-                  <ShieldCheck className="w-5 h-5" style={{ color: "#3EA394" }} />
+            <form onSubmit={handleCodeSubmit} className="space-y-6">
+              <div className="space-y-1 text-center">
+                <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full border border-primary/25 bg-primary/10">
+                  <ShieldCheck className="h-5 w-5 text-primary" />
                 </div>
-                <p className="text-sm text-white font-medium">Check your email</p>
-                <p className="text-xs" style={{ color: "#8A96A0" }}>
-                  Sent to <span className="text-white font-medium">{email}</span>
+                <p className="text-sm font-medium text-foreground">Check your email</p>
+                <p className="text-xs text-muted-foreground">
+                  Sent to <span className="font-medium text-foreground">{email}</span>
                 </p>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: "#CBD4DD" }}>
-                  6-Digit Code
+              <div className="space-y-2">
+                <label htmlFor="login-code" className="block text-sm font-medium text-foreground">
+                  6-digit code
                 </label>
                 <input
+                  id="login-code"
                   type="text"
                   inputMode="numeric"
                   maxLength={6}
@@ -175,17 +158,10 @@ export default function Login() {
                   placeholder="000000"
                   data-testid="input-code"
                   autoFocus
-                  className="w-full text-center text-2xl font-bold rounded-lg py-3 text-white focus:outline-none tracking-[0.4em] transition-all"
-                  style={{
-                    background: "rgba(6,22,36,0.8)",
-                    border: "1px solid rgba(62,163,148,0.25)",
-                    fontVariantNumeric: "tabular-nums",
-                  }}
-                  onFocus={e => (e.target.style.borderColor = "#3EA394")}
-                  onBlur={e => (e.target.style.borderColor = "rgba(62,163,148,0.25)")}
                   required
+                  className={`py-3 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums ${inputClasses}`}
                 />
-                <p className="text-xs mt-2" style={{ color: "#5A6B76" }}>
+                <p className="text-xs text-muted-foreground">
                   Expires in 10 minutes. Do not share this code.
                 </p>
               </div>
@@ -194,21 +170,17 @@ export default function Login() {
                 type="submit"
                 disabled={loading || code.length < 6}
                 data-testid="button-verify-code"
-                className="w-full py-3 rounded-lg text-sm font-semibold flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                style={{
-                  background: loading ? "rgba(62,163,148,0.5)" : "linear-gradient(135deg, #3EA394, #5FB8A5)",
-                  color: "white",
-                  boxShadow: "0 4px 20px rgba(62,163,148,0.25)",
-                }}
+                className={buttonClasses}
               >
-                {loading ? "Verifying…" : (<><ShieldCheck className="w-4 h-4" /> Verify & Sign In</>)}
+                {loading
+                  ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Verifying…</>)
+                  : (<><ShieldCheck className="h-4 w-4" aria-hidden /> Verify & sign in</>)}
               </button>
 
               <button
                 type="button"
                 onClick={() => { setStep("email"); setCode(""); }}
-                className="w-full text-xs text-center transition-colors"
-                style={{ color: "#5A6B76" }}
+                className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 ← Use a different email
               </button>
@@ -217,11 +189,9 @@ export default function Login() {
         </div>
 
         {/* Footer */}
-        <div className="text-center mt-5">
-          <p className="text-xs" style={{ color: "#5A6B76" }}>
-            Home Front Solutions · Team access only
-          </p>
-        </div>
+        <p className="mt-6 text-center text-xs text-muted-foreground/70">
+          © {new Date().getFullYear()} Home Front Solutions
+        </p>
       </div>
     </div>
   );
