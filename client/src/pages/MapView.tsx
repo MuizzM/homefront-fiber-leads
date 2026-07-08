@@ -313,6 +313,26 @@ export default function MapView() {
     },
   });
 
+  // Reclaim / pull-back an area with one of the 3 modes.
+  const [reclaimMenuId, setReclaimMenuId] = useState<number | null>(null);
+  const reclaimMutation = useMutation({
+    mutationFn: async ({ id, mode, newRepId }: { id: number; mode: string; newRepId?: number }) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/reclaim`, { mode, newRepId });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      setReclaimMenuId(null);
+      const label = data.mode === "return_to_pool" ? `${data.leadsAffected} leads returned to pool`
+        : data.mode === "reassign" ? `reassigned (${data.leadsAffected} leads)` : "area reclaimed";
+      toast({ title: `✓ Area reclaimed — ${label}` });
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
   // Single exit path for the lasso — clears mode, selection, and map layers.
   // Every button/mutation that leaves lasso mode goes through this so no shape
   // or state is ever left behind.
@@ -1876,19 +1896,47 @@ export default function MapView() {
                   </div>
                   {territories.map(t => {
                     const prog = territoryProgress.find(p => p.id === t.id);
-                    const color = colorForRep(t.repId);
-                    const repName = team.find(m => m.id === t.repId)?.name ?? t.name;
+                    const status = (t as any).status ?? "active";
+                    const isUnassigned = status === "unassigned" || status === "reclaimed";
+                    const color = isUnassigned ? "#94a3b8" : colorForRep(t.repId);
+                    const repName = isUnassigned ? "Unassigned" : (team.find(m => m.id === t.repId)?.name ?? t.name);
                     return (
                     <div key={t.id} className="mb-1.5 group">
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-white/20" style={{ background: color }} />
                         <span className="text-[11px] truncate text-white/85">{repName}</span>
-                        {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total} · {prog.pct}%</span>}
-                        {canAssign && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} title="Clear this area" className="opacity-0 group-hover:opacity-100 text-red-400 text-xs">×</button>}
+                        {status !== "active" && <span className="text-[9px] uppercase tracking-wide text-white/40">{status}</span>}
+                        {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total}</span>}
+                        {canManage && !isUnassigned && (
+                          <button onClick={() => setReclaimMenuId(reclaimMenuId === t.id ? null : t.id)} title="Reclaim / pull back this area"
+                            className="opacity-0 group-hover:opacity-100 text-amber-400 text-xs" data-testid={`reclaim-${t.id}`}>↩</button>
+                        )}
+                        {canManage && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} title="Delete this area" className="opacity-0 group-hover:opacity-100 text-red-400/70 hover:text-red-400 text-xs">×</button>}
                       </div>
                       {prog && prog.total > 0 && (
                         <div className="h-1 rounded-full bg-white/10 mt-0.5 overflow-hidden">
                           <div className="h-full rounded-full" style={{ width: `${prog.pct}%`, background: color }} />
+                        </div>
+                      )}
+                      {/* Reclaim 3-mode chooser */}
+                      {reclaimMenuId === t.id && (
+                        <div className="mt-1 ml-4 flex flex-col gap-1 bg-black/40 rounded-md p-1.5" data-testid={`reclaim-menu-${t.id}`}>
+                          <button onClick={() => reclaimMutation.mutate({ id: t.id, mode: "return_to_pool" })}
+                            className="text-left text-[10px] text-white/80 hover:text-white px-1.5 py-1 rounded hover:bg-white/10">
+                            ↩ Return leads to pool <span className="text-white/40">(default)</span>
+                          </button>
+                          <button onClick={() => reclaimMutation.mutate({ id: t.id, mode: "keep_leads" })}
+                            className="text-left text-[10px] text-white/80 hover:text-white px-1.5 py-1 rounded hover:bg-white/10">
+                            Reclaim area only <span className="text-white/40">(keep leads)</span>
+                          </button>
+                          <div className="flex items-center gap-1">
+                            <select data-testid={`reassign-select-${t.id}`} defaultValue=""
+                              onChange={e => { if (e.target.value) reclaimMutation.mutate({ id: t.id, mode: "reassign", newRepId: Number(e.target.value) }); }}
+                              className="flex-1 bg-black/50 text-white text-[10px] rounded px-1 py-1 border border-white/10">
+                              <option value="" className="text-slate-900">Reassign to rep…</option>
+                              {team.filter(m => m.active && m.id !== t.repId).map(m => <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>)}
+                            </select>
+                          </div>
                         </div>
                       )}
                     </div>
