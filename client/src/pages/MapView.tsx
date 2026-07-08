@@ -4,7 +4,7 @@ declare const mapboxgl: any;
 import {
   Play, Square, RefreshCw, AlertCircle, Pencil, X,
   DoorOpen, UserCheck, Zap, CalendarClock, PhoneOff, Map as MapIcon, ShieldCheck, Bell,
-  ChevronRight, Home, Wifi, Signal, Users, Target, Search
+  ChevronRight, Home, Wifi, Signal, Users, Target, Search, LocateFixed
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -221,6 +221,7 @@ const POLL_MS = 400; // 400ms — scan dots appear almost instantly
 export default function MapView() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
+  const geolocateRef = useRef<any>(null);
   const scanMarkersRef = useRef<any[]>([]);
   const leadMarkersRef = useRef<Map<number, any>>(new Map());
   const lastRenderedCount = useRef(0);
@@ -259,6 +260,8 @@ export default function MapView() {
 
   // Filter
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  // Visit filter — the field rep's primary lens: what's left to knock.
+  const [visitFilter, setVisitFilter] = useState<"all" | "unvisited" | "visited">("all");
 
   // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -512,6 +515,15 @@ export default function MapView() {
     setTimeout(() => map.resize(), 400);
 
     map.addControl(new (window as any).mapboxgl.NavigationControl(), "top-right");
+    // "Locate me" — the core field control: center on the rep's position and
+    // track it as they walk the street. Triggered by the big thumb FAB below.
+    const geolocate = new (window as any).mapboxgl.GeolocateControl({
+      positionOptions: { enableHighAccuracy: true },
+      trackUserLocation: true,
+      showUserHeading: true,
+    });
+    map.addControl(geolocate, "top-right");
+    geolocateRef.current = geolocate;
 
     const setupMapLayers = () => {
       // Territory draw click handler (for territory polygon mode, separate from scan bbox)
@@ -837,9 +849,11 @@ export default function MapView() {
       );
     }
 
-    const visibleLeads = filterStatus === "all"
-      ? leadsToShow
-      : leadsToShow.filter(l => l.leadStatus === filterStatus);
+    if (filterStatus !== "all") leadsToShow = leadsToShow.filter(l => l.leadStatus === filterStatus);
+    // Visit filter — "what's left to knock" is the rep's primary lens
+    if (visitFilter === "unvisited") leadsToShow = leadsToShow.filter(l => !l.visited);
+    else if (visitFilter === "visited") leadsToShow = leadsToShow.filter(l => l.visited);
+    const visibleLeads = leadsToShow;
 
     // GPU-rendered circle layer — no DOM markers, handles 100k+ points
     src.setData({
@@ -852,7 +866,7 @@ export default function MapView() {
           properties: { id: l.id, status: l.leadStatus, address: l.address, visited: l.visited ? 1 : 0 },
         })),
     });
-  }, [leads, team, mapReady, filterStatus, filterRep, canAssign, territories, isAdmin, user, styleEpoch]);
+  }, [leads, team, mapReady, filterStatus, filterRep, visitFilter, canAssign, territories, isAdmin, user, styleEpoch]);
 
   // ── Auto-fit to leads once on first load (Sales Rabbit density view) ──────────
   // Centers/zooms the map so pins are visible the moment you open it. Runs once,
@@ -1398,6 +1412,8 @@ export default function MapView() {
     () => leads.reduce((n, l) => n + (l.assignedRepId ? 1 : 0), 0),
     [leads],
   );
+  const visitedCount = useMemo(() => leads.reduce((n, l) => n + (l.visited ? 1 : 0), 0), [leads]);
+  const doorsLeft = leads.length - visitedCount;
 
   // On-map search — top matches for the search box dropdown (address or city).
   const searchMatches = useMemo(() => {
@@ -1436,6 +1452,22 @@ export default function MapView() {
               <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>
             </div>
           )}
+          {/* Doors left to knock — the field rep's key number */}
+          <div className="flex items-center gap-1" title="Doors not yet knocked">
+            <DoorOpen className="w-3 h-3 text-amber-400" />
+            <span className="text-xs font-semibold text-amber-400">{doorsLeft.toLocaleString()}</span>
+            <span className="text-xs text-muted-foreground hidden sm:inline">left</span>
+          </div>
+          {/* Visit filter — All / Left / Done */}
+          <div className="flex items-center rounded-md border border-border overflow-hidden text-[11px]">
+            {([["all", "All"], ["unvisited", "Left"], ["visited", "Done"]] as const).map(([v, label]) => (
+              <button key={v} onClick={() => setVisitFilter(v)}
+                className={`px-2 py-1 transition-colors ${visitFilter === v ? "bg-primary text-white" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
+                data-testid={`visit-filter-${v}`}>
+                {label}
+              </button>
+            ))}
+          </div>
           {/* Filter map pins by rep — admin/manager/team lead */}
           {canAssign && (
             <select
@@ -1787,6 +1819,19 @@ export default function MapView() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Locate-me FAB — big thumb target, bottom-right, above zoom controls */}
+          {mapReady && (
+            <button
+              onClick={() => { try { geolocateRef.current?.trigger(); } catch {} }}
+              title="Center on my location"
+              data-testid="locate-me"
+              className="absolute bottom-8 right-3 z-20 h-13 w-13 rounded-full bg-primary text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform hover:bg-primary/90"
+              style={{ height: 52, width: 52 }}
+            >
+              <LocateFixed className="w-6 h-6" />
+            </button>
           )}
 
           {/* Pin legend + filter — bottom left, FiberFocus style */}

@@ -19,7 +19,6 @@ import {
   ClipboardList,
   Bell,
   DollarSign,
-  Navigation,
   Clock,
   Radio,
 } from "lucide-react";
@@ -51,7 +50,6 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/map",   label: "Field Map",    icon: Map,             show: () => true,                                    group: "Core" },
   { href: "/leads", label: "Leads",        icon: MapPin,          show: () => true,                                    group: "Core" },
   // ── Field ─────────────────────────────────────────────────────────────────
-  { href: "/my-territory", label: "My Territory", icon: Navigation,  show: () => true,                                group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: () => true,                               group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: () => true,                               group: "Field" },
   { href: "/commissions",  label: "Commissions",   icon: DollarSign,   show: () => true,                               group: "Field" },

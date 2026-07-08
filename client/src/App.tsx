@@ -25,7 +25,6 @@ const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
 const Applications = lazy(() => import("@/pages/Applications"));
-const MyTerritory = lazy(() => import("@/pages/MyTerritory"));
 const Commissions = lazy(() => import("@/pages/Commissions"));
 const LiveMap = lazy(() => import("@/pages/LiveMap"));
 const ComingSoon = lazy(() => import("@/pages/ComingSoon"));
@@ -105,7 +104,10 @@ function AppRoutes() {
           <Route path="/map" component={MapView} />
           <Route path="/leads" component={Leads} />
           <Route path="/leaderboard" component={Leaderboard} />
-          <Route path="/my-territory" component={MyTerritory} />
+          {/* My Territory removed — everyone knocks + manages via Field Map & Leads */}
+          <Route path="/my-territory">
+            <Redirect to="/map" />
+          </Route>
           <Route path="/clock" component={ClockIn} />
           <Route path="/commissions" component={Commissions} />
 

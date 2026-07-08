@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
@@ -25,6 +25,8 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useDebounce } from "@/hooks/use-debounce";
 import type { CoveragePin } from "@/components/LeadsCoverageMap";
 import type { Lead, InsertLead, TeamMember, Knock, InsertKnock } from "@shared/schema";
 
@@ -40,13 +42,26 @@ const STATUS_LABEL: Record<string, string> = {
   follow_up: "Follow Up",
 };
 
+// ONE status color language, matched to the map's PIN_COLORS (MapView.tsx) so a
+// status looks identical on the list and on the map. (interested=purple,
+// follow_up=amber — these were previously swapped between the two pages.)
 const STATUS_COLOR: Record<string, string> = {
-  prospect:      "bg-slate-500/15 text-slate-400",
+  prospect:      "bg-emerald-500/15 text-emerald-400",
   contacted:     "bg-blue-500/15 text-blue-400",
-  interested:    "bg-amber-500/15 text-amber-400",
+  interested:    "bg-violet-500/15 text-violet-400",
   sold:          "bg-green-500/15 text-green-400",
   not_interested:"bg-red-500/15 text-red-400",
-  follow_up:     "bg-purple-500/15 text-purple-400",
+  follow_up:     "bg-amber-500/15 text-amber-400",
+};
+
+// Solid accent (left bar / dot) so a rep reads status at a glance without text.
+const STATUS_ACCENT: Record<string, string> = {
+  prospect:      "#22c55e",
+  contacted:     "#3b82f6",
+  interested:    "#8b5cf6",
+  sold:          "#10b981",
+  not_interested:"#ef4444",
+  follow_up:     "#f59e0b",
 };
 
 const OUTCOME_ICONS: Record<string, React.ElementType> = {
@@ -60,7 +75,7 @@ const OUTCOME_ICONS: Record<string, React.ElementType> = {
 const OUTCOME_COLORS: Record<string, string> = {
   not_home:      "text-muted-foreground",
   not_interested:"text-red-400",
-  interested:    "text-blue-400",
+  interested:    "text-violet-400",
   callback:      "text-amber-400",
   sold:          "text-green-400",
 };
@@ -670,11 +685,14 @@ export default function Leads() {
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 100;
 
-  const { data: leadsResp, isLoading } = useQuery<{ leads: Lead[]; total: number; limit: number; offset: number }>({
-    queryKey: ["/api/leads", search, filterStatus, filterCity, filterState, page],
+  // Debounce search so a query fires once typing pauses, not on every keystroke.
+  const debouncedSearch = useDebounce(search, 300);
+
+  const { data: leadsResp, isLoading, isFetching } = useQuery<{ leads: Lead[]; total: number; limit: number; offset: number }>({
+    queryKey: ["/api/leads", debouncedSearch, filterStatus, filterCity, filterState, page],
     queryFn: async () => {
       const params = new URLSearchParams();
-      if (search) params.set("search", search);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       if (filterStatus !== "all") params.set("status", filterStatus);
       if (filterCity !== "all") params.set("city", filterCity);
       if (filterState !== "all") params.set("state", filterState);
@@ -684,6 +702,7 @@ export default function Leads() {
       return res.json();
     },
     staleTime: 30000,
+    placeholderData: keepPreviousData, // keep the current page visible while the next loads — no skeleton flash
   });
   const leads = leadsResp?.leads ?? [];
   const totalLeads = leadsResp?.total ?? 0;
@@ -756,6 +775,7 @@ export default function Leads() {
   // Reset page when any filter/search changes
   const handleStatusChange = (s: string) => { setFilterStatus(s); setPage(0); };
   const handleSearchChange = (v: string) => { setSearch(v); setPage(0); };
+  const searching = search !== debouncedSearch; // typing, query not yet fired
   const handleStateChange = (s: string) => { setFilterState(s); setFilterCity("all"); setPage(0); };
   const handleCityChange = (c: string) => { setFilterCity(c); setPage(0); };
 
@@ -777,12 +797,15 @@ export default function Leads() {
 
       {/* Filters */}
       <div className="flex gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[180px]">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input value={search} onChange={e => handleSearchChange(e.target.value)}
-            placeholder="Search address, city, contact..."
-            className="pl-9 bg-secondary border-input text-sm h-9"
+            placeholder="Search address, city, contact…"
+            className="pl-9 pr-9 bg-secondary border-input text-sm h-9 focus-visible:ring-primary/40"
             data-testid="input-search-leads" />
+          {(searching || (isFetching && !isLoading)) && (
+            <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />
+          )}
         </div>
         <Select value={filterState} onValueChange={handleStateChange}>
           <SelectTrigger className="bg-secondary border-input w-28 text-sm h-9" data-testid="filter-state">
@@ -802,29 +825,24 @@ export default function Leads() {
             {cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
           </SelectContent>
         </Select>
-        <Select value={filterStatus} onValueChange={handleStatusChange}>
-          <SelectTrigger className="bg-secondary border-input w-36 text-sm h-9" data-testid="filter-lead-status">
-            <SelectValue placeholder="All statuses" />
-          </SelectTrigger>
-          <SelectContent className="bg-card border-border">
-            <SelectItem value="all">All statuses</SelectItem>
-            {LEAD_STATUSES.map(s => (
-              <SelectItem key={s} value={s}>{STATUS_LABEL[s]}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
-      {/* Status tabs — server-side filtered, show active filter only */}
-      <div className="flex gap-2 flex-wrap">
+      {/* Status filter chips — the primary status control (dropdown removed as dup) */}
+      <div className="flex gap-1.5 flex-wrap" data-testid="filter-lead-status">
         {["all", ...LEAD_STATUSES].map(s => {
           const active = filterStatus === s;
+          const accent = STATUS_ACCENT[s];
           return (
             <button key={s} onClick={() => handleStatusChange(s)}
-              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
-                active ? "bg-primary text-white" : "bg-secondary text-muted-foreground hover:text-foreground"
+              className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
+                active
+                  ? "bg-primary text-white border-primary shadow-sm"
+                  : "bg-secondary text-muted-foreground border-transparent hover:text-foreground hover:border-border"
               }`}>
-              {s === "all" ? `All ${totalLeads > 0 ? totalLeads.toLocaleString() : ""}` : STATUS_LABEL[s]}
+              {s !== "all" && !active && (
+                <span className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle" style={{ background: accent }} />
+              )}
+              {s === "all" ? `All${totalLeads > 0 ? ` · ${totalLeads.toLocaleString()}` : ""}` : STATUS_LABEL[s]}
             </button>
           );
         })}
@@ -832,125 +850,123 @@ export default function Leads() {
 
       {/* Lead list */}
       {isLoading ? (
-        <div className="flex items-center justify-center py-12 gap-2 text-muted-foreground text-sm">
-          <RefreshCw className="w-4 h-4 animate-spin" /> Loading leads…
+        <div className="space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
+              <Skeleton className="w-1 h-9 rounded-full" />
+              <div className="flex-1 space-y-2">
+                <Skeleton className="h-3.5 w-1/3" />
+                <Skeleton className="h-3 w-1/2" />
+              </div>
+              <Skeleton className="h-7 w-24 rounded-md" />
+            </div>
+          ))}
         </div>
       ) : filtered.length === 0 ? (
-        <Card className="bg-card border-border">
-          <CardContent className="py-12 text-center">
-            <Users className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
-            <div className="text-sm text-muted-foreground">
-              {totalLeads === 0 ? "No leads yet — run a City Scan to discover new fiber leads." : "No leads match this filter."}
-            </div>
-          </CardContent>
-        </Card>
+        <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in duration-300">
+          <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
+            <Users className="w-7 h-7 text-primary/70" />
+          </div>
+          <div className="text-sm font-semibold text-foreground mb-1">
+            {totalLeads === 0 ? "No leads yet" : "No leads match this filter"}
+          </div>
+          <div className="text-xs text-muted-foreground max-w-xs">
+            {totalLeads === 0
+              ? "Run a City Scan or draw a Scan Area on the Field Map to discover new fiber leads."
+              : "Try clearing the search or switching status filters."}
+          </div>
+        </div>
       ) : (
-        <div className="space-y-2">
-          {filtered.map(lead => {
+        <div className="space-y-1.5 animate-in fade-in duration-200">
+          {filtered.map((lead) => {
             const assignedRep = lead.assignedRepId ? repMap[lead.assignedRepId] : null;
             const statusCls = STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground";
+            const accent = STATUS_ACCENT[lead.leadStatus] ?? "#64748b";
+            const hot = (lead.leadScore ?? 0) >= 80;
+            const speed = lead.maxDownloadMbps ? (lead.maxDownloadMbps >= 1000 ? `${lead.maxDownloadMbps / 1000}G` : `${lead.maxDownloadMbps}M`) : null;
 
             return (
-              <Card key={lead.id} className="bg-card border-border hover:border-primary/20 transition-colors"
-                data-testid={`card-lead-${lead.id}`}>
-                <CardContent className="py-3 px-4">
-                  <div className="flex items-center gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-medium text-sm text-foreground">{lead.address}</span>
-                        <span className="text-xs text-muted-foreground">{lead.city}, {lead.state} {lead.zip}</span>
-                        <Badge className={`text-xs px-2 py-0 rounded-full border-0 ${statusCls}`}>
-                          {STATUS_LABEL[lead.leadStatus]}
-                        </Badge>
-                      </div>
-                      <div className="flex items-center gap-3 mt-1 flex-wrap">
-                        {lead.contactName && (
-                          <span className="text-xs text-muted-foreground flex items-center gap-1">
-                            <Users className="w-3 h-3" /> {lead.contactName}
-                          </span>
-                        )}
-                        {lead.contactPhone && (
-                          <span className="text-xs text-muted-foreground flex items-center gap-1">
-                            <Phone className="w-3 h-3" /> {lead.contactPhone}
-                          </span>
-                        )}
-                        {assignedRep ? (
-                          <span className="text-xs text-primary flex items-center gap-1">
-                            <UserCheck className="w-3 h-3" /> {assignedRep.name}
-                          </span>
-                        ) : (
-                          <span className="text-xs text-muted-foreground italic">Unassigned</span>
-                        )}
-                        {lead.notes && (
-                          <span className="text-xs text-muted-foreground italic truncate max-w-[200px]">
-                            "{lead.notes}"
-                          </span>
-                        )}
-                      </div>
-                    </div>
+              <div
+                key={lead.id}
+                data-testid={`card-lead-${lead.id}`}
+                className="group flex items-stretch gap-0 rounded-xl border border-border bg-card overflow-hidden hover:border-primary/40 hover:bg-card/80 transition-all"
+              >
+                {/* Status accent bar */}
+                <div className="w-1 flex-shrink-0" style={{ background: accent }} />
 
-                    {/* Actions */}
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {/* Status dropdown — manager+ only */}
-                      {canEdit && (
-                        <Select value={lead.leadStatus} onValueChange={v => quickStatus.mutate({ id: lead.id, status: v })}>
-                          <SelectTrigger className="bg-secondary border-input h-7 text-xs w-28"
-                            data-testid={`select-status-${lead.id}`}>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent className="bg-card border-border">
-                            {LEAD_STATUSES.map(s => (
-                              <SelectItem key={s} value={s} className="text-xs">{STATUS_LABEL[s]}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                <div className="flex-1 min-w-0 flex items-center gap-3 pl-3.5 pr-3 py-2.5">
+                  <div className="flex-1 min-w-0">
+                    {/* Address + badges */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-[13px] text-foreground truncate">{lead.address}</span>
+                      {lead.fiberStatus === "new_fiber" && (
+                        <span className="px-1.5 py-[1px] rounded-full text-[10px] font-bold bg-teal-500/15 text-teal-400 flex items-center gap-0.5">
+                          <Wifi className="w-2.5 h-2.5" /> FIBER
+                        </span>
                       )}
-                      {/* Assign — team lead+ */}
-                      {canAssign && (
-                        <Button variant="ghost" size="sm"
-                          className="h-7 px-2 text-xs text-muted-foreground hover:text-primary"
-                          onClick={() => setAssignLead(lead)}
-                          data-testid={`btn-assign-${lead.id}`}>
-                          <UserCheck className="w-3.5 h-3.5" />
-                        </Button>
+                      {speed && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-400">{speed}</span>}
+                      {hot && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-bold bg-orange-500/15 text-orange-400">🔥 {lead.leadScore}</span>}
+                    </div>
+                    {/* Meta row */}
+                    <div className="flex items-center gap-2.5 mt-0.5 flex-wrap text-[11px] text-muted-foreground">
+                      <span>{lead.city}, {lead.state} {lead.zip}</span>
+                      {lead.contactPhone && (
+                        <span className="flex items-center gap-1"><Phone className="w-2.5 h-2.5" /> {lead.contactPhone}</span>
                       )}
-                      {/* Intelligence — everyone */}
-                      <Button variant="ghost" size="sm"
-                        className="h-7 px-2 text-xs text-muted-foreground hover:text-primary"
-                        onClick={() => setIntelLead(lead)}
-                        title="Lead Intelligence"
-                        data-testid={`btn-intel-${lead.id}`}>
-                        <BarChart2 className="w-3.5 h-3.5" />
-                      </Button>
-                      {/* Knock — everyone */}
-                      <Button variant="ghost" size="sm"
-                        className="h-7 px-2 text-xs text-muted-foreground hover:text-amber-400"
-                        onClick={() => setKnockLead(lead)}
-                        data-testid={`btn-knock-${lead.id}`}>
-                        <DoorOpen className="w-3.5 h-3.5" />
-                      </Button>
-                      {/* Edit — manager+ */}
-                      {canEdit && (
-                        <Button variant="ghost" size="sm"
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                          onClick={() => setEditLead(lead)}
-                          data-testid={`btn-edit-${lead.id}`}>
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                      {/* Delete — manager+ */}
-                      {canDelete && (
-                        <Button variant="ghost" size="sm"
-                          className="h-7 w-7 p-0 text-muted-foreground hover:text-red-400"
-                          onClick={() => setDeleteId(lead.id)}
-                          data-testid={`btn-delete-${lead.id}`}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
+                      {assignedRep ? (
+                        <span className="flex items-center gap-1 text-primary font-medium"><UserCheck className="w-2.5 h-2.5" /> {assignedRep.name.split(" ")[0]}</span>
+                      ) : (
+                        <span className="italic text-muted-foreground/70">Unassigned</span>
                       )}
                     </div>
                   </div>
-                </CardContent>
-              </Card>
+
+                  {/* Status pill (always visible) */}
+                  <Badge className={`text-[10px] px-2 py-0.5 rounded-full border-0 font-semibold flex-shrink-0 ${statusCls}`}>
+                    {STATUS_LABEL[lead.leadStatus]}
+                  </Badge>
+
+                  {/* Actions — appear/emphasize on hover, always tappable on touch */}
+                  <div className="flex items-center gap-0.5 flex-shrink-0">
+                    <Button variant="ghost" size="sm"
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10"
+                      onClick={() => setKnockLead(lead)} title="Log a door knock"
+                      data-testid={`btn-knock-${lead.id}`}>
+                      <DoorOpen className="w-4 h-4" />
+                    </Button>
+                    <Button variant="ghost" size="sm"
+                      className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                      onClick={() => setIntelLead(lead)} title="Lead intelligence"
+                      data-testid={`btn-intel-${lead.id}`}>
+                      <BarChart2 className="w-4 h-4" />
+                    </Button>
+                    {canAssign && (
+                      <Button variant="ghost" size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                        onClick={() => setAssignLead(lead)} title="Assign rep"
+                        data-testid={`btn-assign-${lead.id}`}>
+                        <UserCheck className="w-4 h-4" />
+                      </Button>
+                    )}
+                    {canEdit && (
+                      <Button variant="ghost" size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                        onClick={() => setEditLead(lead)} title="Edit"
+                        data-testid={`btn-edit-${lead.id}`}>
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                    {canDelete && (
+                      <Button variant="ghost" size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 hover:bg-red-400/10 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
+                        onClick={() => setDeleteId(lead.id)} title="Delete"
+                        data-testid={`btn-delete-${lead.id}`}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
             );
           })}
         </div>
