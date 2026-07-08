@@ -286,3 +286,84 @@ export async function harvestCityAddresses(
     gridPoints: gridPoints.length,
   };
 }
+
+// ── Count grid points for an arbitrary bbox (cost preview, no API calls) ──────
+// Every grid point is one billable reverse-geocode. Lets the UI show the exact
+// cost before an admin commits to a deep harvest.
+export function bboxGridSize(
+  bbox: { south: number; north: number; west: number; east: number },
+  step = 0.0012,
+): number {
+  let n = 0;
+  for (let lat = bbox.south; lat <= bbox.north; lat += step)
+    for (let lng = bbox.west; lng <= bbox.east; lng += step) n++;
+  return n;
+}
+
+// ── Deep-harvest EVERY address inside a drawn box via the Mapbox grid ─────────
+// This is the "full coverage / precise hits" path: it finds real addresses that
+// free OpenStreetMap doesn't have. The caller draws a TIGHT box over the homes,
+// so the grid stays small (a 2.5km box ≈ 450 points) and cheap — reverse-geocode
+// with limit=5 means each point returns its ~5 nearest houses, so 130m spacing
+// catches essentially every home. Capped like the city harvest.
+export async function harvestBboxAddresses(
+  bbox: { south: number; north: number; west: number; east: number },
+  state: string,
+  mapboxToken: string,
+  onProgress?: (done: number, total: number, found: number) => void,
+  step = 0.0012, // ~130m
+): Promise<AddressResult[]> {
+  const gridPoints: [number, number][] = [];
+  for (let lat = bbox.south; lat <= bbox.north; lat += step)
+    for (let lng = bbox.west; lng <= bbox.east; lng += step)
+      gridPoints.push([+lng.toFixed(5), +lat.toFixed(5)]);
+
+  const HARVEST_CAP = Number(process.env.MAPBOX_HARVEST_CAP ?? 5000);
+  if (gridPoints.length > HARVEST_CAP) {
+    throw new Error(
+      `That box needs ${gridPoints.length.toLocaleString()} Mapbox reverse-geocode calls ` +
+      `(cap: ${HARVEST_CAP.toLocaleString()}). Draw a smaller box.`
+    );
+  }
+  console.log(`[deep-harvest] box grid: ${gridPoints.length} reverse-geocode requests`);
+
+  const BATCH = 30;
+  const DELAY = 40;
+  const seen = new Map<string, AddressResult>();
+  let done = 0;
+  for (let i = 0; i < gridPoints.length; i += BATCH) {
+    const batch = gridPoints.slice(i, i + BATCH);
+    await Promise.all(batch.map(async ([lng, lat]) => {
+      const url =
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
+        `?access_token=${mapboxToken}&types=address&limit=5&country=US`;
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) { done++; return; }
+        const data = await res.json();
+        for (const feat of (data.features ?? [])) {
+          const placeName: string = feat.place_name ?? '';
+          const parts = placeName.split(',').map((s: string) => s.trim());
+          const streetAddress = parts[0] ?? '';
+          if (!/^\d+/.test(streetAddress)) continue;
+          const zipMatch = placeName.match(/\b(\d{5})\b/);
+          const zip = zipMatch ? zipMatch[1] : '';
+          const key = normalizeAddress(streetAddress);
+          if (!key || seen.has(key)) continue;
+          const cityPart = (parts[1] ?? '').replace(/\s+North Carolina.*/i, '').replace(/\s+[A-Z]{2}$/i, '').trim();
+          // keep only addresses actually inside the drawn box
+          if (feat.center[1] < bbox.south || feat.center[1] > bbox.north ||
+              feat.center[0] < bbox.west || feat.center[0] > bbox.east) continue;
+          seen.set(key, {
+            address: streetAddress, city: cityPart || '', state, zip,
+            lat: feat.center[1], lng: feat.center[0],
+          });
+        }
+      } catch {}
+      done++;
+    }));
+    onProgress?.(done, gridPoints.length, seen.size);
+    await sleep(DELAY);
+  }
+  return Array.from(seen.values());
+}

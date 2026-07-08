@@ -34,7 +34,7 @@ import { scanAddress, NEW_FIBER_ZIPS, FCC_DEPLOYMENT_PERIODS, setManualToken, ge
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
-import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize } from "./mapbox-addresses";
+import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { getCronStatus, triggerManualScan, startNightlyCron } from "./cron-scanner";
 import { getProxyStatus } from "./proxy-fetch";
 
@@ -809,34 +809,71 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(loadGisAddresses());
   });
 
+  // Cost preview for a deep (Mapbox-grid) box scan — how many billable
+  // reverse-geocode calls + the $ cost, so an admin sees the price before running.
+  app.post("/api/scan/area-estimate", requireAdmin, (req, res) => {
+    const { minLat, maxLat, minLng, maxLng } = req.body;
+    if (minLat == null || maxLat == null || minLng == null || maxLng == null) {
+      return res.status(400).json({ error: "bbox required" });
+    }
+    const bbox = { south: Number(minLat), north: Number(maxLat), west: Number(minLng), east: Number(maxLng) };
+    const gridPoints = bboxGridSize(bbox);
+    const cap = Number(process.env.MAPBOX_HARVEST_CAP ?? 5000);
+    // Mapbox: 100k free geocoding/mo, then ~$0.75 per 1,000
+    const overFree = Math.max(0, gridPoints - 100_000);
+    const estCostUsd = (overFree / 1000) * 0.75;
+    res.json({
+      gridPoints,
+      mapboxCalls: gridPoints,
+      estCostUsd: Number(estCostUsd.toFixed(2)),
+      withinFreeTier: overFree === 0,
+      overCap: gridPoints > cap,
+      cap,
+      estAddresses: Math.round(gridPoints * 0.75), // ~0.75 real addresses per grid pt (measured)
+    });
+  });
+
   app.post("/api/scan/area", requireAdmin, scanLimiter, async (req, res) => {
-    const { minLat, maxLat, minLng, maxLng, city = "", state = "NC" } = req.body;
+    const { minLat, maxLat, minLng, maxLng, city = "", state = "NC", deep = false } = req.body;
     if (minLat == null || maxLat == null || minLng == null || maxLng == null) {
       return res.status(400).json({ error: "minLat, maxLat, minLng, maxLng required" });
     }
     const bbox = { south: Number(minLat), north: Number(maxLat), west: Number(minLng), east: Number(maxLng) };
+    let source = deep ? "mapbox-grid" : "overpass";
 
-    // Pull the real addresses INSIDE the drawn box straight from OpenStreetMap —
-    // the box already gives us the bounds, so there's NO Mapbox geocoding (free)
-    // and it works for any town, not just Rockwell.
     let addresses: any[] = [];
-    try {
-      addresses = await pullAddressesFromOverpass(bbox, city || "", state);
-    } catch { addresses = []; }
-    // Fallback: local GIS parcels that fall inside the box (Rockwell coverage).
-    if (addresses.length === 0) {
-      addresses = generateAddresses("28138", "Rockwell").filter((a: any) =>
-        a.lat >= bbox.south && a.lat <= bbox.north && a.lng >= bbox.west && a.lng <= bbox.east);
+    if (deep) {
+      // FULL COVERAGE: Mapbox reverse-geocode grid over the box — finds every
+      // home, not just the ones OpenStreetMap happens to have. Admin-only, capped.
+      const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
+      if (!token) return res.status(400).json({ error: "MAPBOX_TOKEN not set" });
+      try {
+        addresses = await harvestBboxAddresses(bbox, state, token);
+      } catch (e: any) {
+        return res.status(400).json({ error: e.message });
+      }
+    } else {
+      // Free path: real addresses INSIDE the box from OpenStreetMap (0 Mapbox).
+      try {
+        addresses = await pullAddressesFromOverpass(bbox, city || "", state);
+      } catch { addresses = []; }
+      // Fallback: local GIS parcels that fall inside the box (Rockwell coverage).
+      if (addresses.length === 0) {
+        addresses = generateAddresses("28138", "Rockwell").filter((a: any) =>
+          a.lat >= bbox.south && a.lat <= bbox.north && a.lng >= bbox.west && a.lng <= bbox.east);
+      }
     }
     if (addresses.length === 0) {
-      return res.status(400).json({ error: "No addresses found in that area. Try a bigger box or a more populated spot." });
+      return res.status(400).json({ error: deep
+        ? "No addresses found in that box even with deep scan. Try a spot with homes."
+        : "No addresses found in that area. Try Deep scan (full coverage) or a bigger box." });
     }
 
     // Persist to the pool (geocoded once → re-scannable for free later)
     try {
       storage.upsertScanTargets(addresses.map((a: any) => ({
         address: a.address, city: a.city ?? city, state: a.state ?? state,
-        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: "overpass",
+        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source,
       })));
     } catch {}
 
@@ -852,7 +889,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
       bbox: { minLat: Number(minLat), maxLat: Number(maxLat), minLng: Number(minLng), maxLng: Number(maxLng) },
     });
     runCityScan(jobId, newAddrs);
-    res.json({ jobId, total: newAddrs.length, source: "overpass", bbox: { minLat, maxLat, minLng, maxLng } });
+    res.json({ jobId, total: newAddrs.length, harvested: addresses.length, source, bbox: { minLat, maxLat, minLng, maxLng } });
   });
 
   // City scan — start. Free sources by default (pool → GIS → Overpass);

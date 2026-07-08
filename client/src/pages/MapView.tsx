@@ -232,6 +232,8 @@ export default function MapView() {
   // Draw mode
   const [drawMode, setDrawMode] = useState(false);
   const [drawnBBox, setDrawnBBox] = useState<BBox | null>(null);
+  // Deep-scan (Mapbox grid) cost preview for the drawn box
+  const [areaEstimate, setAreaEstimate] = useState<{ gridPoints: number; estAddresses: number; estCostUsd: number; withinFreeTier: boolean; overCap: boolean } | null>(null);
   const drawingRef = useRef(false);
   const drawStartRef = useRef<any>(null);
 
@@ -1259,6 +1261,22 @@ export default function MapView() {
     setScanning(false);
   }, [stopPolling, jobId]);
 
+  // When a box is drawn, fetch the deep-scan cost preview (grid points → $).
+  useEffect(() => {
+    if (!drawnBBox || !isAdmin) { setAreaEstimate(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiRequest("POST", "/api/scan/area-estimate", {
+          minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng,
+        });
+        const data = await res.json();
+        if (!cancelled) setAreaEstimate(data);
+      } catch { if (!cancelled) setAreaEstimate(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [drawnBBox, isAdmin]);
+
   // ── Legend items ──────────────────────────────────────────────────────────
   // ── Fly to lead on map ────────────────────────────────────────────────────
   // Geocode an arbitrary street the user typed (admin only) and jump the map
@@ -1464,23 +1482,48 @@ export default function MapView() {
         </div>
       </div>
 
-      {/* Context banners */}
-      {drawMode && isAdmin && (
+      {/* Context banners — stay open after the box is drawn (drawMode flips off
+          on mouse-up) so the scan buttons remain visible. */}
+      {(drawMode || drawnBBox || scanning) && isAdmin && (
         <div className="px-3 py-2 bg-orange-500/10 border-b border-orange-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
           <span className="text-[11px] text-orange-400">
             {scanning ? `Scanning… ${done}/${total} · ${newFound} new fiber found`
-              : drawnBBox ? "Box drawn — scan it for new fiber (hits Kinetic)"
-              : "Drag on the map to draw a box over the area to scan"}
+              : drawnBBox ? "Box drawn — pick a scan below (green dots = new fiber)"
+              : "Drag on the map to draw a box over the homes you want to scan"}
           </span>
           {drawnBBox && !scanning && (
-            <Button size="sm"
-              className="bg-orange-500 hover:bg-orange-600 text-white h-6 text-[11px] px-2"
-              onClick={() => startScan("/api/scan/area", {
-                minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat,
-                minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng,
-              })}>
-              <Target className="w-3 h-3 mr-1" /> Scan this area
-            </Button>
+            <>
+              {/* Free: OpenStreetMap addresses in the box (fast, but rural coverage is thin) */}
+              <Button size="sm" variant="outline"
+                className="border-orange-500/40 text-orange-400 hover:bg-orange-500/10 h-6 text-[11px] px-2"
+                onClick={() => startScan("/api/scan/area", {
+                  minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat,
+                  minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng,
+                })}>
+                <Target className="w-3 h-3 mr-1" /> Quick scan · free
+              </Button>
+              {/* Full coverage: Mapbox reverse-geocode grid → every home. Cost shown. */}
+              <Button size="sm"
+                disabled={!areaEstimate || areaEstimate.overCap}
+                className="bg-orange-500 hover:bg-orange-600 text-white h-6 text-[11px] px-2 disabled:opacity-50"
+                title={areaEstimate?.overCap ? "Box too big — draw a smaller box" : "Finds every address via Mapbox grid"}
+                onClick={() => startScan("/api/scan/area", {
+                  minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat,
+                  minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true,
+                })}>
+                <Target className="w-3 h-3 mr-1" />
+                {areaEstimate
+                  ? `Deep scan · ~${areaEstimate.estAddresses.toLocaleString()} addr · ${areaEstimate.withinFreeTier ? "free" : "$" + areaEstimate.estCostUsd}`
+                  : "Deep scan…"}
+              </Button>
+              {areaEstimate && (
+                <span className="text-[10px] text-orange-400/60">
+                  {areaEstimate.overCap
+                    ? `box too big (${areaEstimate.gridPoints.toLocaleString()} calls > cap) — draw smaller`
+                    : `deep = ${areaEstimate.gridPoints.toLocaleString()} Mapbox calls`}
+                </span>
+              )}
+            </>
           )}
           {scanning && (
             <Button size="sm" variant="ghost" className="text-red-400 h-6 text-[11px]" onClick={() => stopScan()}>Stop</Button>
