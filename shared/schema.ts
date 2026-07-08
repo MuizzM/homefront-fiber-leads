@@ -220,6 +220,9 @@ export const knockLog = sqliteTable("knock_log", {
   callbackDate: text("callback_date"),
   callbackTime: text("callback_time"),
   notes: text("notes"),
+  // Idempotency key from the offline knock queue; null for legacy rows. A retried
+  // flush with the same clientId returns the existing row instead of double-logging.
+  clientId: text("client_id"),
 });
 export const insertKnockSchema = createInsertSchema(knockLog).omit({ id: true });
 export type InsertKnock = z.infer<typeof insertKnockSchema>;

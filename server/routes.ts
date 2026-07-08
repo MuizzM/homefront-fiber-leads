@@ -34,10 +34,20 @@ import { colorForRep } from "@shared/repColors";
 import { pointInPolygon } from "@shared/geo";
 import { can } from "@shared/permissions";
 import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { OUTCOME_TO_STATUS, deriveWasHome, isKnockOutcome, type KnockOutcome } from "@shared/knock";
 
 function safeJson<T = number[]>(s: string | null | undefined): T | undefined {
   if (!s) return undefined;
   try { return JSON.parse(s) as T; } catch { return undefined; }
+}
+
+// An area is "auto-named" if it follows the "<Rep>'s area" / "Unassigned area"
+// convention we generate. Only those get renamed on reclaim/reassign so a rep's
+// name never lingers on an area they no longer own — custom names are preserved.
+function isAutoAreaName(name?: string | null): boolean {
+  if (!name || !name.trim()) return true;
+  const n = name.trim();
+  return /'s area$/.test(n) || n === "Unassigned area";
 }
 import { scanAddress, NEW_FIBER_ZIPS, FCC_DEPLOYMENT_PERIODS, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
@@ -1492,18 +1502,30 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const _knl = storage.getLeadById(Number(req.params.id));
       if (!repCanAccessLead(_knu, _knl)) return res.status(404).json({ error: "Not found" });
     }
-    const parsed = insertKnockSchema.safeParse({ ...req.body, leadId: Number(req.params.id) });
+    // Idempotency: the offline queue retries with the same clientId after a lost
+    // response. If we've already logged this knock, return the existing row and
+    // skip ALL side effects (status flip, cache bust, commission, activity log).
+    // better-sqlite3 is synchronous per-process so SELECT-then-INSERT is race-free;
+    // the partial unique index on client_id is the backstop.
+    const clientId = typeof req.body?.clientId === "string" && req.body.clientId ? req.body.clientId : null;
+    if (clientId) {
+      const existing = storage.getKnockByClientId(clientId);
+      if (existing) return res.status(200).json({ ...existing, deduped: true });
+    }
+    if (!isKnockOutcome(req.body?.outcome)) return res.status(400).json({ error: "invalid outcome" });
+    // wasHome is DERIVED from the outcome — never trust the client's value.
+    const parsed = insertKnockSchema.safeParse({
+      ...req.body,
+      leadId: Number(req.params.id),
+      wasHome: deriveWasHome(req.body.outcome),
+      clientId,
+    });
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
     const knock = storage.createKnock(parsed.data);
-    // Update lead status to match knock outcome
-    const outcomeToStatus: Record<string, string> = {
-      sold: "sold",
-      interested: "interested",
-      callback: "follow_up",
-      not_interested: "not_interested",
-      not_home: "prospect",
-    };
-    const newStatus = outcomeToStatus[parsed.data.outcome];
+    // Update lead status to match knock outcome — shared map covers all 7 outcomes
+    // (incl. follow_up→follow_up, needs_verification→contacted) and cannot drift
+    // from the client, which imports the same module.
+    const newStatus = OUTCOME_TO_STATUS[parsed.data.outcome as KnockOutcome];
     if (newStatus) storage.updateLead(Number(req.params.id), { leadStatus: newStatus });
     bustMapCache(); // a knock changes the pin's visited state — refresh the map layer
     // Auto-create pending commission when outcome = sold
@@ -1532,6 +1554,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
     }
     storage.logActivity((req as any).user?.id ?? null, `knock.${parsed.data.outcome}`, "knock", knock.id, { leadId: Number(req.params.id), repId: parsed.data.repId }, req.ip);
     res.status(201).json(knock);
+  });
+
+  // Note typed AFTER the knock saved — attaches to the existing knock row without
+  // re-picking the outcome. Only `notes` is writable; reps can only annotate
+  // their own knocks (fail-closed 404, same shape as the lead guard).
+  app.patch("/api/knocks/:id", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const notes = req.body?.notes;
+    if (typeof notes !== "string" || notes.length > 2000) return res.status(400).json({ error: "notes must be a string ≤2000 chars" });
+    const knock = storage.getKnockById(Number(req.params.id));
+    if (!knock) return res.status(404).json({ error: "Not found" });
+    if (user?.role === "rep" && knock.repId !== user.teamMemberId) return res.status(404).json({ error: "Not found" });
+    const updated = storage.updateKnockNotes(knock.id, notes);
+    storage.logActivity(user?.id ?? null, "knock.note_updated", "knock", knock.id, { leadId: knock.leadId }, req.ip);
+    res.json(updated);
   });
 
   // ── Leaderboard ──────────────────────────────────────────────────────────────
@@ -1823,8 +1860,15 @@ export function registerRoutes(httpServer: Server, app: Express) {
     // Persist territory: keep repId as the last/new primary owner for color+history
     const newPrimary = next.repIds[0] ?? t.repId;
     const past = Array.from(new Set([...(safeJson<number[]>((t as any).pastAssigneeIds) ?? []), t.repId].filter(Boolean)));
+    // Drop the old rep's name from an auto-named area: back to the pool → "Unassigned area";
+    // reassigned → the new owner's name. Custom names are left untouched.
+    let newName = t.name;
+    if (isAutoAreaName(t.name)) {
+      const nr = next.repIds.length ? storage.getTeamMemberById(next.repIds[0]) : null;
+      newName = nr ? `${nr.name}'s area` : "Unassigned area";
+    }
     storage.updateTerritory(t.id, {
-      status: next.status, repId: newPrimary,
+      status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
       color: colorForRep(newPrimary), reclaimedAt: at, updatedAt: at,
     } as any, tid);
@@ -1846,6 +1890,52 @@ export function registerRoutes(httpServer: Server, app: Express) {
     storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected });
 
     res.json({ ok: true, mode, status: next.status, leadsAffected });
+  });
+
+  // POST /api/territories/:id/assign { repId } — hand an (unassigned/reclaimed)
+  // area to the next rep: recolors it, re-links the UNASSIGNED leads inside its
+  // polygon to the new rep, and logs the event. Never steals another rep's leads.
+  app.post("/api/territories/:id/assign", requireTeamLead, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    if (!can(user?.role, "assign_territory")) return res.status(403).json({ error: "not allowed" });
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    const repId = Number(req.body?.repId);
+    if (!repId) return res.status(400).json({ error: "repId required" });
+    const rep = storage.getTeamMemberById(repId);
+    if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
+
+    // Max-active-areas guard
+    const activeForRep = storage.getTerritoriesByRep(repId).filter((x: any) => x.status === "active" || x.status === "shared").length;
+    if (!canRepTakeAnotherArea(activeForRep)) {
+      return res.status(409).json({ error: `${rep.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}).` });
+    }
+
+    const at = new Date().toISOString();
+    let polygon: [number, number][] = [];
+    try { polygon = JSON.parse(t.polygon); } catch {}
+
+    // Assign only leads inside the area that are currently UNASSIGNED — direct
+    // assignments and other reps' pipelines are never touched.
+    let assigned = 0;
+    if (polygon.length >= 3) {
+      const inside = storage.getLeads(tid).filter((l: any) =>
+        l.lat != null && l.lng != null && l.assignedRepId == null && pointInPolygon(l.lat, l.lng, polygon));
+      for (const l of inside) {
+        if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedAt: at } as any, tid)) assigned++;
+      }
+    }
+
+    // Re-badge an auto-named area with the new owner's name (custom names kept).
+    const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
+    storage.updateTerritory(t.id, {
+      repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
+      color: colorForRep(repId), updatedAt: at,
+    } as any, tid);
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
+
+    res.json({ ok: true, repId, assigned, status: "active" });
   });
 
   // POST /api/territories/:id/complete { notes? }

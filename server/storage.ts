@@ -47,6 +47,9 @@ export interface IStorage {
   getKnocksByLead(leadId: number): Knock[];
   getKnocksByRep(repId: number): Knock[];
   createKnock(knock: InsertKnock): Knock;
+  getKnockById(id: number): Knock | undefined;
+  getKnockByClientId(clientId: string): Knock | undefined;
+  updateKnockNotes(id: number, notes: string): Knock | undefined;
   getVisitSummary(): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
   // ── Leaderboard ────────────────────────────────────────────────────────────
   getLeaderboard(): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number }[];
@@ -193,6 +196,11 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS territory_events (id INTEGER PRIMARY KEY AUTOINCREMENT, territory_id INTEGER NOT NULL, actor_user_id INTEGER, type TEXT NOT NULL, payload TEXT, at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_territory_events_terr ON territory_events(territory_id)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_assigned_territory ON leads(assigned_territory_id)`,
+    // Offline knock queue idempotency — a retried flush with the same client_id
+    // must return the existing row, never double-log. Partial unique index so all
+    // legacy NULL rows stay untouched (SQLite treats NULLs as distinct anyway).
+    `ALTER TABLE knock_log ADD COLUMN client_id TEXT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_knock_log_client_id ON knock_log(client_id) WHERE client_id IS NOT NULL`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -419,7 +427,20 @@ export class Storage implements IStorage {
     return db.select().from(knockLog).where(eq(knockLog.repId, repId)).all();
   }
   createKnock(knock: InsertKnock): Knock {
-    return db.insert(knockLog).values({ ...knock, knockedAt: new Date().toISOString() }).returning().get();
+    // Respect a client-supplied knockedAt — offline-queued knocks flush minutes or
+    // hours after the tap, and the tap time is the truthful field timestamp.
+    return db.insert(knockLog).values({ ...knock, knockedAt: knock.knockedAt || new Date().toISOString() }).returning().get();
+  }
+  getKnockById(id: number): Knock | undefined {
+    return db.select().from(knockLog).where(eq(knockLog.id, id)).get();
+  }
+  // Idempotency lookup for the offline queue (see POST /api/leads/:id/knock).
+  getKnockByClientId(clientId: string): Knock | undefined {
+    return db.select().from(knockLog).where(eq(knockLog.clientId, clientId)).get();
+  }
+  // Note typed after the knock already flushed — only notes is writable.
+  updateKnockNotes(id: number, notes: string): Knock | undefined {
+    return db.update(knockLog).set({ notes }).where(eq(knockLog.id, id)).returning().get();
   }
 
   // Per-lead visit summary for the map: leadId → { count, lastOutcome, lastAt }.
