@@ -5,7 +5,7 @@ import { queryClient } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { Suspense, lazy } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { Wifi } from "lucide-react";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
@@ -67,6 +67,18 @@ function AppRoutes() {
   const [location] = useHashLocation();
   const role = user?.role;
 
+  // Warm the heavy route chunks (Mapbox map, lead list) right after login so
+  // the first click on Field Map / Leads is instant instead of a chunk fetch.
+  useEffect(() => {
+    if (!user) return;
+    const t = setTimeout(() => {
+      import("@/pages/MapView");
+      import("@/pages/Leads");
+      import("@/pages/Dashboard");
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [user]);
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -84,6 +96,9 @@ function AppRoutes() {
       <Layout>
         <ErrorBoundary resetKey={location}>
         <Suspense fallback={<PageLoader />}>
+        {/* Keyed by route → each page fades/slides in for a smooth tab switch.
+            Also the single scroll container for tall pages (map pages fill it). */}
+        <div key={location} className="flex-1 flex flex-col min-h-0 overflow-y-auto animate-in fade-in slide-in-from-bottom-1 duration-200">
         <Switch>
           {/* ── All roles ── */}
           <Route path="/" component={Dashboard} />
@@ -158,6 +173,7 @@ function AppRoutes() {
 
           <Route component={NotFound} />
         </Switch>
+        </div>
         </Suspense>
         </ErrorBoundary>
       </Layout>

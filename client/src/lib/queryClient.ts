@@ -69,7 +69,11 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: false,
-      staleTime: Infinity,
+      // 60s freshness window: navigating between tabs re-uses cached data
+      // instantly (no spinner, no API churn), but data older than a minute
+      // refetches in the background so other reps' knocks/assignments appear.
+      // (Was Infinity — data never refreshed unless this tab mutated it.)
+      staleTime: 60_000,
       retry: false,
     },
     mutations: {

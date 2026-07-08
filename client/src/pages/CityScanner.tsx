@@ -386,21 +386,9 @@ export default function CityScanner() {
                   </div>
                   <span className="text-xs text-green-400 font-semibold">Ready to scan</span>
                 </div>
-                {/* Static map preview via Mapbox Static API */}
-                {overpassResult.center && (
-                  <div className="rounded-xl overflow-hidden border border-border h-36 relative">
-                    <img
-                      src={`https://api.mapbox.com/styles/v1/mapbox/dark-v11/static/${overpassResult.center[0]},${overpassResult.center[1]},12,0/600x144@2x?access_token=pk.eyJ1IjoibXVpenptMjEiLCJhIjoiY21xOGtnZWxyMDdtczJ0cHRuNTA3NXl6MCJ9.hN33fPeJItYetPlS2GEt4Q`}
-                      alt="City map preview"
-                      className="w-full h-full object-cover opacity-80"
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <div className="bg-black/60 backdrop-blur-sm rounded-lg px-3 py-1.5 text-xs font-semibold text-white">
-                        {overpassResult.cityName} · {overpassResult.count.toLocaleString()} addresses
-                      </div>
-                    </div>
-                  </div>
-                )}
+                {/* No static-map preview: it was a billable Mapbox Static Images
+                    request (with a hardcoded token) for pure decoration. The scan
+                    results land on the Field Map anyway. */}
               </div>
             )}
           </div>

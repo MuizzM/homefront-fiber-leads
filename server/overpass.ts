@@ -27,13 +27,21 @@ interface MapboxFeature {
 }
 
 /**
- * Geocode a city name via Mapbox → returns bounding box
+ * Geocode a city name via Mapbox → returns bounding box.
+ * Cached in memory forever — city bounding boxes don't move, so each unique
+ * city costs at most ONE Mapbox geocoding request per server lifetime.
  */
-export async function geocodeCity(city: string, state: string): Promise<{
+type CityGeo = {
   bbox: { south: number; west: number; north: number; east: number };
   center: [number, number];
   name: string;
-} | null> {
+} | null;
+const cityGeoCache = new Map<string, CityGeo>();
+
+export async function geocodeCity(city: string, state: string): Promise<CityGeo> {
+  const cacheKey = `${city.trim().toLowerCase()},${state.trim().toLowerCase()}`;
+  if (cityGeoCache.has(cacheKey)) return cityGeoCache.get(cacheKey)!;
+
   const token = process.env.MAPBOX_TOKEN;
   if (!token) throw new Error("MAPBOX_TOKEN not configured");
 
@@ -44,7 +52,10 @@ export async function geocodeCity(city: string, state: string): Promise<{
   if (!res.ok) throw new Error(`Mapbox geocoding failed: ${res.status}`);
 
   const data = await res.json();
-  if (!data.features || data.features.length === 0) return null;
+  if (!data.features || data.features.length === 0) {
+    cityGeoCache.set(cacheKey, null); // negative-cache misses too
+    return null;
+  }
 
   const feature: MapboxFeature = data.features[0];
 
@@ -73,11 +84,13 @@ export async function geocodeCity(city: string, state: string): Promise<{
     bbox = { south: lat - latDelta, north: lat + latDelta, west: lng - lngDelta, east: lng + lngDelta };
   }
 
-  return {
+  const result: CityGeo = {
     bbox,
     center: [feature.center[0], feature.center[1]],
     name: feature.place_name,
   };
+  cityGeoCache.set(cacheKey, result);
+  return result;
 }
 
 /**

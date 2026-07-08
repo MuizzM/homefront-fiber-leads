@@ -439,13 +439,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // ── Geocode a single street/address → map coordinates (admin) ──────────────
-  // ONE Mapbox forward-geocode per call. Lets an admin type a street they want
-  // to scan (e.g. "Bell Ridge Ct, Rockwell NC"), jump the map there, then draw
-  // a cut-out box. This is 1 request — nothing like the grid harvest that caused
-  // the big bill; Mapbox includes 100k free geocoding requests/month.
+  // ONE Mapbox forward-geocode per UNIQUE query — results are cached in memory
+  // forever (street coordinates don't move), so repeat lookups cost nothing.
+  // Mapbox includes 100k free geocoding requests/month; this uses a handful.
+  const geocodeCache = new Map<string, { lng: number; lat: number; placeName: string }>();
   app.get("/api/geocode", requireAdmin, async (req, res) => {
     const q = String(req.query.q ?? "").trim();
     if (q.length < 3) return res.status(400).json({ error: "query too short" });
+    const key = q.toLowerCase();
+    const cached = geocodeCache.get(key);
+    if (cached) return res.json({ ...cached, cached: true });
     const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
     if (!token) return res.status(503).json({ error: "Geocoding not configured" });
     try {
@@ -457,7 +460,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const f = data.features?.[0];
       if (!f) return res.status(404).json({ error: `No match for “${q}”` });
       const [lng, lat] = f.center;
-      res.json({ lng, lat, placeName: f.place_name ?? q });
+      const result = { lng, lat, placeName: f.place_name ?? q };
+      geocodeCache.set(key, result);
+      if (geocodeCache.size > 2000) geocodeCache.delete(geocodeCache.keys().next().value!); // FIFO bound
+      res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }
