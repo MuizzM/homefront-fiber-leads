@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 declare const mapboxgl: any;
 import {
   Play, Square, RefreshCw, AlertCircle, Pencil, X,
-  DoorOpen, UserCheck, Zap, CalendarClock, PhoneOff, Map as MapIcon, ShieldCheck, Bell,
+  DoorOpen, UserCheck, Zap, CalendarClock, PhoneOff, Map as MapIcon, Bell,
   ChevronRight, Home, Wifi, Signal, Users, Target, Search, LocateFixed
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import type { Lead, TeamMember, InsertKnock, Territory } from "@shared/schema";
+import { colorForRep } from "@shared/repColors";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -234,14 +235,10 @@ export default function MapView() {
   const [geocoding, setGeocoding] = useState(false); // street "go to" lookup in flight
   const [sidebarSearch, setSidebarSearch] = useState("");
 
-  // Territory draw
-  const [territoryDrawMode, setTerritoryDrawMode] = useState(false);
-  const [territoryPoints, setTerritoryPoints] = useState<[number, number][]>([]);
-  const [territoryName, setTerritoryName] = useState("");
-  const [territoryRepId, setTerritoryRepId] = useState("");
+  // Colored territory regions visibility toggle (rendered from saved territories)
   const [showTerritories, setShowTerritories] = useState(true);
 
-  // Lasso (bulk select) mode
+  // Assign-Area (freehand draw) mode
   const [lassoMode, setLassoMode] = useState(false);
   const [lassoPoints, setLassoPoints] = useState<[number, number][]>([]);
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
@@ -286,18 +283,21 @@ export default function MapView() {
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
-  const saveTerritoryMutation = useMutation({
-    mutationFn: async (data: { name: string; repId: number; polygon: string; color: string }) => {
-      const res = await apiRequest("POST", "/api/territories", data);
+  // Assign Area: create a rep-colored territory AND assign the enclosed leads in
+  // one atomic call. The drawn polygon comes straight from the freehand stroke.
+  const assignAreaMutation = useMutation({
+    mutationFn: async ({ polygon, repId }: { polygon: [number, number][]; repId: number }) => {
+      const res = await apiRequest("POST", "/api/territories/assign-area", { polygon, repId });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["/api/territories"] });
-      setTerritoryDrawMode(false);
-      setTerritoryPoints([]);
-      setTerritoryName("");
-      setTerritoryRepId("");
-      toast({ title: "Territory saved!" });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      const repName = team.find((m: TeamMember) => m.id === data.territory?.repId)?.name ?? "rep";
+      toast({ title: `✓ ${data.assigned} leads assigned to ${repName} · territory saved` });
+      exitLasso();
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -307,7 +307,10 @@ export default function MapView() {
       const res = await apiRequest("DELETE", `/api/territories/${id}`);
       return res.json();
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/territories"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+    },
   });
 
   // Single exit path for the lasso — clears mode, selection, and map layers.
@@ -330,21 +333,6 @@ export default function MapView() {
   }, []);
 
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
-  const bulkAssignMutation = useMutation({
-    mutationFn: async ({ leadIds, repId }: { leadIds: number[]; repId: number | null }) => {
-      const res = await apiRequest("POST", "/api/leads/bulk-assign", { leadIds, repId });
-      return res.json();
-    },
-    onSuccess: (data) => {
-      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      const repName = data.repId ? (team.find((m: TeamMember) => m.id === data.repId)?.name ?? "rep") : "unassigned";
-      toast({ title: `✓ ${data.updated} leads assigned to ${repName}` });
-      exitLasso();
-    },
-    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
-  });
-
   // Fetch ALL map pins from dedicated lean endpoint — only runs after auth is ready
   const { data: mapPinData, refetch: refetchLeads } = useQuery<{ pins: MapPin[]; total: number }>(
     {
@@ -501,13 +489,6 @@ export default function MapView() {
     geolocateRef.current = geolocate;
 
     const setupMapLayers = () => {
-      // Territory draw click handler (for territory polygon mode, separate from scan bbox)
-      map.on("click", (e) => {
-        if ((window as any).__territoryDrawActive) {
-          const pt: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-          (window as any).__addTerritoryPoint(pt);
-        }
-      });
       // Draw bbox layers
       map.addSource("draw-bbox", {
         type: "geojson",
@@ -871,26 +852,32 @@ export default function MapView() {
     } catch {}
   }, [leads, mapReady]);
 
-  // ── Render territory polygons on map ─────────────────────────────────────
+  // ── Render color-coded territory regions (per-rep color + name label) ──────
+  // Each saved territory fills with its rep's stable color, a matching outline,
+  // and a centered pill "<Rep>  knocked/total" so the team sees who owns what.
+  // Only shown to admin/manager/team-lead (canAssign); reps get a clean map.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
 
-    // Remove old territory layers/sources
+    // Remove old territory layers/sources (fill, outline, label + its source)
     territoryLayersRef.current.forEach(id => {
       try { if (map.getLayer(id)) map.removeLayer(id); } catch {}
       try { if (map.getLayer(id + "-outline")) map.removeLayer(id + "-outline"); } catch {}
+      try { if (map.getLayer(id + "-label")) map.removeLayer(id + "-label"); } catch {}
       try { if (map.getSource(id)) map.removeSource(id); } catch {}
+      try { if (map.getSource(id + "-label-src")) map.removeSource(id + "-label-src"); } catch {}
     });
     territoryLayersRef.current = [];
 
-    if (!showTerritories) return;
+    if (!showTerritories || !canAssign) return;
 
     territories.forEach(t => {
       try {
         const coords = JSON.parse(t.polygon) as [number, number][];
         if (coords.length < 3) return;
         const closed = [...coords, coords[0]];
+        const color = colorForRep(t.repId);           // rep color wins over stored color
         const srcId = `territory-${t.id}`;
         if (!map.getSource(srcId)) {
           map.addSource(srcId, {
@@ -900,16 +887,32 @@ export default function MapView() {
         }
         if (!map.getLayer(srcId)) {
           map.addLayer({ id: srcId, type: "fill", source: srcId,
-            paint: { "fill-color": t.color, "fill-opacity": 0.12 } });
+            paint: { "fill-color": color, "fill-opacity": 0.14 } });
         }
         if (!map.getLayer(srcId + "-outline")) {
           map.addLayer({ id: srcId + "-outline", type: "line", source: srcId,
-            paint: { "line-color": t.color, "line-width": 2, "line-opacity": 0.8 } });
+            paint: { "line-color": color, "line-width": 2.5, "line-opacity": 0.9 } });
+        }
+        // Centroid label — rep name + canvassing progress
+        const cx = coords.reduce((s, p) => s + p[0], 0) / coords.length;
+        const cy = coords.reduce((s, p) => s + p[1], 0) / coords.length;
+        const prog = territoryProgress.find(p => p.id === t.id);
+        const repName = team.find(m => m.id === t.repId)?.name?.split(" ")[0] ?? "";
+        const label = prog ? `${repName}  ${prog.knocked}/${prog.total}` : repName;
+        if (label && !map.getSource(srcId + "-label-src")) {
+          map.addSource(srcId + "-label-src", {
+            type: "geojson", data: { type: "Feature", geometry: { type: "Point", coordinates: [cx, cy] }, properties: {} }
+          });
+          map.addLayer({
+            id: srcId + "-label", type: "symbol", source: srcId + "-label-src",
+            layout: { "text-field": label, "text-size": 12, "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"], "text-allow-overlap": false },
+            paint: { "text-color": "#ffffff", "text-halo-color": color, "text-halo-width": 2 },
+          });
         }
         territoryLayersRef.current.push(srcId);
       } catch {}
     });
-  }, [territories, mapReady, showTerritories, styleEpoch]);
+  }, [territories, territoryProgress, team, mapReady, showTerritories, canAssign, styleEpoch]);
 
   // ── Map style toggle ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -997,63 +1000,7 @@ export default function MapView() {
     map.setStyle(STYLE);
   }, [mapStyleMode, mapReady]);
 
-  // ── Territory draw: expose addPoint callback + draw preview ──────────────
-  useEffect(() => {
-    if (territoryDrawMode) {
-      (window as any).__territoryDrawActive = true;
-      (window as any).__addTerritoryPoint = (pt: [number, number]) => {
-        setTerritoryPoints(prev => {
-          const next = [...prev, pt];
-          // Draw preview on map
-          const map = mapRef.current;
-          if (map && next.length >= 2) {
-            const coords = [...next, next[0]];
-            try {
-              if (map.getSource("territory-preview")) {
-                (map.getSource("territory-preview") as any).setData({
-                  type: "Feature", geometry: { type: "Polygon", coordinates: [coords] }, properties: {}
-                });
-              } else {
-                map.addSource("territory-preview", {
-                  type: "geojson",
-                  data: { type: "Feature", geometry: { type: "Polygon", coordinates: [coords] }, properties: {} }
-                });
-                map.addLayer({ id: "territory-preview-fill", type: "fill", source: "territory-preview",
-                  paint: { "fill-color": "#f97316", "fill-opacity": 0.2 } });
-                map.addLayer({ id: "territory-preview-line", type: "line", source: "territory-preview",
-                  paint: { "line-color": "#f97316", "line-width": 2, "line-dasharray": [3, 2] } });
-              }
-            } catch {}
-          }
-          return next;
-        });
-      };
-      // Draw affordance: crosshair + no accidental double-click zoom while
-      // placing vertices (panning stays enabled so you can move between clicks).
-      try {
-        mapRef.current?.doubleClickZoom.disable();
-        const c = mapRef.current?.getCanvas(); if (c) c.style.cursor = "crosshair";
-      } catch {}
-    } else {
-      (window as any).__territoryDrawActive = false;
-      delete (window as any).__addTerritoryPoint;
-      // Remove preview layers + restore map behavior
-      const map = mapRef.current;
-      if (map) {
-        try { if (map.getLayer("territory-preview-fill")) map.removeLayer("territory-preview-fill"); } catch {}
-        try { if (map.getLayer("territory-preview-line")) map.removeLayer("territory-preview-line"); } catch {}
-        try { if (map.getSource("territory-preview")) map.removeSource("territory-preview"); } catch {}
-        try { map.doubleClickZoom.enable(); map.getCanvas().style.cursor = ""; } catch {}
-      }
-    }
-    return () => {
-      (window as any).__territoryDrawActive = false;
-      delete (window as any).__addTerritoryPoint;
-      try { mapRef.current?.doubleClickZoom.enable(); } catch {}
-    };
-  }, [territoryDrawMode]);
-
-  // ── Lasso mode — SalesRabbit-style FREEHAND drag lasso ───────────────────────
+  // ── Assign-Area (freehand) — SalesRabbit-style draw → assign → colored region ─
   // Press and DRAG to draw a loop around leads; release to select. Map panning
   // is fully suspended while armed (no more grab-hand fighting the draw), and
   // drawing again replaces the previous selection. Works with mouse and touch.
@@ -1104,19 +1051,19 @@ export default function MapView() {
 
     const render = (closeRing: boolean) => {
       if (stroke.length < 2) return;
-      const ring = closeRing ? [...stroke, stroke[0]] : stroke;
-      const geojson = {
-        type: "Feature" as const,
-        geometry: { type: "Polygon" as const, coordinates: [closeRing ? ring : [...ring, ring[0]]] },
-        properties: {},
-      };
+      // While dragging: a smooth OPEN line that grows with the finger (never a
+      // flat filled sliver — that was the "starts with a flat line" bug). Only on
+      // release do we close it into a filled polygon.
+      const geojson = (closeRing && stroke.length >= 3)
+        ? { type: "Feature" as const, geometry: { type: "Polygon" as const, coordinates: [[...stroke, stroke[0]]] }, properties: {} }
+        : { type: "Feature" as const, geometry: { type: "LineString" as const, coordinates: stroke }, properties: {} };
       if (!lassoLayerRef.current) {
         try {
           map.addSource("lasso-polygon", { type: "geojson", data: geojson });
           map.addLayer({ id: "lasso-fill", type: "fill", source: "lasso-polygon",
-            paint: { "fill-color": "#3b82f6", "fill-opacity": 0.12 } });
+            paint: { "fill-color": "#2dd4bf", "fill-opacity": 0.14 } });
           map.addLayer({ id: "lasso-outline", type: "line", source: "lasso-polygon",
-            paint: { "line-color": "#60a5fa", "line-width": 2.5, "line-dasharray": [2, 1.5] } });
+            paint: { "line-color": "#5eead4", "line-width": 3, "line-cap": "round", "line-join": "round" } });
           lassoLayerRef.current = true;
         } catch {}
       } else {
@@ -1583,8 +1530,10 @@ export default function MapView() {
 
         {/* Actions */}
         <div className="ml-auto flex items-center gap-1.5">
-          {/* ── Action tools: assign · territory · scan (blue → purple → orange).
-                 Exactly ONE draw tool can be armed at a time. ── */}
+          {/* ── Action tools. Exactly ONE draw tool armed at a time. ──
+                 Assign Area: draw a loop → pick a rep → assigns the leads inside
+                 AND saves a color-coded territory for that rep.
+                 Scan Area: draw a box → hit Kinetic → new leads. ── */}
           {canAssign && (
             <Button
               size="sm" variant="outline"
@@ -1594,39 +1543,29 @@ export default function MapView() {
                 } else {
                   exitLasso(); // clear any prior shape before re-arming
                   setLassoMode(true);
-                  setTerritoryDrawMode(false);
                   setDrawMode(false); setDrawnBBox(null);
                 }
               }}
               disabled={!mapReady}
               className={`h-7 text-xs ${
                 lassoMode
-                  ? "border-blue-500 text-blue-400 bg-blue-500/10"
-                  : "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
+                  ? "border-teal-500 text-teal-300 bg-teal-500/10"
+                  : "border-teal-500/40 text-teal-400 hover:bg-teal-500/10"
               }`}
-              title="Lasso: drag to draw around leads, then bulk-assign to a rep"
+              title="Assign Area: drag a loop around leads, pick a rep — assigns them and color-codes the territory"
             >
               <Pencil className="w-3 h-3 mr-1" />
-              {lassoMode ? (lassoSelected.length > 0 ? `Lasso (${lassoSelected.length})` : "Lasso — on") : "Lasso"}
+              {lassoMode ? (lassoSelected.length > 0 ? `Area (${lassoSelected.length})` : "Draw area…") : "Assign Area"}
             </Button>
-          )}
-          {canAssign && (
-            <Button
-              onClick={() => { setTerritoryDrawMode(!territoryDrawMode); setTerritoryPoints([]); exitLasso(); setDrawMode(false); setDrawnBBox(null); }}
-              disabled={!mapReady}
-              size="sm" variant="outline"
-              className={`h-7 text-xs ${territoryDrawMode ? "border-purple-500 text-purple-400 bg-purple-500/10" : "border-purple-500/40 text-purple-400 hover:bg-purple-500/10"}`}
-              title="Territory: draw a polygon and assign it to a rep"
-            ><ShieldCheck className="w-3 h-3 mr-1" />{territoryDrawMode ? "Drawing…" : "Territory"}</Button>
           )}
           {/* Draw a box → scan that area for new fiber (admin only) */}
           {isAdmin && (
             <Button
-              onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); setTerritoryDrawMode(false); exitLasso(); }}
+              onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); exitLasso(); }}
               disabled={!mapReady}
               size="sm" variant="outline"
               className={`h-7 text-xs ${drawMode ? "border-orange-500 text-orange-400 bg-orange-500/10" : "border-orange-500/40 text-orange-400 hover:bg-orange-500/10"}`}
-              title="Scan Area: draw a box to scan for new fiber"
+              title="Scan Area: draw a box to scan Kinetic for new fiber leads"
             ><Target className="w-3 h-3 mr-1" />{drawMode ? "Drawing…" : "Scan Area"}</Button>
           )}
 
@@ -1701,23 +1640,6 @@ export default function MapView() {
           )}
           <Button size="sm" variant="ghost" className="text-muted-foreground h-6 text-[11px]"
             onClick={() => { setDrawMode(false); setDrawnBBox(null); if (scanning) stopScan(); }}>Cancel</Button>
-        </div>
-      )}
-      {territoryDrawMode && canAssign && (
-        <div className="px-3 py-2 bg-purple-500/10 border-b border-purple-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
-          <span className="text-[11px] text-purple-400">Click map to add polygon points ({territoryPoints.length} pts, min 3)</span>
-          <input value={territoryName} onChange={e => setTerritoryName(e.target.value)} placeholder="Territory name…"
-            className="bg-background border border-border rounded px-2 py-0.5 text-[11px] text-foreground w-32 focus:outline-none focus:ring-1 focus:ring-purple-500" />
-          <select value={territoryRepId} onChange={e => setTerritoryRepId(e.target.value)}
-            className="bg-background border border-border rounded px-2 py-0.5 text-[11px] text-foreground w-32 focus:outline-none focus:ring-1 focus:ring-purple-500">
-            <option value="">Assign rep…</option>
-            {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-          <Button size="sm" disabled={territoryPoints.length < 3 || !territoryName || !territoryRepId || saveTerritoryMutation.isPending}
-            onClick={() => saveTerritoryMutation.mutate({ name: territoryName, repId: Number(territoryRepId), polygon: JSON.stringify(territoryPoints), color: "#8b5cf6" })}
-            className="bg-purple-600 hover:bg-purple-700 text-white h-6 text-[11px] px-2">Save</Button>
-          <Button size="sm" variant="ghost" className="text-muted-foreground h-6 text-[11px]" onClick={() => { setTerritoryDrawMode(false); setTerritoryPoints([]); }}>Cancel</Button>
-          {territoryPoints.length > 0 && <Button size="sm" variant="ghost" className="text-red-400 h-6 text-[11px]" onClick={() => setTerritoryPoints([])}>Clear</Button>}
         </div>
       )}
       {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
@@ -1851,53 +1773,56 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── Lasso floating action bar — bottom-center, thumb-reachable ── */}
+          {/* ── Assign-Area floating action bar — bottom-center, thumb-reachable ── */}
           {lassoMode && (
             <div className="absolute left-1/2 -translate-x-1/2 bottom-6 z-30 max-w-[calc(100vw-24px)]">
               {lassoSelected.length === 0 ? (
-                /* Armed, nothing selected yet → drawing hint */
-                <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-blue-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                  <Pencil className="w-4 h-4 text-blue-400 flex-shrink-0" />
+                /* Armed, nothing drawn yet → drawing hint */
+                <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-teal-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <Pencil className="w-4 h-4 text-teal-400 flex-shrink-0" />
                   <span className="text-[13px] font-medium text-white whitespace-nowrap">
-                    Drag to draw around leads
+                    Drag a loop around the area
                   </span>
                   <button
                     onClick={exitLasso}
                     className="w-9 h-9 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-                    title="Exit lasso"
+                    title="Exit"
                     data-testid="lasso-exit"
                   ><X className="w-4 h-4" /></button>
                 </div>
               ) : (
-                /* Selected → count · rep picker · Assign · exit */
-                <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-blue-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                /* Drawn → count · rep picker · Assign (creates colored territory) */
+                <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-teal-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
                   <span className="flex items-center gap-1.5 text-[14px] font-bold text-white whitespace-nowrap" aria-live="polite">
-                    <span className="w-2 h-2 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.9)]" />
-                    {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads</span>
+                    <span
+                      className="w-2.5 h-2.5 rounded-full transition-colors"
+                      style={{ background: colorForRep(lassoRepId ? Number(lassoRepId) : null), boxShadow: lassoRepId ? `0 0 8px ${colorForRep(Number(lassoRepId))}` : "none" }}
+                    />
+                    {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads in area</span>
                   </span>
                   <select
                     value={lassoRepId}
                     onChange={e => setLassoRepId(e.target.value)}
                     data-testid="lasso-rep-select"
-                    className="h-9 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-blue-400/60 max-w-[150px]"
+                    className="h-9 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60 max-w-[160px]"
                   >
-                    <option value="" className="text-slate-900">Pick a rep…</option>
+                    <option value="" className="text-slate-900">Assign to rep…</option>
                     {team.filter(m => m.active).map((m: TeamMember) => (
                       <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
                     ))}
                   </select>
                   <Button
-                    disabled={!lassoRepId || bulkAssignMutation.isPending}
-                    onClick={() => bulkAssignMutation.mutate({ leadIds: lassoSelected.map(l => l.id), repId: Number(lassoRepId) })}
+                    disabled={!lassoRepId || assignAreaMutation.isPending}
+                    onClick={() => assignAreaMutation.mutate({ polygon: lassoPoints, repId: Number(lassoRepId) })}
                     data-testid="lasso-assign"
-                    className="h-9 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-bold text-[13px] px-4 disabled:opacity-40"
+                    className="h-9 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                   >
-                    {bulkAssignMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
+                    {assignAreaMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
                   </Button>
                   <button
                     onClick={exitLasso}
                     className="w-9 h-9 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
-                    title="Exit lasso"
+                    title="Exit"
                     data-testid="lasso-exit"
                   ><X className="w-4 h-4" /></button>
                 </div>
@@ -1943,25 +1868,27 @@ export default function MapView() {
                   </div>
                 );
               })}
-              {territories.length > 0 && (
+              {canAssign && territories.length > 0 && (
                 <div className="pt-2 mt-1 border-t border-white/10">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Territories</span>
+                    <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Assigned areas</span>
                     <button onClick={() => setShowTerritories(v => !v)} className="text-[10px] text-white/40 hover:text-white/70">{showTerritories ? "Hide" : "Show"}</button>
                   </div>
                   {territories.map(t => {
                     const prog = territoryProgress.find(p => p.id === t.id);
+                    const color = colorForRep(t.repId);
+                    const repName = team.find(m => m.id === t.repId)?.name ?? t.name;
                     return (
                     <div key={t.id} className="mb-1.5 group">
                       <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ background: t.color, opacity: 0.8 }} />
-                        <span className="text-[11px] truncate" style={{ color: t.color }}>{t.name}</span>
+                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-white/20" style={{ background: color }} />
+                        <span className="text-[11px] truncate text-white/85">{repName}</span>
                         {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total} · {prog.pct}%</span>}
-                        {canAssign && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} className="opacity-0 group-hover:opacity-100 text-red-400 text-xs">×</button>}
+                        {canAssign && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} title="Clear this area" className="opacity-0 group-hover:opacity-100 text-red-400 text-xs">×</button>}
                       </div>
                       {prog && prog.total > 0 && (
                         <div className="h-1 rounded-full bg-white/10 mt-0.5 overflow-hidden">
-                          <div className="h-full rounded-full" style={{ width: `${prog.pct}%`, background: t.color }} />
+                          <div className="h-full rounded-full" style={{ width: `${prog.pct}%`, background: color }} />
                         </div>
                       )}
                     </div>

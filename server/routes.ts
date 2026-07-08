@@ -30,6 +30,17 @@ try {
   console.log("[startup] SQLite WAL + indexes applied");
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema, insertCommissionSchema } from "@shared/schema";
+import { colorForRep } from "@shared/repColors";
+
+// Ray-cast point-in-polygon. Polygon points are stored/sent as [lng, lat].
+function pointInPolygon(lat: number, lng: number, poly: [number, number][]): boolean {
+  let hit = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) hit = !hit;
+  }
+  return hit;
+}
 import { scanAddress, NEW_FIBER_ZIPS, FCC_DEPLOYMENT_PERIODS, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
@@ -1742,7 +1753,33 @@ export function registerRoutes(httpServer: Server, app: Express) {
   app.post("/api/territories", requireTeamLead, (req, res) => {
     const parsed = insertTerritorySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(storage.createTerritory(parsed.data));
+    const tid = (req as any).user?.tenantId ?? undefined;
+    res.status(201).json(storage.createTerritory({ ...parsed.data, tenantId: parsed.data.tenantId ?? tid ?? null } as any));
+  });
+
+  // POST /api/territories/assign-area — the SalesRabbit move: draw an area, pick
+  // a rep, and in ONE atomic action (a) save the polygon as a rep-colored
+  // territory and (b) assign every enclosed lead to that rep.
+  // Body: { polygon: [lng,lat][], repId: number, name?: string }
+  app.post("/api/territories/assign-area", requireTeamLead, (req, res) => {
+    const tid = (req as any).user?.tenantId ?? undefined;
+    const { polygon, repId, name } = req.body as { polygon: [number, number][]; repId: number; name?: string };
+    if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
+    if (typeof repId !== "number") return res.status(400).json({ error: "repId required" });
+    const rep = storage.getTeamMemberById(repId);
+    if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
+
+    const color = colorForRep(repId);
+    const territory = storage.createTerritory({
+      tenantId: tid ?? null, name: (name && name.trim()) || `${rep.name}'s area`,
+      repId, polygon: JSON.stringify(polygon), color,
+    } as any);
+
+    const enclosed = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon));
+    let assigned = 0;
+    for (const l of enclosed) if (storage.updateLead(l.id, { assignedRepId: repId }, tid)) assigned++;
+
+    res.status(201).json({ territory, assigned, total: enclosed.length });
   });
 
   app.patch("/api/territories/:id", requireTeamLead, (req, res) => {
@@ -1774,15 +1811,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const knockedIds = new Set(storage.getKnocks().map((k: any) => k.leadId));
     const members = storage.getTeamMembers();
 
-    // Ray-casting point-in-polygon. Polygon points are stored as [lng, lat].
-    const inside = (lat: number, lng: number, poly: [number, number][]) => {
-      let hit = false;
-      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
-        if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) hit = !hit;
-      }
-      return hit;
-    };
+    const inside = pointInPolygon;
 
     const result = territories.map((t: any) => {
       let poly: [number, number][] = [];
