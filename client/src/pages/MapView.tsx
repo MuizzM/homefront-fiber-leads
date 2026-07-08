@@ -101,7 +101,6 @@ function buildPopupHTML(
 ): string {
   const { canAssign = true, currentRepId = null } = opts;
   const pin = PIN_COLORS[lead.leadStatus] ?? PIN_COLORS.prospect;
-  const assignedRep = team.find(m => m.id === lead.assignedRepId);
   const repOptions = team.filter(m => m.active)
     .map(m => `<option value="${m.id}" ${m.id === lead.assignedRepId ? "selected" : ""}>${escapeHtml(m.name)}</option>`)
     .join("");
@@ -113,89 +112,55 @@ function buildPopupHTML(
   const dirUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
   const phone = lead.contactPhone ? String(lead.contactPhone).replace(/[^0-9+]/g, "") : "";
 
-  const speedTag = lead.maxDownloadMbps
-    ? `<span style="background:#0ea5e922;color:#38bdf8;border:1px solid #0ea5e944;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;">${lead.maxDownloadMbps >= 1000 ? lead.maxDownloadMbps / 1000 + "G" : lead.maxDownloadMbps + "M"}</span>`
-    : "";
-
   // Who a logged knock is credited to. Managers pick via the dropdown; reps are
   // always credited to themselves (no dropdown shown for them).
   const knockRep = canAssign ? "" : String(currentRepId ?? "");
-  const knockHint = canAssign
-    ? (assignedRep ? `Logs under ${escapeHtml(assignedRep.name)}` : "Pick a rep, then log")
-    : "Logs under you";
+  const hot = (lead.leadScore ?? 0) >= 80;
+
+  // Compact tags line — only what matters at a glance (NEW FIBER, hot). Status is
+  // already the colored dot; contact/notes/competitor live in the Leads panel.
+  const tags = [
+    lead.fiberStatus === "new_fiber" ? `<span style="background:#22c55e22;color:#22c55e;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;">NEW FIBER</span>` : "",
+    hot ? `<span style="background:#f9731622;color:#fb923c;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;">🔥 ${lead.leadScore}</span>` : "",
+    lead.visited ? `<span style="background:#0f2a1e;color:#22c55e;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;">✓ ${escapeHtml(String(lead.lastOutcome ?? "").replace("_", " "))} · ${relTime(lead.lastKnockedAt)}</span>` : "",
+  ].filter(Boolean).join("");
 
   return `
-    <div style="font-family:system-ui,sans-serif;font-size:13px;color:#e2e8f0;min-width:268px;max-width:300px;">
-      <!-- Header -->
-      <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px;">
-        <div style="width:12px;height:12px;margin-top:3px;border-radius:50%;background:${pin.bg};border:2px solid ${pin.border};flex-shrink:0;box-shadow:0 0 8px ${pin.bg}80;"></div>
-        <div style="min-width:0;">
-          <div style="font-weight:700;font-size:14px;line-height:1.2;color:#f1f5f9;">${escapeHtml(lead.address)}</div>
-          <div style="color:#94a3b8;font-size:11px;">${escapeHtml(lead.city)}, ${escapeHtml(lead.state)} ${escapeHtml(lead.zip)}</div>
+    <div style="font-family:system-ui,sans-serif;color:#e2e8f0;width:228px;">
+      <!-- Header: status dot + address -->
+      <div style="display:flex;align-items:center;gap:7px;margin-bottom:${tags ? "7px" : "9px"};">
+        <div style="width:11px;height:11px;border-radius:50%;background:${pin.bg};border:2px solid ${pin.border};flex-shrink:0;"></div>
+        <div style="min-width:0;flex:1;">
+          <div style="font-weight:700;font-size:13px;line-height:1.15;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(lead.address)}</div>
+          <div style="color:#94a3b8;font-size:10.5px;">${escapeHtml(lead.city)}, ${escapeHtml(lead.state)} ${escapeHtml(lead.zip)}</div>
         </div>
       </div>
 
-      <!-- Status + fiber pills -->
-      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
-        <span style="background:${pin.bg}22;color:${pin.bg};border:1px solid ${pin.bg}44;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;">${pin.label}</span>
-        ${lead.fiberStatus === "new_fiber" ? `<span style="background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;">NEW FIBER</span>` : ""}
-        ${speedTag}
-        ${lead.competitorName ? `<span style="background:#f9731622;color:#fb923c;border:1px solid #f9731644;border-radius:999px;padding:2px 9px;font-size:11px;">vs ${escapeHtml(lead.competitorName)}</span>` : ""}
-      </div>
+      ${tags ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px;">${tags}</div>` : ""}
 
-      <!-- Primary actions: Directions + Call -->
-      <div style="display:flex;gap:6px;margin-bottom:10px;">
+      <!-- Directions + Call -->
+      <div style="display:flex;gap:6px;margin-bottom:8px;">
         <a href="${dirUrl}" target="_blank" rel="noopener"
-          style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;background:#5eead422;color:#5eead4;border:1px solid #5eead444;border-radius:7px;padding:8px;font-size:12px;font-weight:600;text-decoration:none;">
-          🧭 Directions
-        </a>
+          style="flex:1;text-align:center;background:#5eead41f;color:#5eead4;border-radius:7px;padding:7px;font-size:12px;font-weight:600;text-decoration:none;">🧭 Directions</a>
         ${phone ? `<a href="tel:${phone}"
-          style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;background:#3b82f622;color:#60a5fa;border:1px solid #3b82f644;border-radius:7px;padding:8px;font-size:12px;font-weight:600;text-decoration:none;">
-          📞 Call
-        </a>` : ""}
+          style="flex:1;text-align:center;background:#3b82f61f;color:#60a5fa;border-radius:7px;padding:7px;font-size:12px;font-weight:600;text-decoration:none;">📞 Call</a>` : ""}
       </div>
 
-      <!-- Contact -->
-      ${lead.contactName ? `<div style="color:#94a3b8;font-size:11px;margin-bottom:8px;">👤 ${escapeHtml(lead.contactName)}${lead.contactPhone ? ` · ${escapeHtml(lead.contactPhone)}` : ""}</div>` : ""}
-
-      <!-- Assign rep (managers/team leads only) -->
-      ${canAssign ? `<div style="margin-bottom:8px;">
-        <div style="color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;">Assigned Rep</div>
-        <div style="display:flex;gap:6px;">
-          <select id="assign-rep-${lead.id}" style="flex:1;background:#1e2430;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px;font-size:12px;">
-            <option value="">— Unassigned —</option>
-            ${repOptions}
-          </select>
-          <button onclick="window.__assignRep(${lead.id})"
-            style="background:#f97316;color:white;border:none;border-radius:6px;padding:0 12px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
-        </div>
+      ${canAssign ? `<div style="display:flex;gap:6px;margin-bottom:8px;">
+        <select id="assign-rep-${lead.id}" style="flex:1;background:#1e2430;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:5px;font-size:11px;">
+          <option value="">— Unassigned —</option>${repOptions}
+        </select>
+        <button onclick="window.__assignRep(${lead.id})" style="background:#f97316;color:white;border:none;border-radius:6px;padding:0 11px;font-size:11px;font-weight:600;cursor:pointer;">Save</button>
       </div>` : ""}
 
-      <!-- Visited banner — shows past visits so reps know it's already been hit -->
-      ${lead.visited ? `<div style="display:flex;align-items:center;gap:7px;background:#0f172a;border:1px solid #1e3a2e;border-radius:8px;padding:6px 10px;margin-bottom:9px;font-size:11px;">
-        <span style="color:#22c55e;font-weight:700;">✓ Visited${(lead.knockCount ?? 0) > 1 ? ` ${lead.knockCount}×` : ""}</span>
-        <span style="color:#94a3b8;">last: ${escapeHtml(String(lead.lastOutcome ?? "").replace("_", " "))} · ${relTime(lead.lastKnockedAt)}</span>
-      </div>` : ""}
-
-      <!-- One-tap knock logging — big targets for one-handed field use -->
-      <div style="margin-bottom:2px;">
-        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
-          <span style="color:#e2e8f0;font-size:11px;font-weight:700;">${lead.visited ? "Update visit" : "Mark this visit"}</span>
-          <span style="color:#64748b;font-size:10px;">${knockHint}</span>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">
-          ${OUTCOME_OPTIONS.map(o => `
-            <button
-              onclick="window.__knockLead(${lead.id}, '${o.val}', '${knockRep}')"
-              style="background:${o.color}1f;color:${o.color};border:1px solid ${o.color}55;border-radius:8px;padding:11px 4px;font-size:13px;font-weight:700;cursor:pointer;text-align:center;transition:background .1s;"
-              onmousedown="this.style.background='${o.color}44'" onmouseup="this.style.background='${o.color}1f'" ontouchstart="this.style.background='${o.color}44'" ontouchend="this.style.background='${o.color}1f'"
-            >${o.label}</button>
-          `).join("")}
-        </div>
+      <!-- One-tap outcome buttons -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
+        ${OUTCOME_OPTIONS.map(o => `<button
+          onclick="window.__knockLead(${lead.id}, '${o.val}', '${knockRep}')"
+          style="background:${o.color}1f;color:${o.color};border:1px solid ${o.color}44;border-radius:7px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer;"
+          onmousedown="this.style.background='${o.color}40'" onmouseup="this.style.background='${o.color}1f'" ontouchstart="this.style.background='${o.color}40'" ontouchend="this.style.background='${o.color}1f'"
+        >${o.label}</button>`).join("")}
       </div>
-
-      <!-- Notes -->
-      ${lead.notes ? `<div style="color:#94a3b8;font-size:11px;font-style:italic;border-top:1px solid #1e2430;padding-top:6px;margin-top:8px;">"${escapeHtml(lead.notes)}"</div>` : ""}
     </div>
   `;
 }
@@ -222,6 +187,7 @@ export default function MapView() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const geolocateRef = useRef<any>(null);
+  const leadPopupRef = useRef<any>(null); // only one lead card open at a time
   const scanMarkersRef = useRef<any[]>([]);
   const leadMarkersRef = useRef<Map<number, any>>(new Map());
   const lastRenderedCount = useRef(0);
@@ -690,7 +656,8 @@ export default function MapView() {
         if (!lead) return;
         const tm = (window as any).__teamMembers ?? [];
         while (Math.abs(e.lngLat.lng - coords[0]) > 180) { coords[0] += e.lngLat.lng > coords[0] ? 360 : -360; }
-        new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
+        leadPopupRef.current?.remove();
+        leadPopupRef.current = new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
           .setLngLat(coords)
           .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
           .addTo(map);
@@ -1000,7 +967,8 @@ export default function MapView() {
           const lead = (window as any).__allLeads?.find((l: any) => l.id === props.id);
           if (!lead) return;
           const tm = (window as any).__teamMembers ?? [];
-          new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
+          leadPopupRef.current?.remove();
+          leadPopupRef.current = new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
             .setLngLat(coords).setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null })).addTo(map);
         });
         map.on("mouseenter", "lead-unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
@@ -1388,7 +1356,8 @@ export default function MapView() {
         m.jumpTo({ center: target, zoom: 17 });
       }
       const tm = (window as any).__teamMembers ?? [];
-      new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
+      leadPopupRef.current?.remove();
+      leadPopupRef.current = new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
         .setLngLat(target)
         .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
         .addTo(m);

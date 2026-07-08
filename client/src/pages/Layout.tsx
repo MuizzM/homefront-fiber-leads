@@ -28,6 +28,26 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
 
+// ── Brand mark — the Home Front Solutions house (teal roof, cream walls, orange
+// door + path). Crisp inline SVG so it scales anywhere with no image request.
+function BrandMark({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 48 48" className={className} fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Home Front Solutions">
+      {/* roof */}
+      <path d="M24 5 L43 21 H39 L24 9 L9 21 H5 Z" fill="#3EA394" />
+      {/* body */}
+      <path d="M9 20 H39 V42 H9 Z" fill="#F3EEE2" stroke="#3EA394" strokeWidth="1.5" />
+      {/* windows */}
+      <rect x="13.5" y="25" width="4.5" height="7" rx="1" fill="#E0982F" />
+      <rect x="30" y="25" width="4.5" height="7" rx="1" fill="#E0982F" />
+      {/* door */}
+      <path d="M21 42 V27 a3 3 0 0 1 6 0 V42 Z" fill="#E0982F" />
+      {/* path to door */}
+      <path d="M24 42 C22 37 27 34 24 30" stroke="#3EA394" strokeWidth="2" strokeLinecap="round" opacity="0.55" />
+    </svg>
+  );
+}
+
 // ── Role hierarchy helpers ────────────────────────────────────────────────────
 type AppRole = "admin" | "manager" | "team_lead" | "rep";
 
@@ -119,13 +139,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         mobileOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         {/* Logo */}
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-border">
-          <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center">
-            <Wifi className="w-4 h-4 text-primary" />
-          </div>
-          <div>
-            <div className="text-sm font-bold text-foreground leading-tight">HomeFront Fiber</div>
-            <div className="text-xs text-muted-foreground">Field Sales Intelligence</div>
+        <div className="flex items-center gap-2.5 px-5 py-4 border-b border-border">
+          <BrandMark className="w-8 h-8 flex-shrink-0" />
+          <div className="leading-tight">
+            <div className="text-sm font-bold text-foreground">Home Front</div>
+            <div className="text-[11px] font-medium tracking-wide text-primary">SOLUTIONS</div>
           </div>
           <button
             className="ml-auto md:hidden text-muted-foreground hover:text-foreground"
@@ -214,8 +232,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          <div className="text-xs text-muted-foreground">
-            HomeFront Fiber · National
+          <div className="text-[11px] text-muted-foreground">
+            Home Front Solutions · National
           </div>
         </div>
       </aside>
@@ -233,8 +251,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Menu className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-2">
-            <Wifi className="w-4 h-4 text-primary" />
-            <span className="text-sm font-bold">HomeFront Fiber</span>
+            <BrandMark className="w-6 h-6" />
+            <span className="text-sm font-bold">Home Front Solutions</span>
           </div>
         </header>
 

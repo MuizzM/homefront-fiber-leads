@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { Wifi, ArrowRight, Mail, ShieldCheck } from "lucide-react";
+import { ArrowRight, Mail, ShieldCheck } from "lucide-react";
 
 const API_BASE = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
 
@@ -83,21 +83,18 @@ export default function Login() {
             backdropFilter: "blur(16px)",
           }}
         >
-          {/* Logo */}
+          {/* Brand logo */}
           <div className="text-center mb-8">
-            <div
-              className="w-14 h-14 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-              style={{
-                background: "linear-gradient(135deg, #0F2A44, #1a4060)",
-                border: "1px solid rgba(62,163,148,0.4)",
-                boxShadow: "0 0 28px rgba(62,163,148,0.2)",
-              }}
-            >
-              <Wifi className="w-7 h-7" style={{ color: "#3EA394" }} />
-            </div>
-            <h1 className="text-xl font-bold text-white tracking-tight">HomeFront Fiber</h1>
-            <p className="text-xs mt-1 font-medium tracking-widest uppercase" style={{ color: "#3EA394" }}>
-              Field Sales Intelligence
+            <img
+              src="/hfs-logo-full.png"
+              alt="Home Front Solutions"
+              className="mx-auto mb-3 h-24 w-auto object-contain drop-shadow-lg"
+              width={120}
+              height={120}
+            />
+            <h1 className="text-xl font-bold text-white tracking-tight">Home Front Solutions</h1>
+            <p className="text-xs mt-1 font-medium tracking-[0.2em] uppercase" style={{ color: "#3EA394" }}>
+              Direct to your door
             </p>
           </div>
 
@@ -220,17 +217,9 @@ export default function Login() {
         </div>
 
         {/* Footer */}
-        <div className="text-center mt-5 space-y-1">
-          <p className="text-xs" style={{ color: "#5A6B76" }}>HomeFront Fiber · Field Sales Intelligence</p>
-          <p className="text-xs" style={{ color: "#3a4a55" }}>
-            Not a rep yet?{" "}
-            <a
-              href="#"
-              onClick={e => { e.preventDefault(); window.open("/join", "_blank"); }}
-              style={{ color: "#3EA394" }}
-            >
-              Apply to join
-            </a>
+        <div className="text-center mt-5">
+          <p className="text-xs" style={{ color: "#5A6B76" }}>
+            Home Front Solutions · Team access only
           </p>
         </div>
       </div>

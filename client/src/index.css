@@ -40,17 +40,61 @@
     --input:        210 35% 22%;
     --ring:         172 44% 44%;      /* teal ring */
 
-    --radius: 0.5rem;
+    /* 12px base radius — cards/buttons/inputs inherit (design-system standard) */
+    --radius: 0.75rem;
+  }
+
+  /* Light theme tokens — same brand hues on light surfaces (WCAG AA). Applied
+     when a `.light` class is set on <html>; the app defaults to dark. */
+  .light {
+    --background:   210 25% 97%;
+    --foreground:   210 53% 12%;
+    --card:         0 0% 100%;
+    --card-foreground: 210 53% 12%;
+    --popover:      0 0% 100%;
+    --popover-foreground: 210 53% 12%;
+    --primary:      172 48% 34%;      /* darker teal for contrast on white */
+    --primary-foreground: 0 0% 100%;
+    --secondary:    210 25% 92%;
+    --secondary-foreground: 210 40% 22%;
+    --muted:        210 25% 93%;
+    --muted-foreground: 210 15% 40%;
+    --accent:       172 44% 40%;
+    --accent-foreground: 0 0% 100%;
+    --border:       210 20% 86%;
+    --input:        210 20% 86%;
+    --ring:         172 48% 34%;
   }
 
   * {
     @apply border-border;
   }
 
+  /* Consistent, visible keyboard focus everywhere (WCAG 2.4.7) */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Type scale — one clear hierarchy for every page */
+  h1 { @apply text-xl font-bold tracking-tight; }
+  h2 { @apply text-lg font-semibold tracking-tight; }
+  h3 { @apply text-base font-semibold; }
+
+  /* Brand selection + slim dark scrollbars */
+  ::selection { background: hsl(172 44% 44% / 0.35); }
+  * { scrollbar-width: thin; scrollbar-color: hsl(210 35% 25%) transparent; }
+  *::-webkit-scrollbar { width: 8px; height: 8px; }
+  *::-webkit-scrollbar-thumb { background: hsl(210 35% 25%); border-radius: 8px; }
+  *::-webkit-scrollbar-track { background: transparent; }
+
   body {
     @apply bg-background text-foreground;
-    font-family: 'Inter', system-ui, sans-serif;
+    /* Geist — Home Front Solutions brand font; Inter/system fallback while loading */
+    font-family: 'Geist', 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
 
   .font-mono {
@@ -67,11 +111,12 @@
   background: hsl(210 50% 13%) !important;
   color: hsl(210 20% 94%) !important;
   border: 1px solid hsl(210 35% 22%) !important;
-  border-radius: 8px !important;
-  padding: 12px 16px !important;
-  font-family: 'Inter', sans-serif !important;
+  border-radius: 12px !important;
+  padding: 12px 14px !important;
+  font-family: 'Geist', 'Inter', sans-serif !important;
   font-size: 13px !important;
   min-width: 200px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45) !important;
 }
 
 .mapboxgl-popup-tip {

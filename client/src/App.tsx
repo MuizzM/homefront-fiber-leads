@@ -6,7 +6,6 @@ import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Suspense, lazy, useEffect } from "react";
-import { Wifi } from "lucide-react";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
 import Layout from "@/pages/Layout";
@@ -37,8 +36,8 @@ function PageLoader() {
   return (
     <div className="flex-1 flex items-center justify-center" style={{ minHeight: 0 }} data-testid="page-loader">
       <div className="flex flex-col items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-primary/15 border border-primary/25 flex items-center justify-center animate-pulse">
-          <Wifi className="w-5 h-5 text-primary" />
+        <div className="w-11 h-11 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+          <div className="w-5 h-5 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
         </div>
         <div className="text-xs text-muted-foreground">Loading…</div>
       </div>
