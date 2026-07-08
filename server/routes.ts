@@ -33,7 +33,7 @@ import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerr
 import { scanAddress, NEW_FIBER_ZIPS, FCC_DEPLOYMENT_PERIODS, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
-import { getCityAddresses } from "./overpass";
+import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize } from "./mapbox-addresses";
 import { getCronStatus, triggerManualScan, startNightlyCron } from "./cron-scanner";
 import { getProxyStatus } from "./proxy-fetch";
@@ -866,26 +866,50 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(loadGisAddresses());
   });
 
-  app.post("/api/scan/area", requireAdmin, scanLimiter, (req, res) => {
-    const { minLat, maxLat, minLng, maxLng, city = "Rockwell", zip = "28138", state = "NC" } = req.body;
+  app.post("/api/scan/area", requireAdmin, scanLimiter, async (req, res) => {
+    const { minLat, maxLat, minLng, maxLng, city = "", state = "NC" } = req.body;
     if (minLat == null || maxLat == null || minLng == null || maxLng == null) {
       return res.status(400).json({ error: "minLat, maxLat, minLng, maxLng required" });
     }
-    // We don't have real coords for unscanned addresses, so we use the bounding
-    // box to do a rough street-name filter based on known street approximate coords.
-    // For now: generate all addresses for the city and tag them for scanning —
-    // the bbox is used post-scan to only surface dots inside the drawn area.
-    // Store the bbox with the job so the frontend can filter rendered dots.
+    const bbox = { south: Number(minLat), north: Number(maxLat), west: Number(minLng), east: Number(maxLng) };
+
+    // Pull the real addresses INSIDE the drawn box straight from OpenStreetMap —
+    // the box already gives us the bounds, so there's NO Mapbox geocoding (free)
+    // and it works for any town, not just Rockwell.
+    let addresses: any[] = [];
+    try {
+      addresses = await pullAddressesFromOverpass(bbox, city || "", state);
+    } catch { addresses = []; }
+    // Fallback: local GIS parcels that fall inside the box (Rockwell coverage).
+    if (addresses.length === 0) {
+      addresses = generateAddresses("28138", "Rockwell").filter((a: any) =>
+        a.lat >= bbox.south && a.lat <= bbox.north && a.lng >= bbox.west && a.lng <= bbox.east);
+    }
+    if (addresses.length === 0) {
+      return res.status(400).json({ error: "No addresses found in that area. Try a bigger box or a more populated spot." });
+    }
+
+    // Persist to the pool (geocoded once → re-scannable for free later)
+    try {
+      storage.upsertScanTargets(addresses.map((a: any) => ({
+        address: a.address, city: a.city ?? city, state: a.state ?? state,
+        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: "overpass",
+      })));
+    } catch {}
+
+    // Dedup against existing leads so we don't re-scan/re-create known addresses.
+    const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
+    const newAddrs = addresses.filter((a: any) => !existingSet.has(normalizeAddrForDedup(a.address || "")));
+
     const jobId = `scan_${Date.now()}`;
-    const addresses = generateAddresses(zip, city);
     scanJobs.set(jobId, {
-      id: jobId, city, zip, status: "running",
-      total: addresses.length, done: 0, results: [],
+      id: jobId, city: city || "Drawn area", zip: "", status: "running",
+      total: newAddrs.length, done: 0, results: [],
       startedAt: new Date().toISOString(),
       bbox: { minLat: Number(minLat), maxLat: Number(maxLat), minLng: Number(minLng), maxLng: Number(maxLng) },
     });
-    runCityScan(jobId, addresses);
-    res.json({ jobId, total: addresses.length, bbox: { minLat, maxLat, minLng, maxLng } });
+    runCityScan(jobId, newAddrs);
+    res.json({ jobId, total: newAddrs.length, source: "overpass", bbox: { minLat, maxLat, minLng, maxLng } });
   });
 
   // City scan — start (Mapbox-native address harvesting for Rockwell)
