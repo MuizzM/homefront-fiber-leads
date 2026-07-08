@@ -25,6 +25,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import LeadsCoverageMap, { type CoveragePin } from "@/components/LeadsCoverageMap";
 import type { Lead, InsertLead, TeamMember, Knock, InsertKnock } from "@shared/schema";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -647,6 +648,9 @@ function IntelligencePanel({ lead, open, onClose, canEdit }: {
 export default function Leads() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [filterCity, setFilterCity] = useState("all");
+  const [filterState, setFilterState] = useState("all");
+  const [showMap, setShowMap] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
@@ -668,11 +672,13 @@ export default function Leads() {
   const PAGE_SIZE = 100;
 
   const { data: leadsResp, isLoading } = useQuery<{ leads: Lead[]; total: number; limit: number; offset: number }>({
-    queryKey: ["/api/leads", search, filterStatus, page],
+    queryKey: ["/api/leads", search, filterStatus, filterCity, filterState, page],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
       if (filterStatus !== "all") params.set("status", filterStatus);
+      if (filterCity !== "all") params.set("city", filterCity);
+      if (filterState !== "all") params.set("state", filterState);
       params.set("limit", String(PAGE_SIZE));
       params.set("offset", String(page * PAGE_SIZE));
       const res = await apiRequest("GET", `/api/leads?${params}`);
@@ -683,6 +689,28 @@ export default function Leads() {
   const leads = leadsResp?.leads ?? [];
   const totalLeads = leadsResp?.total ?? 0;
   const totalPages = Math.ceil(totalLeads / PAGE_SIZE);
+
+  // All pins for the coverage map (every geocoded lead — free, one map load).
+  // Also the source for the City / State filter option lists.
+  const { data: mapData } = useQuery<{ pins: CoveragePin[]; total: number }>({
+    queryKey: ["/api/leads/map"],
+    queryFn: async () => (await apiRequest("GET", "/api/leads/map")).json(),
+    staleTime: 30000,
+  });
+  const allPins = mapData?.pins ?? [];
+
+  // Distinct states + cities for the dropdowns (cities scoped to the chosen state)
+  const states = Array.from(new Set(allPins.map(p => p.state).filter(Boolean))).sort();
+  const cities = Array.from(new Set(
+    allPins.filter(p => filterState === "all" || p.state === filterState).map(p => p.city).filter(Boolean)
+  )).sort();
+
+  // Pins shown on the map — respects city/state/status filters
+  const mapPins = allPins.filter(p =>
+    (filterState === "all" || p.state === filterState) &&
+    (filterCity === "all" || p.city === filterCity) &&
+    (filterStatus === "all" || p.leadStatus === filterStatus)
+  );
 
   const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"] });
   const repMap = Object.fromEntries(team.map(m => [m.id, m]));
@@ -733,9 +761,11 @@ export default function Leads() {
 
   // Filtering is now server-side; leads array is already filtered
   const filtered = leads;
-  // Reset page when filter/search changes
+  // Reset page when any filter/search changes
   const handleStatusChange = (s: string) => { setFilterStatus(s); setPage(0); };
   const handleSearchChange = (v: string) => { setSearch(v); setPage(0); };
+  const handleStateChange = (s: string) => { setFilterState(s); setFilterCity("all"); setPage(0); };
+  const handleCityChange = (c: string) => { setFilterCity(c); setPage(0); };
 
   return (
     <div className="p-6 space-y-5">
@@ -745,13 +775,31 @@ export default function Leads() {
           <h1 className="text-xl font-bold">Lead Management</h1>
           <p className="text-sm text-muted-foreground mt-0.5">{totalLeads.toLocaleString()} lead{totalLeads !== 1 ? "s" : ""}</p>
         </div>
-        {canAddLead && (
-          <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-white text-sm"
-            data-testid="btn-add-lead-manual">
-            <Plus className="w-4 h-4 mr-1" /> Add Lead
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setShowMap(v => !v)}
+            className="border-border text-sm h-9" data-testid="btn-toggle-coverage-map">
+            <Map className="w-4 h-4 mr-1" /> {showMap ? "Hide map" : "Show map"}
           </Button>
-        )}
+          {canAddLead && (
+            <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-white text-sm h-9"
+              data-testid="btn-add-lead-manual">
+              <Plus className="w-4 h-4 mr-1" /> Add Lead
+            </Button>
+          )}
+        </div>
       </div>
+
+      {/* Coverage map — all pins, filtered by city/state/status */}
+      {showMap && (
+        <div>
+          <LeadsCoverageMap pins={mapPins} />
+          <p className="text-[11px] text-muted-foreground mt-1.5 flex items-center gap-1">
+            <Map className="w-3 h-3" /> Showing {mapPins.length.toLocaleString()} of {allPins.length.toLocaleString()} pins
+            {filterState !== "all" && ` · ${filterState}`}
+            {filterCity !== "all" && ` · ${filterCity}`}
+          </p>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex gap-2 flex-wrap">
@@ -762,6 +810,24 @@ export default function Leads() {
             className="pl-9 bg-secondary border-input text-sm h-9"
             data-testid="input-search-leads" />
         </div>
+        <Select value={filterState} onValueChange={handleStateChange}>
+          <SelectTrigger className="bg-secondary border-input w-28 text-sm h-9" data-testid="filter-state">
+            <SelectValue placeholder="State" />
+          </SelectTrigger>
+          <SelectContent className="bg-card border-border">
+            <SelectItem value="all">All states</SelectItem>
+            {states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        <Select value={filterCity} onValueChange={handleCityChange}>
+          <SelectTrigger className="bg-secondary border-input w-40 text-sm h-9" data-testid="filter-city">
+            <SelectValue placeholder="City" />
+          </SelectTrigger>
+          <SelectContent className="bg-card border-border max-h-64">
+            <SelectItem value="all">All cities</SelectItem>
+            {cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+          </SelectContent>
+        </Select>
         <Select value={filterStatus} onValueChange={handleStatusChange}>
           <SelectTrigger className="bg-secondary border-input w-36 text-sm h-9" data-testid="filter-lead-status">
             <SelectValue placeholder="All statuses" />

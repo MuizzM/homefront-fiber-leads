@@ -644,7 +644,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.get("/api/leads", requireAuth, (req, res) => {
-    const { search, limit, offset, status, zip } = req.query;
+    const { search, limit, offset, status, zip, city, state } = req.query;
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     // Reps only see leads assigned to them; managers/admins see all
@@ -657,6 +657,8 @@ export function registerRoutes(httpServer: Server, app: Express) {
     // Server-side filters
     if (status && status !== "all") leads = leads.filter(l => l.leadStatus === String(status));
     if (zip) leads = leads.filter(l => l.zip === String(zip));
+    if (city && city !== "all") leads = leads.filter(l => (l.city ?? "").toLowerCase() === String(city).toLowerCase());
+    if (state && state !== "all") leads = leads.filter(l => (l.state ?? "").toLowerCase() === String(state).toLowerCase());
 
     // Pagination
     const total = leads.length;
