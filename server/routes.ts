@@ -1175,6 +1175,31 @@ export function registerRoutes(httpServer: Server, app: Express) {
     team_lead: ["rep"],
   };
   // Team lead, manager, and admin can add/edit reps
+  // Team members with an email automatically get a login account (OTP by email).
+  // The Team page is the ONE place to manage people — no separate Accounts page.
+  function syncLoginAccount(member: { id: number; name: string; email?: string | null; role: string; active: boolean }) {
+    try {
+      const linked = storage.getAllUsers().find(u => u.teamMemberId === member.id);
+      if (member.email) {
+        if (linked) {
+          storage.updateUser(linked.id, { name: member.name, email: member.email, role: member.role, active: member.active } as any);
+        } else {
+          const byEmail = storage.getUserByEmail(member.email);
+          if (byEmail) {
+            storage.updateUser(byEmail.id, { teamMemberId: member.id, name: member.name, role: member.role, active: member.active } as any);
+          } else {
+            storage.createUser({ name: member.name, email: member.email, role: member.role, active: member.active, teamMemberId: member.id } as any);
+          }
+        }
+      } else if (linked) {
+        // Email removed → login disabled (account kept for history)
+        storage.updateUser(linked.id, { active: false } as any);
+      }
+    } catch (e: any) {
+      console.warn("[team-sync] login account sync failed:", e.message);
+    }
+  }
+
   app.post("/api/team", requireTeamLead, (req, res) => {
     const parsed = insertTeamMemberSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
@@ -1183,7 +1208,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (!(HIRABLE_ROLES[creatorRole] ?? []).includes(newRole)) {
       return res.status(403).json({ error: `Your role cannot create a ${newRole.replace("_", " ")}` });
     }
-    res.status(201).json(storage.createTeamMember(parsed.data));
+    const member = storage.createTeamMember(parsed.data);
+    syncLoginAccount(member as any);
+    res.status(201).json(member);
   });
   app.patch("/api/team/:id", requireTeamLead, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
@@ -1201,12 +1228,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
     }
     const updated = storage.updateTeamMember(id, req.body, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    syncLoginAccount(updated as any);
     res.json(updated);
   });
   // Only manager+ can delete reps
   app.delete("/api/team/:id", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
-    if (!storage.deleteTeamMember(Number(req.params.id), tid)) return res.status(404).json({ error: "Not found" });
+    const id = Number(req.params.id);
+    if (!storage.deleteTeamMember(id, tid)) return res.status(404).json({ error: "Not found" });
+    // Member removed → disable their login (account kept for knock history)
+    try {
+      const linked = storage.getAllUsers().find(u => u.teamMemberId === id);
+      if (linked) storage.updateUser(linked.id, { active: false } as any);
+    } catch {}
     res.json({ success: true });
   });
 

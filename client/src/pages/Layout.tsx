@@ -22,7 +22,6 @@ import {
   Navigation,
   Clock,
   Radio,
-  ScanSearch,
 } from "lucide-react";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -56,16 +55,13 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: () => true,                               group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: () => true,                               group: "Field" },
   { href: "/commissions",  label: "Commissions",   icon: DollarSign,   show: () => true,                               group: "Field" },
-  // ── Scan ──────────────────────────────────────────────────────────────────
-  { href: "/usa-scan",     label: "USA Scanner",   icon: Globe,        show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
-  { href: "/city-scan",    label: "City Scanner",  icon: Radar,        show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
-  { href: "/cns-scanner",  label: "CNS Scanner",   icon: ScanSearch,   show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
-  // ── Manage ────────────────────────────────────────────────────────────────
+  // ── Scan — one hub with City / USA / Nightly tabs ─────────────────────────
+  { href: "/scanner",      label: "Scanner",       icon: Radar,        show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
+  // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Applications",  icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   // ── Admin ─────────────────────────────────────────────────────────────────
-  { href: "/users",        label: "Accounts",      icon: ShieldCheck,  show: r => hasRole(r, "admin"),                 group: "Admin" },
   { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r: string, email?: string) => email === "muizzm21@gmail.com", group: "Admin" },
 ];
 

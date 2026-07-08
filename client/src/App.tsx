@@ -18,14 +18,12 @@ import NotFound from "@/pages/not-found";
 // initial load). The first paint only pulls the shell + login; the landing
 // page and any route the user visits are fetched on demand.
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
-const FiberScanner = lazy(() => import("@/pages/FiberScanner"));
 const MapView = lazy(() => import("@/pages/MapView"));
 const Leads = lazy(() => import("@/pages/Leads"));
-const CityScanner = lazy(() => import("@/pages/CityScanner"));
+const Scanners = lazy(() => import("@/pages/Scanners"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
-const Users = lazy(() => import("@/pages/Users"));
 const Applications = lazy(() => import("@/pages/Applications"));
 const MyTerritory = lazy(() => import("@/pages/MyTerritory"));
 const Commissions = lazy(() => import("@/pages/Commissions"));
@@ -33,8 +31,6 @@ const LiveMap = lazy(() => import("@/pages/LiveMap"));
 const ComingSoon = lazy(() => import("@/pages/ComingSoon"));
 const ClockIn = lazy(() => import("@/pages/ClockIn"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
-const CnsScanner = lazy(() => import("@/pages/CnsScanner"));
-const USAScanner = lazy(() => import("@/pages/USAScanner"));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
 // while a page chunk loads — never a blank screen.
@@ -108,7 +104,7 @@ function AppRoutes() {
           {/* ── Manager + Admin only ── */}
           <Route path="/scanner">
             <Guard role={role} allowed={["admin", "manager"]}>
-              <FiberScanner />
+              <Scanners />
             </Guard>
           </Route>
           <Route path="/coming-soon">
@@ -122,31 +118,32 @@ function AppRoutes() {
             </Guard>
           </Route>
 
-          {/* ── Admin only ── */}
+          {/* Old scanner bookmarks land on the right tab of the Scanner hub */}
           <Route path="/city-scan">
             <Guard role={role} allowed={["admin", "manager"]}>
-              <CityScanner />
+              <Scanners initialTab="city" />
             </Guard>
           </Route>
           <Route path="/usa-scan">
             <Guard role={role} allowed={["admin", "manager"]}>
-              <USAScanner />
+              <Scanners initialTab="usa" />
             </Guard>
           </Route>
           <Route path="/cns-scanner">
             <Guard role={role} allowed={["admin", "manager"]}>
-              <CnsScanner />
+              <Scanners initialTab="cns" />
             </Guard>
           </Route>
+          {/* ── Admin only ── */}
           <Route path="/token">
             <Guard role={role} allowed={["admin"]}>
               <TokenSetup />
             </Guard>
           </Route>
+          {/* /users removed — the Team page is the one place to manage people;
+              members with an email automatically get login access */}
           <Route path="/users">
-            <Guard role={role} allowed={["admin"]}>
-              <Users />
-            </Guard>
+            <Redirect to="/team" />
           </Route>
           <Route path="/applications">
             <Guard role={role} allowed={["admin", "manager"]}>

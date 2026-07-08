@@ -186,7 +186,7 @@ function MemberFormUI({
           />
         </div>
         <div>
-          <Label className="text-xs text-muted-foreground">Email</Label>
+          <Label className="text-xs text-muted-foreground">Email (login access)</Label>
           <Input
             value={form.email}
             onChange={e => set("email", e.target.value)}
@@ -196,6 +196,9 @@ function MemberFormUI({
           />
         </div>
       </div>
+      <p className="text-[11px] text-muted-foreground -mt-1">
+        Members with an email can log in with a one-time code sent to that address.
+      </p>
 
       {/* Role picker — changing role resets the supervisor (eligibility changes) */}
       <RolePicker value={form.role} onChange={v => setForm({ ...form, role: v, reportsToId: null })} allowed={allowedRoles} />
@@ -426,6 +429,7 @@ export default function Team() {
                     {member.email && (
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         <Mail className="w-3 h-3" /> {member.email}
+                        <span className="text-[10px] px-1.5 py-0 rounded-full bg-teal-500/15 text-teal-400">login</span>
                       </div>
                     )}
                   </div>
