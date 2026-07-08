@@ -310,6 +310,25 @@ export default function MapView() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/territories"] }),
   });
 
+  // Single exit path for the lasso — clears mode, selection, and map layers.
+  // Every button/mutation that leaves lasso mode goes through this so no shape
+  // or state is ever left behind.
+  const exitLasso = useCallback(() => {
+    setLassoMode(false);
+    setLassoPoints([]);
+    setLassoSelected([]);
+    setLassoRepId("");
+    const map = mapRef.current;
+    if (map) {
+      try {
+        if (map.getLayer("lasso-fill")) map.removeLayer("lasso-fill");
+        if (map.getLayer("lasso-outline")) map.removeLayer("lasso-outline");
+        if (map.getSource("lasso-polygon")) map.removeSource("lasso-polygon");
+      } catch {}
+      lassoLayerRef.current = false;
+    }
+  }, []);
+
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
   const bulkAssignMutation = useMutation({
     mutationFn: async ({ leadIds, repId }: { leadIds: number[]; repId: number | null }) => {
@@ -321,17 +340,7 @@ export default function MapView() {
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       const repName = data.repId ? (team.find((m: TeamMember) => m.id === data.repId)?.name ?? "rep") : "unassigned";
       toast({ title: `✓ ${data.updated} leads assigned to ${repName}` });
-      setLassoSelected([]);
-      setLassoPoints([]);
-      setLassoMode(false);
-      setLassoRepId("");
-      // Remove lasso layers
-      const map = mapRef.current;
-      if (map) {
-        if (map.getLayer("lasso-fill")) map.removeLayer("lasso-fill");
-        if (map.getLayer("lasso-outline")) map.removeLayer("lasso-outline");
-        if (map.getSource("lasso-polygon")) map.removeSource("lasso-polygon");
-      }
+      exitLasso();
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -570,8 +579,15 @@ export default function MapView() {
         paint: { "text-color": "#ffffff", "text-halo-color": "rgba(0,0,0,0.3)", "text-halo-width": 0.5 },
       });
 
+      // True while any draw tool is armed — cluster zoom / popups / hover-cursor
+      // must all stand down so they can't yank the map or fight the crosshair
+      // mid-draw.
+      const drawToolActive = () =>
+        (window as any).__lassoActive || (window as any).__territoryDrawActive || (window as any).__drawModeActive;
+
       // Click cluster → zoom in
       map.on("click", "lead-clusters", (e: any) => {
+        if (drawToolActive()) return;
         const features = map.queryRenderedFeatures(e.point, { layers: ["lead-clusters"] });
         const clusterId = features[0]?.properties?.cluster_id;
         if (!clusterId) return;
@@ -581,10 +597,11 @@ export default function MapView() {
         });
       });
 
-      map.on("mouseenter", "lead-clusters", () => { map.getCanvas().style.cursor = "pointer"; });
-      map.on("mouseleave", "lead-clusters", () => { map.getCanvas().style.cursor = ""; });
-      map.on("mouseenter", "lead-clusters-glow", () => { map.getCanvas().style.cursor = "pointer"; });
-      map.on("mouseleave", "lead-clusters-glow", () => { map.getCanvas().style.cursor = ""; });
+      const hoverCursor = (c: string) => { if (!drawToolActive()) map.getCanvas().style.cursor = c; };
+      map.on("mouseenter", "lead-clusters", () => hoverCursor("pointer"));
+      map.on("mouseleave", "lead-clusters", () => hoverCursor(""));
+      map.on("mouseenter", "lead-clusters-glow", () => hoverCursor("pointer"));
+      map.on("mouseleave", "lead-clusters-glow", () => hoverCursor(""));
 
       // ── Individual lead pins (GPU circle layer) — shown when zoomed in past clusterMaxZoom ──
       map.addLayer({
@@ -649,6 +666,9 @@ export default function MapView() {
 
       // Click unclustered pin → show popup
       map.on("click", "lead-unclustered", (e: any) => {
+        // No popups while a draw tool is active — a lasso stroke over a pin
+        // must not open a card mid-draw.
+        if ((window as any).__lassoActive || (window as any).__territoryDrawActive || (window as any).__drawModeActive) return;
         const props = e.features?.[0]?.properties;
         const coords = e.features?.[0]?.geometry?.coordinates?.slice() as [number, number];
         if (!props || !coords) return;
@@ -662,8 +682,8 @@ export default function MapView() {
           .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
           .addTo(map);
       });
-      map.on("mouseenter", "lead-unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
-      map.on("mouseleave", "lead-unclustered", () => { map.getCanvas().style.cursor = ""; });
+      map.on("mouseenter", "lead-unclustered", () => hoverCursor("pointer"));
+      map.on("mouseleave", "lead-unclustered", () => hoverCursor(""));
 
       mapRef.current = map;
       setMapReady(true);
@@ -951,29 +971,24 @@ export default function MapView() {
           layout: { "text-field": "✓", "text-font": ["Arial Unicode MS Regular"], "text-size": 12, "text-offset": [0, -1.15], "text-allow-overlap": true, "text-ignore-placement": true },
           paint: { "text-color": "#ffffff", "text-halo-color": "#0f172a", "text-halo-width": 1.5 },
         });
-        map.on("click", "lead-clusters", (e: any) => {
-          const features = map.queryRenderedFeatures(e.point, { layers: ["lead-clusters"] });
-          const clusterId = features[0]?.properties?.cluster_id;
-          if (!clusterId) return;
-          (map.getSource("leads-cluster") as any).getClusterExpansionZoom(clusterId, (err: any, zoom: number) => {
-            if (err) return;
-            map.easeTo({ center: features[0].geometry.coordinates, zoom: zoom + 1 });
-          });
-        });
-        map.on("click", "lead-unclustered", (e: any) => {
-          const props = e.features?.[0]?.properties;
-          const coords = e.features?.[0]?.geometry?.coordinates?.slice() as [number, number];
-          if (!props || !coords) return;
-          const lead = (window as any).__allLeads?.find((l: any) => l.id === props.id);
-          if (!lead) return;
-          const tm = (window as any).__teamMembers ?? [];
-          leadPopupRef.current?.remove();
-          leadPopupRef.current = new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
-            .setLngLat(coords).setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null })).addTo(map);
-        });
-        map.on("mouseenter", "lead-unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
-        map.on("mouseleave", "lead-unclustered", () => { map.getCanvas().style.cursor = ""; });
+        // NOTE: no map.on(...) here — layer-scoped click/hover handlers bound at
+        // init SURVIVE setStyle (they live on the Map, not the style). Re-binding
+        // them here stacked a duplicate handler per style toggle (N popups per
+        // pin click after N toggles).
       }
+      // setStyle also wiped the draw-bbox + lasso sources — re-add / reset so
+      // Scan-Area and Lasso keep working after a satellite/street toggle.
+      if (!map.getSource("draw-bbox")) {
+        map.addSource("draw-bbox", {
+          type: "geojson",
+          data: { type: "Feature", geometry: { type: "Polygon", coordinates: [[]] }, properties: {} }
+        });
+        map.addLayer({ id: "draw-bbox-fill", type: "fill", source: "draw-bbox",
+          paint: { "fill-color": "#f97316", "fill-opacity": 0.1 } });
+        map.addLayer({ id: "draw-bbox-outline", type: "line", source: "draw-bbox",
+          paint: { "line-color": "#f97316", "line-width": 2, "line-dasharray": [3, 2] } });
+      }
+      lassoLayerRef.current = false;
       lastRenderedCount.current = 0;
       // Re-trigger the lead-pin setData + territory render effects — the new
       // style starts with an empty source, so without this the pins vanish.
@@ -1013,40 +1028,64 @@ export default function MapView() {
           return next;
         });
       };
+      // Draw affordance: crosshair + no accidental double-click zoom while
+      // placing vertices (panning stays enabled so you can move between clicks).
+      try {
+        mapRef.current?.doubleClickZoom.disable();
+        const c = mapRef.current?.getCanvas(); if (c) c.style.cursor = "crosshair";
+      } catch {}
     } else {
       (window as any).__territoryDrawActive = false;
-      // Remove preview layers
+      delete (window as any).__addTerritoryPoint;
+      // Remove preview layers + restore map behavior
       const map = mapRef.current;
       if (map) {
         try { if (map.getLayer("territory-preview-fill")) map.removeLayer("territory-preview-fill"); } catch {}
         try { if (map.getLayer("territory-preview-line")) map.removeLayer("territory-preview-line"); } catch {}
         try { if (map.getSource("territory-preview")) map.removeSource("territory-preview"); } catch {}
+        try { map.doubleClickZoom.enable(); map.getCanvas().style.cursor = ""; } catch {}
       }
     }
-    return () => { (window as any).__territoryDrawActive = false; };
+    return () => {
+      (window as any).__territoryDrawActive = false;
+      delete (window as any).__addTerritoryPoint;
+      try { mapRef.current?.doubleClickZoom.enable(); } catch {}
+    };
   }, [territoryDrawMode]);
 
-  // ── Lasso mode — click to add polygon points, close to select leads ─────────
+  // ── Lasso mode — SalesRabbit-style FREEHAND drag lasso ───────────────────────
+  // Press and DRAG to draw a loop around leads; release to select. Map panning
+  // is fully suspended while armed (no more grab-hand fighting the draw), and
+  // drawing again replaces the previous selection. Works with mouse and touch.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
+
+    const clearPreview = () => {
+      try {
+        if (map.getLayer("lasso-fill")) map.removeLayer("lasso-fill");
+        if (map.getLayer("lasso-outline")) map.removeLayer("lasso-outline");
+        if (map.getSource("lasso-polygon")) map.removeSource("lasso-polygon");
+      } catch {}
+      lassoLayerRef.current = false;
+    };
+
     if (!lassoMode) {
-      // Clean up layers when exiting lasso mode without saving
-      if (lassoPoints.length === 0) {
-        try {
-          if (map.getLayer("lasso-fill")) map.removeLayer("lasso-fill");
-          if (map.getLayer("lasso-outline")) map.removeLayer("lasso-outline");
-          if (map.getSource("lasso-polygon")) map.removeSource("lasso-polygon");
-        } catch {}
-        lassoLayerRef.current = false;
-      }
+      clearPreview(); // never leave a stale lasso shape under another tool
       try { map.getCanvas().style.cursor = ""; } catch {}
       return;
     }
 
-    try { map.getCanvas().style.cursor = "crosshair"; } catch {}
+    // Arm the tool: suspend every gesture that would move the map mid-draw.
+    (window as any).__lassoActive = true; // suppresses pin popups while armed
+    try {
+      map.getCanvas().style.cursor = "crosshair";
+      map.dragPan.disable();
+      map.doubleClickZoom.disable();
+      map.touchZoomRotate.disable();
+      map.touchPitch?.disable();
+    } catch {}
 
-    // Point-in-polygon check for lasso
     function ptInPoly(lat: number, lng: number, poly: [number, number][]): boolean {
       let inside = false;
       for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -1056,42 +1095,103 @@ export default function MapView() {
       return inside;
     }
 
-    const onClick = (e: any) => {
-      if ((window as any).__territoryDrawActive) return;
-      const pt: [number, number] = [e.lngLat.lng, e.lngLat.lat];
-      setLassoPoints(prev => {
-        const next = [...prev, pt];
-        // Draw lasso polygon preview
-        const closed = [...next, next[0]];
-        const geojson = { type: "Feature" as const, geometry: { type: "Polygon" as const, coordinates: [closed.map(([lng, lat]) => [lng, lat])] }, properties: {} };
-        if (!lassoLayerRef.current) {
-          try {
-            map.addSource("lasso-polygon", { type: "geojson", data: geojson });
-            map.addLayer({ id: "lasso-fill", type: "fill", source: "lasso-polygon",
-              paint: { "fill-color": "#f97316", "fill-opacity": 0.15 } });
-            map.addLayer({ id: "lasso-outline", type: "line", source: "lasso-polygon",
-              paint: { "line-color": "#f97316", "line-width": 2, "line-dasharray": [4, 2] } });
-            lassoLayerRef.current = true;
-          } catch {}
-        } else {
-          try { (map.getSource("lasso-polygon") as any).setData(geojson); } catch {}
-        }
-        // If 3+ points, compute which leads are inside
-        if (next.length >= 3) {
-          const selected = leads.filter(l => l.lat && l.lng && ptInPoly(l.lat, l.lng, next));
-          setLassoSelected(selected);
-        }
-        return next;
-      });
+    // Stroke state lives in refs — zero React re-renders while the finger moves.
+    let stroke: [number, number][] = [];        // [lng, lat]
+    let lastPx: { x: number; y: number } | null = null;
+    let drawing = false;
+    const MIN_PX_DIST = 5;   // thin points: capture every ~5px of movement
+    const MAX_POINTS = 800;
+
+    const render = (closeRing: boolean) => {
+      if (stroke.length < 2) return;
+      const ring = closeRing ? [...stroke, stroke[0]] : stroke;
+      const geojson = {
+        type: "Feature" as const,
+        geometry: { type: "Polygon" as const, coordinates: [closeRing ? ring : [...ring, ring[0]]] },
+        properties: {},
+      };
+      if (!lassoLayerRef.current) {
+        try {
+          map.addSource("lasso-polygon", { type: "geojson", data: geojson });
+          map.addLayer({ id: "lasso-fill", type: "fill", source: "lasso-polygon",
+            paint: { "fill-color": "#3b82f6", "fill-opacity": 0.12 } });
+          map.addLayer({ id: "lasso-outline", type: "line", source: "lasso-polygon",
+            paint: { "line-color": "#60a5fa", "line-width": 2.5, "line-dasharray": [2, 1.5] } });
+          lassoLayerRef.current = true;
+        } catch {}
+      } else {
+        try { (map.getSource("lasso-polygon") as any).setData(geojson); } catch {}
+      }
     };
 
-    map.on("click", onClick);
-    return () => {
-      // Defensive: on unmount the map may already be removed (getCanvas → undefined)
-      try { map.off("click", onClick); } catch {}
-      try { map.getCanvas().style.cursor = ""; } catch {}
+    const start = (lngLat: any, point: any) => {
+      drawing = true;
+      stroke = [[lngLat.lng, lngLat.lat]];
+      lastPx = { x: point.x, y: point.y };
+      // A new stroke replaces the previous selection
+      setLassoSelected([]); setLassoPoints([]);
+      clearPreview();
     };
-  }, [lassoMode, mapReady, leads]);
+
+    const move = (lngLat: any, point: any) => {
+      if (!drawing || stroke.length >= MAX_POINTS || !lastPx) return;
+      const dx = point.x - lastPx.x, dy = point.y - lastPx.y;
+      if (dx * dx + dy * dy < MIN_PX_DIST * MIN_PX_DIST) return;
+      lastPx = { x: point.x, y: point.y };
+      stroke.push([lngLat.lng, lngLat.lat]);
+      render(false);
+    };
+
+    const finish = () => {
+      if (!drawing) return;
+      drawing = false;
+      // Too small to be a deliberate loop → treat as accidental tap, clear.
+      if (stroke.length < 8) { stroke = []; clearPreview(); return; }
+      render(true);
+      const allLeads: MapPin[] = (window as any).__allLeads ?? [];
+      const selected = allLeads.filter(l => l.lat && l.lng && ptInPoly(l.lat, l.lng, stroke));
+      setLassoPoints(stroke);
+      setLassoSelected(selected);
+    };
+
+    const cancelStroke = () => { drawing = false; stroke = []; clearPreview(); };
+
+    // Mouse
+    const onMouseDown = (e: any) => start(e.lngLat, e.point);
+    const onMouseMove = (e: any) => move(e.lngLat, e.point);
+    const onMouseUp = () => finish();
+    // Touch — single finger draws; a second finger cancels the stroke.
+    const onTouchStart = (e: any) => {
+      if (e.points && e.points.length > 1) { cancelStroke(); return; }
+      start(e.lngLat, e.point);
+    };
+    const onTouchMove = (e: any) => {
+      if (e.points && e.points.length > 1) { cancelStroke(); return; }
+      move(e.lngLat, e.point);
+    };
+    const onTouchEnd = () => finish();
+
+    map.on("mousedown", onMouseDown); map.on("mousemove", onMouseMove); map.on("mouseup", onMouseUp);
+    map.on("touchstart", onTouchStart); map.on("touchmove", onTouchMove); map.on("touchend", onTouchEnd);
+
+    return () => {
+      (window as any).__lassoActive = false;
+      // Defensive: on unmount the map may already be removed (getCanvas → undefined)
+      try {
+        map.off("mousedown", onMouseDown); map.off("mousemove", onMouseMove); map.off("mouseup", onMouseUp);
+        map.off("touchstart", onTouchStart); map.off("touchmove", onTouchMove); map.off("touchend", onTouchEnd);
+      } catch {}
+      try {
+        map.getCanvas().style.cursor = "";
+        map.dragPan.enable();
+        map.doubleClickZoom.enable();
+        map.touchZoomRotate.enable();
+        map.touchPitch?.enable();
+      } catch {}
+    };
+    // styleEpoch: rebind after a style swap / map re-init (setStyle wipes the
+    // lasso source; a re-created map instance needs fresh handlers)
+  }, [lassoMode, mapReady, styleEpoch]);
 
     // ── Popup custom styles ───────────────────────────────────────────────────
   useEffect(() => {
@@ -1132,31 +1232,57 @@ export default function MapView() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !drawMode) return;
-    try { map.getCanvas().style.cursor = "crosshair"; map.dragPan.disable(); } catch {}
+    // Fresh session: clear any stale drag state from a mode toggled off mid-drag
+    drawingRef.current = false;
+    drawStartRef.current = null;
+    (window as any).__drawModeActive = true;
+    try { map.getCanvas().style.cursor = "crosshair"; map.dragPan.disable(); map.touchZoomRotate.disable(); } catch {}
 
-    const onDown = (e: mapboxgl.MapMouseEvent) => { drawingRef.current = true; drawStartRef.current = e.lngLat; };
-    const onMove = (e: mapboxgl.MapMouseEvent) => {
+    let startPx: { x: number; y: number } | null = null;
+
+    const down = (lngLat: any, point: any) => { drawingRef.current = true; drawStartRef.current = lngLat; startPx = { x: point.x, y: point.y }; };
+    const moveTo = (lngLat: any) => {
       if (!drawingRef.current || !drawStartRef.current) return;
-      const s = drawStartRef.current, c = e.lngLat;
+      const s = drawStartRef.current, c = lngLat;
       updateDrawLayer({ minLng: Math.min(s.lng, c.lng), maxLng: Math.max(s.lng, c.lng), minLat: Math.min(s.lat, c.lat), maxLat: Math.max(s.lat, c.lat) });
     };
-    const onUp = (e: mapboxgl.MapMouseEvent) => {
+    const up = (lngLat: any, point: any) => {
       if (!drawingRef.current || !drawStartRef.current) return;
       drawingRef.current = false;
-      const s = drawStartRef.current, c = e.lngLat;
+      // A stray tap (<6px drag) is not a box — ignore instead of committing a
+      // degenerate zero-area bbox and bouncing the user out of the mode.
+      if (startPx && Math.hypot(point.x - startPx.x, point.y - startPx.y) < 6) {
+        drawStartRef.current = null; clearDrawLayer(); return;
+      }
+      const s = drawStartRef.current, c = lngLat;
       setDrawnBBox({ minLng: Math.min(s.lng, c.lng), maxLng: Math.max(s.lng, c.lng), minLat: Math.min(s.lat, c.lat), maxLat: Math.max(s.lat, c.lat) });
       drawStartRef.current = null;
       setDrawMode(false);
-      try { map.getCanvas().style.cursor = ""; map.dragPan.enable(); } catch {}
+      try { map.getCanvas().style.cursor = ""; map.dragPan.enable(); map.touchZoomRotate.enable(); } catch {}
     };
 
+    // Mouse + touch (single finger draws the box; multi-touch ignored)
+    const onDown = (e: any) => down(e.lngLat, e.point);
+    const onMove = (e: any) => moveTo(e.lngLat);
+    const onUp = (e: any) => up(e.lngLat, e.point);
+    const onTDown = (e: any) => { if (e.points && e.points.length > 1) return; down(e.lngLat, e.point); };
+    const onTMove = (e: any) => { if (e.points && e.points.length > 1) return; moveTo(e.lngLat); };
+    const onTUp = (e: any) => up(e.lngLat, e.point);
+
     map.on("mousedown", onDown); map.on("mousemove", onMove); map.on("mouseup", onUp);
+    map.on("touchstart", onTDown); map.on("touchmove", onTMove); map.on("touchend", onTUp);
     return () => {
+      (window as any).__drawModeActive = false;
+      drawingRef.current = false;
+      drawStartRef.current = null;
       // Defensive: on unmount the map may already be removed (getCanvas → undefined)
-      try { map.off("mousedown", onDown); map.off("mousemove", onMove); map.off("mouseup", onUp); } catch {}
-      try { map.getCanvas().style.cursor = ""; map.dragPan.enable(); } catch {}
+      try {
+        map.off("mousedown", onDown); map.off("mousemove", onMove); map.off("mouseup", onUp);
+        map.off("touchstart", onTDown); map.off("touchmove", onTMove); map.off("touchend", onTUp);
+      } catch {}
+      try { map.getCanvas().style.cursor = ""; map.dragPan.enable(); map.touchZoomRotate.enable(); } catch {}
     };
-  }, [drawMode, mapReady, updateDrawLayer]);
+  }, [drawMode, mapReady, updateDrawLayer, clearDrawLayer, styleEpoch]);
 
   // ── Scan helpers ──────────────────────────────────────────────────────────
   const stopPolling = useCallback(() => {
@@ -1457,27 +1583,19 @@ export default function MapView() {
 
         {/* Actions */}
         <div className="ml-auto flex items-center gap-1.5">
-          {/* ── Action tools: assign · territory · scan (blue → purple → orange) ── */}
+          {/* ── Action tools: assign · territory · scan (blue → purple → orange).
+                 Exactly ONE draw tool can be armed at a time. ── */}
           {canAssign && (
             <Button
               size="sm" variant="outline"
               onClick={() => {
                 if (lassoMode) {
-                  // Exit lasso, clear
-                  setLassoMode(false);
-                  setLassoPoints([]);
-                  setLassoSelected([]);
-                  setLassoRepId("");
-                  const map = mapRef.current;
-                  if (map) {
-                    try { map.removeLayer("lasso-fill"); } catch {}
-                    try { map.removeLayer("lasso-outline"); } catch {}
-                    try { map.removeSource("lasso-polygon"); } catch {}
-                    lassoLayerRef.current = false;
-                  }
+                  exitLasso();
                 } else {
+                  exitLasso(); // clear any prior shape before re-arming
                   setLassoMode(true);
                   setTerritoryDrawMode(false);
+                  setDrawMode(false); setDrawnBBox(null);
                 }
               }}
               disabled={!mapReady}
@@ -1486,15 +1604,15 @@ export default function MapView() {
                   ? "border-blue-500 text-blue-400 bg-blue-500/10"
                   : "border-blue-500/40 text-blue-400 hover:bg-blue-500/10"
               }`}
-              title="Lasso: click points around leads, then bulk-assign to rep"
+              title="Lasso: drag to draw around leads, then bulk-assign to a rep"
             >
               <Pencil className="w-3 h-3 mr-1" />
-              {lassoMode ? `Lasso (${lassoSelected.length} selected)` : "Lasso"}
+              {lassoMode ? (lassoSelected.length > 0 ? `Lasso (${lassoSelected.length})` : "Lasso — on") : "Lasso"}
             </Button>
           )}
           {canAssign && (
             <Button
-              onClick={() => { setTerritoryDrawMode(!territoryDrawMode); setTerritoryPoints([]); setLassoMode(false); setDrawMode(false); }}
+              onClick={() => { setTerritoryDrawMode(!territoryDrawMode); setTerritoryPoints([]); exitLasso(); setDrawMode(false); setDrawnBBox(null); }}
               disabled={!mapReady}
               size="sm" variant="outline"
               className={`h-7 text-xs ${territoryDrawMode ? "border-purple-500 text-purple-400 bg-purple-500/10" : "border-purple-500/40 text-purple-400 hover:bg-purple-500/10"}`}
@@ -1504,7 +1622,7 @@ export default function MapView() {
           {/* Draw a box → scan that area for new fiber (admin only) */}
           {isAdmin && (
             <Button
-              onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); setTerritoryDrawMode(false); setLassoMode(false); }}
+              onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); setTerritoryDrawMode(false); exitLasso(); }}
               disabled={!mapReady}
               size="sm" variant="outline"
               className={`h-7 text-xs ${drawMode ? "border-orange-500 text-orange-400 bg-orange-500/10" : "border-orange-500/40 text-orange-400 hover:bg-orange-500/10"}`}
@@ -1602,64 +1720,7 @@ export default function MapView() {
           {territoryPoints.length > 0 && <Button size="sm" variant="ghost" className="text-red-400 h-6 text-[11px]" onClick={() => setTerritoryPoints([])}>Clear</Button>}
         </div>
       )}
-      {/* ── Lasso bulk-assign banner ── */}
-      {lassoMode && (
-        <div className="px-3 py-2 bg-blue-500/10 border-b border-blue-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
-          <span className="text-[11px] text-blue-400 font-medium">
-            ■ Lasso active — click map to draw area
-            {lassoPoints.length > 0 && ` (${lassoPoints.length} pts)`}
-            {lassoSelected.length > 0 && ` → ${lassoSelected.length} leads selected`}
-          </span>
-          {lassoSelected.length > 0 && (
-            <>
-              <select
-                value={lassoRepId}
-                onChange={e => setLassoRepId(e.target.value)}
-                className="bg-background border border-border rounded px-2 py-0.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="">Assign to rep…</option>
-                {team.map((m: TeamMember) => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
-              <Button
-                size="sm"
-                disabled={!lassoRepId || bulkAssignMutation.isPending}
-                onClick={() => bulkAssignMutation.mutate({ leadIds: lassoSelected.map(l => l.id), repId: Number(lassoRepId) })}
-                className="h-6 text-[11px] px-2 bg-blue-600 hover:bg-blue-700 text-white"
-              >
-                {bulkAssignMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
-              </Button>
-            </>
-          )}
-          <Button
-            size="sm" variant="ghost"
-            className="text-blue-400/70 h-6 text-[11px] ml-auto"
-            onClick={() => {
-              setLassoMode(false); setLassoPoints([]); setLassoSelected([]); setLassoRepId("");
-              const map = mapRef.current;
-              if (map) {
-                try { map.removeLayer("lasso-fill"); } catch {}
-                try { map.removeLayer("lasso-outline"); } catch {}
-                try { map.removeSource("lasso-polygon"); } catch {}
-                lassoLayerRef.current = false;
-              }
-            }}
-          >Cancel</Button>
-          {lassoPoints.length > 0 && (
-            <Button size="sm" variant="ghost" className="text-blue-400/70 h-6 text-[11px]"
-              onClick={() => {
-                setLassoPoints([]); setLassoSelected([]);
-                const map = mapRef.current;
-                if (map) {
-                  try { map.removeLayer("lasso-fill"); } catch {}
-                  try { map.removeLayer("lasso-outline"); } catch {}
-                  try { map.removeSource("lasso-polygon"); } catch {}
-                  lassoLayerRef.current = false;
-                }
-              }}
-            >Clear points</Button>
-          )}
-        </div>
-      )}
+      {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
 
       {error && (
         <div className="px-3 py-1.5 bg-red-500/10 border-b border-red-500/30 text-[11px] text-red-400 flex items-center gap-2 flex-shrink-0">
@@ -1785,6 +1846,60 @@ export default function MapView() {
                       {geocoding ? "Locating…" : <>Go to “{sidebarSearch}” on the map <span className="text-white/40 text-[11px]">then draw a Scan-Area box</span></>}
                     </button>
                   )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── Lasso floating action bar — bottom-center, thumb-reachable ── */}
+          {lassoMode && (
+            <div className="absolute left-1/2 -translate-x-1/2 bottom-6 z-30 max-w-[calc(100vw-24px)]">
+              {lassoSelected.length === 0 ? (
+                /* Armed, nothing selected yet → drawing hint */
+                <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-blue-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <Pencil className="w-4 h-4 text-blue-400 flex-shrink-0" />
+                  <span className="text-[13px] font-medium text-white whitespace-nowrap">
+                    Drag to draw around leads
+                  </span>
+                  <button
+                    onClick={exitLasso}
+                    className="w-9 h-9 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                    title="Exit lasso"
+                    data-testid="lasso-exit"
+                  ><X className="w-4 h-4" /></button>
+                </div>
+              ) : (
+                /* Selected → count · rep picker · Assign · exit */
+                <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-blue-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
+                  <span className="flex items-center gap-1.5 text-[14px] font-bold text-white whitespace-nowrap" aria-live="polite">
+                    <span className="w-2 h-2 rounded-full bg-blue-400 shadow-[0_0_8px_rgba(96,165,250,0.9)]" />
+                    {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads</span>
+                  </span>
+                  <select
+                    value={lassoRepId}
+                    onChange={e => setLassoRepId(e.target.value)}
+                    data-testid="lasso-rep-select"
+                    className="h-9 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-blue-400/60 max-w-[150px]"
+                  >
+                    <option value="" className="text-slate-900">Pick a rep…</option>
+                    {team.filter(m => m.active).map((m: TeamMember) => (
+                      <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
+                    ))}
+                  </select>
+                  <Button
+                    disabled={!lassoRepId || bulkAssignMutation.isPending}
+                    onClick={() => bulkAssignMutation.mutate({ leadIds: lassoSelected.map(l => l.id), repId: Number(lassoRepId) })}
+                    data-testid="lasso-assign"
+                    className="h-9 rounded-full bg-blue-500 hover:bg-blue-600 text-white font-bold text-[13px] px-4 disabled:opacity-40"
+                  >
+                    {bulkAssignMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
+                  </Button>
+                  <button
+                    onClick={exitLasso}
+                    className="w-9 h-9 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
+                    title="Exit lasso"
+                    data-testid="lasso-exit"
+                  ><X className="w-4 h-4" /></button>
                 </div>
               )}
             </div>
