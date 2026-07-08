@@ -430,12 +430,6 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ token });
   });
 
-  // Scanner submit secret — served only to authenticated managers/admins, never in client bundle
-  app.get("/api/config/scanner-secret", requireManager, (_req, res) => {
-    const secret = process.env.SCANNER_SUBMIT_SECRET ?? "";
-    if (!secret) return res.status(503).json({ error: "Scanner secret not configured" });
-    res.json({ secret });
-  });
 
   // ── FCC-sourced Kinetic active build markets ───────────────────────────────
   // Active build zones from FCC BDC Jan 2025 → Jun 2025 delta analysis.
@@ -769,98 +763,6 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // then starts a background scan job just like /api/scan/start
   // Serve the GIS address list to the browser scanner (requireAuth — any logged-in user)
 
-
-  // ── Download standalone scanner HTML ──
-  app.get("/api/scan/scanner-download", requireManager, (_req, res) => {
-    // In production: dist/index.cjs lives in dist/, scanner is at project root
-    // In dev: server/ lives in server/, scanner is at project root
-    const scannerPath = path.join(__dirname, "..", "standalone-scanner.html");
-    const fallbackPath = path.join(process.cwd(), "standalone-scanner.html");
-    const resolvedPath = fs.existsSync(scannerPath) ? scannerPath : fallbackPath;
-    if (!fs.existsSync(resolvedPath)) {
-      return res.status(404).json({ error: "Scanner file not found" });
-    }
-    // The Kinetic credential is a placeholder in source (never committed to git).
-    // Inject the real value from env at download time. Falls back to the main
-    // scan auth credential since it's the same Kinetic account.
-    let html = fs.readFileSync(resolvedPath, "utf-8");
-    const kineticBasic = process.env.SCANNER_KINETIC_BASIC || process.env.KFS_AUTH_BASIC || "";
-    html = html.split("__KINETIC_BASIC__").join(kineticBasic);
-    res.setHeader("Content-Disposition", "attachment; filename=kfs-rockwell-scanner.html");
-    res.setHeader("Content-Type", "text/html");
-    res.send(html);
-  });
-
-  // ── Bookmarklet/standalone scanner submit endpoint ──
-  // Accepts leads from the standalone scanner HTML page running in user's own browser.
-  // Uses a shared secret key instead of session auth (since it's a separate browser tab).
-  // POST /api/scan/submit-leads  { secret: string, leads: LeadPayload[] }
-  app.post("/api/scan/submit-leads", (req, res) => {
-    const submitSecret = process.env.SCANNER_SUBMIT_SECRET;
-    if (!submitSecret) return res.status(503).json({ error: "Submit secret not configured" });
-
-    const { secret, leads: incomingLeads } = req.body;
-    // Use timingSafeEqual to prevent timing-based secret enumeration attacks
-    if (!secret || typeof secret !== "string") {
-      return res.status(401).json({ error: "Invalid secret" });
-    }
-    const secretBuf = Buffer.from(secret);
-    const expectedBuf = Buffer.from(submitSecret);
-    const secretsMatch = secretBuf.length === expectedBuf.length &&
-      crypto.timingSafeEqual(secretBuf, expectedBuf);
-    if (!secretsMatch) {
-      return res.status(401).json({ error: "Invalid secret" });
-    }
-    if (!Array.isArray(incomingLeads) || incomingLeads.length === 0) {
-      return res.status(400).json({ error: "No leads provided" });
-    }
-
-    const saved: any[] = [];
-    const skipped: string[] = [];
-
-    for (const l of incomingLeads) {
-      // Only accept NEW FIBER leads where customer does not have service
-      if (!l.isNewFiber || l.billingStatus !== "N") {
-        skipped.push(l.address || "unknown");
-        continue;
-      }
-      // Check for duplicate
-      const existing = storage.getLeads().find(
-        (ex: any) => ex.address?.toLowerCase() === (l.address || "").toLowerCase()
-      );
-      if (existing) {
-        skipped.push(l.address);
-        continue;
-      }
-      try {
-        const lead = storage.createLead({
-          address: l.address,
-          city: l.city || "Rockwell",
-          state: l.state || "NC",
-          zip: l.zip || "28138",
-          lat: l.lat ?? null,
-          lng: l.lng ?? null,
-          fiberStatus: "new_fiber",
-          isNewFiber: true,
-          isTenured: false,
-          billingStatus: "N",
-          speedTier: l.speedTier ?? null,
-          maxDownloadMbps: l.maxDownloadMbps ?? null,
-          techType: l.techType ?? "FIBER",
-          chipSetType: l.chipSetType ?? null,
-          dfAddressId: l.dfAddressId ?? null,
-          accessId: l.accessId ?? null,
-          exchangeId: l.exchangeId ?? null,
-          leadStatus: "prospect",
-        });
-        saved.push(lead);
-      } catch (err: any) {
-        skipped.push(l.address);
-      }
-    }
-
-    res.json({ saved: saved.length, skipped: skipped.length, leads: saved });
-  });
 
   app.get("/api/scan/addresses", requireAuth, (_req, res) => {
     res.json(loadGisAddresses());

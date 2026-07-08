@@ -22,7 +22,6 @@ const FiberScanner = lazy(() => import("@/pages/FiberScanner"));
 const MapView = lazy(() => import("@/pages/MapView"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const CityScanner = lazy(() => import("@/pages/CityScanner"));
-const BrowserScanner = lazy(() => import("@/pages/BrowserScanner"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
@@ -110,11 +109,6 @@ function AppRoutes() {
           <Route path="/scanner">
             <Guard role={role} allowed={["admin", "manager"]}>
               <FiberScanner />
-            </Guard>
-          </Route>
-          <Route path="/browser-scan">
-            <Guard role={role} allowed={["admin", "manager"]}>
-              <BrowserScanner />
             </Guard>
           </Route>
           <Route path="/coming-soon">

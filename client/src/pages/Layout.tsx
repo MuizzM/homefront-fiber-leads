@@ -60,7 +60,6 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/usa-scan",     label: "USA Scanner",   icon: Globe,        show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
   { href: "/city-scan",    label: "City Scanner",  icon: Radar,        show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
   { href: "/cns-scanner",  label: "CNS Scanner",   icon: ScanSearch,   show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
-  { href: "/browser-scan", label: "Standalone Scanner", icon: Globe,  show: r => hasRole(r, "admin", "manager"),      group: "Scan" },
   // ── Manage ────────────────────────────────────────────────────────────────
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Applications",  icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },

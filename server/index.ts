@@ -35,10 +35,7 @@ app.set(
     : (process.env.NODE_ENV === "production" ? 1 : false),
 );
 
-// ── CORS — tight allowlist; standalone scanner uses secret not origin trust ───
-// We do NOT use origin:true — instead the submit-leads endpoint uses a
-// server-side secret validated with timingSafeEqual. CORS just lets the
-// pre-flight through; auth is enforced in the route handler.
+// ── CORS — tight origin allowlist ─────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
   process.env.APP_ORIGIN,
   "https://www.perplexity.ai",
@@ -51,12 +48,7 @@ function originAllowed(origin: string | undefined): boolean {
          origin.endsWith(".pplx.app");
 }
 
-// Submit-leads: allow cross-origin so standalone scanner HTML can POST;
-// actual auth is the SCANNER_SUBMIT_SECRET (timingSafeEqual), not origin.
-app.options("/api/scan/submit-leads", cors({ origin: true, methods: ["POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
-app.use("/api/scan/submit-leads", cors({ origin: true, methods: ["POST", "OPTIONS"], allowedHeaders: ["Content-Type"] }));
-
-// All other API routes: strict origin allowlist
+// All API routes: strict origin allowlist
 app.use("/api", cors({
   origin: (origin, cb) => cb(null, originAllowed(origin)),
   credentials: true,
@@ -131,7 +123,6 @@ const CSRF_EXEMPT = new Set([
   "/api/auth/setup",
   "/api/auth/login",
   "/api/auth/logout",
-  "/api/scan/submit-leads",   // uses its own secret
   "/api/onboarding/apply",    // public form
   "/join",
 ]);
@@ -190,7 +181,6 @@ function sanitizeVal(v: any): any {
 // "[redacted]", handing the map an invalid token and crashing MapView.
 const SANITIZE_EXEMPT_PATHS = new Set([
   "/api/config/map",
-  "/api/config/scanner-secret",
 ]);
 app.use((req, res, next) => {
   if (SANITIZE_EXEMPT_PATHS.has(req.path)) return next();

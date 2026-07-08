@@ -69,16 +69,6 @@ async function buildAll() {
     console.warn("Could not copy GIS addresses:", e);
   }
 
-  // Copy standalone scanner HTML to dist root
-  try {
-    await copyFile(
-      "standalone-scanner.html",
-      "dist/standalone-scanner.html"
-    );
-    console.log("copied standalone scanner to dist/");
-  } catch (e) {
-    console.warn("Could not copy standalone scanner:", e);
-  }
 
   // Copy join form directory to dist
   try {
