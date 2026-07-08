@@ -91,30 +91,30 @@ export default function ComingSoon() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-white">Coming Soon Pipeline</h1>
-          <p className="text-sm text-[#7a9ab5]">Track addresses where fiber isn't available yet — future lead pipeline</p>
+          <p className="text-sm text-muted-foreground">Track addresses where fiber isn't available yet — future lead pipeline</p>
         </div>
         {isManager && (
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" className="bg-[#3EA394] hover:bg-[#35897d] text-white" data-testid="button-add-coming-soon">
+              <Button size="sm" className="bg-primary hover:bg-primary/90 text-white" data-testid="button-add-coming-soon">
                 <Plus className="w-4 h-4 mr-2" /> Add Address
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-[#0a1e30] border-[#1a3a52] text-white">
+            <DialogContent className="bg-card border-border text-white">
               <DialogHeader><DialogTitle>Add to Pipeline</DialogTitle></DialogHeader>
               <div className="space-y-3">
-                <Input placeholder="Street address" value={form.address} onChange={e => setForm(f => ({...f, address: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-address" />
+                <Input placeholder="Street address" value={form.address} onChange={e => setForm(f => ({...f, address: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-address" />
                 <div className="grid grid-cols-2 gap-2">
-                  <Input placeholder="City" value={form.city} onChange={e => setForm(f => ({...f, city: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-city" />
-                  <Input placeholder="ZIP" value={form.zip} onChange={e => setForm(f => ({...f, zip: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-zip" />
+                  <Input placeholder="City" value={form.city} onChange={e => setForm(f => ({...f, city: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-city" />
+                  <Input placeholder="ZIP" value={form.zip} onChange={e => setForm(f => ({...f, zip: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-zip" />
                 </div>
                 <Select value={form.reason} onValueChange={v => setForm(f => ({...f, reason: v}))}>
-                  <SelectTrigger className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="select-reason"><SelectValue /></SelectTrigger>
-                  <SelectContent className="bg-[#0a1e30] border-[#1a3a52]">
+                  <SelectTrigger className="bg-secondary border-border text-white" data-testid="select-reason"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-card border-border">
                     {Object.entries(REASON_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Button onClick={() => addMutation.mutate(form)} disabled={addMutation.isPending || !form.address} className="w-full bg-[#3EA394] hover:bg-[#35897d] text-white" data-testid="button-submit-coming-soon">
+                <Button onClick={() => addMutation.mutate(form)} disabled={addMutation.isPending || !form.address} className="w-full bg-primary hover:bg-primary/90 text-white" data-testid="button-submit-coming-soon">
                   Add to Pipeline
                 </Button>
               </div>
@@ -125,23 +125,23 @@ export default function ComingSoon() {
 
       {/* Stats row */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <Card className="bg-[#0a1e30] border-[#1a3a52] lg:col-span-1">
+        <Card className="bg-card border-border lg:col-span-1">
           <CardContent className="p-3 text-center">
             <p className="text-2xl font-bold text-white">{addresses.filter(a => !a.fiberAvailable).length}</p>
-            <p className="text-xs text-[#7a9ab5]">Monitoring</p>
+            <p className="text-xs text-muted-foreground">Monitoring</p>
           </CardContent>
         </Card>
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardContent className="p-3 text-center">
             <p className="text-2xl font-bold text-emerald-400">{converted.length}</p>
-            <p className="text-xs text-[#7a9ab5]">Converted</p>
+            <p className="text-xs text-muted-foreground">Converted</p>
           </CardContent>
         </Card>
         {byReason.slice(0, 3).map(r => (
-          <Card key={r.reason} className="bg-[#0a1e30] border-[#1a3a52]">
+          <Card key={r.reason} className="bg-card border-border">
             <CardContent className="p-3 text-center">
               <p className="text-2xl font-bold text-white">{r.count}</p>
-              <p className="text-xs text-[#7a9ab5]">{r.label}</p>
+              <p className="text-xs text-muted-foreground">{r.label}</p>
             </CardContent>
           </Card>
         ))}
@@ -150,14 +150,14 @@ export default function ComingSoon() {
       {/* Filters */}
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#7a9ab5]" />
-          <Input placeholder="Search addresses..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 bg-[#0a1e30] border-[#1a3a52] text-white placeholder:text-[#4a6a82]" data-testid="input-search" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Input placeholder="Search addresses..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 bg-card border-border text-white placeholder:text-muted-foreground" data-testid="input-search" />
         </div>
         <div className="flex items-center gap-2">
-          <Filter className="w-4 h-4 text-[#7a9ab5]" />
+          <Filter className="w-4 h-4 text-muted-foreground" />
           <Select value={filterReason} onValueChange={setFilterReason}>
-            <SelectTrigger className="w-36 bg-[#0a1e30] border-[#1a3a52] text-[#7a9ab5]" data-testid="select-filter-reason"><SelectValue /></SelectTrigger>
-            <SelectContent className="bg-[#0a1e30] border-[#1a3a52]">
+            <SelectTrigger className="w-36 bg-card border-border text-muted-foreground" data-testid="select-filter-reason"><SelectValue /></SelectTrigger>
+            <SelectContent className="bg-card border-border">
               <SelectItem value="all">All Reasons</SelectItem>
               {Object.entries(REASON_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
             </SelectContent>
@@ -166,31 +166,31 @@ export default function ComingSoon() {
       </div>
 
       {/* Address table */}
-      <Card className="bg-[#0a1e30] border-[#1a3a52]">
+      <Card className="bg-card border-border">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-            <Wifi className="w-4 h-4 text-[#3EA394]" /> Monitored Addresses
-            <Badge className="bg-[#1a3a52] text-[#7a9ab5] border-[#2a4a62] ml-2">{filtered.length}</Badge>
+            <Wifi className="w-4 h-4 text-primary" /> Monitored Addresses
+            <Badge className="bg-secondary text-muted-foreground border-border ml-2">{filtered.length}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-14 bg-[#1a3a52]" />)}</div>
+            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-14 bg-secondary" />)}</div>
           ) : filtered.length === 0 ? (
             <div className="p-6 text-center">
-              <Wifi className="w-8 h-8 text-[#2a4a62] mx-auto mb-2" />
-              <p className="text-sm text-[#7a9ab5]">No addresses in pipeline{search ? " matching search" : ""}</p>
+              <Wifi className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground">No addresses in pipeline{search ? " matching search" : ""}</p>
             </div>
           ) : (
-            <div className="divide-y divide-[#1a3a52]">
+            <div className="divide-y divide-border">
               {filtered.map(a => (
                 <div key={a.id} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`coming-soon-row-${a.id}`}>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-white font-medium truncate">{a.address}</p>
-                    <p className="text-xs text-[#7a9ab5]">{a.city}, {a.state} {a.zip}</p>
+                    <p className="text-xs text-muted-foreground">{a.city}, {a.state} {a.zip}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    <Badge className={`text-xs ${REASON_COLORS[a.reason] ?? "bg-[#1a3a52] text-[#7a9ab5]"}`}>
+                    <Badge className={`text-xs ${REASON_COLORS[a.reason] ?? "bg-secondary text-muted-foreground"}`}>
                       {REASON_LABELS[a.reason] ?? a.reason}
                     </Badge>
                     {isManager && (
@@ -213,7 +213,7 @@ export default function ComingSoon() {
 
       {/* Converted section */}
       {converted.length > 0 && (
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
               <ArrowUpRight className="w-4 h-4 text-emerald-400" /> Converted to Leads
@@ -221,12 +221,12 @@ export default function ComingSoon() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="divide-y divide-[#1a3a52]">
+            <div className="divide-y divide-border">
               {converted.map(a => (
                 <div key={a.id} className="px-4 py-3 flex items-center justify-between" data-testid={`converted-row-${a.id}`}>
                   <div>
                     <p className="text-sm text-white">{a.address}</p>
-                    <p className="text-xs text-[#7a9ab5]">{a.city}, {a.state} {a.zip}</p>
+                    <p className="text-xs text-muted-foreground">{a.city}, {a.state} {a.zip}</p>
                   </div>
                   <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">Fiber Available</Badge>
                 </div>

@@ -158,12 +158,12 @@ export default function LiveMap() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-white">Live Field Map</h1>
-          <p className="text-sm text-[#7a9ab5]">Real-time rep locations · updates every 60 seconds</p>
+          <p className="text-sm text-muted-foreground">Real-time rep locations · updates every 60 seconds</p>
         </div>
         <div className="flex items-center gap-2">
           {/* Clocked in reps count */}
           {isManager && (
-            <Badge className={pings.length > 0 ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-[#1a3a52] text-[#7a9ab5] border-[#2a4a62]"}>
+            <Badge className={pings.length > 0 ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
               <Radio className="w-3 h-3 mr-1" /> {pings.length} active
             </Badge>
           )}
@@ -174,7 +174,7 @@ export default function LiveMap() {
                 Stop Sharing Location
               </Button>
             ) : (
-              <Button size="sm" className="bg-[#3EA394] hover:bg-[#35897d] text-white" onClick={startTracking} data-testid="button-start-tracking" disabled={!clockStatus?.clockedIn}>
+              <Button size="sm" className="bg-primary hover:bg-primary/90 text-white" onClick={startTracking} data-testid="button-start-tracking" disabled={!clockStatus?.clockedIn}>
                 <Navigation className="w-4 h-4 mr-2" />
                 {clockStatus?.clockedIn ? "Share My Location" : "Clock In First"}
               </Button>
@@ -186,11 +186,11 @@ export default function LiveMap() {
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         {/* Map */}
         <div className="lg:col-span-3">
-          <Card className="bg-[#0a1e30] border-[#1a3a52] overflow-hidden">
+          <Card className="bg-card border-border overflow-hidden">
             <div ref={mapContainer} style={{ height: "520px", width: "100%" }}>
               {!mapReady && (
                 <div className="h-full flex items-center justify-center">
-                  <Skeleton className="w-full h-full bg-[#1a3a52]" />
+                  <Skeleton className="w-full h-full bg-secondary" />
                 </div>
               )}
             </div>
@@ -201,33 +201,33 @@ export default function LiveMap() {
         <div className="space-y-4">
           {/* Rep list */}
           {isManager && (
-            <Card className="bg-[#0a1e30] border-[#1a3a52]">
+            <Card className="bg-card border-border">
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-                  <Users className="w-4 h-4 text-[#3EA394]" /> Reps in Field
+                  <Users className="w-4 h-4 text-primary" /> Reps in Field
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 {isLoading ? (
                   <div className="p-3 space-y-2">
-                    {[1,2,3].map(i => <Skeleton key={i} className="h-10 bg-[#1a3a52]" />)}
+                    {[1,2,3].map(i => <Skeleton key={i} className="h-10 bg-secondary" />)}
                   </div>
                 ) : pings.length === 0 ? (
-                  <p className="text-xs text-[#7a9ab5] px-3 pb-3">No active reps</p>
+                  <p className="text-xs text-muted-foreground px-3 pb-3">No active reps</p>
                 ) : (
-                  <div className="divide-y divide-[#1a3a52]">
+                  <div className="divide-y divide-border">
                     {pings.map(p => (
                       <div key={p.repId}
-                        className="px-3 py-2.5 flex items-center gap-2 cursor-pointer hover:bg-[#0f2438] transition-colors"
+                        className="px-3 py-2.5 flex items-center gap-2 cursor-pointer hover:bg-secondary/50 transition-colors"
                         onClick={() => mapRef.current?.flyTo({ center: [p.lng, p.lat], zoom: 15 })}
                         data-testid={`rep-ping-${p.repId}`}
                       >
-                        <div className="w-7 h-7 rounded-full bg-[#3EA394] flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                        <div className="w-7 h-7 rounded-full bg-primary flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
                           {p.repName.charAt(0)}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-xs text-white font-medium truncate">{p.repName}</p>
-                          <p className="text-xs text-[#7a9ab5]">{timeAgo(p.pingAt)}</p>
+                          <p className="text-xs text-muted-foreground">{timeAgo(p.pingAt)}</p>
                         </div>
                         <div className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />
                       </div>
@@ -240,14 +240,14 @@ export default function LiveMap() {
 
           {/* Rep self-status */}
           {!isManager && (
-            <Card className="bg-[#0a1e30] border-[#1a3a52]">
+            <Card className="bg-card border-border">
               <CardContent className="p-4 space-y-3">
                 <div className="flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-[#3EA394]" />
+                  <Clock className="w-4 h-4 text-primary" />
                   <span className="text-sm text-white font-medium">Field Status</span>
                 </div>
                 <div className="space-y-1">
-                  <Badge className={clockStatus?.clockedIn ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-[#1a3a52] text-[#7a9ab5] border-[#2a4a62]"}>
+                  <Badge className={clockStatus?.clockedIn ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-secondary text-muted-foreground border-border"}>
                     {clockStatus?.clockedIn ? "Clocked In" : "Clocked Out"}
                   </Badge>
                   {tracking && (
@@ -257,7 +257,7 @@ export default function LiveMap() {
                   )}
                 </div>
                 {clockStatus?.session && (
-                  <p className="text-xs text-[#7a9ab5]">
+                  <p className="text-xs text-muted-foreground">
                     Since {new Date(clockStatus.session.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                   </p>
                 )}
@@ -265,20 +265,20 @@ export default function LiveMap() {
             </Card>
           )}
 
-          <Card className="bg-[#0a1e30] border-[#1a3a52]">
+          <Card className="bg-card border-border">
             <CardContent className="p-4">
               <div className="flex items-center gap-2 mb-2">
-                <MapPin className="w-4 h-4 text-[#3EA394]" />
+                <MapPin className="w-4 h-4 text-primary" />
                 <span className="text-xs text-white font-medium">Map Legend</span>
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
-                  <div className="w-4 h-4 rounded-full bg-[#3EA394] border-2 border-white" />
-                  <span className="text-xs text-[#7a9ab5]">Active rep</span>
+                  <div className="w-4 h-4 rounded-full bg-primary border-2 border-white" />
+                  <span className="text-xs text-muted-foreground">Active rep</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full bg-emerald-400" />
-                  <span className="text-xs text-[#7a9ab5]">Online (last 15 min)</span>
+                  <span className="text-xs text-muted-foreground">Online (last 15 min)</span>
                 </div>
               </div>
             </CardContent>
