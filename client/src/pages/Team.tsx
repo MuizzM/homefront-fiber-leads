@@ -85,13 +85,21 @@ function fromMember(m: TeamMember): MemberForm {
 // Org rank — a member reports to someone strictly above them.
 const ROLE_RANK: Record<string, number> = { rep: 1, team_lead: 2, manager: 3 };
 
+// Which member roles each account role may create — mirrors the server check.
+// Admin hires managers; managers hire team leads + reps; team leads hire reps only.
+const HIRABLE_ROLES: Record<string, RepRole[]> = {
+  admin: ["rep", "team_lead", "manager"],
+  manager: ["rep", "team_lead"],
+  team_lead: ["rep"],
+};
+
 // ── Role picker card ──────────────────────────────────────────────────────────
-function RolePicker({ value, onChange }: { value: RepRole; onChange: (v: RepRole) => void }) {
+function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v: RepRole) => void; allowed: RepRole[] }) {
   return (
     <div className="space-y-2">
       <Label className="text-xs text-muted-foreground">Role *</Label>
       <div className="space-y-2">
-        {ROLES.map(r => {
+        {ROLES.filter(r => allowed.includes(r.value)).map(r => {
           const selected = value === r.value;
           return (
             <button
@@ -129,7 +137,7 @@ function RolePicker({ value, onChange }: { value: RepRole; onChange: (v: RepRole
 
 // ── Member form UI ────────────────────────────────────────────────────────────
 function MemberFormUI({
-  form, setForm, onSave, onCancel, saving, isEdit, team, selfId
+  form, setForm, onSave, onCancel, saving, isEdit, team, selfId, creatorRole
 }: {
   form: MemberForm;
   setForm: (f: MemberForm) => void;
@@ -139,9 +147,13 @@ function MemberFormUI({
   isEdit?: boolean;
   team: TeamMember[];
   selfId?: number;
+  creatorRole: string;
 }) {
   const set = (k: keyof MemberForm, v: string | boolean) =>
     setForm({ ...form, [k]: v });
+
+  // Only offer roles the current user is allowed to hire (admin → managers too)
+  const allowedRoles = HIRABLE_ROLES[creatorRole] ?? ["rep"];
 
   // Managers report to Admin (no picker). Reps → team lead/manager; team leads → manager.
   const showReportsTo = form.role === "rep" || form.role === "team_lead";
@@ -186,7 +198,7 @@ function MemberFormUI({
       </div>
 
       {/* Role picker — changing role resets the supervisor (eligibility changes) */}
-      <RolePicker value={form.role} onChange={v => setForm({ ...form, role: v, reportsToId: null })} />
+      <RolePicker value={form.role} onChange={v => setForm({ ...form, role: v, reportsToId: null })} allowed={allowedRoles} />
 
       {/* Reports To — who this member is under in the org chart */}
       {showReportsTo && (
@@ -522,6 +534,7 @@ export default function Team() {
             onCancel={() => setAddOpen(false)}
             saving={createMutation.isPending}
             team={team}
+            creatorRole={user?.role ?? "team_lead"}
           />
         </DialogContent>
       </Dialog>
@@ -542,6 +555,7 @@ export default function Team() {
               isEdit
               team={team}
               selfId={editMember.id}
+              creatorRole={user?.role ?? "team_lead"}
             />
           )}
         </DialogContent>

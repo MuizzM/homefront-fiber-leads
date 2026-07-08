@@ -191,6 +191,9 @@ export default function MapView() {
   // The style the map was actually created with. Prevents a redundant setStyle()
   // on first load (which would reload the whole style and blank the map).
   const appliedStyleRef = useRef<"dark" | "satellite">("satellite");
+  // Bumped after each style swap so lead pins + territories re-render onto the
+  // fresh style (setStyle wipes all sources/layers).
+  const [styleEpoch, setStyleEpoch] = useState(0);
 
   // Draw mode
   const [drawMode, setDrawMode] = useState(false);
@@ -229,6 +232,7 @@ export default function MapView() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const isRep = user?.role === "rep";
   const canManage = user?.role === "admin" || user?.role === "manager";
   // Admin, manager, and team lead can carve out areas and assign them to reps.
   const canAssign = user?.role === "admin" || user?.role === "manager" || user?.role === "team_lead";
@@ -425,6 +429,7 @@ export default function MapView() {
       zoom: 13,
     });
     mapRef.current = map; // claim immediately so a re-render can't spawn a second map
+    if (import.meta.env.DEV) (window as any).__map = map; // debug handle (dev only)
 
     // Force resize once container is definitely painted
     setTimeout(() => map.resize(), 100);
@@ -595,6 +600,10 @@ export default function MapView() {
 
       mapRef.current = map;
       setMapReady(true);
+      // Always re-trigger the lead-pin + territory data effects. setMapReady(true)
+      // is a no-op re-render if a previous map instance (HMR / re-init) already
+      // set it — the fresh source would then stay empty and no pins would show.
+      setStyleEpoch(e => e + 1);
     };
 
     // Run layer setup as soon as the STYLE is parsed — not on the full "load"
@@ -718,7 +727,6 @@ export default function MapView() {
     if (!src) return;
 
     let leadsToShow = leads;
-    const isRep = user?.role === "rep";
     if (!isAdmin && !isRep && user?.teamMemberId) {
       const myTerritories = territories.filter(t => t.repId === user.teamMemberId);
       if (myTerritories.length > 0) {
@@ -732,6 +740,13 @@ export default function MapView() {
           });
         });
       }
+    }
+
+    // Rep filter (admin/manager/team lead) — narrows the map pins, not just the list
+    if (canAssign && filterRep !== "all") {
+      leadsToShow = leadsToShow.filter(l =>
+        filterRep === "unassigned" ? !l.assignedRepId : l.assignedRepId === Number(filterRep)
+      );
     }
 
     const visibleLeads = filterStatus === "all"
@@ -749,7 +764,7 @@ export default function MapView() {
           properties: { id: l.id, status: l.leadStatus, address: l.address },
         })),
     });
-  }, [leads, team, mapReady, filterStatus, territories, isAdmin, user]);
+  }, [leads, team, mapReady, filterStatus, filterRep, canAssign, territories, isAdmin, user, styleEpoch]);
 
   // ── Auto-fit to leads once on first load (Sales Rabbit density view) ──────────
   // Centers/zooms the map so pins are visible the moment you open it. Runs once,
@@ -805,7 +820,7 @@ export default function MapView() {
         territoryLayersRef.current.push(srcId);
       } catch {}
     });
-  }, [territories, mapReady, showTerritories]);
+  }, [territories, mapReady, showTerritories, styleEpoch]);
 
   // ── Map style toggle ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -882,6 +897,9 @@ export default function MapView() {
         map.on("mouseleave", "lead-unclustered", () => { map.getCanvas().style.cursor = ""; });
       }
       lastRenderedCount.current = 0;
+      // Re-trigger the lead-pin setData + territory render effects — the new
+      // style starts with an empty source, so without this the pins vanish.
+      setStyleEpoch(e => e + 1);
     });
     map.setStyle(STYLE);
   }, [mapStyleMode, mapReady]);
@@ -937,16 +955,18 @@ export default function MapView() {
     if (!lassoMode) {
       // Clean up layers when exiting lasso mode without saving
       if (lassoPoints.length === 0) {
-        if (map.getLayer("lasso-fill")) map.removeLayer("lasso-fill");
-        if (map.getLayer("lasso-outline")) map.removeLayer("lasso-outline");
-        if (map.getSource("lasso-polygon")) map.removeSource("lasso-polygon");
+        try {
+          if (map.getLayer("lasso-fill")) map.removeLayer("lasso-fill");
+          if (map.getLayer("lasso-outline")) map.removeLayer("lasso-outline");
+          if (map.getSource("lasso-polygon")) map.removeSource("lasso-polygon");
+        } catch {}
         lassoLayerRef.current = false;
       }
-      map.getCanvas().style.cursor = "";
+      try { map.getCanvas().style.cursor = ""; } catch {}
       return;
     }
 
-    map.getCanvas().style.cursor = "crosshair";
+    try { map.getCanvas().style.cursor = "crosshair"; } catch {}
 
     // Point-in-polygon check for lasso
     function ptInPoly(lat: number, lng: number, poly: [number, number][]): boolean {
@@ -989,8 +1009,9 @@ export default function MapView() {
 
     map.on("click", onClick);
     return () => {
-      map.off("click", onClick);
-      map.getCanvas().style.cursor = "";
+      // Defensive: on unmount the map may already be removed (getCanvas → undefined)
+      try { map.off("click", onClick); } catch {}
+      try { map.getCanvas().style.cursor = ""; } catch {}
     };
   }, [lassoMode, mapReady, leads]);
 
@@ -1033,8 +1054,7 @@ export default function MapView() {
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !drawMode) return;
-    map.getCanvas().style.cursor = "crosshair";
-    map.dragPan.disable();
+    try { map.getCanvas().style.cursor = "crosshair"; map.dragPan.disable(); } catch {}
 
     const onDown = (e: mapboxgl.MapMouseEvent) => { drawingRef.current = true; drawStartRef.current = e.lngLat; };
     const onMove = (e: mapboxgl.MapMouseEvent) => {
@@ -1049,14 +1069,14 @@ export default function MapView() {
       setDrawnBBox({ minLng: Math.min(s.lng, c.lng), maxLng: Math.max(s.lng, c.lng), minLat: Math.min(s.lat, c.lat), maxLat: Math.max(s.lat, c.lat) });
       drawStartRef.current = null;
       setDrawMode(false);
-      map.getCanvas().style.cursor = "";
-      map.dragPan.enable();
+      try { map.getCanvas().style.cursor = ""; map.dragPan.enable(); } catch {}
     };
 
     map.on("mousedown", onDown); map.on("mousemove", onMove); map.on("mouseup", onUp);
     return () => {
-      map.off("mousedown", onDown); map.off("mousemove", onMove); map.off("mouseup", onUp);
-      map.getCanvas().style.cursor = ""; map.dragPan.enable();
+      // Defensive: on unmount the map may already be removed (getCanvas → undefined)
+      try { map.off("mousedown", onDown); map.off("mousemove", onMove); map.off("mouseup", onUp); } catch {}
+      try { map.getCanvas().style.cursor = ""; map.dragPan.enable(); } catch {}
     };
   }, [drawMode, mapReady, updateDrawLayer]);
 
@@ -1266,10 +1286,12 @@ export default function MapView() {
             <span className="text-xs font-semibold text-teal-400">{newFiberCount}</span>
             <span className="text-xs text-muted-foreground hidden sm:inline"> fiber</span>
           </div>
-          <div className="flex items-center gap-1">
-            <Users className="w-3 h-3 text-blue-400" />
-            <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>
-          </div>
+          {!isRep && (
+            <div className="flex items-center gap-1">
+              <Users className="w-3 h-3 text-blue-400" />
+              <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>
+            </div>
+          )}
         </div>
 
         {/* Actions */}
@@ -1349,9 +1371,11 @@ export default function MapView() {
             className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
             title="Reset map view"
           ><Home className="w-3 h-3" /></Button>
-          <Button size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground" onClick={() => setSidebarOpen(v => !v)} title="Toggle lead list">
-            <SlidersHorizontal className="w-3.5 h-3.5" />
-          </Button>
+          {!isRep && (
+            <Button size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground" onClick={() => setSidebarOpen(v => !v)} title="Toggle lead list">
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1583,8 +1607,8 @@ export default function MapView() {
           )}
         </div>
 
-        {/* ── LEAD SIDEBAR ── */}
-        {sidebarOpen && (
+        {/* ── LEAD SIDEBAR ── (hidden for reps — they get just the map) */}
+        {sidebarOpen && !isRep && (
           <div className="w-72 flex-shrink-0 flex flex-col border-l border-border bg-card overflow-hidden">
 
             {/* Sidebar header */}
@@ -1603,8 +1627,8 @@ export default function MapView() {
                 />
                 <Filter className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
               </div>
-              {/* Rep filter chips */}
-              {canManage && (
+              {/* Rep filter chips — admin, manager, team lead */}
+              {canAssign && (
                 <div className="flex flex-wrap gap-1">
                   {[
                     { id: "all", label: "All" },

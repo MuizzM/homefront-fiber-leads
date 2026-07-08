@@ -1134,10 +1134,22 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const tid = (req as any).user?.tenantId ?? undefined;
     res.json(storage.getTeamMembers(tid));
   });
+  // Which member roles each account role may create/promote to.
+  // Admin hires managers; managers hire team leads + reps; team leads hire reps only.
+  const HIRABLE_ROLES: Record<string, string[]> = {
+    admin: ["rep", "team_lead", "manager"],
+    manager: ["rep", "team_lead"],
+    team_lead: ["rep"],
+  };
   // Team lead, manager, and admin can add/edit reps
   app.post("/api/team", requireTeamLead, (req, res) => {
     const parsed = insertTeamMemberSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    const creatorRole = (req as any).user.role as string;
+    const newRole = parsed.data.role ?? "rep";
+    if (!(HIRABLE_ROLES[creatorRole] ?? []).includes(newRole)) {
+      return res.status(403).json({ error: `Your role cannot create a ${newRole.replace("_", " ")}` });
+    }
     res.status(201).json(storage.createTeamMember(parsed.data));
   });
   app.patch("/api/team/:id", requireTeamLead, (req, res) => {
@@ -1146,6 +1158,13 @@ export function registerRoutes(httpServer: Server, app: Express) {
     // A member cannot report to themselves
     if (req.body?.reportsToId != null && Number(req.body.reportsToId) === id) {
       return res.status(400).json({ error: "A member cannot report to themselves" });
+    }
+    // Role changes obey the same hiring hierarchy as creation
+    if (req.body?.role) {
+      const creatorRole = (req as any).user.role as string;
+      if (!(HIRABLE_ROLES[creatorRole] ?? []).includes(req.body.role)) {
+        return res.status(403).json({ error: `Your role cannot set a member to ${String(req.body.role).replace("_", " ")}` });
+      }
     }
     const updated = storage.updateTeamMember(id, req.body, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
