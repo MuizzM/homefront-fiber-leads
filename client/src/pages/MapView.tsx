@@ -4,7 +4,7 @@ declare const mapboxgl: any;
 import {
   Play, Square, RefreshCw, AlertCircle, Pencil, X,
   DoorOpen, UserCheck, Zap, CalendarClock, PhoneOff, Map as MapIcon, ShieldCheck, Bell,
-  ChevronRight, Home, Wifi, Signal, Users, Target, Filter, SlidersHorizontal
+  ChevronRight, Home, Wifi, Signal, Users, Target, Search
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -238,8 +238,7 @@ export default function MapView() {
   // Filter
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
-  // Sidebar
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
   const [sidebarSearch, setSidebarSearch] = useState("");
 
@@ -1262,20 +1261,27 @@ export default function MapView() {
   // ── Legend items ──────────────────────────────────────────────────────────
   // ── Fly to lead on map ────────────────────────────────────────────────────
   const flyToLead = useCallback((lead: MapPin) => {
-    if (!mapRef.current || !lead.lat || !lead.lng) return;
+    const map = mapRef.current;
+    if (!map || !lead.lat || !lead.lng) return;
+    const target: [number, number] = [lead.lng, lead.lat];
     setSelectedLeadId(lead.id);
-    mapRef.current.flyTo({ center: [lead.lng, lead.lat], zoom: 17, duration: 900, essential: true });
+    map.flyTo({ center: target, zoom: 17, duration: 900, essential: true });
     setTimeout(() => {
-      // Show popup via map layer instead of DOM marker ref
-      const map = mapRef.current;
-      if (!map) return;
+      if (!mapRef.current) return;
+      const m = mapRef.current;
+      // Fallback: if the animation was dropped (background tab, reduced motion),
+      // snap to the target so the pin always ends up centered.
+      const c = m.getCenter();
+      if (Math.abs(c.lng - target[0]) > 0.0006 || Math.abs(c.lat - target[1]) > 0.0006) {
+        m.jumpTo({ center: target, zoom: 17 });
+      }
       const tm = (window as any).__teamMembers ?? [];
       new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
-        .setLngLat([lead.lng, lead.lat])
+        .setLngLat(target)
         .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
-        .addTo(map);
+        .addTo(m);
     }, 950);
-  }, []);
+  }, [canAssign, user]);
 
   // Memoized so these full-array passes over all leads don't re-run on every
   // render (the map re-renders ~every 400ms during a scan).
@@ -1295,17 +1301,15 @@ export default function MapView() {
     [leads],
   );
 
-  const sidebarLeads = useMemo(() => {
-    const q = sidebarSearch.toLowerCase();
-    return leads.filter(l => {
-      const matchStatus = filterStatus === "all" || l.leadStatus === filterStatus;
-      const matchSearch = !q || l.address.toLowerCase().includes(q) || (l.city ?? "").toLowerCase().includes(q);
-      const matchRep = filterRep === "all" ? true
-        : filterRep === "unassigned" ? !l.assignedRepId
-        : l.assignedRepId === Number(filterRep);
-      return matchStatus && matchSearch && matchRep;
-    }).sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0));
-  }, [leads, filterStatus, sidebarSearch, filterRep]);
+  // On-map search — top matches for the search box dropdown (address or city).
+  const searchMatches = useMemo(() => {
+    const q = sidebarSearch.trim().toLowerCase();
+    if (!q) return [];
+    return leads
+      .filter(l => l.lat && l.lng && (l.address.toLowerCase().includes(q) || (l.city ?? "").toLowerCase().includes(q)))
+      .sort((a, b) => (b.leadScore ?? 0) - (a.leadScore ?? 0))
+      .slice(0, 8);
+  }, [leads, sidebarSearch]);
 
   // noToken is true only after we confirmed the token is unavailable (never during load)
   const noToken = mapTokenFailed;
@@ -1333,6 +1337,22 @@ export default function MapView() {
               <Users className="w-3 h-3 text-blue-400" />
               <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>
             </div>
+          )}
+          {/* Filter map pins by rep — admin/manager/team lead */}
+          {canAssign && (
+            <select
+              value={filterRep}
+              onChange={e => setFilterRep(e.target.value)}
+              data-testid="map-filter-rep"
+              className="h-7 bg-secondary border border-border rounded-md px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              title="Show only leads for a rep"
+            >
+              <option value="all">All reps</option>
+              <option value="unassigned">Unassigned ({leads.filter(l => !l.assignedRepId).length})</option>
+              {team.map((m: TeamMember) => (
+                <option key={m.id} value={String(m.id)}>{m.name} ({leads.filter(l => l.assignedRepId === m.id).length})</option>
+              ))}
+            </select>
           )}
         </div>
 
@@ -1413,11 +1433,6 @@ export default function MapView() {
             className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
             title="Reset map view"
           ><Home className="w-3 h-3" /></Button>
-          {!isRep && (
-            <Button size="sm" variant="ghost" className="h-7 px-2 text-muted-foreground" onClick={() => setSidebarOpen(v => !v)} title="Toggle lead list">
-              <SlidersHorizontal className="w-3.5 h-3.5" />
-            </Button>
-          )}
         </div>
       </div>
 
@@ -1594,6 +1609,52 @@ export default function MapView() {
             </div>
           )}
 
+          {/* ── On-map street/address search — flies to the matching lead ── */}
+          {mapReady && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 w-[min(420px,70vw)]">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
+                <input
+                  value={sidebarSearch}
+                  onChange={e => setSidebarSearch(e.target.value)}
+                  placeholder="Search a street or address…"
+                  data-testid="map-search"
+                  className="w-full bg-black/80 backdrop-blur-md border border-white/15 rounded-lg pl-9 pr-8 py-2 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-teal-400 shadow-lg"
+                />
+                {sidebarSearch && (
+                  <button onClick={() => setSidebarSearch("")}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white text-sm">×</button>
+                )}
+              </div>
+              {searchMatches.length > 0 && (
+                <div className="mt-1 bg-black/90 backdrop-blur-md border border-white/10 rounded-lg overflow-hidden shadow-2xl max-h-72 overflow-y-auto">
+                  {searchMatches.map(l => {
+                    const pin = PIN_COLORS[l.leadStatus] ?? PIN_COLORS.prospect;
+                    return (
+                      <button
+                        key={l.id}
+                        onClick={() => { flyToLead(l); setSidebarSearch(""); }}
+                        className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/10 transition-colors border-b border-white/5 last:border-0"
+                      >
+                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg }} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-[13px] text-white font-medium truncate">{l.address}</span>
+                          <span className="block text-[11px] text-white/50 truncate">{l.city}, {l.state} {l.zip}</span>
+                        </span>
+                        {l.fiberStatus === "new_fiber" && <span className="text-[9px] font-bold text-teal-400 flex-shrink-0">NEW</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {sidebarSearch.trim() && searchMatches.length === 0 && (
+                <div className="mt-1 bg-black/90 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white/50 shadow-xl">
+                  No lead matches “{sidebarSearch}”
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Pin legend + filter — bottom left, FiberFocus style */}
           {mapReady && (
             <div className="absolute bottom-8 left-3 bg-black/85 backdrop-blur-md rounded-xl p-3 z-10 min-w-[150px] shadow-xl border border-white/5">
@@ -1648,129 +1709,6 @@ export default function MapView() {
             </div>
           )}
         </div>
-
-        {/* ── LEAD SIDEBAR ── (hidden for reps — they get just the map) */}
-        {sidebarOpen && !isRep && (
-          <div className="w-72 flex-shrink-0 flex flex-col border-l border-border bg-card overflow-hidden">
-
-            {/* Sidebar header */}
-            <div className="px-3 pt-3 pb-2 border-b border-border flex-shrink-0">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-bold text-foreground uppercase tracking-wide">Leads</span>
-                <span className="text-[11px] text-muted-foreground">{sidebarLeads.length} shown</span>
-              </div>
-              {/* Search */}
-              <div className="relative mb-2">
-                <input
-                  value={sidebarSearch}
-                  onChange={e => setSidebarSearch(e.target.value)}
-                  placeholder="Search address…"
-                  className="w-full bg-background border border-border rounded-md pl-7 pr-2 py-1.5 text-[11px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-                <Filter className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
-              </div>
-              {/* Rep filter chips — admin, manager, team lead */}
-              {canAssign && (
-                <div className="flex flex-wrap gap-1">
-                  {[
-                    { id: "all", label: "All" },
-                    { id: "unassigned", label: `Unassigned (${leads.filter(l => !l.assignedRepId).length})` },
-                    ...team.map((m: TeamMember) => ({ id: String(m.id), label: `${m.name.split(" ")[0]} (${leads.filter(l => l.assignedRepId === m.id).length})` }))
-                  ].map(opt => (
-                    <button
-                      key={opt.id}
-                      onClick={() => setFilterRep(opt.id)}
-                      className="text-[10px] px-2 py-0.5 rounded-full border transition-all"
-                      style={{
-                        background: filterRep === opt.id ? "#3EA394" : "transparent",
-                        borderColor: filterRep === opt.id ? "#3EA394" : "#334155",
-                        color: filterRep === opt.id ? "#fff" : "#64748b",
-                        fontWeight: filterRep === opt.id ? 600 : 400,
-                      }}
-                    >{opt.label}</button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Lead list */}
-            <div className="flex-1 overflow-y-auto overscroll-contain" style={{ scrollbarWidth: "thin" }}>
-              {sidebarLeads.length === 0 && (
-                <div className="flex flex-col items-center justify-center h-32 text-center px-4">
-                  <Target className="w-6 h-6 text-muted-foreground/40 mb-2" />
-                  <p className="text-xs text-muted-foreground">No leads match filter</p>
-                </div>
-              )}
-              {sidebarLeads.map(lead => {
-                const pin = PIN_COLORS[lead.leadStatus] ?? PIN_COLORS.prospect;
-                const rep = team.find(m => m.id === lead.assignedRepId);
-                const isSelected = selectedLeadId === lead.id;
-                const speed = lead.maxDownloadMbps ? (lead.maxDownloadMbps >= 1000 ? `${lead.maxDownloadMbps/1000}G` : `${lead.maxDownloadMbps}M`) : null;
-                return (
-                  <div
-                    key={lead.id}
-                    onClick={() => flyToLead(lead)}
-                    className="px-3 py-2.5 border-b border-border cursor-pointer transition-colors"
-                    style={{ background: isSelected ? pin.bg + "12" : "transparent" }}
-                    onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLDivElement).style.background = "#ffffff08"; }}
-                    onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.background = isSelected ? pin.bg + "12" : "transparent"; }}
-                  >
-                    {/* Address row */}
-                    <div className="flex items-start gap-2 mb-1">
-                      <svg viewBox="0 0 18 24" width="10" height="14" className="flex-shrink-0 mt-0.5">
-                        <path d="M9 0C4.029 0 0 4.029 0 9C0 15 9 24 9 24C9 24 18 15 18 9C18 4.029 13.971 0 9 0Z"
-                          fill={pin.bg} stroke={pin.border} strokeWidth="1.5"/>
-                        <circle cx="9" cy="9" r="3.5" fill="white" fillOpacity="0.9"/>
-                      </svg>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[12px] font-semibold text-foreground leading-tight truncate">{lead.address}</div>
-                        <div className="text-[10px] text-muted-foreground">{lead.city}, {lead.state} {lead.zip}</div>
-                      </div>
-                    </div>
-
-                    {/* Badges row */}
-                    <div className="flex items-center gap-1 flex-wrap ml-3.5">
-                      <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold" style={{ background: pin.bg + "22", color: pin.bg }}>{pin.label}</span>
-                      {lead.fiberStatus === "new_fiber" && (
-                        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-teal-400/15 text-teal-400">NEW FIBER</span>
-                      )}
-                      {speed && <span className="px-1.5 py-0.5 rounded text-[10px] bg-sky-400/15 text-sky-400">{speed}</span>}
-                      {lead.competitorName && <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-400/10 text-amber-400 truncate max-w-[70px]">{lead.competitorName}</span>}
-                    </div>
-
-                    {/* Rep row */}
-                    {(rep || lead.leadScore >= 80) && (
-                      <div className="flex items-center justify-between mt-1 ml-3.5">
-                        {rep
-                          ? <span className="text-[10px] text-blue-400 flex items-center gap-1"><Users className="w-2.5 h-2.5" />{rep.name}</span>
-                          : <span />}
-                        {lead.leadScore >= 80 && (
-                          <span className="text-[10px] text-orange-400 font-semibold">🔥 Score {lead.leadScore}</span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Sidebar footer stats */}
-            <div className="px-3 py-2 border-t border-border flex-shrink-0 grid grid-cols-3 gap-1 text-center">
-              <div>
-                <div className="text-xs font-bold text-green-400">{newFiberCount}</div>
-                <div className="text-[9px] text-muted-foreground uppercase tracking-wide">New Fiber</div>
-              </div>
-              <div>
-                <div className="text-xs font-bold text-blue-400">{assignedCount}</div>
-                <div className="text-[9px] text-muted-foreground uppercase tracking-wide">Assigned</div>
-              </div>
-              <div>
-                <div className="text-xs font-bold text-orange-400">{leads.filter(l => (l.leadScore ?? 0) >= 80).length}</div>
-                <div className="text-[9px] text-muted-foreground uppercase tracking-wide">Hot</div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
