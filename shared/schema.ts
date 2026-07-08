@@ -77,14 +77,34 @@ export const territories = sqliteTable("territories", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   tenantId: integer("tenant_id"),
   name: text("name").notNull(),
-  repId: integer("rep_id").notNull(),
+  repId: integer("rep_id").notNull(),           // primary assignee (back-compat)
   polygon: text("polygon").notNull(),
   color: text("color").notNull().default("#3b82f6"),
+  status: text("status").notNull().default("active"), // draft|active|shared|completed|reclaimed|archived|unassigned
+  assigneeIds: text("assignee_ids"),            // JSON int[] — multi-rep
+  pastAssigneeIds: text("past_assignee_ids"),   // JSON int[] — reassignment history
+  completionNotes: text("completion_notes"),
+  hierarchyParentId: integer("hierarchy_parent_id"),
+  updatedAt: text("updated_at"),
+  completedAt: text("completed_at"),
+  reclaimedAt: text("reclaimed_at"),
+  archivedAt: text("archived_at"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export const insertTerritorySchema = createInsertSchema(territories).omit({ id: true, createdAt: true });
 export type InsertTerritory = z.infer<typeof insertTerritorySchema>;
 export type Territory = typeof territories.$inferSelect;
+
+// ── Territory events (immutable history) ──────────────────────────────────────
+export const territoryEvents = sqliteTable("territory_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  territoryId: integer("territory_id").notNull(),
+  actorUserId: integer("actor_user_id"),
+  type: text("type").notNull(),                  // created|assigned|shared|reclaimed|completed|archived|reassigned|lead_returned|renamed
+  payload: text("payload"),                      // JSON
+  at: text("at").notNull().default(new Date().toISOString()),
+});
+export type TerritoryEvent = typeof territoryEvents.$inferSelect;
 
 // ── Leads ─────────────────────────────────────────────────────────────────────
 export const leads = sqliteTable("leads", {
@@ -116,6 +136,10 @@ export const leads = sqliteTable("leads", {
   exchangeId: text("exchange_id"),
   addressCatalogDate: text("address_catalog_date"),
   assignedRepId: integer("assigned_rep_id"),
+  assignmentSource: text("assignment_source"),   // manual|lasso|territory-sync|direct|auto
+  assignedTerritoryId: integer("assigned_territory_id"),
+  assignedAt: text("assigned_at"),
+  unassignedAt: text("unassigned_at"),
   contactName: text("contact_name"),
   contactPhone: text("contact_phone"),
   contactEmail: text("contact_email"),

@@ -1,7 +1,7 @@
 import { db, rawDb } from "./db";
 import {
   leads, fiberChecks, teamMembers, knockLog,
-  users, sessions, otpCodes, territories, repApplications,
+  users, sessions, otpCodes, territories, territoryEvents, repApplications,
   territoryRequests, locationPings, clockSessions,
   comingSoonAddresses, commissions, commissionRates, activityLog, tenants,
   type Lead, type InsertLead,
@@ -68,6 +68,10 @@ export interface IStorage {
   // ── Territories ────────────────────────────────────────────────────────────
   getTerritories(tenantId?: number): Territory[];
   getTerritoriesByRep(repId: number): Territory[];
+  getTerritoryById(id: number): Territory | undefined;
+  getLeadsByTerritory(territoryId: number): Lead[];
+  addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void;
+  getTerritoryEvents(territoryId: number): any[];
   createTerritory(t: InsertTerritory): Territory;
   updateTerritory(id: number, updates: Partial<InsertTerritory>): Territory | undefined;
   deleteTerritory(id: number): boolean;
@@ -168,6 +172,27 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead ON knock_log(lead_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_rep ON knock_log(rep_id)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(lead_status)`,
+
+    // ── Territory ops: status lifecycle + multi-rep + history (SalesRabbit-grade) ──
+    // status: unassigned | active | shared | completed | reclaimed | archived | draft
+    `ALTER TABLE territories ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+    `ALTER TABLE territories ADD COLUMN assignee_ids TEXT`,        // JSON int[] — multi-rep (repId stays primary)
+    `ALTER TABLE territories ADD COLUMN past_assignee_ids TEXT`,   // JSON int[] — reassignment history
+    `ALTER TABLE territories ADD COLUMN completion_notes TEXT`,
+    `ALTER TABLE territories ADD COLUMN hierarchy_parent_id INTEGER`, // future parent/child
+    `ALTER TABLE territories ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE territories ADD COLUMN completed_at TEXT`,
+    `ALTER TABLE territories ADD COLUMN reclaimed_at TEXT`,
+    `ALTER TABLE territories ADD COLUMN archived_at TEXT`,
+    // Lead assignment provenance — lets reclaim distinguish direct vs area-sync leads
+    `ALTER TABLE leads ADD COLUMN assignment_source TEXT`,          // manual|lasso|territory-sync|direct|auto
+    `ALTER TABLE leads ADD COLUMN assigned_territory_id INTEGER`,
+    `ALTER TABLE leads ADD COLUMN assigned_at TEXT`,
+    `ALTER TABLE leads ADD COLUMN unassigned_at TEXT`,
+    // Immutable history — every territory lifecycle event is preserved forever
+    `CREATE TABLE IF NOT EXISTS territory_events (id INTEGER PRIMARY KEY AUTOINCREMENT, territory_id INTEGER NOT NULL, actor_user_id INTEGER, type TEXT NOT NULL, payload TEXT, at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_territory_events_terr ON territory_events(territory_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_leads_assigned_territory ON leads(assigned_territory_id)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -492,7 +517,31 @@ export class Storage implements IStorage {
     return (tenantId != null ? q.where(eq(territories.tenantId, tenantId)) : q).all();
   }
   getTerritoriesByRep(repId: number): Territory[] {
-    return db.select().from(territories).where(eq(territories.repId, repId)).all();
+    // A rep sees a territory if they're the primary repId OR in assignee_ids
+    // (multi-rep/shared), and it isn't archived.
+    return this.getTerritories().filter((t: any) => {
+      if (t.status === "archived") return false;
+      if (t.repId === repId) return true;
+      try { return (JSON.parse(t.assigneeIds || "[]") as number[]).includes(repId); } catch { return false; }
+    });
+  }
+  getTerritoryById(id: number): Territory | undefined {
+    return db.select().from(territories).where(eq(territories.id, id)).get();
+  }
+  // Leads currently linked to a territory (area-sync). Used by reclaim.
+  getLeadsByTerritory(territoryId: number): Lead[] {
+    return db.select().from(leads).where(eq(leads.assignedTerritoryId, territoryId)).all();
+  }
+  // Immutable territory history
+  addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void {
+    try {
+      rawDb.prepare("INSERT INTO territory_events (territory_id, actor_user_id, type, payload, at) VALUES (?,?,?,?,datetime('now'))")
+        .run(territoryId, actorUserId ?? null, type, payload != null ? JSON.stringify(payload) : null);
+    } catch (e: any) { console.warn("territory event log failed:", e.message); }
+  }
+  getTerritoryEvents(territoryId: number): any[] {
+    return rawDb.prepare("SELECT id, territory_id AS territoryId, actor_user_id AS actorUserId, type, payload, at FROM territory_events WHERE territory_id = ? ORDER BY at DESC, id DESC").all(territoryId)
+      .map((r: any) => ({ ...r, payload: r.payload ? (() => { try { return JSON.parse(r.payload); } catch { return null; } })() : null }));
   }
   createTerritory(t: InsertTerritory): Territory {
     return db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();

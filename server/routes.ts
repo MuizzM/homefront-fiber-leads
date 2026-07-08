@@ -31,15 +31,13 @@ try {
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema, insertCommissionSchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
+import { pointInPolygon } from "@shared/geo";
+import { can } from "@shared/permissions";
+import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 
-// Ray-cast point-in-polygon. Polygon points are stored/sent as [lng, lat].
-function pointInPolygon(lat: number, lng: number, poly: [number, number][]): boolean {
-  let hit = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
-    if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) hit = !hit;
-  }
-  return hit;
+function safeJson<T = number[]>(s: string | null | undefined): T | undefined {
+  if (!s) return undefined;
+  try { return JSON.parse(s) as T; } catch { return undefined; }
 }
 import { scanAddress, NEW_FIBER_ZIPS, FCC_DEPLOYMENT_PERIODS, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
@@ -1762,24 +1760,136 @@ export function registerRoutes(httpServer: Server, app: Express) {
   // territory and (b) assign every enclosed lead to that rep.
   // Body: { polygon: [lng,lat][], repId: number, name?: string }
   app.post("/api/territories/assign-area", requireTeamLead, (req, res) => {
-    const tid = (req as any).user?.tenantId ?? undefined;
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
     const { polygon, repId, name } = req.body as { polygon: [number, number][]; repId: number; name?: string };
     if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
     if (typeof repId !== "number") return res.status(400).json({ error: "repId required" });
     const rep = storage.getTeamMemberById(repId);
     if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
 
+    // Max-active-areas guard (company rule; recommended 3–5)
+    const activeForRep = storage.getTerritoriesByRep(repId).filter((t: any) => t.status === "active" || t.status === "shared").length;
+    if (!canRepTakeAnotherArea(activeForRep)) {
+      return res.status(409).json({ error: `${rep.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}). Reclaim one first.` });
+    }
+
+    const at = new Date().toISOString();
     const color = colorForRep(repId);
     const territory = storage.createTerritory({
       tenantId: tid ?? null, name: (name && name.trim()) || `${rep.name}'s area`,
       repId, polygon: JSON.stringify(polygon), color,
+      status: "active", assigneeIds: JSON.stringify([repId]), updatedAt: at,
     } as any);
+    storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId, name: territory.name });
 
     const enclosed = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon));
     let assigned = 0;
-    for (const l of enclosed) if (storage.updateLead(l.id, { assignedRepId: repId }, tid)) assigned++;
+    for (const l of enclosed) {
+      if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedAt: at } as any, tid)) assigned++;
+    }
+    storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, assigned });
 
     res.status(201).json({ territory, assigned, total: enclosed.length });
+  });
+
+  // ── Territory lifecycle: reclaim / complete / share / archive / history ──────
+  // POST /api/territories/:id/reclaim  { mode: "keep_leads"|"return_to_pool"|"reassign", newRepId? }
+  app.post("/api/territories/:id/reclaim", requireManager, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    if (!can(user?.role, "reclaim_territory")) return res.status(403).json({ error: "not allowed" });
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+
+    const mode = (req.body?.mode ?? "return_to_pool") as ReclaimMode;
+    const newRepId = req.body?.newRepId ?? req.body?.reassignToRepId ?? undefined;
+    if (mode === "reassign" && !newRepId) return res.status(400).json({ error: "newRepId required for reassign mode" });
+
+    const at = new Date().toISOString();
+    // Build the pure TerritoryState from DB rows, run the shared transition,
+    // then diff it back to the DB — the rules live in @shared/territory (tested).
+    const before = storage.getLeadsByTerritory(t.id);
+    const prev: TerritoryState = {
+      id: t.id,
+      status: ((t as any).status ?? "active") as TerritoryStatus,
+      repIds: safeJson((t as any).assigneeIds) ?? [t.repId],
+      color: t.color,
+      leads: before.map((l: any) => ({ id: l.id, assignedRepId: l.assignedRepId })),
+      history: [],
+    };
+    const next = reclaimTerritory(prev, mode, { actorId: user?.id ?? null, at, newRepId });
+
+    // Persist territory: keep repId as the last/new primary owner for color+history
+    const newPrimary = next.repIds[0] ?? t.repId;
+    const past = Array.from(new Set([...(safeJson<number[]>((t as any).pastAssigneeIds) ?? []), t.repId].filter(Boolean)));
+    storage.updateTerritory(t.id, {
+      status: next.status, repId: newPrimary,
+      assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
+      color: colorForRep(newPrimary), reclaimedAt: at, updatedAt: at,
+    } as any, tid);
+
+    // Persist only the leads whose rep actually changed
+    const beforeById = new Map(before.map((l: any) => [l.id, l.assignedRepId]));
+    let leadsAffected = 0;
+    for (const l of next.leads) {
+      if (beforeById.get(l.id) !== l.assignedRepId) {
+        storage.updateLead(l.id, {
+          assignedRepId: l.assignedRepId,
+          assignedTerritoryId: l.assignedRepId == null ? null : t.id,
+          assignmentSource: l.assignedRepId == null ? null : "territory-sync",
+          [l.assignedRepId == null ? "unassignedAt" : "assignedAt"]: at,
+        } as any, tid);
+        leadsAffected++;
+      }
+    }
+    storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected });
+
+    res.json({ ok: true, mode, status: next.status, leadsAffected });
+  });
+
+  // POST /api/territories/:id/complete { notes? }
+  app.post("/api/territories/:id/complete", requireTeamLead, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t) return res.status(404).json({ error: "not found" });
+    if (((t as any).status ?? "active") === "archived") return res.status(409).json({ error: "cannot complete an archived area" });
+    const at = new Date().toISOString();
+    storage.updateTerritory(t.id, { status: "completed", completedAt: at, updatedAt: at, completionNotes: req.body?.notes ?? null } as any, tid);
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "completed", { notes: req.body?.notes ?? null });
+    res.json({ ok: true, status: "completed" });
+  });
+
+  // POST /api/territories/:id/share { repIds: number[] } — multi-rep assignment
+  app.post("/api/territories/:id/share", requireManager, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t) return res.status(404).json({ error: "not found" });
+    const repIds: number[] = Array.isArray(req.body?.repIds) ? req.body.repIds.map(Number) : [];
+    const merged = Array.from(new Set([t.repId, ...repIds].filter(Boolean)));
+    const at = new Date().toISOString();
+    storage.updateTerritory(t.id, { status: merged.length > 1 ? "shared" : "active", assigneeIds: JSON.stringify(merged), updatedAt: at } as any, tid);
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged });
+    res.json({ ok: true, assigneeIds: merged });
+  });
+
+  // POST /api/territories/:id/archive
+  app.post("/api/territories/:id/archive", requireManager, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t) return res.status(404).json({ error: "not found" });
+    const at = new Date().toISOString();
+    storage.updateTerritory(t.id, { status: "archived", archivedAt: at, updatedAt: at } as any, tid);
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "archived", {});
+    res.json({ ok: true, status: "archived" });
+  });
+
+  // GET /api/territories/:id/history — full immutable event log
+  app.get("/api/territories/:id/history", requireTeamLead, (req, res) => {
+    res.json(storage.getTerritoryEvents(Number(req.params.id)));
   });
 
   app.patch("/api/territories/:id", requireTeamLead, (req, res) => {
