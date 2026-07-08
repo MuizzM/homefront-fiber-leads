@@ -240,6 +240,7 @@ export default function MapView() {
 
   // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
+  const [geocoding, setGeocoding] = useState(false); // street "go to" lookup in flight
   const [sidebarSearch, setSidebarSearch] = useState("");
 
   // Territory draw
@@ -1260,6 +1261,33 @@ export default function MapView() {
 
   // ── Legend items ──────────────────────────────────────────────────────────
   // ── Fly to lead on map ────────────────────────────────────────────────────
+  // Geocode an arbitrary street the user typed (admin only) and jump the map
+  // there so they can draw a cut-out box + scan. Costs 1 Mapbox geocode call.
+  const jumpToAddress = useCallback(async (q: string) => {
+    const query = q.trim();
+    if (!query || geocoding) return;
+    setGeocoding(true);
+    try {
+      const res = await apiRequest("GET", `/api/geocode?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      if (!res.ok || data.lng == null) { toast({ title: data.error || "Address not found", variant: "destructive" }); return; }
+      const map = mapRef.current;
+      if (map) {
+        map.flyTo({ center: [data.lng, data.lat], zoom: 16, duration: 900, essential: true });
+        setTimeout(() => {
+          const m = mapRef.current;
+          if (m && (Math.abs(m.getCenter().lng - data.lng) > 0.001)) m.jumpTo({ center: [data.lng, data.lat], zoom: 16 });
+        }, 950);
+      }
+      setSidebarSearch("");
+      toast({ title: `Jumped to ${data.placeName}`, description: isAdmin ? "Draw a Scan-Area box here, then scan for new fiber." : undefined });
+    } catch (e: any) {
+      toast({ title: "Address lookup failed", variant: "destructive" });
+    } finally {
+      setGeocoding(false);
+    }
+  }, [geocoding, toast, isAdmin]);
+
   const flyToLead = useCallback((lead: MapPin) => {
     const map = mapRef.current;
     if (!map || !lead.lat || !lead.lng) return;
@@ -1647,9 +1675,20 @@ export default function MapView() {
                   })}
                 </div>
               )}
-              {sidebarSearch.trim() && searchMatches.length === 0 && (
-                <div className="mt-1 bg-black/90 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white/50 shadow-xl">
-                  No lead matches “{sidebarSearch}”
+              {sidebarSearch.trim().length >= 3 && searchMatches.length === 0 && (
+                <div className="mt-1 bg-black/90 border border-white/10 rounded-lg overflow-hidden shadow-xl">
+                  <div className="px-3 py-2 text-[12px] text-white/50">No existing lead matches “{sidebarSearch}”</div>
+                  {isAdmin && (
+                    <button
+                      onClick={() => jumpToAddress(sidebarSearch)}
+                      disabled={geocoding}
+                      data-testid="map-search-goto"
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left border-t border-white/10 hover:bg-white/10 text-[13px] text-teal-300 disabled:opacity-60"
+                    >
+                      <Target className="w-3.5 h-3.5 flex-shrink-0" />
+                      {geocoding ? "Locating…" : <>Go to “{sidebarSearch}” on the map <span className="text-white/40 text-[11px]">then draw a Scan-Area box</span></>}
+                    </button>
+                  )}
                 </div>
               )}
             </div>

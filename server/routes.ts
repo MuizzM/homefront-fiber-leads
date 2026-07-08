@@ -438,6 +438,31 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json({ token });
   });
 
+  // ── Geocode a single street/address → map coordinates (admin) ──────────────
+  // ONE Mapbox forward-geocode per call. Lets an admin type a street they want
+  // to scan (e.g. "Bell Ridge Ct, Rockwell NC"), jump the map there, then draw
+  // a cut-out box. This is 1 request — nothing like the grid harvest that caused
+  // the big bill; Mapbox includes 100k free geocoding requests/month.
+  app.get("/api/geocode", requireAdmin, async (req, res) => {
+    const q = String(req.query.q ?? "").trim();
+    if (q.length < 3) return res.status(400).json({ error: "query too short" });
+    const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
+    if (!token) return res.status(503).json({ error: "Geocoding not configured" });
+    try {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(q)}.json` +
+        `?access_token=${token}&country=us&limit=1&types=address,neighborhood,locality,place`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return res.status(502).json({ error: `Mapbox geocoding failed: ${r.status}` });
+      const data = await r.json();
+      const f = data.features?.[0];
+      if (!f) return res.status(404).json({ error: `No match for “${q}”` });
+      const [lng, lat] = f.center;
+      res.json({ lng, lat, placeName: f.place_name ?? q });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
 
   // ── FCC-sourced Kinetic active build markets ───────────────────────────────
   // Active build zones from FCC BDC Jan 2025 → Jun 2025 delta analysis.
