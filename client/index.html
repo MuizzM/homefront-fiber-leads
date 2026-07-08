@@ -7,6 +7,15 @@
     <meta name="description" content="Home Front Solutions — direct-to-door field sales. Find new fiber, work territories, close deals." />
     <link rel="icon" type="image/png" href="/hfs-logo.png" />
     <meta name="theme-color" content="#0F2A44" />
+    <script>
+      // Apply saved theme before paint to avoid a flash (dark is the default).
+      (function () {
+        try {
+          var t = localStorage.getItem('hfs-theme');
+          document.documentElement.classList.add(t === 'light' ? 'light' : 'dark');
+        } catch (e) { document.documentElement.classList.add('dark'); }
+      })();
+    </script>
     <!-- Brand typography: Geist (matches homefrontsolutionsllc.com), loaded non-blocking -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

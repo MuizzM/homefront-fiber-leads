@@ -11,6 +11,8 @@ import {
   Radar,
   Trophy,
   LogOut,
+  Sun,
+  Moon,
   ShieldCheck,
   Crown,
   Star,
@@ -27,6 +29,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/lib/auth";
+import { useTheme } from "@/hooks/use-theme";
 
 // ── Brand mark — the Home Front Solutions house (teal roof, cream walls, orange
 // door + path). Crisp inline SVG so it scales anywhere with no image request.
@@ -116,6 +119,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, logout } = useAuth();
+  const { theme, toggle } = useTheme();
   const role = (user?.role ?? "rep") as AppRole;
   const isAdmin = role === "admin";
 
@@ -223,10 +227,18 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               <RoleBadge role={role} />
             </div>
             <button
+              onClick={toggle}
+              title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+              data-testid="button-theme-toggle"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            <button
               onClick={() => logout()}
               title="Sign out"
               data-testid="button-logout"
-              className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
               <LogOut size={14} />
             </button>

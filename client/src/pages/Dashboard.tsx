@@ -29,27 +29,42 @@ interface ActivityEntry {
   at: string;
 }
 
+// Soft tinted icon tiles keyed by semantic color — premium, theme-aware look.
+const TILE: Record<string, string> = {
+  teal:   "bg-primary/15 text-primary",
+  blue:   "bg-blue-500/15 text-blue-400",
+  purple: "bg-violet-500/15 text-violet-400",
+  amber:  "bg-amber-500/15 text-amber-400",
+  sky:    "bg-sky-500/15 text-sky-400",
+  orange: "bg-orange-500/15 text-orange-400",
+  rose:   "bg-rose-500/15 text-rose-400",
+  slate:  "bg-muted text-muted-foreground",
+};
+
 function StatCard({
   title, value, sub, icon: Icon, accent, loading
 }: {
   title: string; value: string | number; sub?: string;
-  icon: any; accent: string; loading?: boolean;
+  icon: any; accent: keyof typeof TILE; loading?: boolean;
 }) {
   return (
-    <Card className="bg-[#0a1e30] border-[#1a3a52]" data-testid={`stat-card-${title.toLowerCase().replace(/\s/g,"-")}`}>
+    <Card
+      className="bg-card border-border transition-all hover:border-primary/30 hover:shadow-lg hover:shadow-black/20 hover:-translate-y-0.5"
+      data-testid={`stat-card-${title.toLowerCase().replace(/\s/g,"-")}`}
+    >
       <CardContent className="p-5">
-        <div className="flex items-start justify-between">
+        <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
-            <p className="text-xs text-[#7a9ab5] uppercase tracking-wider font-medium mb-1">{title}</p>
+            <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold mb-1.5">{title}</p>
             {loading ? (
-              <Skeleton className="h-8 w-20 bg-[#1a3a52]" />
+              <Skeleton className="h-8 w-20" />
             ) : (
-              <p className="text-2xl font-bold text-white">{value}</p>
+              <p className="text-2xl font-bold text-foreground tabular-nums">{value}</p>
             )}
-            {sub && !loading && <p className="text-xs text-[#7a9ab5] mt-1">{sub}</p>}
+            {sub && !loading && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
           </div>
-          <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${accent}`}>
-            <Icon className="w-5 h-5 text-white" />
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${TILE[accent]}`}>
+            <Icon className="w-5 h-5" />
           </div>
         </div>
       </CardContent>
@@ -117,10 +132,10 @@ export default function Dashboard() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-white">
+          <h1 className="text-xl font-bold text-foreground">
             {isRep ? `Welcome back, ${user?.name?.split(" ")[0] ?? "Rep"}` : "Dashboard"}
           </h1>
-          <p className="text-sm text-[#7a9ab5]">
+          <p className="text-sm text-muted-foreground">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
             {isRep && " · Your personal dashboard"}
           </p>
@@ -129,7 +144,7 @@ export default function Dashboard() {
           <Badge
             className={stats.team.activeClockedIn > 0
               ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-              : "bg-[#1a3a52] text-[#7a9ab5] border-[#2a4a62]"}
+              : "bg-secondary text-muted-foreground border-border"}
             data-testid="badge-clocked-in"
           >
             {stats.team.activeClockedIn} reps in field
@@ -145,25 +160,25 @@ export default function Dashboard() {
       {/* KPI Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="New Fiber Leads" icon={Zap} accent="bg-[#3EA394]"
+          title="New Fiber Leads" icon={Zap} accent="teal"
           value={stats?.leads.newFiber ?? "—"}
           sub={`${stats?.leads.unassigned ?? 0} unassigned`}
           loading={statsLoading}
         />
         <StatCard
-          title="Knocks Today" icon={Target} accent="bg-blue-600"
+          title="Knocks Today" icon={Target} accent="blue"
           value={stats?.knocks.today ?? "—"}
           sub={`${stats?.knocks.todaySales ?? 0} sales today`}
           loading={statsLoading}
         />
         <StatCard
-          title="Week Sales" icon={TrendingUp} accent="bg-purple-600"
+          title="Week Sales" icon={TrendingUp} accent="purple"
           value={stats?.knocks.weekSales ?? "—"}
           sub="last 7 days"
           loading={statsLoading}
         />
         <StatCard
-          title="Pending Payout" icon={DollarSign} accent="bg-amber-600"
+          title="Pending Payout" icon={DollarSign} accent="amber"
           value={stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : "—"}
           sub={`$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid total`}
           loading={statsLoading}
@@ -173,25 +188,25 @@ export default function Dashboard() {
       {/* Second row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
-          title="Active Reps" icon={Users} accent="bg-[#0F2A44]"
+          title="Active Reps" icon={Users} accent="slate"
           value={stats?.team.activeClockedIn ?? "—"}
           sub={`of ${stats?.team.total ?? 0} total reps`}
           loading={statsLoading}
         />
         <StatCard
-          title="Total Leads" icon={MapPin} accent="bg-sky-600"
+          title="Total Leads" icon={MapPin} accent="sky"
           value={stats?.leads.total ?? "—"}
           sub={`${stats?.leads.sold ?? 0} sold`}
           loading={statsLoading}
         />
         <StatCard
-          title="Coming Soon" icon={Wifi} accent="bg-orange-600"
+          title="Coming Soon" icon={Wifi} accent="orange"
           value={stats?.comingSoon.total ?? "—"}
           sub={`${stats?.comingSoon.converted ?? 0} converted`}
           loading={statsLoading}
         />
         <StatCard
-          title="Field Hours Today" icon={Clock} accent="bg-rose-700"
+          title="Field Hours Today" icon={Clock} accent="rose"
           value={isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : "—"}
           sub="total clocked time"
           loading={statsLoading}
@@ -201,32 +216,32 @@ export default function Dashboard() {
       {/* Quick Actions — admin/manager only */}
       {isManager && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <a href="#/city-scan" className="group flex flex-col gap-2 rounded-xl border border-[#1a3a52] bg-[#0a1e30] p-4 hover:border-[#3EA394]/50 hover:bg-[#0f2438] transition-all">
-            <Radar className="w-5 h-5 text-[#3EA394]" />
+          <a href="#/city-scan" className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all">
+            <Radar className="w-5 h-5 text-primary" />
             <div>
-              <div className="text-sm font-semibold text-white">City Scan</div>
-              <div className="text-xs text-[#7a9ab5]">Find new fiber</div>
+              <div className="text-sm font-semibold text-foreground">City Scan</div>
+              <div className="text-xs text-muted-foreground">Find new fiber</div>
             </div>
           </a>
-          <a href="#/leads" className="group flex flex-col gap-2 rounded-xl border border-[#1a3a52] bg-[#0a1e30] p-4 hover:border-[#3EA394]/50 hover:bg-[#0f2438] transition-all">
+          <a href="#/leads" className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all">
             <MapPin className="w-5 h-5 text-sky-400" />
             <div>
-              <div className="text-sm font-semibold text-white">Leads</div>
-              <div className="text-xs text-[#7a9ab5]">{stats?.leads.unassigned ?? 0} unassigned</div>
+              <div className="text-sm font-semibold text-foreground">Leads</div>
+              <div className="text-xs text-muted-foreground">{stats?.leads.unassigned ?? 0} unassigned</div>
             </div>
           </a>
-          <a href="#/team" className="group flex flex-col gap-2 rounded-xl border border-[#1a3a52] bg-[#0a1e30] p-4 hover:border-[#3EA394]/50 hover:bg-[#0f2438] transition-all">
+          <a href="#/team" className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all">
             <Users className="w-5 h-5 text-purple-400" />
             <div>
-              <div className="text-sm font-semibold text-white">Team</div>
-              <div className="text-xs text-[#7a9ab5]">{stats?.team.total ?? 0} reps</div>
+              <div className="text-sm font-semibold text-foreground">Team</div>
+              <div className="text-xs text-muted-foreground">{stats?.team.total ?? 0} reps</div>
             </div>
           </a>
-          <a href="#/map" className="group flex flex-col gap-2 rounded-xl border border-[#1a3a52] bg-[#0a1e30] p-4 hover:border-[#3EA394]/50 hover:bg-[#0f2438] transition-all">
+          <a href="#/map" className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all">
             <Activity className="w-5 h-5 text-amber-400" />
             <div>
-              <div className="text-sm font-semibold text-white">Field Map</div>
-              <div className="text-xs text-[#7a9ab5]">{stats?.team.activeClockedIn ?? 0} active reps</div>
+              <div className="text-sm font-semibold text-foreground">Field Map</div>
+              <div className="text-xs text-muted-foreground">{stats?.team.activeClockedIn ?? 0} active reps</div>
             </div>
           </a>
         </div>
@@ -235,35 +250,35 @@ export default function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Activity Feed */}
         {isManager && (
-          <Card className="bg-[#0a1e30] border-[#1a3a52]">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-                <Activity className="w-4 h-4 text-[#3EA394]" />
+              <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Activity className="w-4 h-4 text-primary" />
                 Live Activity
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {actLoading ? (
                 <div className="px-4 pb-4 space-y-3">
-                  {[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-[#1a3a52]" />)}
+                  {[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-secondary" />)}
                 </div>
               ) : activity.length === 0 ? (
-                <p className="text-sm text-[#7a9ab5] px-4 pb-4">No recent activity</p>
+                <p className="text-sm text-muted-foreground px-4 pb-4">No recent activity</p>
               ) : (
-                <div className="divide-y divide-[#1a3a52]">
+                <div className="divide-y divide-border">
                   {activity.map(entry => (
-                    <div key={entry.id} className="px-4 py-3 flex items-start gap-3 hover:bg-[#0f2438] transition-colors" data-testid={`activity-entry-${entry.id}`}>
-                      <div className="w-7 h-7 rounded-full bg-[#1a3a52] flex items-center justify-center flex-shrink-0 mt-0.5">
-                        <Activity className="w-3 h-3 text-[#3EA394]" />
+                    <div key={entry.id} className="px-4 py-3 flex items-start gap-3 hover:bg-secondary/50 transition-colors" data-testid={`activity-entry-${entry.id}`}>
+                      <div className="w-7 h-7 rounded-full bg-secondary flex items-center justify-center flex-shrink-0 mt-0.5">
+                        <Activity className="w-3 h-3 text-primary" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs text-white font-medium">{entry.userName}</p>
-                        <p className="text-xs text-[#7a9ab5]">{actionLabel(entry.action)}</p>
+                        <p className="text-xs text-foreground font-medium">{entry.userName}</p>
+                        <p className="text-xs text-muted-foreground">{actionLabel(entry.action)}</p>
                         {entry.details?.address && (
-                          <p className="text-xs text-[#5a7a95] truncate">{entry.details.address}</p>
+                          <p className="text-xs text-muted-foreground truncate">{entry.details.address}</p>
                         )}
                       </div>
-                      <span className="text-xs text-[#4a6a82] flex-shrink-0">{timeAgo(entry.at)}</span>
+                      <span className="text-xs text-muted-foreground flex-shrink-0">{timeAgo(entry.at)}</span>
                     </div>
                   ))}
                 </div>
@@ -274,33 +289,33 @@ export default function Dashboard() {
 
         {/* Today's Clock Sessions */}
         {isManager && (
-          <Card className="bg-[#0a1e30] border-[#1a3a52]">
+          <Card className="bg-card border-border">
             <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-                <Calendar className="w-4 h-4 text-[#3EA394]" />
+              <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <Calendar className="w-4 h-4 text-primary" />
                 Today's Field Activity
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
               {clockSessions.filter((s: any) => s.date === today).length === 0 ? (
-                <div className="px-4 pb-4 flex items-center gap-2 text-[#7a9ab5]">
+                <div className="px-4 pb-4 flex items-center gap-2 text-muted-foreground">
                   <AlertCircle className="w-4 h-4" />
                   <p className="text-sm">No reps clocked in today</p>
                 </div>
               ) : (
-                <div className="divide-y divide-[#1a3a52]">
+                <div className="divide-y divide-border">
                   {clockSessions.filter((s: any) => s.date === today).map((s: any) => (
                     <div key={s.id} className="px-4 py-3 flex items-center justify-between" data-testid={`clock-session-${s.id}`}>
                       <div>
-                        <p className="text-sm text-white font-medium">{s.repName}</p>
-                        <p className="text-xs text-[#7a9ab5]">
+                        <p className="text-sm text-foreground font-medium">{s.repName}</p>
+                        <p className="text-xs text-muted-foreground">
                           In: {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                           {s.clockedOut ? ` · Out: ${new Date(s.clockedOut).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}` : ""}
                         </p>
                       </div>
                       <div className="text-right">
                         {s.clockedOut ? (
-                          <Badge className="bg-[#1a3a52] text-[#7a9ab5] border-[#2a4a62] text-xs">
+                          <Badge className="bg-secondary text-muted-foreground border-border text-xs">
                             {Math.floor((s.durationMinutes ?? 0) / 60)}h {(s.durationMinutes ?? 0) % 60}m
                           </Badge>
                         ) : (
