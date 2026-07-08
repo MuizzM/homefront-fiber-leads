@@ -78,70 +78,104 @@ function escapeHtml(v: unknown): string {
 }
 
 // ── Inline popup HTML builder ─────────────────────────────────────────────────
-function buildPopupHTML(lead: MapPin, team: TeamMember[], canAssign = true): string {
+// The field card that opens when a rep taps a pin. Built to be usable one-handed
+// in the field: big Directions / Call actions up top, then one-tap knock logging.
+function buildPopupHTML(
+  lead: MapPin,
+  team: TeamMember[],
+  opts: { canAssign?: boolean; currentRepId?: number | null } = {}
+): string {
+  const { canAssign = true, currentRepId = null } = opts;
   const pin = PIN_COLORS[lead.leadStatus] ?? PIN_COLORS.prospect;
   const assignedRep = team.find(m => m.id === lead.assignedRepId);
   const repOptions = team.filter(m => m.active)
     .map(m => `<option value="${m.id}" ${m.id === lead.assignedRepId ? "selected" : ""}>${escapeHtml(m.name)}</option>`)
     .join("");
 
-  // Tap the address → open turn-by-turn directions (Maps app on mobile).
+  // Tap the address / Directions → open turn-by-turn (Maps app on mobile).
   const dest = (lead.lat && lead.lng)
     ? `${lead.lat},${lead.lng}`
     : encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`);
   const dirUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+  const phone = lead.contactPhone ? String(lead.contactPhone).replace(/[^0-9+]/g, "") : "";
+
+  const speedTag = lead.maxDownloadMbps
+    ? `<span style="background:#0ea5e922;color:#38bdf8;border:1px solid #0ea5e944;border-radius:999px;padding:2px 8px;font-size:11px;font-weight:600;">${lead.maxDownloadMbps >= 1000 ? lead.maxDownloadMbps / 1000 + "G" : lead.maxDownloadMbps + "M"}</span>`
+    : "";
+
+  // Who a logged knock is credited to. Managers pick via the dropdown; reps are
+  // always credited to themselves (no dropdown shown for them).
+  const knockRep = canAssign ? "" : String(currentRepId ?? "");
+  const knockHint = canAssign
+    ? (assignedRep ? `Logs under ${escapeHtml(assignedRep.name)}` : "Pick a rep, then log")
+    : "Logs under you";
 
   return `
-    <div style="font-family:system-ui,sans-serif;font-size:13px;color:#e2e8f0;min-width:260px;max-width:300px;">
+    <div style="font-family:system-ui,sans-serif;font-size:13px;color:#e2e8f0;min-width:268px;max-width:300px;">
       <!-- Header -->
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-        <div style="width:14px;height:14px;border-radius:50%;background:${pin.bg};border:2px solid ${pin.border};flex-shrink:0;box-shadow:0 0 8px ${pin.bg}80;"></div>
-        <div>
-          <a href="${dirUrl}" target="_blank" rel="noopener" style="font-weight:700;font-size:13px;line-height:1.2;color:#5eead4;text-decoration:none;">${escapeHtml(lead.address)} ↗</a>
-          <div style="color:#94a3b8;font-size:11px;">${escapeHtml(lead.city)}, ${escapeHtml(lead.state)} ${escapeHtml(lead.zip)} · <span style="color:#5eead4;">tap address for directions</span></div>
+      <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:10px;">
+        <div style="width:12px;height:12px;margin-top:3px;border-radius:50%;background:${pin.bg};border:2px solid ${pin.border};flex-shrink:0;box-shadow:0 0 8px ${pin.bg}80;"></div>
+        <div style="min-width:0;">
+          <div style="font-weight:700;font-size:14px;line-height:1.2;color:#f1f5f9;">${escapeHtml(lead.address)}</div>
+          <div style="color:#94a3b8;font-size:11px;">${escapeHtml(lead.city)}, ${escapeHtml(lead.state)} ${escapeHtml(lead.zip)}</div>
         </div>
       </div>
 
-      <!-- Status + fiber -->
+      <!-- Status + fiber pills -->
       <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
-        <span style="background:${pin.bg}22;color:${pin.bg};border:1px solid ${pin.bg}44;border-radius:4px;padding:2px 7px;font-size:11px;font-weight:600;">${pin.label}</span>
-        ${lead.fiberStatus === "new_fiber" ? `<span style="background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;border-radius:4px;padding:2px 7px;font-size:11px;">NEW FIBER</span>` : ""}
-        ${lead.maxDownloadMbps ? `<span style="background:#0ea5e922;color:#38bdf8;border:1px solid #0ea5e944;border-radius:4px;padding:2px 7px;font-size:11px;">${lead.maxDownloadMbps >= 1000 ? lead.maxDownloadMbps/1000+"G" : lead.maxDownloadMbps+"M"}</span>` : ""}
+        <span style="background:${pin.bg}22;color:${pin.bg};border:1px solid ${pin.bg}44;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;">${pin.label}</span>
+        ${lead.fiberStatus === "new_fiber" ? `<span style="background:#22c55e22;color:#22c55e;border:1px solid #22c55e44;border-radius:999px;padding:2px 9px;font-size:11px;font-weight:600;">NEW FIBER</span>` : ""}
+        ${speedTag}
+        ${lead.competitorName ? `<span style="background:#f9731622;color:#fb923c;border:1px solid #f9731644;border-radius:999px;padding:2px 9px;font-size:11px;">vs ${escapeHtml(lead.competitorName)}</span>` : ""}
+      </div>
+
+      <!-- Primary actions: Directions + Call -->
+      <div style="display:flex;gap:6px;margin-bottom:10px;">
+        <a href="${dirUrl}" target="_blank" rel="noopener"
+          style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;background:#5eead422;color:#5eead4;border:1px solid #5eead444;border-radius:7px;padding:8px;font-size:12px;font-weight:600;text-decoration:none;">
+          🧭 Directions
+        </a>
+        ${phone ? `<a href="tel:${phone}"
+          style="flex:1;display:flex;align-items:center;justify-content:center;gap:5px;background:#3b82f622;color:#60a5fa;border:1px solid #3b82f644;border-radius:7px;padding:8px;font-size:12px;font-weight:600;text-decoration:none;">
+          📞 Call
+        </a>` : ""}
       </div>
 
       <!-- Contact -->
-      ${lead.contactName ? `<div style="color:#94a3b8;font-size:11px;margin-bottom:6px;">👤 ${escapeHtml(lead.contactName)}${lead.contactPhone ? ` · ${escapeHtml(lead.contactPhone)}` : ""}</div>` : ""}
+      ${lead.contactName ? `<div style="color:#94a3b8;font-size:11px;margin-bottom:8px;">👤 ${escapeHtml(lead.contactName)}${lead.contactPhone ? ` · ${escapeHtml(lead.contactPhone)}` : ""}</div>` : ""}
 
       <!-- Assign rep (managers/team leads only) -->
       ${canAssign ? `<div style="margin-bottom:8px;">
         <div style="color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px;">Assigned Rep</div>
-        <select id="assign-rep-${lead.id}" style="width:100%;background:#1e2430;color:#e2e8f0;border:1px solid #334155;border-radius:5px;padding:4px 6px;font-size:12px;">
-          <option value="">— Unassigned —</option>
-          ${repOptions}
-        </select>
+        <div style="display:flex;gap:6px;">
+          <select id="assign-rep-${lead.id}" style="flex:1;background:#1e2430;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:6px;font-size:12px;">
+            <option value="">— Unassigned —</option>
+            ${repOptions}
+          </select>
+          <button onclick="window.__assignRep(${lead.id})"
+            style="background:#f97316;color:white;border:none;border-radius:6px;padding:0 12px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+        </div>
       </div>` : ""}
 
-      <!-- Quick knock buttons -->
-      <div style="margin-bottom:8px;">
-        <div style="color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Log Door Knock</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;">
+      <!-- One-tap knock logging -->
+      <div style="margin-bottom:2px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px;">
+          <span style="color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:.05em;">Log Door Knock</span>
+          <span style="color:#64748b;font-size:10px;">${knockHint}</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
           ${OUTCOME_OPTIONS.map(o => `
             <button
-              onclick="window.__knockLead(${lead.id}, '${o.val}')"
-              style="background:${o.color}18;color:${o.color};border:1px solid ${o.color}40;border-radius:5px;padding:5px 4px;font-size:11px;font-weight:600;cursor:pointer;text-align:center;"
+              onclick="window.__knockLead(${lead.id}, '${o.val}', '${knockRep}')"
+              style="background:${o.color}18;color:${o.color};border:1px solid ${o.color}40;border-radius:6px;padding:8px 4px;font-size:12px;font-weight:600;cursor:pointer;text-align:center;"
+              onmousedown="this.style.background='${o.color}33'" onmouseup="this.style.background='${o.color}18'"
             >${o.label}</button>
           `).join("")}
         </div>
       </div>
 
       <!-- Notes -->
-      ${lead.notes ? `<div style="color:#94a3b8;font-size:11px;font-style:italic;border-top:1px solid #1e2430;padding-top:6px;">"${escapeHtml(lead.notes)}"</div>` : ""}
-
-      <!-- Save assign button (managers/team leads only) -->
-      ${canAssign ? `<button
-        onclick="window.__assignRep(${lead.id})"
-        style="width:100%;margin-top:8px;background:#f97316;color:white;border:none;border-radius:5px;padding:6px;font-size:12px;font-weight:600;cursor:pointer;"
-      >Save Assignment</button>` : ""}
+      ${lead.notes ? `<div style="color:#94a3b8;font-size:11px;font-style:italic;border-top:1px solid #1e2430;padding-top:6px;margin-top:8px;">"${escapeHtml(lead.notes)}"</div>` : ""}
     </div>
   `;
 }
@@ -368,16 +402,21 @@ export default function MapView() {
 
   // ── Expose global functions for popup button callbacks ────────────────────
   useEffect(() => {
-    (window as any).__knockLead = async (leadId: number, outcome: string) => {
-      const activeRep = (document.getElementById(`assign-rep-${leadId}`) as HTMLSelectElement)?.value;
-      if (!activeRep) {
-        toast({ title: "Select a rep first before logging a knock", variant: "destructive" });
+    (window as any).__knockLead = async (leadId: number, outcome: string, presetRep?: string) => {
+      // Resolve who the knock is credited to, in priority order:
+      //   1. the rep dropdown (managers/team leads), if present + chosen
+      //   2. presetRep passed from the button (reps → their own id)
+      //   3. the current user's own teamMemberId (rep logging their own knock)
+      const dropdown = (document.getElementById(`assign-rep-${leadId}`) as HTMLSelectElement)?.value;
+      const repId = dropdown || presetRep || (user?.teamMemberId ? String(user.teamMemberId) : "");
+      if (!repId) {
+        toast({ title: "Assign a rep to this lead first, then log the knock", variant: "destructive" });
         return;
       }
       try {
         const wasHome = outcome !== "not_home";
         await apiRequest("POST", `/api/leads/${leadId}/knock`, {
-          repId: Number(activeRep),
+          repId: Number(repId),
           wasHome,
           outcome,
           knockedAt: new Date().toISOString(),
@@ -409,7 +448,7 @@ export default function MapView() {
       delete (window as any).__knockLead;
       delete (window as any).__assignRep;
     };
-  }, [toast, qc]);
+  }, [toast, qc, user]);
 
   // ── Init Mapbox ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -429,7 +468,10 @@ export default function MapView() {
       zoom: 13,
     });
     mapRef.current = map; // claim immediately so a re-render can't spawn a second map
-    if (import.meta.env.DEV) (window as any).__map = map; // debug handle (dev only)
+    if (import.meta.env.DEV) {
+      (window as any).__map = map; // debug handle (dev only)
+      (window as any).__buildPopupHTML = buildPopupHTML;
+    }
 
     // Force resize once container is definitely painted
     setTimeout(() => map.resize(), 100);
@@ -592,7 +634,7 @@ export default function MapView() {
         while (Math.abs(e.lngLat.lng - coords[0]) > 180) { coords[0] += e.lngLat.lng > coords[0] ? 360 : -360; }
         new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
           .setLngLat(coords)
-          .setHTML(buildPopupHTML(lead, tm, canAssign))
+          .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
           .addTo(map);
       });
       map.on("mouseenter", "lead-unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
@@ -692,7 +734,7 @@ export default function MapView() {
       offset: [0, -42], closeButton: true,
       className: "sr-popup",
       maxWidth: "320px",
-    }).setHTML(buildPopupHTML(lead, allTeam, canAssign));
+    }).setHTML(buildPopupHTML(lead, allTeam, { canAssign, currentRepId: user?.teamMemberId ?? null }));
 
     popupsRef.current.set(lead.id, popup);
 
@@ -891,7 +933,7 @@ export default function MapView() {
           if (!lead) return;
           const tm = (window as any).__teamMembers ?? [];
           new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
-            .setLngLat(coords).setHTML(buildPopupHTML(lead, tm, canAssign)).addTo(map);
+            .setLngLat(coords).setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null })).addTo(map);
         });
         map.on("mouseenter", "lead-unclustered", () => { map.getCanvas().style.cursor = "pointer"; });
         map.on("mouseleave", "lead-unclustered", () => { map.getCanvas().style.cursor = ""; });
@@ -1230,7 +1272,7 @@ export default function MapView() {
       const tm = (window as any).__teamMembers ?? [];
       new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
         .setLngLat([lead.lng, lead.lat])
-        .setHTML(buildPopupHTML(lead, tm, canAssign))
+        .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
         .addTo(map);
     }, 950);
   }, []);
