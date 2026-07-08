@@ -33,7 +33,7 @@ function ElapsedTimer({ startTime }: { startTime: string }) {
   const m = Math.floor((elapsed % 3600) / 60);
   const s = elapsed % 60;
   return (
-    <span className="font-mono text-2xl font-bold text-[#3EA394]">
+    <span className="font-mono text-2xl font-bold text-primary">
       {String(h).padStart(2, "0")}:{String(m).padStart(2, "0")}:{String(s).padStart(2, "0")}
     </span>
   );
@@ -90,32 +90,32 @@ export default function ClockIn() {
     <div className="p-6 max-w-4xl mx-auto space-y-6">
       <div>
         <h1 className="text-xl font-bold text-white">Field Hours</h1>
-        <p className="text-sm text-[#7a9ab5]">Clock in/out tracker · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
+        <p className="text-sm text-muted-foreground">Clock in/out tracker · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
       </div>
 
       {/* Clock widget */}
-      <Card className="bg-[#0a1e30] border-[#1a3a52]">
+      <Card className="bg-card border-border">
         <CardContent className="p-6">
           {statusLoading ? (
-            <Skeleton className="h-24 bg-[#1a3a52]" />
+            <Skeleton className="h-24 bg-secondary" />
           ) : (
             <div className="flex flex-col sm:flex-row items-center justify-between gap-6">
               <div className="text-center sm:text-left">
                 <div className="flex items-center gap-3 mb-2">
-                  <div className={`w-3 h-3 rounded-full ${clockStatus?.clockedIn ? "bg-emerald-400 animate-pulse" : "bg-[#4a6a82]"}`} />
-                  <span className="text-sm text-[#7a9ab5] font-medium">
+                  <div className={`w-3 h-3 rounded-full ${clockStatus?.clockedIn ? "bg-emerald-400 animate-pulse" : "bg-muted-foreground"}`} />
+                  <span className="text-sm text-muted-foreground font-medium">
                     {clockStatus?.clockedIn ? "In the Field" : "Off Duty"}
                   </span>
                 </div>
                 {clockStatus?.clockedIn && clockStatus.session ? (
                   <div>
                     <ElapsedTimer startTime={clockStatus.session.clockedIn} />
-                    <p className="text-xs text-[#7a9ab5] mt-1">
+                    <p className="text-xs text-muted-foreground mt-1">
                       Started {new Date(clockStatus.session.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                     </p>
                   </div>
                 ) : (
-                  <p className="text-xl text-[#4a6a82]">Not clocked in</p>
+                  <p className="text-xl text-muted-foreground">Not clocked in</p>
                 )}
               </div>
               <div className="flex gap-3">
@@ -124,7 +124,7 @@ export default function ClockIn() {
                     size="lg"
                     onClick={() => clockInMutation.mutate()}
                     disabled={clockInMutation.isPending}
-                    className="bg-[#3EA394] hover:bg-[#35897d] text-white px-8"
+                    className="bg-primary hover:bg-primary/90 text-white px-8"
                     data-testid="button-clock-in"
                   >
                     <LogIn className="w-5 h-5 mr-2" />
@@ -151,47 +151,47 @@ export default function ClockIn() {
 
       {/* Summary stats */}
       <div className="grid grid-cols-3 gap-4">
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardContent className="p-4 text-center">
-            <Clock className="w-5 h-5 text-[#3EA394] mx-auto mb-1" />
+            <Clock className="w-5 h-5 text-primary mx-auto mb-1" />
             <p className="text-lg font-bold text-white">{formatDuration(todayMinutes)}</p>
-            <p className="text-xs text-[#7a9ab5]">Today</p>
+            <p className="text-xs text-muted-foreground">Today</p>
           </CardContent>
         </Card>
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardContent className="p-4 text-center">
             <TrendingUp className="w-5 h-5 text-blue-400 mx-auto mb-1" />
             <p className="text-lg font-bold text-white">{formatDuration(weekMinutes)}</p>
-            <p className="text-xs text-[#7a9ab5]">This Week</p>
+            <p className="text-xs text-muted-foreground">This Week</p>
           </CardContent>
         </Card>
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardContent className="p-4 text-center">
             <Users className="w-5 h-5 text-purple-400 mx-auto mb-1" />
             <p className="text-lg font-bold text-white">{isManager ? activeSessions.length : (clockStatus?.clockedIn ? 1 : 0)}</p>
-            <p className="text-xs text-[#7a9ab5]">{isManager ? "Active Now" : "My Status"}</p>
+            <p className="text-xs text-muted-foreground">{isManager ? "Active Now" : "My Status"}</p>
           </CardContent>
         </Card>
       </div>
 
       {/* Active sessions (manager) */}
       {isManager && activeSessions.length > 0 && (
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-              <Timer className="w-4 h-4 text-[#3EA394]" /> Currently in Field
+              <Timer className="w-4 h-4 text-primary" /> Currently in Field
               <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 ml-1">{activeSessions.length}</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="divide-y divide-[#1a3a52]">
+            <div className="divide-y divide-border">
               {activeSessions.map(s => (
                 <div key={s.id} className="px-4 py-3 flex items-center justify-between" data-testid={`active-session-${s.id}`}>
                   <div className="flex items-center gap-3">
                     <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
                     <div>
                       <p className="text-sm text-white font-medium">{s.repName ?? `Rep #${s.repId}`}</p>
-                      <p className="text-xs text-[#7a9ab5]">Since {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</p>
+                      <p className="text-xs text-muted-foreground">Since {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}</p>
                     </div>
                   </div>
                   <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">Active</Badge>
@@ -203,31 +203,31 @@ export default function ClockIn() {
       )}
 
       {/* Session history */}
-      <Card className="bg-[#0a1e30] border-[#1a3a52]">
+      <Card className="bg-card border-border">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-[#3EA394]" /> Session History
+            <Calendar className="w-4 h-4 text-primary" /> Session History
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {sessionsLoading ? (
-            <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-[#1a3a52]" />)}</div>
+            <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-secondary" />)}</div>
           ) : sessions.length === 0 ? (
-            <p className="text-sm text-[#7a9ab5] p-4">No sessions yet</p>
+            <p className="text-sm text-muted-foreground p-4">No sessions yet</p>
           ) : (
-            <div className="divide-y divide-[#1a3a52] max-h-80 overflow-y-auto">
+            <div className="divide-y divide-border max-h-80 overflow-y-auto">
               {sessions.filter(s => s.clockedOut).slice(0, 30).map(s => (
                 <div key={s.id} className="px-4 py-3 flex items-center justify-between" data-testid={`session-history-${s.id}`}>
                   <div>
-                    {isManager && <p className="text-xs text-[#3EA394] font-medium">{s.repName ?? `Rep #${s.repId}`}</p>}
+                    {isManager && <p className="text-xs text-primary font-medium">{s.repName ?? `Rep #${s.repId}`}</p>}
                     <p className="text-sm text-white">{new Date(s.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
-                    <p className="text-xs text-[#7a9ab5]">
+                    <p className="text-xs text-muted-foreground">
                       {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                       {" → "}
                       {s.clockedOut ? new Date(s.clockedOut).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : "—"}
                     </p>
                   </div>
-                  <Badge className="bg-[#1a3a52] text-[#7a9ab5] border-[#2a4a62] text-xs">
+                  <Badge className="bg-secondary text-muted-foreground border-border text-xs">
                     {formatDuration(s.durationMinutes ?? 0)}
                   </Badge>
                 </div>

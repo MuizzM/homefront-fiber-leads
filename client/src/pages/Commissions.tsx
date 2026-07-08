@@ -113,44 +113,44 @@ export default function Commissions() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-white">Commissions</h1>
-          <p className="text-sm text-[#7a9ab5]">Rep earnings and payout management</p>
+          <p className="text-sm text-muted-foreground">Rep earnings and payout management</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={exportCsv} className="border-[#1a3a52] text-[#7a9ab5] hover:bg-[#0a1e30]" data-testid="button-export-csv">
+          <Button variant="outline" size="sm" onClick={exportCsv} className="border-border text-muted-foreground hover:bg-card" data-testid="button-export-csv">
             <Download className="w-4 h-4 mr-2" /> Export CSV
           </Button>
           {user?.role === "admin" && (
             <Dialog open={rateOpen} onOpenChange={setRateOpen}>
               <DialogTrigger asChild>
-                <Button variant="outline" size="sm" className="border-[#1a3a52] text-[#7a9ab5] hover:bg-[#0a1e30]" data-testid="button-add-rate">
+                <Button variant="outline" size="sm" className="border-border text-muted-foreground hover:bg-card" data-testid="button-add-rate">
                   Rate Plans
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-[#0a1e30] border-[#1a3a52] text-white">
+              <DialogContent className="bg-card border-border text-white">
                 <DialogHeader><DialogTitle>Commission Rate Plans</DialogTitle></DialogHeader>
                 <div className="space-y-3">
                   {rates.map(r => (
-                    <div key={r.id} className="flex items-center justify-between p-3 bg-[#0F2A44] rounded-lg">
+                    <div key={r.id} className="flex items-center justify-between p-3 bg-secondary rounded-lg">
                       <div>
                         <p className="text-sm text-white font-medium">{r.name}</p>
-                        <p className="text-xs text-[#7a9ab5]">{r.role ?? "Custom"}</p>
+                        <p className="text-xs text-muted-foreground">{r.role ?? "Custom"}</p>
                       </div>
-                      <Badge className="bg-[#3EA394]/20 text-[#3EA394] border-[#3EA394]/30">${r.ratePerSale}/sale</Badge>
+                      <Badge className="bg-primary/20 text-primary border-primary/30">${r.ratePerSale}/sale</Badge>
                     </div>
                   ))}
-                  <div className="pt-3 border-t border-[#1a3a52] space-y-2">
-                    <p className="text-xs text-[#7a9ab5] font-medium uppercase tracking-wider">Add Rate Plan</p>
-                    <Input placeholder="Name" value={rateForm.name} onChange={e => setRateForm(f => ({...f, name: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-rate-name" />
+                  <div className="pt-3 border-t border-border space-y-2">
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Add Rate Plan</p>
+                    <Input placeholder="Name" value={rateForm.name} onChange={e => setRateForm(f => ({...f, name: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-rate-name" />
                     <Select value={rateForm.role} onValueChange={v => setRateForm(f => ({...f, role: v}))}>
-                      <SelectTrigger className="bg-[#0F2A44] border-[#1a3a52] text-white"><SelectValue /></SelectTrigger>
-                      <SelectContent className="bg-[#0a1e30] border-[#1a3a52]">
+                      <SelectTrigger className="bg-secondary border-border text-white"><SelectValue /></SelectTrigger>
+                      <SelectContent className="bg-card border-border">
                         <SelectItem value="rep">Rep</SelectItem>
                         <SelectItem value="team_lead">Team Lead</SelectItem>
                         <SelectItem value="manager">Manager</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Input placeholder="$ per sale" type="number" value={rateForm.ratePerSale} onChange={e => setRateForm(f => ({...f, ratePerSale: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-rate-amount" />
-                    <Button onClick={() => addRateMutation.mutate({ name: rateForm.name, role: rateForm.role, ratePerSale: Number(rateForm.ratePerSale), isActive: true })} className="w-full bg-[#3EA394] hover:bg-[#35897d] text-white" disabled={addRateMutation.isPending} data-testid="button-save-rate">
+                    <Input placeholder="$ per sale" type="number" value={rateForm.ratePerSale} onChange={e => setRateForm(f => ({...f, ratePerSale: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-rate-amount" />
+                    <Button onClick={() => addRateMutation.mutate({ name: rateForm.name, role: rateForm.role, ratePerSale: Number(rateForm.ratePerSale), isActive: true })} className="w-full bg-primary hover:bg-primary/90 text-white" disabled={addRateMutation.isPending} data-testid="button-save-rate">
                       Save Rate Plan
                     </Button>
                   </div>
@@ -161,26 +161,26 @@ export default function Commissions() {
           {isManager && (
             <Dialog open={addOpen} onOpenChange={setAddOpen}>
               <DialogTrigger asChild>
-                <Button size="sm" className="bg-[#3EA394] hover:bg-[#35897d] text-white" data-testid="button-add-commission">
+                <Button size="sm" className="bg-primary hover:bg-primary/90 text-white" data-testid="button-add-commission">
                   <Plus className="w-4 h-4 mr-2" /> Log Sale
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-[#0a1e30] border-[#1a3a52] text-white">
+              <DialogContent className="bg-card border-border text-white">
                 <DialogHeader><DialogTitle>Log Commission</DialogTitle></DialogHeader>
                 <div className="space-y-3">
                   <Select value={form.repId} onValueChange={v => setForm(f => ({...f, repId: v}))}>
-                    <SelectTrigger className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="select-rep"><SelectValue placeholder="Select Rep" /></SelectTrigger>
-                    <SelectContent className="bg-[#0a1e30] border-[#1a3a52]">
+                    <SelectTrigger className="bg-secondary border-border text-white" data-testid="select-rep"><SelectValue placeholder="Select Rep" /></SelectTrigger>
+                    <SelectContent className="bg-card border-border">
                       {members.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
-                  <Input type="number" placeholder="Amount ($)" value={form.amount} onChange={e => setForm(f => ({...f, amount: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-amount" />
-                  <Input type="date" value={form.saleDate} onChange={e => setForm(f => ({...f, saleDate: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-sale-date" />
-                  <Input placeholder="Notes (optional)" value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} className="bg-[#0F2A44] border-[#1a3a52] text-white" data-testid="input-notes" />
+                  <Input type="number" placeholder="Amount ($)" value={form.amount} onChange={e => setForm(f => ({...f, amount: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-amount" />
+                  <Input type="date" value={form.saleDate} onChange={e => setForm(f => ({...f, saleDate: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-sale-date" />
+                  <Input placeholder="Notes (optional)" value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-notes" />
                   {rates.length > 0 && (
-                    <p className="text-xs text-[#7a9ab5]">Rate plans: {rates.map(r => `${r.name}: $${r.ratePerSale}`).join(", ")}</p>
+                    <p className="text-xs text-muted-foreground">Rate plans: {rates.map(r => `${r.name}: $${r.ratePerSale}`).join(", ")}</p>
                   )}
-                  <Button onClick={() => addMutation.mutate({ repId: Number(form.repId), amount: Number(form.amount), saleDate: form.saleDate, notes: form.notes || null })} disabled={addMutation.isPending || !form.repId || !form.amount} className="w-full bg-[#3EA394] hover:bg-[#35897d] text-white" data-testid="button-submit-commission">
+                  <Button onClick={() => addMutation.mutate({ repId: Number(form.repId), amount: Number(form.amount), saleDate: form.saleDate, notes: form.notes || null })} disabled={addMutation.isPending || !form.repId || !form.amount} className="w-full bg-primary hover:bg-primary/90 text-white" data-testid="button-submit-commission">
                     Log Commission
                   </Button>
                 </div>
@@ -192,35 +192,35 @@ export default function Commissions() {
 
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-4">
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardContent className="p-4 flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-amber-600/20 flex items-center justify-center">
               <Clock className="w-4 h-4 text-amber-400" />
             </div>
             <div>
-              <p className="text-xs text-[#7a9ab5]">Pending</p>
+              <p className="text-xs text-muted-foreground">Pending</p>
               <p className="text-lg font-bold text-white" data-testid="stat-pending">${totalPending.toFixed(0)}</p>
             </div>
           </CardContent>
         </Card>
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardContent className="p-4 flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-blue-600/20 flex items-center justify-center">
               <CheckCircle className="w-4 h-4 text-blue-400" />
             </div>
             <div>
-              <p className="text-xs text-[#7a9ab5]">Approved</p>
+              <p className="text-xs text-muted-foreground">Approved</p>
               <p className="text-lg font-bold text-white" data-testid="stat-approved">${totalApproved.toFixed(0)}</p>
             </div>
           </CardContent>
         </Card>
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardContent className="p-4 flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-emerald-600/20 flex items-center justify-center">
               <DollarSign className="w-4 h-4 text-emerald-400" />
             </div>
             <div>
-              <p className="text-xs text-[#7a9ab5]">Total Paid</p>
+              <p className="text-xs text-muted-foreground">Total Paid</p>
               <p className="text-lg font-bold text-white" data-testid="stat-paid">${totalPaid.toFixed(0)}</p>
             </div>
           </CardContent>
@@ -229,22 +229,22 @@ export default function Commissions() {
 
       {/* Per-rep summary (manager only) */}
       {isManager && summary.filter(s => s.sales > 0).length > 0 && (
-        <Card className="bg-[#0a1e30] border-[#1a3a52]">
+        <Card className="bg-card border-border">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-[#3EA394]" /> Rep Earnings Summary
+              <TrendingUp className="w-4 h-4 text-primary" /> Rep Earnings Summary
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <div className="divide-y divide-[#1a3a52]">
+            <div className="divide-y divide-border">
               {summary.filter(s => s.sales > 0).sort((a, b) => b.total - a.total).map(s => (
                 <div key={s.repId} className="px-4 py-3 flex items-center justify-between" data-testid={`summary-rep-${s.repId}`}>
                   <div>
                     <p className="text-sm text-white font-medium">{s.repName}</p>
-                    <p className="text-xs text-[#7a9ab5]">{s.sales} sales · ${s.paid.toFixed(0)} paid</p>
+                    <p className="text-xs text-muted-foreground">{s.sales} sales · ${s.paid.toFixed(0)} paid</p>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-bold text-[#3EA394]">${s.total.toFixed(0)}</p>
+                    <p className="text-sm font-bold text-primary">${s.total.toFixed(0)}</p>
                     {s.pending > 0 && <p className="text-xs text-amber-400">${s.pending.toFixed(0)} pending</p>}
                   </div>
                 </div>
@@ -255,17 +255,17 @@ export default function Commissions() {
       )}
 
       {/* Commission Table */}
-      <Card className="bg-[#0a1e30] border-[#1a3a52]">
+      <Card className="bg-card border-border">
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
             <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-[#3EA394]" /> Commission Records
+              <DollarSign className="w-4 h-4 text-primary" /> Commission Records
             </CardTitle>
             <div className="flex items-center gap-2">
-              <Filter className="w-3 h-3 text-[#7a9ab5]" />
+              <Filter className="w-3 h-3 text-muted-foreground" />
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="h-7 w-28 bg-[#0F2A44] border-[#1a3a52] text-[#7a9ab5] text-xs" data-testid="select-filter"><SelectValue /></SelectTrigger>
-                <SelectContent className="bg-[#0a1e30] border-[#1a3a52]">
+                <SelectTrigger className="h-7 w-28 bg-secondary border-border text-muted-foreground text-xs" data-testid="select-filter"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-card border-border">
                   <SelectItem value="all">All</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
                   <SelectItem value="approved">Approved</SelectItem>
@@ -278,19 +278,19 @@ export default function Commissions() {
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-[#1a3a52]" />)}</div>
+            <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-secondary" />)}</div>
           ) : filtered.length === 0 ? (
-            <p className="text-sm text-[#7a9ab5] p-4">No commissions yet</p>
+            <p className="text-sm text-muted-foreground p-4">No commissions yet</p>
           ) : (
-            <div className="divide-y divide-[#1a3a52]">
+            <div className="divide-y divide-border">
               {filtered.map(c => (
                 <div key={c.id} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`commission-row-${c.id}`}>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="text-sm text-white font-medium">${c.amount.toFixed(2)}</p>
-                      <Badge className={`text-xs ${STATUS_COLORS[c.status] ?? "bg-[#1a3a52] text-[#7a9ab5]"}`}>{c.status}</Badge>
+                      <Badge className={`text-xs ${STATUS_COLORS[c.status] ?? "bg-secondary text-muted-foreground"}`}>{c.status}</Badge>
                     </div>
-                    <p className="text-xs text-[#7a9ab5]">Rep #{c.repId} · {c.saleDate}{c.notes ? ` · ${c.notes}` : ""}</p>
+                    <p className="text-xs text-muted-foreground">Rep #{c.repId} · {c.saleDate}{c.notes ? ` · ${c.notes}` : ""}</p>
                   </div>
                   {isManager && c.status === "pending" && (
                     <Button size="sm" variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 text-xs h-7" onClick={() => updateMutation.mutate({ id: c.id, status: "approved" })} data-testid={`button-approve-${c.id}`}>
