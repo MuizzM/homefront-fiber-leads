@@ -1154,14 +1154,13 @@ export default function MapView() {
       lastRenderedCount.current = status.results?.length ?? 0;
       let found = 0;
       for (const r of newRows) {
-        // Show ALL scan results as colored dots — not just new fiber
-        // Green pulsing = hot lead, yellow = coming soon, blue = upgrade, red = copper
         if (!r.lat || !r.lng) continue;
         if (bbox && !inBBox(r.lat, r.lng, bbox)) continue;
-        // Only skip tenured+subscriber and unknown (no dot spam)
-        if (r.fiberStatus === "unknown" && !r.isNewFiber) continue;
+        // Only surface NEW FIBER with no current subscriber — the green hot-lead
+        // pins. Everything else (tenured, copper, coming soon, upgrades) is skipped.
+        if (!(r.isNewFiber && r.billingStatus === "N")) continue;
         addScanDot(r);
-        if (r.isNewFiber && r.billingStatus === "N") found++;
+        found++;
       }
       if (found > 0) setNewFound(p => p + found);
 
