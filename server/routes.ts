@@ -52,6 +52,7 @@ import {
   type Capability, type Role,
 } from "@shared/capabilities";
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
+import { registerCommissionRoutes } from "./commissionRoutes";
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
 // Legacy flat rows (no effective_from) are treated as always-on flat plans.
@@ -517,6 +518,10 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 export function registerRoutes(_httpServer: Server, app: Express) {
+
+  // ── Weekly commission (Phase 2) internal API — injects the shared auth
+  // middleware so authorization matches the rest of the app. ────────────────────
+  registerCommissionRoutes(app, { requireAuth, requireCapability });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle

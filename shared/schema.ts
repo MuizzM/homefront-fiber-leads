@@ -28,6 +28,16 @@ export const tenants = sqliteTable("tenants", {
   maxReps: integer("max_reps").default(10),
   enrichmentApiKey: text("enrichment_api_key"),
   notes: text("notes"),
+  // ── Weekly commission workweek configuration (see shared/workweek.ts) ────────
+  // Historical statements snapshot these values, so changing them here never
+  // rewrites a past week (each statement keeps its own timezone + basis).
+  commissionTimezone: text("commission_timezone").notNull().default("America/New_York"),
+  commissionWeekStartsOn: integer("commission_week_starts_on").notNull().default(1), // 0=Sun..1=Mon
+  commissionWeekStartLocalTime: text("commission_week_start_local_time").notNull().default("00:00"),
+  commissionQualificationBasis: text("commission_qualification_basis").notNull().default("QUALIFIED_AT"),
+  commissionFinalizationDelayHours: integer("commission_finalization_delay_hours").notNull().default(0),
+  commissionCorrectionWindowDays: integer("commission_correction_window_days").notNull().default(30),
+  commissionAutoFinalizeEnabled: integer("commission_auto_finalize_enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
@@ -468,3 +478,152 @@ export const commissionRates = sqliteTable("commission_rates", {
 export const insertCommissionRateSchema = createInsertSchema(commissionRates).omit({ id: true, createdAt: true });
 export type InsertCommissionRate = z.infer<typeof insertCommissionRateSchema>;
 export type CommissionRate = typeof commissionRates.$inferSelect;
+
+// ════════════════════════════════════════════════════════════════════════════
+// WEEKLY COMMISSION (Phase 2) — versioned plans, effective-dated assignments,
+// a commissionable-sale ledger, and immutable weekly statements. DELIBERATELY
+// ISOLATED from `commissions`/`commissionRates` above and from any MLM/payout-
+// tree code: this is the retroactive-weekly rep-commission system driven by
+// shared/workweek.ts + shared/commissionTiers.ts. All money is integer CENTS.
+// ════════════════════════════════════════════════════════════════════════════
+
+// A commission plan's stable identity. Financial rules live in immutable
+// versions — the plan itself is just name/type/status.
+export const commissionPlans = sqliteTable("commission_plans", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  currency: text("currency").notNull().default("USD"),  // ISO 4217
+  type: text("type").notNull().default("TIERED"),        // FLAT | TIERED
+  tierMode: text("tier_mode").notNull().default("RETROACTIVE_WEEKLY"), // RETROACTIVE_WEEKLY | PROGRESSIVE
+  status: text("status").notNull().default("DRAFT"),     // DRAFT | ACTIVE | ARCHIVED
+  createdBy: integer("created_by"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type CommissionPlan = typeof commissionPlans.$inferSelect;
+
+// Immutable version of a plan's financial rules. A rate/tier/type/basis change
+// creates a NEW version — never an in-place edit of an ACTIVE version.
+export const commissionPlanVersions = sqliteTable("commission_plan_versions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  commissionPlanId: integer("commission_plan_id").notNull(),
+  versionNumber: integer("version_number").notNull(),
+  flatRateCents: integer("flat_rate_cents"),             // FLAT plans only
+  qualificationBasis: text("qualification_basis").notNull().default("QUALIFIED_AT"),
+  effectiveFrom: text("effective_from").notNull(),        // ISO date
+  effectiveTo: text("effective_to"),                     // null = open-ended
+  rulesSnapshot: text("rules_snapshot"),                 // JSON: {type,tierMode,flatRateCents,tiers[]}
+  changeSummary: text("change_summary"),
+  createdBy: integer("created_by"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type CommissionPlanVersion = typeof commissionPlanVersions.$inferSelect;
+
+// Retroactive-weekly tiers for a plan version (validated by shared/commissionTiers.ts).
+export const commissionTiers = sqliteTable("commission_tiers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  commissionPlanVersionId: integer("commission_plan_version_id").notNull(),
+  position: integer("position").notNull(),
+  label: text("label").notNull(),
+  minimumSales: integer("minimum_sales").notNull(),      // whole ≥ 1
+  maximumSales: integer("maximum_sales"),                // null = open-ended final tier
+  rateCents: integer("rate_cents").notNull(),            // > 0
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type CommissionTierRow = typeof commissionTiers.$inferSelect;
+
+// Effective-dated assignment of a plan VERSION to a rep. No overlapping active
+// periods for a rep. Agreement acceptance snapshot captured on accept.
+export const repCommissionAssignments = sqliteTable("rep_commission_assignments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),                    // team_members.id
+  commissionPlanVersionId: integer("commission_plan_version_id").notNull(),
+  effectiveFrom: text("effective_from").notNull(),        // ISO date
+  effectiveTo: text("effective_to"),                     // null = open-ended
+  assignedBy: integer("assigned_by"),
+  acceptedAt: text("accepted_at"),
+  agreementSnapshot: text("agreement_snapshot"),          // JSON, captured on acceptance
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type RepCommissionAssignment = typeof repCommissionAssignments.$inferSelect;
+
+// Commissionable-sale ledger. NEW table (not knock_log): knock_log is an
+// append-only knock-event log with no sale-qualification lifecycle or
+// attribution timestamps; coupling those in would be unsafe. Reversals retain
+// the row (status flip), never a physical delete.
+export const commissionSales = sqliteTable("commission_sales", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),                    // team_members.id
+  externalId: text("external_id").notNull(),             // idempotency key (unique per tenant)
+  status: text("status").notNull().default("PENDING"),   // PENDING|QUALIFIED|CANCELLED|REVERSED|DISQUALIFIED
+  soldAt: text("sold_at").notNull(),
+  qualifiedAt: text("qualified_at"),
+  installedAt: text("installed_at"),
+  activatedAt: text("activated_at"),
+  reversedAt: text("reversed_at"),
+  disqualificationReason: text("disqualification_reason"),
+  leadId: integer("lead_id"),                            // optional link to leads
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type CommissionSale = typeof commissionSales.$inferSelect;
+
+// Immutable weekly statement. Snapshots timezone/basis/plan so it never changes
+// if org config changes later. finalCommissionCents = gross + adjustment.
+export const commissionStatements = sqliteTable("commission_statements", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),
+  weekStartUtc: text("week_start_utc").notNull(),         // inclusive
+  nextWeekStartUtc: text("next_week_start_utc").notNull(), // exclusive
+  timezone: text("timezone").notNull(),
+  localWeekLabel: text("local_week_label").notNull(),
+  qualificationBasis: text("qualification_basis").notNull(),
+  commissionPlanId: integer("commission_plan_id"),
+  commissionPlanVersionId: integer("commission_plan_version_id"),
+  planVersionNumber: integer("plan_version_number"),
+  planSnapshot: text("plan_snapshot"),                   // JSON — reproduces the calc
+  qualifiedSaleCount: integer("qualified_sale_count").notNull().default(0),
+  tierId: integer("tier_id"),
+  tierLabel: text("tier_label"),
+  rateCents: integer("rate_cents").notNull().default(0),
+  grossCommissionCents: integer("gross_commission_cents").notNull().default(0),
+  adjustmentCents: integer("adjustment_cents").notNull().default(0),
+  finalCommissionCents: integer("final_commission_cents").notNull().default(0),
+  calculationVersion: integer("calculation_version").notNull().default(1),
+  status: text("status").notNull().default("OPEN"),      // OPEN|REVIEW|FINALIZED|PAID
+  calculatedAt: text("calculated_at").notNull().default(new Date().toISOString()),
+  finalizedAt: text("finalized_at"),
+  finalizedBy: integer("finalized_by"),
+  paidAt: text("paid_at"),
+  paidBy: integer("paid_by"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type CommissionStatement = typeof commissionStatements.$inferSelect;
+
+// Append-only adjustments. Only APPROVED adjustments feed adjustmentCents.
+export const commissionAdjustments = sqliteTable("commission_adjustments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  statementId: integer("statement_id").notNull(),
+  repId: integer("rep_id").notNull(),
+  amountCents: integer("amount_cents").notNull(),        // + or − ; never 0
+  type: text("type").notNull().default("MANUAL"),        // MANUAL|CLAWBACK|CORRECTION|BONUS
+  reason: text("reason").notNull(),
+  relatedSaleId: integer("related_sale_id"),
+  status: text("status").notNull().default("PENDING"),   // PENDING|APPROVED|REJECTED
+  createdBy: integer("created_by"),
+  approvedBy: integer("approved_by"),
+  approvedAt: text("approved_at"),
+  rejectedBy: integer("rejected_by"),
+  rejectedAt: text("rejected_at"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type CommissionAdjustment = typeof commissionAdjustments.$inferSelect;

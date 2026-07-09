@@ -286,6 +286,38 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_location_pings_rep ON location_pings(rep_id, ping_at)`,
     `CREATE INDEX IF NOT EXISTS idx_commissions_rep ON commissions(rep_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_knocked_at ON knock_log(knocked_at)`,
+
+    // ══ WEEKLY COMMISSION (Phase 2) — additive; isolated from the old commission system ══
+    // Org workweek config on tenants (safe backfill via NOT NULL DEFAULT).
+    `ALTER TABLE tenants ADD COLUMN commission_timezone TEXT NOT NULL DEFAULT 'America/New_York'`,
+    `ALTER TABLE tenants ADD COLUMN commission_week_starts_on INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE tenants ADD COLUMN commission_week_start_local_time TEXT NOT NULL DEFAULT '00:00'`,
+    `ALTER TABLE tenants ADD COLUMN commission_qualification_basis TEXT NOT NULL DEFAULT 'QUALIFIED_AT'`,
+    `ALTER TABLE tenants ADD COLUMN commission_finalization_delay_hours INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE tenants ADD COLUMN commission_correction_window_days INTEGER NOT NULL DEFAULT 30`,
+    `ALTER TABLE tenants ADD COLUMN commission_auto_finalize_enabled INTEGER NOT NULL DEFAULT 0`,
+
+    `CREATE TABLE IF NOT EXISTS commission_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, currency TEXT NOT NULL DEFAULT 'USD', type TEXT NOT NULL DEFAULT 'TIERED', tier_mode TEXT NOT NULL DEFAULT 'RETROACTIVE_WEEKLY', status TEXT NOT NULL DEFAULT 'DRAFT', created_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_commission_plans_tenant ON commission_plans(tenant_id, status)`,
+
+    `CREATE TABLE IF NOT EXISTS commission_plan_versions (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, commission_plan_id INTEGER NOT NULL, version_number INTEGER NOT NULL, flat_rate_cents INTEGER, qualification_basis TEXT NOT NULL DEFAULT 'QUALIFIED_AT', effective_from TEXT NOT NULL, effective_to TEXT, rules_snapshot TEXT, change_summary TEXT, created_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_cpv_plan_version ON commission_plan_versions(commission_plan_id, version_number)`,
+
+    `CREATE TABLE IF NOT EXISTS commission_tiers (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, commission_plan_version_id INTEGER NOT NULL, position INTEGER NOT NULL, label TEXT NOT NULL, minimum_sales INTEGER NOT NULL, maximum_sales INTEGER, rate_cents INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_tiers_version_min ON commission_tiers(commission_plan_version_id, minimum_sales)`,
+
+    `CREATE TABLE IF NOT EXISTS rep_commission_assignments (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, commission_plan_version_id INTEGER NOT NULL, effective_from TEXT NOT NULL, effective_to TEXT, assigned_by INTEGER, accepted_at TEXT, agreement_snapshot TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_rca_tenant_rep_from ON rep_commission_assignments(tenant_id, rep_id, effective_from)`,
+
+    `CREATE TABLE IF NOT EXISTS commission_sales (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, external_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', sold_at TEXT NOT NULL, qualified_at TEXT, installed_at TEXT, activated_at TEXT, reversed_at TEXT, disqualification_reason TEXT, lead_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_tenant_external ON commission_sales(tenant_id, external_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_sales_agg ON commission_sales(tenant_id, rep_id, status, qualified_at)`,
+
+    `CREATE TABLE IF NOT EXISTS commission_statements (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, week_start_utc TEXT NOT NULL, next_week_start_utc TEXT NOT NULL, timezone TEXT NOT NULL, local_week_label TEXT NOT NULL, qualification_basis TEXT NOT NULL, commission_plan_id INTEGER, commission_plan_version_id INTEGER, plan_version_number INTEGER, plan_snapshot TEXT, qualified_sale_count INTEGER NOT NULL DEFAULT 0, tier_id INTEGER, tier_label TEXT, rate_cents INTEGER NOT NULL DEFAULT 0, gross_commission_cents INTEGER NOT NULL DEFAULT 0, adjustment_cents INTEGER NOT NULL DEFAULT 0, final_commission_cents INTEGER NOT NULL DEFAULT 0, calculation_version INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'OPEN', calculated_at TEXT NOT NULL DEFAULT (datetime('now')), finalized_at TEXT, finalized_by INTEGER, paid_at TEXT, paid_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_statements_tenant_rep_week ON commission_statements(tenant_id, rep_id, week_start_utc)`,
+
+    `CREATE TABLE IF NOT EXISTS commission_adjustments (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, statement_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, type TEXT NOT NULL DEFAULT 'MANUAL', reason TEXT NOT NULL, related_sale_id INTEGER, status TEXT NOT NULL DEFAULT 'PENDING', created_by INTEGER, approved_by INTEGER, approved_at TEXT, rejected_by INTEGER, rejected_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_adjustments_tenant_stmt_status ON commission_adjustments(tenant_id, statement_id, status)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
