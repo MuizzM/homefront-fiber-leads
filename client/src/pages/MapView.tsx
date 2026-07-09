@@ -2,32 +2,27 @@ import { useEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore
 // mapbox-gl loaded via CDN in index.html — do not bundle
 declare const mapboxgl: any;
 import {
-  Play, Square, RefreshCw, AlertCircle, Pencil, X,
-  DoorOpen, UserCheck, Zap, CalendarClock, PhoneOff, Map as MapIcon, Bell,
-  ChevronRight, Home, Wifi, Signal, Users, Target, Search, LocateFixed, Footprints,
-  Satellite, Moon
+  AlertCircle, Pencil, X, Map as MapIcon, Bell, Target, Search, LocateFixed,
 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
-import type { Lead, TeamMember, InsertKnock, Territory } from "@shared/schema";
+import type { TeamMember, Territory } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
 import { TerritoryDetailPanel } from "@/components/TerritoryDetailPanel";
+import { TerritoryActivityDrawer } from "@/components/TerritoryActivityDrawer";
 import { LeadKnockSheet } from "@/components/LeadKnockSheet";
-import { RepProgressHUD } from "@/components/RepProgressHUD";
 import { getKnockQueue, type KnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
-import {
-  OUTCOME_TO_STATUS, pinDisplayState, nearestUnworkedLead, distanceHint,
-  haversineMeters, type KnockOutcome,
-} from "@shared/knock";
+import { captureFieldFix } from "@/lib/geoFix";
+import { OUTCOME_TO_STATUS, pinDisplayState, type KnockOutcome } from "@shared/knock";
+import { saveLeadNote, flushPendingNotes, type NotePoster, type NoteSaveResult } from "@/lib/leadNotes";
 import {
   UNCLUSTERED_PAINT, UNCLUSTERED_GLOW_PAINT, SELECTED_RING_SPEC,
   SELECTED_RING_FILTER, sheetPeekPaddingPx, moveCamera,
+  STREET_ZOOM, pickRepStartCamera, readCachedFix, writeCachedFix,
 } from "@/lib/mapPins";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
@@ -59,22 +54,18 @@ interface MapPin {
 const ROCKWELL_CENTER: [number, number] = [-80.41, 35.545];
 
 // ── Sales Rabbit pin colors by lead status ────────────────────────────────────
+// Manager legend/search dots — same hues as the shared STATE_COLORS pin system
+// (prospect orange, follow-up yellow, contacted slate) so the legend can never
+// disagree with what the map paints.
 const PIN_COLORS: Record<string, { bg: string; border: string; label: string }> = {
-  prospect:       { bg: "#22c55e", border: "#86efac", label: "Prospect" },       // green  — new fiber unworked
-  contacted:      { bg: "#3b82f6", border: "#93c5fd", label: "Contacted" },      // blue
+  prospect:       { bg: "#f97316", border: "#fdba74", label: "Prospect" },       // orange — unworked pool
+  contacted:      { bg: "#64748b", border: "#cbd5e1", label: "Contacted" },      // slate
   interested:     { bg: "#8b5cf6", border: "#c4b5fd", label: "Interested" },     // purple
-  follow_up:      { bg: "#f59e0b", border: "#fcd34d", label: "Follow-up" },      // amber
+  follow_up:      { bg: "#eab308", border: "#fde047", label: "Follow-up" },      // yellow
   sold:           { bg: "#10b981", border: "#6ee7b7", label: "SOLD" },           // emerald
   not_interested: { bg: "#ef4444", border: "#fca5a5", label: "Not Interested" }, // red
 };
 
-const OUTCOME_OPTIONS = [
-  { val: "not_home",      label: "Not Home",      color: "#94a3b8" },
-  { val: "not_interested",label: "Not Interested", color: "#ef4444" },
-  { val: "interested",    label: "Interested",     color: "#8b5cf6" },
-  { val: "callback",      label: "Callback",       color: "#f59e0b" },
-  { val: "sold",          label: "SOLD 🎉",        color: "#10b981" },
-];
 
 // ── Bbox type ─────────────────────────────────────────────────────────────────
 interface BBox { minLng: number; minLat: number; maxLng: number; maxLat: number }
@@ -82,105 +73,6 @@ function inBBox(lat: number, lng: number, b: BBox) {
   return lat >= b.minLat && lat <= b.maxLat && lng >= b.minLng && lng <= b.maxLng;
 }
 
-// Escape untrusted strings before injecting into popup innerHTML. Lead notes,
-// owner names, addresses, and team-member names all originate from user input
-// or external scan/enrichment data — without this, a value like
-// `<img src=x onerror=…>` executes on popup open (stored XSS → session theft).
-function escapeHtml(v: unknown): string {
-  if (v == null) return "";
-  return String(v)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
-// Compact "3m ago / 2h ago / 4d ago" for the visited banner.
-function relTime(iso?: string | null): string {
-  if (!iso) return "";
-  const s = (Date.now() - new Date(iso).getTime()) / 1000;
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  return `${Math.floor(s / 86400)}d ago`;
-}
-
-// ── Inline popup HTML builder ─────────────────────────────────────────────────
-// The field card that opens when a rep taps a pin. Built to be usable one-handed
-// in the field: big Directions / Call actions up top, then one-tap knock logging.
-function buildPopupHTML(
-  lead: MapPin,
-  team: TeamMember[],
-  opts: { canAssign?: boolean; currentRepId?: number | null } = {}
-): string {
-  const { canAssign = true, currentRepId = null } = opts;
-  const pin = PIN_COLORS[lead.leadStatus] ?? PIN_COLORS.prospect;
-  const repOptions = team.filter(m => m.active)
-    .map(m => `<option value="${m.id}" ${m.id === lead.assignedRepId ? "selected" : ""}>${escapeHtml(m.name)}</option>`)
-    .join("");
-
-  // Tap the address / Directions → open turn-by-turn (Maps app on mobile).
-  const dest = (lead.lat && lead.lng)
-    ? `${lead.lat},${lead.lng}`
-    : encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`);
-  const dirUrl = `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
-  const phone = lead.contactPhone ? String(lead.contactPhone).replace(/[^0-9+]/g, "") : "";
-
-  // Who a logged knock is credited to. Managers pick via the dropdown; reps are
-  // always credited to themselves (no dropdown shown for them).
-  const knockRep = canAssign ? "" : String(currentRepId ?? "");
-  const hot = (lead.leadScore ?? 0) >= 80;
-
-  // Compact tags line — only what matters at a glance (NEW FIBER, hot). Status is
-  // already the colored dot; contact/notes/competitor live in the Leads panel.
-  const tags = [
-    lead.fiberStatus === "new_fiber" ? `<span style="background:#22c55e22;color:#22c55e;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;">NEW FIBER</span>` : "",
-    hot ? `<span style="background:#f9731622;color:#fb923c;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;">🔥 ${lead.leadScore}</span>` : "",
-    lead.visited ? `<span style="background:#0f2a1e;color:#22c55e;border-radius:999px;padding:1px 7px;font-size:10px;font-weight:700;">✓ ${escapeHtml(String(lead.lastOutcome ?? "").replace("_", " "))} · ${relTime(lead.lastKnockedAt)}</span>` : "",
-  ].filter(Boolean).join("");
-
-  return `
-    <div style="font-family:system-ui,sans-serif;color:#e2e8f0;width:228px;">
-      <!-- Header: status dot + address -->
-      <div style="display:flex;align-items:center;gap:7px;margin-bottom:${tags ? "7px" : "9px"};">
-        <div style="width:11px;height:11px;border-radius:50%;background:${pin.bg};border:2px solid ${pin.border};flex-shrink:0;"></div>
-        <div style="min-width:0;flex:1;">
-          <div style="font-weight:700;font-size:13px;line-height:1.15;color:#f1f5f9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(lead.address)}</div>
-          <div style="color:#94a3b8;font-size:10.5px;">${escapeHtml(lead.city)}, ${escapeHtml(lead.state)} ${escapeHtml(lead.zip)}</div>
-        </div>
-      </div>
-
-      ${tags ? `<div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:9px;">${tags}</div>` : ""}
-
-      <!-- Directions + Call -->
-      <div style="display:flex;gap:6px;margin-bottom:8px;">
-        <a href="${dirUrl}" target="_blank" rel="noopener"
-          style="flex:1;text-align:center;background:#5eead41f;color:#5eead4;border-radius:7px;padding:7px;font-size:12px;font-weight:600;text-decoration:none;">🧭 Directions</a>
-        ${phone ? `<a href="tel:${phone}"
-          style="flex:1;text-align:center;background:#3b82f61f;color:#60a5fa;border-radius:7px;padding:7px;font-size:12px;font-weight:600;text-decoration:none;">📞 Call</a>` : ""}
-      </div>
-
-      ${canAssign ? `<div style="display:flex;gap:6px;margin-bottom:8px;">
-        <select id="assign-rep-${lead.id}" style="flex:1;background:#1e2430;color:#e2e8f0;border:1px solid #334155;border-radius:6px;padding:5px;font-size:11px;">
-          <option value="">— Unassigned —</option>${repOptions}
-        </select>
-        <button onclick="window.__assignRep(${lead.id})" style="background:#f97316;color:white;border:none;border-radius:6px;padding:0 11px;font-size:11px;font-weight:600;cursor:pointer;">Save</button>
-      </div>` : ""}
-
-      <!-- One-tap outcome buttons -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;">
-        ${OUTCOME_OPTIONS.map(o => `<button
-          onclick="window.__knockLead(${lead.id}, '${o.val}', '${knockRep}')"
-          style="background:${o.color}1f;color:${o.color};border:1px solid ${o.color}44;border-radius:7px;padding:9px 4px;font-size:12px;font-weight:700;cursor:pointer;"
-          onmousedown="this.style.background='${o.color}40'" onmouseup="this.style.background='${o.color}1f'" ontouchstart="this.style.background='${o.color}40'" ontouchend="this.style.background='${o.color}1f'"
-        >${o.label}</button>`).join("")}
-      </div>
-    </div>
-  `;
-}
-
-// ── Scan types ────────────────────────────────────────────────────────────────
 interface ScanRow {
   address: string; city: string; state: string; zip: string;
   fiberStatus: string; isNewFiber: boolean; billingStatus: string | null;
@@ -201,26 +93,31 @@ const POLL_MS = 400; // 400ms — scan dots appear almost instantly
 // Stable empty snapshot for useSyncExternalStore before the queue exists —
 // a fresh object per call would loop the store subscription forever.
 const EMPTY_QUEUE_SNAP: QueueSnapshot = { pendingCount: 0, deadCount: 0, byLead: {}, online: true };
-const RESUME_TTL_MS = 12 * 3600_000; // one shift boundary
-const GPS_FRESH_MS = 120_000;
+
+// HTML-escape untrusted text interpolated into scan-dot popups (XSS guard).
+function escapeHtml(v: unknown): string {
+  if (v == null) return "";
+  return String(v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+// Compact "3m ago / 2h ago / 4d ago" for the visited banner.
 
 export default function MapView() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const geolocateRef = useRef<any>(null);
-  const leadPopupRef = useRef<any>(null); // only one lead card open at a time
   const scanMarkersRef = useRef<any[]>([]);
-  const leadMarkersRef = useRef<Map<number, any>>(new Map());
   const lastRenderedCount = useRef(0);
-  const popupsRef = useRef<Map<number, any>>(new Map());
   const pollTickRef = useRef(0);      // counts scan polls, to throttle live lead refreshes
   const didAutoFitRef = useRef(false); // fit the map to leads once on first load
 
   const [mapReady, setMapReady] = useState(false);
-  const [mapInitKey, setMapInitKey] = useState(0); // bumped to retry map init if container has no height yet
   const [scanning, setScanning] = useState(false);
-  const [scanSource, setScanSource] = useState<string>("mapbox"); // "mapbox" | "overpass" | "gis"
-  const [progress, setProgress] = useState(0);
   const [total, setTotal] = useState(0);
   const [done, setDone] = useState(0);
   const [newFound, setNewFound] = useState(0);
@@ -248,11 +145,10 @@ export default function MapView() {
 
   // Filter
   const [filterStatus, setFilterStatus] = useState<string>("all");
-  // Visit filter — the field rep's primary lens: what's left to knock.
-  const [visitFilter, setVisitFilter] = useState<"all" | "unvisited" | "visited">("all");
 
   // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
+  const [legendOpen, setLegendOpen] = useState(false); // manager legend: collapsed dot-strip by default
   const [geocoding, setGeocoding] = useState(false); // street "go to" lookup in flight
   const [sidebarSearch, setSidebarSearch] = useState("");
 
@@ -264,11 +160,11 @@ export default function MapView() {
   const [lassoPoints, setLassoPoints] = useState<[number, number][]>([]);
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
   const [lassoRepId, setLassoRepId] = useState("");
+  const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
   const lassoLayerRef = useRef<boolean>(false);
 
   // Sidebar filters
   const [filterRep, setFilterRep] = useState<string>("all"); // "all" | "unassigned" | repId
-  const [filterUnassigned, setFilterUnassigned] = useState(false);
   const territoryLayersRef = useRef<string[]>([]);
 
   const { toast } = useToast();
@@ -284,15 +180,14 @@ export default function MapView() {
   // Reps always get the sheet; admins/managers get it on mobile (desktop keeps
   // the pin popup with its assign-rep dropdown).
   const isMobile = useIsMobile();
-  const useSheet = isRep || isMobile;
-  const [hudMini, setHudMini] = useState(false);
-  // Outcome just logged this session, per lead — drives the sheet's "done" phase.
-  const [lastSaved, setLastSaved] = useState<{ leadId: number; outcome: KnockOutcome } | null>(null);
-  const [resumeTarget, setResumeTarget] = useState<{ leadId: number; address: string } | null>(null);
-  const lastFixRef = useRef<{ lat: number; lng: number; at: number } | null>(null); // GPS cache — ref, zero renders per tick
-  const lastKnockedRef = useRef<{ lat: number; lng: number } | null>(null);         // where the rep physically stands
-  const recentIdsRef = useRef<number[]>([]);   // ring buffer (10) — just-knocked/skipped doors Next Door must not bounce back to
-  const visibleLeadsRef = useRef<MapPin[]>([]); // the filtered pin set the map currently shows (written by the setData effect)
+  // ONE lead card for every role — reps, team leads, managers, admins all get
+  // the same clean sheet (bottom on mobile, docked panel on desktop). The old
+  // manager HTML popup is gone; assignment lives as a capability-gated row
+  // inside the card itself.
+  const useSheet = true;
+  const gpsCenteredRef = useRef(false);      // a live fix has positioned the camera — startup fallbacks stand down
+  const geoAutoStartedRef = useRef(false);   // auto-trigger fired once for this rep session
+  const recentIdsRef = useRef<number[]>([]);   // ring buffer (10) — just-knocked doors exempt from the "unvisited" lens
 
   // Territory requests (admin/manager)
   const { data: territoryRequests = [] } = useQuery<{
@@ -321,8 +216,8 @@ export default function MapView() {
   // Assign Area: create a rep-colored territory AND assign the enclosed leads in
   // one atomic call. The drawn polygon comes straight from the freehand stroke.
   const assignAreaMutation = useMutation({
-    mutationFn: async ({ polygon, repId }: { polygon: [number, number][]; repId: number }) => {
-      const res = await apiRequest("POST", "/api/territories/assign-area", { polygon, repId });
+    mutationFn: async ({ polygon, repId, name }: { polygon: [number, number][]; repId: number; name?: string }) => {
+      const res = await apiRequest("POST", "/api/territories/assign-area", { polygon, repId, ...(name?.trim() ? { name: name.trim() } : {}) });
       return res.json();
     },
     onSuccess: (data) => {
@@ -333,6 +228,20 @@ export default function MapView() {
       const repName = team.find((m: TeamMember) => m.id === data.territory?.repId)?.name ?? "rep";
       toast({ title: `✓ ${data.assigned} leads assigned to ${repName} · territory saved` });
       exitLasso();
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  // Rename an area — the friendly name reps see on their map. Server keeps an
+  // audit trail (territory "renamed" event) and custom names survive reassign.
+  const renameTerritoryMutation = useMutation({
+    mutationFn: async ({ id, name }: { id: number; name: string }) => {
+      const res = await apiRequest("PATCH", `/api/territories/${id}`, { name });
+      return res.json();
+    },
+    onSuccess: (t: { name?: string }) => {
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      toast({ title: `Area renamed to "${t?.name ?? "area"}"` });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -350,6 +259,7 @@ export default function MapView() {
 
   // Territory selected by tapping its region on the map → detail panel
   const [selectedTerritoryId, setSelectedTerritoryId] = useState<number | null>(null);
+  const [activityTerritoryId, setActivityTerritoryId] = useState<number | null>(null); // "View Activity" drawer
 
   // Hand an unassigned/reclaimed area to the next rep (recolors + re-links leads)
   const assignTerritoryMutation = useMutation({
@@ -397,6 +307,7 @@ export default function MapView() {
     setLassoPoints([]);
     setLassoSelected([]);
     setLassoRepId("");
+    setLassoName("");
     const map = mapRef.current;
     if (map) {
       try {
@@ -410,7 +321,7 @@ export default function MapView() {
 
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
   // Fetch ALL map pins from dedicated lean endpoint — only runs after auth is ready
-  const { data: mapPinData, refetch: refetchLeads } = useQuery<{ pins: MapPin[]; total: number }>(
+  const { data: mapPinData } = useQuery<{ pins: MapPin[]; total: number }>(
     {
       queryKey: ["/api/leads/map"],
       queryFn: async () => {
@@ -423,19 +334,34 @@ export default function MapView() {
     }
   );
   const leads: MapPin[] = mapPinData?.pins ?? [];
-  const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"], enabled: !!user });
-  const { data: territories = [] } = useQuery<Territory[]>({ queryKey: ["/api/territories"], enabled: !!user });
-  const { data: territoryProgress = [] } = useQuery<{ id: number; knocked: number; total: number; pct: number; sold: number }[]>({
+  // O(1) id→lead map — the hot paths (pin tap, knock, card swap) never scan the
+  // array. Declared HERE, above the effects that reference it (dep arrays are
+  // read during render — a later declaration is a TDZ crash under native ESM).
+  const leadById = useMemo(() => new Map(leads.map(l => [l.id, l])), [leads]);
+  // Manager-plane data stays OFF rep phones: team (popup/lasso/reassign) and
+  // the 30s progress poll are never fetched in rep mode. Territories DO load
+  // for reps — a one-shot, tiny payload — so their own area names render on
+  // the map (managers name areas; reps navigate by them).
+  const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"], enabled: !!user && !isRep });
+  const { data: territories = [] } = useQuery<Territory[]>({ queryKey: ["/api/territories"], enabled: !!user, staleTime: 60_000 });
+  const { data: territoryProgress = [] } = useQuery<Array<{
+    id: number; knocked: number; total: number; pct: number; sold: number;
+    // Location-verified fields (see /api/territories/progress).
+    verifiedWorkedLeads: number; areaWorkedPct: number;
+    verified: number; needsReview: number; invalid: number;
+    avgDistanceM: number | null; maxObservedDistanceM: number | null;
+    maxAllowedDistanceM: number; maxAllowedAccuracyM: number;
+  }>>({
     queryKey: ["/api/territories/progress"],
     queryFn: async () => (await apiRequest("GET", "/api/territories/progress")).json(),
-    enabled: !!user,
+    enabled: !!user && canAssign,
     refetchInterval: 30000,
   });
   // Expose globally so popup onclick handlers can access current data.
   // NOTE: these effects must stay after `team` is declared — their dependency
   // arrays are read during render, so referencing `team` earlier throws a TDZ
   // error under native ESM (dev), even though esbuild masks it in prod builds.
-  useEffect(() => { (window as any).__allLeads = leads; }, [leads]);
+  useEffect(() => { (window as any).__allLeads = leads; (window as any).__leadById = leadById; }, [leads, leadById]);
   useEffect(() => { (window as any).__teamMembers = team; }, [team]);
   useEffect(() => {
     (window as any).__onTerritoryClick = (tid: number | null) => setSelectedTerritoryId(tid);
@@ -454,20 +380,18 @@ export default function MapView() {
     return () => { delete (window as any).__closeLeadSheet; };
   }, []);
   // Reps default to ALL pins — a knocked door must never vanish from the map;
-  // it stays visible in its new state (recolored + ✓) so coverage always reads.
+  // it stays visible in its new state (recolored) so coverage always reads.
   // "Left"/"Done"/"Follow-ups"/"Sold" are opt-in lenses via the filter chips.
 
   // ── Fetch Mapbox token from server (not in bundle) ──────────────────────────
   const [mapboxToken, setMapboxToken] = useState<string>("");
   const [mapTokenFailed, setMapTokenFailed] = useState(false);
-  const [mapboxReady, setMapboxReady] = useState(() => !!(window as any).__mapboxReady || typeof (window as any).mapboxgl !== "undefined");
 
   // Wait for mapboxgl CDN — uses onload callback from index.html, no polling
   useEffect(() => {
     let cancelled = false;
     const init = () => {
       if (cancelled) return;
-      setMapboxReady(true);
       apiRequest("GET", "/api/config/map")
         .then(r => r.json())
         .then((d: { token: string }) => {
@@ -482,68 +406,6 @@ export default function MapView() {
     (window as any).__onMapboxReady(init);
     return () => { cancelled = true; };
   }, []);
-
-  // ── Expose global functions for popup button callbacks ────────────────────
-  useEffect(() => {
-    (window as any).__knockLead = async (leadId: number, outcome: string, presetRep?: string) => {
-      // Resolve who the knock is credited to, in priority order:
-      //   1. the rep dropdown (managers/team leads), if present + chosen
-      //   2. presetRep passed from the button (reps → their own id)
-      //   3. the current user's own teamMemberId (rep logging their own knock)
-      const dropdown = (document.getElementById(`assign-rep-${leadId}`) as HTMLSelectElement)?.value;
-      const repId = dropdown || presetRep || (user?.teamMemberId ? String(user.teamMemberId) : "");
-      if (!repId) {
-        toast({ title: "Assign a rep to this lead first, then log the knock", variant: "destructive" });
-        return;
-      }
-      // Optimistic: recolor the pin + mark it visited (✓) INSTANTLY, before the
-      // network round-trip — so marking a door feels immediate in the field.
-      const outcomeToStatus: Record<string, string> = {
-        sold: "sold", interested: "interested", callback: "follow_up",
-        not_interested: "not_interested", not_home: "prospect",
-      };
-      qc.setQueryData(["/api/leads/map"], (old: any) => {
-        if (!old?.pins) return old;
-        return { ...old, pins: old.pins.map((p: MapPin) => p.id === leadId
-          ? { ...p, leadStatus: outcomeToStatus[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: new Date().toISOString() }
-          : p) };
-      });
-      popupsRef.current.get(leadId)?.remove();
-      try {
-        const wasHome = outcome !== "not_home";
-        await apiRequest("POST", `/api/leads/${leadId}/knock`, {
-          repId: Number(repId),
-          wasHome,
-          outcome,
-          knockedAt: new Date().toISOString(),
-        });
-        toast({ title: outcome === "sold" ? "🎉 Sale logged!" : `✓ Marked: ${outcome.replace("_", " ")}` });
-        qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
-        qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      } catch (e: any) {
-        toast({ title: "Couldn't save — reverting", variant: "destructive" });
-        qc.invalidateQueries({ queryKey: ["/api/leads/map"] }); // roll back to server truth
-      }
-    };
-
-    (window as any).__assignRep = async (leadId: number) => {
-      const sel = document.getElementById(`assign-rep-${leadId}`) as HTMLSelectElement;
-      const repId = sel?.value ? Number(sel.value) : null;
-      try {
-        await apiRequest("POST", `/api/leads/${leadId}/assign`, { repId });
-        toast({ title: repId ? "Lead assigned" : "Lead unassigned" });
-        qc.invalidateQueries({ queryKey: ["/api/leads"] }); qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-        popupsRef.current.get(leadId)?.remove();
-      } catch {
-        toast({ title: "Failed to assign", variant: "destructive" });
-      }
-    };
-
-    return () => {
-      delete (window as any).__knockLead;
-      delete (window as any).__assignRep;
-    };
-  }, [toast, qc, user]);
 
   // ── Init Mapbox ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -565,7 +427,6 @@ export default function MapView() {
     mapRef.current = map; // claim immediately so a re-render can't spawn a second map
     if (import.meta.env.DEV) {
       (window as any).__map = map; // debug handle (dev only)
-      (window as any).__buildPopupHTML = buildPopupHTML;
     }
 
     // Force resize once container is definitely painted
@@ -576,17 +437,36 @@ export default function MapView() {
     // "Locate me" — the core field control: center on the rep's position and
     // track it as they walk the street. Triggered by the big thumb FAB below.
     const geolocate = new (window as any).mapboxgl.GeolocateControl({
-      positionOptions: { enableHighAccuracy: true },
+      // Fresh fixes only (≤1s cache), 10s timeout, high accuracy — the dot must
+      // track the rep in real time, not replay a stale reading.
+      positionOptions: { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 },
+      // Street-level landing: the control's default maxZoom (15) is a block
+      // overview — a rep needs to see individual doors when the fix centers.
+      fitBoundsOptions: { maxZoom: STREET_ZOOM },
       trackUserLocation: true,
       showUserHeading: true,
     });
     map.addControl(geolocate, "top-right");
     geolocateRef.current = geolocate;
-    // Cache the last GPS fix in a ref — Next Door reads it, and a ~1/s tick must
-    // cause zero React renders. Permission denied just never populates it.
+    // Persist the fix (throttled) so the NEXT launch opens on last-known
+    // location instantly, before live GPS warms up. A ~1/s tick in follow mode
+    // must cause zero React renders — refs and storage only, never state.
     geolocate.on("geolocate", (e: any) => {
-      try { lastFixRef.current = { lat: e.coords.latitude, lng: e.coords.longitude, at: Date.now() }; } catch {}
+      try {
+        writeCachedFix(e.coords.latitude, e.coords.longitude, Date.now());
+        // First live fix has centered the camera (trigger + trackUserLocation) —
+        // the startup fallback effect must never yank the view after this.
+        gpsCenteredRef.current = true;
+      } catch {}
     });
+    // Permission denied / no signal: nothing to do — the launch effect already
+    // painted last-known/territory view, and the FAB can re-prompt any time.
+
+    // Toggle a class the stylesheet uses to enable the user-dot glide only
+    // while the camera is at rest (see index.css .map-camera-idle rules).
+    el.classList.add("map-camera-idle");
+    map.on("movestart", () => el.classList.remove("map-camera-idle"));
+    map.on("moveend", () => el.classList.add("map-camera-idle"));
 
     const setupMapLayers = () => {
       // Draw bbox layers
@@ -696,19 +576,13 @@ export default function MapView() {
         paint: UNCLUSTERED_PAINT,
       });
 
-      // Visited ✓ badge — any pin that's been knocked (even "Not Home") shows a
-      // check above it, so reps instantly see which doors they've already hit.
-      map.addLayer({
-        id: "lead-visited-check", type: "symbol", source: "leads-cluster",
-        filter: ["all", ["!", ["has", "point_count"]], ["==", ["get", "visited"], 1]],
-        minzoom: 12,
-        layout: { "text-field": "✓", "text-font": ["Arial Unicode MS Regular"], "text-size": 12, "text-offset": [0, -1.15], "text-allow-overlap": true, "text-ignore-placement": true },
-        paint: { "text-color": "#ffffff", "text-halo-color": "#0f172a", "text-halo-width": 1.5 },
-      });
+      // Worked-vs-unworked is color-only: knocked doors render in their status
+      // hue (terminal states pre-dimmed) with a thicker white stroke — no glyph
+      // badges on pins, per the field design language.
 
       // Glow ring for unclustered pins — inserted BENEATH the pin layer so the
-      // 0.18-alpha halo never washes over the pin or its ✓ (matches the
-      // style-reload block's order).
+      // 0.18-alpha halo never washes over the pin (matches the style-reload
+      // block's order).
       map.addLayer({
         id: "lead-unclustered-glow",
         type: "circle",
@@ -719,7 +593,7 @@ export default function MapView() {
       }, "lead-unclustered");
 
       // Selected-pin ring — driven by setFilter (style-thread only, no setData).
-      // Added last so it can never be occluded by pins/✓/glow.
+      // Added last so it can never be occluded by pins/glow.
       map.addLayer(SELECTED_RING_SPEC);
 
       // Click unclustered pin → show popup
@@ -730,19 +604,11 @@ export default function MapView() {
         const props = e.features?.[0]?.properties;
         const coords = e.features?.[0]?.geometry?.coordinates?.slice() as [number, number];
         if (!props || !coords) return;
-        const lead = (window as any).__allLeads?.find((l: any) => l.id === props.id);
+        const lead = (window as any).__leadById?.get(props.id); // O(1), never an array scan
         if (!lead) return;
-        // Rep/mobile path: open the bottom knock sheet instead of the HTML popup.
-        // Checked at call time so role/viewport changes never need a rebind.
-        const openSheet = (window as any).__openLeadSheet;
-        if (openSheet) { openSheet(props.id); return; }
-        const tm = (window as any).__teamMembers ?? [];
-        while (Math.abs(e.lngLat.lng - coords[0]) > 180) { coords[0] += e.lngLat.lng > coords[0] ? 360 : -360; }
-        leadPopupRef.current?.remove();
-        leadPopupRef.current = new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
-          .setLngLat(coords)
-          .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
-          .addTo(map);
+        // Every role opens the same card. Checked at call time so role/
+        // viewport changes never need a rebind.
+        (window as any).__openLeadSheet?.(props.id);
       });
       map.on("mouseenter", "lead-unclustered", () => hoverCursor("pointer"));
       map.on("mouseleave", "lead-unclustered", () => hoverCursor(""));
@@ -797,88 +663,7 @@ export default function MapView() {
     }
 
     return () => { ro?.disconnect(); map.remove(); mapRef.current = null; };
-  }, [mapboxToken, mapInitKey]); // re-run when token arrives or when we retry after container paints
-
-  // ── Render lead pins on map (Sales Rabbit style) ───────────────────────────
-  const renderLeadPin = useCallback((lead: MapPin, allTeam: TeamMember[]) => {
-    const map = mapRef.current;
-    if (!map || !lead.lat || !lead.lng) return;
-
-    // Remove old marker for this lead if it exists
-    leadMarkersRef.current.get(lead.id)?.remove();
-    popupsRef.current.get(lead.id)?.remove();
-
-    const pin = PIN_COLORS[lead.leadStatus] ?? PIN_COLORS.prospect;
-    const assignedRep = allTeam.find(m => m.id === lead.assignedRepId);
-
-    const el = document.createElement("div");
-    el.style.cssText = `
-      width: 32px; height: 40px; cursor: pointer; position: relative;
-      transition: transform 0.15s;
-    `;
-    // House-shaped pin (SalesRabbit style) — roof + walls + door
-    const iconGlyph: Record<string, string> = {
-      prospect: "",           // clean house — unworked
-      contacted: "✉",           // envelope
-      interested: "★",           // star
-      follow_up: "↺",           // callback arrow
-      sold: "✓",                // checkmark
-      not_interested: "✕",       // X
-    };
-    const glyph = iconGlyph[lead.leadStatus] ?? "";
-    el.innerHTML = `
-      <svg viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg" width="32" height="40">
-        <!-- Drop shadow filter -->
-        <defs><filter id="shadow-${lead.id}" x="-20%" y="-20%" width="140%" height="140%">
-          <feDropShadow dx="0" dy="2" stdDeviation="2" flood-color="rgba(0,0,0,0.55)"/>
-        </filter></defs>
-        <!-- House body -->
-        <g filter="url(#shadow-${lead.id})">
-          <!-- Roof triangle -->
-          <polygon points="16,2 30,16 2,16" fill="${pin.bg}" stroke="${pin.border}" stroke-width="1.5" stroke-linejoin="round"/>
-          <!-- Walls -->
-          <rect x="5" y="15" width="22" height="16" rx="1" fill="${pin.bg}" stroke="${pin.border}" stroke-width="1.5"/>
-          <!-- Door -->
-          <rect x="12" y="23" width="8" height="8" rx="1" fill="rgba(0,0,0,0.25)"/>
-          <!-- Chimney -->
-          <rect x="22" y="6" width="4" height="6" fill="${pin.bg}" stroke="${pin.border}" stroke-width="1"/>
-        </g>
-        <!-- Status glyph -->
-        ${glyph ? `<text x="16" y="22" text-anchor="middle" font-size="10" fill="white" font-weight="bold" font-family="system-ui">${glyph}</text>` : ""}
-        <!-- Spike bottom -->
-        <polygon points="13,31 16,40 19,31" fill="${pin.bg}" stroke="${pin.border}" stroke-width="1"/>
-      </svg>
-      ${assignedRep ? `
-        <div style="
-          position:absolute;top:-8px;right:-6px;
-          background:${pin.bg};color:white;
-          border-radius:50%;width:16px;height:16px;
-          font-size:8px;font-weight:700;
-          display:flex;align-items:center;justify-content:center;
-          border:1.5px solid white;
-          box-shadow:0 1px 3px rgba(0,0,0,0.4);
-        ">${assignedRep.name.charAt(0)}</div>
-      ` : ""}
-    `;
-
-    el.addEventListener("mouseenter", () => { el.style.transform = "scale(1.15)"; });
-    el.addEventListener("mouseleave", () => { el.style.transform = "scale(1)"; });
-
-    const popup = new (window as any).mapboxgl.Popup({
-      offset: [0, -42], closeButton: true,
-      className: "sr-popup",
-      maxWidth: "320px",
-    }).setHTML(buildPopupHTML(lead, allTeam, { canAssign, currentRepId: user?.teamMemberId ?? null }));
-
-    popupsRef.current.set(lead.id, popup);
-
-    const marker = new (window as any).mapboxgl.Marker({ element: el, anchor: "bottom" })
-      .setLngLat([lead.lng, lead.lat])
-      .setPopup(popup)
-      .addTo(map);
-
-    leadMarkersRef.current.set(lead.id, marker);
-  }, []);
+  }, [mapboxToken]); // re-run when the token arrives
 
   // ── Territory polygon — point-in-polygon check ────────────────────────────
   function pointInPolygon(lat: number, lng: number, polygon: [number, number][]): boolean {
@@ -895,6 +680,23 @@ export default function MapView() {
   // ── Update cluster GeoJSON source when leads change ─────────────────────────
   // Cluster setData consolidated into the lead render effect below
 
+  // Territory clip for mid-tier roles — memoized so the 30s team/territory polls
+  // (and unrelated `user` identity churn) never re-serialize every pin below.
+  const territoryClippedLeads = useMemo(() => {
+    if (isAdmin || isRep || !user?.teamMemberId) return leads;
+    const myTerritories = territories.filter(t => t.repId === user.teamMemberId);
+    if (myTerritories.length === 0) return leads;
+    return leads.filter(lead => {
+      if (!lead.lat || !lead.lng) return false;
+      return myTerritories.some(t => {
+        try {
+          const poly = JSON.parse(t.polygon) as [number, number][];
+          return pointInPolygon(lead.lat!, lead.lng!, poly);
+        } catch { return false; }
+      });
+    });
+  }, [leads, territories, isAdmin, isRep, user?.teamMemberId]);
+
   // ── Update cluster GeoJSON when leads/filter/territory changes ───────────
   useEffect(() => {
     const map = mapRef.current;
@@ -902,21 +704,7 @@ export default function MapView() {
     const src = map.getSource("leads-cluster") as any;
     if (!src) return;
 
-    let leadsToShow = leads;
-    if (!isAdmin && !isRep && user?.teamMemberId) {
-      const myTerritories = territories.filter(t => t.repId === user.teamMemberId);
-      if (myTerritories.length > 0) {
-        leadsToShow = leads.filter(lead => {
-          if (!lead.lat || !lead.lng) return false;
-          return myTerritories.some(t => {
-            try {
-              const poly = JSON.parse(t.polygon) as [number, number][];
-              return pointInPolygon(lead.lat!, lead.lng!, poly);
-            } catch { return false; }
-          });
-        });
-      }
-    }
+    let leadsToShow = territoryClippedLeads;
 
     // Rep filter (admin/manager/team lead) — narrows the map pins, not just the list
     if (canAssign && filterRep !== "all") {
@@ -926,14 +714,7 @@ export default function MapView() {
     }
 
     if (filterStatus !== "all") leadsToShow = leadsToShow.filter(l => l.leadStatus === filterStatus);
-    // Visit filter — "what's left to knock". Session-knocked doors (ring buffer)
-    // are exempt from the unvisited lens: the pin the rep JUST marked must not
-    // vanish from under their finger mid-sheet — it fades out on the next
-    // re-filter instead. (Ref read, so the dep array stays selection-free.)
-    if (visitFilter === "unvisited") leadsToShow = leadsToShow.filter(l => !l.visited || recentIdsRef.current.includes(l.id));
-    else if (visitFilter === "visited") leadsToShow = leadsToShow.filter(l => l.visited);
     const visibleLeads = leadsToShow;
-    visibleLeadsRef.current = visibleLeads; // Next Door candidates = what the rep can see
 
     // GPU-rendered circle layer — no DOM markers, handles 100k+ points.
     // `ds` = precomputed display state so circle-color stays a flat GPU match.
@@ -949,7 +730,9 @@ export default function MapView() {
     });
     // NOTE: this dep array must NEVER gain selection/sheet state — a pin tap must
     // rebuild zero GeoJSON. Selection is a setFilter on its own effect below.
-  }, [leads, team, mapReady, filterStatus, filterRep, visitFilter, canAssign, territories, isAdmin, user, styleEpoch]);
+    // It must also stay free of poll-churned identities (team, territories, user):
+    // the memoized territoryClippedLeads absorbs those upstream.
+  }, [territoryClippedLeads, mapReady, filterStatus, filterRep, canAssign, styleEpoch]);
 
   // ── Selected-pin ring — pure style-thread update, no setData, no re-cluster ──
   useEffect(() => {
@@ -958,41 +741,53 @@ export default function MapView() {
     try { map.setFilter("lead-selected-ring", SELECTED_RING_FILTER(selectedLeadId)); } catch {}
   }, [selectedLeadId, mapReady, styleEpoch]); // styleEpoch: re-apply after style switch
 
-  // ── Auto-fit to leads once on first load (Sales Rabbit density view) ──────────
-  // Centers/zooms the map so pins are visible the moment you open it. Runs once,
-  // so it never yanks the view around while you're scanning or panning.
+  // ── Field-mode launch: start where the rep is standing ────────────────────────
+  // Live GPS is the ONLY anchor (SalesRabbit behavior) — the auto-triggered
+  // GeolocateControl below shows the blue dot and keeps it moving with the
+  // device. GPS takes seconds though, so paint the best instant guess ONCE:
+  // last known GPS fix at street zoom, else lead bounds (managers always get
+  // the bounds overview). The moment the live fix lands, the control centers
+  // on it and this effect stands down for the session.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || didAutoFitRef.current) return;
+    if (gpsCenteredRef.current) { didAutoFitRef.current = true; return; } // live GPS won the race
+    if (isRep) {
+      const start = pickRepStartCamera(readCachedFix(), Date.now());
+      if (start) {
+        map.jumpTo({ center: start.center, zoom: start.zoom });
+        didAutoFitRef.current = true;
+        return;
+      }
+    }
+    // No location signal yet (first run / cleared storage) or manager view:
+    // frame the assigned leads so the map is never a blank town center.
     const pts = leads.filter(l => l.lat && l.lng);
     if (pts.length === 0) return;
-    // Resume-where-you-left-off: a rep returning within a shift gets their last
-    // camera back (silent jumpTo) instead of the generic fit-all view.
-    if (isRep && user?.teamMemberId != null) {
-      try {
-        const raw = localStorage.getItem(`hf.repResume.v1.${user.teamMemberId}`);
-        if (raw) {
-          const r = JSON.parse(raw);
-          if (r?.camera && r?.at && Date.now() - Date.parse(r.at) < RESUME_TTL_MS) {
-            map.jumpTo({ center: [r.camera.lng, r.camera.lat], zoom: r.camera.zoom });
-            didAutoFitRef.current = true;
-            return;
-          }
-        }
-      } catch { /* storage blocked — fall through to fit-all */ }
-    }
     try {
       const b = new (window as any).mapboxgl.LngLatBounds();
       pts.forEach(l => b.extend([l.lng!, l.lat!]));
-      map.fitBounds(b, { padding: 60, maxZoom: 15, duration: 0 });
+      map.fitBounds(b, { padding: 60, maxZoom: isRep ? STREET_ZOOM : 15, duration: 0 });
       didAutoFitRef.current = true;
     } catch {}
   }, [leads, mapReady, isRep, user]);
 
-  // ── Render color-coded territory regions (per-rep color + name label) ──────
-  // Each saved territory fills with its rep's stable color, a matching outline,
-  // and a centered pill "<Rep>  knocked/total" so the team sees who owns what.
-  // Only shown to admin/manager/team-lead (canAssign); reps get a clean map.
+  // ── Auto-start live location for reps (SalesRabbit launch behavior) ───────────
+  // One trigger per session: prompts for permission if needed, shows the blue
+  // dot immediately, centers at street zoom on the first fix, and follows the
+  // rep as they walk (trackUserLocation). The Locate FAB re-triggers the same
+  // control, so one tap always snaps back to current location.
+  useEffect(() => {
+    if (!mapReady || !isRep || geoAutoStartedRef.current) return;
+    geoAutoStartedRef.current = true;
+    try { geolocateRef.current?.trigger(); } catch { /* control not ready — FAB still works */ }
+  }, [mapReady, isRep]);
+
+  // ── Render color-coded territory regions (area name + owner label) ─────────
+  // Managers/team leads see EVERY area: rep-colored fill + a two-line centroid
+  // label "Area name / Rep knocked/total". Reps see ONLY their own areas as a
+  // quiet outline + the area name — enough to know where they're working
+  // without cluttering the pins they knock.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
@@ -1007,21 +802,31 @@ export default function MapView() {
     });
     territoryLayersRef.current = [];
 
-    if (!showTerritories || !canAssign) return;
+    // Managers can hide the layer from the rail; reps' own areas always show.
+    if (canAssign && !showTerritories) return;
 
-    territories.forEach(t => {
+    // Rep view: only areas they own (single or shared assignment).
+    const myId = user?.teamMemberId ?? null;
+    const visible = canAssign ? territories : territories.filter(t => {
+      if (myId == null) return false;
+      if (t.repId === myId) return true;
+      try { const a = JSON.parse((t as any).assigneeIds || "[]"); return Array.isArray(a) && a.includes(myId); } catch { return false; }
+    });
+
+    visible.forEach(t => {
       try {
         const status = (t as any).status ?? "active";
         if (status === "archived") return; // archived areas never render
+        if (!canAssign && (status === "unassigned" || status === "reclaimed" || status === "completed")) return;
         const coords = JSON.parse(t.polygon) as [number, number][];
         if (coords.length < 3) return;
         const closed = [...coords, coords[0]];
         // Status-aware styling: reclaimed/unassigned areas go GRAY and lose the
-        // rep's name; completed areas keep the rep color but muted with a ✓.
+        // rep's name; completed areas keep the rep color but muted.
         const isPool = status === "unassigned" || status === "reclaimed";
         const isDone = status === "completed";
         const color = isPool ? "#94a3b8" : colorForRep(t.repId);
-        const fillOpacity = isPool ? 0.10 : isDone ? 0.08 : 0.14;
+        const fillOpacity = !canAssign ? 0.05 : isPool ? 0.10 : isDone ? 0.08 : 0.14;
         const srcId = `territory-${t.id}`;
         if (!map.getSource(srcId)) {
           map.addSource(srcId, {
@@ -1035,32 +840,41 @@ export default function MapView() {
         }
         if (!map.getLayer(srcId + "-outline")) {
           map.addLayer({ id: srcId + "-outline", type: "line", source: srcId,
-            paint: { "line-color": color, "line-width": isPool ? 2 : 2.5, "line-opacity": isPool ? 0.7 : 0.9,
+            paint: { "line-color": color, "line-width": !canAssign ? 1.75 : isPool ? 2 : 2.5,
+              "line-opacity": !canAssign ? 0.65 : isPool ? 0.7 : 0.9,
               ...(isPool ? { "line-dasharray": [3, 2] } : {}) } });
         }
-        // Centroid label — rep name + progress while owned; "Unassigned" once
-        // reclaimed (the old rep's name must NOT linger on the area).
+        // Centroid label. Reps: the area NAME only. Managers: name + owner line
+        // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's
+        // name must NOT linger on the area).
         const cx = coords.reduce((s, p) => s + p[0], 0) / coords.length;
         const cy = coords.reduce((s, p) => s + p[1], 0) / coords.length;
-        const prog = territoryProgress.find(p => p.id === t.id);
-        const repName = team.find(m => m.id === t.repId)?.name?.split(" ")[0] ?? "";
-        const label = isPool ? "Unassigned"
-          : isDone ? `✓ ${repName}`
-          : (prog ? `${repName}  ${prog.knocked}/${prog.total}` : repName);
+        const areaName = (t.name ?? "").trim();
+        let label = areaName;
+        if (canAssign) {
+          const prog = territoryProgress.find(p => p.id === t.id);
+          const repName = team.find(m => m.id === t.repId)?.name?.split(" ")[0] ?? "";
+          const ownerLine = isPool ? "Unassigned"
+            : isDone ? `Done — ${repName}`
+            : (prog ? `${repName}  ${prog.knocked}/${prog.total}` : repName);
+          label = areaName && ownerLine && areaName !== ownerLine ? `${areaName}\n${ownerLine}` : (areaName || ownerLine);
+        }
         if (label && !map.getSource(srcId + "-label-src")) {
           map.addSource(srcId + "-label-src", {
             type: "geojson", data: { type: "Feature", geometry: { type: "Point", coordinates: [cx, cy] }, properties: {} }
           });
           map.addLayer({
             id: srcId + "-label", type: "symbol", source: srcId + "-label-src",
-            layout: { "text-field": label, "text-size": 12, "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"], "text-allow-overlap": false },
-            paint: { "text-color": "#ffffff", "text-halo-color": isPool ? "#475569" : color, "text-halo-width": 2 },
+            layout: { "text-field": label, "text-size": 12, "text-line-height": 1.3,
+              "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"], "text-allow-overlap": false },
+            paint: { "text-color": "#ffffff", "text-halo-color": isPool ? "#475569" : color, "text-halo-width": 2,
+              ...(canAssign ? {} : { "text-opacity": 0.9 }) },
           });
         }
         territoryLayersRef.current.push(srcId);
       } catch {}
     });
-  }, [territories, territoryProgress, team, mapReady, showTerritories, canAssign, styleEpoch]);
+  }, [territories, territoryProgress, team, mapReady, showTerritories, canAssign, user?.teamMemberId, styleEpoch]);
 
   // ── Lead-layer visibility (control-rail toggle) ─────────────────────────────
   useEffect(() => {
@@ -1124,11 +938,6 @@ export default function MapView() {
         map.addLayer({ id: "lead-unclustered", type: "circle", source: "leads-cluster",
           filter: ["!", ["has", "point_count"]], minzoom: 12,
           paint: UNCLUSTERED_PAINT,
-        });
-        map.addLayer({ id: "lead-visited-check", type: "symbol", source: "leads-cluster",
-          filter: ["all", ["!", ["has","point_count"]], ["==", ["get","visited"], 1]], minzoom: 12,
-          layout: { "text-field": "✓", "text-font": ["Arial Unicode MS Regular"], "text-size": 12, "text-offset": [0, -1.15], "text-allow-overlap": true, "text-ignore-placement": true },
-          paint: { "text-color": "#ffffff", "text-halo-color": "#0f172a", "text-halo-width": 1.5 },
         });
         // Selected-pin ring — its filter is re-applied by the selection effect
         // (styleEpoch dep) right after this block bumps the epoch.
@@ -1317,12 +1126,12 @@ export default function MapView() {
       .sr-popup .mapboxgl-popup-close-button:hover { color: #e2e8f0; background: transparent; }
     `;
     document.head.appendChild(style);
-    return () => document.head.removeChild(style);
+    return () => { document.head.removeChild(style); };
   }, []);
 
   // ── Draw bbox helpers ─────────────────────────────────────────────────────
   const updateDrawLayer = useCallback((bbox: BBox) => {
-    const src = mapRef.current?.getSource("draw-bbox") as mapboxgl.GeoJSONSource;
+    const src = mapRef.current?.getSource("draw-bbox") as any;
     src?.setData({ type: "Feature", geometry: { type: "Polygon", coordinates: [[
       [bbox.minLng, bbox.minLat], [bbox.maxLng, bbox.minLat],
       [bbox.maxLng, bbox.maxLat], [bbox.minLng, bbox.maxLat],
@@ -1331,7 +1140,7 @@ export default function MapView() {
   }, []);
 
   const clearDrawLayer = useCallback(() => {
-    const src = mapRef.current?.getSource("draw-bbox") as mapboxgl.GeoJSONSource;
+    const src = mapRef.current?.getSource("draw-bbox") as any;
     src?.setData({ type: "Feature", geometry: { type: "Polygon", coordinates: [[]] }, properties: {} });
   }, []);
 
@@ -1413,7 +1222,7 @@ export default function MapView() {
 
     let bg: string, border: string, glow: string, size = 10, label: string;
     if (isHotLead) {
-      bg = "#22c55e"; border = "#86efac"; glow = "rgba(34,197,94,0.8)"; size = 12; label = "🔥 HOT LEAD";
+      bg = "#22c55e"; border = "#86efac"; glow = "rgba(34,197,94,0.8)"; size = 12; label = "HOT LEAD";
     } else if (isFiberSoon) {
       bg = "#a855f7"; border = "#d8b4fe"; glow = "rgba(168,85,247,0.7)"; size = 11; label = "📡 FIBER SOON";
     } else if (isComingSoon) {
@@ -1479,7 +1288,6 @@ export default function MapView() {
       const status: ScanJobStatus = await res.json();
       setDone(status.done);
       setTotal(status.total);
-      setProgress(status.total ? Math.round((status.done / status.total) * 100) : 0);
       const newRows = (status.results ?? []).slice(lastRenderedCount.current);
       lastRenderedCount.current = status.results?.length ?? 0;
       let found = 0;
@@ -1510,12 +1318,11 @@ export default function MapView() {
     if (!mapReady) return;
     scanMarkersRef.current.forEach(m => m.remove());
     scanMarkersRef.current = []; lastRenderedCount.current = 0; pollTickRef.current = 0;
-    setNewFound(0); setDone(0); setProgress(0); setError(null);
+    setNewFound(0); setDone(0); setError(null);
     stopPolling(); setScanning(true);
     try {
       const res = await apiRequest("POST", endpoint, body);
-      const { jobId: id, total: t, bbox, source } = await res.json();
-      setScanSource(source ?? "mapbox");
+      const { jobId: id, total: t } = await res.json();
       setJobId(id); setTotal(t);
       pollRef.current = setInterval(() => pollJob(id, drawnBBox ?? undefined), POLL_MS);
     } catch (e: any) { setScanning(false); setError(e.message); }
@@ -1577,34 +1384,14 @@ export default function MapView() {
     if (!map || !lead.lat || !lead.lng) return;
     const target: [number, number] = [lead.lng, lead.lat];
     setSelectedLeadId(lead.id);
-    // Sheet path (reps / mobile): camera padding keeps the pin visible above the
-    // peek sheet; the sheet itself opens via selectedLeadId — no popup.
-    if (useSheet) {
-      moveCamera(map, {
-        center: target, zoom: Math.max(map.getZoom?.() ?? 16, 16.5),
-        padding: { top: 0, left: 0, right: 0, bottom: sheetPeekPaddingPx() },
-        duration: 600, essential: true,
-      });
-      return;
-    }
-    map.flyTo({ center: target, zoom: 17, duration: 900, essential: true });
-    setTimeout(() => {
-      if (!mapRef.current) return;
-      const m = mapRef.current;
-      // Fallback: if the animation was dropped (background tab, reduced motion),
-      // snap to the target so the pin always ends up centered.
-      const c = m.getCenter();
-      if (Math.abs(c.lng - target[0]) > 0.0006 || Math.abs(c.lat - target[1]) > 0.0006) {
-        m.jumpTo({ center: target, zoom: 17 });
-      }
-      const tm = (window as any).__teamMembers ?? [];
-      leadPopupRef.current?.remove();
-      leadPopupRef.current = new (window as any).mapboxgl.Popup({ offset: 14, className: "sr-popup", closeButton: true })
-        .setLngLat(target)
-        .setHTML(buildPopupHTML(lead, tm, { canAssign, currentRepId: user?.teamMemberId ?? null }))
-        .addTo(m);
-    }, 950);
-  }, [canAssign, user, useSheet]);
+    // The card opens via selectedLeadId; camera padding keeps the pin visible
+    // beside/above it (docked panel or bottom sheet).
+    moveCamera(map, {
+      center: target, zoom: Math.max(map.getZoom?.() ?? 16, 16.5),
+      padding: { top: 0, left: 0, right: 0, bottom: sheetPeekPaddingPx() },
+      duration: 600, essential: true,
+    });
+  }, []);
 
   // Memoized so these full-array passes over all leads don't re-run on every
   // render (the map re-renders ~every 400ms during a scan).
@@ -1615,16 +1402,6 @@ export default function MapView() {
     return acc;
   }, [leads]);
 
-  const newFiberCount = useMemo(
-    () => leads.reduce((n, l) => n + (l.fiberStatus === "new_fiber" ? 1 : 0), 0),
-    [leads],
-  );
-  const assignedCount = useMemo(
-    () => leads.reduce((n, l) => n + (l.assignedRepId ? 1 : 0), 0),
-    [leads],
-  );
-  const visitedCount = useMemo(() => leads.reduce((n, l) => n + (l.visited ? 1 : 0), 0), [leads]);
-  const doorsLeft = leads.length - visitedCount;
 
   // On-map search — top matches for the search box dropdown (address or city).
   const searchMatches = useMemo(() => {
@@ -1645,9 +1422,11 @@ export default function MapView() {
       repId: user.teamMemberId ?? 0,
       post: (url, body) => apiRequest("POST", url, body).then(r => r.json()),
       patch: (url, body) => apiRequest("PATCH", url, body).then(r => r.json()),
-      onSaved: () => {
+      onSaved: (leadId: number) => {
         qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
         qc.invalidateQueries({ queryKey: ["/api/leads"] });
+        // The card's History timeline shows the new entry as soon as the POST lands.
+        qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/history`] });
       },
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1656,40 +1435,15 @@ export default function MapView() {
   const getQueueSnap = useCallback(() => knockQueue ? knockQueue.getSnapshot() : EMPTY_QUEUE_SNAP, [knockQueue]);
   const queueSnap = useSyncExternalStore(subscribeQueue, getQueueSnap);
 
-  const selectedLead = useMemo(() => leads.find(l => l.id === selectedLeadId) ?? null, [leads, selectedLeadId]);
-  const sheetSaveState = selectedLeadId != null ? (queueSnap.byLead[selectedLeadId] ?? "idle") : "idle";
-  const sheetSavedOutcome = lastSaved && lastSaved.leadId === selectedLeadId ? lastSaved.outcome : null;
+  const selectedLead = selectedLeadId != null ? (leadById.get(selectedLeadId) ?? null) : null;
 
-  // Where the rep physically is, for Next Door: fresh GPS → selected door →
-  // last knocked door → map center. Never a geocoding/directions API call.
-  const knockOrigin = useCallback((): { lat: number; lng: number } => {
-    const fix = lastFixRef.current;
-    if (fix && Date.now() - fix.at < GPS_FRESH_MS) return { lat: fix.lat, lng: fix.lng };
-    const sel = leads.find(l => l.id === selectedLeadId);
-    if (sel?.lat && sel?.lng) return { lat: sel.lat, lng: sel.lng };
-    if (lastKnockedRef.current) return lastKnockedRef.current;
-    const c = mapRef.current?.getCenter?.();
-    return { lat: c?.lat ?? 0, lng: c?.lng ?? 0 };
-  }, [leads, selectedLeadId]);
-
-  const writeResume = useCallback((leadId: number | null) => {
-    if (user?.teamMemberId == null) return;
-    try {
-      const map = mapRef.current;
-      const c = map?.getCenter?.();
-      localStorage.setItem(`hf.repResume.v1.${user.teamMemberId}`, JSON.stringify({
-        lastLeadId: leadId,
-        camera: c ? { lng: c.lng, lat: c.lat, zoom: map.getZoom() } : null,
-        at: new Date().toISOString(),
-      }));
-    } catch { /* storage blocked (sandboxed iframe) — resume simply won't offer */ }
-  }, [user?.teamMemberId]);
-
-  // One-tap knock: optimistic pin recolor FIRST (marking a door must feel
+  // One-tap disposition: optimistic pin recolor FIRST (marking a door must feel
   // instant in the field), then the offline-safe enqueue. The queue owns
   // retries/idempotency; react-query owns rollback via onSaved invalidations.
-  const handleKnock = useCallback((outcome: KnockOutcome, extra?: { callbackDate?: string; callbackTime?: string }) => {
-    const lead = leads.find(l => l.id === selectedLeadId);
+  // The card's chip, timestamp, and active pill all read from this same
+  // optimistic pin data, so a single tap updates everything at once.
+  const handleKnock = useCallback((outcome: KnockOutcome) => {
+    const lead = selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
     if (!lead || !knockQueue) return;
     const credit = isRep ? user?.teamMemberId : (lead.assignedRepId ?? user?.teamMemberId);
     if (!credit) { toast({ title: "Assign a rep to this lead first, then log the knock", variant: "destructive" }); return; }
@@ -1700,78 +1454,53 @@ export default function MapView() {
         ? { ...p, leadStatus: OUTCOME_TO_STATUS[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: at }
         : p) };
     });
-    setLastSaved({ leadId: lead.id, outcome });
-    if (lead.lat && lead.lng) lastKnockedRef.current = { lat: lead.lat, lng: lead.lng };
     recentIdsRef.current = [...recentIdsRef.current.slice(-9), lead.id];
-    knockQueue.enqueue({ leadId: lead.id, repId: credit, outcome, callbackDate: extra?.callbackDate ?? null, callbackTime: extra?.callbackTime ?? null });
-    writeResume(lead.id);
-    setResumeTarget(null); // knocked this session — the resume offer is stale
-    if (outcome === "sold") toast({ title: "🎉 Sale logged!" });
-  }, [leads, selectedLeadId, knockQueue, isRep, user, qc, toast, writeResume]);
-
-  const handleSaveNote = useCallback((note: string) => {
-    if (selectedLeadId == null || !knockQueue) return;
-    knockQueue.updateNote(selectedLeadId, note).then(r => {
-      if (r === "not-found") toast({ title: "Couldn't attach note — log a knock first", variant: "destructive" });
+    // Capture WHERE the rep is standing at the tap so the server can verify the
+    // work. Non-blocking: the pin already recolored above; we attach the fix and
+    // enqueue when it resolves (a recent cached fix returns almost instantly, a
+    // denied/absent one enqueues location-less → server marks it Needs Review).
+    captureFieldFix().then(fix => {
+      knockQueue.enqueue({ leadId: lead.id, repId: credit, outcome, callbackDate: null, callbackTime: null, ...fix });
     });
-  }, [selectedLeadId, knockQueue, toast]);
-
-  const handleRetrySave = useCallback(() => {
-    if (selectedLeadId != null) knockQueue?.retryLead(selectedLeadId);
-  }, [knockQueue, selectedLeadId]);
-
-  const goNextDoor = useCallback(() => {
-    const map = mapRef.current;
-    const origin = knockOrigin();
-    const pins = (visibleLeadsRef.current.length ? visibleLeadsRef.current : leads).filter(l => l.lat && l.lng) as any[];
-    const exclude = new Set<number>([...recentIdsRef.current, ...(selectedLeadId != null ? [selectedLeadId] : [])]);
-    // Retry without the ring buffer before declaring done — the buffer may be
-    // masking the genuinely-last few doors.
-    let next = nearestUnworkedLead(origin, pins, exclude);
-    if (!next) next = nearestUnworkedLead(origin, pins, new Set(selectedLeadId != null ? [selectedLeadId] : []));
-    // Inside the Done/Follow-ups/Sold lenses the visible set has zero routable
-    // doors by definition — fall back to ALL pins and reset the lens so the rep
-    // lands back in active-knocking view instead of a false "all worked".
-    if (!next) {
-      next = nearestUnworkedLead(origin, leads.filter(l => l.lat && l.lng) as any[], new Set(selectedLeadId != null ? [selectedLeadId] : []));
-      if (next) { setVisitFilter("all"); setFilterStatus("all"); }
+    // Sold pays: the server auto-creates a pending commission with this knock.
+    // Surface it immediately — one calm toast, plus a fresh Commission tab.
+    if (outcome === "sold") {
+      toast({ title: "Sold — commission entry created", description: "Pending review in the Commission tab" });
+      qc.invalidateQueries({ queryKey: ["/api/commissions"] });
+      qc.invalidateQueries({ queryKey: ["/api/commissions/summary"] });
     }
-    if (!next) { toast({ title: "All doors here are worked — nice job 🎉" }); return; }
-    setSelectedLeadId(next.id);
-    moveCamera(map, {
-      center: [next.lng, next.lat], zoom: Math.max(map?.getZoom?.() ?? 16, 16.5),
-      duration: 600, essential: true,
-      padding: { top: 0, left: 0, right: 0, bottom: sheetPeekPaddingPx() },
-    });
-  }, [knockOrigin, leads, selectedLeadId, toast]);
+  }, [leadById, selectedLeadId, knockQueue, isRep, user, qc, toast]);
 
-  const handleSkip = useCallback(() => {
-    if (selectedLeadId != null) recentIdsRef.current = [...recentIdsRef.current.slice(-9), selectedLeadId];
-    goNextDoor();
-  }, [selectedLeadId, goNextDoor]);
+  // Lead-level notes: the card owns typing; this owns persistence through the
+  // offline-safe, conflict-aware pipeline in lib/leadNotes. Explicit leadId so
+  // the card can flush the OUTGOING lead's pending note during a swap.
+  const notePoster = useCallback<NotePoster>(
+    (leadId, body) => apiRequest("PATCH", `/api/leads/${leadId}/notes`, body),
+    [],
+  );
+  const handleSaveNote = useCallback(async (leadId: number, note: string, baseUpdatedAt: string | null): Promise<NoteSaveResult> => {
+    const result = await saveLeadNote(notePoster, leadId, note, baseUpdatedAt);
+    if (result.status === "saved") {
+      qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}`] });
+      qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/history`] }); // note event just landed
+    }
+    return result;
+  }, [notePoster, qc]);
 
-  const handleAssignRep = useCallback(async (repId: number | null) => {
-    if (selectedLeadId == null) return;
-    try {
-      await apiRequest("POST", `/api/leads/${selectedLeadId}/assign`, { repId });
-      toast({ title: repId ? "Lead assigned" : "Lead unassigned" });
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-    } catch { toast({ title: "Failed to assign", variant: "destructive" }); }
-  }, [selectedLeadId, qc, toast]);
+  // Stashed offline notes flush the moment connectivity returns (and once on
+  // mount, in case the app reloaded while offline notes were pending).
+  useEffect(() => {
+    const flush = () => { void flushPendingNotes(notePoster); };
+    flush();
+    window.addEventListener("online", flush);
+    return () => window.removeEventListener("online", flush);
+  }, [notePoster]);
 
-  // Next Door suggestion for the sheet button ("152 Maple St · 40m").
-  const nextDoorSuggestion = useMemo(() => {
-    if (!useSheet || !selectedLead?.lat || !selectedLead?.lng) return null;
-    const pins = (visibleLeadsRef.current.length ? visibleLeadsRef.current : leads).filter(l => l.lat && l.lng) as any[];
-    const exclude = new Set<number>([...recentIdsRef.current, selectedLead.id]);
-    return nearestUnworkedLead({ lat: selectedLead.lat, lng: selectedLead.lng }, pins, exclude);
-    // lastSaved dep: re-suggest after each knock (ring buffer grew)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useSheet, selectedLead, leads, lastSaved]);
-  const nextDoorHint = nextDoorSuggestion && selectedLead?.lat && selectedLead?.lng
-    ? `${(nextDoorSuggestion as any).address ?? ""} · ${distanceHint(haversineMeters({ lat: selectedLead.lat, lng: selectedLead.lng }, nextDoorSuggestion))}`
-    : null;
+  // Stable identity so the memoized card never re-renders for MapView churn.
+  const closeSheet = useCallback(() => setSelectedLeadId(null), []);
+
+  // Rep assignment lives on the manager popup path (window.__assignRep) only —
+  // the rep card carries zero admin actions.
 
   // Camera padding: keep the tapped pin visible above the peek sheet; restore
   // padding (never the center — the rep keeps their pan position) on close.
@@ -1780,11 +1509,18 @@ export default function MapView() {
     if (!useSheet) return;
     const map = mapRef.current;
     if (!map || !mapReady) return;
+    // ≥1024px the card docks right (380px panel) — pad that edge instead of
+    // the bottom so the selected pin still sits in the visible map area.
+    let dockedPanel = false;
+    try { dockedPanel = window.matchMedia("(min-width: 1024px)").matches; } catch { /* jsdom */ }
+    const openPad = dockedPanel
+      ? { top: 0, left: 0, right: 396, bottom: 0 }
+      : { top: 0, left: 0, right: 0, bottom: sheetPeekPaddingPx() };
     if (selectedLeadId != null) {
       sheetWasOpenRef.current = true;
-      const lead = leads.find(l => l.id === selectedLeadId);
+      const lead = leadById.get(selectedLeadId);
       if (lead?.lat && lead?.lng) {
-        moveCamera(map, { center: [lead.lng, lead.lat], padding: { top: 0, left: 0, right: 0, bottom: sheetPeekPaddingPx() }, duration: 350, essential: true });
+        moveCamera(map, { center: [lead.lng, lead.lat], padding: openPad, duration: 350, essential: true });
       }
     } else if (sheetWasOpenRef.current) {
       sheetWasOpenRef.current = false;
@@ -1793,84 +1529,57 @@ export default function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedLeadId, mapReady, useSheet]);
 
-  // Resume chip — offered (never auto-opened) when a fresh last-worked door exists.
-  const resumeCheckedRef = useRef(false);
-  useEffect(() => {
-    if (!isRep || resumeCheckedRef.current || user?.teamMemberId == null || leads.length === 0) return;
-    resumeCheckedRef.current = true;
-    try {
-      const raw = localStorage.getItem(`hf.repResume.v1.${user.teamMemberId}`);
-      if (!raw) return;
-      const r = JSON.parse(raw);
-      if (!r?.at || Date.now() - Date.parse(r.at) >= RESUME_TTL_MS) {
-        localStorage.removeItem(`hf.repResume.v1.${user.teamMemberId}`);
-        return;
-      }
-      const lead = r.lastLeadId ? leads.find(l => l.id === r.lastLeadId) : null;
-      if (lead && pinDisplayState(lead) !== "sold") setResumeTarget({ leadId: lead.id, address: lead.address });
-    } catch { /* storage blocked — no resume offer */ }
-  }, [isRep, user?.teamMemberId, leads]);
+  // No resume system — live GPS is the anchor. The rep opens the app where
+  // they stand; the blue dot is always on and moves with the device.
 
-  // HUD collapses to "{n} left" while the rep pans — tap to re-expand.
+  // Selected-pin pulse: a slow breathing halo on the ring layer so the active
+  // door is findable at a glance. Pure style-thread paint updates (no setData,
+  // no React state per frame); disabled under prefers-reduced-motion.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady || !isRep) return;
-    const onMove = () => setHudMini(true);
-    map.on("movestart", onMove);
-    return () => { try { map.off("movestart", onMove); } catch {} };
-  }, [mapReady, isRep]);
+    if (!map || !mapReady || selectedLeadId == null) return;
+    let reduce = false;
+    try { reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch { /* jsdom */ }
+    if (reduce) return;
+    let raf = 0;
+    const start = performance.now();
+    const tick = (now: number) => {
+      const phase = (Math.sin((now - start) / 450) + 1) / 2; // 0..1, ~2.8s cycle
+      try {
+        map.setPaintProperty("lead-selected-ring", "circle-radius", 14 + phase * 6);
+        map.setPaintProperty("lead-selected-ring", "circle-stroke-opacity", 0.95 - phase * 0.45);
+      } catch { /* layer mid-reload */ }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      try {
+        map.setPaintProperty("lead-selected-ring", "circle-radius", 14);
+        map.setPaintProperty("lead-selected-ring", "circle-stroke-opacity", 0.95);
+      } catch { /* map torn down */ }
+    };
+  }, [selectedLeadId, mapReady, styleEpoch]);
 
   // noToken is true only after we confirmed the token is unavailable (never during load)
   const noToken = mapTokenFailed;
-  const tokenLoading = !mapboxToken && !mapTokenFailed;
 
   return (
     <div className="flex flex-col" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
 
-      {/* ── Top bar ── (admin/manager/team-lead chrome; reps get the on-map HUD) */}
+      {/* ── Top bar — manager/team-lead. ONE calm row: two filters, two
+             actions. Counts live where they belong (on-map chip + legend),
+             not as toolbar furniture. ── */}
       {!isRep && (
-      <div className="flex items-center gap-3 px-3 py-2 border-b border-border bg-card flex-shrink-0">
-        {/* Stats */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5">
-            <div className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_6px_rgba(34,197,94,0.8)]" />
-            <span className="text-xs font-semibold text-foreground">{leads.length}</span>
-            <span className="text-xs text-muted-foreground">leads</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <Wifi className="w-3 h-3 text-teal-400" />
-            <span className="text-xs font-semibold text-teal-400">{newFiberCount}</span>
-            <span className="text-xs text-muted-foreground hidden sm:inline"> fiber</span>
-          </div>
-          {!isRep && (
-            <div className="flex items-center gap-1">
-              <Users className="w-3 h-3 text-blue-400" />
-              <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>
-            </div>
-          )}
-          {/* Doors left to knock — the field rep's key number */}
-          <div className="flex items-center gap-1" title="Doors not yet knocked">
-            <DoorOpen className="w-3 h-3 text-amber-400" />
-            <span className="text-xs font-semibold text-amber-400">{doorsLeft.toLocaleString()}</span>
-            <span className="text-xs text-muted-foreground hidden sm:inline">left</span>
-          </div>
-          {/* Visit filter — All / Left / Done */}
-          <div className="flex items-center rounded-md border border-border overflow-hidden text-[11px]">
-            {([["all", "All"], ["unvisited", "Left"], ["visited", "Done"]] as const).map(([v, label]) => (
-              <button key={v} onClick={() => setVisitFilter(v)}
-                className={`px-2 py-1 transition-colors ${visitFilter === v ? "bg-primary text-white" : "text-muted-foreground hover:text-foreground hover:bg-secondary"}`}
-                data-testid={`visit-filter-${v}`}>
-                {label}
-              </button>
-            ))}
-          </div>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-1.5 border-b border-border bg-card flex-shrink-0">
+        <div className="flex items-center gap-2">
           {/* Filter map pins by rep — admin/manager/team lead */}
           {canAssign && (
             <select
               value={filterRep}
               onChange={e => setFilterRep(e.target.value)}
               data-testid="map-filter-rep"
-              className="h-7 bg-secondary border border-border rounded-md px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              className="h-7 max-w-[150px] bg-transparent border border-border rounded-lg px-2 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               title="Show only leads for a rep"
             >
               <option value="all">All reps</option>
@@ -1901,10 +1610,10 @@ export default function MapView() {
                 }
               }}
               disabled={!mapReady}
-              className={`h-7 text-xs ${
+              className={`h-7 text-xs font-semibold ${
                 lassoMode
-                  ? "border-teal-500 text-teal-300 bg-teal-500/10"
-                  : "border-teal-500/40 text-teal-400 hover:bg-teal-500/10"
+                  ? "border-teal-400 text-white bg-teal-500/80 hover:bg-teal-500"
+                  : "border-teal-500/50 text-teal-300 bg-teal-500/15 hover:bg-teal-500/25"
               }`}
               title="Assign Area: drag a loop around leads, pick a rep — assigns them and color-codes the territory"
             >
@@ -1918,22 +1627,11 @@ export default function MapView() {
               onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); exitLasso(); }}
               disabled={!mapReady}
               size="sm" variant="outline"
-              className={`h-7 text-xs ${drawMode ? "border-orange-500 text-orange-400 bg-orange-500/10" : "border-orange-500/40 text-orange-400 hover:bg-orange-500/10"}`}
+              className={`h-7 text-xs font-semibold ${drawMode ? "border-orange-400 text-white bg-orange-500/80 hover:bg-orange-500" : "border-orange-500/50 text-orange-300 bg-orange-500/15 hover:bg-orange-500/25"}`}
               title="Scan Area: draw a box to scan Kinetic for new fiber leads"
             ><Target className="w-3 h-3 mr-1" />{drawMode ? "Drawing…" : "Scan Area"}</Button>
           )}
 
-          {/* Divider between action tools and view controls */}
-          {(canAssign || isAdmin) && <div className="w-px h-5 bg-border mx-0.5" />}
-
-          {/* ── View controls (map mode moved to the right control rail) ── */}
-          <Button
-            size="sm" variant="outline"
-            onClick={() => mapRef.current?.flyTo({ center: ROCKWELL_CENTER, zoom: 13, duration: 800 })}
-            disabled={!mapReady}
-            className="h-7 text-xs border-border text-muted-foreground hover:text-foreground"
-            title="Reset map view"
-          ><Home className="w-3 h-3" /></Button>
         </div>
       </div>
       )}
@@ -2065,8 +1763,10 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── On-map street/address search — flies to the matching lead ── */}
-          {mapReady && (
+          {/* ── On-map street/address search — flies to the matching lead.
+                 Manager/desk tool: reps navigate by walking, not by typing —
+                 field mode keeps the top of the map clear. ── */}
+          {mapReady && !isRep && (
             <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 w-[min(420px,70vw)]">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
@@ -2122,48 +1822,8 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── Rep progress HUD — assigned/knocked/left/sold/follow-ups, client-derived ── */}
-          {mapReady && isRep && leads.length > 0 && (
-            <div className="absolute top-14 left-3 right-3 z-20 flex justify-start pointer-events-none [&>*]:pointer-events-auto">
-              <RepProgressHUD pins={leads} mini={hudMini} onToggle={() => setHudMini(m => !m)} />
-            </div>
-          )}
-
-          {/* ── Rep filter chips — one-tap lenses over the same pins. Radio-style;
-                 knocked doors always stay on the map under "All" (default). ── */}
-          {mapReady && isRep && (
-            <div className="absolute top-[104px] left-3 right-3 z-20 flex gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pb-0.5">
-              {([
-                ["all", "All", visitFilter === "all" && filterStatus === "all"],
-                ["unworked", "Left", visitFilter === "unvisited" && filterStatus === "all"],
-                ["worked", "Done", visitFilter === "visited" && filterStatus === "all"],
-                ["followups", "Follow-ups", filterStatus === "follow_up"],
-                ["sold", "Sold", filterStatus === "sold"],
-              ] as const).map(([key, label, active]) => (
-                <button
-                  key={key}
-                  data-testid={`filter-chip-${key}`}
-                  aria-pressed={active}
-                  onClick={() => {
-                    if (key === "all") { setVisitFilter("all"); setFilterStatus("all"); }
-                    else if (key === "unworked") { setVisitFilter("unvisited"); setFilterStatus("all"); }
-                    else if (key === "worked") { setVisitFilter("visited"); setFilterStatus("all"); }
-                    else if (key === "followups") { setVisitFilter("all"); setFilterStatus("follow_up"); }
-                    else { setVisitFilter("all"); setFilterStatus("sold"); }
-                  }}
-                  // Active = SOLID teal (a 20% tint dies in direct sunlight over satellite)
-                  className={`h-9 px-3 shrink-0 rounded-full text-xs font-semibold border shadow-lg transition-colors active:scale-95 flex items-center ${
-                    active ? "bg-primary border-primary text-white" : "bg-black/80 backdrop-blur-sm border-white/15 text-white/70 hover:text-white"
-                  }`}
-                >
-                  {/* Follow-ups/Sold chips teach the pin-color language with a dot */}
-                  {key === "followups" && <span className={`w-1.5 h-1.5 rounded-full mr-1 inline-block ${active ? "bg-white/70" : ""}`} style={active ? undefined : { background: "#f59e0b" }} />}
-                  {key === "sold" && <span className={`w-1.5 h-1.5 rounded-full mr-1 inline-block ${active ? "bg-white/70" : ""}`} style={active ? undefined : { background: "#10b981" }} />}
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Rep mode has NO persistent map chrome — no HUD, no filter lenses,
+              no counters. The map is pins only; every pin state reads by color. */}
 
           {/* Offline-queue badge — knocks waiting to sync. Hugs the edge on mobile
               rep screens where the Mapbox control stack is hidden. */}
@@ -2172,31 +1832,6 @@ export default function MapView() {
               className={`absolute top-3 ${isRep && isMobile ? "right-3" : "right-14"} z-20 flex items-center gap-1.5 h-8 px-3 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-semibold backdrop-blur-sm shadow-lg`}>
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
               {queueSnap.pendingCount} to sync
-            </div>
-          )}
-
-          {/* Resume where you left off — offered, never auto-opened */}
-          {mapReady && isRep && resumeTarget && selectedLeadId == null && (
-            <div className="absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-teal-400/30 shadow-2xl pl-4 pr-1.5 py-1.5"
-              style={{ bottom: "calc(1.5rem + env(safe-area-inset-bottom))" }}>
-              <button
-                data-testid="resume-chip"
-                onClick={() => {
-                  const lead = leads.find(l => l.id === resumeTarget.leadId);
-                  setResumeTarget(null);
-                  if (lead) flyToLead(lead);
-                }}
-                className="flex items-center gap-2 text-[13px] font-semibold text-white"
-              >
-                <Footprints className="w-4 h-4 text-teal-400" />
-                Resume · <span className="max-w-[160px] truncate font-medium text-white/85">{resumeTarget.address}</span>
-              </button>
-              <button
-                data-testid="resume-chip-dismiss"
-                onClick={() => setResumeTarget(null)}
-                className="w-9 h-9 rounded-full flex items-center justify-center text-white/50 hover:text-white"
-                title="Dismiss"
-              ><X className="w-4 h-4" /></button>
             </div>
           )}
 
@@ -2218,40 +1853,53 @@ export default function MapView() {
                   ><X className="w-4 h-4" /></button>
                 </div>
               ) : (
-                /* Drawn → count · rep picker · Assign (creates colored territory) */
-                <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-teal-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
-                  <span className="flex items-center gap-1.5 text-[14px] font-bold text-white whitespace-nowrap" aria-live="polite">
-                    <span
-                      className="w-2.5 h-2.5 rounded-full transition-colors"
-                      style={{ background: colorForRep(lassoRepId ? Number(lassoRepId) : null), boxShadow: lassoRepId ? `0 0 8px ${colorForRep(Number(lassoRepId))}` : "none" }}
-                    />
-                    {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads in area</span>
-                  </span>
-                  <select
-                    value={lassoRepId}
-                    onChange={e => setLassoRepId(e.target.value)}
-                    data-testid="lasso-rep-select"
-                    className="h-9 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60 max-w-[160px]"
-                  >
-                    <option value="" className="text-slate-900">Assign to rep…</option>
-                    {team.filter(m => m.active).map((m: TeamMember) => (
-                      <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
-                    ))}
-                  </select>
-                  <Button
-                    disabled={!lassoRepId || assignAreaMutation.isPending}
-                    onClick={() => assignAreaMutation.mutate({ polygon: lassoPoints, repId: Number(lassoRepId) })}
-                    data-testid="lasso-assign"
-                    className="h-9 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
-                  >
-                    {assignAreaMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
-                  </Button>
-                  <button
-                    onClick={exitLasso}
-                    className="w-9 h-9 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
-                    title="Exit"
-                    data-testid="lasso-exit"
-                  ><X className="w-4 h-4" /></button>
+                /* Drawn → name it (optional) · pick rep · Assign (creates colored territory) */
+                <div className="flex flex-col gap-2 rounded-2xl bg-[#0F2A43]/95 backdrop-blur-md border border-teal-400/30 shadow-2xl px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(440px,calc(100vw-24px))]">
+                  <input
+                    type="text"
+                    value={lassoName}
+                    onChange={e => setLassoName(e.target.value)}
+                    maxLength={60}
+                    data-testid="lasso-area-name"
+                    placeholder={lassoRepId
+                      ? `Area name — leave blank for "${team.find(m => m.id === Number(lassoRepId))?.name ?? "Rep"}'s area"`
+                      : "Area name (optional)"}
+                    className="h-9 w-full rounded-lg bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                  />
+                  <div className="flex items-center gap-2.5">
+                    <span className="flex items-center gap-1.5 text-[14px] font-bold text-white whitespace-nowrap" aria-live="polite">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full transition-colors"
+                        style={{ background: colorForRep(lassoRepId ? Number(lassoRepId) : null), boxShadow: lassoRepId ? `0 0 8px ${colorForRep(Number(lassoRepId))}` : "none" }}
+                      />
+                      {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads in area</span>
+                    </span>
+                    <select
+                      value={lassoRepId}
+                      onChange={e => setLassoRepId(e.target.value)}
+                      data-testid="lasso-rep-select"
+                      className="h-9 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60 max-w-[160px]"
+                    >
+                      <option value="" className="text-slate-900">Assign to rep…</option>
+                      {team.filter(m => m.active).map((m: TeamMember) => (
+                        <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
+                      ))}
+                    </select>
+                    <Button
+                      disabled={!lassoRepId || assignAreaMutation.isPending}
+                      onClick={() => assignAreaMutation.mutate({ polygon: lassoPoints, repId: Number(lassoRepId), name: lassoName })}
+                      data-testid="lasso-assign"
+                      className="h-9 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
+                    >
+                      {assignAreaMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
+                    </Button>
+                    <button
+                      onClick={exitLasso}
+                      className="w-9 h-9 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
+                      title="Exit"
+                      data-testid="lasso-exit"
+                    ><X className="w-4 h-4" /></button>
+                  </div>
                 </div>
               )}
             </div>
@@ -2274,7 +1922,14 @@ export default function MapView() {
                     territory={{ id: t.id, name: t.name, status, repIds, color: t.color, leadCount: prog?.total ?? 0, workedCount: prog?.knocked }}
                     currentUser={{ role: (user?.role ?? "rep") }}
                     teamNames={teamNames}
+                    progress={prog ? {
+                      total: prog.total, verifiedWorkedLeads: prog.verifiedWorkedLeads, areaWorkedPct: prog.areaWorkedPct,
+                      verified: prog.verified, needsReview: prog.needsReview, invalid: prog.invalid,
+                      avgDistanceM: prog.avgDistanceM, maxAllowedDistanceM: prog.maxAllowedDistanceM,
+                    } : undefined}
                     onReclaim={!isPool && canManage ? () => setReclaimMenuId(reclaimMenuId === t.id ? null : t.id) : undefined}
+                    onRename={name => renameTerritoryMutation.mutate({ id: t.id, name })}
+                    onViewHistory={() => setActivityTerritoryId(t.id)}
                   />
                   {/* Assign-to-next-rep for unassigned/reclaimed areas */}
                   {isPool && (
@@ -2307,29 +1962,32 @@ export default function MapView() {
             );
           })()}
 
+          {/* Territory activity History drawer (opened from the card's View Activity) */}
+          {activityTerritoryId != null && (
+            <TerritoryActivityDrawer territoryId={activityTerritoryId} onClose={() => setActivityTerritoryId(null)} />
+          )}
+
           {/* ── Right control rail — layers + map mode (SalesRabbit/SPOTIO style) ── */}
           {/* Admin/manager control rail — layer toggles + map modes. Reps get ONE
               button instead: nothing on their screen that doesn't speed up knocking. */}
           {mapReady && !isRep && (
-            <div className="absolute top-[110px] right-3 z-20 w-40 rounded-xl bg-black/80 backdrop-blur-md border border-white/10 p-2.5 shadow-xl text-white">
-              <div className="text-[9px] uppercase tracking-wider text-white/40 font-semibold mb-1.5">Layers</div>
+            <div className="absolute top-[110px] right-3 z-20 w-[136px] rounded-xl bg-black/75 backdrop-blur-md border border-white/10 p-2 shadow-lg text-white space-y-0.5">
               {[
                 { key: "leads", label: "Leads", on: showLeads, toggle: () => setShowLeads(v => !v) },
                 ...(canAssign ? [{ key: "terr", label: "Territories", on: showTerritories, toggle: () => setShowTerritories(v => !v) }] : []),
               ].map(l => (
                 <button key={l.key} onClick={l.toggle} data-testid={`layer-${l.key}`}
-                  className="w-full flex items-center justify-between py-1 text-[12px] text-white/85 hover:text-white">
+                  className="w-full flex items-center justify-between py-0.5 text-[11.5px] text-white/80 hover:text-white">
                   <span>{l.label}</span>
-                  <span className={`w-7 h-4 rounded-full transition-colors relative ${l.on ? "bg-primary" : "bg-white/15"}`}>
-                    <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${l.on ? "left-3.5" : "left-0.5"}`} />
+                  <span className={`w-6 h-3.5 rounded-full transition-colors relative ${l.on ? "bg-primary" : "bg-white/15"}`}>
+                    <span className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white transition-all ${l.on ? "left-3" : "left-0.5"}`} />
                   </span>
                 </button>
               ))}
-              <div className="text-[9px] uppercase tracking-wider text-white/40 font-semibold mt-2.5 mb-1.5">Map</div>
-              <div className="grid grid-cols-3 gap-1">
-                {([["satellite", "Sat"], ["streets", "Street"], ["dark", "Dark"]] as const).map(([mode, label]) => (
+              <div className="grid grid-cols-3 gap-1 pt-1.5 mt-1 border-t border-white/10">
+                {([["satellite", "Sat"], ["streets", "St"], ["dark", "Dark"]] as const).map(([mode, label]) => (
                   <button key={mode} onClick={() => setMapStyleMode(mode)} data-testid={`mapmode-${mode}`} disabled={!mapReady}
-                    className={`text-[10px] py-1 rounded-md transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/70 hover:bg-white/20"}`}>
+                    className={`text-[10px] py-1 rounded-md transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/60 hover:bg-white/20"}`}>
                     {label}
                   </button>
                 ))}
@@ -2337,22 +1995,8 @@ export default function MapView() {
             </div>
           )}
 
-          {/* Rep map-style button — one tap cycles Sat → Street → Dark. Fixed
-              min-width so the pill never resizes between labels; the icon shows
-              the CURRENT mode. */}
-          {mapReady && isRep && (
-            <button
-              data-testid="rep-map-style"
-              onClick={() => setMapStyleMode(m => m === "satellite" ? "streets" : m === "streets" ? "dark" : "satellite")}
-              aria-label={`Map style: ${mapStyleMode === "satellite" ? "Satellite" : mapStyleMode === "streets" ? "Street" : "Dark"}. Tap to switch`}
-              className="absolute top-[152px] right-3 z-20 h-9 min-w-[76px] px-3 rounded-full bg-black/80 backdrop-blur-sm border border-white/15 text-white/90 text-[11px] font-semibold shadow-lg flex items-center justify-center gap-1.5 active:scale-95 transition"
-            >
-              {mapStyleMode === "satellite" ? <Satellite className="w-3.5 h-3.5" />
-                : mapStyleMode === "streets" ? <MapIcon className="w-3.5 h-3.5" />
-                : <Moon className="w-3.5 h-3.5" />}
-              {mapStyleMode === "satellite" ? "Sat" : mapStyleMode === "streets" ? "Street" : "Dark"}
-            </button>
-          )}
+          {/* No style toggle in rep mode — one good field basemap (satellite-
+              streets), zero extra pills. Managers switch styles from the rail. */}
 
           {/* Locate-me FAB — big thumb target, bottom-right, above zoom controls */}
           {mapReady && (
@@ -2367,30 +2011,35 @@ export default function MapView() {
             </button>
           )}
 
-          {/* Next Door FAB — start (or continue) the route when the sheet is closed */}
-          {mapReady && useSheet && isRep && selectedLeadId == null && leads.length > 0 && (
+          {/* Pin legend + filter — bottom left, admin/manager only. Collapsed
+                 to a quiet dot-strip by default; one tap expands the full
+                 status filter + assigned-areas manager panel. */}
+          {mapReady && !isRep && !legendOpen && (
             <button
-              onClick={goNextDoor}
-              title="Take me to the nearest unworked door"
-              data-testid="next-door-fab"
-              className="absolute bottom-24 right-3 z-20 rounded-full bg-card border border-border text-foreground shadow-xl flex items-center justify-center active:scale-95 transition-transform hover:border-primary/50"
-              style={{ height: 52, width: 52 }}
+              onClick={() => setLegendOpen(true)}
+              data-testid="legend-collapsed"
+              title="Legend, status filter & assigned areas"
+              className="absolute bottom-8 left-3 z-10 flex items-center gap-1.5 h-9 px-3 rounded-full bg-black/80 backdrop-blur-md border border-white/10 shadow-lg active:scale-95 transition"
             >
-              <DoorOpen className="w-6 h-6 text-primary" />
+              {Object.values(PIN_COLORS).map((pin, i) => (
+                <span key={i} className="w-2 h-2 rounded-full" style={{ background: pin.bg }} />
+              ))}
+              {filterStatus !== "all" && (
+                <span className="ml-1 text-[10px] font-semibold text-teal-300">filtered</span>
+              )}
             </button>
           )}
-
-          {/* Pin legend + filter — bottom left, admin/manager only. Reps get the
-              chips instead on every viewport: two filter UIs writing the same
-              state (legend can pick statuses the chips can't show) is confusion,
-              not power. */}
-          {mapReady && !isRep && (
-            <div className="absolute bottom-8 left-3 bg-black/85 backdrop-blur-md rounded-xl p-3 z-10 min-w-[150px] shadow-xl border border-white/5">
+          {mapReady && !isRep && legendOpen && (
+            <div className="absolute bottom-8 left-3 bg-black/85 backdrop-blur-md rounded-xl p-3 z-10 min-w-[170px] max-w-[240px] shadow-xl border border-white/5">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Filter by status</span>
-                {filterStatus !== "all" && (
-                  <button onClick={() => setFilterStatus("all")} className="text-[10px] text-teal-400 hover:text-teal-300">Clear</button>
-                )}
+                <span className="flex items-center gap-2">
+                  {filterStatus !== "all" && (
+                    <button onClick={() => setFilterStatus("all")} className="text-[10px] text-teal-400 hover:text-teal-300">Clear</button>
+                  )}
+                  <button onClick={() => setLegendOpen(false)} data-testid="legend-collapse" aria-label="Collapse legend"
+                    className="text-white/40 hover:text-white text-xs leading-none">×</button>
+                </span>
               </div>
               {Object.entries(PIN_COLORS).map(([status, pin]) => {
                 const count = statusCounts[status] ?? 0;
@@ -2482,23 +2131,13 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── Knock sheet — the rep's door-to-door workflow (reps always; admins on mobile) ── */}
+          {/* ── Lead card — the rep's door-to-door workflow (reps always; admins on mobile) ── */}
           {useSheet && (
             <LeadKnockSheet
               lead={selectedLead}
-              saveState={sheetSaveState}
-              savedOutcome={sheetSavedOutcome}
               onKnock={handleKnock}
               onSaveNote={handleSaveNote}
-              onRetrySave={handleRetrySave}
-              onClose={() => setSelectedLeadId(null)}
-              onNextDoor={goNextDoor}
-              onSkip={handleSkip}
-              nextDoorHint={nextDoorHint}
-              hasNext={!!nextDoorSuggestion}
-              canAssign={canAssign}
-              reps={team.filter(m => m.active).map(m => ({ id: m.id, name: m.name }))}
-              onAssignRep={handleAssignRep}
+              onClose={closeSheet}
             />
           )}
         </div>

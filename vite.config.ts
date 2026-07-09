@@ -16,6 +16,12 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    // Hardening: never ship source maps to production — they reverse the
+    // minification/mangling and expose original source. Vite defaults to
+    // false, but pin it explicitly so a future config tweak can't
+    // silently re-enable it. (Minify defaults to esbuild, which also
+    // mangles identifiers — accepted posture; no heavyweight obfuscator.)
+    sourcemap: false,
   },
   server: {
     fs: {

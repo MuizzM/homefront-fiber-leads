@@ -4,7 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import {
-  UserPlus, Edit2, Trash2, Phone, Mail, Shield,
+  UserPlus, Edit2, Trash2, Phone, Mail,
   User, CheckCircle2, XCircle, Users, Crown, Star, ChevronUp
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -484,8 +484,9 @@ export default function Team() {
         )}
       </div>
 
-      {/* Role legend */}
-      <div className="grid grid-cols-3 gap-2">
+      {/* Role legend — stacks on phones so the icon + label + description of each
+          role stays readable instead of being crushed into a third of 320px. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         {ROLES.map(r => (
           <div key={r.value} className={`rounded-lg border border-border p-3 bg-card`}>
             <div className="flex items-center gap-1.5 mb-1">

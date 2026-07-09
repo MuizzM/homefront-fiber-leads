@@ -38,13 +38,13 @@ const CANONICAL_STATUSES = [
 ] as const;
 
 const ALL_PIN_STATES: PinDisplayState[] = [
-  "unworked", "not_home", "contacted", "interested", "follow_up", "sold", "not_interested",
+  "unworked", "not_home", "contacted", "interested", "follow_up", "callback", "sold", "not_interested",
 ];
 
 describe("OUTCOMES — totality", () => {
-  it("defines exactly 7 outcomes with unique keys", () => {
-    expect(OUTCOMES).toHaveLength(7);
-    expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(7);
+  it("defines exactly 8 outcomes with unique keys (7 rep statuses + needs_verification)", () => {
+    expect(OUTCOMES).toHaveLength(8);
+    expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(8);
   });
 
   it("maps every outcome to one of the 6 canonical lead statuses", () => {
@@ -58,6 +58,8 @@ describe("OUTCOMES — totality", () => {
     expect(OUTCOME_TO_STATUS.callback).toBe("follow_up");
     expect(OUTCOME_TO_STATUS.follow_up).toBe("follow_up");
     expect(OUTCOME_TO_STATUS.not_home).toBe("prospect");
+    // "prospect" is the reset disposition — returns the door to the pool.
+    expect(OUTCOME_TO_STATUS.prospect).toBe("prospect");
     expect(OUTCOME_TO_STATUS.sold).toBe("sold");
   });
 
@@ -88,6 +90,22 @@ describe("deriveWasHome / isKnockOutcome", () => {
 });
 
 describe("pinDisplayState — truth table", () => {
+  it("callback renders as its own display state even though it stores follow_up", () => {
+    expect(
+      pinDisplayState({ leadStatus: "follow_up", visited: 1, lastOutcome: "callback" }),
+    ).toBe("callback");
+    // A later follow_up knock reclaims the plain follow_up state.
+    expect(
+      pinDisplayState({ leadStatus: "follow_up", visited: 1, lastOutcome: "follow_up" }),
+    ).toBe("follow_up");
+  });
+
+  it("a prospect reset reads as unworked orange again, even though it was knocked", () => {
+    expect(
+      pinDisplayState({ leadStatus: "prospect", visited: 1, lastOutcome: "prospect" }),
+    ).toBe("unworked");
+  });
+
   it("each non-prospect status maps to itself, beating visited/lastOutcome", () => {
     // sold beats visited+not_home: the status IS the disposition once set.
     for (const status of ["sold", "not_interested", "follow_up", "interested", "contacted"]) {
@@ -121,11 +139,21 @@ describe("pinDisplayState — truth table", () => {
     expect(pinDisplayState({ leadStatus: "prospect", visited: false })).toBe("unworked");
   });
 
-  it("STATE_COLORS covers all 7 pin states with valid hex colors", () => {
+  it("STATE_COLORS covers all 8 pin states with valid hex colors", () => {
     expect(Object.keys(STATE_COLORS).sort()).toEqual([...ALL_PIN_STATES].sort());
     for (const state of ALL_PIN_STATES) {
       expect(STATE_COLORS[state]).toMatch(/^#[0-9a-f]{6}$/i);
     }
+  });
+
+  it("spec color anchors: prospect orange, not-home blue, callback cyan, follow-up yellow", () => {
+    expect(STATE_COLORS.unworked).toBe("#f97316");        // orange — never green/purple
+    expect(STATE_COLORS.not_home).toBe("#3b82f6");        // blue
+    expect(STATE_COLORS.callback).toBe("#06b6d4");        // cyan
+    expect(STATE_COLORS.follow_up).toBe("#eab308");       // yellow, distinct from orange
+    // Every rep-facing state color is unique — no two statuses share a hue.
+    const repStates = ALL_PIN_STATES.filter(s => s !== "contacted");
+    expect(new Set(repStates.map(s => STATE_COLORS[s])).size).toBe(repStates.length);
   });
 });
 

@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+import { useCan } from "@/lib/capabilities";
 import { DollarSign, TrendingUp, Clock, CheckCircle, Plus, Filter, Download } from "lucide-react";
 import { useState } from "react";
 
@@ -16,6 +17,9 @@ interface Commission {
   id: number; repId: number; leadId: number | null; knockId: number | null;
   amount: number; status: string; saleDate: string; paidDate: string | null;
   notes: string | null; approvedBy: number | null; createdAt: string;
+  // Server-enriched for the mobile entry line ("sold date · rep · address, city")
+  repName: string | null; address: string | null; city: string | null;
+  calcType?: string | null; structureVersion?: number | null; // locked-plan provenance
 }
 interface CommissionSummary {
   repId: number; repName: string; total: number; paid: number; pending: number; sales: number;
@@ -34,6 +38,7 @@ export default function Commissions() {
   const { user } = useAuth();
   const { toast } = useToast();
   const isManager = user?.role === "admin" || user?.role === "manager";
+  const canManageStructures = useCan("commission.structure.manage"); // team_lead+ (UI parity with server)
   const [statusFilter, setStatusFilter] = useState("all");
   const [addOpen, setAddOpen] = useState(false);
   const [rateOpen, setRateOpen] = useState(false);
@@ -61,6 +66,7 @@ export default function Commissions() {
   const { data: rates = [] } = useQuery<CommissionRate[]>({
     queryKey: ["/api/commission-rates"],
     queryFn: () => apiRequest("GET", "/api/commission-rates").then(r => r.json()),
+    enabled: canManageStructures, // reps/others 403 here — don't fire it (or retry it)
   });
 
   const addMutation = useMutation({
@@ -83,6 +89,7 @@ export default function Commissions() {
       queryClient.invalidateQueries({ queryKey: ["/api/commissions/summary"] });
       toast({ title: "Commission updated" });
     },
+    onError: (e: any) => toast({ title: e?.message ?? "Couldn't update commission", variant: "destructive" }),
   });
 
   const addRateMutation = useMutation({
@@ -94,8 +101,12 @@ export default function Commissions() {
     },
   });
 
-  const filtered = statusFilter === "all" ? commissions : commissions.filter(c => c.status === statusFilter);
+  // Newest sale first — createdAt desc breaks same-day ties (id desc equivalent).
+  const ordered = [...commissions].sort((a, b) =>
+    b.saleDate < a.saleDate ? -1 : b.saleDate > a.saleDate ? 1 : b.id - a.id);
+  const filtered = statusFilter === "all" ? ordered : ordered.filter(c => c.status === statusFilter);
 
+  const runningTotal = commissions.reduce((s, c) => s + c.amount, 0);
   const totalPending = commissions.filter(c => c.status === "pending").reduce((s, c) => s + c.amount, 0);
   const totalApproved = commissions.filter(c => c.status === "approved").reduce((s, c) => s + c.amount, 0);
   const totalPaid = commissions.filter(c => c.status === "paid").reduce((s, c) => s + c.amount, 0);
@@ -113,13 +124,15 @@ export default function Commissions() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-white">Commissions</h1>
-          <p className="text-sm text-muted-foreground">Rep earnings and payout management</p>
+          <p className="text-sm text-muted-foreground" data-testid="commission-running-total">
+            {commissions.length} sale{commissions.length === 1 ? "" : "s"} · <span className="text-primary font-semibold">${runningTotal.toFixed(0)}</span> total
+          </p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" size="sm" onClick={exportCsv} className="border-border text-muted-foreground hover:bg-card" data-testid="button-export-csv">
             <Download className="w-4 h-4 mr-2" /> Export CSV
           </Button>
-          {user?.role === "admin" && (
+          {canManageStructures && (
             <Dialog open={rateOpen} onOpenChange={setRateOpen}>
               <DialogTrigger asChild>
                 <Button variant="outline" size="sm" className="border-border text-muted-foreground hover:bg-card" data-testid="button-add-rate">
@@ -190,10 +203,11 @@ export default function Commissions() {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-3 gap-4">
+      {/* Summary Cards — 3-up everywhere, but the icon stacks over the value on
+          the narrowest phones so nothing overflows at 320px. */}
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
         <Card className="bg-card border-border">
-          <CardContent className="p-4 flex items-center gap-3">
+          <CardContent className="p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center gap-1.5 sm:gap-3">
             <div className="w-9 h-9 rounded-lg bg-amber-600/20 flex items-center justify-center">
               <Clock className="w-4 h-4 text-amber-400" />
             </div>
@@ -204,7 +218,7 @@ export default function Commissions() {
           </CardContent>
         </Card>
         <Card className="bg-card border-border">
-          <CardContent className="p-4 flex items-center gap-3">
+          <CardContent className="p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center gap-1.5 sm:gap-3">
             <div className="w-9 h-9 rounded-lg bg-blue-600/20 flex items-center justify-center">
               <CheckCircle className="w-4 h-4 text-blue-400" />
             </div>
@@ -215,7 +229,7 @@ export default function Commissions() {
           </CardContent>
         </Card>
         <Card className="bg-card border-border">
-          <CardContent className="p-4 flex items-center gap-3">
+          <CardContent className="p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center gap-1.5 sm:gap-3">
             <div className="w-9 h-9 rounded-lg bg-emerald-600/20 flex items-center justify-center">
               <DollarSign className="w-4 h-4 text-emerald-400" />
             </div>
@@ -287,18 +301,24 @@ export default function Commissions() {
                 <div key={c.id} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`commission-row-${c.id}`}>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm text-white font-medium">${c.amount.toFixed(2)}</p>
-                      <Badge className={`text-xs ${STATUS_COLORS[c.status] ?? "bg-secondary text-muted-foreground"}`}>{c.status}</Badge>
+                      <p className="text-[15px] text-white font-semibold tabular-nums">${c.amount.toFixed(2)}</p>
+                      <Badge className={`text-xs capitalize ${STATUS_COLORS[c.status] ?? "bg-secondary text-muted-foreground"}`}>{c.status}</Badge>
                     </div>
-                    <p className="text-xs text-muted-foreground">Rep #{c.repId} · {c.saleDate}{c.notes ? ` · ${c.notes}` : ""}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {new Date(c.saleDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      {" · "}{c.repName ?? `Rep #${c.repId}`}
+                    </p>
+                    {c.address && (
+                      <p className="text-[11px] text-muted-foreground/70 truncate">{c.address}{c.city ? `, ${c.city}` : ""}</p>
+                    )}
                   </div>
                   {isManager && c.status === "pending" && (
-                    <Button size="sm" variant="outline" className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 text-xs h-7" onClick={() => updateMutation.mutate({ id: c.id, status: "approved" })} data-testid={`button-approve-${c.id}`}>
+                    <Button size="sm" variant="outline" disabled={updateMutation.isPending} className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 text-xs h-7 disabled:opacity-50" onClick={() => updateMutation.mutate({ id: c.id, status: "approved" })} data-testid={`button-approve-${c.id}`}>
                       Approve
                     </Button>
                   )}
                   {isManager && c.status === "approved" && (
-                    <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7" onClick={() => updateMutation.mutate({ id: c.id, status: "paid" })} data-testid={`button-mark-paid-${c.id}`}>
+                    <Button size="sm" disabled={updateMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 disabled:opacity-50" onClick={() => updateMutation.mutate({ id: c.id, status: "paid" })} data-testid={`button-mark-paid-${c.id}`}>
                       Mark Paid
                     </Button>
                   )}

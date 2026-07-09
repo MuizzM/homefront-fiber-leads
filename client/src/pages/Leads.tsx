@@ -7,9 +7,8 @@ import {
   Users, Search, Plus, Edit2, Trash2, Phone,
   DoorOpen, UserCheck, CalendarClock, Zap, Home, PhoneOff,
   BarChart2, Wifi, WifiOff, Building2, DollarSign, Map, Info,
-  RefreshCw, ShieldCheck, ShieldX, User, Mail
+  RefreshCw, ShieldCheck, ShieldX, User, Mail, ChevronLeft, ChevronRight
 } from "lucide-react";
-import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -92,7 +91,9 @@ function LeadForm({ initial, onSave, onCancel, saving }: {
     city: initial?.city ?? "",
     state: initial?.state ?? "NC",
     zip: initial?.zip ?? "",
-    fiberStatus: "new_fiber",
+    // Preserve the existing fiber status on edit (this form has no field for it);
+    // hardcoding new_fiber here silently reset tenured/no_service leads on save.
+    fiberStatus: initial?.fiberStatus ?? "new_fiber",
     leadStatus: initial?.leadStatus ?? "prospect",
     contactName: initial?.contactName ?? "",
     contactPhone: initial?.contactPhone ?? "",
@@ -170,7 +171,7 @@ function LeadForm({ initial, onSave, onCancel, saving }: {
 }
 
 // ── Knock Logger ──────────────────────────────────────────────────────────────
-function KnockLogger({ lead, team, onClose }: {
+function KnockLogger({ lead, team }: {
   lead: Lead; team: TeamMember[]; onClose: () => void;
 }) {
   const { toast } = useToast();
@@ -252,9 +253,9 @@ function KnockLogger({ lead, team, onClose }: {
             <div className="grid grid-cols-2 gap-2 mt-1">
               {[
                 { val: "not_interested", label: "Not Interested", color: "text-red-400" },
-                { val: "interested",     label: "Interested",     color: "text-blue-400" },
+                { val: "interested",     label: "Interested",     color: "text-violet-400" },
                 { val: "callback",       label: "Needs Callback", color: "text-amber-400" },
-                { val: "sold",           label: "Sold 🎉",        color: "text-green-400" },
+                { val: "sold",           label: "Sold",           color: "text-green-400" },
               ].map(({ val, label, color }) => (
                 <button key={val} onClick={() => setOutcome(val)}
                   className={`px-3 py-2 rounded-md border text-sm font-medium transition-colors ${
@@ -320,7 +321,7 @@ function KnockLogger({ lead, team, onClose }: {
                     <div className="flex-1 min-w-0">
                       <span className={`font-medium ${color}`}>{k.outcome.replace("_", " ")}</span>
                       <span className="text-muted-foreground ml-1">· {repName}</span>
-                      {k.callbackDate && <span className="text-amber-400 ml-1">→ {k.callbackDate}</span>}
+                      {k.callbackDate && <span className="text-amber-400 ml-1">Callback {k.callbackDate}</span>}
                       {k.notes && <div className="text-muted-foreground italic truncate">{k.notes}</div>}
                     </div>
                     <span className="text-muted-foreground flex-shrink-0">
@@ -416,7 +417,7 @@ function OwnerLookupButton({ leadId, onDone }: { leadId: number; onDone: () => v
       <p className="text-xs text-amber-400 font-medium">Owner Lookup (Tracerfy)</p>
       <p className="text-xs text-muted-foreground mt-0.5">Add a Tracerfy API key in SaaS Tenant settings to enable deep owner lookup at $0.20/hit.</p>
       <a href="https://www.tracerfy.com" target="_blank" rel="noreferrer"
-        className="text-xs text-primary hover:underline">Get API key →</a>
+        className="text-xs text-primary hover:underline">Get API key</a>
     </div>
   );
 
@@ -424,7 +425,7 @@ function OwnerLookupButton({ leadId, onDone }: { leadId: number; onDone: () => v
     <div className="mt-2">
       {result ? (
         <div className={`rounded-lg px-3 py-2 text-xs ${result.hit ? "bg-green-500/10 border border-green-500/20 text-green-400" : "bg-secondary/50 text-muted-foreground"}`}>
-          {result.hit ? `✓ Owner enriched · ${result.cost}` : `No match · $0.00 charged`}
+          {result.hit ? `Owner enriched · ${result.cost}` : `No match · $0.00 charged`}
         </div>
       ) : (
         <Button size="sm" variant="outline"
@@ -724,7 +725,6 @@ export default function Leads() {
   )).sort();
 
   const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"] });
-  const repMap = Object.fromEntries(team.map(m => [m.id, m]));
 
   const createMutation = useMutation({
     mutationFn: async (data: Partial<InsertLead>) => {
@@ -737,6 +737,7 @@ export default function Leads() {
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
       setAddOpen(false);
     },
+    onError: (e: any) => toast({ title: e?.message ?? "Couldn't add lead", variant: "destructive" }),
   });
 
   const updateMutation = useMutation({
@@ -750,6 +751,7 @@ export default function Leads() {
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
       setEditLead(null);
     },
+    onError: (e: any) => toast({ title: e?.message ?? "Couldn't update lead", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -760,14 +762,7 @@ export default function Leads() {
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
       setDeleteId(null);
     },
-  });
-
-  const quickStatus = useMutation({
-    mutationFn: async ({ id, status }: { id: number; status: string }) => {
-      const res = await apiRequest("PATCH", `/api/leads/${id}`, { leadStatus: status });
-      return res.json();
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["/api/leads"] }),
+    onError: (e: any) => toast({ title: e?.message ?? "Couldn't delete lead", variant: "destructive" }),
   });
 
   // Filtering is now server-side; leads array is already filtered
@@ -879,7 +874,6 @@ export default function Leads() {
       ) : (
         <div className="space-y-1.5 animate-in fade-in duration-200">
           {filtered.map((lead) => {
-            const assignedRep = lead.assignedRepId ? repMap[lead.assignedRepId] : null;
             const statusCls = STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground";
             const accent = STATUS_ACCENT[lead.leadStatus] ?? "#64748b";
             const hot = (lead.leadScore ?? 0) >= 80;
@@ -894,46 +888,47 @@ export default function Leads() {
                 {/* Status accent bar */}
                 <div className="w-1 flex-shrink-0" style={{ background: accent }} />
 
-                <div className="flex-1 min-w-0 flex items-center gap-3 pl-3.5 pr-3 py-2.5">
+                {/* Mobile: content stacks, then a status+actions row below (address
+                    gets the full width). Desktop (md+): one horizontal row. */}
+                <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-center gap-1.5 md:gap-3 pl-3.5 pr-3 py-2.5">
                   <div className="flex-1 min-w-0">
-                    {/* Address + badges */}
+                    {/* Address + badges (fiber status omitted — every lead is new
+                        fiber, so the badge was noise on every row). */}
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-[13px] text-foreground truncate">{lead.address}</span>
-                      {lead.fiberStatus === "new_fiber" && (
-                        <span className="px-1.5 py-[1px] rounded-full text-[10px] font-bold bg-teal-500/15 text-teal-400 flex items-center gap-0.5">
-                          <Wifi className="w-2.5 h-2.5" /> FIBER
-                        </span>
-                      )}
                       {speed && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-400">{speed}</span>}
-                      {hot && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-bold bg-orange-500/15 text-orange-400">🔥 {lead.leadScore}</span>}
+                      {hot && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-bold bg-orange-500/15 text-orange-400">HOT</span>}
                     </div>
-                    {/* Meta row */}
+                    {/* Meta row — address/phone only; assignment removed for a
+                        cleaner list (managers still assign via the row action). */}
                     <div className="flex items-center gap-2.5 mt-0.5 flex-wrap text-[11px] text-muted-foreground">
                       <span>{lead.city}, {lead.state} {lead.zip}</span>
                       {lead.contactPhone && (
                         <span className="flex items-center gap-1"><Phone className="w-2.5 h-2.5" /> {lead.contactPhone}</span>
                       )}
-                      {assignedRep ? (
-                        <span className="flex items-center gap-1 text-primary font-medium"><UserCheck className="w-2.5 h-2.5" /> {assignedRep.name.split(" ")[0]}</span>
-                      ) : (
-                        <span className="italic text-muted-foreground/70">Unassigned</span>
-                      )}
                     </div>
                   </div>
 
+                  {/* Status + actions — own row on mobile (justify-between), inline on desktop */}
+                  <div className="flex items-center justify-between md:justify-end gap-1 flex-shrink-0">
                   {/* Status pill (always visible) */}
                   <Badge className={`text-[10px] px-2 py-0.5 rounded-full border-0 font-semibold flex-shrink-0 ${statusCls}`}>
                     {STATUS_LABEL[lead.leadStatus]}
                   </Badge>
 
-                  {/* Actions — appear/emphasize on hover, always tappable on touch */}
+                  {/* Actions — always tappable on touch; edit/delete reveal on hover on desktop.
+                      Reps get a clean read-only list here (they knock via the Field
+                      Map, which credits them automatically); logging a knock for a
+                      chosen rep is a lead/manager tool. */}
                   <div className="flex items-center gap-0.5 flex-shrink-0">
-                    <Button variant="ghost" size="sm"
-                      className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10"
-                      onClick={() => setKnockLead(lead)} title="Log a door knock"
-                      data-testid={`btn-knock-${lead.id}`}>
-                      <DoorOpen className="w-4 h-4" />
-                    </Button>
+                    {canAssign && (
+                      <Button variant="ghost" size="sm"
+                        className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10"
+                        onClick={() => setKnockLead(lead)} title="Log a door knock"
+                        data-testid={`btn-knock-${lead.id}`}>
+                        <DoorOpen className="w-4 h-4" />
+                      </Button>
+                    )}
                     <Button variant="ghost" size="sm"
                       className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                       onClick={() => setIntelLead(lead)} title="Lead intelligence"
@@ -965,6 +960,7 @@ export default function Leads() {
                       </Button>
                     )}
                   </div>
+                  </div>
                 </div>
               </div>
             );
@@ -979,9 +975,9 @@ export default function Leads() {
             Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}
           </span>
           <div className="flex items-center gap-1">
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}>← Prev</Button>
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-0.5" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" /> Prev</Button>
             <span className="text-xs text-muted-foreground px-2">{page + 1} / {totalPages}</span>
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next →</Button>
+            <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-0.5" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next <ChevronRight className="w-3.5 h-3.5" /></Button>
           </div>
         </div>
       )}

@@ -5,8 +5,8 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import {
   Building2, Plus, DollarSign, Users, Zap, BarChart2,
-  Edit2, Trash2, Shield, Globe, CheckCircle, XCircle,
-  TrendingUp, ChevronDown, ChevronUp, Settings, Copy
+  Edit2, Trash2, Shield, Globe, CheckCircle,
+  TrendingUp, ChevronDown, ChevronUp, Copy
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";

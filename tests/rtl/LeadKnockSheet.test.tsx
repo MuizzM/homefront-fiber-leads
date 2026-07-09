@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LeadKnockSheet } from "@/components/LeadKnockSheet";
@@ -7,28 +7,28 @@ import { OUTCOMES } from "@shared/knock";
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * CONTRACT (UI agent, client/src/components/LeadKnockSheet.tsx).
- * Props: { lead, saveState, savedOutcome, onKnock, onSaveNote, onRetrySave?,
- *          onClose, onNextDoor, onSkip, nextDoorHint?, hasNext?, canAssign?,
- *          reps?, onAssignRep? }
- * lead: { id, address, city, state, zip, leadStatus, lat, lng, contactPhone?,
- *         visited?, knockCount?, lastOutcome?, lastKnockedAt? } | null
+ * CONTRACT (v2 lead card, client/src/components/LeadKnockSheet.tsx).
+ * Props: { lead, onKnock, onSaveNote, onClose }
+ * The card is PHASE-FREE: address → status chip + relative timestamp → one
+ * horizontally-scrollable row of the 7 status pills → Directions → inline
+ * always-editable Notes → History (colored dot · label · time · rep).
  * Requirements exercised here (testids are the API):
- *   - [knock-sheet] with the address; one [knock-outcome-{key}] per OUTCOMES
- *   - tapping an outcome calls onKnock(outcome) — EXCEPT callback, which is a
- *     two-step: [callback-quick-row] chips → onKnock("callback", {callbackDate,
- *     callbackTime}); [callback-chip-tomorrow-am] means tomorrow at 09:00
- *   - savedOutcome set = done phase: [next-door-btn] + [knock-change-outcome]
- *     replace the grid; change-outcome brings the grid back; hasNext={false}
- *     disables next-door
- *   - [knock-save-state] mirrors saveState via data-state; in "error" it is
- *     tappable and fires onRetrySave
- *   - quick actions: [action-call]/[action-text] aria-disabled without a
- *     phone, tel: href with one; [action-directions] links to Google Maps
- *     (NEVER mapbox — geocoding billing guardrail)
- *   - [knock-skip] → onSkip, [knock-sheet-close] → onClose
- *   - [assign-rep-select] rendered only when canAssign
- *   - lead null renders nothing
+ *   - [knock-sheet] with the address; one [knock-outcome-{key}] per rep status
+ *     (7 pills, needs_verification excluded), each ≥44px tall
+ *   - tapping ANY pill — callback and prospect included — calls onKnock(key)
+ *     immediately: one tap, no confirm, no sub-screen; the row never unmounts
+ *   - the pill matching the lead's current display state is aria-pressed
+ *   - NO status chip / clock row: the ACTIVE pill leads the status row (a
+ *     just-tapped status is promoted to the front); History has every
+ *     timestamped change
+ *   - [action-directions] links to Google Maps turn-by-turn (NEVER mapbox —
+ *     geocoding billing guardrail); it is the ONLY action button
+ *   - [knock-note-input] is a COMPOSER: starts empty (saved notes live in
+ *     History), commits on blur or the Add button, and CLEARS after commit
+ *   - [knock-history-list] renders every change: outcome label, timestamp,
+ *     shortened rep name ("M. Muhammad")
+ *   - REMOVED chrome must not render: X close, Skip, Next Door, call, text
+ *   - Escape fires onClose; lead null renders nothing
  * Drag physics are framer-motion's problem, not jsdom's — NOT tested here.
  * ────────────────────────────────────────────────────────────────────────────
  */
@@ -55,6 +55,16 @@ beforeAll(() => {
   }
 });
 
+const GRID_KEYS = OUTCOMES.filter(o => o.key !== "needs_verification").map(o => o.key);
+
+// Unified timeline: status changes, assignments ("assigned by"), note events.
+const HISTORY = [
+  { id: "k12", type: "status_change", actor: "Muizz Muhammad", changedAt: "2026-07-08T19:12:00.000Z", status: "sold" },
+  { id: "e5", type: "note", actor: "Zargham Muhammad", changedAt: "2026-07-08T19:15:00.000Z", notePreview: "Gate code 4412, come back after 6pm" },
+  { id: "e4", type: "assignment", actor: "Muizz Muhammad", changedAt: "2026-07-08T13:02:00.000Z", assignedTo: "Zargham Muhammad", assignedBy: "Muizz Muhammad" },
+  { id: "k10", type: "status_change", actor: null, changedAt: "2026-07-06T14:00:00.000Z", status: "not_home" },
+];
+
 function baseLead(overrides: Record<string, unknown> = {}) {
   return {
     id: 7,
@@ -70,21 +80,25 @@ function baseLead(overrides: Record<string, unknown> = {}) {
 }
 
 function renderSheet(overrides: Record<string, any> = {}) {
-  // The sheet lazily queries knock history when expanded; give the test
-  // client a benign default queryFn so an eager fetch can never explode.
+  // The card fetches lead detail (notes seed) and knock history itself; the
+  // test client answers both from one key-aware queryFn.
   const qc = new QueryClient({
-    defaultOptions: { queries: { retry: false, queryFn: async () => [] } },
+    defaultOptions: {
+      queries: {
+        retry: false,
+        queryFn: async ({ queryKey }) => {
+          const key = String(queryKey[0] ?? "");
+          if (key.endsWith("/history")) return HISTORY;
+          return { id: 7, notes: "Gate code 4411", updatedAt: "2026-07-08T19:00:00.000Z" };
+        },
+      },
+    },
   });
   const props = {
     lead: baseLead(),
-    saveState: "idle",
-    savedOutcome: null,
     onKnock: vi.fn(),
-    onSaveNote: vi.fn(),
-    onRetrySave: vi.fn(),
+    onSaveNote: vi.fn().mockResolvedValue({ status: "saved", updatedAt: "2026-07-08T19:20:00.000Z" }),
     onClose: vi.fn(),
-    onNextDoor: vi.fn(),
-    onSkip: vi.fn(),
     ...overrides,
   };
   const view = render(
@@ -95,172 +109,191 @@ function renderSheet(overrides: Record<string, any> = {}) {
   return { ...view, props };
 }
 
-describe("<LeadKnockSheet /> — outcome grid", () => {
-  it("renders the sheet with the address and exactly the 6 rep outcome buttons", () => {
-    renderSheet();
+describe("<LeadKnockSheet /> — status row", () => {
+  const pillOrder = () =>
+    [...screen.getByTestId("knock-status-row").querySelectorAll("[data-testid^='knock-outcome-']")]
+      .map(b => (b as HTMLElement).dataset.testid!.replace("knock-outcome-", ""));
 
-    const sheet = screen.getByTestId("knock-sheet");
-    expect(sheet).toHaveTextContent("148 Maple St");
-    // Owner's rule: 4-6 buttons max on the rep card. needs_verification stays in
-    // shared/knock.ts for server/history back-compat but is NOT offered to reps.
-    for (const o of OUTCOMES.filter(o => o.key !== "needs_verification")) {
-      expect(screen.getByTestId(`knock-outcome-${o.key}`)).toBeInTheDocument();
-    }
+  it("renders the address and exactly the 7 one-tap pills — ACTIVE status leads the row", () => {
+    renderSheet(); // fresh prospect → prospect pill is the current status, so it leads
+    expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
+    expect(pillOrder()).toEqual([
+      "prospect", "not_home", "interested", "sold", "not_interested", "follow_up", "callback",
+    ]);
+    expect(pillOrder()).toHaveLength(GRID_KEYS.length);
     expect(screen.queryByTestId("knock-outcome-needs_verification")).not.toBeInTheDocument();
   });
 
-  it("tapping an outcome fires onKnock with that outcome", async () => {
-    const { props } = renderSheet();
-    await userEvent.click(screen.getByTestId("knock-outcome-interested"));
-
-    expect(props.onKnock).toHaveBeenCalledTimes(1);
-    expect(props.onKnock.mock.calls[0][0]).toBe("interested");
+  it("a sold door opens with the big Sold pill FIRST and filled", () => {
+    renderSheet({
+      lead: baseLead({ leadStatus: "sold", visited: true, lastOutcome: "sold", lastKnockedAt: new Date().toISOString() }),
+    });
+    expect(pillOrder()[0]).toBe("sold");
+    expect(screen.getByTestId("knock-outcome-sold")).toHaveAttribute("aria-pressed", "true");
+    // No chip/clock row — the leading pill IS the status readout.
+    expect(screen.queryByTestId("knock-status-chip")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("knock-status-time")).not.toBeInTheDocument();
   });
 
-  it("callback is a two-step: chip row first, then onKnock with date+time", async () => {
-    const { props } = renderSheet();
-
-    await userEvent.click(screen.getByTestId("knock-outcome-callback"));
-    // No knock yet — a callback without a time is useless to the rep.
-    expect(props.onKnock).not.toHaveBeenCalled();
-    expect(screen.getByTestId("callback-quick-row")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId("callback-chip-tomorrow-am"));
-    expect(props.onKnock).toHaveBeenCalledTimes(1);
-    const [outcome, extra] = props.onKnock.mock.calls[0];
-    expect(outcome).toBe("callback");
-    expect(extra.callbackDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(extra.callbackTime).toBe("09:00");
-  });
-});
-
-describe("<LeadKnockSheet /> — done phase", () => {
-  it("savedOutcome swaps the grid for Next Door + Change outcome", async () => {
-    const { props } = renderSheet({ savedOutcome: "interested", hasNext: true });
-
-    expect(screen.getByTestId("next-door-btn")).toBeInTheDocument();
-    expect(screen.getByTestId("knock-change-outcome")).toBeInTheDocument();
-    expect(screen.queryByTestId("knock-outcome-sold")).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId("next-door-btn"));
-    expect(props.onNextDoor).toHaveBeenCalledTimes(1);
-  });
-
-  it("Change outcome brings the outcome grid back", async () => {
-    renderSheet({ savedOutcome: "interested", hasNext: true });
-
-    await userEvent.click(screen.getByTestId("knock-change-outcome"));
-    expect(screen.getByTestId("knock-outcome-sold")).toBeInTheDocument();
-  });
-
-  it("disables Next Door when there is no next unworked lead", () => {
-    renderSheet({ savedOutcome: "sold", hasNext: false });
-    expect(screen.getByTestId("next-door-btn")).toBeDisabled();
-  });
-});
-
-describe("<LeadKnockSheet /> — save state indicator", () => {
-  it("mirrors saving and queued states via data-state", () => {
-    const first = renderSheet({ saveState: "saving" });
-    expect(screen.getByTestId("knock-save-state")).toHaveAttribute("data-state", "saving");
-    first.unmount();
-
-    renderSheet({ saveState: "queued" });
-    expect(screen.getByTestId("knock-save-state")).toHaveAttribute("data-state", "queued");
-  });
-
-  it("error state is tappable and fires onRetrySave", async () => {
-    const { props } = renderSheet({ saveState: "error" });
-
-    const indicator = screen.getByTestId("knock-save-state");
-    expect(indicator).toHaveAttribute("data-state", "error");
-    await userEvent.click(indicator);
-    expect(props.onRetrySave).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("<LeadKnockSheet /> — quick actions", () => {
-  it("call/text are aria-disabled without a phone, live tel: link with one", () => {
-    const first = renderSheet(); // baseLead has no contactPhone
-    expect(screen.getByTestId("action-call")).toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByTestId("action-text")).toHaveAttribute("aria-disabled", "true");
-    first.unmount();
-
-    renderSheet({ lead: baseLead({ contactPhone: "704-555-0101" }) });
-    expect(screen.getByTestId("action-call").getAttribute("href")).toContain("tel:");
-  });
-
-  it("directions deep-link to Google Maps at the lead's coords — never mapbox", () => {
+  it("every pill is a one-handed tap target (≥44px)", () => {
     renderSheet();
-    const href = screen.getByTestId("action-directions").getAttribute("href") ?? "";
-    expect(href).toContain("google.com/maps/dir");
-    expect(href).toContain("34.9");
-    expect(href).toContain("-79.9");
-    expect(href.toLowerCase()).not.toContain("mapbox");
+    for (const key of GRID_KEYS) {
+      // h-11 = 44px; jsdom has no layout, so assert the class contract.
+      expect(screen.getByTestId(`knock-outcome-${key}`).className).toMatch(/\bh-11\b/);
+    }
+  });
+
+  it("tapping any pill — callback and prospect included — fires onKnock immediately, no sub-screen", async () => {
+    for (const key of ["callback", "prospect", "sold"] as const) {
+      const { props, unmount } = renderSheet();
+      await userEvent.click(screen.getByTestId(`knock-outcome-${key}`));
+      expect(props.onKnock).toHaveBeenCalledTimes(1);
+      expect(props.onKnock).toHaveBeenCalledWith(key);
+      // The row never unmounts — no done phase, no scheduling form.
+      expect(screen.getByTestId("knock-status-row")).toBeInTheDocument();
+      expect(screen.queryByTestId("callback-quick-row")).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("the pill matching the lead's current state is pressed; a prospect reset re-arms the Prospect pill", () => {
+    const first = renderSheet({
+      lead: baseLead({ leadStatus: "interested", visited: true, lastOutcome: "interested", lastKnockedAt: new Date().toISOString() }),
+    });
+    expect(screen.getByTestId("knock-outcome-interested")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("knock-outcome-sold")).toHaveAttribute("aria-pressed", "false");
+    first.unmount();
+
+    renderSheet({
+      lead: baseLead({ leadStatus: "prospect", visited: true, lastOutcome: "prospect", lastKnockedAt: new Date().toISOString() }),
+    });
+    expect(screen.getByTestId("knock-outcome-prospect")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("header block: street on line 1, city/state/ZIP on line 2", () => {
+    renderSheet();
+    expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
+    expect(screen.getByTestId("knock-address-locality")).toHaveTextContent("Rockwell, NC 28138");
+  });
+
+  it("tapping a status promotes it to the front once the lead data reflects it", () => {
+    // The row order derives from the lead's display state (optimistic upstream),
+    // so simulate the post-tap lead: callback just logged → callback leads.
+    renderSheet({
+      lead: baseLead({
+        leadStatus: "follow_up", visited: true, lastOutcome: "callback",
+        lastKnockedAt: new Date().toISOString(),
+      }),
+    });
+    expect(pillOrder()[0]).toBe("callback");
+    expect(screen.getByTestId("knock-outcome-callback")).toHaveAttribute("aria-pressed", "true");
   });
 });
 
-describe("<LeadKnockSheet /> — chrome and gating", () => {
-  it("skip and close fire their callbacks", async () => {
-    const { props } = renderSheet();
-
-    await userEvent.click(screen.getByTestId("knock-skip"));
-    expect(props.onSkip).toHaveBeenCalledTimes(1);
-
-    await userEvent.click(screen.getByTestId("knock-sheet-close"));
-    expect(props.onClose).toHaveBeenCalledTimes(1);
+describe("<LeadKnockSheet /> — actions, notes, history", () => {
+  it("Directions is the ONLY action: Google Maps turn-by-turn to the coords, never mapbox", () => {
+    renderSheet();
+    const a = screen.getByTestId("action-directions");
+    expect(a).toHaveAttribute("href", expect.stringContaining("google.com/maps/dir"));
+    expect(a.getAttribute("href")).toContain("34.9,-79.9");
+    expect(a.getAttribute("href")).not.toMatch(/mapbox/i);
+    expect(screen.queryByTestId("action-call")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("action-text")).not.toBeInTheDocument();
   });
 
-  it("renders the assign-rep select only when canAssign AND expanded (peek stays clean)", async () => {
-    const reps = [
-      { id: 3, name: "Dana Reyes" },
-      { id: 4, name: "Malik Byrd" },
-    ];
-    const first = renderSheet({ canAssign: true, reps, onAssignRep: vi.fn() });
-    // Peek shows knocking essentials only — admin controls live behind expand.
-    expect(screen.queryByTestId("assign-rep-select")).not.toBeInTheDocument();
-    // Tapping the handle toggles peek → expanded (one-hand alternative to drag).
-    await userEvent.click(screen.getByTestId("knock-sheet-handle"));
-    expect(screen.getByTestId("assign-rep-select")).toBeInTheDocument();
-    first.unmount();
+  it("notes composer: starts EMPTY (saved notes live in History), commit clears the draft", async () => {
+    const { props } = renderSheet();
+    const input = screen.getByTestId("knock-note-input") as HTMLTextAreaElement;
+    // Never seeded from the lead — the box is for writing, History is for reading.
+    expect(input).toHaveValue("");
+    expect(screen.queryByTestId("note-add-btn")).not.toBeInTheDocument(); // Add hides while empty
 
-    renderSheet({ reps }); // no canAssign → reps alone must not leak the control
-    expect(screen.queryByTestId("assign-rep-select")).not.toBeInTheDocument();
+    await userEvent.type(input, "dog in yard");
+    expect(props.onSaveNote).not.toHaveBeenCalled(); // typing is local-only
+    expect(screen.getByTestId("note-add-btn")).toBeInTheDocument();
+
+    input.blur(); // tap-away commits
+    await waitFor(() =>
+      expect(props.onSaveNote).toHaveBeenCalledWith(7, "dog in yard", "2026-07-08T19:00:00.000Z"),
+    );
+    expect(props.onSaveNote).toHaveBeenCalledTimes(1); // one commit = one history event
+    await waitFor(() => expect(input).toHaveValue(""));  // draft CLEARED after save
+    await waitFor(() => expect(screen.getByTestId("note-save-state")).toHaveTextContent("Saved to history"));
+  });
+
+  it("the Add button commits without waiting for blur", async () => {
+    const { props } = renderSheet();
+    const input = screen.getByTestId("knock-note-input") as HTMLTextAreaElement;
+    await userEvent.type(input, "gate code 4412");
+    await userEvent.pointer({ keys: "[MouseLeft]", target: screen.getByTestId("note-add-btn") });
+    await waitFor(() => expect(props.onSaveNote).toHaveBeenCalledTimes(1));
+    expect(props.onSaveNote).toHaveBeenCalledWith(7, "gate code 4412", "2026-07-08T19:00:00.000Z");
+    await waitFor(() => expect(input).toHaveValue(""));
+  });
+
+  it("a conflict (409) merges with the server copy, re-commits once, then clears", async () => {
+    const onSaveNote = vi.fn()
+      .mockResolvedValueOnce({ status: "conflict", serverNotes: "Server wrote this", updatedAt: "2026-07-08T19:30:00.000Z" })
+      .mockResolvedValueOnce({ status: "saved", updatedAt: "2026-07-08T19:31:00.000Z" });
+    renderSheet({ onSaveNote });
+    const input = screen.getByTestId("knock-note-input") as HTMLTextAreaElement;
+    await userEvent.type(input, "extra detail");
+    input.blur();
+    await waitFor(() => expect(onSaveNote).toHaveBeenCalledTimes(2));
+    // Second commit carried the MERGED text against the fresh base version.
+    expect(onSaveNote.mock.calls[1][0]).toBe(7);
+    expect(onSaveNote.mock.calls[1][1]).toContain("Server wrote this");
+    expect(onSaveNote.mock.calls[1][1]).toContain("extra detail");
+    expect(onSaveNote.mock.calls[1][2]).toBe("2026-07-08T19:30:00.000Z");
+    await waitFor(() => expect(input).toHaveValue("")); // cleared once settled
+  });
+
+  it("history is ONE timeline: status changes, assignments (assigned by), and note events", async () => {
+    renderSheet();
+    const rows = await screen.findAllByTestId(/knock-history-item-/);
+    expect(rows).toHaveLength(4);
+    // status_change: label · time · actor
+    expect(rows[0]).toHaveTextContent("Sold");
+    expect(rows[0]).toHaveTextContent("Jul 8");
+    expect(rows[0]).toHaveTextContent("M. Muhammad");
+    // note event: title line + author/time meta line + wrapped preview text
+    expect(rows[1]).toHaveTextContent("Note");
+    expect(rows[1]).toHaveTextContent("Z. Muhammad");
+    expect(rows[1]).toHaveTextContent("Gate code 4412, come back after 6pm");
+    // assignment: to whom AND by whom
+    expect(rows[2]).toHaveTextContent("Assigned to Z. Muhammad");
+    expect(rows[2]).toHaveTextContent("by M. Muhammad");
+    // status_change with no actor → no dangling separator
+    expect(rows[3]).toHaveTextContent("Not Home");
+  });
+});
+
+describe("<LeadKnockSheet /> — chrome and lifecycle", () => {
+  it("the assign row is capability-gated OFF for reps (fail-closed without lead.assign)", () => {
+    renderSheet(); // test auth context has no user → useCan fails closed
+    expect(screen.queryByTestId("card-assign-row")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("card-assign-select")).not.toBeInTheDocument();
+  });
+
+  it("renders none of the removed chrome: no close, skip, next-door, or save-state chip", () => {
+    renderSheet();
+    for (const gone of [
+      "knock-sheet-close", "knock-skip", "next-door-btn", "knock-save-state",
+      "knock-change-outcome", "knock-hot-chip",
+    ]) {
+      expect(screen.queryByTestId(gone)).not.toBeInTheDocument();
+    }
+    expect(screen.getByTestId("knock-sheet").textContent).not.toMatch(/[✓✔🔥🎉]/u);
+  });
+
+  it("Escape fires onClose (map tap and overdrag close upstream)", async () => {
+    const { props } = renderSheet();
+    await userEvent.keyboard("{Escape}");
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("renders nothing when lead is null", () => {
     renderSheet({ lead: null });
     expect(screen.queryByTestId("knock-sheet")).not.toBeInTheDocument();
-  });
-});
-
-describe("<LeadKnockSheet /> — porch-simple peek", () => {
-  it("never shows the word 'Unworked'; a fresh door shows its city instead", () => {
-    renderSheet(); // baseLead: fresh, city Rockwell
-    expect(screen.getByTestId("knock-sheet")).not.toHaveTextContent(/unworked/i);
-    expect(screen.getByTestId("knock-sheet")).toHaveTextContent("Rockwell");
-  });
-
-  it("keeps the note field out of peek; after a save + expand it appears", async () => {
-    const { props } = renderSheet({ savedOutcome: "interested" });
-    // Peek: no form controls, calm card.
-    expect(screen.queryByTestId("knock-note-input")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByTestId("knock-sheet-handle")); // expand
-    expect(screen.getByTestId("knock-note-input")).toBeInTheDocument();
-    expect(props).toBeTruthy();
-  });
-
-  it("without a saved outcome there is no note field even when expanded", async () => {
-    renderSheet();
-    await userEvent.click(screen.getByTestId("knock-sheet-handle"));
-    expect(screen.queryByTestId("knock-note-input")).not.toBeInTheDocument();
-  });
-
-  it("shows the 🔥 chip only for hot leads (score ≥ 80)", () => {
-    const hot = renderSheet({ lead: baseLead({ leadScore: 85 }) });
-    expect(screen.getByTestId("knock-hot-chip")).toBeInTheDocument();
-    hot.unmount();
-    renderSheet({ lead: baseLead({ leadScore: 40 }) });
-    expect(screen.queryByTestId("knock-hot-chip")).not.toBeInTheDocument();
   });
 });

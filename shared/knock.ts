@@ -6,7 +6,7 @@
 
 export type KnockOutcome =
   | "not_home" | "not_interested" | "interested" | "follow_up"
-  | "callback" | "sold" | "needs_verification";
+  | "callback" | "sold" | "prospect" | "needs_verification";
 
 export type LeadStatus =
   | "prospect" | "contacted" | "interested" | "sold" | "not_interested" | "follow_up";
@@ -15,20 +15,24 @@ export interface OutcomeDef {
   key: KnockOutcome;
   label: string;          // button label
   color: string;          // hex — button tint AND the pin color the tap produces
-  leadStatus: LeadStatus; // canonical status the knock sets (no 7th status exists)
-  worked: boolean;        // true = door is done for this pass (excluded from Next Door)
+  leadStatus: LeadStatus; // canonical status the knock sets
+  worked: boolean;        // true = door is done for this pass
 }
 
-// Button order = this array order (thumb-frequency: most common first).
-// needs_verification maps to "contacted" — the only canonical status not already
-// claimed by an outcome, and semantically "made contact, no disposition yet".
+// Button order = this array order (the rep card renders it verbatim).
+// "prospect" is the reset disposition — one tap returns a door to the pool
+// (status prospect, pin back to prospect orange), logged in history like any
+// other change. "callback" folds to follow_up at the DB level (the manager
+// status vocabulary is unchanged) but renders as its own cyan display state.
+// needs_verification maps to "contacted" — server/history back-compat only.
 export const OUTCOMES: OutcomeDef[] = [
-  { key: "not_home",           label: "Not Home",           color: "#06b6d4", leadStatus: "prospect",       worked: false },
+  { key: "not_home",           label: "Not Home",           color: "#3b82f6", leadStatus: "prospect",       worked: false },
   { key: "interested",         label: "Interested",         color: "#8b5cf6", leadStatus: "interested",     worked: true  },
   { key: "sold",               label: "Sold",               color: "#10b981", leadStatus: "sold",           worked: true  },
   { key: "not_interested",     label: "Not Interested",     color: "#ef4444", leadStatus: "not_interested", worked: true  },
-  { key: "follow_up",          label: "Follow-up",          color: "#f59e0b", leadStatus: "follow_up",      worked: true  },
-  { key: "callback",           label: "Callback",           color: "#3b82f6", leadStatus: "follow_up",      worked: true  },
+  { key: "follow_up",          label: "Follow-up",          color: "#eab308", leadStatus: "follow_up",      worked: true  },
+  { key: "callback",           label: "Callback",           color: "#06b6d4", leadStatus: "follow_up",      worked: true  },
+  { key: "prospect",           label: "Prospect",           color: "#f97316", leadStatus: "prospect",       worked: false },
   { key: "needs_verification", label: "Needs Verification", color: "#64748b", leadStatus: "contacted",      worked: true  },
 ];
 
@@ -48,20 +52,26 @@ export function deriveWasHome(outcome: KnockOutcome): boolean {
   return outcome !== "not_home";
 }
 
-// ── Pin display state — the 7 map states the rep sees ─────────────────────────
+// ── Pin display state — the map states the rep sees ───────────────────────────
 // A projection of {leadStatus, visited, lastOutcome} the map API already returns.
+// One state per rep disposition: unworked (Prospect), not_home, interested,
+// follow_up, callback, sold, not_interested — plus legacy "contacted"
+// (needs_verification only, never offered on the rep card).
 export type PinDisplayState =
   | "unworked" | "not_home" | "contacted" | "interested"
-  | "follow_up" | "sold" | "not_interested";
+  | "follow_up" | "callback" | "sold" | "not_interested";
 
-// not_home = cyan: slate would vanish against the gray territory fills and the
-// dark basemap, and low-chroma gray is the first color to wash out in sunlight.
+// Spec color system — every status visually distinct at 8px in sunlight:
+// Prospect orange (explicitly NOT green/purple), Not Home blue, Callback cyan,
+// Follow-up yellow (shifted off amber so it can't read as prospect orange),
+// legacy contacted drops to slate now that blue belongs to Not Home.
 export const STATE_COLORS: Record<PinDisplayState, string> = {
-  unworked:       "#22c55e",
-  not_home:       "#06b6d4",
-  contacted:      "#3b82f6",
+  unworked:       "#f97316",
+  not_home:       "#3b82f6",
+  contacted:      "#64748b",
   interested:     "#8b5cf6",
-  follow_up:      "#f59e0b",
+  follow_up:      "#eab308",
+  callback:       "#06b6d4",
   sold:           "#10b981",
   not_interested: "#ef4444",
 };
@@ -72,12 +82,16 @@ export function pinDisplayState(p: {
   switch (p.leadStatus) {
     case "sold":           return "sold";
     case "not_interested": return "not_interested";
-    case "follow_up":      return "follow_up";
+    case "follow_up":
+      // Callback is first-class on the map/card even though it stores follow_up.
+      return p.lastOutcome === "callback" ? "callback" : "follow_up";
     case "interested":     return "interested";
     case "contacted":      return "contacted";
-    default: // "prospect" (a not_home knock keeps status prospect but sets visited)
+    default: // "prospect" — fresh, knocked-not-home, or explicitly reset
       if (p.lastOutcome === "not_home") return "not_home";
-      // Knocked but status unchanged (defensive) still reads as worked, never green.
+      // A "prospect" tap RESETS the door: back to the pool, orange again.
+      if (p.lastOutcome === "prospect") return "unworked";
+      // Knocked but status unchanged (defensive) still reads as worked.
       return p.visited ? "contacted" : "unworked";
   }
 }
@@ -146,6 +160,15 @@ export interface QueuedKnock {
   attempts: number;             // transient-failure attempts so far
   nextAttemptAt: number;        // epoch ms; flush skips items not yet due
   lastError: string | null;
+  // ── Location evidence captured AT THE TAP (server computes distance+verdict) ──
+  // All optional so legacy queue items and location-denied taps still flush.
+  repLat?: number | null;
+  repLng?: number | null;
+  gpsAccuracy?: number | null;
+  deviceTs?: string | null;     // device clock at the tap
+  mockLocation?: boolean | null;
+  netState?: "online" | "offline" | null;
+  appVersion?: string | null;
 }
 
 export const KNOCK_QUEUE_MAX_ATTEMPTS = 8;

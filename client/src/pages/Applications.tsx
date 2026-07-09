@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import {
   CheckCircle2, XCircle, Clock, User, Mail, Phone, MapPin,
   Briefcase, FileText, Image, ExternalLink, ChevronDown, ChevronUp,
-  Wifi, AlertTriangle, RefreshCw
+  AlertTriangle, RefreshCw
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 

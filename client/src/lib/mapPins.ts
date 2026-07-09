@@ -3,27 +3,19 @@
 // never drift (they already had), and by tests. Colors come from @shared/knock —
 // one palette for buttons, pins, and legend.
 
-import { STATE_COLORS, type PinDisplayState } from "@shared/knock";
+import { STATE_COLORS } from "@shared/knock";
 
 // Flat GPU match on the precomputed `ds` feature prop — no nested case logic.
-// MAP-ONLY overrides for terminal states: alpha-dimming muddied into satellite
-// texture, and sold #10b981 read as a green twin of unworked #22c55e at 8px in
-// sunlight. Pre-mixed solid "quiet" hexes (≈45% toward slate) keep edges crisp
-// and unmistakably darker than the bright actionable pins. Buttons/chips keep
-// the vivid STATE_COLORS.
-const MAP_DIM: Record<string, string> = {
-  sold: "#20836d",           // deep sea-green — clearly not "fresh door" green
-  not_interested: "#9a434c", // muted brick — quiet but still reads red
-};
+// Pin hue = STATE_COLORS verbatim: one color per status, identical on the map,
+// the card chip, and the status buttons. (The old sold/not_interested map-dim
+// overrides existed because unworked was green and clashed with sold — unworked
+// is prospect ORANGE now, so every state is distinct at full saturation.)
 export const PIN_DS_COLOR: any = [
   "match", ["get", "ds"],
-  ...Object.entries(STATE_COLORS).flatMap(([k, v]) => [k, MAP_DIM[k] ?? v]),
+  ...Object.entries(STATE_COLORS).flatMap(([k, v]) => [k, v]),
   STATE_COLORS.unworked, // fallback
 ];
 
-// Done-vs-left at a glance: terminal states are quiet via their pre-mixed hue
-// (above), not via alpha. Actionable knocked states (not_home, follow_up,
-// interested, contacted) stay bright — the rep still owes them a visit.
 export const PIN_DS_OPACITY: any = [
   "match", ["get", "ds"],
   "unworked", 0.95,
@@ -68,8 +60,54 @@ export const SELECTED_RING_SPEC: any = {
   },
 };
 
+// ── Field-mode startup camera ─────────────────────────────────────────────────
+// The rep map must open where the rep is standing, at door-knocking zoom — never
+// a regional overview. Live GPS is async, so launch renders instantly on the
+// best cached guess and the GeolocateControl recenters the moment a fix lands.
+export const STREET_ZOOM = 17;
+export const LAST_FIX_KEY = "hf.lastFix.v1";
+export const LAST_FIX_TTL_MS = 24 * 60 * 60 * 1000; // stale beyond a day — rep likely drove elsewhere
+
+export type CachedFix = { lat: number; lng: number; at: number };
+export type StartCamera = {
+  center: [number, number]; // [lng, lat]
+  zoom: number;
+  source: "gps-cache";
+};
+
+// Live GPS is the only anchor (SalesRabbit behavior — no resume/session camera).
+// This just answers "where do we paint while the live fix warms up?": the last
+// known GPS fix at street zoom, or null → caller frames the assigned leads.
+// Pure so the launch contract is unit-testable without a map.
+export function pickRepStartCamera(cachedFix: CachedFix | null, now: number): StartCamera | null {
+  if (cachedFix && now - cachedFix.at < LAST_FIX_TTL_MS
+      && Number.isFinite(cachedFix.lat) && Number.isFinite(cachedFix.lng)) {
+    return { center: [cachedFix.lng, cachedFix.lat], zoom: STREET_ZOOM, source: "gps-cache" };
+  }
+  return null;
+}
+
+export function readCachedFix(): CachedFix | null {
+  try {
+    const raw = localStorage.getItem(LAST_FIX_KEY);
+    if (!raw) return null;
+    const f = JSON.parse(raw);
+    return typeof f?.lat === "number" && typeof f?.lng === "number" && typeof f?.at === "number" ? f : null;
+  } catch { return null; }
+}
+
+let lastFixWriteAt = 0;
+export function writeCachedFix(lat: number, lng: number, at: number): void {
+  if (at - lastFixWriteAt < 10_000) return; // ~1 fix/s in follow mode — don't hammer storage
+  lastFixWriteAt = at;
+  try { localStorage.setItem(LAST_FIX_KEY, JSON.stringify({ lat, lng, at })); } catch { /* storage blocked */ }
+}
+
 // Single source for the sheet's peek height — LeadKnockSheet imports this so
 // the camera padding can never drift from the actual sheet lip again.
+// Peek: handle + two-line address + pill row + Directions + the full Notes
+// composer (never a half-clipped form control above the fold). The status
+// chip row is gone — the active pill leads the row instead.
 export const SHEET_PEEK_BASE_PX = 292;
 
 // Camera bottom padding = peek height + a small margin so the selected pin sits

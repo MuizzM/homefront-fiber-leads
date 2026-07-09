@@ -1,11 +1,10 @@
-import { Link, useLocation } from "wouter";
+import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import {
   LayoutDashboard,
   Map,
   MapPin,
   Users,
-  Wifi,
   Menu,
   X,
   Radar,
@@ -14,6 +13,7 @@ import {
   Sun,
   Moon,
   ShieldCheck,
+  Activity,
   Crown,
   Star,
   User as UserIcon,
@@ -26,8 +26,8 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { BottomTabs } from "@/components/BottomTabs";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
 
@@ -82,6 +82,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Applications",  icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
+  // ── Governance (Phase 2) ──────────────────────────────────────────────────
+  { href: "/diagnostics",  label: "Diagnostics",   icon: Activity,     show: r => hasRole(r, "admin", "manager"),      group: "Governance" },
+  { href: "/governance",   label: "Permissions",   icon: ShieldCheck,  show: r => hasRole(r, "admin"),                 group: "Governance" },
   // ── Admin ─────────────────────────────────────────────────────────────────
   { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r: string, email?: string) => email === "muizzm21@gmail.com", group: "Admin" },
 ];
@@ -121,7 +124,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const role = (user?.role ?? "rep") as AppRole;
-  const isAdmin = role === "admin";
 
   // Territory request pending count (admin/manager only)
   const canManage = hasRole(role, "admin", "manager");
@@ -150,10 +152,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <div className="text-[11px] font-medium tracking-wide text-primary">SOLUTIONS</div>
           </div>
           <button
-            className="ml-auto md:hidden text-muted-foreground hover:text-foreground"
+            type="button"
+            aria-label="Close navigation menu"
+            className="ml-auto md:hidden inline-flex h-11 w-11 items-center justify-center text-muted-foreground hover:text-foreground"
             onClick={() => setMobileOpen(false)}
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
 
@@ -257,10 +261,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mobile header */}
+        {/* Mobile header — standard app chrome on every page. The field map
+            itself carries NO menu overlay (owner spec: map = pins only). */}
         <header className="md:hidden flex items-center gap-3 px-4 py-3 border-b border-border bg-card">
-          <button onClick={() => setMobileOpen(true)} className="text-muted-foreground">
-            <Menu className="w-5 h-5" />
+          <button type="button" aria-label="Open navigation menu" aria-expanded={mobileOpen}
+            onClick={() => setMobileOpen(true)}
+            className="inline-flex h-11 w-11 -ml-2 items-center justify-center text-muted-foreground hover:text-foreground">
+            <Menu className="w-5 h-5" aria-hidden="true" />
           </button>
           <div className="flex items-center gap-2">
             <BrandMark className="w-6 h-6" />
@@ -268,9 +275,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        <main className="flex-1 overflow-hidden" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {/* pb clears the mobile tab bar (h-14 + safe area); zero on desktop */}
+        <main className="flex-1 overflow-hidden pb-14 md:pb-0" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
+        <BottomTabs />
       </div>
     </div>
   );

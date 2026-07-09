@@ -1,0 +1,42 @@
+# ── HomeFront Fiber — Caddy reverse proxy ────────────────────────────────────
+# Automatic HTTPS (Let's Encrypt) + HTTP→HTTPS redirect are ON by default in
+# Caddy — no extra config needed. Caddy renews certs automatically.
+#
+# DNS prerequisite: an A record for portal.homefrontsolutionsllc.com → server IP
+# must resolve BEFORE first boot, or the ACME challenge fails. See docs/DNS.md.
+
+portal.homefrontsolutionsllc.com {
+	encode zstd gzip
+	reverse_proxy app:5000
+
+	# Transport-level hardening. The APP already sets a strict CSP + security
+	# headers via helmet (authoritative); these are belt-and-suspenders.
+	header {
+		X-Content-Type-Options   nosniff
+		Referrer-Policy          strict-origin-when-cross-origin
+		X-Frame-Options          DENY
+		-Server                                 # don't advertise the server
+		# HSTS: enable ONLY after HTTPS is verified end-to-end (per spec). The app's
+		# helmet also emits HSTS in production — if you want to DEFER it until HTTPS
+		# is proven, disable it in helmet first, then uncomment here:
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+	}
+
+	# Uploads can be a few MB (headshot + license); allow headroom.
+	request_body {
+		max_size 12MB
+	}
+
+	log {
+		output stdout
+		format json          # structured access logs (shipped via docker logs)
+	}
+}
+
+# ── Optional: split the API onto its own host ────────────────────────────────
+# The app serves the API and SPA from ONE process, so a separate api. host is
+# NOT required. Uncomment only if you later split them; it proxies the same app.
+# api.homefrontsolutionsllc.com {
+# 	encode zstd gzip
+# 	reverse_proxy app:5000
+# }

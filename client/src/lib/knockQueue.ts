@@ -49,6 +49,14 @@ export interface EnqueueInput {
   notes?: string | null;
   callbackDate?: string | null;
   callbackTime?: string | null;
+  // Location evidence captured at the tap (see client/src/lib/geoFix.ts).
+  repLat?: number | null;
+  repLng?: number | null;
+  gpsAccuracy?: number | null;
+  deviceTs?: string | null;
+  mockLocation?: boolean | null;
+  netState?: "online" | "offline" | null;
+  appVersion?: string | null;
 }
 
 export interface KnockQueue {
@@ -234,6 +242,15 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
             notes: item.notes,
             callbackDate: item.callbackDate,
             callbackTime: item.callbackTime,
+            // Location evidence — the server computes distance + verdict from
+            // these; it never trusts a client-sent verification result.
+            repLat: item.repLat ?? null,
+            repLng: item.repLng ?? null,
+            gpsAccuracy: item.gpsAccuracy ?? null,
+            deviceTs: item.deviceTs ?? null,
+            mockLocation: item.mockLocation ?? null,
+            netState: item.netState ?? null,
+            appVersion: item.appVersion ?? null,
             // no wasHome — the server derives it from outcome
           });
           // Created and clientId-deduped replays look the same here: done.
@@ -290,6 +307,14 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
         attempts: 0,
         nextAttemptAt: 0,
         lastError: null,
+        // Location evidence for verification (undefined when the tap had no fix).
+        repLat: k.repLat ?? null,
+        repLng: k.repLng ?? null,
+        gpsAccuracy: k.gpsAccuracy ?? null,
+        deviceTs: k.deviceTs ?? null,
+        mockLocation: k.mockLocation ?? null,
+        netState: k.netState ?? null,
+        appVersion: k.appVersion ?? null,
       };
       pending.push(item);
       persistPending();

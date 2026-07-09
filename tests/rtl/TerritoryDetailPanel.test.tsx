@@ -81,6 +81,62 @@ describe("<TerritoryDetailPanel />", () => {
     expect(screen.queryByTestId("reclaim-btn")).not.toBeInTheDocument();
   });
 
+  it("shows the rename pencil ONLY when onRename is provided, and saves a trimmed new name", async () => {
+    const onRename = vi.fn();
+    const { rerender } = render(
+      <TerritoryDetailPanel
+        territory={activeTerritory}
+        currentUser={{ role: "manager" }}
+        onRename={onRename}
+      />
+    );
+
+    await userEvent.click(screen.getByTestId("territory-rename-btn"));
+    const input = screen.getByTestId("territory-name-input");
+    expect(input).toHaveValue("Rockwell North"); // starts from the current name
+    await userEvent.clear(input);
+    await userEvent.type(input, "  Maple Ridge Loop  ");
+    await userEvent.click(screen.getByTestId("territory-name-save"));
+    expect(onRename).toHaveBeenCalledExactlyOnceWith("Maple Ridge Loop");
+    // Edit mode exits back to the heading
+    expect(screen.queryByTestId("territory-name-input")).not.toBeInTheDocument();
+
+    // Without onRename (e.g. a viewer without the capability) there is no pencil
+    rerender(
+      <TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "rep" }} />
+    );
+    expect(screen.queryByTestId("territory-rename-btn")).not.toBeInTheDocument();
+  });
+
+  it("does NOT fire onRename for an unchanged or blank name, and Escape cancels", async () => {
+    const onRename = vi.fn();
+    render(
+      <TerritoryDetailPanel
+        territory={activeTerritory}
+        currentUser={{ role: "manager" }}
+        onRename={onRename}
+      />
+    );
+
+    // Unchanged name → save is a no-op
+    await userEvent.click(screen.getByTestId("territory-rename-btn"));
+    await userEvent.click(screen.getByTestId("territory-name-save"));
+    expect(onRename).not.toHaveBeenCalled();
+
+    // Blank name → no-op
+    await userEvent.click(screen.getByTestId("territory-rename-btn"));
+    await userEvent.clear(screen.getByTestId("territory-name-input"));
+    await userEvent.click(screen.getByTestId("territory-name-save"));
+    expect(onRename).not.toHaveBeenCalled();
+
+    // Escape closes the editor without saving
+    await userEvent.click(screen.getByTestId("territory-rename-btn"));
+    await userEvent.type(screen.getByTestId("territory-name-input"), " Extra");
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByTestId("territory-name-input")).not.toBeInTheDocument();
+    expect(onRename).not.toHaveBeenCalled();
+  });
+
   it("renders an unassigned territory with the gray swatch", () => {
     render(
       <TerritoryDetailPanel

@@ -1,6 +1,20 @@
+import { useState } from "react";
+import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler } from "lucide-react";
 import { can, type Role } from "@shared/permissions";
 import { colorForRep } from "@shared/repColors";
 import type { TerritoryStatus } from "@shared/territory";
+
+// Location-verified progress for this territory (from /api/territories/progress).
+export interface TerritoryProgress {
+  total: number;
+  verifiedWorkedLeads: number;
+  areaWorkedPct: number;          // verifiedWorkedLeads ÷ total × 100 (2dp)
+  verified: number;
+  needsReview: number;
+  invalid: number;
+  avgDistanceM: number | null;
+  maxAllowedDistanceM: number;
+}
 
 export interface TerritoryDetailPanelProps {
   territory: {
@@ -14,9 +28,12 @@ export interface TerritoryDetailPanelProps {
   };
   currentUser: { role: Role | string };
   teamNames?: Record<number, string>; // repId → display name (optional)
+  progress?: TerritoryProgress;       // location-verified worked %
   onReclaim?: () => void;
   onComplete?: () => void;
   onReassign?: () => void;
+  onRename?: (name: string) => void;  // provided for manager+ — shows the pencil
+  onViewHistory?: () => void;         // opens the verified activity timeline
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -33,10 +50,18 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, onReclaim, onComplete, onReassign }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
   const swatch = isUnassigned ? colorForRep(null) : (territory.color ?? colorForRep(territory.repIds[0]));
+  const [editingName, setEditingName] = useState(false);
+  const [draftName, setDraftName] = useState(territory.name);
+
+  const saveName = () => {
+    const next = draftName.trim();
+    if (next && next !== territory.name) onRename?.(next);
+    setEditingName(false);
+  };
 
   return (
     <div className="w-72 rounded-xl border border-border bg-card p-4 shadow-xl" data-testid="territory-panel">
@@ -48,7 +73,43 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, onRecl
           style={{ backgroundColor: swatch }}
         />
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-bold text-foreground truncate">{territory.name}</h3>
+          {editingName ? (
+            /* Inline rename — Enter/check saves, Esc/x cancels */
+            <div className="flex items-center gap-1.5">
+              <input
+                autoFocus
+                value={draftName}
+                onChange={e => setDraftName(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
+                maxLength={60}
+                data-testid="territory-name-input"
+                className="h-7 min-w-0 flex-1 rounded-md bg-secondary text-foreground text-sm font-semibold px-2 border border-border focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                placeholder="Area name"
+              />
+              <button data-testid="territory-name-save" onClick={saveName} title="Save name"
+                className="w-7 h-7 rounded-md flex items-center justify-center text-emerald-400 hover:bg-emerald-500/15 transition-colors flex-shrink-0">
+                <Check className="w-4 h-4" />
+              </button>
+              <button onClick={() => setEditingName(false)} title="Cancel"
+                className="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-secondary transition-colors flex-shrink-0">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 min-w-0">
+              <h3 className="text-sm font-bold text-foreground truncate">{territory.name}</h3>
+              {onRename && (
+                <button
+                  data-testid="territory-rename-btn"
+                  onClick={() => { setDraftName(territory.name); setEditingName(true); }}
+                  title="Rename area"
+                  className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
+                >
+                  <Pencil className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          )}
           <span
             data-testid="territory-status"
             className={`inline-block mt-1 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${STATUS_STYLE[territory.status] ?? STATUS_STYLE.draft}`}
@@ -81,19 +142,90 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, onRecl
         )}
       </div>
 
-      {/* Counts */}
-      <div className="mt-3 flex items-center gap-4">
-        <div>
-          <div data-testid="lead-count" className="text-lg font-bold text-foreground tabular-nums">{territory.leadCount}</div>
-          <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Leads</div>
-        </div>
-        {territory.workedCount != null && (
-          <div>
-            <div className="text-lg font-bold text-foreground tabular-nums">{territory.workedCount}</div>
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Worked</div>
+      {/* ── Area Worked — the primary metric (location-verified only) ── */}
+      {progress ? (
+        <div className="mt-3.5">
+          <div className="flex items-baseline justify-between">
+            <span
+              className="text-[10px] uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1"
+              title="Area Worked = verified worked leads ÷ total leads. Only activities that pass location verification count."
+            >
+              Area Worked
+              <span className="cursor-help text-muted-foreground/60" aria-hidden>ⓘ</span>
+            </span>
+            <span data-testid="area-worked-pct" className="text-2xl font-bold text-foreground tabular-nums leading-none">
+              {progress.areaWorkedPct.toFixed(2)}<span className="text-sm font-semibold text-muted-foreground">%</span>
+            </span>
           </div>
-        )}
-      </div>
+          {/* Accessible progress bar (value in aria + text, never colour alone) */}
+          <div
+            className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-secondary"
+            role="progressbar"
+            aria-valuenow={Math.round(progress.areaWorkedPct)}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`Area worked ${progress.areaWorkedPct.toFixed(2)} percent`}
+          >
+            <div
+              className="h-full rounded-full bg-emerald-500 transition-[width] duration-500"
+              style={{ width: `${Math.min(100, Math.max(progress.areaWorkedPct, progress.areaWorkedPct > 0 ? 2 : 0))}%` }}
+            />
+          </div>
+          <div data-testid="area-worked-caption" className="mt-1 text-xs text-muted-foreground">
+            {progress.areaWorkedPct.toFixed(2)}% — {progress.verifiedWorkedLeads} of {progress.total} leads worked
+          </div>
+
+          {/* Verification summary — icon + text (WCAG: not colour alone) */}
+          <div className="mt-3 grid grid-cols-3 gap-1.5" data-testid="verification-summary">
+            <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1.5 text-center">
+              <div className="inline-flex items-center gap-1 text-emerald-400"><ShieldCheck className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.verified}</span></div>
+              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Verified</div>
+            </div>
+            <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-center">
+              <div className="inline-flex items-center gap-1 text-amber-400"><AlertTriangle className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.needsReview}</span></div>
+              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Review</div>
+            </div>
+            <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-2 py-1.5 text-center">
+              <div className="inline-flex items-center gap-1 text-red-400"><Ban className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.invalid}</span></div>
+              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Invalid</div>
+            </div>
+          </div>
+
+          {/* Distance summary */}
+          <div className="mt-2.5 flex items-center justify-between text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5" title="Average distance from the lead when marked (verified activities)">
+              <Ruler className="h-3.5 w-3.5" />
+              Avg {progress.avgDistanceM != null ? `${progress.avgDistanceM} m` : "—"}
+            </span>
+            <span title="Configured maximum allowed distance for a mark to verify">Max allowed {progress.maxAllowedDistanceM} m</span>
+          </div>
+        </div>
+      ) : (
+        // Fallback while progress loads: the plain counts we always had.
+        <div className="mt-3 flex items-center gap-4">
+          <div>
+            <div data-testid="lead-count" className="text-lg font-bold text-foreground tabular-nums">{territory.leadCount}</div>
+            <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Leads</div>
+          </div>
+          {territory.workedCount != null && (
+            <div>
+              <div className="text-lg font-bold text-foreground tabular-nums">{territory.workedCount}</div>
+              <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Worked</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* View Activity — opens the verified-activity history */}
+      {onViewHistory && (
+        <button
+          data-testid="view-history-btn"
+          onClick={onViewHistory}
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+        >
+          <History className="h-3.5 w-3.5" /> View Activity
+        </button>
+      )}
 
       {/* Role-gated actions */}
       {can(role, "reclaim_territory") && (

@@ -138,6 +138,7 @@ export const leads = sqliteTable("leads", {
   assignedRepId: integer("assigned_rep_id"),
   assignmentSource: text("assignment_source"),   // manual|lasso|territory-sync|direct|auto
   assignedTerritoryId: integer("assigned_territory_id"),
+  assignedBy: text("assigned_by"),               // display name of the manager who assigned it
   assignedAt: text("assigned_at"),
   unassignedAt: text("unassigned_at"),
   contactName: text("contact_name"),
@@ -223,10 +224,55 @@ export const knockLog = sqliteTable("knock_log", {
   // Idempotency key from the offline knock queue; null for legacy rows. A retried
   // flush with the same clientId returns the existing row instead of double-logging.
   clientId: text("client_id"),
+  // ── Location verification (see shared/geoVerify.ts) ──────────────────────────
+  // OBSERVATIONS the device reports (client-supplied evidence — may be spoofed,
+  // which is exactly what the verdict defends against):
+  repLat: real("rep_lat"),
+  repLng: real("rep_lng"),
+  gpsAccuracy: real("gps_accuracy"),
+  deviceTs: text("device_ts"),
+  mockLocation: integer("mock_location", { mode: "boolean" }),
+  netState: text("net_state"),
+  appVersion: text("app_version"),
+  deviceId: text("device_id"),
+  // VERDICT — computed SERVER-SIDE only; never accepted from the client (omitted
+  // from insertKnockSchema below) and only changed via an audited admin override.
+  serverTs: text("server_ts"),
+  distanceM: real("distance_m"),
+  verificationStatus: text("verification_status"),
+  reviewReason: text("review_reason"),
 });
-export const insertKnockSchema = createInsertSchema(knockLog).omit({ id: true });
+// The client may report its own GPS observations, but NEVER the verdict — those
+// four fields are stamped by the server from classifyKnockLocation().
+export const insertKnockSchema = createInsertSchema(knockLog).omit({
+  id: true, serverTs: true, distanceM: true, verificationStatus: true, reviewReason: true,
+});
 export type InsertKnock = z.infer<typeof insertKnockSchema>;
 export type Knock = typeof knockLog.$inferSelect;
+
+// ── App settings (admin-configurable knobs: geo.max_distance_m, geo.max_accuracy_m) ─
+export const appSettings = sqliteTable("app_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id"),
+  key: text("key").notNull(),
+  value: text("value"),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+  updatedBy: integer("updated_by"),
+});
+export type AppSetting = typeof appSettings.$inferSelect;
+
+// ── Verification override audit (immutable — one row per admin verdict change) ─
+export const activityOverrides = sqliteTable("activity_overrides", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  knockId: integer("knock_id").notNull(),
+  actorUserId: integer("actor_user_id"),
+  actorName: text("actor_name"),
+  oldStatus: text("old_status"),
+  newStatus: text("new_status").notNull(),
+  reason: text("reason").notNull(),
+  at: text("at").notNull().default(new Date().toISOString()),
+});
+export type ActivityOverride = typeof activityOverrides.$inferSelect;
 
 // ── Rep Applications ──────────────────────────────────────────────────────────
 export const repApplications = sqliteTable("rep_applications", {
@@ -349,6 +395,10 @@ export const scanTargets = sqliteTable("scan_targets", {
   dfAddressId: text("df_address_id"),
   scanCount: integer("scan_count").notNull().default(0),
   lastScannedAt: text("last_scanned_at"),
+  // First provable unavailable→live FLIP timestamp (first-to-market signal);
+  // set once and never overwritten. null = never observed going live.
+  firstSeenLiveAt: text("first_seen_live_at"),
+  lastAvailabilityStatus: text("last_availability_status"), // classifier verdict
   convertedToLeadId: integer("converted_to_lead_id"),      // set when a change promoted it to a lead
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
@@ -363,13 +413,18 @@ export const commissions = sqliteTable("commissions", {
   repId: integer("rep_id").notNull(),           // teamMembers.id
   leadId: integer("lead_id"),                   // leads.id — which sale
   knockId: integer("knock_id"),                 // knockLog.id — which knock closed it
-  amount: real("amount").notNull(),             // dollar amount
+  amount: real("amount").notNull(),             // dollar amount (locked at sale time)
   status: text("status").notNull().default("pending"),
   // "pending" | "approved" | "paid" | "disputed"
   saleDate: text("sale_date").notNull(),
   paidDate: text("paid_date"),
   notes: text("notes"),
   approvedBy: integer("approved_by"),           // users.id
+  // ── Structure lock (audit): which plan scored this sale, frozen forever ──
+  structureId: integer("structure_id"),         // commissionRates.id used
+  structureVersion: integer("structure_version"), // its version at sale time
+  calcType: text("calc_type"),                  // "flat" | "percentage" | "tiered"
+  saleAmount: real("sale_amount"),              // deal value the % / tier read
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export const insertCommissionSchema = createInsertSchema(commissions).omit({ id: true, createdAt: true });
@@ -398,7 +453,15 @@ export const commissionRates = sqliteTable("commission_rates", {
   name: text("name").notNull(),                // "Standard Rep", "Team Lead Bonus"
   role: text("role"),                          // null = applies to specific rep
   repId: integer("rep_id"),                    // null = applies to all of that role
-  ratePerSale: real("rate_per_sale").notNull(), // $ per sale
+  ratePerSale: real("rate_per_sale").notNull(), // legacy flat $/sale (= flatAmount)
+  // ── Structure engine (see shared/commission.ts) ──
+  calcType: text("calc_type").notNull().default("flat"), // "flat" | "percentage" | "tiered"
+  percentage: real("percentage").notNull().default(0),   // percentage plans (0–100)
+  tiers: text("tiers"),                         // JSON Tier[] for tiered plans
+  effectiveFrom: text("effective_from"),        // ISO date; null = always-on (legacy)
+  effectiveTo: text("effective_to"),            // ISO date; null = open-ended
+  version: integer("version").notNull().default(1),
+  updatedBy: text("updated_by"),                // actor name of last publish (audit)
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });

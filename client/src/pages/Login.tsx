@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowRight, Loader2, Mail, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ArrowRight, Loader2, Mail } from "lucide-react";
 
 const API_BASE = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
 
@@ -22,18 +22,52 @@ export default function Login() {
   const [email, setEmail]   = useState("");
   const [code, setCode]     = useState("");
   const [loading, setLoading] = useState(false);
+  const [resendIn, setResendIn] = useState(0); // seconds until "Resend code" re-enables
+
+  // Tick the resend cooldown down to zero.
+  useEffect(() => {
+    if (resendIn <= 0) return;
+    const t = setInterval(() => setResendIn(s => (s <= 1 ? 0 : s - 1)), 1000);
+    return () => clearInterval(t);
+  }, [resendIn]);
+
+  // Request (or re-request) a one-time code for the entered email. Throws with a
+  // user-facing message on any non-OK response.
+  async function requestCode() {
+    const res = await apiFetch("/api/auth/otp/request", { email: email.trim().toLowerCase() });
+    const data = await res.json();
+    if (res.status === 429) throw new Error(data.error);
+    // Owner's call for this internal tool: tell the rep plainly instead of a
+    // neutral "if registered…" message — the endpoint stays rate-limited per
+    // IP AND per email, so this can't be used to probe addresses in bulk.
+    if (res.status === 404) throw new Error("This email isn't registered. Contact your manager to get access.");
+    if (!res.ok) throw new Error(data.error ?? "Something went wrong");
+  }
 
   async function handleEmailSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!email.trim()) return;
     setLoading(true);
     try {
-      const res = await apiFetch("/api/auth/otp/request", { email: email.trim().toLowerCase() });
-      const data = await res.json();
-      if (res.status === 429) throw new Error(data.error);
-      if (!res.ok) throw new Error(data.error ?? "Something went wrong");
+      await requestCode();
       setStep("code");
+      setResendIn(30);
       toast({ title: "Code sent — check your email." });
+    } catch (err: any) {
+      toast({ title: err.message || "Something went wrong", variant: "destructive" });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleResend() {
+    if (resendIn > 0 || loading) return;
+    setLoading(true);
+    try {
+      await requestCode();
+      setCode("");
+      setResendIn(30);
+      toast({ title: "New code sent — check your email." });
     } catch (err: any) {
       toast({ title: err.message || "Something went wrong", variant: "destructive" });
     } finally {
@@ -79,7 +113,7 @@ export default function Login() {
         {/* Card */}
         <div className="rounded-2xl border border-border bg-card p-8 shadow-2xl">
           {/* Brand */}
-          <div className="mb-10 text-center">
+          <div className="mb-8 text-center">
             <img
               src="/hfs-logo-full.png"
               alt="Home Front Solutions"
@@ -88,7 +122,7 @@ export default function Login() {
               height={80}
             />
             <h1 className="text-2xl font-semibold tracking-tight text-foreground">Home Front Solutions</h1>
-            <p className="mt-1.5 text-sm text-muted-foreground">Team access only</p>
+            <p className="mt-1 text-sm text-muted-foreground">Field Sales Intelligence</p>
           </div>
 
           {/* Step: email entry */}
@@ -96,7 +130,7 @@ export default function Login() {
             <form onSubmit={handleEmailSubmit} className="space-y-6">
               <div className="space-y-2">
                 <label htmlFor="login-email" className="block text-sm font-medium text-foreground">
-                  Work email
+                  Email
                 </label>
                 <div className="relative">
                   <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -113,9 +147,6 @@ export default function Login() {
                     className={`h-11 pl-9 pr-3 text-sm ${inputClasses}`}
                   />
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  We'll send a one-time code to this address.
-                </p>
               </div>
 
               <button
@@ -125,8 +156,8 @@ export default function Login() {
                 className={buttonClasses}
               >
                 {loading
-                  ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Sending code…</>)
-                  : (<>Send login code <ArrowRight className="h-4 w-4" aria-hidden /></>)}
+                  ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Logging in…</>)
+                  : (<>Login <ArrowRight className="h-4 w-4" aria-hidden /></>)}
               </button>
             </form>
           )}
@@ -134,24 +165,23 @@ export default function Login() {
           {/* Step: code entry */}
           {step === "code" && (
             <form onSubmit={handleCodeSubmit} className="space-y-6">
-              <div className="space-y-1 text-center">
-                <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full border border-primary/25 bg-primary/10">
-                  <ShieldCheck className="h-5 w-5 text-primary" />
-                </div>
-                <p className="text-sm font-medium text-foreground">Check your email</p>
-                <p className="text-xs text-muted-foreground">
-                  Sent to <span className="font-medium text-foreground">{email}</span>
+              <div className="space-y-1.5">
+                <h2 className="text-lg font-semibold tracking-tight text-foreground">Check your email</h2>
+                <p className="text-sm text-muted-foreground">
+                  We sent a 6-digit code to{" "}
+                  <span className="font-medium text-foreground">{email}</span>.
                 </p>
               </div>
 
               <div className="space-y-2">
                 <label htmlFor="login-code" className="block text-sm font-medium text-foreground">
-                  6-digit code
+                  Verification code
                 </label>
                 <input
                   id="login-code"
                   type="text"
                   inputMode="numeric"
+                  autoComplete="one-time-code"
                   maxLength={6}
                   value={code}
                   onChange={e => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
@@ -161,9 +191,18 @@ export default function Login() {
                   required
                   className={`py-3 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums ${inputClasses}`}
                 />
-                <p className="text-xs text-muted-foreground">
-                  Expires in 10 minutes. Do not share this code.
-                </p>
+                <div className="flex items-center justify-between pt-0.5">
+                  <p className="text-xs text-muted-foreground">Expires in 10 minutes.</p>
+                  <button
+                    type="button"
+                    onClick={handleResend}
+                    disabled={resendIn > 0 || loading}
+                    data-testid="button-resend-code"
+                    className="text-xs font-medium text-primary transition-colors hover:text-primary/80 disabled:pointer-events-none disabled:text-muted-foreground/60"
+                  >
+                    {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
+                  </button>
+                </div>
               </div>
 
               <button
@@ -174,15 +213,15 @@ export default function Login() {
               >
                 {loading
                   ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Verifying…</>)
-                  : (<><ShieldCheck className="h-4 w-4" aria-hidden /> Verify & sign in</>)}
+                  : (<>Verify &amp; sign in <ArrowRight className="h-4 w-4" aria-hidden /></>)}
               </button>
 
               <button
                 type="button"
-                onClick={() => { setStep("email"); setCode(""); }}
-                className="w-full text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+                onClick={() => { setStep("email"); setCode(""); setResendIn(0); }}
+                className="flex w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
-                ← Use a different email
+                <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Use a different email
               </button>
             </form>
           )}

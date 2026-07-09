@@ -1,16 +1,15 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
   ScanSearch, Play, Square, PauseCircle, PlayCircle, Trash2,
-  Zap, Globe, RefreshCw, AlertTriangle, KeyRound, CheckCircle,
+  Zap, Globe, RefreshCw, AlertTriangle, KeyRound,
   Activity, ChevronDown, ChevronUp, MapPin, Download
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Badge } from "@/components/ui/badge";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
@@ -101,7 +100,7 @@ export default function CnsScanner() {
   // ── Active job SSE stream ─────────────────────────────────────────────────────
   const [streamJobId, setStreamJobId] = useState<string | null>(null);
   const [streamResults, setStreamResults] = useState<CnsResult[]>([]);
-  const [streamProgress, setStreamProgress] = useState<Partial<CnsJob> | null>(null);
+  const [, setStreamProgress] = useState<Partial<CnsJob> | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
   const connectStream = useCallback((jobId: string) => {

@@ -14,7 +14,8 @@
     "test:unit": "vitest run tests/unit",
     "test:rtl": "vitest run tests/rtl",
     "test:e2e": "playwright test",
-    "test:e2e:install": "playwright install chromium"
+    "test:e2e:install": "playwright install chromium",
+    "check:fast": "tsgo --noEmit"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
@@ -74,7 +75,6 @@
     "express-rate-limit": "^8.5.2",
     "express-session": "^1.18.1",
     "express-validator": "^7.3.2",
-    "framer-motion": "^11.13.1",
     "helmet": "^8.2.0",
     "input-otp": "^1.4.2",
     "leaflet": "^1.9.4",
@@ -120,6 +120,7 @@
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.1",
     "@types/ws": "^8.5.13",
+    "@typescript/native-preview": "^7.0.0-dev.20260707.2",
     "@vitejs/plugin-react": "^4.7.0",
     "autoprefixer": "^10.4.20",
     "drizzle-kit": "^0.31.8",

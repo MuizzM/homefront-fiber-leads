@@ -11,6 +11,7 @@ import { Suspense, lazy, useEffect } from "react";
 import Layout from "@/pages/Layout";
 import Login from "@/pages/Login";
 import NotFound from "@/pages/not-found";
+import { UpdatePrompt } from "@/components/UpdatePrompt";
 
 // Route-level code splitting — every in-app page ships as its own lazy chunk
 // (Mapbox/GL, recharts, the five scanners, etc. no longer weigh down the
@@ -28,6 +29,9 @@ const Commissions = lazy(() => import("@/pages/Commissions"));
 const LiveMap = lazy(() => import("@/pages/LiveMap"));
 const ComingSoon = lazy(() => import("@/pages/ComingSoon"));
 const ClockIn = lazy(() => import("@/pages/ClockIn"));
+const Profile = lazy(() => import("@/pages/Profile"));
+const Diagnostics = lazy(() => import("@/pages/Diagnostics"));
+const Governance = lazy(() => import("@/pages/Governance"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
@@ -46,6 +50,10 @@ function PageLoader() {
 }
 
 type AppRole = "admin" | "manager" | "team_lead" | "rep";
+
+// Super-admin (SaaS tenant management) is gated by identity, not just role.
+// Mirrors the server's SUPER_ADMIN_EMAILS check and the sidebar nav gate.
+const SUPER_ADMIN_EMAIL = "muizzm21@gmail.com";
 
 function hasRole(userRole: string | undefined, ...allowed: AppRole[]) {
   return allowed.includes((userRole ?? "rep") as AppRole);
@@ -109,6 +117,13 @@ function AppRoutes() {
           </Route>
           <Route path="/clock" component={ClockIn} />
           <Route path="/commissions" component={Commissions} />
+          <Route path="/profile" component={Profile} />
+          <Route path="/diagnostics">
+            <Guard role={role} allowed={["admin", "manager"]}><Diagnostics /></Guard>
+          </Route>
+          <Route path="/governance">
+            <Guard role={role} allowed={["admin"]}><Governance /></Guard>
+          </Route>
 
           {/* ── Team Lead + Manager + Admin ── */}
           <Route path="/team">
@@ -167,9 +182,12 @@ function AppRoutes() {
             </Guard>
           </Route>
           <Route path="/super-admin">
-            <Guard role={role} allowed={["admin"]}>
-              <SuperAdmin />
-            </Guard>
+            {/* Super-admin is identity-gated (matches the nav): a normal tenant
+                admin who types the URL is redirected, not shown a dead shell.
+                The server independently enforces requireSuperAdmin on all data. */}
+            {user?.email === SUPER_ADMIN_EMAIL
+              ? <SuperAdmin />
+              : <Redirect to="/" />}
           </Route>
 
           <Route component={NotFound} />
@@ -188,6 +206,7 @@ function App() {
       <AuthProvider>
         <AppRoutes />
         <Toaster />
+        <UpdatePrompt />
       </AuthProvider>
     </QueryClientProvider>
   );

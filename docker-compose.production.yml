@@ -1,0 +1,68 @@
+# ── HomeFront Fiber — production stack (Hetzner Cloud) ────────────────────────
+# Two services: the app (Express serving the SPA + API, SQLite on a volume) and
+# Caddy (public reverse proxy + automatic Let's Encrypt HTTPS). ONLY Caddy binds
+# host ports; the app is reachable only on the internal Docker network.
+#
+# Usage (see docs/DEPLOYMENT.md):
+#   export APP_IMAGE_TAG=$(git rev-parse --short HEAD)   # immutable tag, never :latest
+#   docker compose -f docker-compose.production.yml up -d --build
+#
+# All secrets come from ./.env (git-ignored) — never inline them here.
+
+services:
+  app:
+    # Immutable tag — deploy.sh sets APP_IMAGE_TAG to the commit SHA. Fails fast
+    # if unset so nobody accidentally ships an ambiguous image.
+    image: homefront-app:${APP_IMAGE_TAG:?set APP_IMAGE_TAG to the commit SHA (never :latest)}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      PORT: "5000"
+      DATA_DIR: /data          # data.db + uploads/ both live here (one volume)
+    volumes:
+      - app-data:/data         # DB + uploads — the ONLY stateful mount
+    expose:
+      - "5000"                 # internal network only — NOT published to the host
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    stop_grace_period: 20s     # let in-flight requests drain on redeploy
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"          # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data        # ACME certs + keys (persist across restarts)
+      - caddy-config:/config
+    networks: [internal]
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  app-data:      # SQLite DB + user uploads (back this up — see scripts/backup.sh)
+  caddy-data:    # Let's Encrypt certificates
+  caddy-config:

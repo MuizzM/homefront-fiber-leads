@@ -3,6 +3,7 @@ import fs from "fs";
 import multer from "multer";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
+import { mailTransport, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage } from "./storage";
@@ -34,12 +35,44 @@ try {
   _perfDb.close();
   console.log("[startup] SQLite WAL + indexes applied");
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
-import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema, insertCommissionSchema } from "@shared/schema";
+import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
 import { pointInPolygon } from "@shared/geo";
 import { can } from "@shared/permissions";
 import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
-import { OUTCOME_TO_STATUS, deriveWasHome, isKnockOutcome, type KnockOutcome } from "@shared/knock";
+import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, type KnockOutcome } from "@shared/knock";
+import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
+import {
+  calcCommission, pickActiveStructure, describeStructure,
+  type CommissionStructure, type Tier, type CalcType,
+} from "@shared/commission";
+import type { CommissionRate } from "@shared/schema";
+import {
+  can as hasCapability, capabilitiesFor, groupedCapabilities, rolesWithCapability, isHighRisk,
+  type Capability, type Role,
+} from "@shared/capabilities";
+import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
+
+// Map a stored commission_rates row → the engine's CommissionStructure.
+// Legacy flat rows (no effective_from) are treated as always-on flat plans.
+function rateToStructure(r: CommissionRate): CommissionStructure {
+  let tiers: Tier[] = [];
+  try { tiers = r.tiers ? (JSON.parse(r.tiers) as Tier[]) : []; } catch { /* corrupt JSON → no tiers */ }
+  return {
+    id: r.id,
+    name: r.name,
+    calcType: ((r as any).calcType ?? "flat") as CalcType,
+    flatAmount: r.ratePerSale,
+    percentage: (r as any).percentage ?? 0,
+    tiers,
+    role: r.role ?? null,
+    repId: r.repId ?? null,
+    effectiveFrom: (r as any).effectiveFrom ?? "0000-01-01", // null legacy → always-on
+    effectiveTo: (r as any).effectiveTo ?? null,
+    version: (r as any).version ?? 1,
+    isActive: r.isActive,
+  };
+}
 
 function safeJson<T = number[]>(s: string | null | undefined): T | undefined {
   if (!s) return undefined;
@@ -54,7 +87,7 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, NEW_FIBER_ZIPS, FCC_DEPLOYMENT_PERIODS, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
+import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
@@ -85,32 +118,48 @@ function normalizeAddrForDedup(addr: string): string {
     .join(" ");
 }
 
-// ── Email transporter (uses Gmail SMTP via env, falls back to Ethereal for dev) ──
+// ── Email (Resend/SMTP via env — see server/mail.ts; dev console fallback) ──
 async function sendOtpEmail(to: string, code: string, name: string) {
   // If SMTP env vars set, use them; otherwise log to console (dev mode)
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    const transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT ?? 587),
-      secure: false,
-      auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-    });
-    await transporter.sendMail({
-      from: `"HomeFront Fiber" <${process.env.SMTP_USER}>`,
-      to,
-      subject: "Your login code — HomeFront Fiber",
-      html: `<div style="font-family:sans-serif;max-width:420px;margin:auto;padding:36px;background:#0F2A44;color:#fff;border-radius:12px">
-        <h2 style="color:#3EA394;margin:0 0 4px;font-size:20px">HomeFront Fiber</h2>
-        <p style="color:#CBD4DD;font-size:12px;margin:0 0 28px">Field Sales Intelligence</p>
-        <p style="color:#CBD4DD;margin:0 0 16px">Hi ${name}, here is your one-time login code:</p>
-        <div style="font-size:40px;font-weight:700;letter-spacing:10px;color:#3EA394;padding:20px;background:#061624;border:1px solid rgba(62,163,148,0.3);border-radius:10px;text-align:center">${code}</div>
-        <p style="color:#5A6B76;font-size:12px;margin:20px 0 0">Expires in 10 minutes. Never share this code with anyone. HomeFront Fiber will never ask for your code.</p>
-      </div>`,
-    });
+    const transporter = mailTransport();
+    try {
+      await sendViaTransport(transporter, to, code, name);
+      return;
+    } catch (e: any) {
+      if (process.env.NODE_ENV !== "production") {
+        // Dev machines often can't reach the prod SMTP host — never block a
+        // local login on mail. (Prod NEVER logs codes; it rethrows below.)
+        console.warn(`[otp] SMTP send failed (${e?.message ?? e}) — dev fallback:`);
+        console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
+        return;
+      }
+      throw new Error("email_send_failed");
+    }
   } else {
     // Dev fallback — print to server console so you can test without SMTP
     console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
   }
+}
+
+async function sendViaTransport(transporter: nodemailer.Transporter, to: string, code: string, name: string) {
+  const first = escapeHtml((name || "").trim().split(" ")[0] || "there");
+  const logo = logoAttachment();
+  await transporter.sendMail({
+      from: mailFrom(),
+      to,
+      subject: "Your Home Front Solutions sign-in code",
+      text: `Hi ${(name || "").split(" ")[0] || "there"}, your Home Front Solutions sign-in code is ${code}. It expires in 10 minutes. Never share this code — we will never ask for it.`,
+      html: emailShell({
+        preheader: `Your sign-in code is ${code} — expires in 10 minutes`,
+        heading: "Your sign-in code",
+        bodyHtml:
+          emailParagraph(`Hi ${first}, use this one-time code to sign in:`) +
+          emailCodeBox(code) +
+          emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. Never share it — Home Front Solutions will never ask you for it.`),
+      }),
+      attachments: logo ? [logo] : [],
+  });
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────────
@@ -151,6 +200,24 @@ function requireManager(req: Request, res: Response, next: NextFunction) {
     if (!allowed.includes(user.role)) return res.status(403).json({ error: "Manager or above required" });
     next();
   });
+}
+
+// Capability gate — the enterprise permission unit. Authorizes against the
+// shared capability map (same source the client UI gates read), so a named
+// action is enforced identically on both sides. 403 names the missing cap.
+function requireCapability(cap: Capability) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    requireAuth(req, res, () => {
+      if (!hasCapability((req as any).user?.role, cap)) {
+        // Observable governance signal — the diagnostics panel surfaces denial
+        // patterns (misconfigured access / probing) from this stream.
+        storage.logActivity((req as any).user?.id ?? null, "permission.denied", "capability", undefined,
+          { need: cap, path: req.path, role: (req as any).user?.role ?? null }, req.ip);
+        return res.status(403).json({ error: "Forbidden", need: cap });
+      }
+      next();
+    });
+  };
 }
 
 // ── Lead visibility scope (fail closed) ───────────────────────────────────────
@@ -287,6 +354,11 @@ function generateAddresses(zip = "28138", _city = "Rockwell") {
 // Set to 50 concurrent: undici queues the overflow and dispatches as sockets free up.
 // At 50 concurrent + 60ms batch delay → ~833 addr/sec (vs previous 167 addr/sec at 10 conc).
 // A full 10,500-address Rockwell scan completes in ~15 seconds with proxy.
+// Express 5 types req.params/query/header values as string | string[]; normalize
+// to a plain string (first element for arrays, "" for absent) without changing
+// behavior for the single-string case.
+const qstr = (v: unknown): string => Array.isArray(v) ? String(v[0] ?? "") : typeof v === "string" ? v : "";
+
 // ── Multi-worker scan engine ─────────────────────────────────────────────────
 // 200 concurrent + 0ms delay + 4 parallel zone workers = maximum throughput.
 // Proxy pool: 200 connections × 2 pipeline = 400 slots.
@@ -444,17 +516,26 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-export function registerRoutes(httpServer: Server, app: Express) {
+export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
   // fails the check instead of serving a zombie app.
+  // Liveness/readiness probe — exercises the DB, reports version + uptime. Safe
+  // for uptime monitors and load balancers; carries NO secrets or PII.
   app.get("/api/health", (_req, res) => {
     try {
       storage.getSession("health-probe"); // any read exercises the DB connection
-      res.json({ ok: true });
+      res.json({
+        ok: true,
+        status: "healthy",
+        version: APP_VERSION,
+        db: "up",
+        uptimeSec: Math.round(process.uptime()),
+        time: new Date().toISOString(),
+      });
     } catch {
-      res.status(503).json({ ok: false });
+      res.status(503).json({ ok: false, status: "unhealthy", db: "down", time: new Date().toISOString() });
     }
   });
 
@@ -596,7 +677,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // ── FiberFocus-style scanner state ───────────────────────────────────────────────
   // Polled every 3s by the CityScanner UI to show live efficiency metrics.
-  app.get("/api/scanner/state", requireManager, (req, res) => {
+  app.get("/api/scanner/state", requireManager, (_req, res) => {
     const activeJob = Array.from(scanJobs.values()).find(j => j.status === "running");
     const secondsSinceHeartbeat = Math.floor((Date.now() - _scanWorkerState.lastHeartbeat) / 1000);
     res.json({
@@ -1179,6 +1260,21 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getScanTargetStats());
   });
 
+  // GET /api/scan/first-seen-live — the first-to-market feed: addresses that
+  // FLIPPED from unavailable to live within the window (default 24h), newest
+  // first, each tagged with whether it's already been turned into a lead.
+  // This is the core "New Fiber Today / First Seen Live" manager surface.
+  app.get("/api/scan/first-seen-live", requireManager, (req, res) => {
+    const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
+    const rows = storage.getFirstSeenLive(hours);
+    res.json({
+      windowHours: hours,
+      count: rows.length,
+      readyToAssign: rows.filter(r => r.leadId != null).length,
+      addresses: rows,
+    });
+  });
+
   // POST /api/scan/rescan-pool — re-scan the stored address pool for CHANGES.
   // Uses zero geocoding (addresses are already stored), dedups against existing
   // leads, and surfaces newly-lit fiber as fresh leads. This is the cheap,
@@ -1210,7 +1306,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // SSE: real-time scan stream — registered BEFORE :jobId wildcard
   app.get("/api/scan/stream/:jobId", requireManager, (req, res) => {
-    const jobId = req.params.jobId;
+    const jobId = qstr(req.params.jobId);
     const job = scanJobs.get(jobId);
     if (!job) return res.status(404).json({ error: "Job not found" });
 
@@ -1252,7 +1348,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.get("/api/scan/:jobId", requireManager, (req, res) => {
-    const job = scanJobs.get(req.params.jobId);
+    const job = scanJobs.get(qstr(req.params.jobId));
     const _sjTid = (req as any).user?.tenantId;
     if (!job || (_sjTid && job.tenantId !== _sjTid)) return res.status(404).json({ error: "Not found" });
     const r = job.results;
@@ -1274,11 +1370,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   app.delete("/api/scan/:jobId", requireManager, (req, res) => {
-    scanJobs.delete(req.params.jobId);
+    scanJobs.delete(qstr(req.params.jobId));
     res.json({ success: true });
   });
 
-  app.get("/api/scan", requireManager, (req, res) => {
+  app.get("/api/scan", requireManager, (_req, res) => {
     res.json(Array.from(scanJobs.values()).map(j => ({
       id: j.id, city: j.city, zip: j.zip, status: j.status,
       total: j.total, done: j.done, startedAt: j.startedAt, completedAt: j.completedAt,
@@ -1286,12 +1382,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Fiber check history
-  app.get("/api/fiber-checks", requireAuth, (req, res) => res.json(storage.getRecentChecks(100)));
+  app.get("/api/fiber-checks", requireAuth, (_req, res) => res.json(storage.getRecentChecks(100)));
 
   // ── Team Members ─────────────────────────────────────────────────────────────
   app.get("/api/team", requireAuth, (req, res) => {
-    const tid = (req as any).user?.tenantId ?? undefined;
-    res.json(storage.getTeamMembers(tid));
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const members = storage.getTeamMembers(tid);
+    // Reps need names to resolve "assigned to …" and rankings, but NOT the
+    // roster's phones/emails/org structure — project those away for reps.
+    if (user?.role === "rep") {
+      return res.json(members.map((m: any) => ({ id: m.id, name: m.name, role: m.role, active: m.active, tenantId: m.tenantId ?? null })));
+    }
+    res.json(members);
   });
   // Which member roles each account role may create/promote to.
   // Admin hires managers; managers hire team leads + reps; team leads hire reps only.
@@ -1372,24 +1475,40 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // ── Lead → Assign rep ─────────────────────────────────────────────────────────
   // Team lead+ can assign leads
-  app.post("/api/leads/:id/assign", requireTeamLead, (req, res) => {
+  app.post("/api/leads/:id/assign", requireCapability("lead.assign"), (req, res) => {
     const { repId } = req.body;
-    const tid = (req as any).user?.tenantId ?? undefined;
-    const updated = storage.updateLead(Number(req.params.id), { assignedRepId: repId ?? null }, tid);
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    // Provenance: reps see WHO routed each door to them, and when.
+    const updated = storage.updateLead(Number(req.params.id), {
+      assignedRepId: repId ?? null,
+      assignedBy: repId ? (user?.name ?? null) : null,
+      assignedAt: repId ? new Date().toISOString() : null,
+    }, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    if (repId) {
+      const repName = storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`;
+      storage.addLeadEvent(updated.id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
+    }
     res.json(updated);
   });
 
   // ── Bulk assign leads to a rep (lasso selection) ────────────────────────────
   // POST /api/leads/bulk-assign  { leadIds: number[], repId: number | null }
-  app.post("/api/leads/bulk-assign", requireTeamLead, (req, res) => {
+  app.post("/api/leads/bulk-assign", requireCapability("lead.assign"), (req, res) => {
     const { leadIds, repId } = req.body as { leadIds: number[]; repId: number | null };
     if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
-    const tid = (req as any).user?.tenantId ?? undefined;
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const stamp = repId ? { assignedBy: user?.name ?? null, assignedAt: new Date().toISOString() } : { assignedBy: null, assignedAt: null };
+    const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
     let updated = 0;
     for (const id of leadIds) {
-      const result = storage.updateLead(id, { assignedRepId: repId ?? null }, tid);
-      if (result) updated++;
+      const result = storage.updateLead(id, { assignedRepId: repId ?? null, ...stamp }, tid);
+      if (result) {
+        updated++;
+        if (repName) storage.addLeadEvent(id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
+      }
     }
     res.json({ updated, repId });
   });
@@ -1460,7 +1579,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (ownerName) enrichmentUpdate.ownerName = ownerName;
     if (incomeRange) enrichmentUpdate.incomeRange = incomeRange;
     if (homeValue) enrichmentUpdate.homeValue = homeValue;
-    const updated = storage.updateLead(lead.id, enrichmentUpdate as any);
+    storage.updateLead(lead.id, enrichmentUpdate as any);
 
     res.json({
       ownerName: ownerName ?? lead.ownerName ?? null,
@@ -1509,7 +1628,98 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const lead = storage.getLeadById(Number(req.params.id));
       if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     }
-    res.json(storage.getKnocksByLead(Number(req.params.id)));
+    // History rows carry who made the change — the card renders "Sold · 3:12 PM
+    // · M. Muhammad" without a second round-trip per row.
+    const rows = storage.getKnocksByLead(Number(req.params.id)).map(k => ({
+      ...k,
+      repName: (k.repId != null ? storage.getTeamMemberById(k.repId)?.name : null) ?? null,
+    }));
+    res.json(rows);
+  });
+
+  // Lead-level notes, rep-writable. The manager PATCH /api/leads/:id stays
+  // manager-only; this narrow endpoint writes ONLY `notes`, guarded the same
+  // fail-closed way as every other rep lead access (404, never 403).
+  // Conflict-safe: the client sends the lead `updatedAt` it loaded (base
+  // version); if another device saved a different note since, respond 409 with
+  // the server copy so the client can merge instead of silently overwriting.
+  app.patch("/api/leads/:id/notes", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const notes = req.body?.notes;
+    const baseUpdatedAt = typeof req.body?.baseUpdatedAt === "string" ? req.body.baseUpdatedAt : null;
+    if (typeof notes !== "string" || notes.length > 2000) return res.status(400).json({ error: "notes must be a string ≤2000 chars" });
+    const lead = storage.getLeadById(Number(req.params.id));
+    if (!lead) return res.status(404).json({ error: "Not found" });
+    if (user?.role === "rep" && !repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
+    if (notes === (lead.notes ?? "")) return res.json({ id: lead.id, notes, updatedAt: lead.updatedAt }); // no-op: no write, no event
+    if (baseUpdatedAt && lead.updatedAt && lead.updatedAt > baseUpdatedAt && (lead.notes ?? "") !== "") {
+      return res.status(409).json({ error: "conflict", serverNotes: lead.notes ?? "", updatedAt: lead.updatedAt });
+    }
+    const updated = storage.updateLead(lead.id, { notes });
+    // Note events join the lead's unified history with a short preview.
+    const preview = notes.trim().slice(0, 100);
+    if (preview) storage.addLeadEvent(lead.id, "note", user?.name ?? null, { preview });
+    storage.logActivity(user?.id ?? null, "lead.note_updated", "lead", lead.id, {}, req.ip);
+    res.json({ id: lead.id, notes: updated?.notes ?? notes, updatedAt: updated?.updatedAt ?? null });
+  });
+
+  // ── Unified lead history — one timeline for the card ────────────────────────
+  // status_change rows come from knock_log; assignment + note rows from
+  // lead_events. Merged, newest first, capped — append-only sources make each
+  // read one indexed scan per table, no joins.
+  app.get("/api/leads/:id/history", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const lead = storage.getLeadById(Number(req.params.id));
+    if (!lead) return res.status(404).json({ error: "Not found" });
+    if (user?.role === "rep" && !repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
+    // One indexed team scan → O(1) name lookups per row (not a query per knock).
+    const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    const statusRows = storage.getKnocksByLead(lead.id).map(k => ({
+      id: `k${k.id}`,
+      knockId: k.id,
+      type: "status_change" as const,
+      actor: (k.repId != null ? repNames.get(k.repId) : null) ?? null,
+      changedAt: k.knockedAt,
+      status: k.outcome,
+      // ── Location verification (distance WHEN MARKED — never recomputed live) ──
+      verification: k.verificationStatus ?? null,        // verified|needs_review|invalid|null(legacy)
+      distanceM: k.distanceM ?? null,                    // metres from the lead at mark time
+      gpsAccuracyM: k.gpsAccuracy ?? null,
+      reviewReason: k.reviewReason ?? null,
+      deviceTs: k.deviceTs ?? null,
+      serverTs: k.serverTs ?? null,
+      netState: k.netState ?? null,
+      // Coordinate pair for the History map preview (rep pin + lead pin + line).
+      repLat: k.repLat ?? null, repLng: k.repLng ?? null,
+      leadLat: lead.lat ?? null, leadLng: lead.lng ?? null,
+    }));
+    const eventRows = storage.getLeadEvents(lead.id).map(e => ({
+      id: `e${e.id}`,
+      type: e.type as "assignment" | "note",
+      actor: e.actor,
+      changedAt: e.at,
+      assignedTo: e.detail?.assignedTo ?? undefined,
+      assignedBy: e.detail?.assignedBy ?? undefined,
+      notePreview: e.detail?.preview ?? undefined,
+    }));
+    // Legacy bridge: leads noted before lead_events existed still surface their
+    // note in the timeline (the composer UI clears the field after save, so
+    // history is the ONLY place a note is read).
+    if ((lead.notes ?? "").trim() && !eventRows.some(e => e.type === "note")) {
+      eventRows.push({
+        id: "legacy-note",
+        type: "note" as const,
+        actor: null,
+        changedAt: lead.updatedAt ?? lead.createdAt ?? new Date(0).toISOString(),
+        assignedTo: undefined,
+        assignedBy: undefined,
+        notePreview: (lead.notes ?? "").trim().slice(0, 100),
+      });
+    }
+    const merged = [...statusRows, ...eventRows]
+      .sort((a, b) => (a.changedAt < b.changedAt ? 1 : a.changedAt > b.changedAt ? -1 : 0))
+      .slice(0, 100);
+    res.json(merged);
   });
   // Any authenticated rep can log a knock
   app.post("/api/leads/:id/knock", requireAuth, (req, res) => {
@@ -1531,45 +1741,97 @@ export function registerRoutes(httpServer: Server, app: Express) {
     }
     if (!isKnockOutcome(req.body?.outcome)) return res.status(400).json({ error: "invalid outcome" });
     // wasHome is DERIVED from the outcome — never trust the client's value.
+    // A rep can ONLY ever credit THEMSELVES: force repId to their own team-member
+    // id so a rep can never log a knock (or its commission) for another person.
+    // Managers/leads/admins may still credit any rep (bulk logging, ride-alongs).
+    const forcedRepId = _knu?.role === "rep" ? _knu.teamMemberId : req.body?.repId;
     const parsed = insertKnockSchema.safeParse({
       ...req.body,
       leadId: Number(req.params.id),
       wasHome: deriveWasHome(req.body.outcome),
       clientId,
+      repId: forcedRepId,
     });
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    const knock = storage.createKnock(parsed.data);
+
+    // ── Location verification (server-authoritative — the client's GPS is only
+    // evidence; distance + verdict are computed HERE and cannot be forged). ────
+    const lead = storage.getLeadById(Number(req.params.id));
+    const b = req.body ?? {};
+    const geoConfig = storage.getGeoConfig((req as any).user?.tenantId ?? null);
+    const serverTs = new Date().toISOString();
+    // The rep's previous located knock, for impossible-travel detection.
+    const repId = parsed.data.repId;
+    let prev: { lat: number; lng: number; at: string } | null = null;
+    if (typeof repId === "number") {
+      const prior = storage.getKnocksByRep(repId)
+        .filter(k => k.repLat != null && k.repLng != null && (k.deviceTs || k.knockedAt))
+        .sort((a, z) => ((z.deviceTs ?? z.knockedAt) < (a.deviceTs ?? a.knockedAt) ? -1 : 1))[0];
+      if (prior) prev = { lat: prior.repLat as number, lng: prior.repLng as number, at: (prior.deviceTs ?? prior.knockedAt) as string };
+    }
+    const verdict = classifyKnockLocation({
+      repLat: typeof b.repLat === "number" ? b.repLat : null,
+      repLng: typeof b.repLng === "number" ? b.repLng : null,
+      gpsAccuracyM: typeof b.gpsAccuracy === "number" ? b.gpsAccuracy : null,
+      leadLat: lead?.lat ?? null,
+      leadLng: lead?.lng ?? null,
+      deviceTs: typeof b.deviceTs === "string" ? b.deviceTs : parsed.data.knockedAt ?? null,
+      serverTs,
+      mockLocation: b.mockLocation === true,
+      netState: b.netState === "offline" ? "offline" : b.netState === "online" ? "online" : null,
+      prev,
+    }, geoConfig);
+
+    const knock = storage.createKnock(parsed.data, {
+      serverTs,
+      distanceM: verdict.distanceM,
+      verificationStatus: verdict.status,
+      reviewReason: verdict.reasons.length ? verdict.reasons.join(";") : null,
+    });
     // Update lead status to match knock outcome — shared map covers all 7 outcomes
     // (incl. follow_up→follow_up, needs_verification→contacted) and cannot drift
     // from the client, which imports the same module.
     const newStatus = OUTCOME_TO_STATUS[parsed.data.outcome as KnockOutcome];
     if (newStatus) storage.updateLead(Number(req.params.id), { leadStatus: newStatus });
     bustMapCache(); // a knock changes the pin's visited state — refresh the map layer
-    // Auto-create pending commission when outcome = sold
+    // Auto-create pending commission when outcome = sold. The structure IN
+    // EFFECT for this rep AT SALE TIME scores it, and its id/version/calcType
+    // freeze onto the record — a later plan edit never rewrites this payout.
     if (parsed.data.outcome === "sold" && parsed.data.repId) {
       try {
-        const rates = storage.getCommissionRates();
         const rep = storage.getTeamMemberById(parsed.data.repId);
-        const rate = rates.find(r => r.repId === parsed.data.repId) ??
-          rates.find(r => r.role === rep?.role) ??
-          rates[0];
-        if (rate) {
+        const saleDate = new Date().toISOString().slice(0, 10);
+        const structures = storage.getCommissionRates().map(rateToStructure);
+        const active = pickActiveStructure(structures, parsed.data.repId, rep?.role ?? null, saleDate);
+        if (active) {
+          const saleAmount = Number((req.body as any)?.saleAmount) || 0; // deal value for %/tier plans
+          const calc = calcCommission(active, saleAmount);
           storage.createCommission({
             repId: parsed.data.repId,
             leadId: Number(req.params.id),
             knockId: knock.id,
-            amount: rate.ratePerSale,
-            saleDate: new Date().toISOString().slice(0, 10),
+            amount: calc.amount,
+            saleDate,
             status: "pending",
-            notes: `Auto: knock #${knock.id}`,
+            notes: `Auto: knock #${knock.id} · ${describeStructure(active)}`,
             approvedBy: null,
             paidDate: null,
-          });
+            structureId: active.id,
+            structureVersion: active.version,
+            calcType: calc.calcType,
+            saleAmount: saleAmount || null,
+          } as any);
+          storage.logActivity((req as any).user?.id ?? null, "commission.auto_created", "knock", knock.id,
+            { repId: parsed.data.repId, leadId: Number(req.params.id), structureId: active.id, version: active.version, calcType: calc.calcType, amount: calc.amount }, req.ip);
+        } else {
+          // No plan covers this sale — book a $0 flagged record, never guess.
+          storage.logActivity((req as any).user?.id ?? null, "commission.no_structure", "knock", knock.id,
+            { repId: parsed.data.repId, leadId: Number(req.params.id) }, req.ip);
         }
-        storage.logActivity((req as any).user?.id ?? null, "commission.auto_created", "knock", knock.id, { repId: parsed.data.repId, leadId: Number(req.params.id) }, req.ip);
       } catch (e) { console.warn("Auto-commission failed:", e); }
     }
-    storage.logActivity((req as any).user?.id ?? null, `knock.${parsed.data.outcome}`, "knock", knock.id, { leadId: Number(req.params.id), repId: parsed.data.repId }, req.ip);
+    storage.logActivity((req as any).user?.id ?? null, `knock.${parsed.data.outcome}`, "knock", knock.id,
+      { leadId: Number(req.params.id), repId: parsed.data.repId, verification: verdict.status, distanceM: verdict.distanceM, serverTs }, req.ip);
     res.status(201).json(knock);
   });
 
@@ -1589,8 +1851,51 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // ── Leaderboard ──────────────────────────────────────────────────────────────
-  app.get("/api/leaderboard", requireAuth, (_req, res) => {
-    res.json(storage.getLeaderboard());
+  app.get("/api/leaderboard", requireAuth, (req, res) => {
+    // Scope to the caller's tenant and project to non-PII fields ONLY — the
+    // leaderboard is visible to reps, so it must never carry email/phone/org
+    // structure. Rankings need id/name/role + the counts, nothing more.
+    const tid = (req as any).user?.tenantId ?? null;
+    const rows = storage.getLeaderboard()
+      .filter(r => tid == null || (r.rep as any).tenantId === tid)
+      .map(r => ({
+        rep: { id: r.rep.id, name: r.rep.name, role: (r.rep as any).role ?? "rep" },
+        knocks: r.knocks, contacts: r.contacts, callbacks: r.callbacks, sales: r.sales,
+        knocksToday: r.knocksToday, salesToday: r.salesToday,
+      }));
+    res.json(rows);
+  });
+
+  // ── Rep activity — the dashboard's rep card ──────────────────────────────────
+  // Recent dispositions for one rep, timestamped, with the door they happened
+  // at. Reps may read ONLY their own activity; team lead+ may read anyone's
+  // (fail-closed 404, matching every other rep-scoped read).
+  app.get("/api/team/:id/activity", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const repId = Number(req.params.id);
+    const isSelf = user?.teamMemberId === repId;
+    const canViewOthers = ["admin", "manager", "team_lead"].includes(user?.role);
+    if (!isSelf && !canViewOthers) return res.status(404).json({ error: "Not found" });
+    const rep = storage.getTeamMemberById(repId);
+    if (!rep) return res.status(404).json({ error: "Not found" });
+    // Capped, newest-first (getKnocksByRep is unordered — id desc = insertion
+    // order reversed, no date parsing); one pass to join addresses via a Map.
+    const knocks = storage.getKnocksByRep(repId).sort((a, b) => b.id - a.id).slice(0, 50);
+    const leadIds = new Set(knocks.map(k => k.leadId));
+    const addr = new Map(
+      storage.getLeads(user?.tenantId ?? undefined)
+        .filter(l => leadIds.has(l.id))
+        .map(l => [l.id, `${l.address}, ${l.city}`]),
+    );
+    res.json({
+      rep: { id: rep.id, name: rep.name, role: rep.role },
+      events: knocks.map(k => ({
+        id: k.id,
+        outcome: k.outcome,
+        at: k.knockedAt,
+        address: addr.get(k.leadId) ?? null,
+      })),
+    });
   });
 
   // Stats
@@ -1677,13 +1982,23 @@ export function registerRoutes(httpServer: Server, app: Express) {
       res.setHeader("Retry-After", String(retryAfter));
       return res.status(429).json({ error: `Too many requests. Try again in ${Math.ceil(retryAfter / 60)} minutes.` });
     }
-    // Always respond the same way — never reveal if email exists
+    // Owner's decision (2026-07-08): this is a closed internal team tool, so an
+    // unknown email gets an explicit 404 ("contact your manager") instead of the
+    // neutral anti-enumeration response — field reps kept assuming a silent
+    // "sent" meant a mail delay. The enumeration surface stays bounded by the
+    // dual per-IP AND per-email rate limits above; a public-facing app should
+    // flip this back to the constant response.
     const user = storage.getUserByEmail(cleanEmail);
-    if (user && user.active) {
-      const code = storage.createOtp(cleanEmail);
-      await sendOtpEmail(cleanEmail, code, user.name);
+    if (!user || !user.active) {
+      return res.status(404).json({ error: "This email isn't registered. Contact your manager to get access." });
     }
-    // Constant-time response regardless of whether user exists
+    const code = storage.createOtp(cleanEmail);
+    try {
+      await sendOtpEmail(cleanEmail, code, user.name);
+    } catch {
+      // Mail infrastructure down (prod path) — tell the rep plainly, fast.
+      return res.status(502).json({ error: "Couldn't send the code right now. Try again in a moment." });
+    }
     res.json({ sent: true });
   });
 
@@ -1723,6 +2038,14 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const token = req.headers["x-session-id"] as string;
     if (token) storage.deleteSession(token);
     res.json({ success: true });
+  });
+
+  // Logout from ALL devices — revoke every session for the current user. Audited.
+  app.post("/api/auth/logout-all", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const revoked = storage.deleteSessionsByUser(user.id);
+    storage.logActivity(user.id, "auth.logout_all", "user", user.id, { sessionsRevoked: revoked }, req.ip);
+    res.json({ success: true, sessionsRevoked: revoked });
   });
 
   // First-run admin setup (OTP-only — no password)
@@ -1840,7 +2163,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const enclosed = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon));
     let assigned = 0;
     for (const l of enclosed) {
-      if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedAt: at } as any, tid)) assigned++;
+      if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid)) {
+        assigned++;
+        storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
+      }
     }
     storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, assigned });
 
@@ -1940,7 +2266,10 @@ export function registerRoutes(httpServer: Server, app: Express) {
       const inside = storage.getLeads(tid).filter((l: any) =>
         l.lat != null && l.lng != null && l.assignedRepId == null && pointInPolygon(l.lat, l.lng, polygon));
       for (const l of inside) {
-        if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedAt: at } as any, tid)) assigned++;
+        if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid)) {
+          assigned++;
+          storage.addLeadEvent(l.id, "assignment", (req as any).user?.name ?? null, { assignedTo: rep.name, assignedBy: (req as any).user?.name ?? null });
+        }
       }
     }
 
@@ -1999,10 +2328,19 @@ export function registerRoutes(httpServer: Server, app: Express) {
     res.json(storage.getTerritoryEvents(Number(req.params.id)));
   });
 
+  // PATCH /api/territories/:id { name } — rename an area. Whitelisted to name
+  // only: lifecycle changes go through their dedicated routes above. Custom
+  // names survive reclaim/reassign (see isAutoAreaName) and reps see them on
+  // their own map.
   app.patch("/api/territories/:id", requireTeamLead, (req, res) => {
     const ttid = (req as any).user?.tenantId ?? undefined;
-    const updated = storage.updateTerritory(Number(req.params.id), req.body, ttid);
-    if (!updated) return res.status(404).json({ error: "Not found" });
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (!name || name.length > 60) return res.status(400).json({ error: "Area name must be 1–60 characters" });
+    const id = Number(req.params.id);
+    const prev = storage.getTerritories(ttid).find(t => t.id === id);
+    if (!prev) return res.status(404).json({ error: "Not found" });
+    const updated = storage.updateTerritory(id, { name, updatedAt: new Date().toISOString() } as any, ttid);
+    storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
     res.json(updated);
   });
 
@@ -2025,8 +2363,16 @@ export function registerRoutes(httpServer: Server, app: Express) {
     if (territories.length === 0) return res.json([]);
 
     const leads = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null);
-    const knockedIds = new Set(storage.getKnocks().map((k: any) => k.leadId));
     const members = storage.getTeamMembers();
+    const geoConfig = storage.getGeoConfig(tid ?? null);
+
+    // Group knocks by lead once (O(knocks)) so each territory is O(leads-inside).
+    const knocksByLead = new Map<number, any[]>();
+    for (const k of storage.getKnocks()) {
+      const arr = knocksByLead.get(k.leadId); if (arr) arr.push(k); else knocksByLead.set(k.leadId, [k]);
+    }
+    // Is this a WORKED outcome (door done for the pass)? Mirrors OUTCOME_META.
+    const isWorkedOutcome = (o: string) => !!OUTCOME_META[o as KnockOutcome]?.worked;
 
     const inside = pointInPolygon;
 
@@ -2035,16 +2381,137 @@ export function registerRoutes(httpServer: Server, app: Express) {
       try { poly = JSON.parse(t.polygon); } catch { poly = []; }
       const within = poly.length >= 3 ? leads.filter((l: any) => inside(l.lat, l.lng, poly)) : [];
       const total = within.length;
-      const knocked = within.filter((l: any) => knockedIds.has(l.id)).length;
       const sold = within.filter((l: any) => l.leadStatus === "sold").length;
+
+      // Per-territory verification rollup. "knocked" = any activity; "verifiedWorked"
+      // = distinct leads with a VERIFIED worked knock (the only thing that counts).
+      let knocked = 0, verifiedWorkedLeads = 0;
+      let verified = 0, needsReview = 0, invalid = 0;
+      let distSum = 0, distCount = 0, maxDist = 0;
+      for (const l of within) {
+        const ks = knocksByLead.get(l.id) ?? [];
+        if (ks.length) knocked++;
+        let leadHasVerifiedWork = false;
+        for (const k of ks) {
+          const status = (k.verificationStatus ?? null) as VerificationStatus | null;
+          if (status === "verified") verified++;
+          else if (status === "invalid") invalid++;
+          else if (status === "needs_review") needsReview++;
+          if (typeof k.distanceM === "number") {
+            maxDist = Math.max(maxDist, k.distanceM);
+            if (status === "verified") { distSum += k.distanceM; distCount++; }
+          }
+          if (status === "verified" && isWorkedOutcome(k.outcome) && countsAsWorked(status)) leadHasVerifiedWork = true;
+        }
+        if (leadHasVerifiedWork) verifiedWorkedLeads++;
+      }
+      const areaWorkedPct = total ? Math.round((verifiedWorkedLeads / total) * 10000) / 100 : 0;
+
       return {
-        id: t.id, name: t.name, color: t.color, repId: t.repId,
+        id: t.id, name: t.name, color: t.color, repId: t.repId, status: (t as any).status ?? "active",
         repName: members.find((m: any) => m.id === t.repId)?.name ?? "Unassigned",
         total, knocked, sold,
+        // Back-compat: old clients read pct/knocked (integer % of any-knocked).
         pct: total ? Math.round((knocked / total) * 100) : 0,
+        // New: location-verified progress.
+        verifiedWorkedLeads,
+        areaWorkedPct,
+        verified, needsReview, invalid,
+        avgDistanceM: distCount ? Math.round(distSum / distCount) : null,
+        maxObservedDistanceM: distCount || needsReview || invalid ? Math.round(maxDist) : null,
+        maxAllowedDistanceM: geoConfig.maxDistanceM,
+        maxAllowedAccuracyM: geoConfig.maxAccuracyM,
       };
     });
     res.json(result);
+  });
+
+  // GET /api/territories/:id/activity — the location-verified History feed for a
+  // territory: every lead-marking activity with its distance-when-marked, GPS
+  // accuracy, verdict, and both coordinate pairs for the map preview. Reps see
+  // only their own territory; managers/admins see any in their tenant.
+  app.get("/api/territories/:id/activity", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const territory = storage.getTerritories(tid).find(t => t.id === Number(req.params.id));
+    if (!territory) return res.status(404).json({ error: "Not found" });
+    if (user?.role === "rep" && territory.repId !== user?.teamMemberId) return res.status(404).json({ error: "Not found" });
+    let poly: [number, number][] = [];
+    try { poly = JSON.parse(territory.polygon); } catch { poly = []; }
+    const within = poly.length >= 3
+      ? storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, poly))
+      : [];
+    const leadById = new Map(within.map((l: any) => [l.id, l]));
+    const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    const activities = storage.getKnocks()
+      .filter(k => leadById.has(k.leadId))
+      .map(k => {
+        const l: any = leadById.get(k.leadId);
+        return {
+          knockId: k.id, leadId: k.leadId,
+          leadName: l.address, address: `${l.address}, ${l.city} ${l.state} ${l.zip ?? ""}`.trim(),
+          rep: k.repId != null ? (repNames.get(k.repId) ?? null) : null,
+          outcome: k.outcome, knockedAt: k.knockedAt, deviceTs: k.deviceTs ?? null, serverTs: k.serverTs ?? null,
+          verification: k.verificationStatus ?? null, distanceM: k.distanceM ?? null, gpsAccuracyM: k.gpsAccuracy ?? null,
+          reviewReason: k.reviewReason ?? null, netState: k.netState ?? null,
+          repLat: k.repLat ?? null, repLng: k.repLng ?? null, leadLat: l.lat, leadLng: l.lng,
+        };
+      })
+      .sort((a, z) => (a.knockedAt < z.knockedAt ? 1 : a.knockedAt > z.knockedAt ? -1 : 0))
+      .slice(0, 300);
+    res.json({
+      territoryId: territory.id, name: territory.name,
+      maxAllowedDistanceM: storage.getGeoConfig(tid ?? null).maxDistanceM,
+      activities,
+    });
+  });
+
+  // ── Geo verification config ─────────────────────────────────────────────────
+  // Manager+ can read the thresholds; ONLY admins can change them (spec: only
+  // authorized admins may change max distance). Every change is audited.
+  app.get("/api/settings/geo", requireManager, (req, res) => {
+    res.json(storage.getGeoConfig((req as any).user?.tenantId ?? null));
+  });
+  app.patch("/api/settings/geo", requireAdmin, (req, res) => {
+    const tid = (req as any).user?.tenantId ?? null;
+    const uid = (req as any).user?.id ?? null;
+    const prev = storage.getGeoConfig(tid);
+    const { maxDistanceM, maxAccuracyM } = (req.body ?? {}) as { maxDistanceM?: unknown; maxAccuracyM?: unknown };
+    if (maxDistanceM != null) {
+      const d = Number(maxDistanceM);
+      if (!Number.isFinite(d) || d < 5 || d > 5000) return res.status(400).json({ error: "maxDistanceM must be 5–5000 metres" });
+      storage.setSetting("geo.max_distance_m", String(Math.round(d)), uid, tid);
+    }
+    if (maxAccuracyM != null) {
+      const a = Number(maxAccuracyM);
+      if (!Number.isFinite(a) || a < 5 || a > 1000) return res.status(400).json({ error: "maxAccuracyM must be 5–1000 metres" });
+      storage.setSetting("geo.max_accuracy_m", String(Math.round(a)), uid, tid);
+    }
+    const next = storage.getGeoConfig(tid);
+    storage.logActivity(uid, "settings.geo.update", "settings", undefined, { from: prev, to: next }, req.ip);
+    res.json(next);
+  });
+
+  // ── Verification override (admin-only, fully audited) ───────────────────────
+  // The captured coordinates/timestamp/distance are NEVER changed — only the
+  // verdict, and only through this logged path with a mandatory reason.
+  app.post("/api/knocks/:id/override", requireAdmin, (req, res) => {
+    const { status, reason } = (req.body ?? {}) as { status?: string; reason?: string };
+    if (status !== "verified" && status !== "needs_review" && status !== "invalid") {
+      return res.status(400).json({ error: "status must be verified | needs_review | invalid" });
+    }
+    if (typeof reason !== "string" || reason.trim().length < 3) {
+      return res.status(400).json({ error: "A reason (min 3 characters) is required for every override" });
+    }
+    const user = (req as any).user;
+    const updated = storage.overrideKnockVerification(Number(req.params.id), status, reason.trim(), user?.id ?? null, user?.name ?? null);
+    if (!updated) return res.status(404).json({ error: "Activity not found" });
+    storage.logActivity(user?.id ?? null, "verification.override", "knock", Number(req.params.id), { newStatus: status, reason: reason.trim() }, req.ip);
+    res.json(updated);
+  });
+  // Immutable override history for one activity (manager+).
+  app.get("/api/knocks/:id/overrides", requireManager, (req, res) => {
+    res.json(storage.getActivityOverrides(Number(req.params.id)));
   });
 
 
@@ -2071,15 +2538,11 @@ export function registerRoutes(httpServer: Server, app: Express) {
     const request = storage.createTerritoryRequest(member.id, user.id, message);
 
     // Email admin
-    if (process.env.SMTP_USER) {
-      const transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: Number(process.env.SMTP_PORT),
-        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-      });
+    if (process.env.SMTP_USER && adminInbox()) {
+      const transporter = mailTransport();
       transporter.sendMail({
-        from: process.env.SMTP_USER,
-        to: process.env.SMTP_USER,
+        from: mailFrom(),
+        to: adminInbox()!,
         subject: `Territory Request — ${member.name}`,
         html: `
           <h2>New Territory Request</h2>
@@ -2155,7 +2618,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   const upload = multer({
     storage: multer.diskStorage({
-      destination: (req, file, cb) => {
+      destination: (_req, file, cb) => {
         const dir = file.fieldname === "headshot" ? headshotsDir : licensesDir;
         cb(null, dir);
       },
@@ -2180,7 +2643,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
   });
 
   // Serve uploaded files (admin only) — path traversal protected
-  app.use("/uploads", requireAdmin, (req, res, next) => {
+  app.use("/uploads", requireAdmin, (_req, res, next) => {
     res.setHeader("Content-Disposition", "inline");
     res.setHeader("X-Content-Type-Options", "nosniff");
     next();
@@ -2265,13 +2728,9 @@ export function registerRoutes(httpServer: Server, app: Express) {
         const esc = (s: string) => String(s)
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: Number(process.env.SMTP_PORT),
-          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-        });
+        const transporter = mailTransport();
         transporter.sendMail({
-          from: process.env.SMTP_USER,
+          from: mailFrom(),
           to: adminEmail,
           subject: `New Rep Application — ${esc(fullName)}`,
           html: `
@@ -2343,7 +2802,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // GET /api/cns/jobs/:id — single job detail (includes found array)
   app.get("/api/cns/jobs/:id", requireManager, (req, res) => {
-    const job = getCnsJob(req.params.id);
+    const job = getCnsJob(qstr(req.params.id));
     const _cnsTid = (req as any).user?.tenantId;
     if (!job || (_cnsTid && job.tenantId !== _cnsTid)) return res.status(404).json({ error: "Not found" });
     res.json(job);
@@ -2351,7 +2810,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // GET /api/cns/jobs/:id/stream — SSE stream for CNS job results
   app.get("/api/cns/jobs/:id/stream", requireManager, (req, res) => {
-    const job = getCnsJob(req.params.id);
+    const job = getCnsJob(qstr(req.params.id));
     if (!job) return res.status(404).json({ error: "Job not found" });
 
     res.setHeader("Content-Type", "text/event-stream");
@@ -2363,7 +2822,7 @@ export function registerRoutes(httpServer: Server, app: Express) {
     let lastSent = 0;
 
     function emit() {
-      const j = getCnsJob(req.params.id);
+      const j = getCnsJob(qstr(req.params.id));
       if (!j) { res.end(); return; }
 
       // Drip new results
@@ -2396,33 +2855,33 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
   // POST /api/cns/jobs/:id/stop
   app.post("/api/cns/jobs/:id/stop", requireManager, (req, res) => {
-    const job = getCnsJob(req.params.id);
+    const job = getCnsJob(qstr(req.params.id));
     if (!job) return res.status(404).json({ error: "Not found" });
-    stopCnsJob(req.params.id);
+    stopCnsJob(qstr(req.params.id));
     res.json({ ok: true, status: "stopped" });
   });
 
   // POST /api/cns/jobs/:id/pause
   app.post("/api/cns/jobs/:id/pause", requireManager, (req, res) => {
-    const job = getCnsJob(req.params.id);
+    const job = getCnsJob(qstr(req.params.id));
     if (!job) return res.status(404).json({ error: "Not found" });
-    pauseCnsJob(req.params.id);
+    pauseCnsJob(qstr(req.params.id));
     res.json({ ok: true, status: "paused" });
   });
 
   // POST /api/cns/jobs/:id/resume
   app.post("/api/cns/jobs/:id/resume", requireManager, (req, res) => {
-    const job = getCnsJob(req.params.id);
+    const job = getCnsJob(qstr(req.params.id));
     if (!job) return res.status(404).json({ error: "Not found" });
-    resumeCnsJob(req.params.id);
+    resumeCnsJob(qstr(req.params.id));
     res.json({ ok: true, status: "running" });
   });
 
   // DELETE /api/cns/jobs/:id — remove a completed/stopped job from memory
   app.delete("/api/cns/jobs/:id", requireManager, (req, res) => {
-    const job = getCnsJob(req.params.id);
+    const job = getCnsJob(qstr(req.params.id));
     if (!job) return res.status(404).json({ error: "Not found" });
-    if (job.status === "running") stopCnsJob(req.params.id);
+    if (job.status === "running") stopCnsJob(qstr(req.params.id));
     res.json({ ok: true });
   });
 
@@ -2465,27 +2924,25 @@ export function registerRoutes(httpServer: Server, app: Express) {
 
       // Email rep their welcome + first OTP so they can log in immediately
       if (process.env.SMTP_USER) {
-        const transporter = nodemailer.createTransport({
-          host: process.env.SMTP_HOST,
-          port: Number(process.env.SMTP_PORT),
-          secure: false,
-          auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-        });
+        const transporter = mailTransport();
         // Generate an OTP so they can log in right away
         const otp = storage.createOtp(application.email);
+        const wName = escapeHtml(application.fullName);
+        const wLogo = logoAttachment();
         transporter.sendMail({
-          from: `"HomeFront Fiber" <${process.env.SMTP_USER}>`,
+          from: mailFrom(),
           to: application.email,
-          subject: "Welcome to HomeFront Fiber — Your First Login Code",
-          html: `<div style="font-family:sans-serif;max-width:480px;margin:auto;padding:36px;background:#0F2A44;color:#fff;border-radius:12px">
-            <h2 style="color:#3EA394;margin:0 0 4px;font-size:20px">HomeFront Fiber</h2>
-            <p style="color:#CBD4DD;font-size:12px;margin:0 0 20px">Field Sales Intelligence</p>
-            <h3 style="color:#fff;margin:0 0 12px">Welcome to the team, ${application.fullName}!</h3>
-            <p style="color:#CBD4DD">Your application has been approved. Use this one-time code to log in:</p>
-            <div style="font-size:38px;font-weight:700;letter-spacing:10px;color:#3EA394;padding:20px;background:#061624;border:1px solid rgba(62,163,148,0.3);border-radius:10px;text-align:center;margin:20px 0">${otp}</div>
-            <p style="color:#CBD4DD;font-size:14px">This code expires in 10 minutes. After logging in, request a new code anytime from the login screen.</p>
-            <p style="color:#5A6B76;font-size:11px;margin-top:20px">HomeFront Fiber · Field Sales Intelligence · Never share your code with anyone.</p>
-          </div>`,
+          subject: "Welcome to Home Front Solutions — your first sign-in code",
+          text: `Welcome to the team, ${application.fullName}! Your application is approved. Your first sign-in code is ${otp} (expires in 10 minutes). Request a new one anytime from the login screen.`,
+          html: emailShell({
+            preheader: `You're approved — your first sign-in code is ${otp}`,
+            heading: `Welcome to the team, ${wName}!`,
+            bodyHtml:
+              emailParagraph("Your application has been approved. Use this one-time code to sign in:") +
+              emailCodeBox(otp) +
+              emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. After signing in, you can request a new code anytime from the login screen.`),
+          }),
+          attachments: wLogo ? [wLogo] : [],
         }).catch((e: any) => console.error("Email error:", e));
       }
     }
@@ -2545,7 +3002,9 @@ export function registerSaasRoutes(app: any) {
   // POST /api/clock/in — clock in
   app.post("/api/clock/in", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
-    const repId = req.body.repId ?? user.teamMemberId;
+    // A rep can ONLY clock themselves in/out — never another rep. Higher roles
+    // may clock a specific rep (ride-alongs) via body.repId.
+    const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
     const existing = storage.getActiveClockSession(repId);
     if (existing) return res.status(400).json({ error: "Already clocked in", session: existing });
@@ -2557,7 +3016,9 @@ export function registerSaasRoutes(app: any) {
   // POST /api/clock/out — clock out
   app.post("/api/clock/out", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
-    const repId = req.body.repId ?? user.teamMemberId;
+    // A rep can ONLY clock themselves in/out — never another rep. Higher roles
+    // may clock a specific rep (ride-alongs) via body.repId.
+    const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
     const active = storage.getActiveClockSession(repId);
     if (!active) return res.status(400).json({ error: "Not clocked in" });
@@ -2642,7 +3103,25 @@ export function registerSaasRoutes(app: any) {
     const user = (req as any).user;
     const repId = user.role === "rep" ? (user.teamMemberId ?? -1) : (req.query.repId ? Number(req.query.repId) : undefined);
     const comms = storage.getCommissions(user.role === "rep" ? repId : undefined);
-    res.json(comms);
+    // Mobile entries read "sold date · rep · address, city" — enrich once here
+    // (two Map builds, O(1) per row) instead of N client round-trips.
+    const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    const leadIds = new Set(comms.map(c => c.leadId).filter((id): id is number => id != null));
+    const leadAddr = new Map(
+      storage.getLeads(user?.tenantId ?? undefined)
+        .filter(l => leadIds.has(l.id))
+        .map(l => [l.id, { address: l.address, city: l.city }]),
+    );
+    res.json(comms.map(c => ({
+      ...c,
+      repName: (c.repId != null ? repNames.get(c.repId) : null) ?? null,
+      address: (c.leadId != null ? leadAddr.get(c.leadId)?.address : null) ?? null,
+      city: (c.leadId != null ? leadAddr.get(c.leadId)?.city : null) ?? null,
+      // calcType / structureVersion travel with each row so a rep can SEE how
+      // their payout was scored without exposing the editable structure config.
+      calcType: (c as any).calcType ?? "flat",
+      structureVersion: (c as any).structureVersion ?? null,
+    })));
   });
 
   // POST /api/commissions — create a commission (manager/admin; auto-created on sale knock)
@@ -2676,25 +3155,112 @@ export function registerSaasRoutes(app: any) {
     res.json(storage.getCommissionSummary());
   });
 
-  // GET /api/commission-rates — rate plans
-  app.get("/api/commission-rates", requireAuth, (_req: Request, res: Response) => {
+  // GET /api/commission-rates — structure plans. Management-only: reps see
+  // their commission RESULTS (via /api/commissions), never the structure config.
+  app.get("/api/commission-rates", requireCapability("commission.structure.manage"), (_req: Request, res: Response) => {
     res.json(storage.getCommissionRates());
   });
 
-  // POST /api/commission-rates — create rate plan (admin only)
-  app.post("/api/commission-rates", requireAdmin, (req: Request, res: Response) => {
-    const { name, role, repId, ratePerSale } = req.body;
-    if (!name || !ratePerSale) return res.status(400).json({ error: "name and ratePerSale required" });
-    const rate = storage.createCommissionRate({ name, role, repId, ratePerSale, isActive: true });
+  // POST /api/commission-rates — create a commission structure (Admin/Manager/
+  // Team Lead). Accepts flat | percentage | tiered with effective-date windows;
+  // the actor is stamped for the audit trail.
+  app.post("/api/commission-rates", requireCapability("commission.structure.manage"), (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const b = req.body ?? {};
+    const calcType: CalcType = ["flat", "percentage", "tiered"].includes(b.calcType) ? b.calcType : "flat";
+    if (!b.name) return res.status(400).json({ error: "name required" });
+    // Per-type validation — never book a structure that can't be scored.
+    if (calcType === "flat" && !(Number(b.ratePerSale) > 0)) return res.status(400).json({ error: "flat plan needs ratePerSale > 0" });
+    if (calcType === "percentage" && !(Number(b.percentage) > 0)) return res.status(400).json({ error: "percentage plan needs percentage > 0" });
+    let tiersJson: string | null = null;
+    if (calcType === "tiered") {
+      const tiers = Array.isArray(b.tiers) ? b.tiers.filter((t: any) => Number.isFinite(t?.minBasis) && Number.isFinite(t?.amount)) : [];
+      if (tiers.length === 0) return res.status(400).json({ error: "tiered plan needs at least one tier" });
+      tiersJson = JSON.stringify(tiers as Tier[]);
+    }
+    const rate = storage.createCommissionRate({
+      name: String(b.name), role: b.role ?? null, repId: b.repId != null ? Number(b.repId) : null,
+      ratePerSale: Number(b.ratePerSale) || 0,
+      calcType, percentage: Number(b.percentage) || 0, tiers: tiersJson,
+      effectiveFrom: typeof b.effectiveFrom === "string" ? b.effectiveFrom : new Date().toISOString().slice(0, 10),
+      effectiveTo: typeof b.effectiveTo === "string" ? b.effectiveTo : null,
+      version: 1, updatedBy: user?.name ?? null, isActive: true,
+    } as any);
+    storage.logActivity(user?.id ?? null, "commission_structure.created", "commission_rate", rate.id,
+      { name: rate.name, calcType, by: user?.name ?? null }, req.ip);
     res.json(rate);
   });
 
-  // PATCH /api/commission-rates/:id — update rate
-  app.patch("/api/commission-rates/:id", requireAdmin, (req: Request, res: Response) => {
+  // PATCH /api/commission-rates/:id — edit a structure. Editing PUBLISHES a new
+  // version (bumps `version`, re-stamps actor); commissions already booked keep
+  // the version they were sold under, so payouts are never silently rewritten.
+  app.patch("/api/commission-rates/:id", requireCapability("commission.structure.manage"), (req: Request, res: Response) => {
+    const user = (req as any).user;
     const id = Number(req.params.id);
-    const updated = storage.updateCommissionRate(id, req.body);
+    const existing = storage.getCommissionRates().find(r => r.id === id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    const patch: Record<string, unknown> = { ...req.body };
+    if (Array.isArray(patch.tiers)) patch.tiers = JSON.stringify(patch.tiers);
+    patch.version = ((existing as any).version ?? 1) + 1; // publish = new version
+    patch.updatedBy = user?.name ?? null;
+    const updated = storage.updateCommissionRate(id, patch as any);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    storage.logActivity(user?.id ?? null, "commission_structure.updated", "commission_rate", id,
+      { version: (patch.version as number), by: user?.name ?? null }, req.ip);
     res.json(updated);
+  });
+
+  // ── Admin diagnostics / observability (Phase 2) ─────────────────────────────
+  // A read-model over the append-only activity stream: health cards, categorized
+  // failures, and the permission-denial feed. Gated on audit.read.org.
+  app.get("/api/diagnostics", requireCapability("audit.read.org"), (req: Request, res: Response) => {
+    const windowHours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 168);
+    // Pull a generous slice; buildDiagnostics windows + caps it. Cheap: one
+    // indexed desc scan, no per-row joins.
+    const raw = storage.getActivityLog(1000).map(e => ({
+      action: e.action, at: e.at, userId: e.userId,
+      details: e.details ? (() => { try { return JSON.parse(e.details as string); } catch { return null; } })() : null,
+    }));
+    res.json({ ...buildDiagnostics(raw, Date.now(), windowHours), appVersion: APP_VERSION });
+  });
+
+  // ── Capability governance (Phase 2) ─────────────────────────────────────────
+  // The role×capability matrix as first-class governance objects: grouped by
+  // domain, high-risk flagged, "who can do this". Read straight from the shared
+  // map so it can never drift from what the middleware enforces.
+  app.get("/api/governance/capabilities", requireCapability("settings.manage.org"), (_req: Request, res: Response) => {
+    const roles: Role[] = ["rep", "team_lead", "manager", "admin"];
+    res.json({
+      roles,
+      groups: groupedCapabilities().map(g => ({
+        domain: g.domain,
+        capabilities: g.capabilities.map(c => ({
+          capability: c,
+          highRisk: isHighRisk(c),
+          roles: rolesWithCapability(c).filter(r => roles.includes(r)),
+        })),
+      })),
+    });
+  });
+
+  // Effective permissions PREVIEW BY USER — pick a person, see exactly what
+  // their role grants, grouped by domain with high-risk flagged. Same shared
+  // map as the middleware, so the preview is the real effective permission.
+  app.get("/api/governance/user/:id/capabilities", requireCapability("settings.manage.org"), (req: Request, res: Response) => {
+    const member = storage.getTeamMemberById(Number(req.params.id));
+    if (!member) return res.status(404).json({ error: "Not found" });
+    // A team member's login role lives on the linked user (fallback: member.role).
+    const linked = storage.getAllUsers().find(u => u.teamMemberId === member.id);
+    const role = (linked?.role ?? member.role ?? "rep") as Role;
+    const granted = new Set(capabilitiesFor(role));
+    res.json({
+      user: { id: member.id, name: member.name, role },
+      grantedCount: granted.size,
+      groups: groupedCapabilities().map(g => ({
+        domain: g.domain,
+        capabilities: g.capabilities.map(c => ({ capability: c, highRisk: isHighRisk(c), granted: granted.has(c) })),
+      })),
+    });
   });
 
   // ── Activity Log ──────────────────────────────────────────────────────────────
@@ -2766,7 +3332,7 @@ export function registerSaasRoutes(app: any) {
   }
 
   // GET  /api/sa/tenants           — list all tenants
-  app.get("/api/sa/tenants", requireAuth, requireSuperAdmin, (_req, res) => {
+  app.get("/api/sa/tenants", requireAuth, requireSuperAdmin, (_req: Request, res: Response) => {
     const allTenants = storage.getTenants();
     const enriched = allTenants.map(t => ({
       ...t,
@@ -2778,7 +3344,7 @@ export function registerSaasRoutes(app: any) {
   });
 
   // POST /api/sa/tenants           — create a new tenant
-  app.post("/api/sa/tenants", requireAuth, requireSuperAdmin, (req, res) => {
+  app.post("/api/sa/tenants", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     try {
       const {
         slug, companyName, ownerName, ownerEmail, ownerPhone,
@@ -2813,14 +3379,14 @@ export function registerSaasRoutes(app: any) {
   });
 
   // GET  /api/sa/tenants/:id       — single tenant detail (includes secrets)
-  app.get("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req, res) => {
+  app.get("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     const tenant = storage.getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: "Not found" });
     res.json({ ...tenant, stats: storage.getTenantStats(tenant.id) });
   });
 
   // PATCH /api/sa/tenants/:id      — update tenant settings
-  app.patch("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req, res) => {
+  app.patch("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     const updated = storage.updateTenant(Number(req.params.id), req.body);
     if (!updated) return res.status(404).json({ error: "Not found" });
     storage.logActivity((req as any).user.id, "tenant.updated", "tenant", updated.id, { fields: Object.keys(req.body) });
@@ -2828,7 +3394,7 @@ export function registerSaasRoutes(app: any) {
   });
 
   // DELETE /api/sa/tenants/:id     — suspend/delete tenant
-  app.delete("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req, res) => {
+  app.delete("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     const tenant = storage.getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: "Not found" });
     storage.updateTenant(tenant.id, { status: "cancelled" });
@@ -2837,7 +3403,7 @@ export function registerSaasRoutes(app: any) {
   });
 
   // GET  /api/sa/revenue           — revenue summary across all tenants
-  app.get("/api/sa/revenue", requireAuth, requireSuperAdmin, (_req, res) => {
+  app.get("/api/sa/revenue", requireAuth, requireSuperAdmin, (_req: Request, res: Response) => {
     const allTenants = storage.getTenants().filter(t => t.status === "active");
     const summary = allTenants.map(t => {
       const stats = storage.getTenantStats(t.id);
@@ -2856,7 +3422,7 @@ export function registerSaasRoutes(app: any) {
 
   // ─── Tracerfy Owner Enrichment ──────────────────────────────────────────────
   // POST /api/leads/:id/owner-lookup  — pay-per-hit owner name/phone/email
-  app.post("/api/leads/:id/owner-lookup", requireAuth, ownerLookupLimiter, async (req, res) => {
+  app.post("/api/leads/:id/owner-lookup", requireAuth, ownerLookupLimiter, async (req: Request, res: Response) => {
     const lead = storage.getLeadById(Number(req.params.id));
     const _olu = (req as any).user;
     const _oltid = _olu?.tenantId;
@@ -2937,11 +3503,11 @@ export function registerSaasRoutes(app: any) {
 
 
   // ── Nightly Cron Status + Manual Trigger ──────────────────────────────────────
-  app.get("/api/cron/status", requireManager, (_req, res) => {
+  app.get("/api/cron/status", requireManager, (_req: Request, res: Response) => {
     res.json(getCronStatus());
   });
 
-  app.post("/api/cron/trigger", requireAdmin, async (_req, res) => {
+  app.post("/api/cron/trigger", requireAdmin, async (_req: Request, res: Response) => {
     try {
       await triggerManualScan();
       res.json({ success: true, message: "Nightly scan triggered manually" });
@@ -2951,7 +3517,7 @@ export function registerSaasRoutes(app: any) {
   });
 
   // ── Proxy Status ──────────────────────────────────────────────────────────────
-  app.get("/api/proxy/status", requireAdmin, (_req, res) => {
+  app.get("/api/proxy/status", requireAdmin, (_req: Request, res: Response) => {
     res.json(getProxyStatus());
   });
 

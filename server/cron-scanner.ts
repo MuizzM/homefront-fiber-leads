@@ -13,30 +13,25 @@
  *    - If householdSegmentType changed to NEW FIBER → promote to lead + email
  */
 
-import nodemailer from "nodemailer";
+import { mailTransport, mailFrom, adminInbox } from "./mail";
 import { storage } from "./storage";
 import { getAuthToken, scanAddress } from "./scanner";
 import { proxyFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
+import { classifyAvailabilityTransition, snapshotFromTarget } from "@shared/fiberDetect";
+import {
+  buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
+  type ExclusionReason,
+} from "@shared/leadQualify";
 
-// ── Email ──────────────────────────────────────────────────────────────────────
+// ── Email (shared transport — see server/mail.ts; Resend/SMTP via env) ──
 async function sendAlertEmail(subject: string, html: string) {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+  const to = adminInbox();
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS || !to) {
     console.log(`[cron-alert] EMAIL: ${subject}`);
     return;
   }
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT ?? 587),
-    secure: false,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  });
-  await transporter.sendMail({
-    from: `"HomeFront Fiber" <${process.env.SMTP_USER}>`,
-    to: process.env.SMTP_USER, // alert goes to admin
-    subject,
-    html,
-  });
+  await mailTransport().sendMail({ from: mailFrom(), to, subject, html });
 }
 
 const esc = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -425,8 +420,10 @@ async function runNightlyPoolRescan(): Promise<void> {
   if (!targets.length) { console.log("[cron] Address pool empty — skipping pool re-scan"); return; }
   console.log(`[cron] Pool re-scan starting: ${targets.length} stored addresses`);
 
-  const norm = (a: string) => (a || "").trim().toLowerCase().replace(/\s+/g, " ");
-  const existing = new Set(storage.getLeads().map((l: any) => norm(l.address)));
+  // Net-new qualification: one O(n) inventory index per batch, O(1) checks,
+  // and a NAMED exclusion reason for every detection that doesn't convert.
+  const inventory = buildInventoryIndex(storage.getLeads() as any[]);
+  const exclusionReasons: ExclusionReason[] = [];
   const newFiberAddrs: string[] = [];
   const BATCH = 25;
 
@@ -435,10 +432,14 @@ async function runNightlyPoolRescan(): Promise<void> {
     await Promise.all(batch.map(async (t: any) => {
       try {
         const r = await scanAddress(t.address, t.city, t.state, t.zip);
-        const isHot = r.isNewFiber && r.billingStatus === "N" && r.fiberAvailable;
-        const key = norm(t.address);
+        // Transition detection: compare the stored snapshot against this fresh
+        // scan to tell a genuine unavailable→live FLIP (newly_live, first-to-
+        // market) from a first-ever scan of an already-live address.
+        const outcome = classifyAvailabilityTransition(snapshotFromTarget(t), r);
         let leadId: number | null = null;
-        if (isHot && !existing.has(key)) {
+        const qual = outcome.shouldCreateLead ? qualifyDetection(t.address, inventory) : null;
+        if (qual) exclusionReasons.push(qual.reason);
+        if (qual?.qualified) {
           try {
             const lead = storage.createLead({
               address: r.address, city: r.city, state: r.state, zip: r.zip,
@@ -447,24 +448,34 @@ async function runNightlyPoolRescan(): Promise<void> {
               billingStatus: r.billingStatus, householdSegmentType: r.householdSegmentType,
               techType: r.techType, speedTier: r.speedTier, maxDownloadMbps: r.maxDownloadMbps,
               competitorName: r.competitorName, dfAddressId: r.dfAddressId,
-              leadStatus: "prospect", deploymentNotes: "Nightly pool re-scan — newly-lit fiber.",
+              leadStatus: "prospect",
+              deploymentNotes: outcome.isNewlyLive
+                ? "Nightly re-scan — NEWLY LIVE fiber (flipped from unavailable). First to market."
+                : "Nightly re-scan — live fiber (first observation).",
             });
             leadId = lead.id;
           } catch { /* duplicate — skip */ }
-          existing.add(key);
+          inventory.set(normalizeAddressKey(t.address), { leadStatus: "prospect", assignedRepId: null });
           newFiberAddrs.push(t.address);
           cronStatus.totalNewFiberFound++;
         }
         storage.recordScanTargetResult(t.id, {
           fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
           dfAddressId: r.dfAddressId, convertedToLeadId: leadId,
+          availabilityStatus: outcome.status, newlyLive: outcome.isNewlyLive,
         });
       } catch { /* token expiry / timeout — skip this address, keep going */ }
     }));
     await new Promise(res => setTimeout(res, 60));
   }
 
-  console.log(`[cron] Pool re-scan done: ${newFiberAddrs.length} new fiber lead(s) from ${targets.length} addresses`);
+  const exclusionSummary = summarizeExclusions(exclusionReasons);
+  console.log(`[cron] Pool re-scan done: ${newFiberAddrs.length} new fiber lead(s) from ${targets.length} addresses · qualification: ${JSON.stringify(exclusionSummary)}`);
+  // Auditable scan-batch record: why detections did or didn't convert.
+  try {
+    storage.logActivity(null, "scan.pool_rescan_completed", "scan_batch", undefined,
+      { targets: targets.length, created: newFiberAddrs.length, exclusions: exclusionSummary });
+  } catch { /* audit best-effort */ }
   if (newFiberAddrs.length > 0) {
     await sendAlertEmail(
       `🔥 ${newFiberAddrs.length} NEW FIBER lead(s) — HomeFront pool re-scan`,

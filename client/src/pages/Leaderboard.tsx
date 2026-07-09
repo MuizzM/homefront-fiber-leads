@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap, Medal } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 import type { TeamMember } from "@shared/schema";
 
 type LeaderboardEntry = {
@@ -119,12 +118,12 @@ export default function Leaderboard() {
 
                     {/* Name + role */}
                     <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-sm text-foreground">{entry.rep.name}</div>
+                      <div className="font-semibold text-sm text-foreground truncate" title={entry.rep.name}>{entry.rep.name}</div>
                       <div className="text-xs text-muted-foreground capitalize">{entry.rep.role}</div>
                     </div>
 
                     {/* Stats */}
-                    <div className="flex items-center gap-3 flex-shrink-0">
+                    <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                       <StatPill icon={DoorOpen} val={entry.knocks} label="knocks" color="text-muted-foreground" />
                       <StatPill icon={PhoneCall} val={entry.contacts} label="contacts" color="text-blue-400" />
                       <StatPill icon={CalendarCheck} val={entry.callbacks} label="callbacks" color="text-amber-400" />

@@ -3,12 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <!-- viewport-fit=cover: the knock sheet hugs the bottom edge and pads itself
-         with env(safe-area-inset-bottom) on notched phones -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, viewport-fit=cover" />
+         with env(safe-area-inset-bottom) on notched phones. No maximum-scale /
+         user-scalable=no: blocking pinch-zoom fails WCAG 2.2 AA (1.4.4 Resize
+         Text). iOS focus-zoom is prevented instead by ≥16px form controls (CSS). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Home Front Solutions</title>
     <meta name="description" content="Home Front Solutions team portal — field map, leads, and territory management." />
     <link rel="icon" type="image/png" href="/hfs-logo.png" />
     <meta name="theme-color" content="#0F2A44" />
+    <!-- PWA: installable on mobile home screens, standalone launch, iOS ATHS -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="HomeFront" />
     <script>
       // Apply saved theme before paint to avoid a flash (dark is the default).
       (function () {
@@ -24,7 +33,11 @@
          library's tile/style fetches. -->
     <link rel="preconnect" href="https://api.mapbox.com" />
     <link rel="preconnect" href="https://api.mapbox.com" crossorigin />
-    <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" media="print" onload="this.media='all'" />
+    <!-- Loaded normally: the media="print" onload-flip trick silently failed in
+         some environments, leaving Mapbox's CSS print-only — the user-location
+         dot rendered as an unstyled invisible div. ~12KB gz from a preconnected
+         origin is cheaper than a broken blue dot. -->
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
     <script>
       // Signal when mapboxgl CDN is ready — no polling needed
       window.__mapboxReady = false;

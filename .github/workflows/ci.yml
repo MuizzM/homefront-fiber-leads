@@ -1,0 +1,65 @@
+# CI — runs on every push/PR. Must be green before a deploy (see deploy job gate).
+# Mirrors the local quality gates: type-check (both compilers), unit + RTL tests,
+# and a production build. Nothing here needs secrets, so it runs on any fork/PR.
+name: CI
+
+on:
+  push:
+    branches: [master, main, staging]
+  pull_request:
+    branches: [master, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Type-check, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install (clean, lockfile-exact)
+        run: npm ci
+
+      - name: Type-check (tsc — strict, noUnused*)
+        run: npm run check
+
+      - name: Type-check (tsgo — fast native compiler)
+        run: npm run check:fast
+
+      - name: Unit + component tests
+        run: npm test
+
+      - name: Production build
+        run: npm run build
+
+      # Playwright e2e is opt-in (needs a browser + running server); enable once
+      # a CI-friendly test DB fixture exists.
+      # - name: Install Playwright
+      #   run: npm run test:e2e:install
+      # - name: E2E
+      #   run: npm run test:e2e
+
+  # Gated deploy: only after `quality` is green, only on master, only via a
+  # protected environment (add the SSH secret + reviewers in repo settings).
+  deploy-staging:
+    name: Deploy to staging
+    needs: quality
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: staging   # add required reviewers / secrets here in GitHub
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy over SSH (build on host, restart systemd)
+        run: |
+          echo "Configure SSH deploy here. Example (secrets.STAGING_SSH_KEY):"
+          echo "  ssh deploy@staging 'cd /srv/homefront && git pull && npm ci && npm run build && sudo systemctl restart homefront'"
+          echo "  then curl -fsS https://staging.homefrontsolutionsllc.com/api/health | grep '\"ok\":true'"

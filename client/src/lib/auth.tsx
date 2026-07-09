@@ -7,7 +7,9 @@ export interface AuthUser {
   id: number;
   name: string;
   email: string;
-  role: "admin" | "rep";
+  // Full server role set (shared/schema.ts users.role) — was "admin" | "rep",
+  // which made manager/team_lead comparisons type-lies across the app.
+  role: "super_admin" | "admin" | "manager" | "team_lead" | "rep";
   teamMemberId?: number | null;
 }
 

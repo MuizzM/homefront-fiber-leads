@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Layers, Loader2 } from "lucide-react";
+import { STATE_COLORS } from "@shared/knock";
 
 export type CoveragePin = {
   id: number;
@@ -58,9 +59,12 @@ export default function LeadsCoverageMap({ pins }: { pins: CoveragePin[] }) {
     map.addLayer({
       id: "cov-point", type: "circle", source: "coverage", filter: ["!", ["has", "point_count"]],
       paint: {
+        // Shared palette — this was a drifted hardcoded copy of the pin colors.
         "circle-color": ["match", ["get", "status"],
-          "prospect", "#22c55e", "contacted", "#3b82f6", "interested", "#8b5cf6",
-          "follow_up", "#f59e0b", "sold", "#10b981", "not_interested", "#ef4444", "#22c55e"],
+          "prospect", STATE_COLORS.unworked, "contacted", STATE_COLORS.contacted,
+          "interested", STATE_COLORS.interested, "follow_up", STATE_COLORS.follow_up,
+          "sold", STATE_COLORS.sold, "not_interested", STATE_COLORS.not_interested,
+          STATE_COLORS.unworked],
         "circle-radius": 6, "circle-stroke-width": 1.5, "circle-stroke-color": "rgba(255,255,255,0.9)",
       },
     });

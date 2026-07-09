@@ -91,11 +91,32 @@
   *::-webkit-scrollbar-thumb { background: hsl(210 35% 25%); border-radius: 8px; }
   *::-webkit-scrollbar-track { background: transparent; }
 
+  /* Don't let iOS inflate text on orientation change (MDN). */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
   body {
     @apply bg-background text-foreground;
     font-family: 'Geist Variable', 'Inter Variable', system-ui, -apple-system, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* App-wide guard against horizontal scroll at any width (QA: no page may
+       scroll sideways from 320px up). Vertical scrolling is unaffected. */
+    overflow-x: hidden;
+  }
+
+  /* Snappy taps: kill the 300ms delay and double-tap-zoom on real controls, so
+     the field workflow stays fast one-handed (MDN touch-action guidance). */
+  button, [role="button"], a[href], label, summary, select {
+    touch-action: manipulation;
+  }
+
+  /* Prevent iOS auto-zoom when focusing a form control (fires below 16px). Only
+     on small screens, so desktop density is untouched; pairs with the zoom-
+     enabled viewport above so users keep pinch-zoom without the focus jump. */
+  @media (max-width: 767px) {
+    input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+      font-size: 16px;
+    }
   }
 
   .font-mono {
@@ -189,12 +210,43 @@
   }
 }
 
+/* Lead-card body spring — plays on mount, so a keyed remount (lead swap)
+   restarts it. Pure compositor work (transform+opacity); the global
+   reduced-motion block above collapses it to instant. Replaces framer-motion:
+   the card was that library's only consumer. */
+@keyframes card-swap-in {
+  from { opacity: 0; transform: translateY(24px); }
+  60%  { opacity: 1; transform: translateY(-3px); } /* slight overshoot = spring feel */
+  to   { opacity: 1; transform: translateY(0); }
+}
+.card-swap-in {
+  animation: card-swap-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 /* Rep field mode: hide the Mapbox control stack (zoom/compass/geolocate buttons)
    on mobile rep screens — pinch-zoom + the locate FAB cover both, and the porch
    test says every leftover control is clutter. Applied by MapView on the map
    container when role=rep && mobile. */
 .rep-clean-map .mapboxgl-ctrl-top-right {
   display: none;
+}
+
+/* Status-pill row: soft fade at the right edge hints "more pills this way"
+   without a scrollbar — the fade sits on the container so pills slide under it. */
+.pill-row-fade {
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
+}
+
+/* Live-location dot glide: GPS fixes arrive ~1/s and would snap the dot from
+   point to point. While the CAMERA is at rest (MapView toggles .map-camera-idle
+   on movestart/moveend) a linear transform transition interpolates the dot,
+   its accuracy halo, and the heading cone between fixes — Google-Maps-style
+   gliding, compositor-only. During pan/zoom Mapbox repositions markers every
+   frame, so the transition is dropped to keep the dot glued to the ground. */
+.map-camera-idle .mapboxgl-user-location-dot,
+.map-camera-idle .mapboxgl-user-location-accuracy-circle {
+  transition: transform 0.45s linear, width 0.45s ease, height 0.45s ease;
 }
 
 /* Login page — soft brand glow behind the centered card, built from theme

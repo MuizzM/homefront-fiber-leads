@@ -36,16 +36,17 @@ app.set(
 );
 
 // ── CORS — tight origin allowlist ─────────────────────────────────────────────
+// Driven entirely by env so a standalone deployment (e.g. homefrontsolutionsllc.com)
+// isn't pinned to a specific host provider. APP_ORIGIN is the canonical site
+// origin; EXTRA_ORIGINS is an optional comma-separated list for embeds/staging.
 const ALLOWED_ORIGINS = [
   process.env.APP_ORIGIN,
-  "https://www.perplexity.ai",
-  "https://sites.pplx.app",
+  ...(process.env.EXTRA_ORIGINS?.split(",").map(s => s.trim()).filter(Boolean) ?? []),
 ].filter(Boolean) as string[];
 
 function originAllowed(origin: string | undefined): boolean {
   if (!origin) return true; // same-origin / curl / server-side — allow
-  return ALLOWED_ORIGINS.some(o => origin === o) ||
-         origin.endsWith(".pplx.app");
+  return ALLOWED_ORIGINS.includes(origin);
 }
 
 // All API routes: strict origin allowlist
@@ -66,7 +67,8 @@ app.use(helmet({
       defaultSrc:     ["'self'"],
       scriptSrc:      ["'self'", "'unsafe-eval'", "blob:", "https://api.mapbox.com"],   // Mapbox GL CDN
       scriptSrcElem:  ["'self'", "'unsafe-inline'", "blob:", "https://api.mapbox.com"],   // Mapbox GL <script> tag
-      workerSrc:      ["'self'", "blob:"],
+      workerSrc:      ["'self'", "blob:"],   // service worker (PWA offline shell)
+      manifestSrc:    ["'self'"],            // installable web app manifest
       styleSrc:       ["'self'", "'unsafe-inline'", "https://api.mapbox.com", "https://fonts.googleapis.com"],
       styleSrcElem:   ["'self'", "'unsafe-inline'", "https://api.mapbox.com", "https://fonts.googleapis.com"],
       imgSrc:         ["'self'", "data:", "blob:", "https://*.mapbox.com", "https://*.mapbox.cn"],
@@ -77,7 +79,9 @@ app.use(helmet({
       frameSrc:       ["'none'"],
       baseUri:        ["'self'"],
       formAction:     ["'self'"],
-      frameAncestors: ["'self'", "https://www.perplexity.ai", "https://sites.pplx.app"],
+      // Standalone deployments frame only themselves. Set EMBED_ANCESTORS
+      // (comma-separated) if the app must be embedded by another origin.
+      frameAncestors: ["'self'", ...(process.env.EMBED_ANCESTORS?.split(",").map(s => s.trim()).filter(Boolean) ?? [])],
       upgradeInsecureRequests: [],
     },
   },
@@ -85,7 +89,11 @@ app.use(helmet({
   crossOriginOpenerPolicy: { policy: "same-origin" },
   crossOriginResourcePolicy: { policy: "cross-origin" }, // allow font/image assets
   noSniff: true,
-  frameguard: false,           // handled via CSP frameAncestors above
+  // X-Frame-Options: DENY as legacy-browser clickjacking defense. Modern
+  // browsers that support CSP ignore X-Frame-Options when frame-ancestors is
+  // present, so the allowed embeds above (self/perplexity) still work there;
+  // older browsers without frame-ancestors support fall back to DENY.
+  frameguard: { action: "deny" },
   hsts: { maxAge: 63072000, includeSubDomains: true, preload: true },  // 2 years
   dnsPrefetchControl: { allow: false },
   referrerPolicy: { policy: "no-referrer" },
@@ -126,6 +134,16 @@ const CSRF_EXEMPT = new Set([
   "/api/onboarding/apply",    // public form
   "/join",
 ]);
+// ── Request ID — one correlation id per request, echoed to the client and used
+// in every server log line so a failure can be traced end to end. Honors an
+// upstream x-request-id (from a load balancer) or mints a fresh UUID.
+app.use((req, res, next) => {
+  const rid = (req.headers["x-request-id"] as string) || crypto.randomUUID();
+  (req as any).id = rid;
+  res.setHeader("x-request-id", rid);
+  next();
+});
+
 app.use((req, res, next) => {
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return next();
   if (CSRF_EXEMPT.has(req.path)) return next();
@@ -268,7 +286,8 @@ app.use((req, res, next) => {
   const reqPath = req.path;
   res.on("finish", () => {
     if (reqPath.startsWith("/api")) {
-      log(`${req.method} ${reqPath} ${res.statusCode} in ${Date.now() - start}ms`);
+      const rid = ((req as any).id as string | undefined)?.slice(0, 8) ?? "--------";
+      log(`[${rid}] ${req.method} ${reqPath} ${res.statusCode} in ${Date.now() - start}ms`);
     }
   });
   next();

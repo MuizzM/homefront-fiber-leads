@@ -8,9 +8,9 @@ import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
-  Globe, Play, Square, CheckCircle, Zap, TrendingUp,
-  MapPin, Search, X, Loader2, Activity, AlertCircle,
-  Flame, Star, Building, ArrowUpRight, ChevronDown, ChevronUp, Filter
+  Globe, Play, Square, CheckCircle, Zap,
+  Search, X, Loader2, AlertCircle,
+  Building, ChevronDown, ChevronUp
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -54,11 +54,6 @@ interface ActiveScan {
   total: number; done: number; newFiber: number; error?: string;
 }
 
-const PRIORITY_COLOR = {
-  critical: "text-red-400 border-red-500/30 bg-red-500/5",
-  high:     "text-orange-400 border-orange-500/30 bg-orange-500/5",
-  medium:   "text-yellow-400 border-yellow-500/30 bg-yellow-500/5",
-};
 const PRIORITY_BADGE = {
   critical: "bg-red-500/20 text-red-300 border-red-500/30",
   high:     "bg-orange-500/20 text-orange-300 border-orange-500/30",

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef } from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 
@@ -7,9 +7,9 @@ const _API_BASE: string = ("__PORT_5000__" as string).startsWith("__") ? "" : ("
 import { useToast } from "@/hooks/use-toast";
 import {
   Radar, Play, Square, Wifi, CheckCircle,
-  Zap, Download, RefreshCw, AlertTriangle,
-  MapPin, Search, Globe, Flame, Star, TrendingUp, Users,
-  Activity, Cpu, Timer, AlertCircle
+  Zap, Download, RefreshCw,
+  MapPin, Search, Globe, Flame,
+  Activity, AlertCircle
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
