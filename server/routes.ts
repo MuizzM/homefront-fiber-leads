@@ -1829,6 +1829,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             { repId: parsed.data.repId, leadId: Number(req.params.id) }, req.ip);
         }
       } catch (e) { console.warn("Auto-commission failed:", e); }
+    } else if (parsed.data.repId) {
+      // Un-marking a sale: the door is no longer "sold", so pull its auto-created
+      // PENDING commission so it disappears from the rep's Commissions view.
+      // Approved/paid commissions are left alone (a clawback is a manager action).
+      try {
+        const removed = storage.removePendingCommissionsForLead(Number(req.params.id));
+        if (removed.length) {
+          bustMapCache();
+          storage.logActivity((req as any).user?.id ?? null, "commission.auto_removed", "lead", Number(req.params.id),
+            { leadId: Number(req.params.id), repId: parsed.data.repId, newOutcome: parsed.data.outcome, removed: removed.map(c => ({ id: c.id, amount: c.amount })) }, req.ip);
+        }
+      } catch (e) { console.warn("Commission removal failed:", e); }
     }
     storage.logActivity((req as any).user?.id ?? null, `knock.${parsed.data.outcome}`, "knock", knock.id,
       { leadId: Number(req.params.id), repId: parsed.data.repId, verification: verdict.status, distanceM: verdict.distanceM, serverTs }, req.ip);

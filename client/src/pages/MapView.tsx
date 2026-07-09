@@ -1463,9 +1463,14 @@ export default function MapView() {
       knockQueue.enqueue({ leadId: lead.id, repId: credit, outcome, callbackDate: null, callbackTime: null, ...fix });
     });
     // Sold pays: the server auto-creates a pending commission with this knock.
-    // Surface it immediately — one calm toast, plus a fresh Commission tab.
+    // Un-marking a sale reverses it. Refresh the Commission tab either way.
     if (outcome === "sold") {
       toast({ title: "Sold — commission entry created", description: "Pending review in the Commission tab" });
+      qc.invalidateQueries({ queryKey: ["/api/commissions"] });
+      qc.invalidateQueries({ queryKey: ["/api/commissions/summary"] });
+    } else if (lead.leadStatus === "sold") {
+      // Was sold, now marked otherwise → the server drops its pending commission.
+      toast({ title: "Sale removed — pending commission reversed" });
       qc.invalidateQueries({ queryKey: ["/api/commissions"] });
       qc.invalidateQueries({ queryKey: ["/api/commissions/summary"] });
     }

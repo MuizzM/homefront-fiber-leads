@@ -139,6 +139,7 @@ export interface IStorage {
   getCommissionById(id: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
   updateCommission(id: number, updates: Partial<Commission>): Commission | undefined;
+  removePendingCommissionsForLead(leadId: number): Commission[];
   getCommissionSummary(): { repId: number; repName: string; total: number; paid: number; pending: number; sales: number }[];
   // ── Commission Rates ───────────────────────────────────────────────────────
   getCommissionRates(): CommissionRate[];
@@ -918,6 +919,17 @@ export class Storage implements IStorage {
   }
   updateCommission(id: number, updates: Partial<Commission>): Commission | undefined {
     return db.update(commissions).set(updates).where(eq(commissions.id, id)).returning().get();
+  }
+  // Un-marking a sale: drop the auto-created PENDING commission for a lead.
+  // Approved/paid commissions are never auto-removed — a clawback is a manager
+  // action. Returns how many pending rows were removed.
+  removePendingCommissionsForLead(leadId: number): Commission[] {
+    const pending = db.select().from(commissions)
+      .where(and(eq(commissions.leadId, leadId), eq(commissions.status, "pending"))).all();
+    if (pending.length) {
+      db.delete(commissions).where(and(eq(commissions.leadId, leadId), eq(commissions.status, "pending"))).run();
+    }
+    return pending;
   }
   getCommissionSummary() {
     const reps = this.getTeamMembers().filter(r => r.active);

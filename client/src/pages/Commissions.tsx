@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { useCan } from "@/lib/capabilities";
-import { DollarSign, TrendingUp, Clock, CheckCircle, Plus, Filter, Download } from "lucide-react";
+import { DollarSign, TrendingUp, Clock, CheckCircle, Plus, Filter, Download, User } from "lucide-react";
 import { useState } from "react";
 
 interface Commission {
@@ -43,7 +43,8 @@ export default function Commissions() {
   const [addOpen, setAddOpen] = useState(false);
   const [rateOpen, setRateOpen] = useState(false);
   const [form, setForm] = useState({ repId: "", amount: "", saleDate: new Date().toISOString().slice(0, 10), notes: "" });
-  const [rateForm, setRateForm] = useState({ name: "", role: "rep", ratePerSale: "" });
+  // target: "role:<role>" for a whole role, or "rep:<id>" for one specific rep.
+  const [rateForm, setRateForm] = useState({ name: "", target: "role:rep", ratePerSale: "" });
 
   const { data: commissions = [], isLoading } = useQuery<Commission[]>({
     queryKey: ["/api/commissions"],
@@ -96,10 +97,25 @@ export default function Commissions() {
     mutationFn: (data: any) => apiRequest("POST", "/api/commission-rates", data).then(r => r.json()),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/commission-rates"] });
-      toast({ title: "Rate plan saved" });
+      toast({ title: "Commission updated" });
+      setRateForm({ name: "", target: "role:rep", ratePerSale: "" });
       setRateOpen(false);
     },
+    onError: (e: any) => toast({ title: e?.message ?? "Couldn't save the rate", variant: "destructive" }),
   });
+
+  // Resolve a rate's target for display: a specific rep's name, or a whole role.
+  const memberName = (id: number) => members.find(m => m.id === id)?.name ?? `Rep #${id}`;
+  const rateTargetLabel = (r: CommissionRate) =>
+    r.repId ? memberName(r.repId) : r.role ? `All ${r.role.replace(/_/g, " ")}s` : "Custom";
+  // Split the "role:x" / "rep:id" target into the API payload the server expects.
+  const rateTargetPayload = (t: string) =>
+    t.startsWith("rep:") ? { repId: Number(t.slice(4)), role: null } : { role: t.slice(5), repId: null };
+  const saveRate = () => {
+    const t = rateTargetPayload(rateForm.target);
+    const name = rateForm.name.trim() || (t.repId ? memberName(t.repId) : `All ${t.role}s`);
+    addRateMutation.mutate({ name, ...t, ratePerSale: Number(rateForm.ratePerSale), calcType: "flat", isActive: true });
+  };
 
   // Newest sale first — createdAt desc breaks same-day ties (id desc equivalent).
   const ordered = [...commissions].sort((a, b) =>
@@ -141,30 +157,47 @@ export default function Commissions() {
               </DialogTrigger>
               <DialogContent className="bg-card border-border text-white">
                 <DialogHeader><DialogTitle>Commission Rate Plans</DialogTitle></DialogHeader>
+                <p className="text-xs text-muted-foreground -mt-1">
+                  Set a rate for a whole role, or override it for one rep. A rep-specific
+                  rate always wins over their role rate — use it to change one rep’s pay.
+                </p>
                 <div className="space-y-3">
+                  {rates.length === 0 && (
+                    <p className="text-sm text-muted-foreground py-2">No rate plans yet — add one below.</p>
+                  )}
                   {rates.map(r => (
                     <div key={r.id} className="flex items-center justify-between p-3 bg-secondary rounded-lg">
-                      <div>
-                        <p className="text-sm text-white font-medium">{r.name}</p>
-                        <p className="text-xs text-muted-foreground">{r.role ?? "Custom"}</p>
+                      <div className="min-w-0">
+                        <p className="text-sm text-foreground font-medium truncate">{r.name}</p>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                          {r.repId
+                            ? <span className="inline-flex items-center gap-1 text-primary"><User className="w-3 h-3" />{rateTargetLabel(r)}</span>
+                            : rateTargetLabel(r)}
+                        </p>
                       </div>
-                      <Badge className="bg-primary/20 text-primary border-primary/30">${r.ratePerSale}/sale</Badge>
+                      <Badge className="bg-primary/20 text-primary border-primary/30 flex-shrink-0">${r.ratePerSale}/sale</Badge>
                     </div>
                   ))}
                   <div className="pt-3 border-t border-border space-y-2">
-                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Add Rate Plan</p>
-                    <Input placeholder="Name" value={rateForm.name} onChange={e => setRateForm(f => ({...f, name: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-rate-name" />
-                    <Select value={rateForm.role} onValueChange={v => setRateForm(f => ({...f, role: v}))}>
-                      <SelectTrigger className="bg-secondary border-border text-white"><SelectValue /></SelectTrigger>
+                    <p className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Add / change a rate</p>
+                    <Input placeholder="Plan name (e.g. “Zargham — 2026”)" value={rateForm.name} onChange={e => setRateForm(f => ({...f, name: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-rate-name" />
+                    <label className="block text-[11px] text-muted-foreground">Applies to</label>
+                    <Select value={rateForm.target} onValueChange={v => setRateForm(f => ({...f, target: v}))}>
+                      <SelectTrigger className="bg-secondary border-border text-foreground" data-testid="select-rate-target"><SelectValue /></SelectTrigger>
                       <SelectContent className="bg-card border-border">
-                        <SelectItem value="rep">Rep</SelectItem>
-                        <SelectItem value="team_lead">Team Lead</SelectItem>
-                        <SelectItem value="manager">Manager</SelectItem>
+                        <SelectItem value="role:rep">All Reps</SelectItem>
+                        <SelectItem value="role:team_lead">All Team Leads</SelectItem>
+                        <SelectItem value="role:manager">All Managers</SelectItem>
+                        {members.filter(m => m.active && m.role === "rep").map(m => (
+                          <SelectItem key={m.id} value={`rep:${m.id}`}>Just {m.name}</SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
-                    <Input placeholder="$ per sale" type="number" value={rateForm.ratePerSale} onChange={e => setRateForm(f => ({...f, ratePerSale: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-rate-amount" />
-                    <Button onClick={() => addRateMutation.mutate({ name: rateForm.name, role: rateForm.role, ratePerSale: Number(rateForm.ratePerSale), isActive: true })} className="w-full bg-primary hover:bg-primary/90 text-white" disabled={addRateMutation.isPending} data-testid="button-save-rate">
-                      Save Rate Plan
+                    <Input placeholder="$ per sale" type="number" inputMode="decimal" value={rateForm.ratePerSale} onChange={e => setRateForm(f => ({...f, ratePerSale: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-rate-amount" />
+                    <Button
+                      onClick={saveRate}
+                      className="w-full bg-primary hover:bg-primary/90 text-white" disabled={addRateMutation.isPending || !(Number(rateForm.ratePerSale) > 0)} data-testid="button-save-rate">
+                      {addRateMutation.isPending ? "Saving…" : "Save rate"}
                     </Button>
                   </div>
                 </div>
