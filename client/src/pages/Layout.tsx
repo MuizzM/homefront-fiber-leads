@@ -21,6 +21,7 @@ import {
   ClipboardList,
   Bell,
   DollarSign,
+  Wallet,
   Clock,
   Radio,
 } from "lucide-react";
@@ -75,6 +76,7 @@ const NAV_ITEMS: NavItem[] = [
   // ── Field ─────────────────────────────────────────────────────────────────
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: () => true,                               group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: () => true,                               group: "Field" },
+  { href: "/my-commission",label: "My Commission", icon: Wallet,       show: () => true,                               group: "Field" },
   { href: "/commissions",  label: "Commissions",   icon: DollarSign,   show: () => true,                               group: "Field" },
   // ── Scan — admin only (scanning spends proxy money) ───────────────────────
   { href: "/scanner",      label: "Scanner",       icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },

@@ -10,7 +10,7 @@ import { storage } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
 import {
   validateTiers, calculateRetroactiveCommission, calculateFlatCommission,
-  type CommissionTier, type RetroResult,
+  type CommissionTier, type RetroResult, DEFAULT_RETRO_TIERS,
 } from "@shared/commissionTiers";
 
 // ── Typed domain errors ───────────────────────────────────────────────────────
@@ -505,6 +505,15 @@ export function getStatementById(tenantId: number, id: number): any {
   return rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ? AND tenant_id = ?`).get(id, tenantId);
 }
 
+// Read-only lookup of a rep's statement for the week containing `weekReference`.
+// No write — safe for viewing a locked (FINALIZED/PAID) week.
+export function getStatementForWeek(tenantId: number, repId: number, weekReference: Date | string | number): { statement: any; bounds: WeekBounds } {
+  const config = loadOrgConfig(tenantId);
+  const bounds = weekBoundsFor(weekReference, config);
+  const statement = rawDb.prepare(`SELECT * FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`).get(tenantId, repId, bounds.weekStartUtc);
+  return { statement, bounds };
+}
+
 export function listPlans(tenantId: number): any[] {
   const plans = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? ORDER BY created_at DESC`).all(tenantId) as any[];
   return plans.map(p => ({
@@ -573,4 +582,111 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
     storage.logActivity(actorId, "commission_config.updated", "tenant", tenantId, { fields: Object.keys(patch) }, undefined);
   }
   return loadOrgConfig(tenantId);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ONBOARDING-FACING structure assignment — the "flat vs tiered" choice made when
+// a rep is onboarded (Applications approve) or changed later (Team). Resolves the
+// choice to a concrete plan VERSION and assigns it, creating the tenant's default
+// plans on first use. Keeps the API surface tiny for callers.
+// ════════════════════════════════════════════════════════════════════════════
+
+const STANDARD_TIERED_PLAN_NAME = "Standard Weekly Tiers";
+const FLAT_PLAN_NAME = "Flat Per-Sale";
+const today = () => new Date().toISOString().slice(0, 10);
+
+export type CommissionStructure = "FLAT" | "TIERED";
+
+// The tenant's canonical retroactive-weekly tiered plan (default tiers), created
+// + activated on first use. Idempotent — reused thereafter.
+export function getOrCreateStandardTieredVersion(tenantId: number, actorId: number | null): { planId: number; versionId: number } {
+  let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'TIERED' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, STANDARD_TIERED_PLAN_NAME) as any;
+  if (!plan) plan = createPlan(tenantId, actorId, { name: STANDARD_TIERED_PLAN_NAME, type: "TIERED", tierMode: "RETROACTIVE_WEEKLY", description: "Default retroactive weekly tiers (1–7 $150, 8–12 $200, 13–16 $250, 17+ $300)." });
+  let version = rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ? ORDER BY version_number DESC LIMIT 1`).get(tenantId, plan.id) as any;
+  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: today(), qualificationBasis: "QUALIFIED_AT", tiers: DEFAULT_RETRO_TIERS });
+  if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
+  return { planId: plan.id, versionId: version.id };
+}
+
+// A flat per-sale plan; each distinct rate is a distinct immutable version under
+// the tenant's single "Flat Per-Sale" plan. Reuses a version with the same rate.
+export function getOrCreateFlatVersion(tenantId: number, actorId: number | null, flatRateCents: number): { planId: number; versionId: number } {
+  if (!(Number.isInteger(flatRateCents) && flatRateCents > 0)) {
+    throw new CommissionError("INVALID_COMMISSION_PLAN", "A flat structure needs a positive whole-cent rate.");
+  }
+  let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'FLAT' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, FLAT_PLAN_NAME) as any;
+  if (!plan) plan = createPlan(tenantId, actorId, { name: FLAT_PLAN_NAME, type: "FLAT", description: "Flat per-qualified-sale commission." });
+  let version = rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ? AND flat_rate_cents = ? ORDER BY version_number DESC LIMIT 1`).get(tenantId, plan.id, flatRateCents) as any;
+  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: today(), flatRateCents, qualificationBasis: "QUALIFIED_AT" });
+  if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
+  return { planId: plan.id, versionId: version.id };
+}
+
+// Assign a FLAT or TIERED structure to a rep. `closeExisting` ends any current
+// open assignment at effectiveFrom (half-open) so re-assigning a rep's structure
+// never trips the overlap guard — this is how "change a rep's commission" works.
+export function assignStructureToRep(tenantId: number, actorId: number | null, input: {
+  repId: number; structure: CommissionStructure; flatRateCents?: number | null;
+  commissionPlanVersionId?: number | null; effectiveFrom?: string; closeExisting?: boolean;
+}): { assignment: any; versionId: number; structure: CommissionStructure } {
+  const rep = storage.getTeamMemberById(input.repId);
+  if (!rep || rep.tenantId !== tenantId) throw new CommissionError("CROSS_TENANT_ACCESS", "Rep not found in tenant.", 404);
+  const effectiveFrom = input.effectiveFrom || today();
+
+  // Resolve the concrete version: an explicit custom plan version wins; else the
+  // structure's canonical plan.
+  let versionId: number;
+  let structure: CommissionStructure = input.structure;
+  if (input.commissionPlanVersionId) {
+    const v = rawDb.prepare(`SELECT v.*, p.type AS plan_type FROM commission_plan_versions v JOIN commission_plans p ON p.id = v.commission_plan_id WHERE v.id = ? AND v.tenant_id = ?`).get(input.commissionPlanVersionId, tenantId) as any;
+    if (!v) throw new CommissionError("CROSS_TENANT_ACCESS", "Plan version not found in tenant.", 404);
+    versionId = v.id;
+    structure = v.plan_type === "FLAT" ? "FLAT" : "TIERED";
+  } else if (input.structure === "FLAT") {
+    versionId = getOrCreateFlatVersion(tenantId, actorId, input.flatRateCents ?? 0).versionId;
+  } else {
+    versionId = getOrCreateStandardTieredVersion(tenantId, actorId).versionId;
+  }
+
+  if (input.closeExisting) {
+    const open = rawDb.prepare(`SELECT id FROM rep_commission_assignments WHERE tenant_id = ? AND rep_id = ? AND (effective_to IS NULL OR effective_to > ?)`).all(tenantId, input.repId, effectiveFrom) as any[];
+    for (const a of open) rawDb.prepare(`UPDATE rep_commission_assignments SET effective_to = ? WHERE id = ?`).run(effectiveFrom, a.id);
+  }
+
+  const assignment = assignPlanVersionToRep(tenantId, actorId, { repId: input.repId, commissionPlanVersionId: versionId, effectiveFrom });
+  storage.logActivity(actorId, "commission_structure.assigned", "rep_commission_assignment", assignment.id, { repId: input.repId, structure, versionId, flatRateCents: input.flatRateCents ?? null }, undefined);
+  return { assignment, versionId, structure };
+}
+
+// Resolve a rep's CURRENT effective structure for display (Team card, rep view):
+// structure type, rate/tiers, effective dates — or null if unassigned.
+export function getCurrentStructureForRep(tenantId: number, repId: number): any {
+  const assignments = listRepAssignments(tenantId, repId).map(a => ({
+    id: a.id, commissionPlanVersionId: a.commission_plan_version_id,
+    effectiveFrom: a.effective_from, effectiveTo: a.effective_to,
+  }));
+  const active = resolveAssignmentForWeek(assignments, new Date().toISOString());
+  if (!active) return null;
+  const version = rawDb.prepare(`SELECT v.*, p.name AS plan_name, p.type AS plan_type, p.tier_mode FROM commission_plan_versions v JOIN commission_plans p ON p.id = v.commission_plan_id WHERE v.id = ? AND v.tenant_id = ?`).get(active.commissionPlanVersionId, tenantId) as any;
+  if (!version) return null;
+  const tiers = version.plan_type === "TIERED" ? getPlanVersionTiers(tenantId, version.id) : [];
+  return {
+    assignmentId: active.id, effectiveFrom: active.effectiveFrom, effectiveTo: active.effectiveTo,
+    structure: version.plan_type === "FLAT" ? "FLAT" : "TIERED",
+    planName: version.plan_name, planId: version.commission_plan_id, commissionPlanVersionId: version.id,
+    flatRateCents: version.flat_rate_cents,
+    tiers: tiers.map((t: any) => ({ minimumSales: t.minimum_sales, maximumSales: t.maximum_sales, rateCents: t.rate_cents, label: t.label })),
+  };
+}
+
+// Picker options for the onboarding/assignment UI: the default tiers (for
+// preview), a suggested flat rate, and any existing custom plans in the tenant.
+export function getAssignablePlanOptions(tenantId: number): any {
+  return {
+    standardTiers: DEFAULT_RETRO_TIERS.map(t => ({ minimumSales: t.minimumSales, maximumSales: t.maximumSales, rateCents: t.rateCents, label: t.label })),
+    suggestedFlatRateCents: 15000,
+    customPlans: listPlans(tenantId)
+      .filter((p: any) => p.status === "ACTIVE" && p.name !== STANDARD_TIERED_PLAN_NAME && p.name !== FLAT_PLAN_NAME)
+      .map((p: any) => ({ id: p.id, name: p.name, type: p.type, latestVersionId: p.versions?.[p.versions.length - 1]?.id ?? null })),
+  };
 }

@@ -75,6 +75,41 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   app.post("/api/commission/assignments", requireCapability("commission.structure.manage"), (req, res) => {
     try { res.status(201).json(svc.assignPlanVersionToRep(tid(req), uid(req), req.body || {})); } catch (e) { fail(res, e); }
   });
+
+  // High-level "set this rep's commission structure" (flat vs tiered). Replaces
+  // the rep's current structure by default (closeExisting) — this is the control
+  // behind onboarding + the Team page's "change commission" action.
+  app.post("/api/commission/assign-structure", requireCapability("commission.structure.manage"), (req, res) => {
+    const { repId, structure, flatRateCents, flatRateDollars, commissionPlanVersionId, effectiveFrom, closeExisting } = req.body || {};
+    if (!repId || (structure !== "FLAT" && structure !== "TIERED")) {
+      return res.status(400).json({ error: "repId and structure (FLAT|TIERED) are required" });
+    }
+    const rate = flatRateCents != null ? Number(flatRateCents)
+      : flatRateDollars != null ? Math.round(Number(flatRateDollars) * 100)
+      : undefined;
+    try {
+      const out = svc.assignStructureToRep(tid(req), uid(req), {
+        repId: Number(repId), structure, flatRateCents: rate,
+        commissionPlanVersionId: commissionPlanVersionId ?? null,
+        effectiveFrom: effectiveFrom || undefined,
+        closeExisting: closeExisting !== false, // default true (re-assign replaces)
+      });
+      res.status(201).json(out);
+    } catch (e) { fail(res, e); }
+  });
+
+  // Options for the structure picker (default tiers preview, suggested flat rate,
+  // existing custom plans).
+  app.get("/api/commission/assignable-options", requireCapability("commission.structure.manage"), (req, res) => {
+    try { res.json(svc.getAssignablePlanOptions(tid(req))); } catch (e) { fail(res, e); }
+  });
+
+  // A rep's current effective structure (for Team cards / rep view). Scoped read.
+  app.get("/api/commission/reps/:repId/structure", requireCapability("commission.read.team"), (req, res) => {
+    const repId = Number(req.params.repId);
+    if (!canReadRep((req as any).user, repId)) return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
+    try { res.json(svc.getCurrentStructureForRep(tid(req), repId) || { structure: null }); } catch (e) { fail(res, e); }
+  });
   app.get("/api/commission/reps/:repId/assignments", requireCapability("commission.read.team"), (req, res) => {
     const repId = Number(req.params.repId);
     if (!canReadRep((req as any).user, repId)) return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
@@ -100,6 +135,29 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       const out = svc.calculateOrRecalculateStatement({ tenantId: tid(req), repId, weekReference, actorId: uid(req), requestId: rid(req) });
       res.json(out);
     } catch (e) { fail(res, e); }
+  });
+
+  // Rep-facing "my commission this week" — the caller computes/reads their OWN
+  // current-week statement (self-scoped write is fine and keeps it fresh). Falls
+  // back to read-only on a locked week, and an empty state when unassigned.
+  app.get("/api/commission/statements/me/current", requireCapability("commission.read.self"), (req, res) => {
+    const user = (req as any).user;
+    const repId = user?.teamMemberId;
+    if (!repId) return res.json({ statement: null, structure: null, noRepProfile: true });
+    const now = new Date();
+    try {
+      const out = svc.calculateOrRecalculateStatement({ tenantId: tid(req), repId, weekReference: now, actorId: uid(req), requestId: rid(req) });
+      res.json({ ...out, structure: svc.getCurrentStructureForRep(tid(req), repId) });
+    } catch (e) {
+      if (e instanceof svc.CommissionError && e.code === "STATEMENT_LOCKED") {
+        const { statement, bounds } = svc.getStatementForWeek(tid(req), repId, now);
+        return res.json({ statement, bounds, structure: svc.getCurrentStructureForRep(tid(req), repId), locked: true });
+      }
+      if (e instanceof svc.CommissionError && e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT") {
+        return res.json({ statement: null, structure: null, noPlan: true });
+      }
+      fail(res, e);
+    }
   });
 
   app.get("/api/commission/statements", requireCapability("commission.read.self"), (req, res) => {

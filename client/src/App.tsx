@@ -26,6 +26,7 @@ const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
 const Applications = lazy(() => import("@/pages/Applications"));
 const Commissions = lazy(() => import("@/pages/Commissions"));
+const MyCommission = lazy(() => import("@/pages/MyCommission"));
 const LiveMap = lazy(() => import("@/pages/LiveMap"));
 const ComingSoon = lazy(() => import("@/pages/ComingSoon"));
 const ClockIn = lazy(() => import("@/pages/ClockIn"));
@@ -117,6 +118,7 @@ function AppRoutes() {
           </Route>
           <Route path="/clock" component={ClockIn} />
           <Route path="/commissions" component={Commissions} />
+          <Route path="/my-commission" component={MyCommission} />
           <Route path="/profile" component={Profile} />
           <Route path="/diagnostics">
             <Guard role={role} allowed={["admin", "manager"]}><Diagnostics /></Guard>

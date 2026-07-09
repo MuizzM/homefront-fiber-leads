@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import {
   UserPlus, Edit2, Trash2, Phone, Mail,
-  User, CheckCircle2, XCircle, Users, Crown, Star, ChevronUp
+  User, CheckCircle2, XCircle, Users, Crown, Star, ChevronUp,
+  Wallet, Layers, DollarSign
 } from "lucide-react";
+import { useCan } from "@/lib/capabilities";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -272,9 +274,11 @@ export default function Team() {
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [addForm, setAddForm] = useState<MemberForm>(emptyForm());
   const [editForm, setEditForm] = useState<MemberForm>(emptyForm());
+  const [commissionMember, setCommissionMember] = useState<TeamMember | null>(null);
 
   const { toast } = useToast();
   const qc = useQueryClient();
+  const canManageCommission = useCan("commission.structure.manage");
 
   const { data: team = [], isLoading } = useQuery<TeamMember[]>({
     queryKey: ["/api/team"],
@@ -396,6 +400,13 @@ export default function Team() {
                       </div>
                     </div>
                     <div className="flex gap-1 flex-shrink-0">
+                      {canManageCommission && member.role !== "manager" && (
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
+                          onClick={() => setCommissionMember(member)} data-testid={`btn-commission-rep-${member.id}`}
+                          title="Commission structure">
+                          <Wallet className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
                       {canAddMembers && (
                         <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
                           onClick={() => openEdit(member)} data-testid={`btn-edit-rep-${member.id}`}>
@@ -588,6 +599,133 @@ export default function Team() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Commission structure */}
+      <CommissionDialog member={commissionMember} onClose={() => setCommissionMember(null)} />
     </div>
+  );
+}
+
+// ── Per-rep commission structure control ──────────────────────────────────────
+// Reads the rep's current effective structure, lets a manager set FLAT vs TIERED
+// (a flat rate, or the standard retroactive weekly tiers), and re-assigns via
+// POST /api/commission/assign-structure (which closes the current period first).
+const TIER_LADDER = [
+  { range: "1–7", rate: "$150" }, { range: "8–12", rate: "$200" },
+  { range: "13–16", rate: "$250" }, { range: "17+", rate: "$300" },
+];
+
+function CommissionDialog({ member, onClose }: { member: TeamMember | null; onClose: () => void }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [structure, setStructure] = useState<"TIERED" | "FLAT">("TIERED");
+  const [flatRate, setFlatRate] = useState("150");
+
+  const { data: current, isLoading } = useQuery<any>({
+    queryKey: ["/api/commission/reps", member?.id, "structure"],
+    queryFn: () => apiRequest("GET", `/api/commission/reps/${member!.id}/structure`).then(r => r.json()),
+    enabled: !!member,
+  });
+
+  // Seed the picker from the rep's current structure when it loads.
+  useEffect(() => {
+    if (!current) return;
+    if (current.structure === "FLAT") {
+      setStructure("FLAT");
+      setFlatRate(String(Math.round((current.flatRateCents || 15000) / 100)));
+    } else if (current.structure === "TIERED") {
+      setStructure("TIERED");
+    }
+  }, [current]);
+
+  const assignMutation = useMutation({
+    mutationFn: async () => {
+      const body: any = { repId: member!.id, structure, closeExisting: true };
+      if (structure === "FLAT") body.flatRateDollars = parseFloat(flatRate) || 0;
+      const res = await apiRequest("POST", "/api/commission/assign-structure", body);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Commission structure updated", description: `${member?.name} is now on the ${structure === "FLAT" ? "flat per-sale" : "tiered weekly"} plan.` });
+      qc.invalidateQueries({ queryKey: ["/api/commission/reps", member?.id, "structure"] });
+      onClose();
+    },
+    onError: (err: any) => toast({ title: err.message || "Failed to update commission", variant: "destructive" }),
+  });
+
+  const curStruct = current?.structure as ("FLAT" | "TIERED" | undefined);
+
+  return (
+    <Dialog open={!!member} onOpenChange={v => !v && onClose()}>
+      <DialogContent className="bg-card border-border text-foreground max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-base flex items-center gap-2">
+            <Wallet className="w-4 h-4 text-primary" /> Commission — {member?.name}
+          </DialogTitle>
+        </DialogHeader>
+
+        {/* Current structure */}
+        <div className="rounded-lg bg-secondary/40 border border-border px-3 py-2 text-xs">
+          <span className="text-muted-foreground">Current: </span>
+          {isLoading ? (
+            <span className="text-muted-foreground">loading…</span>
+          ) : curStruct === "FLAT" ? (
+            <span className="text-foreground font-semibold">Flat — ${((current.flatRateCents || 0) / 100).toLocaleString()}/sale</span>
+          ) : curStruct === "TIERED" ? (
+            <span className="text-foreground font-semibold">Tiered — {current.planName || "weekly ladder"}</span>
+          ) : (
+            <span className="text-amber-400">No plan assigned yet</span>
+          )}
+        </div>
+
+        {/* Structure picker */}
+        <div className="grid grid-cols-2 gap-2 mt-1">
+          <button type="button" onClick={() => setStructure("TIERED")}
+            className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors ${structure === "TIERED" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
+            data-testid="btn-team-structure-tiered">
+            <Layers className={`w-4 h-4 mt-0.5 ${structure === "TIERED" ? "text-primary" : "text-muted-foreground"}`} />
+            <span><span className="block text-xs font-semibold">Tiered</span><span className="block text-[10px] text-muted-foreground leading-tight">Retroactive weekly</span></span>
+          </button>
+          <button type="button" onClick={() => setStructure("FLAT")}
+            className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors ${structure === "FLAT" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
+            data-testid="btn-team-structure-flat">
+            <DollarSign className={`w-4 h-4 mt-0.5 ${structure === "FLAT" ? "text-primary" : "text-muted-foreground"}`} />
+            <span><span className="block text-xs font-semibold">Flat</span><span className="block text-[10px] text-muted-foreground leading-tight">Per qualified sale</span></span>
+          </button>
+        </div>
+
+        {structure === "TIERED" ? (
+          <div className="rounded-xl bg-secondary/30 border border-border p-2.5 mt-1">
+            <p className="text-[10px] text-muted-foreground mb-2">Total weekly sales set one rate for every sale:</p>
+            <div className="grid grid-cols-4 gap-1.5">
+              {TIER_LADDER.map(t => (
+                <div key={t.range} className="rounded-lg bg-card border border-border px-1 py-1.5 text-center">
+                  <div className="text-[9px] text-muted-foreground">{t.range}</div>
+                  <div className="text-xs font-bold text-primary">{t.rate}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mt-1">
+            <Label className="text-xs text-muted-foreground">Rate per qualified sale</Label>
+            <div className="flex items-center gap-1.5 mt-1">
+              <span className="text-muted-foreground">$</span>
+              <Input type="number" min={1} step={1} value={flatRate} onChange={e => setFlatRate(e.target.value)}
+                className="w-28 bg-secondary border-border" data-testid="input-team-flat-rate" />
+              <span className="text-xs text-muted-foreground">per sale</span>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter className="mt-2">
+          <Button variant="outline" onClick={onClose} className="border-border">Cancel</Button>
+          <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending}
+            className="bg-primary hover:bg-primary/90 text-white" data-testid="btn-save-commission">
+            {assignMutation.isPending ? "Saving…" : "Apply structure"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

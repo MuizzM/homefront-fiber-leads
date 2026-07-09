@@ -53,6 +53,7 @@ import {
 } from "@shared/capabilities";
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
 import { registerCommissionRoutes } from "./commissionRoutes";
+import * as commissionSvc from "./commissionService";
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
 // Legacy flat rows (no effective_from) are treated as always-on flat plans.
@@ -2905,7 +2906,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // PATCH /api/onboarding/applications/:id — approve or reject
   app.patch("/api/onboarding/applications/:id", requireManager, async (req, res) => {
     const id = Number(req.params.id);
-    const { status, reviewNotes } = req.body;
+    const { status, reviewNotes, commission } = req.body;
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
     }
@@ -2916,8 +2917,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const sessionId = req.headers["x-session-id"] as string;
     const sessionObj = storage.getSession(sessionId);
     const reviewer = sessionObj ? storage.getUserById(sessionObj.userId) : null;
+    const tenantId = (reviewer as any)?.tenantId ?? null;
 
     let userId: number | undefined;
+    let commissionResult: any = null;
+    let commissionWarning: string | null = null;
 
     if (status === "approved") {
       // Create user account — OTP-only, no passwords stored or emailed
@@ -2935,8 +2939,54 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           passwordHash: "",   // OTP-only system — no password
           role: "rep",
           active: true,
-        });
+          tenantId: tenantId ?? undefined,
+        } as any);
         userId = newUser.id;
+      }
+
+      // Approval also makes the applicant a first-class TEAM MEMBER (the entity
+      // leads + commissions reference) and links the login account to it, then
+      // assigns the commission structure the manager chose (flat vs tiered).
+      // Best-effort: a commission hiccup must never block account creation.
+      try {
+        const linkedUser = userId != null ? storage.getUserById(userId) : null;
+        let teamMemberId = (linkedUser as any)?.teamMemberId ?? null;
+        if (!teamMemberId) {
+          // Reuse an existing team member with this email in the tenant if present.
+          const roster = storage.getTeamMembers(tenantId ?? undefined);
+          const match = roster.find((m: any) => (m.email || "").toLowerCase() === application.email.toLowerCase());
+          const member = match ?? storage.createTeamMember({
+            name: application.fullName,
+            phone: application.phone || null,
+            email: application.email,
+            role: "rep",
+            active: true,
+            tenantId: tenantId ?? undefined,
+          } as any);
+          teamMemberId = member.id;
+          if (userId != null) storage.updateUser(userId, { teamMemberId } as any);
+        }
+
+        if (commission && tenantId != null && teamMemberId != null) {
+          const structure = commission.structure === "FLAT" ? "FLAT" : "TIERED";
+          const rawRateCents = commission.flatRateCents != null
+            ? Number(commission.flatRateCents)
+            : commission.flatRateDollars != null
+              ? Math.round(Number(commission.flatRateDollars) * 100)
+              : 0;
+          const flatRateCents = structure === "FLAT" ? Math.round(rawRateCents) : undefined;
+          commissionResult = commissionSvc.assignStructureToRep(tenantId, reviewer?.id ?? null, {
+            repId: teamMemberId, structure, flatRateCents,
+            commissionPlanVersionId: commission.commissionPlanVersionId ?? null,
+            effectiveFrom: commission.effectiveFrom || undefined,
+          });
+        } else if (commission && tenantId == null) {
+          commissionWarning = "Account created, but no organization is set on your login, so a commission plan could not be assigned.";
+        }
+      } catch (e: any) {
+        // Surface the reason but keep the approval — the manager can fix the plan later.
+        commissionWarning = e?.message || "Commission structure could not be assigned.";
+        console.error("Onboarding commission assignment failed:", e?.message);
       }
 
       // Email rep their welcome + first OTP so they can log in immediately
@@ -2971,7 +3021,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       userId: userId ?? null,
     });
 
-    res.json(updated);
+    res.json({ ...updated, commission: commissionResult, commissionWarning });
   });
 }
 

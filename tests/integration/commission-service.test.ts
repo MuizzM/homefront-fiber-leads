@@ -196,3 +196,48 @@ describe("capability-based read scope", () => {
     expect(routes.canReadRep(lead, REP_REPORT)).toBe(true); // lead can read a report
   });
 });
+
+describe("onboarding-facing structure assignment (flat vs tiered)", () => {
+  const REP_STRUCT = 1003; // dedicated rep so we don't disturb REP's statements
+  beforeAll(() => { seedRep(REP_STRUCT, T1, null); });
+
+  it("TIERED assignment creates the standard ladder and reports it back", () => {
+    const out = svc.assignStructureToRep(T1, 1, { repId: REP_STRUCT, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    expect(out.structure).toBe("TIERED");
+    const cur = svc.getCurrentStructureForRep(T1, REP_STRUCT);
+    expect(cur.structure).toBe("TIERED");
+    expect(cur.tiers.length).toBe(DEFAULT_RETRO_TIERS.length);
+    expect(cur.tiers[0].rateCents).toBe(15000);
+  });
+
+  it("re-assigning to FLAT closes the tiered period (no overlap) and becomes current", () => {
+    const out = svc.assignStructureToRep(T1, 1, { repId: REP_STRUCT, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01", closeExisting: true });
+    expect(out.structure).toBe("FLAT");
+    const cur = svc.getCurrentStructureForRep(T1, REP_STRUCT);
+    expect(cur.structure).toBe("FLAT");
+    expect(cur.flatRateCents).toBe(20000);
+    // two assignments exist now, but only one is currently effective
+    expect(svc.listRepAssignments(T1, REP_STRUCT).length).toBe(2);
+  });
+
+  it("a FLAT assignment drives a $-per-sale statement", () => {
+    // give this rep 5 qualified sales in the week and calculate
+    for (let i = 0; i < 5; i++) svc.upsertSale(T1, 1, { repId: REP_STRUCT, externalId: `struct-${i}`, status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    const res = svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP_STRUCT, weekReference: WEEK_REF, actorId: 1 });
+    expect(res.computation.qualifiedSaleCount).toBe(5);
+    expect(res.statement.gross_commission_cents).toBe(5 * 20000); // flat $200 × 5
+  });
+
+  it("getOrCreateStandardTieredVersion is idempotent (reuses the plan/version)", () => {
+    const a = svc.getOrCreateStandardTieredVersion(T1, 1);
+    const b = svc.getOrCreateStandardTieredVersion(T1, 1);
+    expect(a.versionId).toBe(b.versionId);
+    expect(a.planId).toBe(b.planId);
+  });
+
+  it("FLAT structure requires a positive rate", () => {
+    let err: any;
+    try { svc.assignStructureToRep(T1, 1, { repId: REP_STRUCT, structure: "FLAT", flatRateCents: 0, closeExisting: true }); } catch (e) { err = e; }
+    expect(err?.code).toBe("INVALID_COMMISSION_PLAN");
+  });
+});

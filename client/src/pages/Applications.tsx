@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import {
   CheckCircle2, XCircle, Clock, User, Mail, Phone, MapPin,
   Briefcase, FileText, Image, ExternalLink, ChevronDown, ChevronUp,
-  AlertTriangle, RefreshCw
+  AlertTriangle, RefreshCw, Layers, DollarSign, TrendingUp
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -40,6 +40,18 @@ const CARRIER_COLORS: Record<string, string> = {
   "T-Fiber":     "bg-pink-500/15 text-pink-300 border-pink-500/30",
 };
 
+// Mirrors shared/commissionTiers.ts DEFAULT_RETRO_TIERS — a read-only preview of
+// the standard retroactive weekly ladder shown when "Tiered" is picked. The
+// server is authoritative; this is illustrative only.
+const DEFAULT_TIER_LADDER: Array<{ range: string; rate: string }> = [
+  { range: "1–7 sales",  rate: "$150" },
+  { range: "8–12 sales", rate: "$200" },
+  { range: "13–16 sales", rate: "$250" },
+  { range: "17+ sales",  rate: "$300" },
+];
+
+type Structure = "TIERED" | "FLAT";
+
 const API_BASE = ("__PORT_5000__" as string).startsWith("__")
   ? ""
   : "__PORT_5000__";
@@ -50,6 +62,9 @@ export default function Applications() {
   const [activeTab, setActiveTab] = useState<StatusTab>("pending");
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [reviewNotes, setReviewNotes] = useState<Record<number, string>>({});
+  // Per-application commission structure chosen at approval time.
+  const [structure, setStructure] = useState<Record<number, Structure>>({});
+  const [flatRate, setFlatRate] = useState<Record<number, string>>({});
 
   const canReview = user?.role === "admin" || user?.role === "manager";
 
@@ -63,21 +78,46 @@ export default function Applications() {
   });
 
   const reviewMutation = useMutation({
-    mutationFn: ({ id, status, notes }: { id: number; status: string; notes?: string }) =>
-      apiRequest("PATCH", `/api/onboarding/applications/${id}`, { status, reviewNotes: notes || null }).then(r => r.json()),
-    onSuccess: (_, vars) => {
+    mutationFn: ({ id, status, notes, commission }: { id: number; status: string; notes?: string; commission?: any }) =>
+      apiRequest("PATCH", `/api/onboarding/applications/${id}`, { status, reviewNotes: notes || null, commission }).then(r => r.json()),
+    onSuccess: (data: any, vars) => {
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/applications"] });
-      toast({
-        title: vars.status === "approved" ? "Application approved" : "Application rejected",
-        description: vars.status === "approved"
-          ? "Rep account created. They'll receive login credentials by email."
-          : "Applicant has been notified.",
-      });
+      if (vars.status !== "approved") {
+        toast({ title: "Application rejected", description: "Applicant has been notified." });
+        return;
+      }
+      // Approved — reflect the commission structure that was assigned (or warn).
+      if (data?.commissionWarning) {
+        toast({
+          title: "Rep account created — plan needs attention",
+          description: data.commissionWarning,
+          variant: "destructive",
+        });
+      } else {
+        const struct = data?.commission?.structure;
+        const structLabel = struct === "FLAT" ? "flat per-sale" : struct === "TIERED" ? "retroactive weekly tiers" : null;
+        toast({
+          title: "Application approved",
+          description: structLabel
+            ? `Rep account created on the ${structLabel} plan. They'll receive login credentials by email.`
+            : "Rep account created. They'll receive login credentials by email.",
+        });
+      }
     },
     onError: (e: any) => {
       toast({ title: "Error", description: e.message, variant: "destructive" });
     },
   });
+
+  // Build the commission payload for an application from the picker state.
+  function commissionPayloadFor(appId: number) {
+    const s = structure[appId] ?? "TIERED";
+    if (s === "FLAT") {
+      const dollars = parseFloat(flatRate[appId] ?? "150");
+      return { structure: "FLAT", flatRateCents: Math.round((isNaN(dollars) ? 0 : dollars) * 100) };
+    }
+    return { structure: "TIERED" };
+  }
 
   if (!canReview) {
     return (
@@ -241,27 +281,109 @@ export default function Applications() {
                   </button>
                 </div>
 
-                {/* Quick action buttons (pending only) */}
-                {app.status === "pending" && (
-                  <div className="flex gap-2 mt-3">
-                    <button
-                      onClick={() => reviewMutation.mutate({ id: app.id, status: "approved", notes: reviewNotes[app.id] })}
-                      disabled={reviewMutation.isPending}
-                      className="flex items-center gap-1.5 bg-green-500/15 hover:bg-green-500/25 border border-green-500/30 text-green-300 text-xs font-semibold px-3 py-2 rounded-lg transition-colors flex-1 justify-center"
-                      data-testid={`button-approve-${app.id}`}
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" /> Approve & Create Account
-                    </button>
-                    <button
-                      onClick={() => reviewMutation.mutate({ id: app.id, status: "rejected", notes: reviewNotes[app.id] })}
-                      disabled={reviewMutation.isPending}
-                      className="flex items-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-xs font-semibold px-3 py-2 rounded-lg transition-colors justify-center"
-                      data-testid={`button-reject-${app.id}`}
-                    >
-                      <XCircle className="w-3.5 h-3.5" /> Reject
-                    </button>
-                  </div>
-                )}
+                {/* Commission structure picker + actions (pending only) */}
+                {app.status === "pending" && (() => {
+                  const sel = structure[app.id] ?? "TIERED";
+                  const setSel = (s: Structure) => setStructure(prev => ({ ...prev, [app.id]: s }));
+                  return (
+                    <div className="mt-3 space-y-3">
+                      {/* Structure chooser */}
+                      <div>
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1.5 flex items-center gap-1">
+                          <TrendingUp className="w-3 h-3" /> Commission structure
+                        </p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setSel("TIERED")}
+                            className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors ${
+                              sel === "TIERED"
+                                ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40"
+                                : "border-border bg-secondary/40 hover:bg-secondary/70"
+                            }`}
+                            data-testid={`button-structure-tiered-${app.id}`}
+                          >
+                            <Layers className={`w-4 h-4 mt-0.5 flex-shrink-0 ${sel === "TIERED" ? "text-primary" : "text-muted-foreground"}`} />
+                            <span>
+                              <span className="block text-xs font-semibold text-foreground">Tiered</span>
+                              <span className="block text-[10px] text-muted-foreground leading-tight">Retroactive weekly ladder</span>
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSel("FLAT")}
+                            className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors ${
+                              sel === "FLAT"
+                                ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40"
+                                : "border-border bg-secondary/40 hover:bg-secondary/70"
+                            }`}
+                            data-testid={`button-structure-flat-${app.id}`}
+                          >
+                            <DollarSign className={`w-4 h-4 mt-0.5 flex-shrink-0 ${sel === "FLAT" ? "text-primary" : "text-muted-foreground"}`} />
+                            <span>
+                              <span className="block text-xs font-semibold text-foreground">Flat</span>
+                              <span className="block text-[10px] text-muted-foreground leading-tight">Same rate per sale</span>
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Tiered preview OR flat rate input */}
+                      {sel === "TIERED" ? (
+                        <div className="rounded-xl bg-secondary/30 border border-border p-2.5">
+                          <p className="text-[10px] text-muted-foreground mb-2">
+                            Total weekly qualified sales set <strong className="text-foreground">one rate for every sale</strong> that week:
+                          </p>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            {DEFAULT_TIER_LADDER.map(t => (
+                              <div key={t.range} className="rounded-lg bg-card border border-border px-1.5 py-1.5 text-center">
+                                <div className="text-[9px] text-muted-foreground leading-tight">{t.range}</div>
+                                <div className="text-xs font-bold text-primary">{t.rate}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="rounded-xl bg-secondary/30 border border-border p-2.5">
+                          <label className="text-[10px] text-muted-foreground block mb-1.5">Rate per qualified sale</label>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-muted-foreground text-sm">$</span>
+                            <input
+                              type="number"
+                              min={1}
+                              step={1}
+                              value={flatRate[app.id] ?? "150"}
+                              onChange={e => setFlatRate(prev => ({ ...prev, [app.id]: e.target.value }))}
+                              className="w-24 bg-card border border-border rounded-lg px-2 py-1.5 text-sm text-foreground outline-none focus:border-primary/50 transition-colors"
+                              data-testid={`input-flat-rate-${app.id}`}
+                            />
+                            <span className="text-[10px] text-muted-foreground">per sale</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Action buttons */}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => reviewMutation.mutate({ id: app.id, status: "approved", notes: reviewNotes[app.id], commission: commissionPayloadFor(app.id) })}
+                          disabled={reviewMutation.isPending}
+                          className="flex items-center gap-1.5 bg-green-500/15 hover:bg-green-500/25 border border-green-500/30 text-green-300 text-xs font-semibold px-3 py-2 rounded-lg transition-colors flex-1 justify-center disabled:opacity-50"
+                          data-testid={`button-approve-${app.id}`}
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Approve & Create Account
+                        </button>
+                        <button
+                          onClick={() => reviewMutation.mutate({ id: app.id, status: "rejected", notes: reviewNotes[app.id] })}
+                          disabled={reviewMutation.isPending}
+                          className="flex items-center gap-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-xs font-semibold px-3 py-2 rounded-lg transition-colors justify-center disabled:opacity-50"
+                          data-testid={`button-reject-${app.id}`}
+                        >
+                          <XCircle className="w-3.5 h-3.5" /> Reject
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Expanded details */}
