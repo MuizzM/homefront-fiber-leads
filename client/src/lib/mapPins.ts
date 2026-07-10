@@ -164,12 +164,21 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
         "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
         // Legible on a phone at arm's length: floor 11px, scales up close in.
         "text-size": ["interpolate", ["linear"], ["zoom"], 16.8, 11, 18.5, 13.5, 20, 16],
-        "text-padding": 3,
+        // Sit the number BESIDE its house, not on top of it. Variable anchor lets
+        // Mapbox place each label in whatever open space is nearest (preferring
+        // below), and the collision engine keeps numbers off each other and off
+        // street names — so a number never smothers a house, a pin, or a label.
+        "text-variable-anchor": ["bottom", "top", "right", "left"],
+        "text-radial-offset": 0.75,
+        "text-justify": "auto",
+        "text-padding": 4,
+        "text-optional": true, // drop a number before letting it collide/overlap
       },
       paint: {
         "text-color": colors.text,
         "text-halo-color": colors.halo,
-        "text-halo-width": 1.3,
+        "text-halo-width": 1.4,
+        "text-halo-blur": 0.4,
         // Fade in across a third of a zoom level — appears, never pops/flickers.
         "text-opacity": ["interpolate", ["linear"], ["zoom"], 16.8, 0, 17.15, 1],
       },

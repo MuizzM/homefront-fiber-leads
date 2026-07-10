@@ -1839,20 +1839,23 @@ export default function MapView() {
             </div>
           )}
 
-          {/* Lead count chip — top left (reps get the progress HUD instead);
-              sits right of the menu button on mobile, flush left on desktop */}
-          {mapReady && leads.length > 0 && !isRep && (
-            <div style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }} className="absolute left-[64px] md:left-3 md:top-3 bg-black/80 backdrop-blur-sm rounded-lg px-3 py-1.5 z-10 flex items-center gap-2 shadow-lg">
-              <div className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_rgba(34,197,94,1)] animate-pulse" />
-              <span className="text-xs font-bold text-white">
-                {filterStatus === "all" ? leads.length : (statusCounts[filterStatus] ?? 0)}
+          {/* The lead-count chip was removed — the map speaks for itself; a raw
+              "3355 pins" tally added noise without operational value. An active
+              status filter still needs a visible, clearable indication, so a
+              minimal filter pill survives (only when a filter is applied). */}
+          {mapReady && !isRep && leads.length > 0 && filterStatus !== "all" && (
+            <div style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }} className="absolute left-[64px] md:left-3 md:top-3 z-10 flex items-center gap-2 rounded-full bg-black/70 backdrop-blur-md border border-white/10 pl-2.5 pr-1.5 py-1 shadow-lg">
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: PIN_COLORS[filterStatus]?.bg ?? "#0d9488" }} />
+              <span className="text-[11px] font-medium text-white/80">
+                {statusCounts[filterStatus] ?? 0} {PIN_COLORS[filterStatus]?.label ?? filterStatus}
               </span>
-              <span className="text-[11px] text-white/60">
-                {filterStatus === "all" ? "pins" : (PIN_COLORS[filterStatus]?.label ?? filterStatus)}
-              </span>
-              {filterStatus !== "all" && (
-                <button onClick={() => setFilterStatus("all")} className="text-white/40 hover:text-white text-xs leading-none ml-1">×</button>
-              )}
+              <button
+                onClick={() => setFilterStatus("all")}
+                aria-label="Clear filter"
+                className="w-6 h-6 -my-0.5 rounded-full flex items-center justify-center text-white/40 hover:text-white hover:bg-white/10 transition"
+              >
+                <X className="w-3 h-3" aria-hidden="true" />
+              </button>
             </div>
           )}
 
@@ -2091,10 +2094,14 @@ export default function MapView() {
                  The map stays uncluttered; panels open on demand. ── */}
           {mapReady && !isRep && (
             <div
-              className="absolute top-3 right-3 z-30 flex flex-col gap-2"
+              className="absolute top-3 right-3 z-30 flex flex-col items-end"
               style={{ paddingTop: "env(safe-area-inset-top)" }}
               data-testid="map-control-cluster"
             >
+             {/* One coherent glass panel — the icons read as a single instrument,
+                 not four disconnected buttons. Each glyph is transparent until
+                 active; the panel supplies the surface, blur, and lift. */}
+             <div className="flex flex-col gap-1 rounded-2xl border border-white/10 bg-gradient-to-b from-black/70 to-black/55 p-1.5 shadow-[0_12px_40px_-10px_rgba(0,0,0,0.7)] ring-1 ring-inset ring-white/[0.06] backdrop-blur-xl">
               <MapIconBtn
                 icon={<Search className="w-5 h-5" />} label="Search leads &amp; places"
                 testid="ctl-search" active={searchOpen} btnRef={searchBtnRef} disclosure="dialog"
@@ -2133,17 +2140,19 @@ export default function MapView() {
                   }}
                 />
               )}
+              <div className="mx-1 my-0.5 h-px bg-white/10" aria-hidden="true" />
               <MapIconBtn
                 icon={<Layers className="w-5 h-5" />} label="Map layers & style"
                 testid="ctl-layers" active={layersOpen} btnRef={layersBtnRef} disclosure="menu"
                 onClick={() => { setLayersOpen(o => !o); setSearchOpen(false); }}
               />
+             </div>
 
               {/* Layers popover — a group of switches + basemap radios (NOT a
                   role=menu, which would promise a keyboard menu model we don't
                   implement). Each control is a real button operable by Tab. */}
               {layersOpen && (
-                <div className="absolute top-0 right-14 w-[168px] rounded-xl bg-black/85 backdrop-blur-md border border-white/10 p-2.5 shadow-2xl text-white" role="group" aria-label="Map layers and style" data-testid="layers-popover">
+                <div className="absolute top-0 right-14 w-[172px] rounded-2xl bg-black/75 backdrop-blur-xl border border-white/10 ring-1 ring-inset ring-white/[0.06] p-2.5 shadow-[0_12px_40px_-10px_rgba(0,0,0,0.7)] text-white" role="group" aria-label="Map layers and style" data-testid="layers-popover">
                   <div className="text-[10px] uppercase tracking-wider text-white/40 font-semibold mb-1.5">Layers</div>
                   {[
                     { key: "leads", label: "Leads", on: showLeads, toggle: () => setShowLeads(v => !v) },
@@ -2172,18 +2181,20 @@ export default function MapView() {
             </div>
           )}
 
-          {/* Locate-me FAB — thumb target, bottom-right, clear of the home bar.
-              De-emphasized for non-rep roles (a manager rarely needs to recenter
-              on themselves) so it doesn't out-shout the control cluster. */}
-          {mapReady && (
+          {/* Locate-me FAB — REP-ONLY. A field rep walking a street needs to
+              recenter on their blue dot constantly; a manager at a desk reviewing
+              territory does not, and the button only crowded their map. Removed
+              for non-rep roles per operator feedback; the GeolocateControl is
+              still wired, so reps keep the thumb target. */}
+          {mapReady && isRep && (
             <button
               onClick={() => { try { geolocateRef.current?.trigger(); } catch {} }}
               aria-label="Center on my location"
               data-testid="locate-me"
-              style={{ height: isRep ? 52 : 44, width: isRep ? 52 : 44, bottom: "calc(env(safe-area-inset-bottom) + 2rem)" }}
-              className={`absolute right-3 z-20 rounded-full shadow-xl flex items-center justify-center active:scale-95 transition-transform ${isRep ? "bg-primary text-white hover:bg-primary/90" : "bg-black/80 backdrop-blur-md border border-white/15 text-white/90 hover:text-white"}`}
+              style={{ height: 52, width: 52, bottom: "calc(env(safe-area-inset-bottom) + 2rem)" }}
+              className="absolute right-3 z-20 rounded-full shadow-xl flex items-center justify-center active:scale-95 transition-transform bg-primary text-white hover:bg-primary/90"
             >
-              <LocateFixed className={isRep ? "w-6 h-6" : "w-5 h-5"} />
+              <LocateFixed className="w-6 h-6" />
             </button>
           )}
 
@@ -2376,10 +2387,13 @@ function MapIconBtn({
         {...(disclosure ? { "aria-haspopup": disclosure, "aria-expanded": active } : { "aria-pressed": active })}
         data-testid={testid}
         className={[
-          "relative h-11 w-11 rounded-xl flex items-center justify-center shadow-lg border transition-colors",
+          "relative h-11 w-11 rounded-xl flex items-center justify-center border transition-all duration-150",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1 focus-visible:ring-offset-black/40",
           "active:scale-95 disabled:opacity-40 disabled:pointer-events-none",
-          active ? `${activeBg} text-white` : "bg-black/80 backdrop-blur-md border-white/15 text-white/95 hover:bg-black/90 hover:text-white",
+          // Idle icons are transparent — the surrounding glass panel is the
+          // surface. Active tools fill with their tone and lift, so the armed
+          // tool reads at a glance without any text label.
+          active ? `${activeBg} text-white shadow-lg` : "border-transparent text-white/75 hover:text-white hover:bg-white/10",
         ].join(" ")}
       >
         {icon}
