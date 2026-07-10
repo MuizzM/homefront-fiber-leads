@@ -14,20 +14,35 @@ import { ArrowLeft, Loader2, Users, Sparkles, ChevronRight, X, MapPinned, Shield
 // from its boundary and assigns it to a team — discovery straight into the field.
 
 const CLUSTER_SRC = "opp-clusters";
-const SCORE_COLOR = [
-  "interpolate", ["linear"], ["get", "score"],
-  0, "#64748b", 30, "#0d9488", 55, "#eab308", 75, "#f97316", 90, "#ef4444",
-] as any;
+// Ramp calibrated to the REAL score distribution (most clusters land 45–80), so
+// the colour actually differentiates them instead of everything reading amber.
+// Shared by the map fill/line AND the list chips + legend (one colour language).
+const RAMP: Array<[number, string]> = [
+  [25, "#64748b"], [42, "#0d9488"], [55, "#eab308"], [68, "#f97316"], [80, "#ef4444"],
+];
+const SCORE_COLOR = ["interpolate", ["linear"], ["get", "score"], ...RAMP.flat()] as any;
+function scoreTint(score: number): string {
+  let c = RAMP[0][1];
+  for (const [thr, col] of RAMP) if (score >= thr) c = col;
+  return c;
+}
 
-export function OpportunityMap({ onBack }: { focusCity?: { city: string; state: string } | null; onBack: () => void }) {
+export function OpportunityMap({ focusCity, onBack }: { focusCity?: { city: string; state: string } | null; onBack: () => void }) {
   const mapContainer = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<any>(null);
   const [ready, setReady] = useState(false);
   const [token, setToken] = useState<string | null>(null);
   const [tokenFailed, setTokenFailed] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false); // phone cluster bottom-sheet
 
-  const { data, isLoading } = useQuery({ queryKey: ["/api/scan/clusters"], queryFn: () => scanApi.clusters(undefined, 5), refetchInterval: 10000 });
+  // Scope to the market the operator picked (focusCity) so "open a market →
+  // opportunity" shows THAT city, not the whole state.
+  const { data, isLoading } = useQuery({
+    queryKey: ["/api/scan/clusters", focusCity?.city ?? "all", focusCity?.state ?? ""],
+    queryFn: () => scanApi.clusters({ minPoints: 5, city: focusCity?.city, state: focusCity?.state }),
+    refetchInterval: 10000,
+  });
   const clusters = useMemo(() => data?.clusters ?? [], [data]);
   const selected = clusters.find(c => c.id === selectedId) ?? null;
 
@@ -115,13 +130,25 @@ export function OpportunityMap({ onBack }: { focusCity?: { city: string; state: 
             </div>
           </div>
         )}
-        <button onClick={onBack} className="absolute top-3 left-3 h-9 pl-2.5 pr-3 rounded-lg bg-black/70 backdrop-blur border border-white/10 text-white text-[13px] font-medium flex items-center gap-1.5 hover:bg-black/80" data-testid="opp-back">
+        <button onClick={onBack} className="absolute top-3 left-3 h-9 pl-2.5 pr-3 rounded-lg bg-black/70 backdrop-blur border border-white/10 text-white text-[13px] font-medium flex items-center gap-1.5 hover:bg-black/80 z-10" data-testid="opp-back">
           <ArrowLeft className="w-4 h-4" /> Markets
         </button>
+
+        {/* Legend — decodes the opportunity-score colour ramp. */}
+        {clusters.length > 0 && (
+          <div className="absolute bottom-3 left-3 rounded-lg bg-black/70 backdrop-blur border border-white/10 px-2.5 py-2 text-white z-10 md:bottom-3" style={{ bottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}>
+            <div className="text-[10px] uppercase tracking-wider text-white/60 font-semibold mb-1">Opportunity score</div>
+            <div className="flex items-center gap-1.5">
+              <div className="h-2 w-24 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP.map(r => r[1]).join(",")})` }} />
+            </div>
+            <div className="flex justify-between text-[9px] text-white/50 mt-0.5 w-24"><span>low</span><span>high</span></div>
+          </div>
+        )}
       </div>
 
-      {/* Ranked cluster list */}
-      <aside className="w-[300px] flex-shrink-0 border-l border-border bg-card flex flex-col hidden md:flex">
+      {/* Ranked cluster list — a fixed side rail on desktop, a draggable bottom
+          sheet on phone so the ranked opportunity is never hidden in the field. */}
+      <aside className="hidden md:flex w-[300px] flex-shrink-0 border-l border-border bg-card flex-col">
         <div className="px-3 py-2.5 border-b border-border">
           <div className="text-[13px] font-semibold text-foreground">Opportunity clusters</div>
           <div className="text-[11px] text-muted-foreground">{clusters.length} found · strongest first</div>
@@ -131,6 +158,25 @@ export function OpportunityMap({ onBack }: { focusCity?: { city: string; state: 
         </div>
       </aside>
 
+      {/* Phone: a bottom sheet the operator can expand — collapsed shows the top
+          cluster, expanded is the full ranked list. Only when nothing is selected
+          (the deploy panel takes over otherwise). */}
+      {clusters.length > 0 && !selected && (
+        <div className={`md:hidden absolute inset-x-0 bottom-0 z-20 bg-card border-t border-border rounded-t-2xl shadow-2xl transition-[max-height] duration-200 ${sheetOpen ? "max-h-[70%]" : "max-h-[124px]"} flex flex-col`}
+          style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+          <button onClick={() => setSheetOpen(o => !o)} data-testid="opp-sheet-toggle"
+            className="flex items-center gap-2 px-4 py-3 border-b border-border/60 min-h-[44px]" aria-expanded={sheetOpen}>
+            <div className="w-9 h-1 rounded-full bg-white/25 absolute left-1/2 -translate-x-1/2 top-1.5" aria-hidden="true" />
+            <span className="text-[13px] font-semibold text-foreground">Opportunity clusters</span>
+            <span className="text-[11px] text-muted-foreground">{clusters.length} · strongest first</span>
+            <ChevronRight className={`w-4 h-4 text-muted-foreground ml-auto transition-transform ${sheetOpen ? "-rotate-90" : "rotate-90"}`} />
+          </button>
+          <div className="flex-1 overflow-y-auto overscroll-contain">
+            {(sheetOpen ? clusters : clusters.slice(0, 1)).map(c => <ClusterRow key={c.id} c={c} active={c.id === selectedId} onClick={() => setSelectedId(c.id)} />)}
+          </div>
+        </div>
+      )}
+
       {/* Deploy panel */}
       {selected && <DeployPanel cluster={selected} onClose={() => setSelectedId(null)} />}
     </div>
@@ -138,7 +184,7 @@ export function OpportunityMap({ onBack }: { focusCity?: { city: string; state: 
 }
 
 function ClusterRow({ c, active, onClick }: { c: OppCluster; active: boolean; onClick: () => void }) {
-  const tint = c.score >= 75 ? "#f97316" : c.score >= 55 ? "#eab308" : c.score >= 30 ? "#0d9488" : "#64748b";
+  const tint = scoreTint(c.score);
   return (
     <button onClick={onClick} data-testid={`opp-cluster-${c.id}`}
       className={`w-full text-left px-3 py-2.5 border-b border-border/60 flex items-start gap-2.5 transition-colors ${active ? "bg-primary/5" : "hover:bg-secondary/50"}`}>
@@ -168,7 +214,10 @@ function DeployPanel({ cluster, onClose }: { cluster: OppCluster; onClose: () =>
     if (repId == null) return;
     setBusy(true);
     try {
-      const out = await scanApi.deploy(cluster.hull, repId, name.trim() || undefined);
+      // Pass the cluster's MEMBER lead ids so the rep gets exactly the verified
+      // new-fiber doors in the briefing — not every home the hull happens to
+      // enclose, and not fewer because the hull clipped an edge.
+      const out = await scanApi.deploy(cluster.hull, repId, { name: name.trim() || undefined, leadIds: cluster.points });
       toast({ title: "Territory deployed", description: `${out.assigned} doors assigned to ${reps.find((r: any) => r.id === repId)?.name}.` });
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/territories"] });

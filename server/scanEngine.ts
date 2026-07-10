@@ -14,8 +14,8 @@ import { storage } from "./storage";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
 import { classifyAvailabilityTransition } from "@shared/fiberDetect";
 import {
-  getRun, setRunStatus, bumpRun, getQueuedRunTargets, markRunTarget,
-  getTargetSnapshot, countQueued, getResumableRuns, type ScanRunRow,
+  getRun, setRunStatus, claimRunTargets, finalizeRunTarget, touchRun,
+  getTargetSnapshot, countQueued, getResumableRuns, resetInflightTargets, type ScanRunRow,
 } from "./scanIntelStore";
 
 // The reduced result the engine needs, plus the bytes billed for cost evidence.
@@ -63,11 +63,16 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
       if (run.verified + run.failed >= run.budget) { finish(run, "done"); return; }
 
       const remainingBudget = run.budget - (run.verified + run.failed);
-      const batch = getQueuedRunTargets(runId, Math.min(CONCURRENCY, remainingBudget));
+      // Atomically CLAIM the batch (marks them inflight) so a racing dispatch
+      // can't grab the same targets and double-spend the proxy.
+      const batch = claimRunTargets(runId, Math.min(CONCURRENCY, remainingBudget));
       if (batch.length === 0) { finish(run, "done"); return; } // queue drained
+      touchRun(runId); // heartbeat before a batch of slow network calls
 
       await Promise.all(batch.map(async (t) => {
-        // Re-check status mid-batch so a cancel takes effect promptly.
+        // Re-check status mid-batch so a cancel takes effect promptly. A claimed
+        // target on a now-cancelled run is left 'inflight' — resume/reaper resets
+        // it — and no check (no spend) is made.
         const live = getRun(runId, tenantId);
         if (!live || live.status !== "running") return;
         try {
@@ -75,8 +80,7 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
           applyCheck(runId, tenantId, t, result, bytes, checkFailed);
         } catch (err: any) {
           // An unexpected throw is still a FAILED check — never a negative.
-          markRunTarget(runId, t.targetId, "failed", "failed");
-          bumpRun(runId, { failed: 1, estBytes: DEFAULT_BYTES_PER_CHECK });
+          finalizeRunTarget(runId, t.targetId, "failed", "failed", { failed: 1, estBytes: DEFAULT_BYTES_PER_CHECK });
         }
       }));
     }
@@ -92,8 +96,7 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
   // queue conceptually (marked failed on THIS run so we don't re-dispatch it),
   // count it against budget + cost. Product law: a non-answer is not a "no".
   if (checkFailed) {
-    markRunTarget(runId, t.targetId, "failed", "failed");
-    bumpRun(runId, { failed: 1, estBytes: bytes });
+    finalizeRunTarget(runId, t.targetId, "failed", "failed", { failed: 1, estBytes: bytes });
     return;
   }
 
@@ -162,13 +165,9 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
     } catch { /* dedup/constraint — the pool row still records the availability */ }
   }
 
-  markRunTarget(runId, t.targetId, "verified", isTarget ? "new_fiber" : (result.fiberStatus === "no_service" ? "no_service" : "other"));
-  bumpRun(runId, {
-    verified: 1,
-    newFiber: isTarget ? 1 : 0,
-    newlyLive: transition.isNewlyLive ? 1 : 0,
-    estBytes: bytes,
-  });
+  finalizeRunTarget(runId, t.targetId, "verified",
+    isTarget ? "new_fiber" : (result.fiberStatus === "no_service" ? "no_service" : "other"),
+    { verified: 1, newFiber: isTarget ? 1 : 0, newlyLive: transition.isNewlyLive ? 1 : 0, estBytes: bytes });
 }
 
 function finish(run: ScanRunRow, status: string): void {
@@ -185,11 +184,23 @@ export function resumeInterruptedRuns(): void {
   try {
     const runs = getResumableRuns(30);
     for (const run of runs) {
+      if (isRunActive(run.id)) continue;           // a live worker already owns it
+      resetInflightTargets(run.id);                // return crash-orphaned claims to the queue
       if (countQueued(run.id) === 0) { setRunStatus(run.id, "done"); continue; }
-      console.log(`[scan-engine] resuming interrupted run ${run.id} (${countQueued(run.id)} queued)`);
+      console.log(`[scan-engine] resuming interrupted run ${run.id} (${countQueued(run.id)} pending)`);
       void runScanWorker(run.id, run.tenantId);
     }
   } catch (err: any) {
     console.warn("[scan-engine] resume failed:", err?.message);
   }
+}
+
+// PERIODIC REAPER — resumeInterruptedRuns on a timer, not just at boot, so a run
+// whose worker died WITHOUT a process restart (an unhandled rejection, an OOM'd
+// batch) is picked back up within a minute instead of hanging 'running' forever.
+let _reaper: ReturnType<typeof setInterval> | null = null;
+export function startScanReaper(intervalMs = 60_000): void {
+  if (_reaper) return;
+  _reaper = setInterval(() => resumeInterruptedRuns(), intervalMs);
+  if (typeof (_reaper as any).unref === "function") (_reaper as any).unref();
 }

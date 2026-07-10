@@ -38,6 +38,7 @@ try {
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
 import { pointInPolygon } from "@shared/geo";
+import { padHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, type KnockOutcome } from "@shared/knock";
@@ -1342,11 +1343,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Opportunity clusters over verified new-fiber — the spatial "where to deploy"
   // layer. Pure DB + in-memory clustering, ZERO proxy. Manager+.
   app.get("/api/scan/clusters", requireManager, (req: any, res) => {
-    const { minLat, maxLat, minLng, maxLng, minPoints } = req.query;
+    const { minLat, maxLat, minLng, maxLng, minPoints, city, state } = req.query;
     const bbox = minLat != null && maxLat != null && minLng != null && maxLng != null
       ? { minLat: Number(minLat), maxLat: Number(maxLat), minLng: Number(minLng), maxLng: Number(maxLng) }
       : undefined;
-    res.json(scanSvc.getClusters(tid(req), bbox, { minPoints: minPoints != null ? Number(minPoints) : undefined }));
+    res.json(scanSvc.getClusters(tid(req), bbox, {
+      minPoints: minPoints != null ? Number(minPoints) : undefined,
+      city: city ? qstr(city) : undefined,
+      state: state ? qstr(state) : undefined,
+    }));
   });
 
   // Preview a budgeted run's cost — how many addresses would be verified and what
@@ -1385,7 +1390,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ZERO proxy. Honest empty state when nothing has flipped yet.
   app.get("/api/scan/changes", requireManager, (req: any, res) => {
     const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
-    const newlyLive = storage.getFirstSeenLive(hours, 200);
+    const newlyLive = storage.getFirstSeenLive(hours, 200, tid(req));
     const runs = scanSvc.getRuns(tid(req)).filter((r: any) =>
       r.completedAt && (Date.now() - (Date.parse(r.completedAt + "Z") || Date.parse(r.completedAt))) <= hours * 3600_000);
     res.json({
@@ -1421,7 +1426,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/scan/deploy", requireTeamLead, (req: any, res) => {
     const user = req.user;
     const t = user?.tenantId ?? undefined;
-    const { polygon, repId, name, sourceRunId } = req.body ?? {};
+    const { polygon, repId, name, sourceRunId, leadIds } = req.body ?? {};
     if (!Array.isArray(polygon) || polygon.length < 3 || repId == null) {
       return res.status(400).json({ error: "polygon (>=3 points) and repId required" });
     }
@@ -1434,11 +1439,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(409).json({ error: `${rep.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}). Reclaim one first.` });
     }
 
-    // Authoritative enclosed-lead set (server-computed — the briefing can't be
-    // spoofed by the client).
-    const ring = polygon as [number, number][];
-    const enclosed = storage.getLeads(t).filter((l: any) =>
-      l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, ring) && canReassignLead(user, l));
+    // The territory boundary is the cluster hull PADDED outward ~40m so a home on
+    // the convex edge is inside the polygon (a raw hull clips boundary doors).
+    const ring = padHull(polygon as [number, number][], 40);
+
+    // AUTHORITATIVE assigned set. Preferred: assign exactly the cluster's MEMBER
+    // leads (the verified new-fiber the operator saw) — this never over-encloses
+    // unrelated homes inside a convex hull and never drops boundary doors, and
+    // the briefing count is exactly what the rep receives. Fallback (lasso-style
+    // callers with no member list): every reassignable lead inside the padded
+    // ring. Both intersect with the caller's reassign scope.
+    const memberIds: number[] = Array.isArray(leadIds) ? leadIds.map(Number).filter(Number.isFinite) : [];
+    let enclosed: any[];
+    if (memberIds.length > 0) {
+      const idset = new Set(memberIds);
+      enclosed = storage.getLeads(t).filter((l: any) => idset.has(l.id) && canReassignLead(user, l));
+    } else {
+      enclosed = storage.getLeads(t).filter((l: any) =>
+        l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, ring) && canReassignLead(user, l));
+    }
     if (enclosed.length === 0) return res.status(409).json({ error: "No assignable leads inside this cluster" });
 
     // Build the "why this area" briefing from the real enclosed leads.
@@ -1487,9 +1506,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // FLIPPED from unavailable to live within the window (default 24h), newest
   // first, each tagged with whether it's already been turned into a lead.
   // This is the core "New Fiber Today / First Seen Live" manager surface.
-  app.get("/api/scan/first-seen-live", requireManager, (req, res) => {
+  app.get("/api/scan/first-seen-live", requireManager, (req: any, res) => {
     const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
-    const rows = storage.getFirstSeenLive(hours);
+    const rows = storage.getFirstSeenLive(hours, 200, req.user?.tenantId ?? getDefaultTenantId());
     res.json({
       windowHours: hours,
       count: rows.length,

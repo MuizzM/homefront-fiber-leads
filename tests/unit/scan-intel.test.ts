@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { estimateScanCost, bytesToUsd, budgetTiers, MAX_CHECKS_PER_RUN } from "../../shared/scanEconomics";
 import { scoreMarket, type MarketAggregate } from "../../shared/marketIntel";
-import { clusterOpportunities, convexHull, padHull, type OppPoint } from "../../shared/opportunity";
+import { clusterOpportunities, convexHull, padHull, subdivideCluster, type OppPoint } from "../../shared/opportunity";
 import { rankTargets, type PoolTarget } from "../../shared/scanPriority";
 import { classifyAvailabilityTransition } from "../../shared/fiberDetect";
 
@@ -37,36 +37,53 @@ describe("scoreMarket", () => {
     newlyLive: 0, leads: 0, unworkedLeads: 0, workedLeads: 0, soldLeads: 0, lastVerifiedAtMs: null,
   };
 
-  it("a fresh unworked market with verified new-fiber outscores a saturated one", () => {
-    const fresh = scoreMarket({ ...base, verified: 200, verifiedNewFiber: 80, leads: 80, unworkedLeads: 78, workedLeads: 2, lastVerifiedAtMs: now - 86400000 }, now);
-    const worn = scoreMarket({ ...base, verified: 200, verifiedNewFiber: 80, leads: 80, unworkedLeads: 5, workedLeads: 75, soldLeads: 10, lastVerifiedAtMs: now - 86400000 }, now);
+  it("REGRESSION: a door-rich market outranks a big empty-pool one (the whole point)", () => {
+    // Rockwell-shaped: 1063 unworked new-fiber leads, modest pool.
+    const doors = scoreMarket({ ...base, poolSize: 2037, verified: 0, leads: 1063, unworkedLeads: 1050, workedLeads: 13, lastLeadAtMs: now - 2 * 86400000 }, now);
+    // Statesville-shaped: 35,688 unverified addresses, ZERO leads.
+    const emptyPool = scoreMarket({ ...base, poolSize: 35688, verified: 0, leads: 0, unworkedLeads: 0 }, now);
+    expect(doors.priority).toBeGreaterThan(emptyPool.priority);
+    expect(doors.estRemainingOpportunity).toBeGreaterThan(1000);
+    expect(doors.reasons.some(r => /unworked new-fiber door/.test(r))).toBe(true);
+  });
+
+  it("REGRESSION: scanning a market and finding ZERO new fiber makes it COLD, not warm", () => {
+    const scannedEmpty = scoreMarket({ ...base, poolSize: 1000, verified: 962, verifiedNewFiber: 0, leads: 0, unworkedLeads: 0, lastVerifiedAtMs: now - 3600000 }, now);
+    expect(scannedEmpty.priorityBand).toBe("cold");
+    expect(scannedEmpty.confidence).not.toBe("high"); // spending money != confidence in opportunity
+    expect(scannedEmpty.reasons.some(r => /no new fiber found/.test(r))).toBe(true);
+  });
+
+  it("a saturated door market scores below a fresh unworked one", () => {
+    const fresh = scoreMarket({ ...base, leads: 80, unworkedLeads: 78, workedLeads: 2, lastLeadAtMs: now - 86400000 }, now);
+    const worn = scoreMarket({ ...base, leads: 80, unworkedLeads: 5, workedLeads: 75, soldLeads: 10, lastLeadAtMs: now - 86400000 }, now);
     expect(fresh.priority).toBeGreaterThan(worn.priority);
   });
 
-  it("newly-live flips dominate freshness and surface in reasons", () => {
-    const m = scoreMarket({ ...base, verified: 300, verifiedNewFiber: 40, newlyLive: 12, leads: 40, unworkedLeads: 40, lastVerifiedAtMs: now - 3 * 86400000 }, now);
+  it("newly-live flips add freshness when opportunity exists", () => {
+    const m = scoreMarket({ ...base, verified: 300, verifiedNewFiber: 40, newlyLive: 12, leads: 40, unworkedLeads: 40, lastVerifiedAtMs: now - 3 * 86400000, lastLeadAtMs: now - 3 * 86400000 }, now);
     expect(m.reasons.some(r => /just went live/.test(r))).toBe(true);
     expect(m.priorityBand === "hot" || m.priorityBand === "warm").toBe(true);
   });
 
   it("field conversion history lifts a proven market and penalizes a busted one", () => {
-    const proven = scoreMarket({ ...base, verified: 300, verifiedNewFiber: 60, leads: 60, unworkedLeads: 40, workedLeads: 20,
-      outcome: { knocks: 100, contacts: 40, sales: 15, lastDeployedAtMs: now - 5 * 86400000 } }, now);
-    const busted = scoreMarket({ ...base, verified: 300, verifiedNewFiber: 60, leads: 60, unworkedLeads: 40, workedLeads: 20,
-      outcome: { knocks: 100, contacts: 10, sales: 1, lastDeployedAtMs: now - 5 * 86400000 } }, now);
+    const b2 = { ...base, leads: 60, unworkedLeads: 40, workedLeads: 20, lastLeadAtMs: now - 5 * 86400000 };
+    const proven = scoreMarket({ ...b2, outcome: { knocks: 100, contacts: 40, sales: 15, lastDeployedAtMs: now - 5 * 86400000 } }, now);
+    const busted = scoreMarket({ ...b2, outcome: { knocks: 100, contacts: 10, sales: 1, lastDeployedAtMs: now - 5 * 86400000 } }, now);
     expect(proven.priority).toBeGreaterThan(busted.priority);
     expect(proven.conversionRate).toBeCloseTo(0.15, 3);
   });
 
-  it("confidence reflects evidence volume", () => {
-    expect(scoreMarket({ ...base, verified: 5 }, now).confidence).toBe("low");
-    expect(scoreMarket({ ...base, verified: 500, verifiedNewFiber: 50 }, now).confidence).toBe("high");
+  it("confidence reflects real evidence (doors + knocks), not money spent", () => {
+    expect(scoreMarket({ ...base, poolSize: 5000, verified: 5 }, now).confidence).toBe("low");
+    expect(scoreMarket({ ...base, leads: 200, unworkedLeads: 200 }, now).confidence).toBe("high");
   });
 
-  it("an unverified pool still earns discoverability, not zero", () => {
-    const m = scoreMarket({ ...base, poolSize: 5000, verified: 0 }, now);
+  it("an unexplored pool earns SOME discoverability but stays low-confidence", () => {
+    const m = scoreMarket({ ...base, poolSize: 5000, verified: 0, leads: 0 }, now);
     expect(m.priority).toBeGreaterThan(0);
-    expect(m.reasons.some(r => /never checked|never verified/.test(r))).toBe(true);
+    expect(m.confidence).toBe("low");
+    expect(m.reasons.some(r => /unexplored/.test(r))).toBe(true);
   });
 });
 
@@ -104,6 +121,37 @@ describe("clusterOpportunities", () => {
     const fresh = clusters.find(c => c.unworked === c.size)!;
     const worn = clusters.find(c => c.unworked === 0)!;
     expect(fresh.score).toBeGreaterThan(worn.score);
+  });
+
+  it("REGRESSION: bounds cluster diameter — a chained mega-blob is split into walkable areas", () => {
+    // A long single-linkage chain ~4km across (each point within a grid cell of
+    // its neighbor). Without a span cap this is ONE un-deployable cluster.
+    const pts: OppPoint[] = Array.from({ length: 200 }, (_, i) => ({
+      id: i, lat: 35.5, lng: -80.5 + i * 0.0002, isNewFiber: true, // ~4km wide chain
+    }));
+    const clusters = clusterOpportunities(pts, { minPoints: 4, maxSpanDeg: 0.02 });
+    expect(clusters.length).toBeGreaterThan(1); // split, not one blob
+    // Every emitted cluster fits within the span cap (a walkable territory).
+    for (const c of clusters) {
+      expect(c.bbox.maxLng - c.bbox.minLng).toBeLessThanOrEqual(0.02 + 1e-9);
+      expect(c.bbox.maxLat - c.bbox.minLat).toBeLessThanOrEqual(0.02 + 1e-9);
+    }
+    // No point is lost or duplicated across the split.
+    const ids = new Set(clusters.flatMap(c => c.points));
+    expect(ids.size).toBe(200);
+  });
+
+  it("subdivideCluster splits a cluster into k compact parcels for k reps", () => {
+    const pts: OppPoint[] = Array.from({ length: 40 }, (_, i) => ({ id: i, lat: 35.5 + (i % 8) * 0.001, lng: -80.4 + Math.floor(i / 8) * 0.001 }));
+    const parcels = subdivideCluster(pts, 4);
+    expect(parcels.length).toBe(4);
+    // Every member lands in exactly one parcel — no loss, no overlap.
+    const all = parcels.flat();
+    expect(all.length).toBe(40);
+    expect(new Set(all).size).toBe(40);
+    // k clamped to size; k=1 returns everything.
+    expect(subdivideCluster(pts, 1)).toEqual([pts.map(p => p.id)]);
+    expect(subdivideCluster(pts.slice(0, 3), 10).length).toBeLessThanOrEqual(3);
   });
 
   it("handles 35,000 points in well under a second", () => {

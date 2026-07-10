@@ -189,16 +189,19 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     store.createScanRun({ id: runId, tenantId: TENANT, kind: "market", label: "Scan Resumeton", city: "Resumeton", state: "NC", budget: 6 });
     store.enqueueRunTargets(runId, ranked.map(r => ({ id: r.id, seq: r.seq })));
 
-    // Simulate a crash after 2 checks: mark 2 targets verified + bump the run,
-    // leave the rest queued and status 'running' with a stale heartbeat.
-    const firstTwo = store.getQueuedRunTargets(runId, 2);
-    for (const t of firstTwo) { store.markRunTarget(runId, t.targetId, "verified", "other"); }
-    store.bumpRun(runId, { verified: 2, estBytes: 24000 });
+    // Simulate a crash after 2 checks: atomically claim + finalize 2 targets,
+    // then leave one target CLAIMED but unfinished ('inflight' — mid-check crash)
+    // and the rest queued, status 'running' with a stale heartbeat.
+    const firstTwo = store.claimRunTargets(runId, 2);
+    for (const t of firstTwo) store.finalizeRunTarget(runId, t.targetId, "verified", "other", { verified: 1, estBytes: 12000 });
+    const orphaned = store.claimRunTargets(runId, 1); // claimed → inflight, never finalized (crash)
+    expect(orphaned.length).toBe(1);
     rawDb.prepare(`UPDATE scan_runs SET heartbeat_at = datetime('now','-60 seconds') WHERE id=?`).run(runId);
 
-    // Resume path picks it up and finishes the remaining 4.
+    // Resume must find it, RESET the orphaned inflight claim to queued, and finish.
     const resumable = store.getResumableRuns(30).map(r => r.id);
     expect(resumable).toContain(runId);
+    store.resetInflightTargets(runId);
     await engine.runScanWorker(runId, TENANT, replay);
 
     const run = store.getRun(runId, TENANT)!;

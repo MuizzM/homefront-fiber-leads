@@ -8,7 +8,7 @@ export interface MarketCard {
   city: string; state: string;
   poolSize: number; verified: number; verifiedNewFiber: number; newlyLive: number;
   leads: number; unworkedLeads: number; workedLeads: number; soldLeads: number;
-  lastVerifiedAtMs: number | null;
+  lastVerifiedAtMs: number | null; lastLeadAtMs?: number | null;
   coverage: number; saturation: number; freshnessDays: number | null;
   estRemainingOpportunity: number; contactRate: number | null; conversionRate: number | null;
   priority: number; priorityBand: "hot" | "warm" | "cool" | "cold";
@@ -40,7 +40,7 @@ export interface ScanRun {
   estBytes: number; startedAt: string; heartbeatAt: string | null; completedAt: string | null;
   costUsd: number; active: boolean; pct: number; queued?: number;
 }
-export interface RunPreview { poolAvailable: number; eligible: number; willVerify: number; estimate: CostEstimate; maxPerRun: number }
+export interface RunPreview { poolAvailable: number; available: number; highValue: number; willVerify: number; estimate: CostEstimate; maxPerRun: number }
 
 export interface DeployBriefing {
   doors: number; unworked: number; avgScore: number;
@@ -54,10 +54,12 @@ const postJson = async <T>(url: string, body?: unknown): Promise<T> => (await ap
 export const scanApi = {
   markets: () => getJson<MarketsResponse>("/api/scan/markets"),
   marketDetail: (city: string, state = "NC") => getJson<MarketDetail>(`/api/scan/markets/${encodeURIComponent(city)}?state=${encodeURIComponent(state)}`),
-  clusters: (bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number }, minPoints?: number) => {
+  clusters: (opts?: { bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number }; minPoints?: number; city?: string; state?: string }) => {
     const q = new URLSearchParams();
-    if (bbox) { q.set("minLat", String(bbox.minLat)); q.set("maxLat", String(bbox.maxLat)); q.set("minLng", String(bbox.minLng)); q.set("maxLng", String(bbox.maxLng)); }
-    if (minPoints != null) q.set("minPoints", String(minPoints));
+    if (opts?.bbox) { const b = opts.bbox; q.set("minLat", String(b.minLat)); q.set("maxLat", String(b.maxLat)); q.set("minLng", String(b.minLng)); q.set("maxLng", String(b.maxLng)); }
+    if (opts?.minPoints != null) q.set("minPoints", String(opts.minPoints));
+    if (opts?.city) q.set("city", opts.city);
+    if (opts?.state) q.set("state", opts.state);
     const qs = q.toString();
     return getJson<ClustersResponse>(`/api/scan/clusters${qs ? "?" + qs : ""}`);
   },
@@ -67,13 +69,16 @@ export const scanApi = {
   previewRun: (city: string, state: string, budget: number, rescan = false) => postJson<RunPreview>("/api/scan/runs/preview", { city, state, budget, rescan }),
   startRun: (city: string, state: string, budget: number, rescan = false) => postJson<{ runId: string; queued: number; budget: number; estimate: CostEstimate; city: string; state: string }>("/api/scan/runs", { city, state, budget, rescan }),
   controlRun: (id: string, action: "pause" | "resume" | "cancel") => postJson<{ ok: boolean }>(`/api/scan/runs/${id}/${action}`),
-  deploy: (polygon: Array<[number, number]>, repId: number, name?: string, sourceRunId?: string) =>
-    postJson<{ territory: any; assigned: number; briefing: DeployBriefing }>("/api/scan/deploy", { polygon, repId, name, sourceRunId }),
+  deploy: (polygon: Array<[number, number]>, repId: number, opts?: { name?: string; sourceRunId?: string; leadIds?: number[] }) =>
+    postJson<{ territory: any; assigned: number; briefing: DeployBriefing }>("/api/scan/deploy", { polygon, repId, ...opts }),
 };
 
 // ── Presentation helpers ──────────────────────────────────────────────────────
+// Bands read as a heat scale — hot(orange) → cold(grey). "cool" is a muted
+// blue-slate, NOT the brand teal (the hero colour must mean "primary action",
+// not "meh market").
 export const BAND_TINT: Record<MarketCard["priorityBand"], string> = {
-  hot: "#f97316", warm: "#eab308", cool: "#0d9488", cold: "#64748b",
+  hot: "#f97316", warm: "#eab308", cool: "#6b8299", cold: "#64748b",
 };
 export function usdCompact(n: number): string {
   if (n < 0.01) return "<$0.01";

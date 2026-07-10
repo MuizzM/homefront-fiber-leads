@@ -194,11 +194,18 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
         ))}
       </ul>
 
-      {/* Facts */}
-      <div className="grid grid-cols-3 gap-2 text-center pt-1">
-        <Fact label="pool" value={m.poolSize.toLocaleString()} />
-        <Fact label="verified" value={m.verified.toLocaleString()} />
-        <Fact label="leads" value={m.leads.toLocaleString()} />
+      {/* THE DECISION: unworked opportunity is the headline, not vanity counts. */}
+      <div className="flex items-end justify-between rounded-xl bg-secondary/40 border border-border px-3 py-2 mt-auto">
+        <div>
+          <div className="text-[22px] font-bold leading-none tabular-nums" style={{ color: tint }}>
+            {m.estRemainingOpportunity.toLocaleString()}
+          </div>
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-1">est. opportunity</div>
+        </div>
+        <div className="text-right text-[11px] text-muted-foreground leading-tight">
+          <div>{m.unworkedLeads.toLocaleString()} unworked</div>
+          <div className="text-muted-foreground/60">{m.poolSize.toLocaleString()} in pool</div>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 mt-auto pt-1">
@@ -306,7 +313,8 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
                   {/* Cost preview — always shown BEFORE spending (product law) */}
                   {preview && (
                     <div className="rounded-xl border border-border bg-secondary/40 p-3 space-y-1.5" data-testid="scan-cost-preview">
-                      <Row Icon={Search} label="High-value addresses eligible" value={preview.eligible.toLocaleString()} />
+                      <Row Icon={Search} label="Addresses available to verify" value={preview.available.toLocaleString()} />
+                      {preview.highValue > 0 && <Row Icon={Sparkles} label="High-value (near known fiber)" value={preview.highValue.toLocaleString()} />}
                       <Row Icon={Gauge} label="Will verify this run" value={preview.willVerify.toLocaleString()} />
                       <Row Icon={CircleDollarSign} label="Estimated proxy cost" value={usdCompact(preview.estimate.estUsd)} accent />
                       <p className="text-[11px] text-muted-foreground pt-1">Real cost is measured as it runs. Failed checks never fabricate a result.</p>
@@ -407,9 +415,6 @@ function SummaryStat({ label, value, Icon, accent }: { label: string; value: str
       </div>
     </div>
   );
-}
-function Fact({ label, value }: { label: string; value: string }) {
-  return <div><div className="text-[14px] font-bold text-foreground tabular-nums">{value}</div><div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div></div>;
 }
 function Row({ Icon, label, value, accent }: { Icon: React.ElementType; label: string; value: string; accent?: boolean }) {
   return (

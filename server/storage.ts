@@ -151,7 +151,7 @@ export interface IStorage {
   getScanTargetsToRescan(limit: number): any[];
   getScanTargetsByCity(city: string, state: string): any[];
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean }): { prevIsNewFiber: boolean };
-  getFirstSeenLive(sinceHours: number, limit?: number): any[];
+  getFirstSeenLive(sinceHours: number, limit?: number, tenantId?: number): any[];
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(repId?: number): Commission[];
@@ -1252,16 +1252,22 @@ export class Storage implements IStorage {
     return { prevIsNewFiber: !!(prev && prev.last_is_new_fiber) };
   }
   // First-to-market feed: addresses that FLIPPED live within the window, newest
-  // first. Indexed scan on first_seen_live_at; capped.
-  getFirstSeenLive(sinceHours: number, limit = 200): any[] {
+  // first. Indexed scan on first_seen_live_at; capped. Tenant-scoped when a
+  // tenantId is given (shared platform-pool rows have tenant_id NULL and are
+  // visible to all) so one org never sees another's flips/converted leads.
+  getFirstSeenLive(sinceHours: number, limit = 200, tenantId?: number): any[] {
+    const scope = tenantId != null ? "AND (tenant_id = ? OR tenant_id IS NULL)" : "";
+    const args: any[] = [`-${Math.max(1, Math.floor(sinceHours))} hours`];
+    if (tenantId != null) args.push(tenantId);
+    args.push(limit);
     return rawDb.prepare(
       `SELECT id, address, city, state, zip, lat, lng, first_seen_live_at AS firstSeenLiveAt,
               last_availability_status AS availabilityStatus, converted_to_lead_id AS leadId, last_scanned_at AS lastScannedAt
          FROM scan_targets
         WHERE first_seen_live_at IS NOT NULL
-          AND first_seen_live_at >= datetime('now', ?)
+          AND first_seen_live_at >= datetime('now', ?) ${scope}
         ORDER BY first_seen_live_at DESC LIMIT ?`
-    ).all(`-${Math.max(1, Math.floor(sinceHours))} hours`, limit);
+    ).all(...args);
   }
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null } {
     const g = (q: string) => (rawDb.prepare(q).get() as any);

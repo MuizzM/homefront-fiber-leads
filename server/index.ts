@@ -307,8 +307,9 @@ app.use((req, res, next) => {
   // "leave and return without losing progress" must survive a crash/deploy, not
   // just a navigation. Each interrupted run continues from its persisted queue.
   try {
-    const { resumeInterruptedRuns } = await import("./scanEngine");
+    const { resumeInterruptedRuns, startScanReaper } = await import("./scanEngine");
     resumeInterruptedRuns();
+    startScanReaper(); // periodic reaper: pick up runs whose worker died sans restart
   } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────

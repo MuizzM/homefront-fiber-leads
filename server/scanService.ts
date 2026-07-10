@@ -30,6 +30,9 @@ function costRate(): CostRate {
 export function getMarkets(tenantId: number): { markets: MarketCard[]; rate: CostRate & { usdPerGb: number; bytesPerCheck: number } } {
   const now = Date.now();
   const cards = getMarketAggregates(tenantId)
+    // Drop noise: a "market" needs a real pool to scan (>=25 addresses) OR real
+    // doors on the board. 1-5-address rows are mis-parsed harvest, not markets.
+    .filter(m => m.poolSize >= 25 || m.leads > 0)
     .map(m => scoreMarket(m, now))
     .sort((a, b) => b.priority - a.priority);
   const est = estimateScanCost(1, costRate());
@@ -48,8 +51,8 @@ export function getMarketDetail(tenantId: number, city: string, state: string) {
 }
 
 // ── Opportunity clusters ─────────────────────────────────────────────────────
-export function getClusters(tenantId: number, bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number }, opts?: { minPoints?: number; cellDeg?: number }): { clusters: OppCluster[]; points: number } {
-  const raw = getOpportunityPoints(tenantId, bbox);
+export function getClusters(tenantId: number, bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number }, opts?: { minPoints?: number; cellDeg?: number; city?: string; state?: string }): { clusters: OppCluster[]; points: number } {
+  const raw = getOpportunityPoints(tenantId, bbox, opts?.city, opts?.state);
   const pts = raw.map(r => ({
     id: r.id, lat: r.lat, lng: r.lng,
     isNewFiber: !!r.isNewFiber, newlyLive: !!r.newlyLive,
@@ -107,11 +110,15 @@ export function previewMarketRun(opts: { tenantId: number; city: string; state: 
   const targets = getPoolTargetsForCity(opts.city, opts.state);
   const known = getKnownNewFiberPoints(opts.tenantId, opts.city, opts.state);
   const ranked = rankTargets(targets, known, { nowMs: Date.now(), rescan: opts.rescan });
-  const eligible = ranked.filter(r => r.ev > 0).length;
-  const willVerify = Math.min(budget, eligible);
+  const available = ranked.filter(r => r.ev > 0).length;   // addresses we can verify
+  // "High-value" = the meaningfully-above-baseline targets (near known fiber /
+  // field signal), not merely "novel" — the honest count of the strong bets.
+  const highValue = ranked.filter(r => r.ev >= 0.55).length;
+  const willVerify = Math.min(budget, available);
   return {
     poolAvailable: targets.length,
-    eligible,                       // high-EV addresses worth a check
+    available,
+    highValue,
     willVerify,
     estimate: estimateScanCost(willVerify, costRate()),
     maxPerRun: MAX_CHECKS_PER_RUN,

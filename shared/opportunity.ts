@@ -51,8 +51,12 @@ export interface OppCluster {
 }
 
 export interface ClusterOptions {
-  cellDeg?: number;   // grid cell size in degrees (~0.0025 ≈ 250m at NC latitude)
-  minPoints?: number; // clusters smaller than this are noise
+  cellDeg?: number;    // grid cell size in degrees (~0.0025 ≈ 250m at NC latitude)
+  minPoints?: number;  // clusters smaller than this are noise
+  maxSpanDeg?: number; // hard cap on a cluster's bbox span — bounds it to a
+                       // workable territory. Single-linkage grid growth would
+                       // otherwise chain a whole county into one un-deployable
+                       // blob; a component wider than this is split (see below).
   nowMs?: number;
 }
 
@@ -61,6 +65,7 @@ const DAY_MS = 86_400_000;
 export function clusterOpportunities(points: OppPoint[], opts: ClusterOptions = {}): OppCluster[] {
   const cellDeg = opts.cellDeg ?? 0.0025;
   const minPoints = opts.minPoints ?? 4;
+  const maxSpanDeg = opts.maxSpanDeg ?? 0.02; // ~2km — a walkable territory
   const nowMs = opts.nowMs ?? 0;
 
   const valid = points.filter(p => Number.isFinite(p.lat) && Number.isFinite(p.lng));
@@ -103,19 +108,75 @@ export function clusterOpportunities(points: OppPoint[], opts: ClusterOptions = 
     if (bucket) bucket.push(...pts); else compPoints.set(root, [...pts]);
   }
 
-  // ── 4. build + score clusters, drop noise ───────────────────────────────────
+  // ── 4. split oversized components, build + score clusters, drop noise ───────
+  // Single-linkage grid growth can chain an entire county into one component. A
+  // territory a team can't walk is worthless, so any component whose bbox span
+  // exceeds maxSpanDeg is recursively bisected along its longer axis at the
+  // median until every piece is bounded. Deterministic (median split, stable).
   const clusters: OppCluster[] = [];
   let seq = 0;
   for (const idxList of compPoints.values()) {
     if (idxList.length < minPoints) continue;
-    const members = idxList.map(i => valid[i]);
-    clusters.push(buildCluster(`c${seq++}`, members, idxList.map(i => valid[i].id), nowMs));
+    for (const piece of splitBySpan(idxList.map(i => valid[i]), maxSpanDeg)) {
+      if (piece.length < minPoints) continue;
+      clusters.push(buildCluster(`c${seq++}`, piece, piece.map(p => p.id), nowMs));
+    }
   }
 
   // Strongest first — the operator reads top-down.
   clusters.sort((a, b) => b.score - a.score);
   // Re-id in ranked order so c0 is always the top cluster (stable references).
   return clusters.map((c, i) => ({ ...c, id: `c${i}` }));
+}
+
+// Recursively bisect a point set along its longer axis at the median until every
+// piece's bbox span ≤ maxSpanDeg. Deterministic; keeps pieces contiguous-ish
+// (median cut of a contiguous blob stays contiguous). Guards against infinite
+// recursion when many points share a coordinate.
+function splitBySpan(pts: OppPoint[], maxSpanDeg: number): OppPoint[][] {
+  const b = spanOf(pts);
+  if (pts.length <= 2 || (b.spanLat <= maxSpanDeg && b.spanLng <= maxSpanDeg)) return [pts];
+  const byLng = b.spanLng >= b.spanLat;
+  const sorted = [...pts].sort((a, z) => byLng ? (a.lng - z.lng) : (a.lat - z.lat));
+  const mid = Math.floor(sorted.length / 2);
+  let cut = mid;
+  // Push the cut off a run of identical coordinates so both halves are non-empty.
+  const key = (p: OppPoint) => byLng ? p.lng : p.lat;
+  while (cut < sorted.length && key(sorted[cut]) === key(sorted[mid])) cut++;
+  if (cut >= sorted.length) { cut = mid; while (cut > 0 && key(sorted[cut - 1]) === key(sorted[mid])) cut--; }
+  if (cut <= 0 || cut >= sorted.length) return [pts]; // all-collinear degenerate — accept
+  return [...splitBySpan(sorted.slice(0, cut), maxSpanDeg), ...splitBySpan(sorted.slice(cut), maxSpanDeg)];
+}
+function spanOf(pts: OppPoint[]): { spanLat: number; spanLng: number } {
+  let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+  for (const p of pts) { if (p.lat < minLat) minLat = p.lat; if (p.lat > maxLat) maxLat = p.lat; if (p.lng < minLng) minLng = p.lng; if (p.lng > maxLng) maxLng = p.lng; }
+  return { spanLat: maxLat - minLat, spanLng: maxLng - minLng };
+}
+
+// Split a cluster's member points into k compact, contiguous, roughly-equal
+// sub-parcels so a big opportunity can be handed to k reps. Same median-bisection
+// engine; returns the member-id lists per parcel. k is clamped to [1, size].
+export function subdivideCluster(memberPoints: OppPoint[], k: number): number[][] {
+  const n = memberPoints.length;
+  const kk = Math.max(1, Math.min(Math.floor(k), n));
+  if (kk === 1) return [memberPoints.map(p => p.id)];
+  // Recursively bisect into ~kk parcels (binary tree of median cuts).
+  const parcels: OppPoint[][] = [memberPoints];
+  while (parcels.length < kk) {
+    // Split the largest-span parcel next so parcels stay balanced + compact.
+    let bi = 0, best = -1;
+    for (let i = 0; i < parcels.length; i++) {
+      const s = spanOf(parcels[i]); const sp = Math.max(s.spanLat, s.spanLng);
+      if (parcels[i].length > 1 && sp > best) { best = sp; bi = i; }
+    }
+    if (best < 0) break; // nothing splittable
+    const target = parcels.splice(bi, 1)[0];
+    const s = spanOf(target); const byLng = s.spanLng >= s.spanLat;
+    const sorted = [...target].sort((a, z) => byLng ? a.lng - z.lng : a.lat - z.lat);
+    const mid = Math.floor(sorted.length / 2);
+    parcels.push(sorted.slice(0, mid), sorted.slice(mid));
+  }
+  return parcels.map(p => p.map(x => x.id));
 }
 
 function buildCluster(id: string, members: OppPoint[], ids: number[], nowMs: number): OppCluster {

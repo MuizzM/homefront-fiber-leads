@@ -27,16 +27,19 @@ export function getMarketAggregates(tenantId: number): MarketAggregate[] {
       GROUP BY lower(city), lower(state)`,
   );
 
-  // Lead operational rollup per city (tenant-scoped).
-  const leadAgg = all<{ city: string; state: string; leads: number; worked: number; unworked: number; sold: number }>(
+  // Lead operational rollup per city (tenant-scoped). Only NEW-FIBER leads count
+  // as market opportunity — a lead is the product's unit of provider-verified
+  // door. lastLeadAt is the freshest such lead (a real verification timestamp).
+  const leadAgg = all<{ city: string; state: string; leads: number; worked: number; unworked: number; sold: number; lastLeadAt: string | null }>(
     `SELECT l.city AS city, l.state AS state,
             COUNT(*) AS leads,
             SUM(CASE WHEN k.c > 0 THEN 1 ELSE 0 END) AS worked,
             SUM(CASE WHEN k.c IS NULL OR k.c = 0 THEN 1 ELSE 0 END) AS unworked,
-            SUM(CASE WHEN l.lead_status = 'sold' THEN 1 ELSE 0 END) AS sold
+            SUM(CASE WHEN l.lead_status = 'sold' THEN 1 ELSE 0 END) AS sold,
+            MAX(l.created_at) AS lastLeadAt
        FROM leads l
        LEFT JOIN (SELECT lead_id, COUNT(*) c FROM knock_log GROUP BY lead_id) k ON k.lead_id = l.id
-      WHERE l.tenant_id = ? AND l.city IS NOT NULL
+      WHERE l.tenant_id = ? AND l.city IS NOT NULL AND l.is_new_fiber = 1
       GROUP BY lower(l.city), lower(l.state)`,
     tenantId,
   );
@@ -50,15 +53,24 @@ export function getMarketAggregates(tenantId: number): MarketAggregate[] {
   );
   const outcomeByCity = new Map(outcomes.map(r => [key(r.city, r.state), r]));
 
-  return pool.map(p => {
-    const lo = leadByCity.get(key(p.city, p.state));
-    const oc = outcomeByCity.get(key(p.city, p.state));
+  // A market is any city with a pool OR real leads — the UNION, so a city with
+  // door-rich leads but no harvested pool (or vice-versa) is never dropped.
+  const poolByCity = new Map(pool.map(p => [key(p.city, p.state), p]));
+  const allKeys = new Set<string>([...poolByCity.keys(), ...leadByCity.keys()]);
+
+  return [...allKeys].map(k => {
+    const p = poolByCity.get(k);
+    const lo = leadByCity.get(k);
+    const oc = outcomeByCity.get(k);
+    const city = p?.city ?? lo!.city;
+    const state = p?.state ?? lo!.state;
     return {
-      city: p.city, state: p.state,
-      poolSize: p.poolSize, verified: p.verified ?? 0,
-      verifiedNewFiber: p.verifiedNewFiber ?? 0, newlyLive: p.newlyLive ?? 0,
+      city, state,
+      poolSize: p?.poolSize ?? 0, verified: p?.verified ?? 0,
+      verifiedNewFiber: p?.verifiedNewFiber ?? 0, newlyLive: p?.newlyLive ?? 0,
       leads: lo?.leads ?? 0, unworkedLeads: lo?.unworked ?? 0, workedLeads: lo?.worked ?? 0, soldLeads: lo?.sold ?? 0,
-      lastVerifiedAtMs: p.lastVerifiedAt ? Date.parse(p.lastVerifiedAt + "Z") || Date.parse(p.lastVerifiedAt) : null,
+      lastVerifiedAtMs: p?.lastVerifiedAt ? Date.parse(p.lastVerifiedAt + "Z") || Date.parse(p.lastVerifiedAt) : null,
+      lastLeadAtMs: lo?.lastLeadAt ? Date.parse(lo.lastLeadAt + "Z") || Date.parse(lo.lastLeadAt) : null,
       outcome: oc ? {
         knocks: oc.knocks, contacts: oc.contacts, sales: oc.sales,
         lastDeployedAtMs: oc.lastDeployedAt ? Date.parse(oc.lastDeployedAt + "Z") || Date.parse(oc.lastDeployedAt) : null,
@@ -83,9 +95,11 @@ export function getKnownNewFiberPoints(tenantId: number, city?: string, state = 
 }
 
 // Unverified (or oldest-verified) pool targets for a city, as ranking input.
-// Bounded so a huge city can't blow memory — we only ever need `cap` candidates
-// to select a `budget` from, and cap >> any realistic single-run budget.
-export function getPoolTargetsForCity(city: string, state: string, cap = 20_000): Array<{ id: number; lat: number | null; lng: number | null; lastScannedAtMs: number | null; lastIsNewFiber: boolean; opportunityScore: number | null }> {
+// Cap is a memory backstop, not a coverage limit: it must exceed the largest
+// real city so the EV ranker SEES the whole pool and never silently drops the
+// tail of a big market (the biggest NC city here is ~36k). rankTargets is O(n),
+// so ranking 60k lightweight rows is a few MB and a few ms — cheap insurance.
+export function getPoolTargetsForCity(city: string, state: string, cap = 60_000): Array<{ id: number; lat: number | null; lng: number | null; lastScannedAtMs: number | null; lastIsNewFiber: boolean; opportunityScore: number | null }> {
   const rows = all<any>(
     `SELECT id, lat, lng, last_scanned_at AS lastScannedAt, last_is_new_fiber AS lastIsNewFiber, opportunity_score AS opportunityScore
        FROM scan_targets
@@ -102,22 +116,43 @@ export function getPoolTargetsForCity(city: string, state: string, cap = 20_000)
   }));
 }
 
-// Verified opportunity points for the map/clustering: verified new-fiber pool
-// rows + tenant leads, unified into OppPoint-shaped rows with signal fields.
-export function getOpportunityPoints(tenantId: number, bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number }): Array<any> {
-  const box = bbox ? `AND lat BETWEEN ${num(bbox.minLat)} AND ${num(bbox.maxLat)} AND lng BETWEEN ${num(bbox.minLng)} AND ${num(bbox.maxLng)}` : "";
-  // Leads carry the richest signal (worked/sold via knocks, competitor, score).
-  return all<any>(
+// Provider-verified new-fiber points for the map/clustering. Source is the
+// leads board (every row is is_new_fiber=1 — the real Kinetic NEW-FIBER signal),
+// carrying the operational signal (worked/sold via knocks, competitor, score)
+// AND real freshness: created_at is when we verified this door as new fiber, so
+// cluster freshness is data-driven, not a hardcoded null. Optional city scope
+// makes "open a market → its opportunity map" show THAT city, not the state.
+export function getOpportunityPoints(
+  tenantId: number,
+  bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number },
+  city?: string, state?: string,
+): Array<any> {
+  const box = bbox ? `AND l.lat BETWEEN ${num(bbox.minLat)} AND ${num(bbox.maxLat)} AND l.lng BETWEEN ${num(bbox.minLng)} AND ${num(bbox.maxLng)}` : "";
+  const cityFilter = city ? `AND lower(l.city)=lower(?) ${state ? "AND lower(l.state)=lower(?)" : ""}` : "";
+  const args: any[] = [tenantId];
+  if (city) { args.push(city); if (state) args.push(state); }
+  const rows = all<any>(
     `SELECT l.id AS id, l.lat AS lat, l.lng AS lng, 1 AS isNewFiber,
             CASE WHEN k.c > 0 THEN 1 ELSE 0 END AS worked,
             CASE WHEN l.lead_status='sold' THEN 1 ELSE 0 END AS sold,
             l.lead_score AS leadScore, l.competitor_name AS competitor,
-            0 AS newlyLive, NULL AS verifiedAtMs
+            l.created_at AS createdAt
        FROM leads l
        LEFT JOIN (SELECT lead_id, COUNT(*) c FROM knock_log GROUP BY lead_id) k ON k.lead_id = l.id
-      WHERE l.tenant_id=? AND l.is_new_fiber=1 AND l.lat IS NOT NULL ${box}`,
-    tenantId,
+      WHERE l.tenant_id=? AND l.is_new_fiber=1 AND l.lat IS NOT NULL ${cityFilter} ${box}`,
+    ...args,
   );
+  const weekAgo = Date.now() - 7 * 86_400_000;
+  return rows.map(r => {
+    const verifiedAtMs = r.createdAt ? Date.parse(r.createdAt + "Z") || Date.parse(r.createdAt) : null;
+    return {
+      ...r,
+      verifiedAtMs,
+      // "newly live" = verified within the last week (a real, data-driven flag,
+      // not a literal 0) so the map can honestly surface fresh opportunity.
+      newlyLive: verifiedAtMs != null && verifiedAtMs >= weekAgo ? 1 : 0,
+    };
+  });
 }
 
 // ── scan_runs lifecycle (resumable persisted jobs) ────────────────────────────
@@ -147,29 +182,54 @@ export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq
   tx(ranked);
 }
 
-// Next batch of queued targets for a run, in priority order — the resume queue.
-export function getQueuedRunTargets(runId: string, limit: number): Array<{ targetId: number; seq: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }> {
-  return all<any>(
-    `SELECT t.target_id AS targetId, t.seq AS seq, st.address, st.city, st.state, st.zip, st.lat, st.lng
-       FROM scan_run_targets t JOIN scan_targets st ON st.id = t.target_id
-      WHERE t.run_id=? AND t.state='queued' ORDER BY t.seq ASC LIMIT ?`,
-    runId, limit,
-  );
+// ATOMICALLY claim the next batch of queued targets: mark them 'inflight' and
+// return them in ONE transaction, so no two dispatch passes can grab the same
+// target and double-spend the paid proxy. A crash after claiming leaves rows
+// 'inflight' — resetInflightTargets() (called on resume) returns them to the
+// queue. Priority order preserved.
+const _claimSelect = rawDb.prepare(
+  `SELECT t.target_id AS targetId, t.seq AS seq, st.address, st.city, st.state, st.zip, st.lat, st.lng
+     FROM scan_run_targets t JOIN scan_targets st ON st.id = t.target_id
+    WHERE t.run_id=? AND t.state='queued' ORDER BY t.seq ASC LIMIT ?`);
+const _claimMark = rawDb.prepare(`UPDATE scan_run_targets SET state='inflight' WHERE run_id=? AND target_id=? AND state='queued'`);
+const _claimTx = rawDb.transaction((runId: string, limit: number) => {
+  const rows = _claimSelect.all(runId, limit) as any[];
+  for (const r of rows) _claimMark.run(runId, r.targetId);
+  return rows;
+});
+export function claimRunTargets(runId: string, limit: number): Array<{ targetId: number; seq: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }> {
+  return _claimTx(runId, limit) as any;
 }
 
-export function markRunTarget(runId: string, targetId: number, state: "verified" | "failed" | "skipped", result: string | null): void {
-  rawDb.prepare(`UPDATE scan_run_targets SET state=?, result=? WHERE run_id=? AND target_id=?`).run(state, result, runId, targetId);
+// Finalize one checked target: set its terminal state AND bump the run counters
+// in a SINGLE transaction, so a crash between the two can never leave the run's
+// verified/cost totals disagreeing with the per-target ledger.
+const _finTarget = rawDb.prepare(`UPDATE scan_run_targets SET state=?, result=? WHERE run_id=? AND target_id=?`);
+const _finBump = rawDb.prepare(
+  `UPDATE scan_runs SET verified = verified + @verified, new_fiber = new_fiber + @newFiber,
+      newly_live = newly_live + @newlyLive, failed = failed + @failed,
+      est_bytes = est_bytes + @estBytes, heartbeat_at = datetime('now') WHERE id = @runId`);
+const _finalizeTx = rawDb.transaction((runId: string, targetId: number, state: string, result: string | null, delta: any) => {
+  _finTarget.run(state, result, runId, targetId);
+  _finBump.run({ runId, verified: delta.verified ?? 0, newFiber: delta.newFiber ?? 0, newlyLive: delta.newlyLive ?? 0, failed: delta.failed ?? 0, estBytes: delta.estBytes ?? 0 });
+});
+export function finalizeRunTarget(runId: string, targetId: number, state: "verified" | "failed" | "skipped", result: string | null, delta: { verified?: number; newFiber?: number; newlyLive?: number; failed?: number; estBytes?: number }): void {
+  _finalizeTx(runId, targetId, state, result, delta);
 }
 
-// Atomic per-check counter bump on the run (progress evidence).
+// Return orphaned 'inflight' rows to the queue (crash recovery on resume).
+export function resetInflightTargets(runId: string): number {
+  return rawDb.prepare(`UPDATE scan_run_targets SET state='queued' WHERE run_id=? AND state='inflight'`).run(runId).changes;
+}
+
+// Just move the heartbeat forward (worker liveness) without changing counters.
+export function touchRun(runId: string): void {
+  rawDb.prepare(`UPDATE scan_runs SET heartbeat_at=datetime('now') WHERE id=?`).run(runId);
+}
+
+// Legacy standalone bump kept for the resume/edge paths that only adjust counts.
 export function bumpRun(runId: string, delta: { verified?: number; newFiber?: number; newlyLive?: number; failed?: number; estBytes?: number }): void {
-  rawDb.prepare(
-    `UPDATE scan_runs SET
-        verified = verified + @verified, new_fiber = new_fiber + @newFiber,
-        newly_live = newly_live + @newlyLive, failed = failed + @failed,
-        est_bytes = est_bytes + @estBytes, heartbeat_at = datetime('now')
-      WHERE id = @runId`,
-  ).run({ runId, verified: delta.verified ?? 0, newFiber: delta.newFiber ?? 0, newlyLive: delta.newlyLive ?? 0, failed: delta.failed ?? 0, estBytes: delta.estBytes ?? 0 });
+  _finBump.run({ runId, verified: delta.verified ?? 0, newFiber: delta.newFiber ?? 0, newlyLive: delta.newlyLive ?? 0, failed: delta.failed ?? 0, estBytes: delta.estBytes ?? 0 });
 }
 
 export function setRunStatus(runId: string, status: string, error?: string | null): void {
@@ -212,8 +272,9 @@ export function getResumableRuns(staleSeconds = 30): ScanRunRow[] {
   );
 }
 
+// Pending = still to process (queued OR mid-flight). "Queue drained" means 0.
 export function countQueued(runId: string): number {
-  return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id=? AND state='queued'`, runId).c;
+  return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id=? AND state IN ('queued','inflight')`, runId).c;
 }
 
 // ── Per-target scan memory (used by the live engine) ──────────────────────────
