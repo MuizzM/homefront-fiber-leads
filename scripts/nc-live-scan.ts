@@ -47,21 +47,22 @@ async function resolveAddresses(city: string, zip: string): Promise<{ source: st
      ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC`
   ).all(city, STATE) as any[];
   if (pool.length >= 25) return { source: "pool", addrs: pool.map((r: any) => ({ address: r.address, city: r.city, state: r.state, zip: r.zip || zip, lat: r.lat, lng: r.lng })) };
-  // Overpass (free OSM) returns the ACTUAL addresses, not a wasteful grid — it's
-  // the right source. 504s are transient overload, so retry a few times with backoff.
+
+  // Build the UNION of every source (deduped by street), for maximum completeness.
+  const byKey = new Map<string, any>();
+  const srcs = new Set<string>();
+  const add = (a: any, src: string) => {
+    const k = String(a.address ?? "").trim().toLowerCase();
+    if (!k || !a.lat) return;
+    if (!byKey.has(k)) { byKey.set(k, { address: a.address, city, state: STATE, zip: a.zip || zip, lat: a.lat, lng: a.lng }); srcs.add(src); }
+  };
+
+  // Overpass (free OSM) — actual addresses, not a grid. 504s are transient → retry.
   for (let attempt = 1; attempt <= 4; attempt++) {
     try {
       const o = await getCityAddresses(city, STATE);
-      if (o.addresses?.length) {
-        let list = o.addresses.map((a: any) => ({ address: a.address, city, state: STATE, zip: a.zip || zip, lat: a.lat, lng: a.lng }));
-        // The Overpass bbox overshoots into neighboring towns (wrong ZIPs, even
-        // out-of-state) which Kinetic rejects as AddressNeedsFix. If a target ZIP
-        // was given, keep only addresses in that ZIP (or ZIP-less), forcing it —
-        // that's the real town, not its neighbors.
-        if (zip) { const before = list.length; list = list.filter((a: any) => !a.zip || a.zip === zip).map((a: any) => ({ ...a, zip })); console.log(`   overpass: ${o.addresses.length} in bbox → ${list.length} in ZIP ${zip} (dropped ${before - list.length} neighboring)`); }
-        if (list.length) return { source: "overpass", addrs: list };
-      }
-      break; // succeeded but empty — Overpass has no addresses here
+      if (o.addresses?.length) { for (const a of o.addresses) add(a, "overpass"); console.log(`   overpass: ${o.addresses.length} addresses`); }
+      break;
     } catch (e: any) {
       const transient = /50\d|timeout|429|ECONN|network/i.test(e.message ?? "");
       console.log(`   overpass attempt ${attempt}/4 failed: ${e.message}${transient && attempt < 4 ? " — retrying…" : ""}`);
@@ -69,14 +70,23 @@ async function resolveAddresses(city: string, zip: string): Promise<{ source: st
       if (attempt < 4) await new Promise(r => setTimeout(r, attempt * 6000));
     }
   }
+  // Mapbox reverse-geocode grid — fills addresses OSM missed. Costs geocoding
+  // requests (bounded by MAPBOX_HARVEST_CAP); only runs with the explicit --mapbox flag.
   if (ALLOW_MAPBOX && process.env.MAPBOX_TOKEN) {
     try {
       const m: any = await harvestCityAddresses(city, STATE, process.env.MAPBOX_TOKEN);
-      const list = (m.addresses ?? m ?? []) as any[];
-      if (list.length) return { source: "mapbox", addrs: list.map((a: any) => ({ address: a.address, city, state: STATE, zip: a.zip || zip, lat: a.lat, lng: a.lng })) };
+      const list = (m.addresses ?? []) as any[];
+      const before = byKey.size;
+      for (const a of list) add(a, "mapbox");
+      console.log(`   mapbox: ${list.length} harvested → +${byKey.size - before} net-new addresses`);
     } catch (e: any) { console.log(`   mapbox harvest failed: ${e.message}`); }
   }
-  return { source: "none", addrs: [] };
+
+  let all = [...byKey.values()];
+  // The bboxes overshoot into neighboring towns (wrong ZIPs) which Kinetic rejects
+  // as AddressNeedsFix. If a target ZIP was given, keep only that ZIP (or ZIP-less).
+  if (zip) { const before = all.length; all = all.filter(a => !a.zip || a.zip === zip).map(a => ({ ...a, zip })); console.log(`   ZIP ${zip} filter: ${before} → ${all.length} (dropped ${before - all.length} neighboring)`); }
+  return { source: all.length ? [...srcs].join("+") : "none", addrs: all };
 }
 
 const getTargetId = (address: string, city: string) =>
