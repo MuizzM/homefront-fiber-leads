@@ -147,9 +147,13 @@ export interface IStorage {
   markComingSoonAvailable(id: number, leadId: number): ComingSoonAddress | undefined;
   markComingSoonChecked(id: number): ComingSoonAddress | undefined;
   // ── Scan targets (persistent address pool) ───────────────────────────────────
-  upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null }>): number;
+  upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null; dfAddressId?: string | null; scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null }>): number;
   getScanTargetsToRescan(limit: number): any[];
   getScanTargetsByCity(city: string, state: string): any[];
+  getCnsCoverageRows(): Array<{ dfAddressId: string | null; city: string | null; state: string | null; isNewFiber: boolean }>;
+  recordCnsProbes(env: string, probes: Array<{ cns: number; result: "hit" | "miss" }>): void;
+  getProbedCns(env: string, withinDays?: number): number[];
+  getMaxHitCns(env: string): number | null;
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean }): { prevIsNewFiber: boolean };
   getFirstSeenLive(sinceHours: number, limit?: number, tenantId?: number): any[];
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
@@ -266,6 +270,10 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN first_seen_live_at TEXT`,
     `ALTER TABLE scan_targets ADD COLUMN last_availability_status TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`,
+    // CNS negative cache — conclusive probe outcomes so discovery/nightly never
+    // re-buy the same misses; the frontier advances instead of re-scanning.
+    `CREATE TABLE IF NOT EXISTS cns_probes (env TEXT NOT NULL, cns INTEGER NOT NULL, result TEXT NOT NULL, probed_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (env, cns))`,
+    `CREATE INDEX IF NOT EXISTS idx_cns_probes_env ON cns_probes(env, probed_at)`,
     // Speed up knock lookups (leaderboard, territory progress, knock history)
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead ON knock_log(lead_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_rep ON knock_log(rep_id)`,
@@ -1359,20 +1367,82 @@ export class Storage implements IStorage {
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   // Insert harvested addresses once; duplicates are ignored (address is UNIQUE),
   // so the pool grows without re-geocoding. Returns how many NEW rows were added.
-  upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null }>): number {
+  // Insert new pool addresses AND enrich existing ones. A row discovered from
+  // Kinetic itself (the CNS/nightly scanner) arrives WITH its df_address_id,
+  // provider coords, and current status — so it lands complete and needs no
+  // Mapbox geocode and no immediate re-scan. Re-harvesting an existing address
+  // backfills any missing df_address_id / coords / zip (e.g. a Mapbox-seeded row
+  // getting its real Kinetic id) but never clobbers status history — that stays
+  // owned by recordScanTargetResult's vetted transition logic. Returns the count
+  // of NET-NEW rows (enrichment of existing rows is not counted).
+  upsertScanTargets(addrs: Array<{
+    address: string; city?: string; state?: string; zip?: string;
+    lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null;
+    dfAddressId?: string | null;
+    // When the row came from an actual Kinetic probe, pass its result so the row
+    // lands already-scanned (baseline) rather than needing a follow-up check.
+    scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null;
+  }>): number {
     if (!addrs.length) return 0;
-    const stmt = rawDb.prepare(
-      `INSERT OR IGNORE INTO scan_targets (address, city, state, zip, lat, lng, source, tenant_id, created_at)
-       VALUES (@address, @city, @state, @zip, @lat, @lng, @source, @tenantId, datetime('now'))`
+    const insertStmt = rawDb.prepare(
+      `INSERT OR IGNORE INTO scan_targets
+         (address, city, state, zip, lat, lng, source, tenant_id, df_address_id,
+          last_fiber_status, last_is_new_fiber, last_billing_status, last_scanned_at, scan_count, created_at)
+       VALUES (@address,@city,@state,@zip,@lat,@lng,@source,@tenantId,@df,
+               @fs,@nf,@bs,@scannedAt,@scanCount,datetime('now'))`
+    );
+    // Enrichment backfills identity fields ONLY when the stored value is absent —
+    // first writer wins on everything, and status is never touched here. Matched
+    // on (address, city, state) so a same-street-name row in ANOTHER city can
+    // never have its df id / coords overwritten with the wrong city's data.
+    const enrichStmt = rawDb.prepare(
+      `UPDATE scan_targets SET
+         df_address_id = COALESCE(df_address_id, @df),
+         lat = COALESCE(lat, @lat),
+         lng = COALESCE(lng, @lng),
+         zip = CASE WHEN (zip IS NULL OR zip='') THEN @zip ELSE zip END
+       WHERE address = @address AND lower(city) = lower(@city) AND lower(state) = lower(@state)`
+    );
+    // When a Kinetic probe answers an address that was pooled but NEVER scanned
+    // (e.g. a Mapbox-seeded row), record that baseline result so the row counts as
+    // scanned — otherwise the nightly re-probes an address Kinetic just answered
+    // (double proxy spend) and market counts undercount. Only touches never-scanned
+    // rows; an already-scanned row's status stays owned by recordScanTargetResult.
+    const baselineStmt = rawDb.prepare(
+      `UPDATE scan_targets SET
+         last_fiber_status = @fs, last_is_new_fiber = @nf, last_billing_status = @bs,
+         last_scanned_at = @scannedAt, scan_count = 1
+       WHERE address = @address AND lower(city) = lower(@city) AND lower(state) = lower(@state)
+         AND last_scanned_at IS NULL`
     );
     const tx = rawDb.transaction((rows: typeof addrs) => {
       let n = 0;
       for (const r of rows) {
         if (!r.address) continue;
-        n += stmt.run({
+        const scanned = !!r.scannedNow;
+        const params = {
           address: r.address, city: r.city ?? "", state: r.state ?? "NC", zip: r.zip ?? "",
           lat: r.lat ?? null, lng: r.lng ?? null, source: r.source ?? null, tenantId: r.tenantId ?? null,
-        }).changes;
+          df: r.dfAddressId ?? null,
+          fs: scanned ? (r.fiberStatus ?? null) : null,
+          nf: scanned && r.isNewFiber ? 1 : 0,
+          bs: scanned ? (r.billingStatus ?? null) : null,
+          scannedAt: scanned ? new Date().toISOString() : null,
+          scanCount: scanned ? 1 : 0,
+        };
+        const inserted = insertStmt.run(params).changes;
+        n += inserted;
+        if (!inserted) {
+          const key = { address: r.address, city: r.city ?? "", state: r.state ?? "NC" };
+          // Backfill identity (df/coords/zip) — same-city only.
+          if (r.dfAddressId || r.lat != null || r.lng != null || r.zip) {
+            enrichStmt.run({ ...key, df: r.dfAddressId ?? null, lat: r.lat ?? null, lng: r.lng ?? null, zip: r.zip ?? "" });
+          }
+          // Record a baseline status for a never-scanned existing row.
+          if (scanned) {
+            baselineStmt.run({ ...key, fs: params.fs, nf: params.nf, bs: params.bs, scannedAt: params.scannedAt });
+          }
+        }
       }
       return n;
     });
@@ -1391,6 +1461,44 @@ export class Storage implements IStorage {
       `SELECT address, city, state, zip, lat, lng FROM scan_targets
        WHERE lower(city) = lower(?) AND lower(state) = lower(?)`
     ).all(city.trim(), state.trim());
+  }
+  // Every pooled address that carries a Kinetic df id (ENV+CNS) — the raw material
+  // for the city↔CNS index (server/cnsDiscovery.ts). Reads the SHARED scan_targets
+  // pool only (not leads) so no tenant's private lead data leaks into another
+  // tenant's coverage view; harvest-as-you-scan keeps every discovery in the pool
+  // anyway, so the pool is the canonical, tenant-neutral address book. Zero proxy.
+  getCnsCoverageRows(): Array<{ dfAddressId: string | null; city: string | null; state: string | null; isNewFiber: boolean }> {
+    const pool = rawDb.prepare(
+      `SELECT df_address_id AS df, city, state, last_is_new_fiber AS nf FROM scan_targets WHERE df_address_id IS NOT NULL AND df_address_id != ''`
+    ).all() as any[];
+    return pool.map(r => ({ dfAddressId: r.df, city: r.city, state: r.state, isNewFiber: !!r.nf }));
+  }
+
+  // ── CNS negative cache — remember conclusive probe outcomes so discovery and the
+  // nightly never re-buy the same misses. A miss can later become a hit (Kinetic
+  // assigns the number), so callers apply an age window when treating a miss as
+  // "already probed". Hits also land here (belt-and-suspenders with the pool).
+  recordCnsProbes(env: string, probes: Array<{ cns: number; result: "hit" | "miss" }>): void {
+    if (!probes.length) return;
+    const stmt = rawDb.prepare(
+      `INSERT INTO cns_probes (env, cns, result, probed_at) VALUES (?,?,?,datetime('now'))
+       ON CONFLICT(env, cns) DO UPDATE SET result=excluded.result, probed_at=excluded.probed_at`
+    );
+    const tx = rawDb.transaction((rows: typeof probes) => { for (const p of rows) stmt.run(env.toUpperCase(), p.cns, p.result); });
+    tx(probes);
+  }
+  // Control numbers probed within `withinDays` for an env — the set discovery skips
+  // so it never re-probes a recent miss (older misses are retried automatically).
+  getProbedCns(env: string, withinDays = 45): number[] {
+    return (rawDb.prepare(
+      `SELECT cns FROM cns_probes WHERE env = ? AND probed_at >= datetime('now', ?)`
+    ).all(env.toUpperCase(), `-${Math.max(0, Math.floor(withinDays))} days`) as any[]).map(r => r.cns);
+  }
+  // Highest control number Kinetic has ever answered (hit) for an env — the true
+  // observed frontier the nightly sweep should advance past. Null if none seen.
+  getMaxHitCns(env: string): number | null {
+    const r = rawDb.prepare(`SELECT MAX(cns) m FROM cns_probes WHERE env = ? AND result = 'hit'`).get(env.toUpperCase()) as any;
+    return r?.m ?? null;
   }
   // Record a fresh scan result. Returns the PREVIOUS is_new_fiber so the caller
   // can detect a change (was not new fiber → now new fiber = new hot lead).

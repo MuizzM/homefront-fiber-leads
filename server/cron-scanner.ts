@@ -16,8 +16,8 @@
 import { mailTransport, mailFrom, adminInbox } from "./mail";
 import { storage } from "./storage";
 import { getAuthToken, scanAddress } from "./scanner";
-import { proxyFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
+import { KINETIC_ENVS, probeKineticDfId } from "./cns-scanner";
 import { classifyAvailabilityTransition, snapshotFromTarget } from "@shared/fiberDetect";
 import {
   buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
@@ -89,90 +89,6 @@ export function getCronStatus(): CronStatus {
   return { ...cronStatus };
 }
 
-async function lookupCnsDirect(env: string, cns: number, token: string): Promise<{
-  found: boolean;
-  isNewFiber: boolean;
-  address?: string;
-  city?: string;
-  state?: string;
-  zip?: string;
-  lat?: number | null;
-  lng?: number | null;
-  billingStatus?: string | null;
-  householdSegmentType?: string | null;
-  techType?: string | null;
-  speedTier?: string | null;
-  maxDownloadMbps?: number | null;
-  competitorName?: string | null;
-  addressCatalogDate?: string | null;
-  dfAddressId?: string;
-}> {
-  const dfAddressId = `${env}${String(cns).padStart(7, "0")}`;
-
-  try {
-    const res = await proxyFetch(KFS_SCAN_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": `Bearer ${token}`,
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "device-id": "698ca1e5-f077-4a62-a1e7-e97f484c7231",
-        "Referer": KFS_REFERER,
-        "Origin": KFS_ORIGIN,
-      },
-      body: JSON.stringify({ dfAddressId }),
-      signal: AbortSignal.timeout(8000),
-    });
-
-    if (!res.ok) {
-      if (res.status === 401 || res.status === 403) throw new Error("TOKEN_EXPIRED");
-      return { found: false, isNewFiber: false };
-    }
-
-    const data = await res.json();
-    if (!data.success || data.validationResult === "AddressNotFound" || !data.address) {
-      return { found: false, isNewFiber: false };
-    }
-
-    const addr = data.address;
-    const segment = addr.householdSegmentType ?? "";
-    const isNewFiber = segment === "NEW FIBER";
-    const kbps = data.broadbandService?.finalQualSpeed;
-    const mbps = kbps ? Math.round(parseInt(kbps) / 1000) : null;
-    let speedTier: string | null = null;
-    if (mbps) {
-      if (mbps >= 2000) speedTier = "2gig";
-      else if (mbps >= 1000) speedTier = "1gig";
-      else if (mbps >= 500) speedTier = "500mbps";
-      else if (mbps >= 300) speedTier = "300mbps";
-      else if (mbps >= 100) speedTier = "100mbps";
-      else speedTier = "sub100mbps";
-    }
-
-    return {
-      found: true,
-      isNewFiber,
-      address: addr.addressLine1,
-      city: addr.city ?? "",
-      state: addr.stateProvinceCd ?? "",
-      zip: addr.postalCd ?? "",
-      lat: addr.geoLat ? parseFloat(addr.geoLat) : null,
-      lng: addr.geoLong ? parseFloat(addr.geoLong) : null,
-      billingStatus: addr.billingStatus ?? null,
-      householdSegmentType: segment || null,
-      techType: data.techType ?? addr.maxQualTechnologyType ?? null,
-      speedTier,
-      maxDownloadMbps: mbps,
-      competitorName: addr.competitorCompanyName ?? null,
-      addressCatalogDate: addr.addressCatalogDt ?? null,
-      dfAddressId,
-    };
-  } catch (err: any) {
-    if (err.message === "TOKEN_EXPIRED") throw err;
-    return { found: false, isNewFiber: false };
-  }
-}
 
 /**
  * Run the nightly CNS scan for MS ENV (NC/SC/IN/MI)
@@ -183,12 +99,25 @@ async function runNightlyCnsScan(): Promise<void> {
   cronStatus.isRunning = true;
   cronStatus.lastRunAt = new Date().toISOString();
 
-  const ENV = "MS";
-  const UPPER_LIMIT = 3_062_552;
+  const ENV = process.env.NIGHTLY_SCAN_ENV || "MS";
+  const envInfo = KINETIC_ENVS.find(e => e.code === ENV);
   const SCAN_COUNT = Number(process.env.NIGHTLY_SCAN_COUNT ?? 50_000);
-  const startCns = UPPER_LIMIT - SCAN_COUNT;
+  // ADVANCING FRONTIER: sweep a window that STRADDLES the observed frontier, not a
+  // frozen constant. Re-check a recent overlap (catch flips) then probe NEW
+  // territory just above the frontier (where Kinetic numbers its newest builds).
+  // The frontier grows itself — harvest-as-you-scan records every hit into the
+  // negative cache, so getMaxHitCns advances night over night. Recent misses are
+  // skipped so we don't re-buy unassigned numbers.
+  const observedMax = storage.getMaxHitCns(ENV) ?? 0;
+  const frontier = Math.max(envInfo?.upperLimit ?? 0, observedMax);
+  const overlap = Math.min(Math.floor(SCAN_COUNT / 2), 10_000);
+  const startCns = Math.max(1, frontier - overlap);
+  const endCns = frontier + (SCAN_COUNT - overlap);
+  const recentMiss = new Set(storage.getProbedCns(ENV, 30));  // skip recently-probed unassigned numbers
 
   const newFiberAddresses: string[] = [];
+  const probeOutcomes: Array<{ cns: number; result: "hit" | "miss" }> = [];
+  const flushProbes = () => { if (probeOutcomes.length) { try { storage.recordCnsProbes(ENV, probeOutcomes.splice(0)); } catch { /* best-effort */ } } };
   let token: string;
 
   try {
@@ -199,75 +128,78 @@ async function runNightlyCnsScan(): Promise<void> {
     console.warn("[cron] Cannot start — no auth token:", err.message);
     return;
   }
+  console.log(`[cron] Nightly sweep ENV=${ENV} window ${startCns}–${endCns} (frontier ${frontier})`);
 
   let consecutiveErrors = 0;
 
-  for (let cns = startCns; cns <= UPPER_LIMIT; cns++) {
-    // Re-fetch token every 25 min
+  for (let cns = startCns; cns <= endCns; cns++) {
+    // Skip a control number we conclusively probed in the last 30 days if it was a
+    // MISS still below the frontier (re-checking a known hit for flips is fine, so
+    // only skip numbers ABOVE the frontier that recently missed = still unassigned).
+    if (cns > frontier && recentMiss.has(cns)) continue;
+
+    // Re-fetch token every ~1000 checks
     if (cns % 1000 === 0) {
       try { token = await getAuthToken(); consecutiveErrors = 0; } catch { /* keep existing */ }
     }
 
-    try {
-      const result = await lookupCnsDirect(ENV, cns, token);
+    const probe = await probeKineticDfId(`${ENV}${String(cns).padStart(7, "0")}`, token);
 
-      if (result.found && result.isNewFiber && result.billingStatus === "N") {
-        // HOT LEAD — billingStatus N = no existing subscriber
-        const fullAddress = `${result.address}, ${result.city}, ${result.state} ${result.zip}`;
-        newFiberAddresses.push(fullAddress);
-        cronStatus.totalNewFiberFound++;
-
-        // Save as lead immediately
-        try {
-          storage.createLead({
-            address: result.address!,
-            city: result.city!,
-            state: result.state!,
-            zip: result.zip!,
-            lat: result.lat ?? undefined,
-            lng: result.lng ?? undefined,
-            fiberStatus: "new_fiber",
-            isNewFiber: true,
-            isTenured: false,
-            billingStatus: result.billingStatus,
-            householdSegmentType: result.householdSegmentType,
-            techType: result.techType,
-            speedTier: result.speedTier,
-            maxDownloadMbps: result.maxDownloadMbps,
-            competitorName: result.competitorName,
-            addressCatalogDate: result.addressCatalogDate,
-            dfAddressId: result.dfAddressId,
-            leadStatus: "prospect",
-            deploymentNotes: `Nightly CNS scan: ENV=MS CNS=${cns}. Hot Lead — NEW FIBER, no subscriber.`,
-          });
-        } catch { /* duplicate — skip */ }
-
-        // Send immediate email alert for first hit
-        if (newFiberAddresses.length === 1) {
-          sendAlertEmail(
-            "🔥 NEW FIBER Lead Found — HomeFront Fiber Nightly Scan",
-            newFiberAlertHtml(1, newFiberAddresses)
-          ).catch(err => console.warn("[cron] Email alert failed:", err.message));
-        }
-      }
-
-      consecutiveErrors = 0;
-      // Rate limit: 80ms between requests (750/min — respectful)
-      await new Promise(r => setTimeout(r, 80));
-
-    } catch (err: any) {
-      if (err.message === "TOKEN_EXPIRED") {
-        console.warn("[cron] Token expired mid-scan — stopping for tonight");
-        break;
-      }
+    if (probe.kind === "fail") {
+      if (probe.reason === "token_expired") { console.warn("[cron] Token expired mid-scan — stopping for tonight"); break; }
       consecutiveErrors++;
-      if (consecutiveErrors >= 20) {
-        console.warn("[cron] Too many consecutive errors — aborting scan");
-        break;
-      }
+      if (consecutiveErrors >= 20) { console.warn("[cron] Too many consecutive errors — aborting scan"); break; }
       await new Promise(r => setTimeout(r, 500));
+      continue;
     }
+    consecutiveErrors = 0;
+    probeOutcomes.push({ cns, result: probe.kind === "hit" ? "hit" : "miss" });
+    if (probeOutcomes.length >= 500) flushProbes();
+
+    if (probe.kind === "hit") {
+      const result = probe.result;
+      // HARVEST-AS-YOU-SCAN: persist EVERY discovery into the shared pool (Kinetic
+      // gave us the full address + coords + df id for free). Zero Mapbox.
+      try {
+        storage.upsertScanTargets([{
+          address: result.address, city: result.city, state: result.state, zip: result.zip,
+          lat: result.lat, lng: result.lng, source: "kinetic-cns", tenantId: null,
+          dfAddressId: result.dfAddressId, scannedNow: true,
+          fiberStatus: result.isNewFiber ? "new_fiber" : "other",
+          isNewFiber: result.isNewFiber, billingStatus: result.billingStatus,
+        }]);
+      } catch { /* pool write is best-effort */ }
+
+      if (result.isNewFiber && result.billingStatus === "N") {
+        // HOT LEAD — no existing subscriber. Deduped by address (upsert), so the
+        // fixed-overlap re-check never spawns a duplicate lead per night.
+        const fullAddress = `${result.address}, ${result.city}, ${result.state} ${result.zip}`;
+        try {
+          const up = storage.upsertLeadByAddress({
+            address: result.address, city: result.city, state: result.state, zip: result.zip,
+            lat: result.lat ?? undefined, lng: result.lng ?? undefined,
+            fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
+            billingStatus: result.billingStatus, householdSegmentType: result.householdSegmentType,
+            techType: result.techType, speedTier: result.speedTier, maxDownloadMbps: result.maxDownloadMbps,
+            competitorName: result.competitorName, addressCatalogDate: result.addressCatalogDate,
+            dfAddressId: result.dfAddressId, leadStatus: "prospect",
+            deploymentNotes: `Nightly CNS scan: ENV=${ENV} CNS=${cns}. Hot Lead — NEW FIBER, no subscriber.`,
+          } as any);
+          if (up?.created) {
+            newFiberAddresses.push(fullAddress);
+            cronStatus.totalNewFiberFound++;
+            if (newFiberAddresses.length === 1) {
+              sendAlertEmail("🔥 NEW FIBER Lead Found — HomeFront Fiber Nightly Scan", newFiberAlertHtml(1, newFiberAddresses))
+                .catch(err => console.warn("[cron] Email alert failed:", err.message));
+            }
+          }
+        } catch { /* dedup/constraint — skip */ }
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 80)); // ~750/min — respectful
   }
+  flushProbes();
 
   // Summary email if we found multiple
   if (newFiberAddresses.length > 1) {

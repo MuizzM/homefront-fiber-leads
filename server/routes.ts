@@ -93,6 +93,7 @@ function isAutoAreaName(name?: string | null): boolean {
 import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
+import { planCityDiscovery, startCityDiscovery, getDiscoveryJob, getDiscoveryJobs, MAX_DISCOVERY_BUDGET } from "./cnsDiscovery";
 import * as scanSvc from "./scanService";
 import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
@@ -3207,7 +3208,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // POST /api/cns/jobs — start a new CNS scan
   // Body: { env: "MS", startCns: 1, endCns: 50000 }
-  app.post("/api/cns/jobs", requireManager, scanLimiter, async (req, res) => {
+  // Proxy spend is admin-only + capped everywhere else (discovery, area, harvest);
+  // a raw CNS range is up to 100k Kinetic probes, so it must be admin-gated too.
+  app.post("/api/cns/jobs", requireAdmin, scanLimiter, async (req, res) => {
     const { env, startCns, endCns } = req.body;
     if (!env || typeof env !== "string") return res.status(400).json({ error: "env required" });
     const envInfo = KINETIC_ENVS.find(e => e.code === env);
@@ -3218,14 +3221,65 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (start >= end) return res.status(400).json({ error: "startCns must be less than endCns" });
     if (end - start > 100_000) return res.status(400).json({ error: "Max range is 100,000 CNS per job. Split into multiple jobs." });
 
-    const job = createCnsJob(env, start, end, () => getAuthToken());
+    const job = createCnsJob(env, start, end, () => getAuthToken(), (req as any).user?.tenantId ?? undefined);
     storage.logActivity((req as any).user?.id ?? null, "cns.scan.started", "cns_job", 0, { env, start, end, jobId: job.id }, req.ip);
     res.status(201).json(job);
   });
 
-  // GET /api/cns/jobs — list all CNS jobs
-  app.get("/api/cns/jobs", requireManager, (_req, res) => {
-    res.json(getCnsJobs().map(j => ({
+  // ═══ ZERO-MAPBOX CITY DISCOVERY — get fresh leads for any city we've indexed ══
+  // Kinetic returns the full address on every probe, so once a city has been
+  // scanned its addresses (with df ids = ENV+CNS) accumulate in the pool. These
+  // routes target a city by name using ONLY that accumulated CNS evidence — no
+  // Mapbox geocoding, ever. See server/cnsDiscovery.ts.
+
+  // Coverage preview: what do we know about this city's CNS footprint? Pure read,
+  // zero proxy, zero Mapbox — safe for managers to inspect before spending.
+  app.get("/api/scan/city-cns-coverage", requireManager, (req, res) => {
+    const city = qstr(req.query.city), state = qstr(req.query.state) || "NC";
+    if (!city) return res.status(400).json({ error: "city required" });
+    const plan = planCityDiscovery(city, state, 2000);
+    res.json({
+      city: plan.city, state: plan.state, env: plan.env,
+      hasCoverage: plan.hasCoverage, needsAnchor: plan.needsAnchor,
+      knownAddresses: plan.knownCount, cnsBands: plan.bands,
+      frontierCandidates: plan.frontierCount, gapCandidates: plan.gapCount,
+      suggestedProbes: plan.probeDfIds.length, reason: plan.reason,
+    });
+  });
+
+  // Launch a budgeted, zero-Mapbox discovery run against a city's CNS frontier.
+  // Admin-only + rate-limited; proxy spend is capped at `budget` Kinetic checks.
+  app.post("/api/scan/discover-city", requireAdmin, scanLimiter, (req, res) => {
+    const { city, state, budget } = req.body ?? {};
+    if (!city || typeof city !== "string") return res.status(400).json({ error: "city required" });
+    const st = typeof state === "string" && state.trim() ? state.trim() : "NC";
+    const b = Math.min(Math.max(1, Number(budget) || 500), MAX_DISCOVERY_BUDGET);
+    const preview = planCityDiscovery(city, st, b);
+    if (preview.needsAnchor) {
+      return res.status(409).json({ error: "NO_COVERAGE", ...preview });
+    }
+    const job = startCityDiscovery({ city, state: st, budget: b, tenantId: (req as any).user?.tenantId ?? undefined, getToken: () => getAuthToken() });
+    storage.logActivity((req as any).user?.id ?? null, "scan.discover_city.started", "discovery", 0, { city, state: st, budget: b, jobId: job.id }, req.ip);
+    res.status(201).json(job);
+  });
+
+  // Poll a discovery run (tenant-scoped).
+  app.get("/api/scan/discover-city/:id", requireManager, (req, res) => {
+    const job = getDiscoveryJob(String(req.params.id));
+    const tid = (req as any).user?.tenantId;
+    if (!job || (tid != null && job.tenantId != null && job.tenantId !== tid)) return res.status(404).json({ error: "Not found" });
+    res.json(job);
+  });
+
+  // List this tenant's discovery runs.
+  app.get("/api/scan/discover-jobs", requireManager, (req, res) => {
+    res.json(getDiscoveryJobs((req as any).user?.tenantId ?? undefined));
+  });
+
+  // GET /api/cns/jobs — this tenant's CNS jobs (null-tenant/system jobs visible to all).
+  app.get("/api/cns/jobs", requireManager, (req, res) => {
+    const tid = (req as any).user?.tenantId;
+    res.json(getCnsJobs().filter(j => tid == null || j.tenantId == null || j.tenantId === tid).map(j => ({
       id: j.id, env: j.env, envLabel: j.envLabel,
       startCns: j.startCns, endCns: j.endCns, currentCns: j.currentCns,
       status: j.status, scanned: j.scanned, hits: j.hits, newFiberHits: j.newFiberHits,
