@@ -64,7 +64,10 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
   };
 
   return (
-    <div className="w-72 rounded-xl border border-border bg-card p-4 shadow-xl" data-testid="territory-panel">
+    // glass-surface glass-opaque: joins the map's liquid-glass family (this was
+    // the one opaque bg-card orphan floating over the map — review finding);
+    // glass-ink-scope keeps its semantic-token interior dark in BOTH app themes.
+    <div className="glass-surface glass-opaque glass-ink-scope w-72 p-4" data-testid="territory-panel">
       {/* Header */}
       <div className="flex items-start gap-2.5">
         <span

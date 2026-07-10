@@ -12,7 +12,7 @@
 // right-edge slide-in glass drawer over the map.
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X, List, Maximize2 } from "lucide-react";
-import { pinDisplayState, STATE_COLORS, type PinDisplayState } from "@shared/knock";
+import { pinDisplayState, STATE_COLORS, STATE_LABELS } from "@shared/knock";
 
 export interface PanelLead {
   id: number;
@@ -28,17 +28,16 @@ export interface PanelLead {
   fiberStatus?: string | null;
 }
 
-const DS_LABELS: Record<PinDisplayState, string> = {
-  unworked: "Prospect", not_home: "Not Home", contacted: "Contacted",
-  interested: "Interested", follow_up: "Follow-up", callback: "Callback",
-  sold: "SOLD", not_interested: "Not Interested",
-};
-
 const ROW_H = 56; // h-14 — two-line row, ≥44px touch target
 
 // Fixed-row-height windowing: scrollTop → slice indices, overscan rows above
 // and below, translateY spacer. No dependency; identity-bailout on setState.
-function useWindowedList<T>(items: T[], rowH: number, overscan = 8) {
+// `active` MUST flip true when the list actually mounts: the panel renders
+// null while closed, so effects that ran with a null scrollRef would otherwise
+// never re-run on open — the window would stay at its 16-row default and the
+// ResizeObserver would never attach (review-found bug: 451px of blank list
+// after resizing an open panel, and fast-Tab falling off row 16 to <body>).
+function useWindowedList<T>(items: T[], rowH: number, overscan = 8, active = true) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [range, setRange] = useState({ start: 0, end: 2 * overscan });
   const recompute = useCallback(() => {
@@ -48,14 +47,18 @@ function useWindowedList<T>(items: T[], rowH: number, overscan = 8) {
     const end = Math.min(items.length, Math.ceil((el.scrollTop + el.clientHeight) / rowH) + overscan);
     setRange(r => (r.start === start && r.end === end ? r : { start, end }));
   }, [items.length, rowH, overscan]);
-  useEffect(() => { recompute(); }, [recompute]); // clamp when the list changes
+  useEffect(() => {
+    if (!active) return;
+    recompute(); // measure the real viewport the moment the list mounts
+  }, [recompute, active]);
   useEffect(() => { // panel resize (keyboard, rotate) re-measures the window
+    if (!active) return;
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(recompute);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [recompute]);
+  }, [recompute, active]);
   return {
     scrollRef, onScroll: recompute, start: range.start,
     slice: items.slice(range.start, range.end),
@@ -82,7 +85,7 @@ export function LeadsInViewPanel({
   repNameById: Map<number, string>;
 }) {
   const asideRef = useRef<HTMLElement | null>(null);
-  const { scrollRef, onScroll, slice, start, totalHeight, offsetY } = useWindowedList(leads, ROW_H, 8);
+  const { scrollRef, onScroll, slice, start, totalHeight, offsetY } = useWindowedList(leads, ROW_H, 8, open);
 
   // Focus the region on open (next frame — same pattern as the search panel),
   // so Esc + screen-reader context land immediately.
@@ -173,12 +176,15 @@ export function LeadsInViewPanel({
                         type="button"
                         onClick={() => onRowTap(l.id)}
                         data-testid={`leads-panel-row-${l.id}`}
-                        className="w-full h-14 min-h-[44px] px-3 flex flex-col justify-center text-left hover:bg-white/10 focus-visible:bg-white/10 focus:outline-none border-b border-white/5"
+                        className="w-full h-14 min-h-[44px] px-3 flex flex-col justify-center text-left hover:bg-white/10 focus-visible:bg-white/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-inset border-b border-white/5"
                       >
                         <span className="block text-[13px] text-white font-medium truncate">{l.address}</span>
                         <span className="flex items-center gap-1.5 text-[11px] text-white/50 truncate">
+                          {/* The dot carries the true pin hue; the label stays
+                              white/70 — raw hues at 11px fail AA on glass
+                              (contacted slate ≈2.5:1, review finding). */}
                           <span className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} aria-hidden="true" />
-                          <span style={{ color }}>{DS_LABELS[ds]}</span>
+                          <span className="text-white/70">{STATE_LABELS[ds]}</span>
                           <span aria-hidden="true">·</span>
                           <span className="truncate">{rep ?? "Unassigned"}</span>
                           {l.fiberStatus === "new_fiber" && (

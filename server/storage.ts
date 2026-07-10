@@ -60,6 +60,12 @@ export interface IStorage {
   updateLead(id: number, updates: Partial<InsertLead>, tenantId?: number): Lead | undefined;
   deleteLead(id: number, tenantId?: number): boolean;
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[];
+  searchLeadsPage(
+    query: string,
+    tenantId: number | undefined,
+    assignedRep: number | number[] | undefined,
+    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+  ): { rows: Lead[]; total: number };
   // ── Fiber checks ───────────────────────────────────────────────────────────
   getFiberChecks(): FiberCheck[];
   createFiberCheck(check: InsertFiberCheck): FiberCheck;
@@ -376,9 +382,13 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_leads_tenant_created ON leads(tenant_id, created_at DESC)`,
     // (tenant_id, lead_status): status-filtered list pages without a tenant scan.
     `CREATE INDEX IF NOT EXISTS idx_leads_tenant_status ON leads(tenant_id, lead_status)`,
-    // (lead_id, knocked_at): lets the visit-summary window query and per-lead
-    // knock history read each lead's knocks in time order straight off the index.
+    // (lead_id, knocked_at): serves per-lead knock history reads.
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead_time ON knock_log(lead_id, knocked_at)`,
+    // DESC-matched to the visit-summary window's ORDER BY (knocked_at DESC,
+    // id DESC) — the ASC index above can't satisfy the mixed-direction sort
+    // (EXPLAIN showed USE TEMP B-TREE); this one lets each partition stream
+    // off the index in order.
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_lead_time_desc ON knock_log(lead_id, knocked_at DESC, id DESC)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -495,9 +505,11 @@ function getAddressCache(): Set<string> {
 // globalThis). Called from the LEAD MUTATION CHOKE POINTS below (create/update/
 // delete/upsert) so no route can mutate pins and forget to bust — a stale 304
 // after an assignment would silently show a manager old pin data forever.
-function bustPinCaches() {
+// Pass the row's tenantId when known so only that org's polls re-pay; an
+// unknown tenant falls back to a global bust (never risks staleness).
+function bustPinCaches(tenantId?: number | null) {
   const bust = (globalThis as any).__bustMapCache;
-  if (typeof bust === "function") bust();
+  if (typeof bust === "function") bust(tenantId ?? undefined);
 }
 
 export class Storage implements IStorage {
@@ -581,7 +593,7 @@ export class Storage implements IStorage {
     // file under the default org; user paths stamp the actor's org in routes.
     const tenantId = (lead as any).tenantId ?? getDefaultTenantId();
     const row = db.insert(leads).values({ ...lead, tenantId, createdAt: now, updatedAt: now }).returning().get();
-    bustPinCaches();
+    bustPinCaches(row.tenantId);
     return row;
   }
 
@@ -669,7 +681,7 @@ export class Storage implements IStorage {
     const newLead = rawDb.prepare(`SELECT * FROM leads WHERE id = ?`).get(r.lastInsertRowid) as Lead;
     // Update in-memory cache with newly inserted address
     if (_addressCache) _addressCache.add(normalizedAddr);
-    bustPinCaches();
+    bustPinCaches(newLead.tenantId);
     return { lead: newLead, created: true };
   }
   updateLead(id: number, updates: Partial<InsertLead>, tenantId?: number): Lead | undefined {
@@ -678,7 +690,7 @@ export class Storage implements IStorage {
       : eq(leads.id, id);
     const row = db.update(leads).set({ ...updates, updatedAt: new Date().toISOString() })
       .where(condition).returning().get();
-    if (row) bustPinCaches(); // pins changed → map cache + ETag version must move
+    if (row) bustPinCaches(row.tenantId); // pins changed → cache + ETag version must move
     return row;
   }
   deleteLead(id: number, tenantId?: number): boolean {
@@ -686,27 +698,47 @@ export class Storage implements IStorage {
       ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
       : eq(leads.id, id);
     const deleted = db.delete(leads).where(condition).run().changes > 0;
-    if (deleted) bustPinCaches();
+    if (deleted) bustPinCaches(tenantId); // undefined tenant → global bust
     return deleted;
   }
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[] {
-    // Escape LIKE wildcards in user input — a bare "%" must not match the
-    // whole table — and cap in SQL (the route treats 500 as max anyway) so a
-    // broad match never hydrates 50k rows to slice a page.
+    return this.searchLeadsPage(query, tenantId, assignedRep, { limit: 500, offset: 0 }).rows;
+  }
+
+  // Search with filters + pagination pushed into SQL. The filters MUST live in
+  // the WHERE (not post-filter a capped set): a review proved the naive
+  // `LIKE ... LIMIT 500` + JS-filter version silently returned 0 results for
+  // search+status combos whose matches sorted past the first 500 rows, and
+  // reported `total` capped at 500. ORDER BY makes truncation deterministic;
+  // count(*) with the same WHERE keeps `total` exact.
+  searchLeadsPage(
+    query: string,
+    tenantId: number | undefined,
+    assignedRep: number | number[] | undefined,
+    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+  ): { rows: Lead[]; total: number } {
+    // Escape LIKE wildcards in user input — a bare "%" must not match the table.
     const safe = query.replace(/[\\%_]/g, m => "\\" + m);
     const pat = `%${safe}%`;
     const esc = (col: any) => sql`${col} LIKE ${pat} ESCAPE '\\'`;
-    const textFilter = or(esc(leads.address), esc(leads.city), esc(leads.zip), esc(leads.contactName));
-    const conditions = [textFilter];
+    const conditions: any[] = [or(esc(leads.address), esc(leads.city), esc(leads.zip), esc(leads.contactName))];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
     if (Array.isArray(assignedRep)) {
       conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
     } else if (assignedRep != null) {
       conditions.push(eq(leads.assignedRepId, assignedRep));
     }
-    return db.select().from(leads).where(
-      conditions.length === 1 ? conditions[0] : and(...conditions)
-    ).limit(500).all();
+    if (opts.status) conditions.push(eq(leads.leadStatus, opts.status));
+    if (opts.zip) conditions.push(eq(leads.zip, opts.zip));
+    // ASCII lower() matches the JS toLowerCase for the A-Z names in this data;
+    // if non-ASCII city names ever land, store a folded column instead.
+    if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
+    if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
+    const where = conditions.length === 1 ? conditions[0] : and(...conditions);
+    const rows = db.select().from(leads).where(where)
+      .orderBy(desc(leads.createdAt)).limit(opts.limit).offset(opts.offset).all();
+    const total = Number(db.select({ c: sql<number>`count(*)` }).from(leads).where(where).get()?.c ?? 0);
+    return { rows, total };
   }
 
   // ── Fiber checks ───────────────────────────────────────────────────────────
@@ -830,10 +862,10 @@ export class Storage implements IStorage {
   // Per-lead visit summary for the map: leadId → { count, lastOutcome, lastAt }.
   // Single window-function pass (was: a correlated subquery re-sorting each
   // lead's knocks per group — O(k·per-lead sort) and it scanned every tenant's
-  // knocks on every map request). Now one ordered index walk over
-  // idx_knock_log_lead_time, optionally joined down to one tenant's leads.
+  // knocks on every map request). The window's mixed-direction ORDER BY is
+  // served by idx_knock_log_lead_time_desc; optionally joined to one tenant.
   getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }> {
-    const tenantJoin = tenantId
+    const tenantJoin = tenantId != null
       ? `JOIN leads ON leads.id = knock_log.lead_id AND leads.tenant_id = ?`
       : "";
     const rows = rawDb.prepare(
@@ -844,7 +876,7 @@ export class Storage implements IStorage {
                 ROW_NUMBER()    OVER (PARTITION BY knock_log.lead_id ORDER BY knocked_at DESC, knock_log.id DESC) AS rn
          FROM knock_log ${tenantJoin}
        ) WHERE rn = 1`
-    ).all(...(tenantId ? [tenantId] : [])) as any[];
+    ).all(...(tenantId != null ? [tenantId] : [])) as any[];
     const m = new Map<number, { count: number; lastOutcome: string; lastAt: string }>();
     for (const r of rows) m.set(r.leadId, { count: r.count, lastOutcome: r.lastOutcome, lastAt: r.lastAt });
     return m;

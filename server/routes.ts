@@ -785,12 +785,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   const MAP_CACHE_TTL = 8_000; // 8s — fast enough for real-time feel
   // Monotonic data version — powers the /api/leads/map ETag so a steady-state
   // poll returns 304 for the cost of a string compare, not a query + 50k-row
-  // serialize + gzip. Coarse by design: ANY lead/knock write (bustMapCache)
-  // invalidates every scope — writes are rare relative to polls, and coarse
-  // can never serve stale. The boot stamp makes cross-restart 304s impossible
+  // serialize + gzip. Two tiers: a write whose tenant is KNOWN bumps only that
+  // tenant's counter (other tenants keep their 304s); a write of unknown
+  // tenancy bumps the global epoch, invalidating everyone — coarse can never
+  // serve stale. The boot stamp makes cross-restart 304s impossible
   // (out-of-band DB edits while the server is down can't be version-tracked).
   const _leadsEtagBoot = Date.now().toString(36);
-  let _leadsBustCount = 0;
+  let _leadsEpoch = 0;
+  const _leadsBustByTenant = new Map<number, number>();
 
   function getMapPins(tenantId?: number, repFilter?: number | number[]) {
     const now = Date.now();
@@ -832,7 +834,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // 304 for the cost of a string compare. The scope key keeps role scoping
     // airtight — a rep's 304 token can never validate a manager's payload.
     const scopeKey = repFilter == null ? "all" : [repFilter].flat().sort((a, b) => a - b).join(",");
-    const etag = `W/"pins-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${_leadsBustCount}"`;
+    const ver = `${_leadsEpoch}.${_leadsBustByTenant.get(tid ?? 0) ?? 0}`;
+    const etag = `W/"pins-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${ver}"`;
     res.set("Cache-Control", "private, no-cache");
     res.set("ETag", etag);
     if (req.headers["if-none-match"] === etag) return res.status(304).end();
@@ -847,29 +850,28 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Reps only see leads assigned to them; managers/admins see all
     const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
 
-    const lim = limit ? Math.min(Number(limit), 500) : 200;
-    const off = offset ? Number(offset) : 0;
+    // Sanitize BEFORE SQL: NaN/negatives must never reach LIMIT/OFFSET —
+    // SQLite treats a negative LIMIT as unbounded, which would let any
+    // malformed query param force a full-table hydration.
+    const limN = Number(limit), offN = Number(offset);
+    const lim = Number.isFinite(limN) && limN > 0 ? Math.min(Math.floor(limN), 500) : 200;
+    const off = Number.isFinite(offN) && offN > 0 ? Math.floor(offN) : 0;
 
-    if (search) {
-      // Search path: LIKE-capped in SQL (500) then filtered/paged in JS — the
-      // result set is already bounded, so JS post-filtering stays O(500).
-      let rows = storage.searchLeads(String(search), tid, repFilter);
-      if (status && status !== "all") rows = rows.filter(l => l.leadStatus === String(status));
-      if (zip) rows = rows.filter(l => l.zip === String(zip));
-      if (city && city !== "all") rows = rows.filter(l => (l.city ?? "").toLowerCase() === String(city).toLowerCase());
-      if (state && state !== "all") rows = rows.filter(l => (l.state ?? "").toLowerCase() === String(state).toLowerCase());
-      return res.json({ leads: rows.slice(off, off + lim), total: rows.length, limit: lim, offset: off });
-    }
-
-    // List path: filters + ORDER BY + LIMIT/OFFSET pushed into SQL — the old
-    // code hydrated every tenant row (53 cols × 50k) to serve a 200-row page.
-    const { rows, total } = storage.getLeadsPage(tid, repFilter, {
+    const filterOpts = {
       status: status && status !== "all" ? String(status) : undefined,
       zip: zip ? String(zip) : undefined,
       city: city && city !== "all" ? String(city) : undefined,
       state: state && state !== "all" ? String(state) : undefined,
       limit: lim, offset: off,
-    });
+    };
+
+    // Both paths: filters + ORDER BY + LIMIT/OFFSET + exact count pushed into
+    // SQL — the old code hydrated every tenant row (53 cols × 50k) to serve a
+    // 200-row page, and the interim search path capped BEFORE filtering
+    // (dropping real matches — review finding).
+    const { rows, total } = search
+      ? storage.searchLeadsPage(String(search), tid, repFilter, filterOpts)
+      : storage.getLeadsPage(tid, repFilter, filterOpts);
     res.json({ leads: rows, total, limit: lim, offset: off });
   });
   app.get("/api/leads/:id", requireAuth, (req, res) => {
@@ -884,7 +886,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   // Team lead+ can create leads; manager+ can update status/delete
   // Helper to bust map pin cache after any lead mutation
-  function bustMapCache() { _mapPinCache.clear(); _leadsBustCount++; }
+  function bustMapCache(tenantId?: number) {
+    if (tenantId != null) {
+      _mapPinCache.delete(tenantId);
+      _leadsBustByTenant.set(tenantId, (_leadsBustByTenant.get(tenantId) ?? 0) + 1);
+    } else {
+      // Unknown tenancy → invalidate everyone (never risk a stale 304).
+      _mapPinCache.clear();
+      _leadsEpoch++;
+    }
+  }
   // Expose globally so write queue (module scope) can call it
   (globalThis as any).__bustMapCache = bustMapCache;
 
@@ -1885,7 +1896,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // from the client, which imports the same module.
     const newStatus = OUTCOME_TO_STATUS[parsed.data.outcome as KnockOutcome];
     if (newStatus) storage.updateLead(Number(req.params.id), { leadStatus: newStatus });
-    bustMapCache(); // a knock changes the pin's visited state — refresh the map layer
+    // A knock changes the pin's visited state even when leadStatus is unchanged
+    // (not_home) — bust this org's map layer explicitly.
+    bustMapCache((req as any).user?.tenantId ?? undefined);
     // ── WEEKLY COMMISSION ENGINE (authoritative pay system) ──────────────────
     // Sold → one QUALIFIED commissionable sale per door in the weekly ledger
     // (idempotent by lead); any other outcome on a previously-sold door reverses

@@ -41,6 +41,10 @@ export interface LeadKnockSheetProps {
   // result so the card can render Saving/Saved and merge 409 conflicts.
   onSaveNote: (leadId: number, note: string, baseUpdatedAt: string | null) => Promise<NoteSaveResult>;
   onClose: () => void;                    // escape key / overdrag (map tap closes upstream)
+  // Docked mode only: shift the card left by this many px so it never covers
+  // a right-side rail (the leads panel) — a rail-row tap must keep the list
+  // visible beside the card, or list-driven triage dies (review finding).
+  dockOffsetPx?: number;
 }
 
 // Peek height: everything a rep needs on a porch — address, chip, status row,
@@ -132,7 +136,7 @@ interface HistoryRow {
 interface LeadDetail { id: number; notes?: string | null; updatedAt?: string | null }
 
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
-  const { lead, onKnock, onSaveNote, onClose } = props;
+  const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0 } = props;
 
   // Keep the last lead rendered while `lead: null` animates the sheet out.
   const [renderedLead, setRenderedLead] = useState<SheetLead | null>(lead);
@@ -413,7 +417,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
           : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[24px] border-t border-white/10",
         dragging ? "" : "transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
       ].join(" ")}
-      style={{ transform }}
+      style={{ transform, ...(docked && dockOffsetPx ? { right: dockOffsetPx } : null) }}
     >
       {/* Drag region: handle + header + chip row. touchAction none so the
           browser never steals the gesture for page scroll. */}
@@ -435,7 +439,9 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             className="flex justify-center pt-2 pb-1 cursor-pointer"
             onClick={() => setSnap(s => (s === "peek" ? "expanded" : "peek"))}
           >
-            <div className="w-10 h-[5px] rounded-full bg-white/25" />
+            {/* white/40 clears the 3:1 non-text floor over the 0.86 ink sheet
+                on both basemap extremes (white/25 measured ~2.2:1). */}
+            <div className="w-10 h-[5px] rounded-full bg-white/40" />
           </div>
         ) : (
           <div className="pt-4" />

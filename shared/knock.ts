@@ -76,6 +76,14 @@ export const STATE_COLORS: Record<PinDisplayState, string> = {
   not_interested: "#ef4444",
 };
 
+// Human labels for the display states — lives HERE beside STATE_COLORS so the
+// vocabulary is defined once (search rows, leads panel, any future consumer).
+export const STATE_LABELS: Record<PinDisplayState, string> = {
+  unworked: "Prospect", not_home: "Not Home", contacted: "Contacted",
+  interested: "Interested", follow_up: "Follow-up", callback: "Callback",
+  sold: "SOLD", not_interested: "Not Interested",
+};
+
 export function pinDisplayState(p: {
   leadStatus: string; visited?: boolean | number | null; lastOutcome?: string | null;
 }): PinDisplayState {

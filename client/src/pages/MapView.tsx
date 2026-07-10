@@ -19,7 +19,7 @@ import { LeadKnockSheet } from "@/components/LeadKnockSheet";
 import { LeadsInViewPanel } from "@/components/LeadsInViewPanel";
 import { getKnockQueue, type KnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
 import { captureFieldFix } from "@/lib/geoFix";
-import { OUTCOME_TO_STATUS, pinDisplayState, STATE_COLORS, type KnockOutcome, type PinDisplayState } from "@shared/knock";
+import { OUTCOME_TO_STATUS, pinDisplayState, STATE_COLORS, STATE_LABELS, type KnockOutcome } from "@shared/knock";
 import { saveLeadNote, flushPendingNotes, type NotePoster, type NoteSaveResult } from "@/lib/leadNotes";
 import {
   UNCLUSTERED_PAINT, UNCLUSTERED_GLOW_PAINT, SELECTED_RING_SPEC,
@@ -70,15 +70,10 @@ const PIN_COLORS: Record<string, { bg: string; border: string; label: string }> 
   not_interested: { bg: "#ef4444", border: "#fca5a5", label: "Not Interested" }, // red
 };
 
-// Labels for the TRUE pin display state (pinDisplayState → STATE_COLORS).
-// PIN_COLORS above keys on raw leadStatus (6 states) and can't represent
-// callback (cyan) or not-home (blue) — search rows and the leads panel use
-// THIS pair so a row's dot always matches the exact hue the GPU paints.
-const DS_LABELS: Record<PinDisplayState, string> = {
-  unworked: "Prospect", not_home: "Not Home", contacted: "Contacted",
-  interested: "Interested", follow_up: "Follow-up", callback: "Callback",
-  sold: "SOLD", not_interested: "Not Interested",
-};
+// Search rows and the leads panel label pins by the TRUE display state
+// (pinDisplayState → STATE_COLORS/STATE_LABELS from @shared/knock) — the
+// PIN_COLORS map above keys on raw leadStatus (6 states) and can't represent
+// callback (cyan) or not-home (blue).
 
 
 // ── Bbox type ─────────────────────────────────────────────────────────────────
@@ -1650,12 +1645,15 @@ export default function MapView() {
     const q = deferredSearch.trim().toLowerCase();
     if (!q) return [];
     // Single pass keeping the top 8 by leadScore — no full sort of every match
-    // (a 1-char query can match tens of thousands of rows at scale).
+    // (a 1-char query can match tens of thousands of rows at scale). Ties
+    // break on higher id (newer lead first) so truncation is deterministic —
+    // the source array is unordered now that getLeadsForMap dropped ORDER BY.
+    const rank = (p: MapPin) => p.leadScore ?? 0;
     const top: MapPin[] = [];
     for (const { l, hay } of searchIndex) {
       if (!l.lat || !l.lng || !hay.includes(q)) continue;
       let i = top.length;
-      while (i > 0 && (top[i - 1].leadScore ?? 0) < (l.leadScore ?? 0)) i--;
+      while (i > 0 && (rank(top[i - 1]) < rank(l) || (rank(top[i - 1]) === rank(l) && top[i - 1].id < l.id))) i--;
       if (i < 8) {
         top.splice(i, 0, l);
         if (top.length > 8) top.pop();
@@ -2030,7 +2028,10 @@ export default function MapView() {
               <div className="absolute inset-0 z-20" onClick={() => { setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }} />
               <div
                 role="dialog" aria-label="Search locations" aria-modal="false"
-                className="absolute top-[60px] md:top-3 left-1/2 -translate-x-1/2 z-30 w-[min(440px,calc(100vw-24px))]"
+                // Phone: pinned left-3 → right-[72px] so the field AND its close
+                // button clear the control cluster (they underlapped it — tapping
+                // the ghosted × opened the leads drawer; review finding).
+                className="absolute top-[60px] md:top-3 left-3 right-[72px] md:left-1/2 md:right-auto md:-translate-x-1/2 z-30 md:w-[min(440px,calc(100vw-24px))]"
                 onClick={e => e.stopPropagation()}
               >
                 <div className="relative">
@@ -2048,13 +2049,15 @@ export default function MapView() {
                     onClick={() => { setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }}
                     aria-label="Close search"
                     data-testid="map-search-close"
-                    className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 flex items-center justify-center rounded-full text-white/70 hover:text-white hover:bg-white/10"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 flex items-center justify-center rounded-full text-white/70 hover:text-white hover:bg-white/10 after:absolute after:-inset-1"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
                 {searchMatches.length > 0 && (
-                  <div className="glass-surface mt-1.5 overflow-hidden max-h-[min(60vh,360px)] overflow-y-auto">
+                  // glass-opaque: text-dense + keeps the worst-case simultaneous
+                  // blur count at ≤5 surfaces (review measured 6 with it blurred).
+                  <div className="glass-surface glass-opaque mt-1.5 overflow-hidden max-h-[min(60vh,360px)] overflow-y-auto">
                     {searchMatches.map(l => {
                       // TRUE pin hue/label (pinDisplayState) — a callback door
                       // shows cyan "Callback" here exactly as painted on the map.
@@ -2067,11 +2070,12 @@ export default function MapView() {
                           onClick={() => { flyToLead(l); setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }}
                           className="w-full flex items-center gap-2.5 px-3 py-2.5 min-h-[44px] text-left hover:bg-white/10 transition-colors border-b border-white/[0.08] last:border-0"
                         >
-                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5" style={{ background: dsColor }} title={DS_LABELS[ds]} />
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5" style={{ background: dsColor }} title={STATE_LABELS[ds]} />
                           <span className="min-w-0 flex-1">
                             <span className="block text-[13px] text-white font-medium truncate">{l.address}</span>
                             <span className="block text-[11px] text-white/50 truncate">
-                              {l.city}, {l.state} · <span style={{ color: dsColor }}>{DS_LABELS[ds]}</span>
+                              {/* dot carries the hue; label stays neutral (11px raw hues fail AA on glass) */}
+                              {l.city}, {l.state} · <span className="text-white/70">{STATE_LABELS[ds]}</span>
                               {repName ? ` · ${repName}` : " · Unassigned"}
                             </span>
                           </span>
@@ -2340,8 +2344,8 @@ export default function MapView() {
                     {([["satellite", "Satellite"], ["streets", "Street"], ["dark", "Dark"]] as const).map(([mode, label]) => (
                       <button key={mode} onClick={() => setMapStyleMode(mode)} data-testid={`mapmode-${mode}`} disabled={!mapReady}
                         aria-pressed={mapStyleMode === mode} aria-label={`${label} basemap`} title={label}
-                        className={`text-[11px] min-h-[44px] rounded-lg transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/80 hover:bg-white/20"}`}>
-                        {label.slice(0, 3)}
+                        className={`text-[10px] min-h-[44px] rounded-lg transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/80 hover:bg-white/20"}`}>
+                        {label}
                       </button>
                     ))}
                   </div>
@@ -2382,7 +2386,7 @@ export default function MapView() {
                 <span key={i} className="w-2 h-2 rounded-full" style={{ background: pin.bg }} />
               ))}
               {(filterStatus !== "all" || filterRep !== "all") && (
-                <span className="ml-1 text-[10px] font-semibold text-teal-300">filtered</span>
+                <span className="ml-1 text-[10px] font-semibold text-teal-200">filtered</span>
               )}
             </button>
           )}
@@ -2411,33 +2415,37 @@ export default function MapView() {
                 <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Filter by status</span>
                 <span className="flex items-center gap-2">
                   {filterStatus !== "all" && (
-                    <button onClick={() => setFilterStatus("all")} className="text-[10px] text-teal-400 hover:text-teal-300">Clear</button>
+                    <button onClick={() => setFilterStatus("all")} className="relative text-[10px] text-teal-400 hover:text-teal-300 after:absolute after:-inset-3">Clear</button>
                   )}
                   <button onClick={() => setLegendOpen(false)} data-testid="legend-collapse" aria-label="Collapse legend"
-                    className="relative w-8 h-8 -my-1.5 inline-flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/10 text-sm leading-none after:absolute after:-inset-1">×</button>
+                    className="relative w-8 h-8 -my-1.5 inline-flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/10 text-sm leading-none after:absolute after:-inset-1.5">×</button>
                 </span>
               </div>
               {Object.entries(PIN_COLORS).map(([status, pin]) => {
                 const count = statusCounts[status] ?? 0;
                 const isActive = filterStatus === status;
                 return (
-                  <div
+                  // Real toggle buttons (were click-only divs — no keyboard or
+                  // AT path to the status filter at all; review finding), 44px.
+                  <button
                     key={status}
+                    type="button"
+                    aria-pressed={isActive}
                     onClick={() => setFilterStatus(isActive ? "all" : status)}
-                    className="flex items-center gap-2 mb-1 cursor-pointer rounded-lg px-1.5 min-h-[36px] transition-all"
+                    className="w-full flex items-center gap-2 mb-0.5 cursor-pointer rounded-lg px-1.5 min-h-[44px] transition-all text-left focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-inset focus:outline-none"
                     style={{ background: isActive ? pin.bg + "22" : "transparent" }}
                   >
-                    <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg, boxShadow: isActive ? `0 0 6px ${pin.bg}` : "none" }} />
+                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg, boxShadow: isActive ? `0 0 6px ${pin.bg}` : "none" }} />
                     <span className="text-[11px] flex-1" style={{ color: isActive ? pin.bg : "#94a3b8", fontWeight: isActive ? 700 : 400 }}>{pin.label}</span>
                     <span className="text-[10px] tabular-nums" style={{ color: count > 0 ? "#e2e8f0" : "#475569" }}>{count}</span>
-                  </div>
+                  </button>
                 );
               })}
               {canAssign && territories.length > 0 && (
                 <div className="pt-2 mt-1 border-t border-white/10">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Assigned areas</span>
-                    <button onClick={() => setShowTerritories(v => !v)} className="text-[10px] text-white/40 hover:text-white/70">{showTerritories ? "Hide" : "Show"}</button>
+                    <button onClick={() => setShowTerritories(v => !v)} className="relative text-[10px] text-white/50 hover:text-white/80 after:absolute after:-inset-3">{showTerritories ? "Hide" : "Show"}</button>
                   </div>
                   {territories.map(t => {
                     const prog = territoryProgress.find(p => p.id === t.id);
@@ -2472,7 +2480,7 @@ export default function MapView() {
                         <div className="mt-1 ml-4 bg-white/[0.06] border border-white/[0.08] rounded-lg p-1.5" data-testid={`assign-menu-${t.id}`}>
                           <select data-testid={`assign-select-${t.id}`} defaultValue=""
                             onChange={e => { if (e.target.value) { assignTerritoryMutation.mutate({ id: t.id, repId: Number(e.target.value) }); setReclaimMenuId(null); } }}
-                            className="w-full bg-black/50 text-white text-[10px] rounded px-1 py-1 border border-white/10">
+                            className="w-full bg-white/10 text-white text-[10px] rounded-lg px-1 py-1 border border-white/20">
                             <option value="" className="text-slate-900">Assign to next rep…</option>
                             {team.filter(m => m.active).map(m => <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>)}
                           </select>
@@ -2492,7 +2500,7 @@ export default function MapView() {
                           <div className="flex items-center gap-1">
                             <select data-testid={`reassign-select-${t.id}`} defaultValue=""
                               onChange={e => { if (e.target.value) reclaimMutation.mutate({ id: t.id, mode: "reassign", newRepId: Number(e.target.value) }); }}
-                              className="flex-1 bg-black/50 text-white text-[10px] rounded px-1 py-1 border border-white/10">
+                              className="flex-1 bg-white/10 text-white text-[10px] rounded-lg px-1 py-1 border border-white/20">
                               <option value="" className="text-slate-900">Reassign to rep…</option>
                               {team.filter(m => m.active && m.id !== t.repId).map(m => <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>)}
                             </select>
@@ -2514,6 +2522,7 @@ export default function MapView() {
               onKnock={handleKnock}
               onSaveNote={handleSaveNote}
               onClose={closeSheet}
+              dockOffsetPx={leadsOpen ? 340 : 0}
             />
           )}
         </div>

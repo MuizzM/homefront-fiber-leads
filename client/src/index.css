@@ -272,6 +272,20 @@
     backdrop-filter: none !important;
     background-color: var(--glass-fill-opaque);
   }
+  /* Map chrome stays DARK-glass in both app themes. Token-based components
+     floated over the map (territory panel) re-assert the dark palette here so
+     their 20+ semantic-token usages read correctly even under `.light`. */
+  .glass-ink-scope {
+    --card: 210 50% 13%;
+    --card-foreground: 210 20% 94%;
+    --foreground: 210 20% 94%;
+    --secondary: 210 40% 20%;
+    --secondary-foreground: 210 20% 80%;
+    --muted: 210 40% 17%;
+    --muted-foreground: 210 15% 55%;
+    --border: 210 35% 22%;
+    --input: 210 35% 22%;
+  }
   /* Legibility floor when blur is unavailable or the user opts out */
   @supports not (backdrop-filter: blur(1px)) {
     .glass-surface, .glass-capsule, .glass-sheet {
@@ -279,9 +293,12 @@
     }
   }
   @media (prefers-reduced-transparency: reduce) {
+    /* Users who asked for reduced transparency get FULLY opaque ink, no
+       sheen — mirrors the no-backdrop-filter fallback exactly. */
     .glass-surface, .glass-capsule, .glass-sheet {
       -webkit-backdrop-filter: none; backdrop-filter: none;
-      background-color: var(--glass-fill-opaque);
+      background-color: hsl(var(--glass-ink));
+      background-image: none;
     }
   }
 }
