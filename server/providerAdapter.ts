@@ -149,7 +149,7 @@ export class KineticProvider implements AvailabilityProvider {
     // Anything else — a soft `success:false`, a null/empty/unrecognized segment
     // with no explicit not-found — is a NON-ANSWER (a timeout is not a "no"). It
     // must be inconclusive so it can never flip fiber status.
-    const explicitNotServiceable = data?.validationResult === "AddressNotFound";
+    const explicitNotServiceable = /addressnotfound|unserviceable|outofterritory|not\s*serviceable|no\s*service/i.test(String(data?.validationResult ?? ""));
     if (!norm.recognized && !explicitNotServiceable) {
       return this.failObs(target, "malformed", latencyMs);
     }

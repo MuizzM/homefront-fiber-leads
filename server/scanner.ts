@@ -324,13 +324,22 @@ export async function scanAddress(
       signal: AbortSignal.timeout(5000), // 7s per address — frees slot quickly on slow/blocked requests
     });
 
-    // On 401/403 — token expired mid-scan. Force refresh and retry EXACTLY once.
+    // 403 = the Decodo egress IP is WAF/geo-BLOCKED (or a bot challenge). Refreshing
+    // the token can't fix a blocked IP and the refresh call is ALSO proxied, so it
+    // just burns two more blocked requests — fail fast instead (a non-answer, never
+    // a no-service). The caller should back off / rotate the proxy IP.
+    if (!res.ok && res.status === 403) {
+      base.notes = "Proxy egress blocked (403) — back off / rotate IP";
+      base.apiSource = "failed";
+      return base;
+    }
+    // On 401 — token expired mid-scan. Force refresh and retry EXACTLY once.
     // The _retriedAfterAuth guard caps this at a single refresh+retry: without it,
-    // a revoked credential or a 403-answering challenge would recurse without
-    // bound, and each level makes two proxy (Decodo) requests — unbounded spend.
-    if (!res.ok && (res.status === 401 || res.status === 403)) {
+    // a revoked credential would recurse without bound, and each level makes two
+    // proxy (Decodo) requests — unbounded spend.
+    if (!res.ok && res.status === 401) {
       if (_retriedAfterAuth) {
-        base.notes = `Auth still failing (${res.status}) after one token refresh`;
+        base.notes = `Auth still failing (401) after one token refresh`;
         base.apiSource = "failed";
         return base;
       }
@@ -338,7 +347,7 @@ export async function scanAddress(
         await refreshTokenFromApi();
         return await scanAddress(address, city, state, zip, true); // one retry with a fresh token
       } catch {
-        base.notes = `Token refresh failed after ${res.status}`;
+        base.notes = `Token refresh failed after 401`;
         base.apiSource = "failed";
         return base;
       }
@@ -352,22 +361,27 @@ export async function scanAddress(
     const data: KineticAddressResponse = await res.json();
     base.rawResponse = data;
 
-    // Address explicitly not in Kinetic fabric → a genuine, conclusive no-service.
-    if (data.validationResult === "AddressNotFound") {
+    // CONCLUSIVE not-serviceable verdicts — Kinetic definitively says this address
+    // is not in / not served by its fabric (not in the DB, out of territory, or
+    // unserviceable). These are REAL no-service answers to record (so we never
+    // re-scan them), NOT failures. Matched by a known family of validationResult
+    // codes, e.g. AddressNotFound, AddressUnserviceableOutOfTerritory.
+    const vr = String(data.validationResult ?? "");
+    if (/addressnotfound|unserviceable|outofterritory|not\s*serviceable|no\s*service/i.test(vr)) {
       base.fiberStatus = "no_service";
       base.apiSource = "kinetic_live";
       base.confidence = "HIGH";
-      base.notes = "Address not found in Kinetic service fabric";
+      base.notes = `Not serviceable: ${vr}`;
       return base;
     }
-    // A soft `success:false` WITHOUT an explicit AddressNotFound is a NON-ANSWER
-    // (provider hiccup / degraded / schema change), NOT a confirmed "no service".
-    // Treating it as conclusive would let a provider outage flip the whole pool
-    // to unavailable and then fabricate "newly live" flips the next healthy night.
+    // A soft `success:false` with an UNRECOGNIZED / error-shaped validationResult is
+    // a genuine NON-ANSWER (provider hiccup / degraded / schema change), NOT a
+    // confirmed "no service" — treating it as conclusive would let an outage flip
+    // the pool unavailable and fabricate "newly live" flips the next healthy night.
     if (!data.success) {
       base.apiSource = "failed";
       base.confidence = "LOW";
-      base.notes = `Non-conclusive response (success=false, ${data.validationResult ?? "no validationResult"})`;
+      base.notes = `Non-conclusive response (success=false, ${vr || "no validationResult"})`;
       return base;
     }
 
