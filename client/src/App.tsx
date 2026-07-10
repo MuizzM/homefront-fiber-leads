@@ -21,6 +21,7 @@ const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const MapView = lazy(() => import("@/pages/MapView"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Scanners = lazy(() => import("@/pages/Scanners"));
+const ScanIntel = lazy(() => import("@/pages/ScanIntel"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
@@ -140,7 +141,16 @@ function AppRoutes() {
             </Guard>
           </Route>
 
-          {/* ── Scanner — admin only (scanning spends proxy money) ── */}
+          {/* ── Scan Intelligence — market discovery. Manager+ can read the
+              intelligence + deploy; only admin can start a (money-spending)
+              scan, gated inside the page and on the server. ── */}
+          <Route path="/markets">
+            <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
+              <ScanIntel />
+            </Guard>
+          </Route>
+
+          {/* ── Scanner — admin only (advanced tools + token; scanning spends proxy money) ── */}
           <Route path="/scanner">
             <Guard role={role} allowed={["admin"]}>
               <Scanners />

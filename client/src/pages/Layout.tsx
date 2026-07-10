@@ -8,6 +8,7 @@ import {
   Menu,
   X,
   Radar,
+  TrendingUp,
   Trophy,
   LogOut,
   Sun,
@@ -79,8 +80,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: () => true,                               group: "Field" },
   { href: "/my-commission",label: "My Commission", icon: Wallet,       show: () => true,                               group: "Field" },
   { href: "/commissions",  label: "Commissions",   icon: DollarSign,   show: () => true,                               group: "Field" },
-  // ── Scan — admin only (scanning spends proxy money) ───────────────────────
-  { href: "/scanner",      label: "Scanner",       icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },
+  // ── Scan — market intelligence (manager+ read/deploy); Scanner=admin tools ─
+  { href: "/markets",      label: "Markets",       icon: TrendingUp,   show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
+  { href: "/scanner",      label: "Scan Tools",    icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/commission-console", label: "Payroll", icon: Banknote,     show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
