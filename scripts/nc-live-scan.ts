@@ -23,7 +23,8 @@ const NC_KINETIC = [
   { city: "Asheboro", zip: "27203" }, { city: "High Point", zip: "27262" }, { city: "Albemarle", zip: "28001" },
 ];
 const STATE = "NC";
-const CONCURRENCY = 5;
+const CONCURRENCY = 3;             // gentle — avoid re-tripping Kinetic's rate limit
+const PACE_MS = 120;               // small pause between checks per worker
 const usd = (checks: number) => (checks * Number(process.env.SCAN_BYTES_PER_CHECK ?? 12000) / 1e9 * Number(process.env.SCAN_USD_PER_GB ?? 3)).toFixed(4);
 
 const arg = (process.argv[2] || "all").toLowerCase();
@@ -38,8 +39,14 @@ const known = NC_KINETIC.find(c => c.city.toLowerCase() === arg);
 const cities = arg === "all" ? NC_KINETIC : known ? [known] : [{ city: process.argv[2], zip: ZIP_ARG }];
 
 async function resolveAddresses(city: string, zip: string): Promise<{ source: string; addrs: any[] }> {
-  const pool = storage.getScanTargetsByCity(city, STATE);
-  if (!FORCE_HARVEST && pool.length >= 25) return { source: "pool", addrs: pool.map((r: any) => ({ address: r.address, city: r.city, state: r.state, zip: r.zip || zip, lat: r.lat, lng: r.lng })) };
+  // Pool: never-scanned addresses FIRST so re-runs make progress on the backlog
+  // instead of re-checking already-done ones.
+  const pool = FORCE_HARVEST ? [] : rawDb.prepare(
+    `SELECT address, city, state, zip, lat, lng FROM scan_targets
+     WHERE lower(city)=lower(?) AND lower(state)=lower(?)
+     ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC`
+  ).all(city, STATE) as any[];
+  if (pool.length >= 25) return { source: "pool", addrs: pool.map((r: any) => ({ address: r.address, city: r.city, state: r.state, zip: r.zip || zip, lat: r.lat, lng: r.lng })) };
   // Overpass (free OSM) returns the ACTUAL addresses, not a wasteful grid — it's
   // the right source. 504s are transient overload, so retry a few times with backoff.
   for (let attempt = 1; attempt <= 4; attempt++) {
@@ -134,20 +141,24 @@ async function scanCity(city: string, zip: string) {
   async function drain(list: any[]): Promise<any[]> {
     let i = 0; const blockedOut: any[] = [];
     await Promise.all(Array.from({ length: CONCURRENCY }, async () => {
-      while (i < list.length) { const a = list[i++]; if (await processAddr(a) === "blocked") blockedOut.push(a); }
+      while (i < list.length) { const a = list[i++]; if (await processAddr(a) === "blocked") blockedOut.push(a); await sleep(PACE_MS); }
     }));
     return blockedOut;
   }
 
-  let blocked = await drain(batch);
-  // Retry pass: 403 = the proxy IP was blocked, not a real "no". Cool down to let
-  // Decodo rotate the egress IP, then re-scan the blocked addresses ONCE so we
-  // don't lose real coverage to a transient block.
-  if (blocked.length) {
-    console.log(`   ⏸ ${blocked.length} blocked (403) — cooling down 25s to rotate IP, then retrying…`);
-    await sleep(25000);
-    const stillBlocked = await drain(blocked);
-    failed += stillBlocked.length; // whatever is still blocked after the retry is a real miss for this run
+  // Kinetic rate-limits to ~40-50 checks per burst, then 403-blocks for minutes.
+  // So scan in small BURSTs with a COOLDOWN whenever a burst gets blocked — this
+  // works WITH the limit instead of hammering through it. Self-limits to a wall-
+  // clock budget; whatever's unscanned stays queued in the pool for next time.
+  const BURST = 40, COOLDOWN_MS = 60_000, TIME_BUDGET_MS = 7 * 60_000;
+  const t0 = Date.now();
+  for (let start = 0; start < batch.length; start += BURST) {
+    if (Date.now() - t0 > TIME_BUDGET_MS) { console.log(`   ⏹ time budget reached — ${batch.length - start} left queued in pool`); break; }
+    const chunk = batch.slice(start, start + BURST);
+    const blocked = await drain(chunk);
+    failed += blocked.length;
+    console.log(`   burst ${Math.floor(start / BURST) + 1}: ${chunk.length - blocked.length} ok, ${blocked.length} blocked · running: ${leads} leads, ${newFiber} new-fiber`);
+    if (start + BURST < batch.length) await sleep(blocked.length > chunk.length * 0.25 ? COOLDOWN_MS : 4000);
   }
 
   console.log(`   ✓ checked ${checked} · ${newFiber} new-fiber (${leads} new leads) · ${comingSoon} coming-soon · ${existing} existing · ${noService} no-service · ${failed} failed · ~$${usd(checked)}`);
