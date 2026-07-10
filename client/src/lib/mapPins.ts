@@ -158,19 +158,20 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
       type: "symbol",
       source: "composite",
       "source-layer": "housenum_label",
-      minzoom: 17.2,
+      minzoom: 16.8, // route-planning zoom — the address IS the operational label
       layout: {
         "text-field": ["get", "house_num"],
         "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
-        "text-size": ["interpolate", ["linear"], ["zoom"], 17.2, 9.5, 18.5, 12.5, 20, 15.5],
+        // Legible on a phone at arm's length: floor 11px, scales up close in.
+        "text-size": ["interpolate", ["linear"], ["zoom"], 16.8, 11, 18.5, 13.5, 20, 16],
         "text-padding": 3,
       },
       paint: {
         "text-color": colors.text,
         "text-halo-color": colors.halo,
-        "text-halo-width": 1.15,
+        "text-halo-width": 1.3,
         // Fade in across a third of a zoom level — appears, never pops/flickers.
-        "text-opacity": ["interpolate", ["linear"], ["zoom"], 17.2, 0, 17.55, 1],
+        "text-opacity": ["interpolate", ["linear"], ["zoom"], 16.8, 0, 17.15, 1],
       },
     }, before);
   } catch { /* a style variant without housenum tiles — skip, never fake it */ }

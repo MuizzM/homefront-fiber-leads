@@ -146,6 +146,7 @@ export default function MapView() {
   const [layersOpen, setLayersOpen] = useState(false);
   const searchBtnRef = useRef<HTMLButtonElement | null>(null); // focus returns here on close
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const layersBtnRef = useRef<HTMLButtonElement | null>(null); // focus returns here on layers close
 
   // Map style toggle
   const [mapStyleMode, setMapStyleMode] = useState<"dark" | "satellite" | "streets">("satellite");
@@ -518,7 +519,7 @@ export default function MapView() {
         filter: ["has", "point_count"],
         maxzoom: 13.5,
         paint: {
-          "circle-color": ["step",["get","point_count"],"#22c55e",10,"#f59e0b",30,"#ef4444"],
+          "circle-color": ["step",["get","point_count"],"#0d9488",10,"#0f766e",30,"#115e59"],
           "circle-radius": ["step",["get","point_count"],26,10,33,30,42],
           "circle-opacity": 0.25,
           "circle-stroke-width": 0,
@@ -533,11 +534,14 @@ export default function MapView() {
         filter: ["has", "point_count"],
         maxzoom: 13.5,
         paint: {
+          // Neutral teal DENSITY ramp — clusters mean "how many," never a status.
+          // (green/red are reserved for sold/dead pins; reusing them here would
+          // make the overview contradict the pin colors at close zoom.)
           "circle-color": [
             "step", ["get", "point_count"],
-            "#22c55e", 10,
-            "#f59e0b", 30,
-            "#ef4444"
+            "#0d9488", 10,
+            "#0f766e", 30,
+            "#115e59"
           ],
           "circle-radius": ["step", ["get", "point_count"], 18, 10, 24, 30, 32],
           "circle-opacity": 0.92,
@@ -722,24 +726,27 @@ export default function MapView() {
     });
   }, [leads, territories, isAdmin, isRep, user?.teamMemberId]);
 
+  // The EXACT set of leads currently painted on the map — territory-clip, then
+  // rep filter, then status filter. Single source of truth for both the pin
+  // layer AND the lasso, so a selection can never enclose a hidden lead.
+  const visibleLeads = useMemo(() => {
+    let out = territoryClippedLeads;
+    if (canAssign && filterRep !== "all") {
+      out = out.filter(l => filterRep === "unassigned" ? !l.assignedRepId : l.assignedRepId === Number(filterRep));
+    }
+    if (filterStatus !== "all") out = out.filter(l => l.leadStatus === filterStatus);
+    return out;
+  }, [territoryClippedLeads, canAssign, filterRep, filterStatus]);
+
+  // Expose the visible set to the (ref-based) lasso handler.
+  useEffect(() => { (window as any).__visibleLeads = visibleLeads; }, [visibleLeads]);
+
   // ── Update cluster GeoJSON when leads/filter/territory changes ───────────
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
     const src = map.getSource("leads-cluster") as any;
     if (!src) return;
-
-    let leadsToShow = territoryClippedLeads;
-
-    // Rep filter (admin/manager/team lead) — narrows the map pins, not just the list
-    if (canAssign && filterRep !== "all") {
-      leadsToShow = leadsToShow.filter(l =>
-        filterRep === "unassigned" ? !l.assignedRepId : l.assignedRepId === Number(filterRep)
-      );
-    }
-
-    if (filterStatus !== "all") leadsToShow = leadsToShow.filter(l => l.leadStatus === filterStatus);
-    const visibleLeads = leadsToShow;
 
     // GPU-rendered circle layer — no DOM markers, handles 100k+ points.
     // `ds` = precomputed display state so circle-color stays a flat GPU match.
@@ -756,8 +763,8 @@ export default function MapView() {
     // NOTE: this dep array must NEVER gain selection/sheet state — a pin tap must
     // rebuild zero GeoJSON. Selection is a setFilter on its own effect below.
     // It must also stay free of poll-churned identities (team, territories, user):
-    // the memoized territoryClippedLeads absorbs those upstream.
-  }, [territoryClippedLeads, mapReady, filterStatus, filterRep, canAssign, styleEpoch]);
+    // the memoized visibleLeads absorbs those upstream.
+  }, [visibleLeads, mapReady, styleEpoch]);
 
   // ── Selected-pin ring — pure style-thread update, no setData, no re-cluster ──
   useEffect(() => {
@@ -936,14 +943,14 @@ export default function MapView() {
         // Cluster glow
         map.addLayer({ id: "lead-clusters-glow", type: "circle", source: "leads-cluster",
           filter: ["has", "point_count"], maxzoom: 13.5,
-          paint: { "circle-color": ["step",["get","point_count"],"#22c55e",10,"#f59e0b",30,"#ef4444"],
+          paint: { "circle-color": ["step",["get","point_count"],"#0d9488",10,"#0f766e",30,"#115e59"],
             "circle-radius": ["step",["get","point_count"],26,10,33,30,42], "circle-opacity": 0.25 },
         });
         map.addLayer({
           id: "lead-clusters", type: "circle", source: "leads-cluster",
           filter: ["has", "point_count"], maxzoom: 13.5,
           paint: {
-            "circle-color": ["step",["get","point_count"],"#22c55e",10,"#f59e0b",30,"#ef4444"],
+            "circle-color": ["step",["get","point_count"],"#0d9488",10,"#0f766e",30,"#115e59"],
             "circle-radius": ["step",["get","point_count"],18,10,24,30,30],
             "circle-opacity": 0.9, "circle-stroke-width": 2.5, "circle-stroke-color": "#fff",
           },
@@ -1084,10 +1091,12 @@ export default function MapView() {
       // Too small to be a deliberate loop → treat as accidental tap, clear.
       if (stroke.length < 8) { stroke = []; clearPreview(); return; }
       render(true);
-      const allLeads: MapPin[] = (window as any).__allLeads ?? [];
-      // Bounding-box rejection before the exact test: O(n + k·v) instead of
-      // O(n·v) — measured 1.9ms → 0.7ms on 3,355 pins (see lib/mapGeo.ts).
-      const selected = selectPointsInPolygon(allLeads, stroke);
+      // Select from the VISIBLE set (territory-clip + rep + status filters), so
+      // a lasso only ever selects leads the user can actually see and assign —
+      // never a hidden lead. Falls back to all leads if the map hasn't published
+      // a filtered set yet. Bbox-rejected O(n + k·v) (see lib/mapGeo.ts).
+      const source: MapPin[] = (window as any).__visibleLeads ?? (window as any).__allLeads ?? [];
+      const selected = selectPointsInPolygon(source, stroke);
       setLassoPoints(stroke);
       setLassoSelected(selected);
     };
@@ -1227,9 +1236,20 @@ export default function MapView() {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
+  // Belt-and-suspenders: kill the scan poll interval on unmount so a scan in
+  // flight when the user navigates away can't keep firing setState/apiRequest
+  // (and, if the job 404s post-GC, poll forever).
+  useEffect(() => () => stopPolling(), [stopPolling]);
+
+  // Transient scan dots are DOM markers (Mapbox repositions each on every map
+  // move) — cap the count so a large fresh-build scan can't turn panning into
+  // O(n) main-thread work. Found leads still land as GPU pins via the live
+  // refresh; the dots are just an at-a-glance "found here" hint.
+  const MAX_SCAN_DOTS = 400;
   const addScanDot = useCallback((row: ScanRow & { leadTag?: string | null; leadScore?: number }) => {
     const map = mapRef.current;
     if (!map || !row.lat || !row.lng) return;
+    if (scanMarkersRef.current.length >= MAX_SCAN_DOTS) return; // bounded marker budget
 
     // Dot color + size logic based on fiber status + lead tag
     // 🟢 Green pulsing = HOT LEAD (NEW FIBER + billingStatus N, no subscriber)
@@ -1384,6 +1404,7 @@ export default function MapView() {
         searchBtnRef.current?.focus();
       } else if (layersOpen) {
         setLayersOpen(false);
+        layersBtnRef.current?.focus();
       } else if (lassoMode) {
         exitLasso();
       } else if (drawMode || drawnBBox) {
@@ -1650,7 +1671,20 @@ export default function MapView() {
              filter lives in the legend panel; Assign Area + Scan Area live on
              the control rail; banners FLOAT over the map (the page root is
              relative, so this stack overlays the map below). ── */}
-      <div className="absolute top-[108px] md:top-16 left-1/2 -translate-x-1/2 z-30 w-[min(620px,calc(100vw-24px))] space-y-1.5 pointer-events-none [&>*]:pointer-events-auto">
+      {/* Screen-reader scan announcements — MILESTONES only (start + outcome),
+          never the per-poll progress ticks that would spam a screen reader. */}
+      <div className="sr-only" role="status" aria-live="polite" data-testid="scan-sr">
+        {scanning ? "Scanning the selected area." : scanOutcome && !scanStale ? (
+          scanOutcome.kind === "success" ? `Scan complete. ${scanOutcome.found} new-fiber lead${scanOutcome.found === 1 ? "" : "s"} found.`
+          : scanOutcome.kind === "empty" ? "Scan complete. No new fiber found in this area."
+          : scanOutcome.kind === "error" ? "Scan failed."
+          : scanOutcome.kind === "cancelled" ? `Scan stopped. ${scanOutcome.found} found so far.` : ""
+        ) : ""}
+      </div>
+
+      {/* On mobile: left-3 → right-[68px] so the banner clears the icon cluster
+          in the top-right corner. On desktop: centered. */}
+      <div style={{ top: "calc(env(safe-area-inset-top) + 6.75rem)" }} className="absolute left-3 right-[68px] md:top-16 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[min(620px,calc(100vw-24px))] z-30 space-y-1.5 pointer-events-none [&>*]:pointer-events-auto">
 
       {/* ── Scan panel — the scan tool's full state surface. Scope is always the
              DRAWN BOX. Communicates: drawing → box drawn → scanning → a result
@@ -1662,7 +1696,7 @@ export default function MapView() {
         return (
         <div className={`px-3 py-2 bg-black/85 backdrop-blur-md border rounded-xl shadow-xl flex flex-wrap items-center gap-2 ${
           scanOutcome?.kind === "error" ? "border-red-500/50" : scanOutcome?.kind === "success" ? "border-emerald-500/40" : "border-orange-500/40"
-        }`} data-testid="scan-panel" role="status" aria-live="polite">
+        }`} data-testid="scan-panel">
           <span className="text-[11px] flex items-center gap-1.5 text-white/80">
             {scanning ? <><Loader2 className="w-3 h-3 animate-spin" /> Scanning {total ? `${done}/${total}` : ""} · {newFound} new fiber</>
               : freshSameBox && scanOutcome?.kind === "success" ? <><CheckCircle2 className="w-3 h-3 text-emerald-400" /> Found {scanOutcome.found} new-fiber lead{scanOutcome.found === 1 ? "" : "s"} in this area</>
@@ -1748,10 +1782,12 @@ export default function MapView() {
         {/* MAP */}
         <div className="relative flex-1 min-w-0">
           <div style={{ position: "absolute", inset: 0 }}>
-            {/* rep-clean-map hides the Mapbox zoom/compass/geolocate button stack on
-                mobile rep screens — pinch-zoom + the locate FAB cover both, and the
-                porch test says every leftover control is clutter. */}
-            <div ref={mapContainer} className={isRep && isMobile ? "rep-clean-map" : undefined} style={{ width: "100%", height: "100%" }} />
+            {/* rep-clean-map hides the native Mapbox zoom/compass/geolocate stack.
+                On mobile it's hidden for EVERY role — the native stack lives in
+                the same top-right corner as our icon cluster and would collide;
+                pinch-zoom + the locate FAB cover its function. Desktop keeps the
+                native zoom/compass (no cluster collision, useful for mouse). */}
+            <div ref={mapContainer} className={isMobile ? "rep-clean-map" : undefined} style={{ width: "100%", height: "100%" }} />
           </div>
 
           {!mapReady && !noToken && (
@@ -1779,15 +1815,34 @@ export default function MapView() {
             aria-label="Open navigation menu"
             data-testid="map-menu-button"
             onClick={() => window.dispatchEvent(new CustomEvent("hfs:open-menu"))}
-            className="md:hidden absolute top-3 left-3 z-30 h-10 w-10 rounded-full bg-black/80 backdrop-blur-md border border-white/15 shadow-lg flex items-center justify-center text-white/90 active:scale-95 transition"
+            style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
+            className="md:hidden absolute left-3 z-30 h-11 w-11 rounded-full bg-black/80 backdrop-blur-md border border-white/15 shadow-lg flex items-center justify-center text-white/90 active:scale-95 transition"
           >
             <Menu className="w-4.5 h-4.5" style={{ width: 18, height: 18 }} aria-hidden="true" />
           </button>
 
+          {/* First-use empty state — a brand-new org with no leads gets guidance,
+              not a blank map over a random town. */}
+          {mapReady && !isRep && leads.length === 0 && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6">
+              <div className="pointer-events-auto max-w-xs text-center rounded-2xl bg-black/85 backdrop-blur-md border border-white/10 p-6 shadow-2xl">
+                <div className="w-12 h-12 rounded-2xl bg-primary/15 border border-primary/25 flex items-center justify-center mx-auto mb-3">
+                  <MapIcon className="w-6 h-6 text-primary" />
+                </div>
+                <p className="text-sm font-semibold text-white">No leads on the map yet</p>
+                <p className="text-xs text-white/60 mt-1.5 leading-relaxed">
+                  {isAdmin
+                    ? "Draw a box with the scan tool to find new-fiber homes, or import a list — they'll appear here as assignable pins."
+                    : "Once your team is assigned leads or territories, they'll show up here."}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Lead count chip — top left (reps get the progress HUD instead);
               sits right of the menu button on mobile, flush left on desktop */}
           {mapReady && leads.length > 0 && !isRep && (
-            <div className="absolute top-3 left-[60px] md:left-3 bg-black/80 backdrop-blur-sm rounded-lg px-3 py-1.5 z-10 flex items-center gap-2 shadow-lg">
+            <div style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }} className="absolute left-[64px] md:left-3 md:top-3 bg-black/80 backdrop-blur-sm rounded-lg px-3 py-1.5 z-10 flex items-center gap-2 shadow-lg">
               <div className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_rgba(34,197,94,1)] animate-pulse" />
               <span className="text-xs font-bold text-white">
                 {filterStatus === "all" ? leads.length : (statusCounts[filterStatus] ?? 0)}
@@ -1823,13 +1878,13 @@ export default function MapView() {
                     placeholder="Search a street or address…"
                     aria-label="Search a street or address"
                     data-testid="map-search"
-                    className="w-full h-11 bg-black/85 backdrop-blur-md border border-white/15 rounded-xl pl-9 pr-10 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-teal-400 shadow-2xl"
+                    className="w-full h-11 bg-black/85 backdrop-blur-md border border-white/15 rounded-xl pl-9 pr-10 text-sm text-white placeholder:text-white/55 focus:outline-none focus:ring-2 focus:ring-teal-400 shadow-2xl"
                   />
                   <button
                     onClick={() => { setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }}
                     aria-label="Close search"
                     data-testid="map-search-close"
-                    className="absolute right-1.5 top-1/2 -translate-y-1/2 h-8 w-8 flex items-center justify-center rounded-lg text-white/50 hover:text-white hover:bg-white/10"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 flex items-center justify-center rounded-lg text-white/60 hover:text-white hover:bg-white/10"
                   >
                     <X className="w-4 h-4" />
                   </button>
@@ -1838,16 +1893,20 @@ export default function MapView() {
                   <div className="mt-1.5 bg-black/90 backdrop-blur-md border border-white/10 rounded-xl overflow-hidden shadow-2xl max-h-[min(60vh,360px)] overflow-y-auto">
                     {searchMatches.map(l => {
                       const pin = PIN_COLORS[l.leadStatus] ?? PIN_COLORS.prospect;
+                      const repName = l.assignedRepId ? team.find((m: TeamMember) => m.id === l.assignedRepId)?.name : null;
                       return (
                         <button
                           key={l.id}
-                          onClick={() => { flyToLead(l); setSearchOpen(false); setSidebarSearch(""); }}
+                          onClick={() => { flyToLead(l); setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }}
                           className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-white/10 transition-colors border-b border-white/5 last:border-0"
                         >
-                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg }} />
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-0.5" style={{ background: pin.bg }} title={pin.label} />
                           <span className="min-w-0 flex-1">
                             <span className="block text-[13px] text-white font-medium truncate">{l.address}</span>
-                            <span className="block text-[11px] text-white/50 truncate">{l.city}, {l.state} {l.zip}</span>
+                            <span className="block text-[11px] text-white/50 truncate">
+                              {l.city}, {l.state} · <span style={{ color: pin.bg }}>{pin.label}</span>
+                              {repName ? ` · ${repName}` : " · Unassigned"}
+                            </span>
                           </span>
                           {l.fiberStatus === "new_fiber" && <span className="text-[9px] font-bold text-teal-400 flex-shrink-0">NEW</span>}
                         </button>
@@ -1872,7 +1931,7 @@ export default function MapView() {
                   </div>
                 )}
                 {sidebarSearch.trim().length > 0 && sidebarSearch.trim().length < 3 && (
-                  <div className="mt-1.5 bg-black/85 border border-white/10 rounded-xl px-3 py-2 text-[12px] text-white/40 shadow-xl">Keep typing…</div>
+                  <div className="mt-1.5 bg-black/85 border border-white/10 rounded-xl px-3 py-2 text-[12px] text-white/55 shadow-xl">Keep typing…</div>
                 )}
               </div>
             </>
@@ -1891,9 +1950,10 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── Assign-Area floating action bar — bottom-center, thumb-reachable ── */}
+          {/* ── Assign-Area floating action bar — bottom-center, thumb-reachable,
+                 clear of the home-indicator gesture zone (safe-area). ── */}
           {lassoMode && (
-            <div className="absolute left-1/2 -translate-x-1/2 bottom-6 z-30 max-w-[calc(100vw-24px)]">
+            <div style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.5rem)" }} className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100vw-24px)]">
               {lassoSelected.length === 0 ? (
                 /* Armed, nothing drawn yet → drawing hint */
                 <div className="flex items-center gap-2.5 rounded-full bg-[#0F2A43]/95 backdrop-blur-md border border-teal-400/30 shadow-2xl pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -1920,7 +1980,7 @@ export default function MapView() {
                     placeholder={lassoRepId
                       ? `Area name — leave blank for "${team.find(m => m.id === Number(lassoRepId))?.name ?? "Rep"}'s area"`
                       : "Area name (optional)"}
-                    className="h-9 w-full rounded-lg bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                    className="h-9 w-full rounded-lg bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/55 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
                   />
                   <div className="flex items-center gap-2.5">
                     <span className="flex items-center gap-1.5 text-[14px] font-bold text-white whitespace-nowrap" aria-live="polite">
@@ -1928,7 +1988,9 @@ export default function MapView() {
                         className="w-2.5 h-2.5 rounded-full transition-colors"
                         style={{ background: colorForRep(lassoRepId ? Number(lassoRepId) : null), boxShadow: lassoRepId ? `0 0 8px ${colorForRep(Number(lassoRepId))}` : "none" }}
                       />
-                      {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads in area</span>
+                      {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads</span>
+                      {(() => { const already = lassoSelected.filter(l => l.assignedRepId).length; return already > 0
+                        ? <span className="font-normal text-[11px] text-amber-300/90 ml-0.5">({already} already assigned)</span> : null; })()}
                     </span>
                     <select
                       value={lassoRepId}
@@ -2034,8 +2096,8 @@ export default function MapView() {
               data-testid="map-control-cluster"
             >
               <MapIconBtn
-                icon={<Search className="w-5 h-5" />} label="Search a location"
-                testid="ctl-search" active={searchOpen} btnRef={searchBtnRef}
+                icon={<Search className="w-5 h-5" />} label="Search leads &amp; places"
+                testid="ctl-search" active={searchOpen} btnRef={searchBtnRef} disclosure="dialog"
                 onClick={() => { setSearchOpen(o => !o); setLayersOpen(false); }}
               />
               {canAssign && (
@@ -2073,20 +2135,22 @@ export default function MapView() {
               )}
               <MapIconBtn
                 icon={<Layers className="w-5 h-5" />} label="Map layers & style"
-                testid="ctl-layers" active={layersOpen}
+                testid="ctl-layers" active={layersOpen} btnRef={layersBtnRef} disclosure="menu"
                 onClick={() => { setLayersOpen(o => !o); setSearchOpen(false); }}
               />
 
-              {/* Layers popover — leads/territories toggles + basemap. */}
+              {/* Layers popover — a group of switches + basemap radios (NOT a
+                  role=menu, which would promise a keyboard menu model we don't
+                  implement). Each control is a real button operable by Tab. */}
               {layersOpen && (
-                <div className="absolute top-0 right-14 w-[168px] rounded-xl bg-black/85 backdrop-blur-md border border-white/10 p-2.5 shadow-2xl text-white" role="menu" aria-label="Map layers and style" data-testid="layers-popover">
+                <div className="absolute top-0 right-14 w-[168px] rounded-xl bg-black/85 backdrop-blur-md border border-white/10 p-2.5 shadow-2xl text-white" role="group" aria-label="Map layers and style" data-testid="layers-popover">
                   <div className="text-[10px] uppercase tracking-wider text-white/40 font-semibold mb-1.5">Layers</div>
                   {[
                     { key: "leads", label: "Leads", on: showLeads, toggle: () => setShowLeads(v => !v) },
                     ...(canAssign ? [{ key: "terr", label: "Territories", on: showTerritories, toggle: () => setShowTerritories(v => !v) }] : []),
                   ].map(l => (
-                    <button key={l.key} onClick={l.toggle} data-testid={`layer-${l.key}`} role="menuitemcheckbox" aria-checked={l.on}
-                      className="w-full flex items-center justify-between py-1.5 text-[12.5px] text-white/85 hover:text-white">
+                    <button key={l.key} onClick={l.toggle} data-testid={`layer-${l.key}`} role="switch" aria-checked={l.on} aria-label={`${l.label} layer`}
+                      className="w-full flex items-center justify-between min-h-[44px] py-1.5 text-[12.5px] text-white/90 hover:text-white">
                       <span>{l.label}</span>
                       <span className={`w-8 h-4 rounded-full transition-colors relative ${l.on ? "bg-primary" : "bg-white/15"}`}>
                         <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${l.on ? "left-4" : "left-0.5"}`} />
@@ -2097,8 +2161,8 @@ export default function MapView() {
                   <div className="grid grid-cols-3 gap-1">
                     {([["satellite", "Satellite"], ["streets", "Street"], ["dark", "Dark"]] as const).map(([mode, label]) => (
                       <button key={mode} onClick={() => setMapStyleMode(mode)} data-testid={`mapmode-${mode}`} disabled={!mapReady}
-                        aria-pressed={mapStyleMode === mode} title={label}
-                        className={`text-[10px] py-1.5 rounded-md transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/60 hover:bg-white/20"}`}>
+                        aria-pressed={mapStyleMode === mode} aria-label={`${label} basemap`} title={label}
+                        className={`text-[11px] min-h-[40px] rounded-md transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/70 hover:bg-white/20"}`}>
                         {label.slice(0, 3)}
                       </button>
                     ))}
@@ -2108,28 +2172,31 @@ export default function MapView() {
             </div>
           )}
 
-          {/* Locate-me FAB — big thumb target, bottom-right, above zoom controls */}
+          {/* Locate-me FAB — thumb target, bottom-right, clear of the home bar.
+              De-emphasized for non-rep roles (a manager rarely needs to recenter
+              on themselves) so it doesn't out-shout the control cluster. */}
           {mapReady && (
             <button
               onClick={() => { try { geolocateRef.current?.trigger(); } catch {} }}
-              title="Center on my location"
+              aria-label="Center on my location"
               data-testid="locate-me"
-              className="absolute bottom-8 right-3 z-20 h-13 w-13 rounded-full bg-primary text-white shadow-xl flex items-center justify-center active:scale-95 transition-transform hover:bg-primary/90"
-              style={{ height: 52, width: 52 }}
+              style={{ height: isRep ? 52 : 44, width: isRep ? 52 : 44, bottom: "calc(env(safe-area-inset-bottom) + 2rem)" }}
+              className={`absolute right-3 z-20 rounded-full shadow-xl flex items-center justify-center active:scale-95 transition-transform ${isRep ? "bg-primary text-white hover:bg-primary/90" : "bg-black/80 backdrop-blur-md border border-white/15 text-white/90 hover:text-white"}`}
             >
-              <LocateFixed className="w-6 h-6" />
+              <LocateFixed className={isRep ? "w-6 h-6" : "w-5 h-5"} />
             </button>
           )}
 
           {/* Pin legend + filter — bottom left, admin/manager only. Collapsed
                  to a quiet dot-strip by default; one tap expands the full
                  status filter + assigned-areas manager panel. */}
-          {mapReady && !isRep && !legendOpen && (
+          {mapReady && !isRep && leads.length > 0 && !legendOpen && (
             <button
               onClick={() => setLegendOpen(true)}
               data-testid="legend-collapsed"
-              title="Legend, status filter & assigned areas"
-              className="absolute bottom-8 left-3 z-10 flex items-center gap-1.5 h-9 px-3 rounded-full bg-black/80 backdrop-blur-md border border-white/10 shadow-lg active:scale-95 transition"
+              aria-label="Open legend, status filter and assigned areas"
+              style={{ bottom: "calc(env(safe-area-inset-bottom) + 2rem)" }}
+              className="absolute left-3 z-10 flex items-center gap-1.5 h-11 px-3 rounded-full bg-black/80 backdrop-blur-md border border-white/10 shadow-lg active:scale-95 transition"
             >
               {Object.values(PIN_COLORS).map((pin, i) => (
                 <span key={i} className="w-2 h-2 rounded-full" style={{ background: pin.bg }} />
@@ -2140,7 +2207,7 @@ export default function MapView() {
             </button>
           )}
           {mapReady && !isRep && legendOpen && (
-            <div className="absolute bottom-8 left-3 bg-black/85 backdrop-blur-md rounded-xl p-3 z-10 min-w-[170px] max-w-[240px] shadow-xl border border-white/5">
+            <div style={{ bottom: "calc(env(safe-area-inset-bottom) + 2rem)", maxHeight: "min(60vh, 460px)" }} className="absolute left-3 bg-black/85 backdrop-blur-md rounded-xl p-3 z-10 min-w-[170px] max-w-[240px] shadow-xl border border-white/5 overflow-y-auto">
               {/* Rep filter — moved here from the (removed) top bar */}
               {canAssign && (
                 <div className="mb-2.5">
@@ -2206,14 +2273,14 @@ export default function MapView() {
                         {status !== "active" && <span className="text-[9px] uppercase tracking-wide text-white/40">{status}</span>}
                         {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total}</span>}
                         {canAssign && isUnassigned && (
-                          <button onClick={() => setReclaimMenuId(reclaimMenuId === t.id ? null : t.id)} title="Assign to next rep"
-                            className="opacity-0 group-hover:opacity-100 text-teal-400 text-xs" data-testid={`assign-${t.id}`}>＋</button>
+                          <button onClick={() => setReclaimMenuId(reclaimMenuId === t.id ? null : t.id)} aria-label={`Assign ${repName}'s area to a rep`}
+                            className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-teal-400 w-7 h-7 inline-flex items-center justify-center rounded hover:bg-white/10" data-testid={`assign-${t.id}`}>＋</button>
                         )}
                         {canManage && !isUnassigned && (
-                          <button onClick={() => setReclaimMenuId(reclaimMenuId === t.id ? null : t.id)} title="Reclaim / pull back this area"
-                            className="opacity-0 group-hover:opacity-100 text-amber-400 text-xs" data-testid={`reclaim-${t.id}`}>↩</button>
+                          <button onClick={() => setReclaimMenuId(reclaimMenuId === t.id ? null : t.id)} aria-label={`Reclaim ${repName}'s area`}
+                            className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-amber-400 w-7 h-7 inline-flex items-center justify-center rounded hover:bg-white/10" data-testid={`reclaim-${t.id}`}>↩</button>
                         )}
-                        {canManage && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} title="Delete this area" className="opacity-0 group-hover:opacity-100 text-red-400/70 hover:text-red-400 text-xs">×</button>}
+                        {canManage && <button onClick={() => deleteTerritoryMutation.mutate(t.id)} aria-label={`Delete ${repName}'s area`} className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-red-400/80 hover:text-red-400 w-7 h-7 inline-flex items-center justify-center rounded hover:bg-white/10">×</button>}
                       </div>
                       {prog && prog.total > 0 && (
                         <div className="h-1 rounded-full bg-white/10 mt-0.5 overflow-hidden">
@@ -2282,40 +2349,53 @@ export default function MapView() {
 // tool (teal=lasso, orange/red=scan).
 function MapIconBtn({
   icon, label, testid, onClick, active = false, disabled = false,
-  tone = "primary", badge, btnRef,
+  tone = "primary", badge, btnRef, disclosure,
 }: {
   icon: React.ReactNode; label: string; testid: string; onClick: () => void;
   active?: boolean; disabled?: boolean; tone?: "primary" | "teal" | "orange" | "red";
   badge?: string; btnRef?: React.RefObject<HTMLButtonElement | null>;
+  // A disclosure OPENS a panel (dialog/menu) — announce aria-expanded/haspopup
+  // instead of aria-pressed (a toggle). Toggles (lasso/scan) omit this.
+  disclosure?: "dialog" | "menu";
 }) {
+  // Active tints use the -600 shades so the white glyph clears the 3:1 non-text
+  // contrast floor (WCAG 1.4.11) over map imagery.
   const activeBg =
-    tone === "teal" ? "bg-teal-500/90 border-teal-300/60"
-    : tone === "orange" ? "bg-orange-500/90 border-orange-300/60"
-    : tone === "red" ? "bg-red-500/90 border-red-300/60"
+    tone === "teal" ? "bg-teal-600 border-teal-300/70"
+    : tone === "orange" ? "bg-orange-600 border-orange-300/70"
+    : tone === "red" ? "bg-red-600 border-red-300/70"
     : "bg-primary border-primary";
   return (
-    <button
-      ref={btnRef as any}
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      data-testid={testid}
-      className={[
-        "relative h-11 w-11 rounded-xl flex items-center justify-center shadow-lg border transition-colors",
-        "focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1 focus-visible:ring-offset-black/40",
-        "active:scale-95 disabled:opacity-40 disabled:pointer-events-none",
-        active ? `${activeBg} text-white` : "bg-black/80 backdrop-blur-md border-white/15 text-white/90 hover:bg-black/90 hover:text-white",
-      ].join(" ")}
-    >
-      {icon}
-      {badge != null && (
-        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-black text-[10px] font-bold flex items-center justify-center shadow">
-          {badge}
-        </span>
-      )}
-    </button>
+    <div className="relative group">
+      <button
+        ref={btnRef as any}
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={label}
+        {...(disclosure ? { "aria-haspopup": disclosure, "aria-expanded": active } : { "aria-pressed": active })}
+        data-testid={testid}
+        className={[
+          "relative h-11 w-11 rounded-xl flex items-center justify-center shadow-lg border transition-colors",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1 focus-visible:ring-offset-black/40",
+          "active:scale-95 disabled:opacity-40 disabled:pointer-events-none",
+          active ? `${activeBg} text-white` : "bg-black/80 backdrop-blur-md border-white/15 text-white/95 hover:bg-black/90 hover:text-white",
+        ].join(" ")}
+      >
+        {icon}
+        {badge != null && (
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-black text-[10px] font-bold flex items-center justify-center shadow">
+            {badge}
+          </span>
+        )}
+      </button>
+      {/* Styled hover/focus label (desktop) — a real tooltip beyond the native
+          title, so the icon's meaning is one hover away. Touch users get the
+          armed-state hint bars instead. */}
+      <span role="tooltip"
+        className="pointer-events-none absolute right-full top-1/2 -translate-y-1/2 mr-2 whitespace-nowrap rounded-lg bg-black/90 px-2 py-1 text-[11px] font-medium text-white shadow-lg opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity hidden md:block">
+        {label}
+      </span>
+    </div>
   );
 }
