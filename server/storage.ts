@@ -459,6 +459,12 @@ export function runMigrations() {
     `ALTER TABLE territories ADD COLUMN outcome_snapshot TEXT`,
     `ALTER TABLE territories ADD COLUMN briefing TEXT`,
     `ALTER TABLE territories ADD COLUMN source_run_id TEXT`,
+    // One-time retroactive cleanup of the OLD hard-delete orphan bug: leads whose
+    // assigned_territory_id points at a territory that no longer exists. Deleting
+    // a territory now detaches its leads, so going forward there are none; this
+    // heals the ~2,800 rows left dangling before that fix. Idempotent (0 rows
+    // once healed), keeps each lead's rep assignment — only clears the dead ref.
+    `UPDATE leads SET assigned_territory_id = NULL WHERE assigned_territory_id IS NOT NULL AND assigned_territory_id NOT IN (SELECT id FROM territories)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

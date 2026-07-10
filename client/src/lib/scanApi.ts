@@ -69,8 +69,8 @@ export const scanApi = {
   previewRun: (city: string, state: string, budget: number, rescan = false) => postJson<RunPreview>("/api/scan/runs/preview", { city, state, budget, rescan }),
   startRun: (city: string, state: string, budget: number, rescan = false) => postJson<{ runId: string; queued: number; budget: number; estimate: CostEstimate; city: string; state: string }>("/api/scan/runs", { city, state, budget, rescan }),
   controlRun: (id: string, action: "pause" | "resume" | "cancel") => postJson<{ ok: boolean }>(`/api/scan/runs/${id}/${action}`),
-  deploy: (polygon: Array<[number, number]>, repId: number, opts?: { name?: string; sourceRunId?: string; leadIds?: number[] }) =>
-    postJson<{ territory: any; assigned: number; briefing: DeployBriefing }>("/api/scan/deploy", { polygon, repId, ...opts }),
+  deploy: (polygon: Array<[number, number]>, repId: number | undefined, opts?: { name?: string; sourceRunId?: string; leadIds?: number[]; repIds?: number[] }) =>
+    postJson<{ territory: any; assigned: number; briefing: DeployBriefing; deployments?: Array<{ territoryId: number; repId: number; assigned: number }> }>("/api/scan/deploy", { polygon, repId, ...opts }),
 };
 
 // ── Presentation helpers ──────────────────────────────────────────────────────

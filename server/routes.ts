@@ -38,7 +38,7 @@ try {
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
 import { pointInPolygon } from "@shared/geo";
-import { padHull } from "@shared/opportunity";
+import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, type KnockOutcome } from "@shared/knock";
@@ -1417,6 +1417,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ ok: true, action });
   });
 
+  // Server-authored "why this area" briefing from a parcel's real leads.
+  function buildDeployBriefing(leads: any[], visits: Map<number, any>) {
+    const scores = leads.map(l => l.leadScore ?? 0);
+    const competitors = new Map<string, number>();
+    let unworked = 0;
+    for (const l of leads) {
+      if (l.competitorName) competitors.set(l.competitorName, (competitors.get(l.competitorName) ?? 0) + 1);
+      if (!visits.get(l.id)) unworked++;
+    }
+    const topCompetitor = [...competitors.entries()].sort((a, b) => b[1] - a[1])[0];
+    return {
+      doors: leads.length, unworked,
+      avgScore: Math.round(scores.reduce((s, x) => s + x, 0) / Math.max(1, scores.length)),
+      topCompetitor: topCompetitor ? { name: topCompetitor[0], count: topCompetitor[1] } : null,
+      competitorShare: Math.round((leads.filter(l => l.competitorName).length / leads.length) * 100),
+      newFiber: leads.filter(l => l.isNewFiber).length,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
   // Deploy an opportunity cluster as a TERRITORY assigned to a rep — the step
   // that turns discovery into fieldwork. Takes the cluster's boundary polygon +
   // a rep, creates the area, assigns every enclosed reassignable lead, and
@@ -1426,80 +1446,82 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/scan/deploy", requireTeamLead, (req: any, res) => {
     const user = req.user;
     const t = user?.tenantId ?? undefined;
-    const { polygon, repId, name, sourceRunId, leadIds } = req.body ?? {};
-    if (!Array.isArray(polygon) || polygon.length < 3 || repId == null) {
-      return res.status(400).json({ error: "polygon (>=3 points) and repId required" });
+    const { polygon, repId, repIds, name, sourceRunId, leadIds } = req.body ?? {};
+    if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon (>=3 points) required" });
+
+    // One rep, or a SPLIT across several reps (the "field N reps" flow).
+    const reps: number[] = Array.isArray(repIds) && repIds.length
+      ? repIds.map(Number).filter(Number.isFinite)
+      : (repId != null ? [Number(repId)] : []);
+    if (reps.length === 0) return res.status(400).json({ error: "repId or repIds required" });
+
+    // Validate every rep up front — scope + capacity — so a split is all-or-nothing.
+    for (const rid of reps) {
+      const rp = storage.getTeamMemberById(rid);
+      if (!rp) return res.status(404).json({ error: `rep ${rid} not found` });
+      if (!repInVisibilityScope(user, rid)) return res.status(403).json({ error: "A chosen rep is not on your team", code: "OUT_OF_SCOPE" });
+      const active = storage.getTerritoriesByRep(rid).filter((x: any) => x.status === "active" || x.status === "shared").length;
+      if (!canRepTakeAnotherArea(active)) return res.status(409).json({ error: `${rp.name} already has ${active} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}).` });
     }
-    const rep = storage.getTeamMemberById(Number(repId));
-    if (!rep) return res.status(404).json({ error: "rep not found" });
-    if (!repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
 
-    const activeForRep = storage.getTerritoriesByRep(Number(repId)).filter((x: any) => x.status === "active" || x.status === "shared").length;
-    if (!canRepTakeAnotherArea(activeForRep)) {
-      return res.status(409).json({ error: `${rep.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}). Reclaim one first.` });
-    }
-
-    // The territory boundary is the cluster hull PADDED outward ~40m so a home on
-    // the convex edge is inside the polygon (a raw hull clips boundary doors).
-    const ring = padHull(polygon as [number, number][], 40);
-
-    // AUTHORITATIVE assigned set. Preferred: assign exactly the cluster's MEMBER
-    // leads (the verified new-fiber the operator saw) — this never over-encloses
-    // unrelated homes inside a convex hull and never drops boundary doors, and
-    // the briefing count is exactly what the rep receives. Fallback (lasso-style
-    // callers with no member list): every reassignable lead inside the padded
-    // ring. Both intersect with the caller's reassign scope.
+    // AUTHORITATIVE member set: exactly the cluster's leads (never over-enclose a
+    // hull, never drop a boundary door). Fallback for lasso callers: padded ring.
     const memberIds: number[] = Array.isArray(leadIds) ? leadIds.map(Number).filter(Number.isFinite) : [];
     let enclosed: any[];
     if (memberIds.length > 0) {
       const idset = new Set(memberIds);
-      enclosed = storage.getLeads(t).filter((l: any) => idset.has(l.id) && canReassignLead(user, l));
+      enclosed = storage.getLeads(t).filter((l: any) => idset.has(l.id) && l.lat != null && l.lng != null && canReassignLead(user, l));
     } else {
+      const padded = padHull(polygon as [number, number][], 40);
       enclosed = storage.getLeads(t).filter((l: any) =>
-        l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, ring) && canReassignLead(user, l));
+        l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, padded) && canReassignLead(user, l));
     }
     if (enclosed.length === 0) return res.status(409).json({ error: "No assignable leads inside this cluster" });
 
-    // Build the "why this area" briefing from the real enclosed leads.
-    const scores = enclosed.map((l: any) => l.leadScore ?? 0);
-    const competitors = new Map<string, number>();
-    let unworked = 0;
-    for (const l of enclosed) {
-      if (l.competitorName) competitors.set(l.competitorName, (competitors.get(l.competitorName) ?? 0) + 1);
-    }
-    // Which enclosed leads have zero knocks?
     const visits = storage.getVisitSummary(t);
-    for (const l of enclosed) if (!visits.get(l.id)) unworked++;
-    const topCompetitor = [...competitors.entries()].sort((a, b) => b[1] - a[1])[0];
-    const briefing = {
-      doors: enclosed.length,
-      unworked,
-      avgScore: Math.round(scores.reduce((s, x) => s + x, 0) / Math.max(1, scores.length)),
-      topCompetitor: topCompetitor ? { name: topCompetitor[0], count: topCompetitor[1] } : null,
-      competitorShare: Math.round((enclosed.filter((l: any) => l.competitorName).length / enclosed.length) * 100),
-      newFiber: enclosed.filter((l: any) => l.isNewFiber).length,
-      generatedAt: new Date().toISOString(),
-    };
-
     const at = new Date().toISOString();
-    const territory = storage.createTerritory({
-      tenantId: t ?? null, name: (name && String(name).trim()) || `${rep.name}'s area`,
-      repId: Number(repId), polygon: JSON.stringify(ring), color: colorForRep(Number(repId)),
-      status: "active", assigneeIds: JSON.stringify([Number(repId)]),
-      briefing: JSON.stringify(briefing), sourceRunId: sourceRunId ? String(sourceRunId) : null, updatedAt: at,
-    } as any);
-    storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: Number(repId), name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null });
 
-    let assigned = 0;
-    for (const l of enclosed) {
-      if (storage.updateLead(l.id, { assignedRepId: Number(repId), assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t)) {
-        assigned++;
-        storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
+    // Partition members into one parcel per rep (compact, contiguous, balanced).
+    // One rep → one parcel (all members). N reps → subdivideCluster by geography.
+    const parcelIdLists = reps.length === 1
+      ? [enclosed.map((l: any) => l.id)]
+      : subdivideCluster(enclosed.map((l: any) => ({ id: l.id, lat: l.lat, lng: l.lng })), reps.length);
+
+    const results: Array<{ territory: any; repId: number; assigned: number; briefing: any }> = [];
+    parcelIdLists.forEach((ids, i) => {
+      const rid = reps[Math.min(i, reps.length - 1)];
+      const rp = storage.getTeamMemberById(rid)!;
+      const leadsInParcel = enclosed.filter((l: any) => ids.includes(l.id));
+      if (leadsInParcel.length === 0) return;
+      const hull = padHull(convexHull(leadsInParcel.map((l: any) => [l.lng, l.lat] as [number, number])), 40);
+      const briefing = buildDeployBriefing(leadsInParcel, visits);
+      const territory = storage.createTerritory({
+        tenantId: t ?? null,
+        name: reps.length > 1 ? `${rp.name}'s area` : ((name && String(name).trim()) || `${rp.name}'s area`),
+        repId: rid, polygon: JSON.stringify(hull.length >= 3 ? hull : polygon), color: colorForRep(rid),
+        status: "active", assigneeIds: JSON.stringify([rid]),
+        briefing: JSON.stringify(briefing), sourceRunId: sourceRunId ? String(sourceRunId) : null, updatedAt: at,
+      } as any);
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1 });
+      let assigned = 0;
+      for (const l of leadsInParcel) {
+        if (storage.updateLead(l.id, { assignedRepId: rid, assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t)) {
+          assigned++;
+          storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rp.name, assignedBy: user?.name ?? null });
+        }
       }
-    }
-    storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId: Number(repId), assigned });
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId: rid, assigned });
+      results.push({ territory, repId: rid, assigned, briefing });
+    });
+
     if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(t);
-    res.status(201).json({ territory, assigned, briefing });
+    // Back-compat single-rep shape; multi-rep adds `deployments`.
+    const primary = results[0];
+    res.status(201).json({
+      territory: primary?.territory, assigned: results.reduce((s, r) => s + r.assigned, 0),
+      briefing: primary?.briefing,
+      deployments: results.map(r => ({ territoryId: r.territory.id, repId: r.repId, assigned: r.assigned })),
+    });
   });
 
   // GET /api/scan/first-seen-live — the first-to-market feed: addresses that

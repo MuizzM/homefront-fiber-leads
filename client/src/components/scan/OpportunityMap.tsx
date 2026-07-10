@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { scanApi, type OppCluster } from "@/lib/scanApi";
 import type { TeamMember } from "@shared/schema";
-import { ArrowLeft, Loader2, Users, Sparkles, ChevronRight, X, MapPinned, ShieldQuestion } from "lucide-react";
+import { ArrowLeft, Loader2, Users, Sparkles, ChevronRight, X, MapPinned, ShieldQuestion, Check } from "lucide-react";
 
 // ── Opportunity Map — verified new-fiber as a deployable landscape ────────────
 // The clusters (server-computed, scored, with convex-hull boundaries) render as
@@ -206,19 +206,26 @@ function DeployPanel({ cluster, onClose }: { cluster: OppCluster; onClose: () =>
   const canDeploy = user?.role === "admin" || user?.role === "manager" || user?.role === "team_lead";
   const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"], enabled: canDeploy });
   const reps = team.filter((m: any) => m.active);
-  const [repId, setRepId] = useState<number | null>(null);
+  const [selectedReps, setSelectedReps] = useState<number[]>([]);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
+  const doorsEach = selectedReps.length > 1 ? Math.ceil(cluster.unworked / selectedReps.length) : cluster.unworked;
+
+  const toggleRep = (id: number) => setSelectedReps(s => s.includes(id) ? s.filter(x => x !== id) : [...s, id]);
 
   const deploy = async () => {
-    if (repId == null) return;
+    if (selectedReps.length === 0) return;
     setBusy(true);
     try {
-      // Pass the cluster's MEMBER lead ids so the rep gets exactly the verified
-      // new-fiber doors in the briefing — not every home the hull happens to
-      // enclose, and not fewer because the hull clipped an edge.
-      const out = await scanApi.deploy(cluster.hull, repId, { name: name.trim() || undefined, leadIds: cluster.points });
-      toast({ title: "Territory deployed", description: `${out.assigned} doors assigned to ${reps.find((r: any) => r.id === repId)?.name}.` });
+      // Pass the cluster's MEMBER lead ids so reps get exactly the verified
+      // new-fiber doors. With >1 rep, the server splits the cluster into compact
+      // contiguous parcels — one territory + briefing per rep.
+      const out = await scanApi.deploy(cluster.hull, selectedReps.length === 1 ? selectedReps[0] : undefined as any, {
+        name: selectedReps.length === 1 ? (name.trim() || undefined) : undefined,
+        leadIds: cluster.points, repIds: selectedReps.length > 1 ? selectedReps : undefined,
+      });
+      const who = selectedReps.length === 1 ? reps.find((r: any) => r.id === selectedReps[0])?.name : `${selectedReps.length} reps`;
+      toast({ title: "Deployed to the field", description: `${out.assigned} doors assigned to ${who}.` });
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/territories"] });
       onClose();
@@ -254,24 +261,39 @@ function DeployPanel({ cluster, onClose }: { cluster: OppCluster; onClose: () =>
           {canDeploy ? (
             <>
               <div>
-                <label className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold block mb-1.5">Assign to</label>
-                <select value={repId ?? ""} onChange={e => setRepId(e.target.value ? Number(e.target.value) : null)} data-testid="opp-deploy-rep"
-                  className="w-full h-10 rounded-lg bg-secondary/60 border border-border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
-                  <option value="">Choose a rep…</option>
-                  {reps.map((r: any) => <option key={r.id} value={r.id}>{r.name}</option>)}
-                </select>
+                <label className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold block mb-1.5">
+                  Assign to {selectedReps.length > 1 && <span className="text-primary normal-case">— split {selectedReps.length} ways, ~{doorsEach} doors each</span>}
+                </label>
+                <div className="max-h-40 overflow-y-auto rounded-lg border border-border divide-y divide-border/60" data-testid="opp-deploy-reps">
+                  {reps.length === 0 && <div className="px-3 py-2 text-[12px] text-muted-foreground">No active reps.</div>}
+                  {reps.map((r: any) => {
+                    const on = selectedReps.includes(r.id);
+                    return (
+                      <button key={r.id} type="button" onClick={() => toggleRep(r.id)} data-testid={`opp-deploy-rep-${r.id}`}
+                        className={`w-full flex items-center gap-2.5 px-3 min-h-[44px] text-left text-[13px] ${on ? "bg-primary/10" : "hover:bg-secondary/50"}`}>
+                        <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? "bg-primary border-primary" : "border-muted-foreground/40"}`}>
+                          {on && <Check className="w-3 h-3 text-primary-foreground" />}
+                        </span>
+                        <span className="flex-1 text-foreground">{r.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1">Pick one rep, or several to split the cluster into compact areas.</p>
               </div>
-              <div>
-                <label className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold block mb-1.5">Area name (optional)</label>
-                <input value={name} onChange={e => setName(e.target.value)} placeholder={repId ? `${reps.find((r: any) => r.id === repId)?.name}'s area` : "Auto-named"} maxLength={60}
-                  className="w-full h-10 rounded-lg bg-secondary/60 border border-border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
-              </div>
-              <button onClick={deploy} disabled={repId == null || busy} data-testid="opp-deploy-confirm"
+              {selectedReps.length <= 1 && (
+                <div>
+                  <label className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold block mb-1.5">Area name (optional)</label>
+                  <input value={name} onChange={e => setName(e.target.value)} placeholder="Auto-named" maxLength={60}
+                    className="w-full h-10 rounded-lg bg-secondary/60 border border-border px-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+                </div>
+              )}
+              <button onClick={deploy} disabled={selectedReps.length === 0 || busy} data-testid="opp-deploy-confirm"
                 className="w-full h-11 rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground text-[14px] font-semibold flex items-center justify-center gap-2">
                 {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
-                Deploy {cluster.unworked} doors to the field
+                {selectedReps.length > 1 ? `Split ${cluster.unworked} doors across ${selectedReps.length} reps` : `Deploy ${cluster.unworked} doors to the field`}
               </button>
-              <p className="text-[11px] text-muted-foreground text-center">Creates a territory from this cluster's boundary and assigns every enclosed lead, with this briefing attached.</p>
+              <p className="text-[11px] text-muted-foreground text-center">Assigns exactly this cluster's verified new-fiber doors, each rep with their own briefing.</p>
             </>
           ) : (
             <div className="rounded-xl border border-border bg-secondary/40 p-4 text-center text-[13px] text-muted-foreground flex flex-col items-center gap-2">
