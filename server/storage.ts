@@ -491,6 +491,15 @@ function getAddressCache(): Set<string> {
   return _addressCache;
 }
 
+// Invalidate the map-pin cache + ETag data version (registered by routes.ts on
+// globalThis). Called from the LEAD MUTATION CHOKE POINTS below (create/update/
+// delete/upsert) so no route can mutate pins and forget to bust — a stale 304
+// after an assignment would silently show a manager old pin data forever.
+function bustPinCaches() {
+  const bust = (globalThis as any).__bustMapCache;
+  if (typeof bust === "function") bust();
+}
+
 export class Storage implements IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[] {
@@ -571,7 +580,9 @@ export class Storage implements IStorage {
     // Tenancy: never create a tenant-less lead — system paths (scanners, cron)
     // file under the default org; user paths stamp the actor's org in routes.
     const tenantId = (lead as any).tenantId ?? getDefaultTenantId();
-    return db.insert(leads).values({ ...lead, tenantId, createdAt: now, updatedAt: now }).returning().get();
+    const row = db.insert(leads).values({ ...lead, tenantId, createdAt: now, updatedAt: now }).returning().get();
+    bustPinCaches();
+    return row;
   }
 
   // Dedup-safe insert: returns existing lead if address already in DB, otherwise creates new one.
@@ -658,20 +669,25 @@ export class Storage implements IStorage {
     const newLead = rawDb.prepare(`SELECT * FROM leads WHERE id = ?`).get(r.lastInsertRowid) as Lead;
     // Update in-memory cache with newly inserted address
     if (_addressCache) _addressCache.add(normalizedAddr);
+    bustPinCaches();
     return { lead: newLead, created: true };
   }
   updateLead(id: number, updates: Partial<InsertLead>, tenantId?: number): Lead | undefined {
     const condition = tenantId != null
       ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
       : eq(leads.id, id);
-    return db.update(leads).set({ ...updates, updatedAt: new Date().toISOString() })
+    const row = db.update(leads).set({ ...updates, updatedAt: new Date().toISOString() })
       .where(condition).returning().get();
+    if (row) bustPinCaches(); // pins changed → map cache + ETag version must move
+    return row;
   }
   deleteLead(id: number, tenantId?: number): boolean {
     const condition = tenantId != null
       ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
       : eq(leads.id, id);
-    return db.delete(leads).where(condition).run().changes > 0;
+    const deleted = db.delete(leads).where(condition).run().changes > 0;
+    if (deleted) bustPinCaches();
+    return deleted;
   }
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[] {
     // Escape LIKE wildcards in user input — a bare "%" must not match the
