@@ -99,6 +99,11 @@ export const territories = sqliteTable("territories", {
   completedAt: text("completed_at"),
   reclaimedAt: text("reclaimed_at"),
   archivedAt: text("archived_at"),
+  // Scan-intelligence: "why this area" briefing captured at deploy time, the
+  // field-outcome retrospective, and the scan run this territory came from.
+  briefing: text("briefing"),               // JSON — deploy briefing
+  outcomeSnapshot: text("outcome_snapshot"), // JSON — completion retrospective
+  sourceRunId: text("source_run_id"),        // scan_runs.id this deploy came from
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export const insertTerritorySchema = createInsertSchema(territories).omit({ id: true, createdAt: true });

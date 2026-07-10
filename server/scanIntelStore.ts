@@ -236,5 +236,47 @@ export function accumulateMarketOutcome(tenantId: number, city: string, state: s
   ).run({ t: tenantId, c: city, s: state, doors: d.doors, knocks: d.knocks, contacts: d.contacts, sales: d.sales });
 }
 
+// Compute a worked territory's field outcome from its leads + knocks. The
+// "dominant city" is where most of its leads live — that's the market the
+// lesson belongs to. This is the input to the learning loop: a territory that
+// converted well lifts its market's priority; one that didn't, lowers it.
+export interface TerritoryOutcome {
+  city: string; state: string;
+  doors: number;      // leads in the territory
+  knocks: number;     // total knock attempts
+  contacts: number;   // knocks where someone was home
+  sales: number;      // leads that sold
+  daysActive: number | null;
+}
+export function computeTerritoryOutcome(territoryId: number, createdAt: string | null): TerritoryOutcome | null {
+  const leads = all<{ id: number; city: string | null; state: string | null; sold: number }>(
+    `SELECT id, city, state, CASE WHEN lead_status='sold' THEN 1 ELSE 0 END AS sold
+       FROM leads WHERE assigned_territory_id = ?`, territoryId);
+  if (leads.length === 0) return null;
+  // Dominant city among the territory's leads.
+  const cityCount = new Map<string, { city: string; state: string; n: number }>();
+  for (const l of leads) {
+    if (!l.city) continue;
+    const k = key(l.city, l.state ?? "NC");
+    const e = cityCount.get(k);
+    if (e) e.n++; else cityCount.set(k, { city: l.city, state: l.state ?? "NC", n: 1 });
+  }
+  const dom = [...cityCount.values()].sort((a, b) => b.n - a.n)[0];
+  if (!dom) return null;
+  const km = g<{ knocks: number; contacts: number }>(
+    `SELECT COUNT(*) AS knocks, SUM(CASE WHEN was_home=1 THEN 1 ELSE 0 END) AS contacts
+       FROM knock_log WHERE lead_id IN (SELECT id FROM leads WHERE assigned_territory_id = ?)`, territoryId);
+  const sales = leads.reduce((s, l) => s + (l.sold ? 1 : 0), 0);
+  const daysActive = createdAt ? Math.max(0, Math.round((Date.now() - (Date.parse(createdAt + "Z") || Date.parse(createdAt))) / 86_400_000)) : null;
+  return { city: dom.city, state: dom.state, doors: leads.length, knocks: km?.knocks ?? 0, contacts: km?.contacts ?? 0, sales, daysActive };
+}
+
+// Clear leads' territory ref (used when a territory is deleted) WITHOUT touching
+// their rep assignment — the old hard-delete orphaned 2,855 leads pointing at
+// nonexistent territories. Returns the count cleared.
+export function clearTerritoryFromLeads(territoryId: number): number {
+  return rawDb.prepare(`UPDATE leads SET assigned_territory_id = NULL WHERE assigned_territory_id = ?`).run(territoryId).changes;
+}
+
 function key(city: string, state: string): string { return `${(city || "").toLowerCase()}|${(state || "").toLowerCase()}`; }
 function num(n: number): number { return Number.isFinite(n) ? n : 0; }

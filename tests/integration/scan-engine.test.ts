@@ -20,6 +20,7 @@ let storageMod: typeof import("../../server/storage");
 let store: typeof import("../../server/scanIntelStore");
 let engine: typeof import("../../server/scanEngine");
 let priority: typeof import("../../shared/scanPriority");
+let scoreMarket: typeof import("../../shared/marketIntel").scoreMarket;
 
 const TENANT = 1;
 
@@ -59,6 +60,7 @@ beforeAll(async () => {
   store = await import("../../server/scanIntelStore");
   engine = await import("../../server/scanEngine");
   priority = await import("../../shared/scanPriority");
+  ({ scoreMarket } = await import("../../shared/marketIntel"));
 
   // Seed a market of 8 pooled addresses, clustered so ranking has structure.
   const seed = rawDb.prepare(`INSERT INTO scan_targets (address, city, state, zip, lat, lng, source) VALUES (?,?,?,?,?,?,'test')`);
@@ -131,6 +133,50 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     const row: any = rawDb.prepare(`SELECT last_availability_status, first_seen_live_at FROM scan_targets WHERE id=?`).get(id);
     expect(row.last_availability_status).toBe("newly_live");
     expect(row.first_seen_live_at).not.toBeNull();
+  });
+
+  it("learning loop: a worked territory's outcome accumulates into its market", async () => {
+    const svc = await import("../../server/scanService");
+    // Seed 5 leads in 'Learnville' assigned to territory 777, 2 sold, with knocks.
+    const insLead = rawDb.prepare(`INSERT INTO leads (address, city, state, zip, lat, lng, fiber_status, is_new_fiber, lead_status, assigned_territory_id, tenant_id, lead_score, created_at, updated_at) VALUES (?,?,?,?,?,?,'new_fiber',1,?,777,1,100,datetime('now'),datetime('now'))`);
+    const leadIds: number[] = [];
+    for (let i = 0; i < 5; i++) leadIds.push(Number(insLead.run(`${i} Learn St`, "Learnville", "NC", "28200", 35.9 + i * 1e-4, -80.9, i < 2 ? "sold" : "prospect").lastInsertRowid));
+    const insKnock = rawDb.prepare(`INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at) VALUES (?,1,?,?,datetime('now'))`);
+    for (const id of leadIds) insKnock.run(id, "interested", 1);       // 5 contacts
+    insKnock.run(leadIds[0], "sold", 1); insKnock.run(leadIds[1], "sold", 1);
+
+    const outcome = svc.recordTerritoryOutcome(TENANT, 777, new Date(Date.now() - 3 * 86400000).toISOString());
+    expect(outcome).not.toBeNull();
+    expect(outcome!.city).toBe("Learnville");
+    expect(outcome!.doors).toBe(5);
+    expect(outcome!.sales).toBe(2);
+    expect(outcome!.knocks).toBe(7);
+
+    // The outcome landed in the market's memory (the learning-loop write).
+    const row: any = rawDb.prepare(`SELECT knocks, sales FROM market_outcomes WHERE tenant_id=1 AND lower(city)='learnville'`).get();
+    expect(row.knocks).toBe(7);
+    expect(row.sales).toBe(2);
+
+    // And once a market has ENOUGH field evidence, proven conversion lifts its
+    // priority (small samples deliberately don't move it — honesty over noise).
+    const mkt = { city: "Learnville", state: "NC", poolSize: 500, verified: 100, verifiedNewFiber: 40,
+      newlyLive: 0, leads: 40, unworkedLeads: 20, workedLeads: 20, soldLeads: 2, lastVerifiedAtMs: Date.now() - 86400000 };
+    const before = scoreMarket({ ...mkt, outcome: null }, Date.now());
+    const proven = scoreMarket({ ...mkt, outcome: { knocks: 60, contacts: 30, sales: 12, lastDeployedAtMs: Date.now() } }, Date.now());
+    const busted = scoreMarket({ ...mkt, outcome: { knocks: 60, contacts: 8, sales: 0, lastDeployedAtMs: Date.now() } }, Date.now());
+    expect(proven.priority).toBeGreaterThan(before.priority);
+    expect(busted.priority).toBeLessThan(before.priority);
+  });
+
+  it("delete detaches leads instead of orphaning them", async () => {
+    const svc = await import("../../server/scanService");
+    const ins = rawDb.prepare(`INSERT INTO leads (address, city, state, zip, lat, lng, fiber_status, is_new_fiber, lead_status, assigned_rep_id, assigned_territory_id, tenant_id, created_at, updated_at) VALUES (?,?,?,?,?,?,'new_fiber',1,'prospect',9,888,1,datetime('now'),datetime('now'))`);
+    const id = Number(ins.run("1 Orphan Rd", "Orphanton", "NC", "28201", 35.1, -80.1).lastInsertRowid);
+    const detached = svc.detachTerritoryLeads(888);
+    expect(detached).toBe(1);
+    const row: any = rawDb.prepare(`SELECT assigned_territory_id, assigned_rep_id FROM leads WHERE id=?`).get(id);
+    expect(row.assigned_territory_id).toBeNull(); // no orphan ref
+    expect(row.assigned_rep_id).toBe(9);          // rep assignment preserved
   });
 
   it("resumes a run from its persisted queue (survives 'restart')", async () => {

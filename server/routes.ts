@@ -1379,6 +1379,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ runs: scanSvc.getRuns(tid(req)) });
   });
 
+  // Change feed — "what changed since yesterday". Combines the first-to-market
+  // signal (addresses that FLIPPED unavailable->live) with recent scan-run
+  // yields, so leadership sees fresh opportunity the moment it appears. Manager+,
+  // ZERO proxy. Honest empty state when nothing has flipped yet.
+  app.get("/api/scan/changes", requireManager, (req: any, res) => {
+    const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
+    const newlyLive = storage.getFirstSeenLive(hours, 200);
+    const runs = scanSvc.getRuns(tid(req)).filter((r: any) =>
+      r.completedAt && (Date.now() - (Date.parse(r.completedAt + "Z") || Date.parse(r.completedAt))) <= hours * 3600_000);
+    res.json({
+      windowHours: hours,
+      newlyLive: { count: newlyLive.length, readyToAssign: newlyLive.filter((r: any) => r.leadId != null).length, addresses: newlyLive },
+      recentRuns: runs.map((r: any) => ({ id: r.id, label: r.label, verified: r.verified, newFiber: r.newFiber, newlyLive: r.newlyLive, completedAt: r.completedAt, costUsd: r.costUsd })),
+      foundNewFiber: runs.reduce((s: number, r: any) => s + r.newFiber, 0),
+    });
+  });
+
   // Live run status — the resumable progress poll. Manager+ (read/watch).
   app.get("/api/scan/runs/:id", requireManager, (req: any, res) => {
     const status = scanSvc.getRunStatus(qstr(req.params.id), tid(req));
@@ -1393,6 +1410,77 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const ok = scanSvc.controlRun(qstr(req.params.id), tid(req), action as any);
     if (!ok) return res.status(404).json({ error: "Run not found" });
     res.json({ ok: true, action });
+  });
+
+  // Deploy an opportunity cluster as a TERRITORY assigned to a rep — the step
+  // that turns discovery into fieldwork. Takes the cluster's boundary polygon +
+  // a rep, creates the area, assigns every enclosed reassignable lead, and
+  // captures a server-AUTHORED briefing ("why this area") so the rep understands
+  // the opportunity immediately. team_lead+ with the same scope guards as a
+  // lasso assign — this does NOT spend proxy money.
+  app.post("/api/scan/deploy", requireTeamLead, (req: any, res) => {
+    const user = req.user;
+    const t = user?.tenantId ?? undefined;
+    const { polygon, repId, name, sourceRunId } = req.body ?? {};
+    if (!Array.isArray(polygon) || polygon.length < 3 || repId == null) {
+      return res.status(400).json({ error: "polygon (>=3 points) and repId required" });
+    }
+    const rep = storage.getTeamMemberById(Number(repId));
+    if (!rep) return res.status(404).json({ error: "rep not found" });
+    if (!repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+
+    const activeForRep = storage.getTerritoriesByRep(Number(repId)).filter((x: any) => x.status === "active" || x.status === "shared").length;
+    if (!canRepTakeAnotherArea(activeForRep)) {
+      return res.status(409).json({ error: `${rep.name} already has ${activeForRep} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}). Reclaim one first.` });
+    }
+
+    // Authoritative enclosed-lead set (server-computed — the briefing can't be
+    // spoofed by the client).
+    const ring = polygon as [number, number][];
+    const enclosed = storage.getLeads(t).filter((l: any) =>
+      l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, ring) && canReassignLead(user, l));
+    if (enclosed.length === 0) return res.status(409).json({ error: "No assignable leads inside this cluster" });
+
+    // Build the "why this area" briefing from the real enclosed leads.
+    const scores = enclosed.map((l: any) => l.leadScore ?? 0);
+    const competitors = new Map<string, number>();
+    let unworked = 0;
+    for (const l of enclosed) {
+      if (l.competitorName) competitors.set(l.competitorName, (competitors.get(l.competitorName) ?? 0) + 1);
+    }
+    // Which enclosed leads have zero knocks?
+    const visits = storage.getVisitSummary(t);
+    for (const l of enclosed) if (!visits.get(l.id)) unworked++;
+    const topCompetitor = [...competitors.entries()].sort((a, b) => b[1] - a[1])[0];
+    const briefing = {
+      doors: enclosed.length,
+      unworked,
+      avgScore: Math.round(scores.reduce((s, x) => s + x, 0) / Math.max(1, scores.length)),
+      topCompetitor: topCompetitor ? { name: topCompetitor[0], count: topCompetitor[1] } : null,
+      competitorShare: Math.round((enclosed.filter((l: any) => l.competitorName).length / enclosed.length) * 100),
+      newFiber: enclosed.filter((l: any) => l.isNewFiber).length,
+      generatedAt: new Date().toISOString(),
+    };
+
+    const at = new Date().toISOString();
+    const territory = storage.createTerritory({
+      tenantId: t ?? null, name: (name && String(name).trim()) || `${rep.name}'s area`,
+      repId: Number(repId), polygon: JSON.stringify(ring), color: colorForRep(Number(repId)),
+      status: "active", assigneeIds: JSON.stringify([Number(repId)]),
+      briefing: JSON.stringify(briefing), sourceRunId: sourceRunId ? String(sourceRunId) : null, updatedAt: at,
+    } as any);
+    storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: Number(repId), name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null });
+
+    let assigned = 0;
+    for (const l of enclosed) {
+      if (storage.updateLead(l.id, { assignedRepId: Number(repId), assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t)) {
+        assigned++;
+        storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
+      }
+    }
+    storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId: Number(repId), assigned });
+    if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(t);
+    res.status(201).json({ territory, assigned, briefing });
   });
 
   // GET /api/scan/first-seen-live — the first-to-market feed: addresses that
@@ -2527,9 +2615,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!t) return res.status(404).json({ error: "not found" });
     if (((t as any).status ?? "active") === "archived") return res.status(409).json({ error: "cannot complete an archived area" });
     const at = new Date().toISOString();
-    storage.updateTerritory(t.id, { status: "completed", completedAt: at, updatedAt: at, completionNotes: req.body?.notes ?? null } as any, tid);
-    storage.addTerritoryEvent(t.id, user?.id ?? null, "completed", { notes: req.body?.notes ?? null });
-    res.json({ ok: true, status: "completed" });
+    // LEARNING LOOP: capture the field outcome and roll it into the market's
+    // memory so a proven area lifts its market's priority next scan.
+    const outcome = scanSvc.recordTerritoryOutcome(tid ?? getDefaultTenantId(), t.id, (t as any).createdAt ?? null);
+    storage.updateTerritory(t.id, { status: "completed", completedAt: at, updatedAt: at, completionNotes: req.body?.notes ?? null, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, tid);
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "completed", { notes: req.body?.notes ?? null, outcome });
+    res.json({ ok: true, status: "completed", outcome });
   });
 
   // POST /api/territories/:id/share { repIds: number[] } — multi-rep assignment
@@ -2553,9 +2644,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const t = storage.getTerritoryById(Number(req.params.id));
     if (!t) return res.status(404).json({ error: "not found" });
     const at = new Date().toISOString();
-    storage.updateTerritory(t.id, { status: "archived", archivedAt: at, updatedAt: at } as any, tid);
-    storage.addTerritoryEvent(t.id, user?.id ?? null, "archived", {});
-    res.json({ ok: true, status: "archived" });
+    const outcome = scanSvc.recordTerritoryOutcome(tid ?? getDefaultTenantId(), t.id, (t as any).createdAt ?? null);
+    storage.updateTerritory(t.id, { status: "archived", archivedAt: at, updatedAt: at, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, tid);
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "archived", { outcome });
+    res.json({ ok: true, status: "archived", outcome });
   });
 
   // GET /api/territories/:id/history — full immutable event log
@@ -2585,8 +2677,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const id = Number(req.params.id);
     const terr = storage.getTerritories(ttid).find(t => t.id === id);
     if (!terr || !canManageTerritory((req as any).user, terr)) return res.status(404).json({ error: "Not found" });
+    // LEARNING LOOP + orphan fix: teach the market from this area's outcome, then
+    // DETACH its leads (clear their territory ref, keep the rep) BEFORE deleting —
+    // the old hard-delete left leads pointing at a ghost territory (2,855 orphans).
+    scanSvc.recordTerritoryOutcome(ttid ?? getDefaultTenantId(), id, (terr as any).createdAt ?? null);
+    const detached = scanSvc.detachTerritoryLeads(id);
     if (!storage.deleteTerritory(id, ttid)) return res.status(404).json({ error: "Not found" });
-    res.json({ success: true });
+    if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(ttid);
+    res.json({ success: true, detached });
   });
 
   // GET /api/territories/progress — canvassing progress per assigned area.

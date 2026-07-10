@@ -10,7 +10,8 @@ import { rankTargets } from "@shared/scanPriority";
 import { estimateScanCost, bytesToUsd, MAX_CHECKS_PER_RUN, budgetTiers, type CostRate } from "@shared/scanEconomics";
 import {
   getMarketAggregates, getKnownNewFiberPoints, getPoolTargetsForCity, getOpportunityPoints,
-  createScanRun, enqueueRunTargets, getRun, listRuns, setRunStatus, countQueued, type ScanRunRow,
+  createScanRun, enqueueRunTargets, getRun, listRuns, setRunStatus, countQueued,
+  computeTerritoryOutcome, accumulateMarketOutcome, clearTerritoryFromLeads, type ScanRunRow,
 } from "./scanIntelStore";
 import { runScanWorker, isRunActive } from "./scanEngine";
 
@@ -151,6 +152,27 @@ export function controlRun(runId: string, tenantId: number, action: "pause" | "r
     return true;
   }
   return false;
+}
+
+// ── Learning loop ─────────────────────────────────────────────────────────────
+// Roll a finished territory's field outcome up into its market's memory. Called
+// on complete / archive / delete so EVERY worked area teaches the next scan —
+// the old hard-delete erased the lesson. Returns the outcome snapshot to store
+// on the territory (so the retrospective survives on the row too). Best-effort:
+// a territory with no leads (or no city) simply has nothing to teach.
+export function recordTerritoryOutcome(tenantId: number, territoryId: number, createdAt: string | null): ReturnType<typeof computeTerritoryOutcome> {
+  const outcome = computeTerritoryOutcome(territoryId, createdAt);
+  if (!outcome) return null;
+  accumulateMarketOutcome(tenantId, outcome.city, outcome.state, {
+    doors: outcome.doors, knocks: outcome.knocks, contacts: outcome.contacts, sales: outcome.sales,
+  });
+  return outcome;
+}
+
+// Unassign a deleted territory's leads from it (keep their rep) — fixes the
+// orphan bug where deleting a territory left leads pointing at a ghost.
+export function detachTerritoryLeads(territoryId: number): number {
+  return clearTerritoryFromLeads(territoryId);
 }
 
 function clampBudget(n: number): number {
