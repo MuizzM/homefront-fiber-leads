@@ -77,6 +77,7 @@ function ScanHeader({ view, setView, isAdmin }: { view: View; setView: (v: View)
       <div className="flex items-center gap-1 ml-auto rounded-xl bg-secondary/60 p-1">
         {tabs.map(({ id, label, Icon }) => (
           <button key={id} onClick={() => setView(id)} data-testid={`scan-view-${id}`}
+            aria-label={label} aria-pressed={view === id} title={label}
             className={`flex items-center gap-1.5 px-3 h-9 rounded-lg text-[13px] font-medium transition-colors ${view === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
             <Icon className="w-4 h-4" /> <span className="hidden sm:inline">{label}</span>
           </button>

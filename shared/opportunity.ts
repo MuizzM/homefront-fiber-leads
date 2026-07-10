@@ -153,30 +153,26 @@ function spanOf(pts: OppPoint[]): { spanLat: number; spanLng: number } {
   return { spanLat: maxLat - minLat, spanLng: maxLng - minLng };
 }
 
-// Split a cluster's member points into k compact, contiguous, roughly-equal
-// sub-parcels so a big opportunity can be handed to k reps. Same median-bisection
-// engine; returns the member-id lists per parcel. k is clamped to [1, size].
+// Split a cluster's member points into k compact, contiguous, roughly-EQUAL
+// sub-parcels so a big opportunity can be handed to k reps fairly. Recursive
+// PROPORTIONAL median cut: to make k parcels, split into two groups sized
+// kLeft:kRight (⌊k/2⌋:⌈k/2⌉) by cutting the point list at n·kLeft/k along its
+// longer axis, then recurse. Every parcel ends up within ±1 of n/k — a rep
+// never silently gets 4× another (the old span-first 50/50 bug). Deterministic.
 export function subdivideCluster(memberPoints: OppPoint[], k: number): number[][] {
   const n = memberPoints.length;
   const kk = Math.max(1, Math.min(Math.floor(k), n));
-  if (kk === 1) return [memberPoints.map(p => p.id)];
-  // Recursively bisect into ~kk parcels (binary tree of median cuts).
-  const parcels: OppPoint[][] = [memberPoints];
-  while (parcels.length < kk) {
-    // Split the largest-span parcel next so parcels stay balanced + compact.
-    let bi = 0, best = -1;
-    for (let i = 0; i < parcels.length; i++) {
-      const s = spanOf(parcels[i]); const sp = Math.max(s.spanLat, s.spanLng);
-      if (parcels[i].length > 1 && sp > best) { best = sp; bi = i; }
-    }
-    if (best < 0) break; // nothing splittable
-    const target = parcels.splice(bi, 1)[0];
-    const s = spanOf(target); const byLng = s.spanLng >= s.spanLat;
-    const sorted = [...target].sort((a, z) => byLng ? a.lng - z.lng : a.lat - z.lat);
-    const mid = Math.floor(sorted.length / 2);
-    parcels.push(sorted.slice(0, mid), sorted.slice(mid));
-  }
-  return parcels.map(p => p.map(x => x.id));
+  return kwayBalancedSplit(memberPoints, kk).map(p => p.map(x => x.id));
+}
+function kwayBalancedSplit(pts: OppPoint[], k: number): OppPoint[][] {
+  if (k <= 1 || pts.length <= 1) return [pts];
+  const kLeft = Math.floor(k / 2), kRight = k - kLeft;
+  const s = spanOf(pts);
+  const byLng = s.spanLng >= s.spanLat;
+  const sorted = [...pts].sort((a, z) => byLng ? (a.lng - z.lng || a.lat - z.lat || a.id - z.id) : (a.lat - z.lat || a.lng - z.lng || a.id - z.id));
+  // Proportional cut so each side carries its share of the k parcels.
+  const cut = Math.max(1, Math.min(sorted.length - 1, Math.round(sorted.length * kLeft / k)));
+  return [...kwayBalancedSplit(sorted.slice(0, cut), kLeft), ...kwayBalancedSplit(sorted.slice(cut), kRight)];
 }
 
 function buildCluster(id: string, members: OppPoint[], ids: number[], nowMs: number): OppCluster {

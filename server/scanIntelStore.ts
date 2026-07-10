@@ -142,16 +142,15 @@ export function getOpportunityPoints(
       WHERE l.tenant_id=? AND l.is_new_fiber=1 AND l.lat IS NOT NULL ${cityFilter} ${box}`,
     ...args,
   );
-  const weekAgo = Date.now() - 7 * 86_400_000;
   return rows.map(r => {
     const verifiedAtMs = r.createdAt ? Date.parse(r.createdAt + "Z") || Date.parse(r.createdAt) : null;
-    return {
-      ...r,
-      verifiedAtMs,
-      // "newly live" = verified within the last week (a real, data-driven flag,
-      // not a literal 0) so the map can honestly surface fresh opportunity.
-      newlyLive: verifiedAtMs != null && verifiedAtMs >= weekAgo ? 1 : 0,
-    };
+    // verifiedAtMs drives an HONEST "freshly verified" signal (created_at = when
+    // we confirmed this door as new fiber). We do NOT synthesize "newly live"
+    // from lead age — "just went live" is a PROVABLE unavailable→live flip we
+    // only know from a pool rescan (first_seen_live_at), never from a recent
+    // import. Claiming a freshly-imported lead "just went live" would overstate
+    // freshness, so newlyLive stays 0 for lead-sourced points.
+    return { ...r, verifiedAtMs, newlyLive: 0 };
   });
 }
 

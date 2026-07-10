@@ -134,13 +134,14 @@ export function OpportunityMap({ focusCity, onBack }: { focusCity?: { city: stri
           <ArrowLeft className="w-4 h-4" /> Markets
         </button>
 
-        {/* Legend — decodes the opportunity-score colour ramp. */}
+        {/* Legend — decodes the opportunity-score colour ramp. On phone it sits
+            ABOVE the collapsed cluster bottom sheet (~124px) so it's never
+            occluded; on desktop it hugs the bottom-left. */}
         {clusters.length > 0 && (
-          <div className="absolute bottom-3 left-3 rounded-lg bg-black/70 backdrop-blur border border-white/10 px-2.5 py-2 text-white z-10 md:bottom-3" style={{ bottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}>
+          <div className="absolute left-3 rounded-lg bg-black/75 backdrop-blur border border-white/10 px-2.5 py-2 text-white z-30 bottom-[132px] md:bottom-3"
+            style={{ }}>
             <div className="text-[10px] uppercase tracking-wider text-white/60 font-semibold mb-1">Opportunity score</div>
-            <div className="flex items-center gap-1.5">
-              <div className="h-2 w-24 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP.map(r => r[1]).join(",")})` }} />
-            </div>
+            <div className="h-2 w-24 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP.map(r => r[1]).join(",")})` }} />
             <div className="flex justify-between text-[9px] text-white/50 mt-0.5 w-24"><span>low</span><span>high</span></div>
           </div>
         )}

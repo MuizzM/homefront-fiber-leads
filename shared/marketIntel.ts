@@ -74,9 +74,14 @@ export function scoreMarket(m: MarketAggregate, nowMs: number): MarketCard {
   // unconfirmed so it never outranks a door we can actually knock today.
   const confirmedUnworked = Math.max(0, m.unworkedLeads);
   const unverified = Math.max(0, poolSize - m.verified);
+  // Project hidden fiber ONLY over pool addresses we haven't already resolved —
+  // subtracting the leads (which came from the pool) so we never double-count a
+  // door we already found as also "hidden". The rate is what we've observed, or
+  // (before any pool scan) the share of the pool that already became leads.
+  const unresolvedPool = Math.max(0, unverified - m.leads);
   const observedHitRate = m.verified > 0 ? m.verifiedNewFiber / m.verified
     : (m.leads > 0 && poolSize > 0 ? clamp01(m.leads / poolSize) : 0);
-  const projectedHidden = Math.round(observedHitRate * unverified * 0.4); // 60% haircut
+  const projectedHidden = Math.round(observedHitRate * unresolvedPool * 0.4); // 60% haircut
   const estRemainingOpportunity = confirmedUnworked + projectedHidden;
 
   const reasons: string[] = [];

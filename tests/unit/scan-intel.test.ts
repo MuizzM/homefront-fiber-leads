@@ -47,6 +47,18 @@ describe("scoreMarket", () => {
     expect(doors.reasons.some(r => /unworked new-fiber door/.test(r))).toBe(true);
   });
 
+  it("REGRESSION: est opportunity never double-counts known leads as hidden fiber", () => {
+    // 1000 leads out of a 1000 pool, all unworked → known opportunity is 1000 and
+    // there is NO unresolved pool left to project onto (leads == pool).
+    const m = scoreMarket({ ...base, poolSize: 1000, verified: 0, leads: 1000, unworkedLeads: 1000 }, now);
+    expect(m.estRemainingOpportunity).toBe(1000); // exactly the known doors, no phantom "hidden"
+    // With headroom in the pool (2000 pool, 1000 leads), the projection is only
+    // over the ~1000 truly-unresolved addresses, never over the leads again.
+    const m2 = scoreMarket({ ...base, poolSize: 2000, verified: 0, leads: 1000, unworkedLeads: 1000 }, now);
+    expect(m2.estRemainingOpportunity).toBeLessThanOrEqual(1000 + 1000); // ≤ known + unresolved pool
+    expect(m2.estRemainingOpportunity).toBeGreaterThan(1000);            // some projected upside
+  });
+
   it("REGRESSION: scanning a market and finding ZERO new fiber makes it COLD, not warm", () => {
     const scannedEmpty = scoreMarket({ ...base, poolSize: 1000, verified: 962, verifiedNewFiber: 0, leads: 0, unworkedLeads: 0, lastVerifiedAtMs: now - 3600000 }, now);
     expect(scannedEmpty.priorityBand).toBe("cold");
@@ -141,14 +153,21 @@ describe("clusterOpportunities", () => {
     expect(ids.size).toBe(200);
   });
 
-  it("subdivideCluster splits a cluster into k compact parcels for k reps", () => {
+  it("subdivideCluster splits into k BALANCED compact parcels (±1 of n/k) for k reps", () => {
     const pts: OppPoint[] = Array.from({ length: 40 }, (_, i) => ({ id: i, lat: 35.5 + (i % 8) * 0.001, lng: -80.4 + Math.floor(i / 8) * 0.001 }));
-    const parcels = subdivideCluster(pts, 4);
-    expect(parcels.length).toBe(4);
-    // Every member lands in exactly one parcel — no loss, no overlap.
-    const all = parcels.flat();
-    expect(all.length).toBe(40);
-    expect(new Set(all).size).toBe(40);
+    for (const k of [2, 3, 4, 5]) {
+      const parcels = subdivideCluster(pts, k);
+      expect(parcels.length).toBe(k);
+      const all = parcels.flat();
+      expect(all.length).toBe(40);              // no loss
+      expect(new Set(all).size).toBe(40);       // no overlap
+      // Balance: no rep gets far more than another (the old span-first bug gave 4x).
+      const sizes = parcels.map(p => p.length);
+      expect(Math.max(...sizes) - Math.min(...sizes)).toBeLessThanOrEqual(1);
+    }
+    // 37 across 3 reps → 13/12/12 (the live sales-manager case).
+    const uneven = subdivideCluster(Array.from({ length: 37 }, (_, i) => ({ id: i, lat: 35.5 + i * 1e-4, lng: -80.4 })), 3);
+    expect(uneven.map(p => p.length).sort()).toEqual([12, 12, 13]);
     // k clamped to size; k=1 returns everything.
     expect(subdivideCluster(pts, 1)).toEqual([pts.map(p => p.id)]);
     expect(subdivideCluster(pts.slice(0, 3), 10).length).toBeLessThanOrEqual(3);

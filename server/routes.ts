@@ -1458,7 +1458,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Validate every rep up front — scope + capacity — so a split is all-or-nothing.
     for (const rid of reps) {
       const rp = storage.getTeamMemberById(rid);
-      if (!rp) return res.status(404).json({ error: `rep ${rid} not found` });
+      // Tenant wall FIRST: even an org-wide admin/manager can only deploy to a
+      // rep in their own tenant — 404 (not 403) so a foreign rep id can't be
+      // probed. Then the team-scope check for team_leads.
+      if (!rp || !repInCallerTenant(user, rid)) return res.status(404).json({ error: `rep ${rid} not found` });
       if (!repInVisibilityScope(user, rid)) return res.status(403).json({ error: "A chosen rep is not on your team", code: "OUT_OF_SCOPE" });
       const active = storage.getTerritoriesByRep(rid).filter((x: any) => x.status === "active" || x.status === "shared").length;
       if (!canRepTakeAnotherArea(active)) return res.status(409).json({ error: `${rp.name} already has ${active} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}).` });
