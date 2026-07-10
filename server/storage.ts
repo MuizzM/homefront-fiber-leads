@@ -224,6 +224,10 @@ export function runMigrations() {
     `ALTER TABLE leads ADD COLUMN years_at_address INTEGER`,
     `ALTER TABLE leads ADD COLUMN is_homeowner INTEGER`,
     `ALTER TABLE leads ADD COLUMN enriched_at TEXT`,
+    // Legacy pre-drizzle scan columns upsertLeadByAddress still writes — present
+    // in prod from the original schema, absent on migrations-only/fresh DBs.
+    `ALTER TABLE leads ADD COLUMN max_download INTEGER`,
+    `ALTER TABLE leads ADD COLUMN is_new_deployment INTEGER DEFAULT 0`,
     `ALTER TABLE fiber_checks ADD COLUMN billing_status TEXT`,
     `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
     `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
@@ -389,6 +393,72 @@ export function runMigrations() {
     // (EXPLAIN showed USE TEMP B-TREE); this one lets each partition stream
     // off the index in order.
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead_time_desc ON knock_log(lead_id, knocked_at DESC, id DESC)`,
+
+    // ── SCAN INTELLIGENCE — persistent, resumable, budgeted verification runs ──
+    // A scan is no longer an in-memory job that dies on restart. Each run is a
+    // durable record of a budgeted proxy spend against the address pool, so an
+    // operator can leave and return without losing progress, and the system
+    // remembers what a market cost and what it yielded.
+    `CREATE TABLE IF NOT EXISTS scan_runs (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL,
+       kind TEXT NOT NULL DEFAULT 'market',        -- market | area | rescan
+       label TEXT NOT NULL,
+       city TEXT, state TEXT DEFAULT 'NC',
+       bbox TEXT,                                  -- JSON {minLat,maxLat,minLng,maxLng} for area runs
+       budget INTEGER NOT NULL,                    -- addresses authorized to verify (= proxy spend cap)
+       verified INTEGER NOT NULL DEFAULT 0,        -- Kinetic checks actually completed
+       new_fiber INTEGER NOT NULL DEFAULT 0,       -- verified NEW FIBER + billing N hits
+       newly_live INTEGER NOT NULL DEFAULT 0,      -- provable unavailable->live flips
+       failed INTEGER NOT NULL DEFAULT 0,          -- timeouts/errors (NOT negatives)
+       status TEXT NOT NULL DEFAULT 'running',     -- running | paused | done | error | cancelled
+       error TEXT,
+       est_bytes INTEGER NOT NULL DEFAULT 0,       -- proxy bytes billed (cost evidence)
+       created_by INTEGER,
+       started_at TEXT NOT NULL DEFAULT (datetime('now')),
+       heartbeat_at TEXT,
+       completed_at TEXT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_runs_tenant ON scan_runs(tenant_id, started_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_runs_status ON scan_runs(status)`,
+    // The exact target ids a run intends to verify, in priority order, with a
+    // per-target lifecycle. This is what makes a run RESUMABLE: on restart we
+    // re-dispatch the pending rows. queued -> verified | failed | skipped.
+    `CREATE TABLE IF NOT EXISTS scan_run_targets (
+       run_id TEXT NOT NULL,
+       target_id INTEGER NOT NULL,
+       seq INTEGER NOT NULL,                       -- priority order (0 = highest EV)
+       state TEXT NOT NULL DEFAULT 'queued',       -- queued | verified | failed | skipped
+       result TEXT,                                -- 'new_fiber' | 'other' | 'no_service' | 'failed'
+       PRIMARY KEY (run_id, target_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_srt_run_state ON scan_run_targets(run_id, state, seq)`,
+    // scan_targets learns from the field: an EV signal blended into priority so
+    // markets/clusters that converted well get re-verified sooner. Nullable —
+    // absence means "no field signal yet", never zero.
+    `ALTER TABLE scan_targets ADD COLUMN opportunity_score REAL`,
+    // Per-market memory of deployed outcomes (the learning loop). One row per
+    // (tenant, city) accumulating what fieldwork taught us — feeds priority.
+    `CREATE TABLE IF NOT EXISTS market_outcomes (
+       tenant_id INTEGER NOT NULL,
+       city TEXT NOT NULL,
+       state TEXT NOT NULL DEFAULT 'NC',
+       territories_worked INTEGER NOT NULL DEFAULT 0,
+       doors INTEGER NOT NULL DEFAULT 0,
+       knocks INTEGER NOT NULL DEFAULT 0,
+       contacts INTEGER NOT NULL DEFAULT 0,
+       sales INTEGER NOT NULL DEFAULT 0,
+       last_deployed_at TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY (tenant_id, city, state)
+     )`,
+    // Territory archive: a completed/reclaimed territory keeps its shape +
+    // outcome instead of being hard-deleted (the old DELETE orphaned 2,855
+    // leads and erased every lesson). Deploy briefing captured at assign time.
+    `ALTER TABLE territories ADD COLUMN archived_at TEXT`,
+    `ALTER TABLE territories ADD COLUMN outcome_snapshot TEXT`,
+    `ALTER TABLE territories ADD COLUMN briefing TEXT`,
+    `ALTER TABLE territories ADD COLUMN source_run_id TEXT`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

@@ -92,6 +92,7 @@ function isAutoAreaName(name?: string | null): boolean {
 import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
+import * as scanSvc from "./scanService";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { getCronStatus, triggerManualScan, startNightlyCron } from "./cron-scanner";
@@ -1317,6 +1318,81 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // GET /api/scan/pool-stats — size of the persistent address pool
   app.get("/api/scan/pool-stats", requireManager, (_req, res) => {
     res.json(storage.getScanTargetStats());
+  });
+
+  // ═══ SCAN INTELLIGENCE ═══════════════════════════════════════════════════════
+  // The market-discovery system: read markets + clusters (manager+, no spend),
+  // and run/control budgeted scans (admin only — every check spends proxy money).
+  const tid = (req: any) => req.user?.tenantId ?? getDefaultTenantId();
+
+  // Markets grid — every harvested city scored as an opportunity. Pure DB read,
+  // ZERO proxy. Manager+ so leadership can decide where to launch.
+  app.get("/api/scan/markets", requireManager, (req: any, res) => {
+    res.json(scanSvc.getMarkets(tid(req)));
+  });
+
+  // One market's detail + suggested budget tiers with up-front cost.
+  app.get("/api/scan/markets/:city", requireManager, (req: any, res) => {
+    const state = qstr(req.query.state) || "NC";
+    const detail = scanSvc.getMarketDetail(tid(req), qstr(req.params.city), state);
+    if (!detail) return res.status(404).json({ error: "No such market in the pool" });
+    res.json(detail);
+  });
+
+  // Opportunity clusters over verified new-fiber — the spatial "where to deploy"
+  // layer. Pure DB + in-memory clustering, ZERO proxy. Manager+.
+  app.get("/api/scan/clusters", requireManager, (req: any, res) => {
+    const { minLat, maxLat, minLng, maxLng, minPoints } = req.query;
+    const bbox = minLat != null && maxLat != null && minLng != null && maxLng != null
+      ? { minLat: Number(minLat), maxLat: Number(maxLat), minLng: Number(minLng), maxLng: Number(maxLng) }
+      : undefined;
+    res.json(scanSvc.getClusters(tid(req), bbox, { minPoints: minPoints != null ? Number(minPoints) : undefined }));
+  });
+
+  // Preview a budgeted run's cost — how many addresses would be verified and what
+  // it would cost. NO spend. Estimate-first is a hard product rule (two prior
+  // billing incidents). Admin only (it reveals spend controls).
+  app.post("/api/scan/runs/preview", requireAdmin, (req: any, res) => {
+    const { city, state = "NC", budget, rescan } = req.body ?? {};
+    if (!city || budget == null) return res.status(400).json({ error: "city and budget required" });
+    try {
+      res.json(scanSvc.previewMarketRun({ tenantId: tid(req), city: String(city), state: String(state), budget: Number(budget), rescan: !!rescan }));
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+
+  // Start a budgeted scan — the ONLY money-spending create path. Admin +
+  // scanLimiter. Returns immediately; the run is persisted + resumable.
+  app.post("/api/scan/runs", requireAdmin, scanLimiter, (req: any, res) => {
+    const { city, state = "NC", budget, rescan } = req.body ?? {};
+    if (!city || budget == null) return res.status(400).json({ error: "city and budget required" });
+    try {
+      const out = scanSvc.startMarketRun({ tenantId: tid(req), city: String(city), state: String(state), budget: Number(budget), rescan: !!rescan, createdBy: req.user?.id });
+      res.json(out);
+    } catch (e: any) {
+      const code = /^(NO_POOL|NOTHING_TO_VERIFY)/.test(e.message) ? 409 : 400;
+      res.status(code).json({ error: e.message });
+    }
+  });
+
+  // Run list (recent budgeted scans, with real measured cost). Manager+ (read).
+  app.get("/api/scan/runs", requireManager, (req: any, res) => {
+    res.json({ runs: scanSvc.getRuns(tid(req)) });
+  });
+
+  // Live run status — the resumable progress poll. Manager+ (read/watch).
+  app.get("/api/scan/runs/:id", requireManager, (req: any, res) => {
+    const status = scanSvc.getRunStatus(qstr(req.params.id), tid(req));
+    if (!status) return res.status(404).json({ error: "Run not found" });
+    res.json(status);
+  });
+
+  // Pause / resume / cancel a running spend. Admin only — this controls money.
+  app.post("/api/scan/runs/:id/:action", requireAdmin, (req: any, res) => {
+    const action = qstr(req.params.action);
+    if (!["pause", "resume", "cancel"].includes(action)) return res.status(400).json({ error: "bad action" });
+    const ok = scanSvc.controlRun(qstr(req.params.id), tid(req), action as any);
+    if (!ok) return res.status(404).json({ error: "Run not found" });
+    res.json({ ok: true, action });
   });
 
   // GET /api/scan/first-seen-live — the first-to-market feed: addresses that

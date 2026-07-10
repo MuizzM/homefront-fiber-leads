@@ -250,11 +250,9 @@ export interface ScanResult {
   leadScore: number;
 }
 
-export const NEW_FIBER_ZIPS = new Set([
-  "28138", "28072", "28023", "28081", "28083",
-  "28088", "28041", "28071", "28025", "28001", "28163"
-]);
-
+// REFERENCE ONLY — real published FCC/Kinetic build periods for known ZIPs.
+// These are NOT used to classify availability (that would be fabrication). They
+// can seed a "known active build area" hint in market priority, never a result.
 export const FCC_DEPLOYMENT_PERIODS: Record<string, string> = {
   "28138": "Q4 2025 — Rowan County CAB (507 locations, $2.1M)",
   "28072": "Q4 2025 — Rowan County CAB expansion",
@@ -464,19 +462,16 @@ export async function scanAddress(
     base.leadScore = score.leadScore;
 
   } catch (err: any) {
-    // Fallback to knowledge-base
-    base.apiSource = "knowledge_base";
-    const inNewZip = NEW_FIBER_ZIPS.has(zip);
-    if (inNewZip) {
-      base.fiberStatus = "new_fiber";
-      base.isNewFiber = true;
-      base.fiberAvailable = true;
-      base.confidence = "MEDIUM";
-      base.notes = `API unavailable. ZIP ${zip} is in active Kinetic CAB expansion zone. ${FCC_DEPLOYMENT_PERIODS[zip] ?? ""}`;
-    } else {
-      base.confidence = "LOW";
-      base.notes = `API error: ${err.message}`;
-    }
+    // PRODUCT LAW: a failed check (timeout/error/no-token) carries NO
+    // availability signal. We do NOT fabricate a result — the previous code
+    // invented `new_fiber` for any address in a hardcoded ZIP set, which turned
+    // a network timeout into a fake lead. A non-answer is not a "yes" and not a
+    // "no": return an explicit failure so the caller keeps the address in the
+    // recheck queue and never records or counts it as availability data.
+    base.apiSource = "failed";
+    base.fiberStatus = "unknown";
+    base.confidence = "LOW";
+    base.notes = `Check failed — no signal: ${err.message}`;
   }
 
   return base;

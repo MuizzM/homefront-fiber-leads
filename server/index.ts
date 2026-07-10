@@ -303,6 +303,14 @@ app.use((req, res, next) => {
     backfillFieldSales();
   } catch (e: any) { console.warn("[commission] field-sale backfill skipped:", e?.message); }
 
+  // Resume any budgeted scan that was mid-flight when the process last died —
+  // "leave and return without losing progress" must survive a crash/deploy, not
+  // just a navigation. Each interrupted run continues from its persisted queue.
+  try {
+    const { resumeInterruptedRuns } = await import("./scanEngine");
+    resumeInterruptedRuns();
+  } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
+
   // ── Purge expired sessions every 6 hours ────────────────────────────────
   setInterval(() => {
     try {
