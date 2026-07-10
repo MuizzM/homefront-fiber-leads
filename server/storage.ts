@@ -23,7 +23,7 @@ import {
   type ActivityLogEntry,
   type Tenant, type InsertTenant,
 } from "@shared/schema";
-import { eq, desc, like, or, and, gt, isNull, inArray } from "drizzle-orm";
+import { eq, desc, or, and, gt, isNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 
 // Legacy scanner columns that exist in SQLite but predate the drizzle schema —
@@ -38,9 +38,22 @@ export type KnockVerdict = {
   reviewReason: string | null;
 };
 
+// The 16 lead columns the map pin/popup actually uses — the narrow projection
+// getLeadsForMap selects instead of all 53 columns.
+export type MapPinRow = Pick<Lead,
+  "id" | "address" | "city" | "state" | "zip" | "lat" | "lng" | "leadStatus" |
+  "fiberStatus" | "isNewFiber" | "assignedRepId" | "maxDownloadMbps" |
+  "competitorName" | "leadScore" | "contactName" | "contactPhone">;
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[];
+  getLeadsPage(
+    tenantId: number | undefined,
+    assignedRep: number | number[] | undefined,
+    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+  ): { rows: Lead[]; total: number };
   getLeadById(id: number): Lead | undefined;
   createLead(lead: InsertLead): Lead;
   upsertLeadByAddress(lead: InsertLead & LegacyScanFields): { lead: Lead; created: boolean };
@@ -70,7 +83,7 @@ export interface IStorage {
   getGeoConfig(tenantId?: number | null): GeoConfig;
   overrideKnockVerification(knockId: number, newStatus: string, reason: string, actorUserId: number | null, actorName: string | null): Knock | undefined;
   getActivityOverrides(knockId: number): ActivityOverride[];
-  getVisitSummary(): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
+  getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
   // ── Leaderboard ────────────────────────────────────────────────────────────
   getLeaderboard(): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number; knocksToday: number; salesToday: number }[];
   // ── Users ──────────────────────────────────────────────────────────────────
@@ -353,6 +366,19 @@ export function runMigrations() {
     // so the drill-down always explains the locked number even if a door is later
     // reversed (which then surfaces as a REVERSED_AFTER_FINALIZE exception).
     `ALTER TABLE commission_statements ADD COLUMN contributing_sales TEXT`,
+
+    // ── Scale indexes (50k+ leads/tenant) ──────────────────────────────────
+    // Composite (tenant_id, assigned_rep_id): serves the scoped team_lead/rep
+    // map + list queries in one index walk instead of tenant-scan-then-filter.
+    `CREATE INDEX IF NOT EXISTS idx_leads_tenant_rep ON leads(tenant_id, assigned_rep_id)`,
+    // (tenant_id, created_at DESC): the /api/leads list ORDER BY comes straight
+    // off the index — kills the "USE TEMP B-TREE FOR ORDER BY" external sort.
+    `CREATE INDEX IF NOT EXISTS idx_leads_tenant_created ON leads(tenant_id, created_at DESC)`,
+    // (tenant_id, lead_status): status-filtered list pages without a tenant scan.
+    `CREATE INDEX IF NOT EXISTS idx_leads_tenant_status ON leads(tenant_id, lead_status)`,
+    // (lead_id, knocked_at): lets the visit-summary window query and per-lead
+    // knock history read each lead's knocks in time order straight off the index.
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_lead_time ON knock_log(lead_id, knocked_at)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -486,6 +512,60 @@ export class Storage implements IStorage {
   getLeadById(id: number): Lead | undefined {
     return db.select().from(leads).where(eq(leads.id, id)).get();
   }
+
+  // Map-pin projection: ONLY the 16 fields a pin/popup uses (leads has 53
+  // columns) and NO ORDER BY — the map doesn't care about order, and dropping
+  // it lets SQLite serve scoped reads straight off idx_leads_tenant_rep with
+  // no temp B-tree. ~70% less row hydration than getLeads() at 50k.
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[] {
+    const conditions = [];
+    if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
+    if (Array.isArray(assignedRep)) {
+      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
+    } else if (assignedRep != null) {
+      conditions.push(eq(leads.assignedRepId, assignedRep));
+    }
+    const q = db.select({
+      id: leads.id, address: leads.address, city: leads.city, state: leads.state,
+      zip: leads.zip, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
+      fiberStatus: leads.fiberStatus, isNewFiber: leads.isNewFiber,
+      assignedRepId: leads.assignedRepId, maxDownloadMbps: leads.maxDownloadMbps,
+      competitorName: leads.competitorName, leadScore: leads.leadScore,
+      contactName: leads.contactName, contactPhone: leads.contactPhone,
+    }).from(leads);
+    return (conditions.length > 0
+      ? q.where(conditions.length === 1 ? conditions[0] : and(...conditions))
+      : q).all();
+  }
+
+  // Paged list query for /api/leads — filters + ORDER BY + LIMIT/OFFSET pushed
+  // into SQL (the route used to hydrate EVERY tenant row to serve a 200-row
+  // page). Count runs the same WHERE. Scope conditions identical to getLeads.
+  getLeadsPage(
+    tenantId: number | undefined,
+    assignedRep: number | number[] | undefined,
+    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+  ): { rows: Lead[]; total: number } {
+    const conditions = [];
+    if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
+    if (Array.isArray(assignedRep)) {
+      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
+    } else if (assignedRep != null) {
+      conditions.push(eq(leads.assignedRepId, assignedRep));
+    }
+    if (opts.status) conditions.push(eq(leads.leadStatus, opts.status));
+    if (opts.zip) conditions.push(eq(leads.zip, opts.zip));
+    if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
+    if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
+    const where = conditions.length === 0 ? undefined
+      : conditions.length === 1 ? conditions[0] : and(...conditions);
+    const listQ = db.select().from(leads);
+    const rows = (where ? listQ.where(where) : listQ)
+      .orderBy(desc(leads.createdAt)).limit(opts.limit).offset(opts.offset).all();
+    const countQ = db.select({ c: sql<number>`count(*)` }).from(leads);
+    const total = Number((where ? countQ.where(where) : countQ).get()?.c ?? 0);
+    return { rows, total };
+  }
   createLead(lead: InsertLead): Lead {
     const now = new Date().toISOString();
     // Tenancy: never create a tenant-less lead — system paths (scanners, cron)
@@ -594,10 +674,13 @@ export class Storage implements IStorage {
     return db.delete(leads).where(condition).run().changes > 0;
   }
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[] {
-    const textFilter = or(
-      like(leads.address, `%${query}%`), like(leads.city, `%${query}%`),
-      like(leads.zip, `%${query}%`), like(leads.contactName, `%${query}%`)
-    );
+    // Escape LIKE wildcards in user input — a bare "%" must not match the
+    // whole table — and cap in SQL (the route treats 500 as max anyway) so a
+    // broad match never hydrates 50k rows to slice a page.
+    const safe = query.replace(/[\\%_]/g, m => "\\" + m);
+    const pat = `%${safe}%`;
+    const esc = (col: any) => sql`${col} LIKE ${pat} ESCAPE '\\'`;
+    const textFilter = or(esc(leads.address), esc(leads.city), esc(leads.zip), esc(leads.contactName));
     const conditions = [textFilter];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
     if (Array.isArray(assignedRep)) {
@@ -607,7 +690,7 @@ export class Storage implements IStorage {
     }
     return db.select().from(leads).where(
       conditions.length === 1 ? conditions[0] : and(...conditions)
-    ).all();
+    ).limit(500).all();
   }
 
   // ── Fiber checks ───────────────────────────────────────────────────────────
@@ -729,13 +812,23 @@ export class Storage implements IStorage {
   }
 
   // Per-lead visit summary for the map: leadId → { count, lastOutcome, lastAt }.
-  // One grouped query; feeds the "visited" check + last-outcome on each pin.
-  getVisitSummary(): Map<number, { count: number; lastOutcome: string; lastAt: string }> {
+  // Single window-function pass (was: a correlated subquery re-sorting each
+  // lead's knocks per group — O(k·per-lead sort) and it scanned every tenant's
+  // knocks on every map request). Now one ordered index walk over
+  // idx_knock_log_lead_time, optionally joined down to one tenant's leads.
+  getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }> {
+    const tenantJoin = tenantId
+      ? `JOIN leads ON leads.id = knock_log.lead_id AND leads.tenant_id = ?`
+      : "";
     const rows = rawDb.prepare(
-      `SELECT lead_id AS leadId, COUNT(*) AS count, MAX(knocked_at) AS lastAt,
-              (SELECT outcome FROM knock_log k2 WHERE k2.lead_id = k1.lead_id ORDER BY knocked_at DESC LIMIT 1) AS lastOutcome
-       FROM knock_log k1 GROUP BY lead_id`
-    ).all() as any[];
+      `SELECT leadId, count, lastAt, outcome AS lastOutcome FROM (
+         SELECT knock_log.lead_id AS leadId, knock_log.outcome,
+                COUNT(*)        OVER (PARTITION BY knock_log.lead_id) AS count,
+                MAX(knocked_at) OVER (PARTITION BY knock_log.lead_id) AS lastAt,
+                ROW_NUMBER()    OVER (PARTITION BY knock_log.lead_id ORDER BY knocked_at DESC, knock_log.id DESC) AS rn
+         FROM knock_log ${tenantJoin}
+       ) WHERE rn = 1`
+    ).all(...(tenantId ? [tenantId] : [])) as any[];
     const m = new Map<number, { count: number; lastOutcome: string; lastAt: string }>();
     for (const r of rows) m.set(r.leadId, { count: r.count, lastOutcome: r.lastOutcome, lastAt: r.lastAt });
     return m;

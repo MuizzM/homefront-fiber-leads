@@ -405,10 +405,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       role="dialog"
       aria-label={renderedLead.address}
       className={[
-        "fixed z-40 bg-[#0F1729]/95 backdrop-blur-md will-change-transform",
+        // glass-sheet: the liquid-glass bottom-sheet surface (18px blur budget,
+        // ink fill, specular top hairline, token shadow) — see index.css.
+        "glass-sheet fixed z-40 will-change-transform",
         docked
-          ? "inset-y-0 right-0 w-[380px] rounded-l-[20px] border-l border-white/10 shadow-[-8px_0_30px_rgba(0,0,0,0.35)]"
-          : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[20px] border-t border-white/10 shadow-[0_-8px_30px_rgba(0,0,0,0.35)]",
+          ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
+          : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[24px] border-t border-white/10",
         dragging ? "" : "transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
       ].join(" ")}
       style={{ transform }}
@@ -433,7 +435,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             className="flex justify-center pt-2 pb-1 cursor-pointer"
             onClick={() => setSnap(s => (s === "peek" ? "expanded" : "peek"))}
           >
-            <div className="w-9 h-1 rounded-full bg-white/15" />
+            <div className="w-10 h-[5px] rounded-full bg-white/25" />
           </div>
         ) : (
           <div className="pt-4" />

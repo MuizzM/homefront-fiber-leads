@@ -767,104 +767,60 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
-  // ── Server-side lead clusters (FiberFocus-style /api/kinetic-scanner/live-clusters) ──
-  // Returns pre-clustered pins for the current map viewport.
-  // Frontend sends zoom + bbox, server returns clusters — reduces client CPU.
-  app.get("/api/leads/live-clusters", requireAuth, (req, res) => {
-    const user = (req as any).user;
-    const tid = user?.tenantId ?? undefined;
-    const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
-    const { zoom, west, south, east, north } = req.query;
-
-    const all = storage.getLeads(tid, repFilter)
-      .filter(l => l.lat && l.lng);
-
-    const z = zoom ? Math.min(Math.max(Number(zoom), 0), 20) : 10;
-
-    // If bbox provided, filter to viewport for efficiency
-    let pins = all;
-    if (west && south && east && north) {
-      const w = Number(west), s = Number(south), e = Number(east), n = Number(north);
-      pins = all.filter(l => l.lng! >= w && l.lng! <= e && l.lat! >= s && l.lat! <= n);
-    }
-
-    // Build GeoJSON features for supercluster
-    const features = pins.map(l => ({
-      type: "Feature" as const,
-      geometry: { type: "Point" as const, coordinates: [l.lng!, l.lat!] },
-      properties: {
-        id: l.id, address: l.address, city: l.city, zip: l.zip,
-        leadStatus: l.leadStatus, fiberStatus: l.fiberStatus,
-        isNewFiber: l.isNewFiber, assignedRepId: l.assignedRepId,
-        leadScore: l.leadScore,
-      },
-    }));
-
-    // Import supercluster dynamically (CJS)
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const Supercluster = require("supercluster");
-      const index = new Supercluster({ radius: 60, maxZoom: 18 });
-      index.load(features);
-      const bbox: [number, number, number, number] = [
-        Number(west ?? -180), Number(south ?? -90),
-        Number(east ?? 180),  Number(north ?? 90),
-      ];
-      const clusters = index.getClusters(bbox, z);
-      res.json({ clusters, total: features.length });
-    } catch (e: any) {
-      // Fallback: return raw pins without clustering
-      res.json({ clusters: features, total: features.length });
-    }
-  });
+  // NOTE: the old /api/leads/live-clusters endpoint was REMOVED (2026-07-10):
+  // zero client callers, and its `require("supercluster")` threw in BOTH
+  // runtimes (dev ESM has no require; prod left the ESM-only package external),
+  // so its catch silently returned raw UNCLUSTERED pins — the opposite of its
+  // purpose. Clustering is GPU-side in Mapbox (client), which scales past 100k.
 
   // Leads CRUD
   // ── Map-optimized endpoint: returns ALL leads with only pin fields ─────────
   // Deliberately before /api/leads/:id so "/map" doesn't get caught as an :id
-  // ── Map pin cache — avoids re-querying 2k+ leads on every poll ──────────────
-  let _mapPinCache: { ts: number; pins: any[] } | null = null;
+  // ── Map pin cache — avoids re-querying 50k+ leads on every poll ─────────────
+  // Keyed PER TENANT (the old single-slot cache required !tenantId, and every
+  // real user has a tenant since bootstrap — so it never hit in production).
+  // Only the unscoped org-wide view per tenant is cached; scoped team_lead/rep
+  // views are always computed fresh so role visibility can never leak via cache.
+  const _mapPinCache = new Map<number, { ts: number; pins: any[] }>();
   const MAP_CACHE_TTL = 8_000; // 8s — fast enough for real-time feel
+  // Monotonic data version — powers the /api/leads/map ETag so a steady-state
+  // poll returns 304 for the cost of a string compare, not a query + 50k-row
+  // serialize + gzip. Coarse by design: ANY lead/knock write (bustMapCache)
+  // invalidates every scope — writes are rare relative to polls, and coarse
+  // can never serve stale. The boot stamp makes cross-restart 304s impossible
+  // (out-of-band DB edits while the server is down can't be version-tracked).
+  const _leadsEtagBoot = Date.now().toString(36);
+  let _leadsBustCount = 0;
 
   function getMapPins(tenantId?: number, repFilter?: number | number[]) {
     const now = Date.now();
-    // Only the unscoped org-wide view is cached (repFilter falsy). A scoped
-    // team_lead/rep view (a set or an id) is never served from the shared cache.
     const unscoped = repFilter == null || (Array.isArray(repFilter) && repFilter.length === 0);
-    if (unscoped && !tenantId && _mapPinCache && now - _mapPinCache.ts < MAP_CACHE_TTL) {
-      return _mapPinCache.pins; // cache hit for admin/manager (no per-user filter)
+    const cacheKey = tenantId ?? 0;
+    if (unscoped) {
+      const hit = _mapPinCache.get(cacheKey);
+      if (hit && now - hit.ts < MAP_CACHE_TTL) return hit.pins;
     }
-    const all = storage.getLeads(tenantId, repFilter);
+    // Narrow 16-column projection, no ORDER BY — scoped reads come straight
+    // off idx_leads_tenant_rep with no temp B-tree (measured 31ms → sub-ms
+    // plan at 3.4k rows; the gap widens at 50k).
+    const all = storage.getLeadsForMap(tenantId, repFilter);
     // Per-lead visit summary so a rep can SEE which doors they've already hit —
     // even a "Not Home" (which keeps status=prospect) shows a visited check.
-    const visits = storage.getVisitSummary();
-    const pins = all
-      .filter((l: any) => l.lat && l.lng)
-      .map((l: any) => {
-        const v = visits.get(l.id);
-        return {
-          id: l.id,
-          address: l.address,
-          city: l.city,
-          state: l.state,
-          zip: l.zip,
-          lat: l.lat,
-          lng: l.lng,
-          leadStatus: l.leadStatus,
-          fiberStatus: l.fiberStatus,
-          isNewFiber: l.isNewFiber,
-          assignedRepId: l.assignedRepId,
-          maxDownloadMbps: l.maxDownloadMbps,
-          competitorName: l.competitorName,
-          leadScore: l.leadScore,
-          contactName: l.contactName,
-          contactPhone: l.contactPhone,
-          visited: !!v,
-          knockCount: v?.count ?? 0,
-          lastOutcome: v?.lastOutcome ?? null,
-          lastKnockedAt: v?.lastAt ?? null,
-        };
+    // Tenant-scoped: never scans other tenants' knock history.
+    const visits = storage.getVisitSummary(tenantId);
+    const pins: any[] = [];
+    for (const l of all) {
+      if (!l.lat || !l.lng) continue;
+      const v = visits.get(l.id);
+      pins.push({
+        ...l,
+        visited: !!v,
+        knockCount: v?.count ?? 0,
+        lastOutcome: v?.lastOutcome ?? null,
+        lastKnockedAt: v?.lastAt ?? null,
       });
-    if (unscoped && !tenantId) _mapPinCache = { ts: Date.now(), pins };
+    }
+    if (unscoped) _mapPinCache.set(cacheKey, { ts: Date.now(), pins });
     return pins;
   }
 
@@ -872,6 +828,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = req.user;
     const tid = user?.tenantId ?? undefined;
     const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
+    // Data-version ETag, checked BEFORE any DB work: an unchanged poll returns
+    // 304 for the cost of a string compare. The scope key keeps role scoping
+    // airtight — a rep's 304 token can never validate a manager's payload.
+    const scopeKey = repFilter == null ? "all" : [repFilter].flat().sort((a, b) => a - b).join(",");
+    const etag = `W/"pins-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${_leadsBustCount}"`;
+    res.set("Cache-Control", "private, no-cache");
+    res.set("ETag", etag);
+    if (req.headers["if-none-match"] === etag) return res.status(304).end();
     const pins = getMapPins(tid, repFilter);
     res.json({ pins, total: pins.length });
   });
@@ -883,23 +847,30 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Reps only see leads assigned to them; managers/admins see all
     const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
 
-    let leads = search
-      ? storage.searchLeads(String(search), tid, repFilter)
-      : storage.getLeads(tid, repFilter);
-
-    // Server-side filters
-    if (status && status !== "all") leads = leads.filter(l => l.leadStatus === String(status));
-    if (zip) leads = leads.filter(l => l.zip === String(zip));
-    if (city && city !== "all") leads = leads.filter(l => (l.city ?? "").toLowerCase() === String(city).toLowerCase());
-    if (state && state !== "all") leads = leads.filter(l => (l.state ?? "").toLowerCase() === String(state).toLowerCase());
-
-    // Pagination
-    const total = leads.length;
     const lim = limit ? Math.min(Number(limit), 500) : 200;
     const off = offset ? Number(offset) : 0;
-    const page = leads.slice(off, off + lim);
 
-    res.json({ leads: page, total, limit: lim, offset: off });
+    if (search) {
+      // Search path: LIKE-capped in SQL (500) then filtered/paged in JS — the
+      // result set is already bounded, so JS post-filtering stays O(500).
+      let rows = storage.searchLeads(String(search), tid, repFilter);
+      if (status && status !== "all") rows = rows.filter(l => l.leadStatus === String(status));
+      if (zip) rows = rows.filter(l => l.zip === String(zip));
+      if (city && city !== "all") rows = rows.filter(l => (l.city ?? "").toLowerCase() === String(city).toLowerCase());
+      if (state && state !== "all") rows = rows.filter(l => (l.state ?? "").toLowerCase() === String(state).toLowerCase());
+      return res.json({ leads: rows.slice(off, off + lim), total: rows.length, limit: lim, offset: off });
+    }
+
+    // List path: filters + ORDER BY + LIMIT/OFFSET pushed into SQL — the old
+    // code hydrated every tenant row (53 cols × 50k) to serve a 200-row page.
+    const { rows, total } = storage.getLeadsPage(tid, repFilter, {
+      status: status && status !== "all" ? String(status) : undefined,
+      zip: zip ? String(zip) : undefined,
+      city: city && city !== "all" ? String(city) : undefined,
+      state: state && state !== "all" ? String(state) : undefined,
+      limit: lim, offset: off,
+    });
+    res.json({ leads: rows, total, limit: lim, offset: off });
   });
   app.get("/api/leads/:id", requireAuth, (req, res) => {
     const lead = storage.getLeadById(Number(req.params.id));
@@ -913,7 +884,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   // Team lead+ can create leads; manager+ can update status/delete
   // Helper to bust map pin cache after any lead mutation
-  function bustMapCache() { _mapPinCache = null; }
+  function bustMapCache() { _mapPinCache.clear(); _leadsBustCount++; }
   // Expose globally so write queue (module scope) can call it
   (globalThis as any).__bustMapCache = bustMapCache;
 
@@ -1429,19 +1400,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const _sjTid = (req as any).user?.tenantId;
     if (!job || (_sjTid && job.tenantId !== _sjTid)) return res.status(404).json({ error: "Not found" });
     const r = job.results;
+    // ?since=N cursor: return only results[N..] — the 400ms poll used to
+    // re-download the FULL cumulative array every tick (O(total²) bytes over a
+    // scan; a 10k-address deep scan ends at ~2MB × 2.5/s of re-parse on a
+    // phone). resultCount carries the new cursor. One summary pass, not seven.
+    const since = Math.max(0, Number(req.query.since) || 0);
+    const summary: Record<string, number> = {
+      new_fiber: 0, tenured_fiber: 0, existing_fiber: 0, copper: 0, no_service: 0, unknown: 0,
+    };
+    for (const x of r) if (summary[x.fiberStatus] !== undefined) summary[x.fiberStatus]++;
     res.json({
       ...job,
+      results: since > 0 ? r.slice(since) : r,
+      resultCount: r.length,
       summary: {
-        new_fiber:      r.filter(x => x.fiberStatus === "new_fiber").length,
-        tenured_fiber:  r.filter(x => x.fiberStatus === "tenured_fiber").length,
-        existing_fiber: r.filter(x => x.fiberStatus === "existing_fiber").length,
-        copper:         r.filter(x => x.fiberStatus === "copper").length,
-        no_service:     r.filter(x => x.fiberStatus === "no_service").length,
-        unknown:        r.filter(x => x.fiberStatus === "unknown").length,
+        ...summary,
         // Eligible = NEW FIBER + not subscribed — these become dots on map + saved leads
-        eligible:       r.filter(x => x.fiberStatus === "new_fiber").length,
-        scanned:        job.done,
-        remaining:      job.total - job.done,
+        eligible: summary.new_fiber,
+        scanned: job.done,
+        remaining: job.total - job.done,
       }
     });
   });

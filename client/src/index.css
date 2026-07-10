@@ -210,6 +210,82 @@
   }
 }
 
+/* ── Liquid-glass map chrome ─────────────────────────────────────────────
+   One ink, three surfaces. The glass ink is the brand navy pushed near-black
+   (hsl(212 48% 7%) — sibling of --background), never pure black: dark navy
+   glass is the only translucency that survives BOTH basemap extremes. Over
+   bright satellite the 0.62+ fill keeps white text ≥7:1; over dark tiles the
+   specular hairline + shadow (not the fill) carry the edge. Light glass is
+   banned on the map — it dies over white street tiles. Blur budget for phone
+   GPUs: capsules 10px, panels 14px, sheet 18px, max ~5 blurred surfaces at
+   once — secondary banners/pills/tooltips use .glass-opaque (zero blur). */
+:root {
+  --glass-ink: 212 48% 7%;                             /* navy-black ink    */
+  --glass-fill:        hsl(var(--glass-ink) / 0.62);   /* capsules          */
+  --glass-fill-strong: hsl(var(--glass-ink) / 0.74);   /* text-dense panels */
+  --glass-fill-sheet:  hsl(var(--glass-ink) / 0.86);   /* bottom sheet      */
+  --glass-fill-opaque: hsl(var(--glass-ink) / 0.94);   /* blur-free variant */
+  --glass-stroke:      hsl(210 40% 92% / 0.14);        /* hairline border   */
+  --glass-specular: linear-gradient(180deg,
+      hsl(0 0% 100% / 0.10) 0, hsl(0 0% 100% / 0.03) 34%, transparent 62%);
+  --glass-shadow-1: 0 2px 6px hsl(220 60% 3% / 0.30),
+                    0 10px 28px -14px hsl(220 60% 3% / 0.55);  /* capsule */
+  --glass-shadow-2: 0 2px 8px hsl(220 60% 3% / 0.28),
+                    0 18px 44px -16px hsl(220 60% 3% / 0.60);  /* panel   */
+  --glass-shadow-sheet: 0 -14px 44px hsl(220 60% 3% / 0.45);
+}
+
+@layer components {
+  /* Panels & popovers: control cluster, layers, search results, legend, scan */
+  .glass-surface {
+    background-color: var(--glass-fill-strong);
+    background-image: var(--glass-specular);            /* liquid sheen */
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
+    backdrop-filter: blur(14px) saturate(150%);
+    border: 1px solid var(--glass-stroke);
+    border-radius: 20px;
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.12),    /* specular top edge */
+                var(--glass-shadow-2);
+  }
+  /* Pills & FABs: menu FAB, legend pill, filter pill, lasso bar, badges */
+  .glass-capsule {
+    background-color: var(--glass-fill);
+    background-image: var(--glass-specular);
+    -webkit-backdrop-filter: blur(10px) saturate(150%);
+    backdrop-filter: blur(10px) saturate(150%);
+    border: 1px solid var(--glass-stroke);
+    border-radius: 9999px;
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.12), var(--glass-shadow-1);
+  }
+  /* Bottom sheet / docked card */
+  .glass-sheet {
+    background-color: var(--glass-fill-sheet);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    backdrop-filter: blur(18px) saturate(140%);
+    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.10), var(--glass-shadow-sheet);
+  }
+  /* Hairline divider inside any glass */
+  .glass-hairline { height: 1px; background: hsl(0 0% 100% / 0.10); }
+  /* Budget overflow / secondary banners: same look, ZERO blur cost */
+  .glass-opaque {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    background-color: var(--glass-fill-opaque);
+  }
+  /* Legibility floor when blur is unavailable or the user opts out */
+  @supports not (backdrop-filter: blur(1px)) {
+    .glass-surface, .glass-capsule, .glass-sheet {
+      background-color: var(--glass-fill-opaque); background-image: none;
+    }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .glass-surface, .glass-capsule, .glass-sheet {
+      -webkit-backdrop-filter: none; backdrop-filter: none;
+      background-color: var(--glass-fill-opaque);
+    }
+  }
+}
+
 /* Lead-card body spring — plays on mount, so a keyed remount (lead swap)
    restarts it. Pure compositor work (transform+opacity); the global
    reduced-motion block above collapses it to instant. Replaces framer-motion:
