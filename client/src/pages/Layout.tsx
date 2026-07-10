@@ -25,7 +25,7 @@ import {
   Clock,
   Radio,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { BottomTabs } from "@/components/BottomTabs";
@@ -126,6 +126,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const role = (user?.role ?? "rep") as AppRole;
+
+  // The Field Map is FULL-BLEED for every role: no mobile header, no bottom
+  // tabs, no padding — the map itself carries a floating menu button that
+  // fires "hfs:open-menu" to open the sidebar drawer.
+  const onMap = location === "/map";
+  useEffect(() => {
+    const open = () => setMobileOpen(true);
+    window.addEventListener("hfs:open-menu", open);
+    return () => window.removeEventListener("hfs:open-menu", open);
+  }, []);
 
   // Territory request pending count (admin/manager only)
   const canManage = hasRole(role, "admin", "manager");
@@ -272,8 +282,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Mobile header — standard app chrome on every page. The field map
-            itself carries NO menu overlay (owner spec: map = pins only). */}
+        {/* Mobile header — standard app chrome on every page EXCEPT the map:
+            the Field Map is full-bleed (owner spec) with its own floating menu. */}
+        {!onMap && (
         <header className="md:hidden flex items-center gap-3 px-4 py-3 border-b border-border bg-card">
           <button type="button" aria-label="Open navigation menu" aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
@@ -285,12 +296,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <span className="text-sm font-bold">{orgName}</span>
           </div>
         </header>
+        )}
 
-        {/* pb clears the mobile tab bar (h-14 + safe area); zero on desktop */}
-        <main className="flex-1 overflow-hidden pb-14 md:pb-0" style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        {/* pb clears the mobile tab bar (h-14 + safe area); zero on desktop and
+            on the full-bleed map (no tabs there) */}
+        <main className={`flex-1 overflow-hidden ${onMap ? "" : "pb-14 md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
-        <BottomTabs />
+        {!onMap && <BottomTabs />}
       </div>
     </div>
   );

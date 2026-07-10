@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore
 // mapbox-gl loaded via CDN in index.html — do not bundle
 declare const mapboxgl: any;
 import {
-  AlertCircle, Pencil, X, Map as MapIcon, Bell, Target, Search, LocateFixed,
+  AlertCircle, Pencil, X, Map as MapIcon, Bell, Target, Search, LocateFixed, Menu,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1570,81 +1570,18 @@ export default function MapView() {
   const noToken = mapTokenFailed;
 
   return (
-    <div className="flex flex-col" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+    <div className="flex flex-col relative" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
 
-      {/* ── Top bar — manager/team-lead. ONE calm row: two filters, two
-             actions. Counts live where they belong (on-map chip + legend),
-             not as toolbar furniture. ── */}
-      {!isRep && (
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-1.5 border-b border-border bg-card flex-shrink-0">
-        <div className="flex items-center gap-2">
-          {/* Filter map pins by rep — admin/manager/team lead */}
-          {canAssign && (
-            <select
-              value={filterRep}
-              onChange={e => setFilterRep(e.target.value)}
-              data-testid="map-filter-rep"
-              className="h-7 max-w-[150px] bg-transparent border border-border rounded-lg px-2 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              title="Show only leads for a rep"
-            >
-              <option value="all">All reps</option>
-              <option value="unassigned">Unassigned ({leads.filter(l => !l.assignedRepId).length})</option>
-              {team.map((m: TeamMember) => (
-                <option key={m.id} value={String(m.id)}>{m.name} ({leads.filter(l => l.assignedRepId === m.id).length})</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        {/* Actions */}
-        <div className="ml-auto flex items-center gap-1.5">
-          {/* ── Action tools. Exactly ONE draw tool armed at a time. ──
-                 Assign Area: draw a loop → pick a rep → assigns the leads inside
-                 AND saves a color-coded territory for that rep.
-                 Scan Area: draw a box → hit Kinetic → new leads. ── */}
-          {canAssign && (
-            <Button
-              size="sm" variant="outline"
-              onClick={() => {
-                if (lassoMode) {
-                  exitLasso();
-                } else {
-                  exitLasso(); // clear any prior shape before re-arming
-                  setLassoMode(true);
-                  setDrawMode(false); setDrawnBBox(null);
-                }
-              }}
-              disabled={!mapReady}
-              className={`h-7 text-xs font-semibold ${
-                lassoMode
-                  ? "border-teal-400 text-white bg-teal-500/80 hover:bg-teal-500"
-                  : "border-teal-500/50 text-teal-300 bg-teal-500/15 hover:bg-teal-500/25"
-              }`}
-              title="Assign Area: drag a loop around leads, pick a rep — assigns them and color-codes the territory"
-            >
-              <Pencil className="w-3 h-3 mr-1" />
-              {lassoMode ? (lassoSelected.length > 0 ? `Area (${lassoSelected.length})` : "Draw area…") : "Assign Area"}
-            </Button>
-          )}
-          {/* Draw a box → scan that area for new fiber (admin only) */}
-          {isAdmin && (
-            <Button
-              onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); exitLasso(); }}
-              disabled={!mapReady}
-              size="sm" variant="outline"
-              className={`h-7 text-xs font-semibold ${drawMode ? "border-orange-400 text-white bg-orange-500/80 hover:bg-orange-500" : "border-orange-500/50 text-orange-300 bg-orange-500/15 hover:bg-orange-500/25"}`}
-              title="Scan Area: draw a box to scan Kinetic for new fiber leads"
-            ><Target className="w-3 h-3 mr-1" />{drawMode ? "Drawing…" : "Scan Area"}</Button>
-          )}
-
-        </div>
-      </div>
-      )}
+      {/* ── FULL-BLEED MAP (owner spec): no toolbar for ANY role. The rep
+             filter lives in the legend panel; Assign Area + Scan Area live on
+             the control rail; banners FLOAT over the map (the page root is
+             relative, so this stack overlays the map below). ── */}
+      <div className="absolute top-[108px] md:top-16 left-1/2 -translate-x-1/2 z-30 w-[min(620px,calc(100vw-24px))] space-y-1.5 pointer-events-none [&>*]:pointer-events-auto">
 
       {/* Context banners — stay open after the box is drawn (drawMode flips off
           on mouse-up) so the scan buttons remain visible. */}
       {(drawMode || drawnBBox || scanning) && isAdmin && (
-        <div className="px-3 py-2 bg-orange-500/10 border-b border-orange-500/30 flex flex-wrap items-center gap-2 flex-shrink-0">
+        <div className="px-3 py-2 bg-black/80 backdrop-blur-md border border-orange-500/40 rounded-xl shadow-xl flex flex-wrap items-center gap-2">
           <span className="text-[11px] text-orange-400">
             {scanning ? `Scanning… ${done}/${total} · ${newFound} new fiber found`
               : drawnBBox ? "Box drawn — pick a scan below (green dots = new fiber)"
@@ -1694,12 +1631,12 @@ export default function MapView() {
       {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
 
       {error && (
-        <div className="px-3 py-1.5 bg-red-500/10 border-b border-red-500/30 text-[11px] text-red-400 flex items-center gap-2 flex-shrink-0">
+        <div className="px-3 py-1.5 bg-black/80 backdrop-blur-md border border-red-500/40 rounded-xl shadow-xl text-[11px] text-red-400 flex items-center gap-2">
           <AlertCircle className="w-3 h-3" /> {error}
         </div>
       )}
       {canManage && pendingRequests.length > 0 && (
-        <div className="border-b border-amber-500/30 bg-amber-500/5 flex-shrink-0">
+        <div className="bg-black/80 backdrop-blur-md border border-amber-500/40 rounded-xl shadow-xl overflow-hidden">
           <button className="w-full flex items-center gap-2 px-3 py-1.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/10" onClick={() => setShowTerritoryRequests(v => !v)}>
             <Bell className="w-3 h-3" />
             <span className="flex-1 text-left">{pendingRequests.length} territory request{pendingRequests.length !== 1 ? "s" : ""}</span>
@@ -1721,6 +1658,8 @@ export default function MapView() {
           )}
         </div>
       )}
+
+      </div>{/* /floating banner stack */}
 
       {/* ── Main: map + sidebar ── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -1752,9 +1691,22 @@ export default function MapView() {
             </div>
           )}
 
-          {/* Lead count chip — top left (reps get the progress HUD instead) */}
+          {/* Floating menu — the map is full-bleed (no header/tabs), so this is
+              the ONE way back to the rest of the app on mobile. All roles. */}
+          <button
+            type="button"
+            aria-label="Open navigation menu"
+            data-testid="map-menu-button"
+            onClick={() => window.dispatchEvent(new CustomEvent("hfs:open-menu"))}
+            className="md:hidden absolute top-3 left-3 z-30 h-10 w-10 rounded-full bg-black/80 backdrop-blur-md border border-white/15 shadow-lg flex items-center justify-center text-white/90 active:scale-95 transition"
+          >
+            <Menu className="w-4.5 h-4.5" style={{ width: 18, height: 18 }} aria-hidden="true" />
+          </button>
+
+          {/* Lead count chip — top left (reps get the progress HUD instead);
+              sits right of the menu button on mobile, flush left on desktop */}
           {mapReady && leads.length > 0 && !isRep && (
-            <div className="absolute top-3 left-3 bg-black/80 backdrop-blur-sm rounded-lg px-3 py-1.5 z-10 flex items-center gap-2 shadow-lg">
+            <div className="absolute top-3 left-[60px] md:left-3 bg-black/80 backdrop-blur-sm rounded-lg px-3 py-1.5 z-10 flex items-center gap-2 shadow-lg">
               <div className="w-2 h-2 rounded-full bg-green-400 shadow-[0_0_8px_rgba(34,197,94,1)] animate-pulse" />
               <span className="text-xs font-bold text-white">
                 {filterStatus === "all" ? leads.length : (statusCounts[filterStatus] ?? 0)}
@@ -1772,7 +1724,7 @@ export default function MapView() {
                  Manager/desk tool: reps navigate by walking, not by typing —
                  field mode keeps the top of the map clear. ── */}
           {mapReady && !isRep && (
-            <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 w-[min(420px,70vw)]">
+            <div className="absolute top-[60px] md:top-3 left-1/2 -translate-x-1/2 z-20 w-[min(420px,70vw)]">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
                 <input
@@ -1977,6 +1929,43 @@ export default function MapView() {
               button instead: nothing on their screen that doesn't speed up knocking. */}
           {mapReady && !isRep && (
             <div className="absolute top-[110px] right-3 z-20 w-[136px] rounded-xl bg-black/75 backdrop-blur-md border border-white/10 p-2 shadow-lg text-white space-y-0.5">
+              {/* ── Draw tools — moved from the (removed) top bar onto the map
+                    itself. Exactly ONE armed at a time. ── */}
+              {canAssign && (
+                <button
+                  onClick={() => {
+                    if (lassoMode) {
+                      exitLasso();
+                    } else {
+                      exitLasso(); // clear any prior shape before re-arming
+                      setLassoMode(true);
+                      setDrawMode(false); setDrawnBBox(null);
+                    }
+                  }}
+                  data-testid="rail-assign-area"
+                  title="Assign Area: drag a loop around leads, pick a rep — assigns them and color-codes the territory"
+                  className={`w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-semibold transition-colors ${
+                    lassoMode ? "bg-teal-500/80 text-white" : "bg-teal-500/15 text-teal-300 hover:bg-teal-500/25"
+                  }`}
+                >
+                  <Pencil className="w-3 h-3 flex-shrink-0" />
+                  {lassoMode ? (lassoSelected.length > 0 ? `Area (${lassoSelected.length})` : "Draw area…") : "Assign Area"}
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); exitLasso(); }}
+                  data-testid="rail-scan-area"
+                  title="Scan Area: draw a box to scan Kinetic for new fiber leads"
+                  className={`w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-semibold transition-colors ${
+                    drawMode ? "bg-orange-500/80 text-white" : "bg-orange-500/15 text-orange-300 hover:bg-orange-500/25"
+                  }`}
+                >
+                  <Target className="w-3 h-3 flex-shrink-0" />
+                  {drawMode ? "Drawing…" : "Scan Area"}
+                </button>
+              )}
+              <div className="pt-1 mt-1 border-t border-white/10" />
               {[
                 { key: "leads", label: "Leads", on: showLeads, toggle: () => setShowLeads(v => !v) },
                 ...(canAssign ? [{ key: "terr", label: "Territories", on: showTerritories, toggle: () => setShowTerritories(v => !v) }] : []),
@@ -2029,13 +2018,32 @@ export default function MapView() {
               {Object.values(PIN_COLORS).map((pin, i) => (
                 <span key={i} className="w-2 h-2 rounded-full" style={{ background: pin.bg }} />
               ))}
-              {filterStatus !== "all" && (
+              {(filterStatus !== "all" || filterRep !== "all") && (
                 <span className="ml-1 text-[10px] font-semibold text-teal-300">filtered</span>
               )}
             </button>
           )}
           {mapReady && !isRep && legendOpen && (
             <div className="absolute bottom-8 left-3 bg-black/85 backdrop-blur-md rounded-xl p-3 z-10 min-w-[170px] max-w-[240px] shadow-xl border border-white/5">
+              {/* Rep filter — moved here from the (removed) top bar */}
+              {canAssign && (
+                <div className="mb-2.5">
+                  <span className="block text-[10px] text-white/40 uppercase tracking-wider font-semibold mb-1">Rep</span>
+                  <select
+                    value={filterRep}
+                    onChange={e => setFilterRep(e.target.value)}
+                    data-testid="map-filter-rep"
+                    title="Show only leads for a rep"
+                    className="w-full h-7 bg-white/10 border border-white/15 rounded-md px-1.5 text-[11px] text-white focus:outline-none focus:ring-1 focus:ring-teal-400"
+                  >
+                    <option value="all">All reps</option>
+                    <option value="unassigned">Unassigned ({leads.filter(l => !l.assignedRepId).length})</option>
+                    {team.map((m: TeamMember) => (
+                      <option key={m.id} value={String(m.id)}>{m.name} ({leads.filter(l => l.assignedRepId === m.id).length})</option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] text-white/40 uppercase tracking-wider font-semibold">Filter by status</span>
                 <span className="flex items-center gap-2">
