@@ -241,6 +241,9 @@ export function runMigrations() {
     `ALTER TABLE coming_soon_addresses ADD COLUMN household_segment_type TEXT`,
     `ALTER TABLE coming_soon_addresses ADD COLUMN build_status TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_coming_soon_df ON coming_soon_addresses(df_address_id) WHERE df_address_id IS NOT NULL`,
+    // Address dedup for upsertLeadByAddress must hit the DB every time (cross-process
+    // cache can't be trusted) — index it so that lookup stays cheap.
+    `CREATE INDEX IF NOT EXISTS idx_leads_address ON leads(address)`,
     `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
     `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
     `ALTER TABLE tenants ADD COLUMN brand_logo TEXT`,
@@ -714,10 +717,6 @@ export function getDefaultTenantId(): number | null {
   return _defaultTenantId;
 }
 
-// ── In-memory address cache for ultra-fast scan dedup ───────────────────────
-// Loaded once on startup, updated on every insert. O(1) dedup — no DB hit.
-let _addressCache: Set<string> | null = null;
-
 const SUFFIX_MAP_SHARED: Record<string, string> = {
   court: "ct", drive: "dr", street: "st", avenue: "ave",
   boulevard: "blvd", lane: "ln", road: "rd", place: "pl",
@@ -734,13 +733,6 @@ function normalizeAddress(s: string): string {
     .join(" ");
 }
 
-function getAddressCache(): Set<string> {
-  if (_addressCache) return _addressCache;
-  const rows = rawDb.prepare("SELECT address FROM leads").all() as { address: string }[];
-  _addressCache = new Set(rows.map(r => normalizeAddress(r.address ?? "")));
-  console.log(`[storage] Address cache warmed: ${_addressCache.size} entries`);
-  return _addressCache;
-}
 
 // Invalidate the map-pin cache + ETag data version (registered by routes.ts on
 // globalThis). Called from the LEAD MUTATION CHOKE POINTS below (create/update/
@@ -843,14 +835,15 @@ export class Storage implements IStorage {
   upsertLeadByAddress(lead: InsertLead & LegacyScanFields): { lead: Lead; created: boolean } {
     const normalizedAddr = normalizeAddress(lead.address ?? "");
 
-    // ── In-memory cache check (O(1) — no DB hit) ──────────────────────────────
-    const cache = getAddressCache();
-    if (cache.has(normalizedAddr)) {
-      // Cache hit — look up in DB only to return the full Lead object
-      const exactHit = rawDb.prepare("SELECT * FROM leads WHERE address = ? LIMIT 1").get(lead.address ?? "") as Lead | undefined;
-      if (exactHit) return { lead: exactHit, created: false };
-      // Normalized fallback (suffix abbreviation diff)
-      const prefix = normalizedAddr.split(" ")[0];
+    // ── Existence check — ALWAYS hit the DB (indexed on address). The in-memory
+    // cache is only a warmup hint; it can be stale across processes (e.g. a
+    // separate scan process) or after out-of-band inserts, so it must NOT gate
+    // correctness — otherwise a cache miss inserts a DUPLICATE lead and fires a
+    // false "went live" alert. ──────────────────────────────────────────────────
+    const exactHit = rawDb.prepare("SELECT * FROM leads WHERE address = ? LIMIT 1").get(lead.address ?? "") as Lead | undefined;
+    if (exactHit) return { lead: exactHit, created: false };
+    const prefix = normalizedAddr.split(" ")[0];
+    if (prefix) {
       const candidates = rawDb.prepare("SELECT * FROM leads WHERE address LIKE ? LIMIT 20").all(prefix + "%") as Lead[];
       const existingLead = candidates.find(l => normalizeAddress(l.address ?? "") === normalizedAddr);
       if (existingLead) return { lead: existingLead, created: false };
@@ -920,8 +913,6 @@ export class Storage implements IStorage {
       now
     );
     const newLead = rawDb.prepare(`SELECT * FROM leads WHERE id = ?`).get(r.lastInsertRowid) as Lead;
-    // Update in-memory cache with newly inserted address
-    if (_addressCache) _addressCache.add(normalizedAddr);
     bustPinCaches(newLead.tenantId);
     return { lead: newLead, created: true };
   }

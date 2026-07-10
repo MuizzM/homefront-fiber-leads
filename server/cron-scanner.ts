@@ -16,7 +16,18 @@
 import { mailTransport, mailFrom, adminInbox } from "./mail";
 import { storage } from "./storage";
 import { getAuthToken, scanAddress } from "./scanner";
-import { KINETIC_ENVS, probeKineticDfId } from "./cns-scanner";
+import { KINETIC_ENVS, probeKineticDfId, type CnsProbe } from "./cns-scanner";
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+// Address-match guard: only promote if Kinetic's answer is for the SAME address we
+// watched (zip match, or normalized street match) — a re-keyed/recycled dfAddressId
+// must never turn a watched row into a lead based on ANOTHER premise's status.
+function sameWatchedAddress(cs: any, r: { address?: string | null; zip?: string | null }): boolean {
+  if (r.zip && cs.zip && String(r.zip) === String(cs.zip)) return true;
+  const n = (s: any) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  return !!r.address && n(r.address) === n(cs.address);
+}
 import { classifyAvailabilityTransition, snapshotFromTarget } from "@shared/fiberDetect";
 import {
   buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
@@ -240,55 +251,73 @@ function promoteComingSoon(cs: any, billing: string | null, segment: string | nu
   } catch { /* dedup/constraint — skip */ }
 }
 
-async function runComingSoonCheck(): Promise<void> {
+export interface ComingSoonRecheckDeps {
+  getToken?: () => Promise<string>;
+  probe?: (dfId: string, token: string) => Promise<CnsProbe>;
+  scan?: (address: string, city: string, state: string, zip: string) => Promise<any>;
+  perNightBudget?: number; // hard cap on proxy probes per night
+  paceMs?: number;         // inter-probe pace (default 120)
+  blockPaceMs?: number;    // back-off pause on a 403 block (default 800)
+}
+
+export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Promise<void> {
   console.log("[cron] Rechecking Coming Soon watchlist…");
+  const getToken = deps.getToken ?? getAuthToken;
+  const probe = deps.probe ?? probeKineticDfId;
+  const scan = deps.scan ?? scanAddress;
+  const BUDGET = Math.max(1, deps.perNightBudget ?? 20_000);
+  const PACE = deps.paceMs ?? 120, BLOCK_PACE = deps.blockPaceMs ?? 800;
+  const MAX_FAIL = 20; // abort the night after this many CONSECUTIVE non-answers
 
   // Fast lane: addresses that carry Kinetic's dfAddressId → recheck by EXACT key.
   let watch: any[] = [], legacy: any[] = [];
-  try { watch = storage.getComingSoonWithDfId(); } catch { /* table may lack the column pre-migration */ }
-  try { legacy = storage.getComingSoonAddresses().filter((c: any) => !c.dfAddressId && !c.fiberAvailable); } catch { /* ignore */ }
+  try { watch = storage.getComingSoonWithDfId(BUDGET); } catch { /* pre-migration */ }
+  try { legacy = storage.getComingSoonAddresses().filter((c: any) => !c.dfAddressId && !c.fiberAvailable).slice(0, Math.max(0, BUDGET - watch.length)); } catch { /* ignore */ }
   if (!watch.length && !legacy.length) { console.log("[cron] Coming Soon watchlist empty"); return; }
 
   let token: string;
-  try { token = await getAuthToken(); }
+  try { token = await getToken(); }
   catch (err: any) { console.warn("[cron] Cannot recheck Coming Soon — no auth token:", err.message); return; }
 
   const promoted: string[] = [];
-  let consecBlocked = 0;
+  let consecFail = 0;
 
   // ── Phase A: exact dfAddressId recheck (the fast, reliable path) ─────────────
   for (const cs of watch) {
-    if (consecBlocked >= 15) { console.warn("[cron] proxy blocked — pausing Coming Soon recheck for tonight"); break; }
-    const probe = await probeKineticDfId(cs.dfAddressId, token);
-    if (probe.kind === "fail") {
-      // A non-answer NEVER demotes a watched address — just recheck next night.
-      if (probe.reason === "token_expired") { try { token = await getAuthToken(); consecBlocked = 0; } catch { /* keep old */ } }
-      else if (probe.reason === "blocked") consecBlocked++;
+    if (consecFail >= MAX_FAIL) { console.warn(`[cron] ${consecFail} consecutive failures — pausing recheck for tonight`); break; }
+    let p: CnsProbe;
+    try { p = await probe(cs.dfAddressId, token); } catch { consecFail++; await sleep(400); continue; }
+    if (p.kind === "fail") {
+      // A non-answer NEVER demotes a watched address. Count it, pace, back off on a
+      // 403 block, and try a token refresh on 401 — then recheck next night.
+      consecFail++;
+      if (p.reason === "token_expired") { try { token = await getToken(); } catch { /* keep old */ } }
+      await sleep(p.reason === "blocked" ? BLOCK_PACE : PACE);
       continue;
     }
-    consecBlocked = 0;
+    consecFail = 0;
     try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
-    if (probe.kind === "hit" && probe.result.isNewFiber && probe.result.billingStatus === "N") {
-      promoteComingSoon(cs, probe.result.billingStatus, probe.result.householdSegmentType, promoted);
+    if (p.kind === "hit" && p.result.isNewFiber && p.result.billingStatus === "N" && sameWatchedAddress(cs, p.result)) {
+      promoteComingSoon(cs, p.result.billingStatus, p.result.householdSegmentType, promoted);
     }
-    await new Promise(r => setTimeout(r, 120));
+    await sleep(PACE);
   }
 
   // ── Phase B: legacy rows without a dfAddressId — recheck by address, and
   // BACKFILL the dfAddressId so next night uses the fast lane. ─────────────────
   for (const cs of legacy) {
-    if (consecBlocked >= 15) break;
+    if (consecFail >= MAX_FAIL) break;
     let r: any;
-    try { r = await scanAddress(cs.address, cs.city, cs.state, cs.zip); } catch { continue; }
-    if (r.apiSource === "failed") { if (/blocked \(403\)/.test(r.notes ?? "")) consecBlocked++; continue; }
-    consecBlocked = 0;
+    try { r = await scan(cs.address, cs.city, cs.state, cs.zip); } catch { consecFail++; await sleep(400); continue; }
+    if (r.apiSource === "failed") { consecFail++; await sleep(/blocked \(403\)/.test(r.notes ?? "") ? BLOCK_PACE : PACE); continue; }
+    consecFail = 0;
     try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
     if (r.dfAddressId) {
       // Backfill Kinetic's key onto this watchlist row.
       try { storage.upsertComingSoonByDfAddressId({ address: cs.address, city: cs.city, state: cs.state, zip: cs.zip, tenantId: cs.tenantId ?? null, reason: cs.reason, lat: cs.lat, lng: cs.lng, dfAddressId: r.dfAddressId, householdSegmentType: r.householdSegmentType } as any); } catch { /* ignore */ }
     }
-    if (r.isNewFiber && r.billingStatus === "N") promoteComingSoon(cs, r.billingStatus, r.householdSegmentType, promoted);
-    await new Promise(r2 => setTimeout(r2, 150));
+    if (r.isNewFiber && r.billingStatus === "N" && sameWatchedAddress(cs, r)) promoteComingSoon(cs, r.billingStatus, r.householdSegmentType, promoted);
+    await sleep(PACE);
   }
 
   if (promoted.length > 0) {
@@ -334,11 +363,16 @@ async function runNightlyPoolRescan(): Promise<void> {
   const newFiberAddrs: string[] = [];
   const BATCH = 25;
 
+  let consecBlockedBatches = 0;
   for (let i = 0; i < targets.length; i += BATCH) {
     const batch = targets.slice(i, i + BATCH);
+    let blockedInBatch = 0;
     await Promise.all(batch.map(async (t: any) => {
       try {
         const r = await scanAddress(t.address, t.city, t.state, t.zip);
+        // 403 = the proxy egress is blocked. Count it so we can stop hammering a
+        // blocked proxy (a non-answer, so it changes no state either way).
+        if (r.apiSource === "failed" && /blocked \(403\)/.test(r.notes ?? "")) { blockedInBatch++; return; }
         // Transition detection: compare the stored snapshot against this fresh
         // scan to tell a genuine unavailable→live FLIP (newly_live) from a
         // first-ever scan of an already-live address. CRITICAL: the failed-check
@@ -384,6 +418,10 @@ async function runNightlyPoolRescan(): Promise<void> {
         }
       } catch { /* token expiry / timeout — skip this address, keep going */ }
     }));
+    // If most of a batch is 403-blocked for several batches running, the proxy IP
+    // is blocked — stop for tonight rather than burn the whole pool on blocks.
+    if (blockedInBatch >= BATCH * 0.6) { if (++consecBlockedBatches >= 3) { console.warn("[cron] Pool re-scan: proxy blocked — stopping for tonight"); break; } }
+    else consecBlockedBatches = 0;
     await new Promise(res => setTimeout(res, 60));
   }
 

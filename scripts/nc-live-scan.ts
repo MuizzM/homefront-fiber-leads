@@ -139,10 +139,12 @@ async function scanCity(city: string, zip: string) {
     if (r.isNewFiber && r.billingStatus === "N") {
       try { const up = storage.upsertLeadByAddress({ tenantId, address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat ?? undefined, lng: r.lng ?? undefined, fiberStatus: "new_fiber", isNewFiber: true, isTenured: false, billingStatus: r.billingStatus, householdSegmentType: r.householdSegmentType, techType: r.techType, speedTier: r.speedTier, maxDownloadMbps: r.maxDownloadMbps, competitorName: r.competitorName, addressCatalogDate: r.addressCatalogDate, dfAddressId: r.dfAddressId, leadStatus: "prospect", deploymentNotes: `NC live scan (${source}) — NEW FIBER, no subscriber.` } as any); if (up?.created) leads++; } catch {}
       newFiber++;
-    } else if (r.dfAddressId && (r.billingStatus === "N" || r.fiberStatus === "copper")) {
-      // In Kinetic's fabric, no subscriber (or a copper upgrade target) but not yet
-      // a fresh new-fiber lead → WATCH it by dfAddressId. The nightly recheck
-      // promotes it the instant it flips to NEW FIBER. This is the moat.
+    } else if (r.dfAddressId && r.billingStatus === "N" && !["new_fiber", "existing_fiber", "tenured_fiber"].includes(r.fiberStatus)) {
+      // In Kinetic's fabric, NO subscriber, and NOT already on fiber (copper /
+      // prospect / pre-build) → a genuine FUTURE lead: watch it by dfAddressId so
+      // the nightly recheck promotes it the instant it flips to NEW FIBER. Rows
+      // that already have fiber can never flip, so they're never watched (keeps the
+      // nightly recheck bounded). This is the moat.
       const reason = seg === "PROSPECT" ? "prospect" : r.fiberStatus === "copper" ? "copper_only" : "no_service";
       try { storage.upsertComingSoonByDfAddressId({ tenantId, address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat ?? undefined, lng: r.lng ?? undefined, reason, addedBy: null, dfAddressId: r.dfAddressId, householdSegmentType: r.householdSegmentType } as any); comingSoon++; } catch { /* already watched */ }
       if (r.isNewFiber) newFiber++;
