@@ -23,7 +23,7 @@ import {
   type ActivityLogEntry,
   type Tenant, type InsertTenant,
 } from "@shared/schema";
-import { eq, desc, like, or, and, gt, isNull } from "drizzle-orm";
+import { eq, desc, like, or, and, gt, isNull, inArray } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 
 // Legacy scanner columns that exist in SQLite but predate the drizzle schema —
@@ -40,13 +40,13 @@ export type KnockVerdict = {
 
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
-  getLeads(tenantId?: number, assignedRepId?: number): Lead[];
+  getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
   getLeadById(id: number): Lead | undefined;
   createLead(lead: InsertLead): Lead;
   upsertLeadByAddress(lead: InsertLead & LegacyScanFields): { lead: Lead; created: boolean };
   updateLead(id: number, updates: Partial<InsertLead>, tenantId?: number): Lead | undefined;
   deleteLead(id: number, tenantId?: number): boolean;
-  searchLeads(query: string, tenantId?: number, assignedRepId?: number): Lead[];
+  searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[];
   // ── Fiber checks ───────────────────────────────────────────────────────────
   getFiberChecks(): FiberCheck[];
   createFiberCheck(check: InsertFiberCheck): FiberCheck;
@@ -467,11 +467,17 @@ function getAddressCache(): Set<string> {
 
 export class Storage implements IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
-  getLeads(tenantId?: number, assignedRepId?: number): Lead[] {
+  getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[] {
     const conditions = [];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
-    // For reps: filter to only their assigned leads
-    if (assignedRepId != null) conditions.push(eq(leads.assignedRepId, assignedRepId));
+    // Visibility scope: a single rep id (a rep sees only their own leads) OR a
+    // SET of rep ids (a team lead sees their team's). An empty set matches
+    // NOTHING (fail-closed) — never the whole table.
+    if (Array.isArray(assignedRep)) {
+      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
+    } else if (assignedRep != null) {
+      conditions.push(eq(leads.assignedRepId, assignedRep));
+    }
     const q = db.select().from(leads);
     return (conditions.length > 0
       ? q.where(conditions.length === 1 ? conditions[0] : and(...conditions))
@@ -587,14 +593,18 @@ export class Storage implements IStorage {
       : eq(leads.id, id);
     return db.delete(leads).where(condition).run().changes > 0;
   }
-  searchLeads(query: string, tenantId?: number, assignedRepId?: number): Lead[] {
+  searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[] {
     const textFilter = or(
       like(leads.address, `%${query}%`), like(leads.city, `%${query}%`),
       like(leads.zip, `%${query}%`), like(leads.contactName, `%${query}%`)
     );
     const conditions = [textFilter];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
-    if (assignedRepId != null) conditions.push(eq(leads.assignedRepId, assignedRepId));
+    if (Array.isArray(assignedRep)) {
+      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
+    } else if (assignedRep != null) {
+      conditions.push(eq(leads.assignedRepId, assignedRep));
+    }
     return db.select().from(leads).where(
       conditions.length === 1 ? conditions[0] : and(...conditions)
     ).all();

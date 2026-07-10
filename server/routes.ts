@@ -223,20 +223,72 @@ function requireCapability(cap: Capability) {
 }
 
 // ── Lead visibility scope (fail closed) ───────────────────────────────────────
-// Admin / manager / team_lead see every lead in their tenant (undefined = no
-// rep filter). A rep only sees leads assigned to their linked team member. A
-// rep with no team-member link resolves to -1, which matches no lead, so they
-// see NOTHING — never the whole table. This must never fail open to `undefined`.
-function repLeadScope(user: any): number | undefined {
-  if (user?.role !== "rep") return undefined;
-  return user?.teamMemberId ?? -1;
+// The set of rep (team_member) ids whose leads a user may SEE/act on:
+//   • admin / manager / super_admin → undefined = the whole tenant.
+//   • team_lead → their own team: themselves + every rep reporting to them
+//     (team_members.reportsToId === their teamMemberId). A lead with NO reps
+//     still sees only their own assigned leads.
+//   • rep → just their own linked member.
+// Reps/leads with no linkage resolve to a set that matches nothing (never all).
+// Enforced on the SERVER — the map, search, lasso, stats all pass through here.
+function leadVisibilityScope(user: any): number | number[] | undefined {
+  const role = user?.role;
+  if (role === "admin" || role === "manager" || role === "super_admin") return undefined;
+  if (role === "team_lead") {
+    const selfTm = user?.teamMemberId ?? null;
+    const reports = selfTm != null
+      ? storage.getTeamMembers(user?.tenantId ?? undefined).filter((m: any) => m.reportsToId === selfTm).map((m: any) => m.id)
+      : [];
+    const ids = selfTm != null ? [selfTm, ...reports] : [];
+    return ids.length ? [...new Set(ids)] : [-1]; // fail-closed
+  }
+  // rep
+  return [user?.teamMemberId ?? -1];
 }
 
-// A rep may only read/act on a lead assigned to their own team member. Non-reps
-// pass. Used to guard single-lead endpoints against IDOR (fetch-by-id).
+// Is `repId` inside the caller's visibility scope? Used to guard WRITES
+// (assign/reassign/territory) so a team_lead can only target their own team's
+// reps, and can only act on leads owned within their scope. Admin/manager pass.
+function repInVisibilityScope(user: any, repId: number | null | undefined): boolean {
+  const scope = leadVisibilityScope(user);
+  if (scope === undefined) return true;           // admin/manager — org-wide
+  if (repId == null) return false;
+  return (scope as number[]).includes(repId);
+}
+
+// A rep may only read/act on a lead assigned to their own team member; a
+// team_lead only on leads within their team scope. Non-scoped roles pass.
+// Guards single-lead endpoints against IDOR (fetch-by-id) AND cross-team writes.
 function repCanAccessLead(user: any, lead: any): boolean {
-  if (user?.role !== "rep") return true;
-  return !!lead && lead.assignedRepId != null && lead.assignedRepId === user?.teamMemberId;
+  const scope = leadVisibilityScope(user);
+  if (scope === undefined) return true;
+  return !!lead && lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId);
+}
+
+// May the caller REASSIGN this lead? A scoped role (team_lead) may claim an
+// UNASSIGNED lead or move one already within their team — but may NOT steal a
+// lead assigned to another team. Admin/manager pass. This is what makes the
+// lasso/bulk-assign safe: a team lead can carve a fresh area for their reps
+// without silently poaching another team's booked doors.
+function canReassignLead(user: any, lead: any): boolean {
+  const scope = leadVisibilityScope(user);
+  if (scope === undefined) return true;             // admin/manager — org-wide
+  if (!lead) return false;
+  return lead.assignedRepId == null || (scope as number[]).includes(lead.assignedRepId);
+}
+
+// May the caller rename/delete this territory? A team_lead only owns areas
+// belonging to their team (the area's rep or any assignee is in scope).
+// Admin/manager pass. Guards the destructive territory routes against a
+// team_lead renaming/deleting another team's area.
+function canManageTerritory(user: any, terr: any): boolean {
+  const scope = leadVisibilityScope(user);
+  if (scope === undefined) return true;
+  if (!terr) return false;
+  let assignees: number[] = [];
+  try { assignees = JSON.parse(terr.assigneeIds || "[]"); } catch { /* legacy */ }
+  return (terr.repId != null && (scope as number[]).includes(terr.repId))
+    || assignees.some(id => (scope as number[]).includes(id));
 }
 
 // Tenant wall for rep-targeting writes (clock, pings, manual commissions):
@@ -721,7 +773,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/leads/live-clusters", requireAuth, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const repFilter = repLeadScope(user);
+    const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
     const { zoom, west, south, east, north } = req.query;
 
     const all = storage.getLeads(tid, repFilter)
@@ -773,9 +825,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   let _mapPinCache: { ts: number; pins: any[] } | null = null;
   const MAP_CACHE_TTL = 8_000; // 8s — fast enough for real-time feel
 
-  function getMapPins(tenantId?: number, repFilter?: number) {
+  function getMapPins(tenantId?: number, repFilter?: number | number[]) {
     const now = Date.now();
-    if (!repFilter && !tenantId && _mapPinCache && now - _mapPinCache.ts < MAP_CACHE_TTL) {
+    // Only the unscoped org-wide view is cached (repFilter falsy). A scoped
+    // team_lead/rep view (a set or an id) is never served from the shared cache.
+    const unscoped = repFilter == null || (Array.isArray(repFilter) && repFilter.length === 0);
+    if (unscoped && !tenantId && _mapPinCache && now - _mapPinCache.ts < MAP_CACHE_TTL) {
       return _mapPinCache.pins; // cache hit for admin/manager (no per-user filter)
     }
     const all = storage.getLeads(tenantId, repFilter);
@@ -809,14 +864,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           lastKnockedAt: v?.lastAt ?? null,
         };
       });
-    if (!repFilter && !tenantId) _mapPinCache = { ts: Date.now(), pins };
+    if (unscoped && !tenantId) _mapPinCache = { ts: Date.now(), pins };
     return pins;
   }
 
   app.get("/api/leads/map", requireAuth, (req: any, res: any) => {
     const user = req.user;
     const tid = user?.tenantId ?? undefined;
-    const repFilter = repLeadScope(user);
+    const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
     const pins = getMapPins(tid, repFilter);
     res.json({ pins, total: pins.length });
   });
@@ -826,7 +881,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     // Reps only see leads assigned to them; managers/admins see all
-    const repFilter = repLeadScope(user);
+    const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
 
     let leads = search
       ? storage.searchLeads(String(search), tid, repFilter)
@@ -1392,15 +1447,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   app.delete("/api/scan/:jobId", requireManager, (req, res) => {
+    // Tenant-scoped: only cancel a job in your own org (was globally deletable).
+    const job = scanJobs.get(qstr(req.params.jobId));
+    const _tid = (req as any).user?.tenantId;
+    if (!job || (_tid && job.tenantId !== _tid)) return res.status(404).json({ error: "Not found" });
     scanJobs.delete(qstr(req.params.jobId));
     res.json({ success: true });
   });
 
-  app.get("/api/scan", requireManager, (_req, res) => {
-    res.json(Array.from(scanJobs.values()).map(j => ({
-      id: j.id, city: j.city, zip: j.zip, status: j.status,
-      total: j.total, done: j.done, startedAt: j.startedAt, completedAt: j.completedAt,
-    })));
+  app.get("/api/scan", requireManager, (req, res) => {
+    // Tenant-scoped list (was every tenant's jobs).
+    const _tid = (req as any).user?.tenantId;
+    res.json(Array.from(scanJobs.values())
+      .filter(j => _tid == null || j.tenantId === _tid)
+      .map(j => ({
+        id: j.id, city: j.city, zip: j.zip, status: j.status,
+        total: j.total, done: j.done, startedAt: j.startedAt, completedAt: j.completedAt,
+      })));
   });
 
   // Fiber check history
@@ -1415,6 +1478,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // roster's phones/emails/org structure — project those away for reps.
     if (user?.role === "rep") {
       return res.json(members.map((m: any) => ({ id: m.id, name: m.name, role: m.role, active: m.active, tenantId: m.tenantId ?? null })));
+    }
+    // A team_lead's roster is their own team (self + direct reports) — this also
+    // scopes the map's rep-filter + lasso-assign dropdowns to their reps only.
+    if (user?.role === "team_lead") {
+      const scope = leadVisibilityScope(user);
+      const ids = Array.isArray(scope) ? new Set(scope) : null;
+      return res.json(ids ? members.filter((m: any) => ids.has(m.id)) : members);
     }
     res.json(members);
   });
@@ -1506,6 +1576,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const { repId } = req.body;
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
+    // Scope: a team_lead may only target their own reps and may not steal
+    // another team's lead. Admin/manager pass.
+    if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    const existingLead = storage.getLeadById(Number(req.params.id));
+    if (existingLead && (tid == null || existingLead.tenantId === tid) && !canReassignLead(user, existingLead)) {
+      return res.status(403).json({ error: "That lead belongs to another team", code: "OUT_OF_SCOPE" });
+    }
     // Provenance: reps see WHO routed each door to them, and when.
     const updated = storage.updateLead(Number(req.params.id), {
       assignedRepId: repId ?? null,
@@ -1527,17 +1604,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
+    if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     const stamp = repId ? { assignedBy: user?.name ?? null, assignedAt: new Date().toISOString() } : { assignedBy: null, assignedAt: null };
     const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
-    let updated = 0;
+    let updated = 0, skipped = 0;
     for (const id of leadIds) {
+      // A team_lead may only move unassigned or own-team leads — silently skip
+      // (don't steal) another team's; count them so the UI can be honest.
+      const lead = storage.getLeadById(id);
+      if (lead && (tid == null || lead.tenantId === tid) && !canReassignLead(user, lead)) { skipped++; continue; }
       const result = storage.updateLead(id, { assignedRepId: repId ?? null, ...stamp }, tid);
       if (result) {
         updated++;
         if (repName) storage.addLeadEvent(id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
       }
     }
-    res.json({ updated, repId });
+    res.json({ updated, skipped, repId });
   });
 
   // ── Lead Enrichment ──────────────────────────────────────────────────────────
@@ -1967,7 +2049,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Stats
   app.get("/api/stats", requireAuth, (req, res) => {
     const _su = (req as any).user;
-    const all = storage.getLeads(_su?.tenantId ?? undefined, repLeadScope(_su));
+    const all = storage.getLeads(_su?.tenantId ?? undefined, leadVisibilityScope(_su));
     const stats: any = { total: all.length, byStatus: {}, byFiberStatus: {}, newFiber: 0, tenured: 0, sold: 0 };
     for (const l of all) {
       stats.byStatus[l.leadStatus] = (stats.byStatus[l.leadStatus] || 0) + 1;
@@ -2226,6 +2308,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (typeof repId !== "number") return res.status(400).json({ error: "repId required" });
     const rep = storage.getTeamMemberById(repId);
     if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
+    // A team_lead may only assign an area to one of their own reps.
+    if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
 
     // Max-active-areas guard (company rule; recommended 3–5)
     const activeForRep = storage.getTerritoriesByRep(repId).filter((t: any) => t.status === "active" || t.status === "shared").length;
@@ -2242,7 +2326,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } as any);
     storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId, name: territory.name });
 
-    const enclosed = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon));
+    // Only leads the caller may reassign (unassigned or own-team for a team_lead;
+    // all for admin/manager) — an area draw never poaches another team's doors.
+    const enclosed = storage.getLeads(tid).filter((l: any) =>
+      l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon) && canReassignLead(user, l));
     let assigned = 0;
     for (const l of enclosed) {
       if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid)) {
@@ -2421,6 +2508,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const id = Number(req.params.id);
     const prev = storage.getTerritories(ttid).find(t => t.id === id);
     if (!prev) return res.status(404).json({ error: "Not found" });
+    if (!canManageTerritory((req as any).user, prev)) return res.status(404).json({ error: "Not found" }); // 404, don't leak existence
     const updated = storage.updateTerritory(id, { name, updatedAt: new Date().toISOString() } as any, ttid);
     storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
     res.json(updated);
@@ -2428,7 +2516,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   app.delete("/api/territories/:id", requireTeamLead, (req, res) => {
     const ttid = (req as any).user?.tenantId ?? undefined;
-    if (!storage.deleteTerritory(Number(req.params.id), ttid)) return res.status(404).json({ error: "Not found" });
+    const id = Number(req.params.id);
+    const terr = storage.getTerritories(ttid).find(t => t.id === id);
+    if (!terr || !canManageTerritory((req as any).user, terr)) return res.status(404).json({ error: "Not found" });
+    if (!storage.deleteTerritory(id, ttid)) return res.status(404).json({ error: "Not found" });
     res.json({ success: true });
   });
 
@@ -3418,16 +3509,21 @@ export function registerSaasRoutes(app: any) {
   app.get("/api/stats/saas", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
     const isRep = user?.role === "rep";
-    const repMemberId: number | undefined = repLeadScope(user);
+    const repScope = leadVisibilityScope(user); // rep→self, team_lead→team, mgr/admin→all
+    // A set of rep ids to aggregate over for the scoped roles (rep/team_lead);
+    // null for org-wide (admin/manager). Keeps knocks/commissions/hours scoped
+    // to exactly the same reps as the leads above.
+    const scopeIds = Array.isArray(repScope) ? repScope : null;
 
-    // Reps see their own scoped stats; admins/managers see tenant-wide
-    const leads = storage.getLeads(user?.tenantId ?? undefined, repMemberId);
-    const members = storage.getTeamMembers().filter(m => m.active);
-    const knocks = repMemberId ? storage.getKnocksByRep(repMemberId) : storage.getKnocks();
+    // Reps see their own stats; team leads their team's; admins/managers tenant-wide
+    const leads = storage.getLeads(user?.tenantId ?? undefined, repScope);
+    const members = storage.getTeamMembers(user?.tenantId ?? undefined).filter(m => m.active);
+    const scopedMembers = scopeIds ? members.filter(m => scopeIds.includes(m.id)) : members;
+    const knocks = scopeIds ? storage.getKnocks().filter((k: any) => scopeIds.includes(k.repId)) : storage.getKnocks();
     const comingSoon = storage.getComingSoonAddresses();
-    const commissions = storage.getCommissions(repMemberId);
+    const commissions = scopeIds ? storage.getCommissions().filter((c: any) => scopeIds.includes(c.repId)) : storage.getCommissions();
     const allSessions = storage.getAllClockSessions();
-    const sessions = repMemberId ? allSessions.filter(s => s.repId === repMemberId) : allSessions;
+    const sessions = scopeIds ? allSessions.filter(s => scopeIds.includes(s.repId)) : allSessions;
 
     const today = new Date().toISOString().slice(0, 10);
     const todayKnocks = knocks.filter(k => k.knockedAt.slice(0, 10) === today);
@@ -3438,13 +3534,11 @@ export function registerSaasRoutes(app: any) {
     const totalRevenue = commissions.filter(c => c.status === "paid").reduce((s, c) => s + c.amount, 0);
     const pendingPayout = commissions.filter(c => c.status === "approved").reduce((s, c) => s + c.amount, 0);
 
-    const activeClockedIn = isRep
-      ? (repMemberId && storage.getActiveClockSession(repMemberId) ? 1 : 0)
-      : members.filter(m => storage.getActiveClockSession(m.id)).length;
+    const activeClockedIn = (scopeIds ? scopedMembers : members).filter(m => storage.getActiveClockSession(m.id)).length;
 
     res.json({
       leads: { total: leads.length, newFiber: leads.filter(l => l.isNewFiber).length, sold: leads.filter(l => l.leadStatus === "sold").length, unassigned: leads.filter(l => !l.assignedRepId).length },
-      team: isRep ? { total: 1, activeClockedIn } : { total: members.length, activeClockedIn },
+      team: isRep ? { total: 1, activeClockedIn } : { total: scopedMembers.length, activeClockedIn },
       knocks: { total: knocks.length, today: todayKnocks.length, todaySales, weekSales },
       comingSoon: { total: comingSoon.length, converted: comingSoon.filter(a => a.fiberAvailable).length },
       revenue: { totalPaid: totalRevenue, pendingPayout },
