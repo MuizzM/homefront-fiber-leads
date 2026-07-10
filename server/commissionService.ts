@@ -77,15 +77,29 @@ export function loadOrgConfig(tenantId: number): OrgCommissionConfig {
 export interface AssignmentRow {
   id: number; commissionPlanVersionId: number; effectiveFrom: string; effectiveTo: string | null;
 }
-// The assignment effective for a week is the one whose [effectiveFrom, effectiveTo)
-// window contains the week's start date. Dates compared as YYYY-MM-DD strings.
-export function resolveAssignmentForWeek<T extends AssignmentRow>(assignments: T[], weekStartUtc: string): T | null {
+// The assignment effective for a week: the one whose [effectiveFrom, effectiveTo)
+// window contains the week's START date. A mid-week plan change therefore never
+// re-prices the running week (one plan governs one week — matches retroactive
+// weekly semantics). NEW-HIRE EXCEPTION: when no plan existed at week start and
+// nextWeekStartUtc is given, the earliest assignment STARTING inside the week
+// governs the partial hire week — otherwise a rep onboarded on a Wednesday sees
+// "no plan" until Monday. Dates compared as YYYY-MM-DD strings.
+export function resolveAssignmentForWeek<T extends AssignmentRow>(assignments: T[], weekStartUtc: string, nextWeekStartUtc?: string): T | null {
   const wk = weekStartUtc.slice(0, 10); // the week's start calendar date (UTC ISO)
-  const matches = assignments.filter(a =>
+  const covering = assignments.filter(a =>
     a.effectiveFrom.slice(0, 10) <= wk && (a.effectiveTo == null || wk < a.effectiveTo.slice(0, 10)));
-  if (matches.length === 0) return null;
-  // Most recent effectiveFrom wins if (defensively) more than one matches.
-  return matches.sort((a, b) => (a.effectiveFrom < b.effectiveFrom ? 1 : -1))[0];
+  if (covering.length > 0) {
+    // Most recent effectiveFrom wins if (defensively) more than one matches.
+    return covering.sort((a, b) => (a.effectiveFrom < b.effectiveFrom ? 1 : -1))[0];
+  }
+  if (!nextWeekStartUtc) return null;
+  const nk = nextWeekStartUtc.slice(0, 10);
+  const startingWithin = assignments.filter(a => {
+    const from = a.effectiveFrom.slice(0, 10);
+    return from > wk && from < nk && (a.effectiveTo == null || from < a.effectiveTo.slice(0, 10));
+  });
+  if (startingWithin.length === 0) return null;
+  return startingWithin.sort((a, b) => (a.effectiveFrom > b.effectiveFrom ? 1 : -1))[0]; // earliest
 }
 
 // Detect overlapping active periods for a rep (service-level, since SQLite has no
@@ -211,7 +225,7 @@ export function calculateOrRecalculateStatement(input: {
     `SELECT id, commission_plan_version_id AS commissionPlanVersionId, effective_from AS effectiveFrom, effective_to AS effectiveTo
      FROM rep_commission_assignments WHERE tenant_id = ? AND rep_id = ? ORDER BY effective_from DESC`
   ).all(tenantId, repId) as AssignmentRow[];
-  const assignment = resolveAssignmentForWeek(assignments, bounds.weekStartUtc);
+  const assignment = resolveAssignmentForWeek(assignments, bounds.weekStartUtc, bounds.nextWeekStartUtc);
   if (!assignment) throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT",
     `No commission plan assigned to rep ${repId} for week ${bounds.localWeekLabel}.`);
 

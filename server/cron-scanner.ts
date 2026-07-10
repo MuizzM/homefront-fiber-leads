@@ -355,6 +355,7 @@ async function runComingSoonCheck(): Promise<void> {
 
         try {
           const lead = storage.createLead({
+            tenantId: cs.tenantId ?? undefined, // promoted lead stays in its watchlist's org
             address: cs.address,
             city: cs.city,
             state: cs.state,
@@ -442,6 +443,8 @@ async function runNightlyPoolRescan(): Promise<void> {
         if (qual?.qualified) {
           try {
             const lead = storage.createLead({
+              // scan_targets rows are raw SELECT * (snake_case) — inherit the target's org
+              tenantId: (t as any).tenant_id ?? (t as any).tenantId ?? undefined,
               address: r.address, city: r.city, state: r.state, zip: r.zip,
               lat: r.lat ?? t.lat ?? undefined, lng: r.lng ?? t.lng ?? undefined,
               fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,

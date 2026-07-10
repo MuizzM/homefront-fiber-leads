@@ -6,7 +6,7 @@ import nodemailer from "nodemailer";
 import { mailTransport, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { storage } from "./storage";
+import { storage, getDefaultTenantId } from "./storage";
 import Database from "better-sqlite3";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
@@ -239,6 +239,17 @@ function repCanAccessLead(user: any, lead: any): boolean {
   return !!lead && lead.assignedRepId != null && lead.assignedRepId === user?.teamMemberId;
 }
 
+// Tenant wall for rep-targeting writes (clock, pings, manual commissions):
+// a caller may only act on a team member inside their own org. Fail closed on
+// a missing member; super_admin is exempt (cross-org support access).
+function repInCallerTenant(user: any, repId: number): boolean {
+  if (user?.role === "super_admin") return true;
+  const member = storage.getTeamMemberById(repId);
+  if (!member) return false;
+  if (user?.tenantId == null || member.tenantId == null) return true; // legacy rows — bootstrap adopts these
+  return member.tenantId === user.tenantId;
+}
+
 // ── Sanitize fiber result — strip proprietary vendor fields before sending to client ──
 function sanitizeFiberResult(r: any) {
   return {
@@ -378,6 +389,9 @@ let _writeQueue: LeadInsert[] = [];
 let _writeQueueTimer: ReturnType<typeof setInterval> | null = null;
 
 function enqueueLeadWrite(lead: LeadInsert) {
+  // Scans are platform-initiated (no acting user) — new leads file under the
+  // default org so they're never tenant-less. One stamp covers every scan path.
+  if ((lead as any).tenantId == null) (lead as any).tenantId = getDefaultTenantId();
   _writeQueue.push(lead);
   if (!_writeQueueTimer) {
     _writeQueueTimer = setInterval(flushWriteQueue, 500);
@@ -851,7 +865,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/leads", requireTeamLead, (req: any, res: any) => {
     const parsed = insertLeadSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    res.status(201).json(storage.createLead(parsed.data));
+    // Tenancy is never client-supplied: the lead belongs to the creator's org.
+    const tenantId = req.user?.tenantId ?? getDefaultTenantId();
+    res.status(201).json(storage.createLead({ ...parsed.data, tenantId } as any));
   });
   app.patch("/api/leads/:id", requireManager, (req, res) => {
     // Allowlist only safe fields — prevent mass-assignment of internal fields
@@ -1412,18 +1428,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Team lead, manager, and admin can add/edit reps
   // Team members with an email automatically get a login account (OTP by email).
   // The Team page is the ONE place to manage people — no separate Accounts page.
-  function syncLoginAccount(member: { id: number; name: string; email?: string | null; role: string; active: boolean }) {
+  function syncLoginAccount(member: { id: number; name: string; email?: string | null; role: string; active: boolean; tenantId?: number | null }) {
     try {
       const linked = storage.getAllUsers().find(u => u.teamMemberId === member.id);
+      // Login account lives in the member's org. Only stamp when known — never
+      // strip an existing tenant with a null.
+      const tenantPatch = member.tenantId != null ? { tenantId: member.tenantId } : {};
       if (member.email) {
         if (linked) {
-          storage.updateUser(linked.id, { name: member.name, email: member.email, role: member.role, active: member.active } as any);
+          storage.updateUser(linked.id, { name: member.name, email: member.email, role: member.role, active: member.active, ...tenantPatch } as any);
         } else {
           const byEmail = storage.getUserByEmail(member.email);
           if (byEmail) {
-            storage.updateUser(byEmail.id, { teamMemberId: member.id, name: member.name, role: member.role, active: member.active } as any);
+            storage.updateUser(byEmail.id, { teamMemberId: member.id, name: member.name, role: member.role, active: member.active, ...tenantPatch } as any);
           } else {
-            storage.createUser({ name: member.name, email: member.email, role: member.role, active: member.active, teamMemberId: member.id } as any);
+            storage.createUser({ name: member.name, email: member.email, role: member.role, active: member.active, teamMemberId: member.id, ...tenantPatch } as any);
           }
         }
       } else if (linked) {
@@ -1443,7 +1462,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!(HIRABLE_ROLES[creatorRole] ?? []).includes(newRole)) {
       return res.status(403).json({ error: `Your role cannot create a ${newRole.replace("_", " ")}` });
     }
-    const member = storage.createTeamMember(parsed.data);
+    // Tenancy is NEVER client-supplied: a new member always joins the creator's
+    // org (overrides any tenantId smuggled into the body).
+    const member = storage.createTeamMember({ ...parsed.data, tenantId: (req as any).user.tenantId ?? null });
     syncLoginAccount(member as any);
     res.status(201).json(member);
   });
@@ -1730,10 +1751,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Any authenticated rep can log a knock
   app.post("/api/leads/:id/knock", requireAuth, (req, res) => {
     const _knu = (req as any).user;
-    // Reps can only log knocks on leads assigned to them
-    if (_knu?.role === "rep") {
+    // Tenant wall for EVERY role (super_admin exempt): you can only knock leads
+    // in your own org — a manager must not flip another tenant's lead.
+    {
       const _knl = storage.getLeadById(Number(req.params.id));
-      if (!repCanAccessLead(_knu, _knl)) return res.status(404).json({ error: "Not found" });
+      if (!_knl) return res.status(404).json({ error: "Not found" });
+      if (_knu?.role !== "super_admin" && _knu?.tenantId != null && _knl.tenantId != null && _knl.tenantId !== _knu.tenantId) {
+        return res.status(404).json({ error: "Not found" });
+      }
+      // Reps can only log knocks on leads assigned to them
+      if (_knu?.role === "rep" && !repCanAccessLead(_knu, _knl)) return res.status(404).json({ error: "Not found" });
     }
     // Idempotency: the offline queue retries with the same clientId after a lost
     // response. If we've already logged this knock, return the existing row and
@@ -1943,10 +1970,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const session = storage.getSession(token);
       if (session) {
         const u = storage.getUserById(session.userId);
-        if (u) currentUser = { id: u.id, name: u.name, email: u.email, role: u.role, teamMemberId: u.teamMemberId };
+        if (u) currentUser = { id: u.id, name: u.name, email: u.email, role: u.role, teamMemberId: u.teamMemberId, tenantId: (u as any).tenantId ?? null };
       }
     }
     res.json({ isFirstRun, currentUser });
+  });
+
+  // ── Current tenant (org) — name/branding for the caller's organization ──────
+  app.get("/api/tenant/me", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const tenantId = user?.tenantId ?? getDefaultTenantId();
+    const t = tenantId != null ? storage.getTenantById(tenantId) : undefined;
+    if (!t) return res.json({ tenant: null });
+    // Branding only — never billing/keys/secrets.
+    res.json({ tenant: { id: t.id, companyName: t.companyName, brandName: t.brandName, brandColor: t.brandColor, tagline: t.tagline, plan: t.plan } });
   });
 
   // ── Rate limiting maps (in-memory, per IP + per email) ───────────────────────
@@ -2074,7 +2111,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "Valid name required" });
     if (!email || typeof email !== "string" || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return res.status(400).json({ error: "Valid email required" });
-    const user = storage.createUser({ name: name.trim(), email: email.trim().toLowerCase(), passwordHash: "", role: "admin", active: true });
+    // First admin belongs to the default org (bootstrapped at migration time).
+    const user = storage.createUser({ name: name.trim(), email: email.trim().toLowerCase(), passwordHash: "", role: "admin", active: true, tenantId: getDefaultTenantId() } as any);
     // Send OTP immediately so admin can log in
     const code = storage.createOtp(user.email);
     await sendOtpEmail(user.email, code, user.name);
@@ -2096,7 +2134,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!name || !email) return res.status(400).json({ error: "name and email required" });
     const existing = storage.getUserByEmail(email);
     if (existing) return res.status(409).json({ error: "Email already in use" });
-    const user = storage.createUser({ name, email, role: "rep", active: true, teamMemberId: teamMemberId ?? null });
+    // New account joins the creating admin's org (or the linked member's tenant).
+    const user = storage.createUser({
+      name, email, role: "rep", active: true, teamMemberId: teamMemberId ?? null,
+      tenantId: (req as any).user?.tenantId ?? null,
+    } as any);
     res.status(201).json({ id: user.id, name: user.name, email: user.email, role: user.role });
   });
 
@@ -2146,8 +2188,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/territories", requireTeamLead, (req, res) => {
     const parsed = insertTerritorySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
-    const tid = (req as any).user?.tenantId ?? undefined;
-    res.status(201).json(storage.createTerritory({ ...parsed.data, tenantId: parsed.data.tenantId ?? tid ?? null } as any));
+    // Actor's org wins — a client-supplied tenantId is ignored (anti-spoofing).
+    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
+    res.status(201).json(storage.createTerritory({ ...parsed.data, tenantId } as any));
   });
 
   // POST /api/territories/assign-area — the SalesRabbit move: draw an area, pick
@@ -2917,7 +2960,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const sessionId = req.headers["x-session-id"] as string;
     const sessionObj = storage.getSession(sessionId);
     const reviewer = sessionObj ? storage.getUserById(sessionObj.userId) : null;
-    const tenantId = (reviewer as any)?.tenantId ?? null;
+    // Reviewer's org, falling back to the default org so approvals are never
+    // tenant-less (commission assignment requires a tenant).
+    const tenantId = (reviewer as any)?.tenantId ?? getDefaultTenantId();
 
     let userId: number | undefined;
     let commissionResult: any = null;
@@ -3037,8 +3082,9 @@ export function registerSaasRoutes(app: any) {
     const user = (req as any).user;
     const { lat, lng, accuracy, repId } = req.body;
     if (!lat || !lng) return res.status(400).json({ error: "lat/lng required" });
-    const resolvedRepId = repId ?? user.teamMemberId;
+    const resolvedRepId = user.role === "rep" ? user.teamMemberId : (repId ?? user.teamMemberId);
     if (!resolvedRepId) return res.status(400).json({ error: "No rep ID" });
+    if (!repInCallerTenant(user, resolvedRepId)) return res.status(404).json({ error: "Rep not found" });
     const ping = storage.createLocationPing({ repId: resolvedRepId, userId: user.id, lat, lng, accuracy });
     res.json(ping);
   });
@@ -3073,6 +3119,7 @@ export function registerSaasRoutes(app: any) {
     // may clock a specific rep (ride-alongs) via body.repId.
     const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
+    if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
     const existing = storage.getActiveClockSession(repId);
     if (existing) return res.status(400).json({ error: "Already clocked in", session: existing });
     const session = storage.clockIn(repId, user.id, req.body.notes);
@@ -3087,6 +3134,7 @@ export function registerSaasRoutes(app: any) {
     // may clock a specific rep (ride-alongs) via body.repId.
     const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
+    if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
     const active = storage.getActiveClockSession(repId);
     if (!active) return res.status(400).json({ error: "Not clocked in" });
     const session = storage.clockOut(active.id);
@@ -3154,6 +3202,7 @@ export function registerSaasRoutes(app: any) {
     if (!entry) return res.status(404).json({ error: "Not found" });
     // Create lead from this address
     const lead = storage.createLead({
+      tenantId: entry.tenantId ?? user?.tenantId ?? undefined, // watchlist's org, else the promoter's
       address: entry.address, city: entry.city, state: entry.state, zip: entry.zip,
       lat: entry.lat ?? undefined, lng: entry.lng ?? undefined,
       fiberStatus: "new_fiber", isNewFiber: true,
@@ -3196,6 +3245,7 @@ export function registerSaasRoutes(app: any) {
     const user = (req as any).user;
     const { repId, leadId, knockId, amount, saleDate, notes } = req.body;
     if (!repId || !amount || !saleDate) return res.status(400).json({ error: "repId, amount, saleDate required" });
+    if (!repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
     const comm = storage.createCommission({ repId, leadId, knockId, amount, saleDate, notes, status: "pending", approvedBy: null, paidDate: null });
     storage.logActivity(user.id, "commission.created", "commission", comm.id, { repId, amount }, req.ip);
     res.json(comm);

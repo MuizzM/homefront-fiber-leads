@@ -11,6 +11,7 @@ export interface AuthUser {
   // which made manager/team_lead comparisons type-lies across the app.
   role: "super_admin" | "admin" | "manager" | "team_lead" | "rep";
   teamMemberId?: number | null;
+  tenantId?: number | null; // the user's organization (tenants.id)
 }
 
 interface AuthCtx {

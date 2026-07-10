@@ -136,6 +136,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   });
   const pendingTerritoryCount = (territoryRequests ?? []).filter(r => r.status === "pending").length;
 
+  // The caller's organization — real tenant branding, not a hardcode. Falls
+  // back to the Home Front Solutions brand while loading / for legacy sessions.
+  const { data: tenantMe } = useQuery<{ tenant: { companyName: string; tagline: string | null; plan: string } | null }>({
+    queryKey: ["/api/tenant/me"],
+    staleTime: 5 * 60 * 1000,
+  });
+  const orgName = tenantMe?.tenant?.companyName || "Home Front Solutions";
+  const orgTagline = tenantMe?.tenant?.tagline || null;
+
   const visibleNav = NAV_ITEMS.filter(item => item.show(role, user?.email));
 
   return (
@@ -250,8 +259,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          <div className="text-[11px] text-muted-foreground">
-            Home Front Solutions · National
+          <div className="text-[11px] text-muted-foreground" data-testid="org-footer">
+            {orgName}{orgTagline ? ` · ${orgTagline}` : ""}
           </div>
         </div>
       </aside>
@@ -273,7 +282,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </button>
           <div className="flex items-center gap-2">
             <BrandMark className="w-6 h-6" />
-            <span className="text-sm font-bold">Home Front Solutions</span>
+            <span className="text-sm font-bold">{orgName}</span>
           </div>
         </header>
 

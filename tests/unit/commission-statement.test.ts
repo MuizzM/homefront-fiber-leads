@@ -94,6 +94,19 @@ describe("resolveAssignmentForWeek — effective-dated selection", () => {
   it("returns null when no window covers the week", () => {
     expect(svc.resolveAssignmentForWeek([A], "2025-12-01T00:00:00.000Z")).toBeNull();
   });
+
+  it("NEW-HIRE: an assignment starting mid-week governs the partial hire week", () => {
+    // Hired Wed Jul 8 2026; week = Mon Jul 6 → Mon Jul 13. No plan covered the
+    // week start, but the mid-week assignment applies when bounds are passed.
+    const hire = { id: 9, commissionPlanVersionId: 30, effectiveFrom: "2026-07-08", effectiveTo: null };
+    expect(svc.resolveAssignmentForWeek([hire], "2026-07-06T04:00:00.000Z")).toBeNull(); // without bounds: strict
+    expect(svc.resolveAssignmentForWeek([hire], "2026-07-06T04:00:00.000Z", "2026-07-13T04:00:00.000Z")?.id).toBe(9);
+    // …but a plan covering the week start still wins over a mid-week change.
+    const covering = { id: 10, commissionPlanVersionId: 40, effectiveFrom: "2026-01-01", effectiveTo: "2026-07-08" };
+    expect(svc.resolveAssignmentForWeek([covering, hire], "2026-07-06T04:00:00.000Z", "2026-07-13T04:00:00.000Z")?.id).toBe(10);
+    // an assignment starting AFTER the week never applies to it.
+    expect(svc.resolveAssignmentForWeek([hire], "2026-06-29T04:00:00.000Z", "2026-07-06T04:00:00.000Z")).toBeNull();
+  });
 });
 
 describe("assignmentsOverlap — prevents double-assignment", () => {

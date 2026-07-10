@@ -224,6 +224,7 @@ export const knockLog = sqliteTable("knock_log", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   leadId: integer("lead_id").notNull(),
   repId: integer("rep_id").notNull(),
+  tenantId: integer("tenant_id"),               // inherited from the lead at insert
   knockedAt: text("knocked_at").notNull().default(new Date().toISOString()),
   wasHome: integer("was_home", { mode: "boolean" }).notNull(),
   outcome: text("outcome").notNull(),
@@ -345,6 +346,7 @@ export const clockSessions = sqliteTable("clock_sessions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   repId: integer("rep_id").notNull(),
   userId: integer("user_id").notNull(),
+  tenantId: integer("tenant_id"),               // inherited from the rep at insert
   clockedIn: text("clocked_in").notNull(),
   clockedOut: text("clocked_out"),             // null = still active
   durationMinutes: integer("duration_minutes"), // set on clock out
@@ -421,6 +423,7 @@ export type ScanTarget = typeof scanTargets.$inferSelect;
 export const commissions = sqliteTable("commissions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   repId: integer("rep_id").notNull(),           // teamMembers.id
+  tenantId: integer("tenant_id"),               // inherited from the rep at insert
   leadId: integer("lead_id"),                   // leads.id — which sale
   knockId: integer("knock_id"),                 // knockLog.id — which knock closed it
   amount: real("amount").notNull(),             // dollar amount (locked at sale time)

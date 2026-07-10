@@ -190,6 +190,37 @@ export function runMigrations() {
     `ALTER TABLE territories ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE coming_soon_addresses ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE commissions ADD COLUMN tenant_id INTEGER`,
+    // users/leads got tenant_id from drizzle-kit push in prod; these ALTERs make
+    // a migrations-only DB (tests, fresh installs) match.
+    `ALTER TABLE users ADD COLUMN tenant_id INTEGER`,
+    `ALTER TABLE leads ADD COLUMN tenant_id INTEGER`,
+    // Full drizzle-parity for migrations-only DBs (verified by schema diff):
+    // lead-enrichment columns + fiber_checks.billing_status + tenant branding/
+    // billing columns all originally came from drizzle-kit push.
+    `ALTER TABLE leads ADD COLUMN owner_name TEXT`,
+    `ALTER TABLE leads ADD COLUMN owner_phone TEXT`,
+    `ALTER TABLE leads ADD COLUMN owner_email TEXT`,
+    `ALTER TABLE leads ADD COLUMN income_range TEXT`,
+    `ALTER TABLE leads ADD COLUMN home_value TEXT`,
+    `ALTER TABLE leads ADD COLUMN years_at_address INTEGER`,
+    `ALTER TABLE leads ADD COLUMN is_homeowner INTEGER`,
+    `ALTER TABLE leads ADD COLUMN enriched_at TEXT`,
+    `ALTER TABLE fiber_checks ADD COLUMN billing_status TEXT`,
+    `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
+    `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
+    `ALTER TABLE tenants ADD COLUMN brand_logo TEXT`,
+    `ALTER TABLE tenants ADD COLUMN revenue_share_pct REAL DEFAULT 0.20`,
+    `ALTER TABLE tenants ADD COLUMN monthly_fee REAL DEFAULT 0`,
+    `ALTER TABLE tenants ADD COLUMN trial_ends_at TEXT`,
+    `ALTER TABLE tenants ADD COLUMN billing_email TEXT`,
+    `ALTER TABLE tenants ADD COLUMN stripe_customer_id TEXT`,
+    `ALTER TABLE tenants ADD COLUMN mapbox_token TEXT`,
+    `ALTER TABLE tenants ADD COLUMN scanner_secret TEXT`,
+    `ALTER TABLE tenants ADD COLUMN kfs_auth_basic TEXT`,
+    `ALTER TABLE tenants ADD COLUMN allowed_markets TEXT`,
+    `ALTER TABLE tenants ADD COLUMN max_reps INTEGER DEFAULT 10`,
+    `ALTER TABLE tenants ADD COLUMN enrichment_api_key TEXT`,
+    `ALTER TABLE tenants ADD COLUMN notes TEXT`,
     // Structure lock + engine columns (additive; legacy flat rates still work).
     `ALTER TABLE commissions ADD COLUMN structure_id INTEGER`,
     `ALTER TABLE commissions ADD COLUMN structure_version INTEGER`,
@@ -334,6 +365,72 @@ export function runMigrations() {
       raw.prepare("INSERT INTO commission_rates (name, role, rate_per_sale, is_active) VALUES ('Team Lead Bonus', 'team_lead', 75.00, 1)").run();
     }
   } catch (_) {}
+
+  bootstrapDefaultTenant(raw);
+}
+
+// ── Default-tenant bootstrap ─────────────────────────────────────────────────
+// This app grew single-org and tenancy was bolted on: the original admin/users/
+// leads all carry tenant_id NULL, which the (strictly tenant-scoped) commission
+// engine can't work with. This seed makes "Home Front Solutions" the real
+// default tenant and adopts every unowned row into it. Idempotent + additive:
+// - Creates the tenant by SLUG if missing (never duplicates).
+// - Backfills tenant_id ONLY where it is NULL — rows already owned by another
+//   tenant are never touched, so future multi-tenant stays intact.
+// - app_settings is EXCLUDED: tenant_id=0 there is the platform bucket.
+export const DEFAULT_TENANT_SLUG = "home-front-solutions";
+
+export function bootstrapDefaultTenant(raw: any): void {
+  try {
+    let tenant = raw.prepare("SELECT id FROM tenants WHERE slug = ?").get(DEFAULT_TENANT_SLUG) as { id: number } | undefined;
+    if (!tenant) {
+      const now = new Date().toISOString();
+      const info = raw.prepare(
+        `INSERT INTO tenants (slug, company_name, owner_name, owner_email, brand_name, tagline, plan, status, created_at, updated_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?)`
+      ).run(
+        DEFAULT_TENANT_SLUG, "Home Front Solutions", "Muizz Muhammad", "muizzm21@gmail.com",
+        "Home Front Solutions", "Direct to your door", "internal", "active", now, now,
+      );
+      tenant = { id: Number(info.lastInsertRowid) };
+      console.log(`[tenant] Bootstrapped default tenant "Home Front Solutions" (id ${tenant.id})`);
+    }
+
+    // Adopt every unowned row (dynamic sweep — any table with a tenant_id column).
+    const tables = (raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string }[])
+      .map(t => t.name)
+      .filter(name => name !== "app_settings" && name !== "tenants");
+    let adopted = 0;
+    for (const table of tables) {
+      const cols = (raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name);
+      if (!cols.includes("tenant_id")) continue;
+      const res = raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`).run(tenant.id);
+      adopted += res.changes;
+    }
+    if (adopted > 0) {
+      console.log(`[tenant] Adopted ${adopted} unowned rows into "Home Front Solutions"`);
+      raw.prepare(
+        `INSERT INTO activity_log (user_id, action, entity_type, entity_id, details) VALUES (NULL, 'tenant.bootstrap', 'tenant', ?, ?)`
+      ).run(tenant.id, JSON.stringify({ slug: DEFAULT_TENANT_SLUG, adoptedRows: adopted }));
+    }
+    _defaultTenantId = undefined; // re-resolve the cached default-tenant id
+  } catch (e: any) {
+    console.warn("[tenant] Default-tenant bootstrap skipped:", e?.message);
+  }
+}
+
+// ── Default tenant lookup (cached) ───────────────────────────────────────────
+// System-initiated writes (scanners, cron, first-run) have no acting user; they
+// file under the default org. Resolved once — bootstrapDefaultTenant guarantees
+// it exists on any real DB.
+let _defaultTenantId: number | null | undefined;
+export function getDefaultTenantId(): number | null {
+  if (_defaultTenantId !== undefined) return _defaultTenantId;
+  try {
+    const row = rawDb.prepare("SELECT id FROM tenants WHERE slug = ?").get(DEFAULT_TENANT_SLUG) as { id: number } | undefined;
+    _defaultTenantId = row?.id ?? null;
+  } catch { _defaultTenantId = null; }
+  return _defaultTenantId;
 }
 
 // ── In-memory address cache for ultra-fast scan dedup ───────────────────────
@@ -381,7 +478,10 @@ export class Storage implements IStorage {
   }
   createLead(lead: InsertLead): Lead {
     const now = new Date().toISOString();
-    return db.insert(leads).values({ ...lead, createdAt: now, updatedAt: now }).returning().get();
+    // Tenancy: never create a tenant-less lead — system paths (scanners, cron)
+    // file under the default org; user paths stamp the actor's org in routes.
+    const tenantId = (lead as any).tenantId ?? getDefaultTenantId();
+    return db.insert(leads).values({ ...lead, tenantId, createdAt: now, updatedAt: now }).returning().get();
   }
 
   // Dedup-safe insert: returns existing lead if address already in DB, otherwise creates new one.
@@ -461,7 +561,7 @@ export class Storage implements IStorage {
       lead.deploymentNotes ?? null,
       lead.leadTag ?? null,
       lead.leadScore ?? 0,
-      lead.tenantId ?? null,
+      lead.tenantId ?? getDefaultTenantId(), // scans file under the default org
       now,
       now
     );
@@ -548,8 +648,11 @@ export class Storage implements IStorage {
     // hours after the tap, and the tap time is the truthful field timestamp.
     // The verdict fields (distance + verification) come ONLY from the server —
     // the client can never set them (insertKnockSchema omits them).
+    // Tenancy: a knock belongs to its LEAD's tenant (never client-supplied).
+    const tenantId = this.getLeadById(knock.leadId)?.tenantId ?? null;
     return db.insert(knockLog).values({
       ...knock,
+      tenantId,
       knockedAt: knock.knockedAt || new Date().toISOString(),
       ...(verdict ?? {}),
     }).returning().get();
@@ -658,7 +761,11 @@ export class Storage implements IStorage {
     return (tenantId != null ? q.where(eq(users.tenantId, tenantId)) : q).all();
   }
   createUser(user: InsertUser): User {
-    return db.insert(users).values({ ...user, email: user.email.toLowerCase(), createdAt: new Date().toISOString() }).returning().get();
+    // Tenancy: a login account inherits its linked team member's tenant when the
+    // caller didn't set one (covers syncLoginAccount + admin user creation).
+    const tenantId = (user as any).tenantId
+      ?? (user.teamMemberId != null ? this.getTeamMemberById(user.teamMemberId)?.tenantId ?? null : null);
+    return db.insert(users).values({ ...user, tenantId, email: user.email.toLowerCase(), createdAt: new Date().toISOString() }).returning().get();
   }
   updateUser(id: number, updates: Partial<InsertUser>, tenantId?: number): User | undefined {
     const condition = tenantId != null
@@ -815,7 +922,9 @@ export class Storage implements IStorage {
   clockIn(repId: number, userId: number, notes?: string): ClockSession {
     const now = new Date().toISOString();
     const date = now.slice(0, 10);
-    return db.insert(clockSessions).values({ repId, userId, clockedIn: now, date, notes: notes || null }).returning().get();
+    // Tenancy: a clock session belongs to the REP's tenant.
+    const tenantId = this.getTeamMemberById(repId)?.tenantId ?? null;
+    return db.insert(clockSessions).values({ repId, userId, tenantId, clockedIn: now, date, notes: notes || null }).returning().get();
   }
   clockOut(sessionId: number): ClockSession | undefined {
     const session = db.select().from(clockSessions).where(eq(clockSessions.id, sessionId)).get();
@@ -947,7 +1056,9 @@ export class Storage implements IStorage {
     return db.select().from(commissions).where(eq(commissions.id, id)).get();
   }
   createCommission(c: InsertCommission): Commission {
-    return db.insert(commissions).values({ ...c, createdAt: new Date().toISOString() }).returning().get();
+    // Tenancy: a commission belongs to the REP's tenant (unless explicitly set).
+    const tenantId = (c as any).tenantId ?? this.getTeamMemberById(c.repId)?.tenantId ?? null;
+    return db.insert(commissions).values({ ...c, tenantId, createdAt: new Date().toISOString() }).returning().get();
   }
   updateCommission(id: number, updates: Partial<Commission>): Commission | undefined {
     return db.update(commissions).set(updates).where(eq(commissions.id, id)).returning().get();
