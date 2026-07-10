@@ -101,7 +101,7 @@ export default function CommissionConsole() {
   const nearTier = ov?.rows.filter(r => r.status === "OPEN" && r.salesUntilNextTier != null && r.salesUntilNextTier <= 2 && (r.marginalJumpCents ?? 0) > 0) ?? [];
 
   return (
-    <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-5">
+    <div className="p-4 sm:p-6 pb-24 md:pb-6 max-w-5xl mx-auto space-y-5">
       {/* Header + week nav */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
@@ -113,7 +113,7 @@ export default function CommissionConsole() {
           </p>
         </div>
         <div className="flex items-center gap-1.5" data-testid="week-nav">
-          <Button variant="outline" size="sm" className="h-8 w-8 p-0 border-border" onClick={() => setWeekOffset(o => o - 1)} data-testid="week-prev">
+          <Button variant="outline" size="sm" className="h-9 w-9 p-0 border-border" onClick={() => setWeekOffset(o => o - 1)} data-testid="week-prev">
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <div className="text-center min-w-[170px]">
@@ -124,7 +124,7 @@ export default function CommissionConsole() {
                 : weekOffset > 0 ? "Future week" : "Past week"}
             </div>
           </div>
-          <Button variant="outline" size="sm" className="h-8 w-8 p-0 border-border" disabled={weekOffset >= 0}
+          <Button variant="outline" size="sm" className="h-9 w-9 p-0 border-border" disabled={weekOffset >= 0}
             onClick={() => setWeekOffset(o => o + 1)} data-testid="week-next">
             <ChevronRight className="w-4 h-4" />
           </Button>
@@ -143,36 +143,32 @@ export default function CommissionConsole() {
 
       {ov && (
         <>
-          {/* Payroll summary — projected vs locked is never ambiguous */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
-            <SummaryTile
-              icon={<TrendingUp className="w-4 h-4" />}
-              label={openCount > 0 ? "Projected payroll" : "Payroll"}
-              value={usd(totalPayroll)}
-              sub={`${ov.totals.qualifiedSales} qualified sale${ov.totals.qualifiedSales === 1 ? "" : "s"} · ${ov.totals.repsWithSales} rep${ov.totals.repsWithSales === 1 ? "" : "s"} producing`}
-              tone="primary" testid="tile-projected"
-            />
-            <SummaryTile
-              icon={<Zap className="w-4 h-4" />}
-              label="Tier exposure by Sunday"
-              value={ov.totals.exposureCents > 0 ? `+${usd(ov.totals.exposureCents)}` : "—"}
-              sub={ov.totals.exposureCents > 0 ? `${nearTier.length} rep${nearTier.length === 1 ? "" : "s"} within 2 sales of a jump` : "No one is near a tier cliff"}
-              tone="amber" testid="tile-exposure"
-            />
-            <SummaryTile
-              icon={<Lock className="w-4 h-4" />}
-              label="Finalized"
-              value={usd(ov.totals.finalizedPayrollCents)}
-              sub={finalizedCount > 0 ? `${finalizedCount} statement${finalizedCount === 1 ? "" : "s"} locked` : "Nothing locked yet"}
-              tone="teal" testid="tile-finalized"
-            />
-            <SummaryTile
-              icon={<CheckCircle2 className="w-4 h-4" />}
-              label="Paid"
-              value={usd(ov.totals.paidPayrollCents)}
-              sub={ov.totals.paidPayrollCents > 0 ? "Reconciled to the penny" : "Awaiting payout"}
-              tone="emerald" testid="tile-paid"
-            />
+          {/* Payroll summary — the ONE total dominates; Projected/Finalized/Paid
+              are an unambiguous breakdown of it, never overlapping figures. */}
+          <div className="grid gap-2 sm:gap-3 lg:grid-cols-3">
+            <div className="rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/25 p-4 lg:col-span-1" data-testid="tile-total">
+              <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-primary font-semibold">
+                <TrendingUp className="w-3.5 h-3.5" /> Total payroll this week
+              </div>
+              <div className="mt-1.5 text-3xl font-bold tabular-nums text-foreground">{usd(totalPayroll)}</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                {ov.totals.qualifiedSales} qualified sale{ov.totals.qualifiedSales === 1 ? "" : "s"} · {ov.totals.repsWithSales} rep{ov.totals.repsWithSales === 1 ? "" : "s"} producing
+              </div>
+              {ov.totals.exposureCents > 0 && (
+                <div className="mt-2.5 flex items-start gap-1.5 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-2 py-1.5">
+                  <Zap className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                  <span>Could rise <strong className="tabular-nums">+{usd(ov.totals.exposureCents)}</strong> if {nearTier.length} rep{nearTier.length === 1 ? "" : "s"} hit{nearTier.length === 1 ? "s" : ""} the next tier by Sunday</span>
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:col-span-2">
+              <SummaryTile icon={<TrendingUp className="w-4 h-4" />} label="Still projected" value={usd(ov.totals.projectedPayrollCents)}
+                sub={openCount > 0 ? `${openCount} open week${openCount === 1 ? "" : "s"}` : "All settled"} tone="amber" testid="tile-projected" />
+              <SummaryTile icon={<Lock className="w-4 h-4" />} label="Finalized" value={usd(ov.totals.finalizedPayrollCents)}
+                sub={finalizedCount > 0 ? `${finalizedCount} locked` : "None yet"} tone="teal" testid="tile-finalized" />
+              <SummaryTile icon={<CheckCircle2 className="w-4 h-4" />} label="Paid" value={usd(ov.totals.paidPayrollCents)}
+                sub={ov.totals.paidPayrollCents > 0 ? "Money moved" : "Awaiting payout"} tone="emerald" testid="tile-paid" />
+            </div>
           </div>
 
           {/* Needs review — actionable, never decorative */}
@@ -211,9 +207,51 @@ export default function CommissionConsole() {
               <span className="ml-auto text-xs text-muted-foreground">tap a row to explain every dollar</span>
             </div>
             {ov.rows.length === 0 ? (
-              <div className="p-8 text-center text-sm text-muted-foreground">No reps in scope for this week.</div>
+              <div className="p-10 text-center">
+                <div className="w-12 h-12 rounded-2xl bg-secondary/60 border border-border flex items-center justify-center mx-auto mb-3">
+                  <Users className="w-6 h-6 text-muted-foreground" />
+                </div>
+                <p className="text-sm font-semibold text-foreground">No reps producing this week yet</p>
+                <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
+                  As reps close doors, their statements appear here. Onboard a rep and assign a plan from the Team page to get started.
+                </p>
+              </div>
             ) : (
-              <div className="overflow-x-auto">
+              <>
+              {/* Mobile: card list — Rep + Commission + Status never scroll off. */}
+              <div className="sm:hidden divide-y divide-border">
+                {ov.rows.map(r => (
+                  <button key={r.repId} onClick={() => setDrillRep(r)} data-testid={`card-rep-${r.repId}`}
+                    className="w-full text-left px-4 py-3 active:bg-secondary/50 transition-colors">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium text-foreground truncate flex items-center gap-1.5">{r.repName}</div>
+                        <div className="text-[11px] text-muted-foreground">
+                          {r.qualifiedSaleCount} sale{r.qualifiedSaleCount === 1 ? "" : "s"}
+                          {r.rateCents > 0 ? ` · ${usd(r.rateCents)}/sale` : ""}
+                          {r.tierLabel ? ` · ${r.tierLabel}` : ""}
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <div className="font-bold tabular-nums text-foreground">{usd(r.finalCommissionCents)}</div>
+                        <StatusChip status={r.status} />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      {r.structure && !r.planAccepted && (
+                        <span className="text-[9px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5">plan not accepted</span>
+                      )}
+                      {r.status === "OPEN" && r.salesUntilNextTier != null && (r.marginalJumpCents ?? 0) > 0 && (
+                        <span className={`text-[11px] ${r.salesUntilNextTier <= 2 ? "text-amber-400 font-semibold" : "text-muted-foreground"}`}>
+                          {r.salesUntilNextTier} to next tier → +{usd(r.marginalJumpCents!)}
+                        </span>
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              {/* Desktop: full table */}
+              <div className="hidden sm:block overflow-x-auto">
                 <table className="w-full text-sm min-w-[640px]">
                   <thead>
                     <tr className="text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
@@ -228,13 +266,15 @@ export default function CommissionConsole() {
                   </thead>
                   <tbody className="divide-y divide-border">
                     {ov.rows.map(r => (
-                      <tr key={r.repId} className="hover:bg-secondary/40 cursor-pointer transition-colors"
-                        onClick={() => setDrillRep(r)} data-testid={`row-rep-${r.repId}`}>
+                      <tr key={r.repId} className="hover:bg-secondary/40 cursor-pointer transition-colors focus:outline-none focus:bg-secondary/60 focus-visible:ring-1 focus-visible:ring-primary"
+                        role="button" tabIndex={0} aria-label={`Explain ${r.repName}'s ${usd(r.finalCommissionCents)}`}
+                        onClick={() => setDrillRep(r)} onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setDrillRep(r); } }}
+                        data-testid={`row-rep-${r.repId}`}>
                         <td className="px-4 py-2.5">
                           <div className="font-medium text-foreground flex items-center gap-1.5">
                             {r.repName}
                             {r.structure && !r.planAccepted && (
-                              <span title="Plan not accepted yet" className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                              <span className="text-[8px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-0.5">not accepted</span>
                             )}
                           </div>
                           <div className="text-[10px] text-muted-foreground flex items-center gap-1">
@@ -272,6 +312,7 @@ export default function CommissionConsole() {
                   </tbody>
                 </table>
               </div>
+              </>
             )}
           </div>
 

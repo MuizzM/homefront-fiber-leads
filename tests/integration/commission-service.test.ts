@@ -369,3 +369,80 @@ describe("week overview + Sunday closeout", () => {
     expect(again.results.find(r => r.repId === 1004)!.result).toBe("already PAID");
   });
 });
+
+describe("post-finalize correction workflow (reviewer criticals)", () => {
+  const REP_CORR = 1005;
+  let stmtId: number;
+
+  beforeAll(() => {
+    seedRep(REP_CORR, T1, null);
+    svc.assignStructureToRep(T1, 1, { repId: REP_CORR, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    for (let i = 0; i < 8; i++) svc.upsertSale(T1, 1, { repId: REP_CORR, externalId: `corr-${i}`, status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    const out = svc.batchTransitionWeek(T1, 1, WEEK_REF, "FINALIZE", [REP_CORR]);
+    stmtId = out.results.find(r => r.repId === REP_CORR)!.statementId!;
+  });
+
+  it("finalized statement snapshots the exact doors and locks 8 × $200 = $1,600", () => {
+    const s = svc.getStatementById(T1, stmtId);
+    expect(s.status).toBe("FINALIZED");
+    expect(s.final_commission_cents).toBe(160000);
+    expect(JSON.parse(s.contributing_sales).length).toBe(8); // frozen door snapshot
+  });
+
+  it("CRITICAL: an approved adjustment on a FINALIZED week APPLIES without re-pricing gross", () => {
+    const adj = svc.createAdjustment(T1, 1, { statementId: stmtId, amountCents: -20000, reason: "Install cancelled — post-finalize clawback" });
+    const res = svc.decideAdjustment(T1, 2, adj.id, "APPROVE");
+    expect(res.statement.status).toBe("FINALIZED");            // still locked
+    expect(res.statement.gross_commission_cents).toBe(160000); // gross FROZEN — never re-tiered
+    expect(res.statement.adjustment_cents).toBe(-20000);
+    expect(res.statement.final_commission_cents).toBe(140000); // gross + adj — invariant holds on a locked week
+  });
+
+  it("a reversal after finalize does NOT change the locked gross (drill reads the frozen snapshot)", () => {
+    svc.transitionSale(T1, 1, "corr-0", "REVERSE");
+    const s = svc.getStatementById(T1, stmtId);
+    expect(s.gross_commission_cents).toBe(160000);             // unchanged
+    expect(JSON.parse(s.contributing_sales).length).toBe(8);   // snapshot still shows the 8 that were paid
+  });
+
+  it("blocks creating an adjustment on a PAID statement; REJECT still allowed to clear dangling", () => {
+    const pend = svc.createAdjustment(T1, 1, { statementId: stmtId, amountCents: 5000, reason: "pending before pay" });
+    svc.transitionStatement(T1, 1, stmtId, "MARK_PAID");
+    let err: any; try { svc.createAdjustment(T1, 1, { statementId: stmtId, amountCents: 1000, reason: "too late" }); } catch (e) { err = e; }
+    expect(err?.code).toBe("STATEMENT_LOCKED");
+    // a dangling PENDING can still be rejected on a PAID week (moves no money)
+    const rej = svc.decideAdjustment(T1, 2, pend.id, "REJECT");
+    expect(rej.adjustment.status).toBe("REJECTED");
+    // …but it can NOT be approved on a PAID week
+    const pend2 = rawDb.prepare(`INSERT INTO commission_adjustments (tenant_id, statement_id, rep_id, amount_cents, type, reason, status, created_at) VALUES (?,?,?,?,?,?,'PENDING',datetime('now'))`).run(T1, stmtId, REP_CORR, 999, "MANUAL", "x").lastInsertRowid;
+    let e2: any; try { svc.decideAdjustment(T1, 2, Number(pend2), "APPROVE"); } catch (e) { e2 = e; }
+    expect(e2?.code).toBe("STATEMENT_LOCKED");
+  });
+
+  it("guards: reversed-sale adjustment on an OPEN week, over-cap amount", () => {
+    const REP_G = 1006;
+    seedRep(REP_G, T1, null);
+    svc.assignStructureToRep(T1, 1, { repId: REP_G, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    svc.upsertSale(T1, 1, { repId: REP_G, externalId: "g-0", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    const open = svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP_G, weekReference: WEEK_REF, actorId: 1 }).statement;
+    const sale = svc.getSaleByExternalId(T1, "g-0");
+    svc.transitionSale(T1, 1, "g-0", "REVERSE");
+    // adjustment linked to an already-reversed sale on an OPEN week is refused
+    let e1: any; try { svc.createAdjustment(T1, 1, { statementId: open.id, amountCents: -15000, reason: "double", relatedSaleId: sale.id }); } catch (e) { e1 = e; }
+    expect(e1?.code).toBe("INVALID_ADJUSTMENT");
+    // over-cap amount is refused
+    let e2: any; try { svc.createAdjustment(T1, 1, { statementId: open.id, amountCents: 100_000_001, reason: "too big" }); } catch (e) { e2 = e; }
+    expect(e2?.code).toBe("INVALID_ADJUSTMENT");
+  });
+
+  it("batch finalize BLOCKS a rep who has sales but no plan (owed work stays visible)", () => {
+    const REP_NP = 1007;
+    seedRep(REP_NP, T1, null);
+    // sales but NO plan assignment
+    svc.upsertSale(T1, 1, { repId: REP_NP, externalId: "np-0", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    const out = svc.batchTransitionWeek(T1, 1, WEEK_REF, "FINALIZE", [REP_NP]);
+    const r = out.results.find(x => x.repId === REP_NP);
+    expect(r?.result).toMatch(/BLOCKED.*no plan/);
+    expect(r?.statementId).toBeNull();
+  });
+});

@@ -11,7 +11,9 @@ import { Map, LayoutDashboard, DollarSign, User as UserIcon } from "lucide-react
 const TABS = [
   { href: "/map", label: "Map", icon: Map },
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/commissions", label: "Commission", icon: DollarSign },
+  // The authoritative weekly-commission rep view (the legacy /commissions page
+  // remains in the sidebar for its per-sale records).
+  { href: "/my-commission", label: "Commission", icon: DollarSign },
   { href: "/profile", label: "Profile", icon: UserIcon },
 ] as const;
 

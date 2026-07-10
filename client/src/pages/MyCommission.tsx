@@ -31,8 +31,18 @@ interface WeekResponse {
   bounds?: { localWeekLabel: string } | null;
   structure?: { structure: "FLAT" | "TIERED"; flatRateCents: number | null; tiers: Tier[]; planName: string; acceptedAt: string | null } | null;
   sales?: WeekSale[];
+  adjustments?: Array<{ id: number; amount_cents: number; reason: string; type: string; approved_at: string | null }>;
   noPlan?: boolean; noRepProfile?: boolean; locked?: boolean;
 }
+
+// A rep must never wonder whether a number is projected, being reviewed, locked,
+// or already paid. This badge is ALWAYS present on the hero.
+const WEEK_STATE: Record<string, { label: string; cls: string; icon: "lock" | "check" | null }> = {
+  OPEN: { label: "Projected · still live", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30", icon: null },
+  REVIEW: { label: "Under review", cls: "bg-blue-500/15 text-blue-400 border-blue-500/30", icon: null },
+  FINALIZED: { label: "Finalized", cls: "bg-primary/15 text-primary border-primary/30", icon: "lock" },
+  PAID: { label: "Paid", cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30", icon: "check" },
+};
 
 export default function MyCommission() {
   const { data, isLoading, isError } = useQuery<WeekResponse>({
@@ -46,7 +56,7 @@ export default function MyCommission() {
   });
 
   return (
-    <div className="p-6 max-w-3xl mx-auto space-y-6">
+    <div className="p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -168,33 +178,54 @@ function WeekView({ data }: { data: WeekResponse }) {
   const rateCents = comp?.rateCents ?? stmt?.rate_cents ?? 0;
   const finalCents = comp?.finalCommissionCents ?? stmt?.final_commission_cents ?? 0;
   const grossCents = comp?.grossCommissionCents ?? stmt?.gross_commission_cents ?? 0;
-  const adjustmentCents = comp?.adjustmentCents ?? stmt?.adjustment_cents ?? 0;
   const retro = comp?.retro ?? null;
   const isTiered = structure?.structure !== "FLAT";
   const tiers = structure?.tiers ?? [];
+  // Money state — real statement status, falling back to a live projection.
+  const stateKey = (stmt?.status ?? (data.locked ? "FINALIZED" : "OPEN")) as string;
+  const state = WEEK_STATE[stateKey] ?? WEEK_STATE.OPEN;
+  // The rate a rep earns on their FIRST sale (never render "$0 per sale").
+  const entryRateCents = isTiered ? (tiers[0]?.rateCents ?? 15000) : (structure?.flatRateCents ?? 0);
 
   return (
     <>
-      {/* Hero — this week's commission */}
+      {/* Hero — this week's commission, with an ALWAYS-present money-state badge */}
       <div className="rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/25 p-5">
         <div className="flex items-center gap-2 text-xs font-semibold text-primary uppercase tracking-wide">
           <Zap className="w-3.5 h-3.5" /> This week
-          {data.locked && (
-            <span className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground bg-secondary/60 border border-border px-2 py-0.5 rounded-full">
-              <Lock className="w-2.5 h-2.5" /> Finalized
-            </span>
-          )}
+          <span className={`ml-auto inline-flex items-center gap-1 text-[10px] font-bold border px-2 py-0.5 rounded-full ${state.cls}`} data-testid="week-state">
+            {state.icon === "lock" && <Lock className="w-2.5 h-2.5" />}
+            {state.icon === "check" && <CheckCircle2 className="w-2.5 h-2.5" />}
+            {state.label}
+          </span>
         </div>
         <div className="mt-2 text-4xl font-bold text-foreground tabular-nums" data-testid="text-week-commission">
           {usd(finalCents)}
         </div>
         <div className="mt-1 text-sm text-muted-foreground">
-          {count} qualified sale{count === 1 ? "" : "s"} · {usd(rateCents)} per sale
-          {isTiered && comp?.tierLabel ? ` · ${comp.tierLabel}` : ""}
+          {count === 0
+            ? <>No qualified sales yet · starts at {usd(entryRateCents)} per sale</>
+            : <>{count} qualified sale{count === 1 ? "" : "s"} · {usd(rateCents)} per sale{isTiered && comp?.tierLabel ? ` · ${comp.tierLabel}` : ""}</>}
         </div>
-        {adjustmentCents !== 0 && (
-          <div className="mt-2 text-xs text-muted-foreground">
-            Base {usd(grossCents)} {adjustmentCents > 0 ? "+" : "−"} {usd(Math.abs(adjustmentCents))} adjustment
+        {stateKey === "OPEN" && (
+          <div className="mt-1 text-[11px] text-muted-foreground">This is a live projection — it can still change until the week closes Sunday night.</div>
+        )}
+        {/* Adjustments — a deduction is NEVER an unexplained number */}
+        {(data.adjustments?.length ?? 0) > 0 && (
+          <div className="mt-3 pt-3 border-t border-primary/15 space-y-1.5" data-testid="hero-adjustments">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">Base pay ({count} × {usd(rateCents || entryRateCents)})</span>
+              <span className="tabular-nums text-foreground">{usd(grossCents)}</span>
+            </div>
+            {data.adjustments!.map(a => (
+              <div key={a.id} className="flex items-start justify-between text-xs gap-3">
+                <span className="text-muted-foreground min-w-0">
+                  <span className={a.amount_cents < 0 ? "text-red-400 font-semibold" : "text-emerald-400 font-semibold"}>{a.amount_cents < 0 ? "Deduction" : "Bonus"}</span>
+                  {" — "}{a.reason}
+                </span>
+                <span className={`tabular-nums flex-shrink-0 ${a.amount_cents < 0 ? "text-red-400" : "text-emerald-400"}`}>{a.amount_cents > 0 ? "+" : "−"}{usd(Math.abs(a.amount_cents))}</span>
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -211,11 +242,11 @@ function WeekView({ data }: { data: WeekResponse }) {
           <ProgressBar value={count} target={retro.nextTierMinimumSales} />
           <div className="mt-3 grid grid-cols-2 gap-3">
             <MiniStat label="Next rate" value={`${usd(retro.nextTierRateCents)}/sale`} accent />
-            <MiniStat label="Projected at that tier" value={usd(retro.nextTierProjectedCommissionCents)} accent />
+            <MiniStat label="Base pay at that tier" value={usd(retro.nextTierProjectedCommissionCents)} accent />
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            Tiers are <strong className="text-foreground">retroactive</strong> — hitting {retro.nextTierMinimumSales} sales pays
-            {" "}{usd(retro.nextTierRateCents)} on <em>every</em> sale this week, not just the new ones.
+            Tiers are <strong className="text-foreground">retroactive</strong> — hitting {retro.nextTierMinimumSales} sale{retro.nextTierMinimumSales === 1 ? "" : "s"} pays
+            {" "}{usd(retro.nextTierRateCents)} on <em>every</em> sale this week, not just the new ones{(data.adjustments?.length ?? 0) > 0 ? ", before any adjustments" : ""}.
           </p>
         </div>
       )}
@@ -306,14 +337,13 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
         Weeks run Monday–Sunday in your org's timezone. Accepting freezes these exact terms to your file.
       </p>
       {structure.structure === "TIERED" ? (
-        <div className="grid grid-cols-4 gap-1.5 mb-4">
+        <div className="grid grid-cols-2 gap-2 mb-4">
           {structure.tiers.map((t, i) => (
-            <div key={i} className="rounded-lg bg-card border border-border px-1.5 py-2 text-center">
-              <div className="text-[9px] text-muted-foreground leading-tight">
+            <div key={i} className="rounded-lg bg-card border border-border px-3 py-2 flex items-center justify-between">
+              <span className="text-[11px] text-muted-foreground leading-tight">
                 {t.minimumSales}{t.maximumSales == null ? "+" : `–${t.maximumSales}`} sales
-              </div>
-              <div className="text-sm font-bold text-primary">{usd(t.rateCents)}</div>
-              <div className="text-[8px] text-muted-foreground">per sale</div>
+              </span>
+              <span className="text-sm font-bold text-primary">{usd(t.rateCents)}<span className="text-[9px] text-muted-foreground font-normal">/sale</span></span>
             </div>
           ))}
         </div>

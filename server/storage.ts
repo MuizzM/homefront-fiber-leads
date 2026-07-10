@@ -349,6 +349,10 @@ export function runMigrations() {
 
     `CREATE TABLE IF NOT EXISTS commission_adjustments (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, statement_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, type TEXT NOT NULL DEFAULT 'MANUAL', reason TEXT NOT NULL, related_sale_id INTEGER, status TEXT NOT NULL DEFAULT 'PENDING', created_by INTEGER, approved_by INTEGER, approved_at TEXT, rejected_by INTEGER, rejected_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_adjustments_tenant_stmt_status ON commission_adjustments(tenant_id, statement_id, status)`,
+    // Frozen snapshot of the exact sales that composed a FINALIZED/PAID statement,
+    // so the drill-down always explains the locked number even if a door is later
+    // reversed (which then surfaces as a REVERSED_AFTER_FINALIZE exception).
+    `ALTER TABLE commission_statements ADD COLUMN contributing_sales TEXT`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

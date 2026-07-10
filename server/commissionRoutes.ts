@@ -39,7 +39,24 @@ function fail(res: Response, e: unknown) {
   return res.status(500).json({ error: msg });
 }
 
-const parseWeekRef = (v: any): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+// Normalize a ?week= param. A DATE-ONLY string (YYYY-MM-DD) is anchored to NOON
+// UTC so it lands squarely inside the intended org week — a bare "2026-07-06"
+// parses as UTC-midnight, which in America/New_York is the *previous* Sunday
+// evening and would silently resolve to the prior commission week.
+const parseWeekRef = (v: any): string | undefined => {
+  if (typeof v !== "string" || !v.trim()) return undefined;
+  const s = v.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T12:00:00.000Z` : s;
+};
+
+// CSV formula-injection guard: a leading = + - @ (or tab/CR) makes a cell
+// executable in Excel/Sheets. Rep names come from the PUBLIC application form,
+// so neutralize by prefixing a single quote, then quote + escape.
+function csvCell(v: string | number): string {
+  const s = String(v ?? "");
+  const guarded = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+  return `"${guarded.replace(/"/g, '""')}"`;
+}
 
 export function registerCommissionRoutes(app: Express, deps: Deps) {
   // requireCapability wraps requireAuth internally, so we gate every route on a
@@ -71,8 +88,20 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     try { res.json(svc.activatePlan(tid(req), uid(req), Number(req.params.id))); } catch (e) { fail(res, e); }
   });
 
+  // Write-scope guard: a structure.manage holder (team_lead+) may only WRITE to
+  // reps they can READ. Without this a team_lead could fabricate sales / set
+  // rates for reps outside their team (write-scope exceeding read-scope).
+  const denyOutOfScope = (req: Request, res: Response, repId: number): boolean => {
+    if (!repId || Number.isNaN(repId) || !canReadRep((req as any).user, repId)) {
+      res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
+      return true;
+    }
+    return false;
+  };
+
   // ── Rep assignments (overlap-checked) ─────────────────────────────────────────
   app.post("/api/commission/assignments", requireCapability("commission.structure.manage"), (req, res) => {
+    if (denyOutOfScope(req, res, Number(req.body?.repId))) return;
     try { res.status(201).json(svc.assignPlanVersionToRep(tid(req), uid(req), req.body || {})); } catch (e) { fail(res, e); }
   });
 
@@ -84,6 +113,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     if (!repId || (structure !== "FLAT" && structure !== "TIERED")) {
       return res.status(400).json({ error: "repId and structure (FLAT|TIERED) are required" });
     }
+    if (denyOutOfScope(req, res, Number(repId))) return;
     const rate = flatRateCents != null ? Number(flatRateCents)
       : flatRateDollars != null ? Math.round(Number(flatRateDollars) * 100)
       : undefined;
@@ -118,10 +148,14 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
 
   // ── Commissionable sales (idempotent ingest + lifecycle) ──────────────────────
   app.post("/api/commission/sales", requireCapability("commission.structure.manage"), (req, res) => {
+    if (denyOutOfScope(req, res, Number(req.body?.repId))) return;
     try { res.status(201).json(svc.upsertSale(tid(req), uid(req), req.body || {})); } catch (e) { fail(res, e); }
   });
   app.post("/api/commission/sales/:externalId/transition", requireCapability("commission.structure.manage"), (req, res) => {
     const { action, at, reason } = req.body || {};
+    const sale = svc.getSaleByExternalId(tid(req), String(req.params.externalId));
+    if (!sale) return res.status(404).json({ error: "Sale not found" });
+    if (denyOutOfScope(req, res, sale.rep_id)) return;
     try { res.json(svc.transitionSale(tid(req), uid(req), String(req.params.externalId), action, { at, reason })); } catch (e) { fail(res, e); }
   });
 
@@ -146,17 +180,21 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     const repId = user?.teamMemberId;
     if (!repId) return res.json({ statement: null, structure: null, noRepProfile: true });
     const now = new Date();
-    const withSales = (payload: any) => ({ ...payload, sales: svc.listWeekSalesForRep(tid(req), repId, now) });
+    // Surface APPROVED adjustments (reason + amount + date) so a deduction is
+    // never an unexplained number on the rep's own paycheck screen.
+    const adjustmentsFor = (statementId: number | null | undefined) =>
+      statementId ? svc.getStatementAdjustments(tid(req), statementId).filter((a: any) => a.status === "APPROVED") : [];
+    const withExtras = (payload: any) => ({ ...payload, sales: svc.listWeekSalesForRep(tid(req), repId, now), adjustments: adjustmentsFor(payload?.statement?.id) });
     try {
       const out = svc.calculateOrRecalculateStatement({ tenantId: tid(req), repId, weekReference: now, actorId: uid(req), requestId: rid(req) });
-      res.json(withSales({ ...out, structure: svc.getCurrentStructureForRep(tid(req), repId) }));
+      res.json(withExtras({ ...out, structure: svc.getCurrentStructureForRep(tid(req), repId) }));
     } catch (e) {
       if (e instanceof svc.CommissionError && e.code === "STATEMENT_LOCKED") {
         const { statement, bounds } = svc.getStatementForWeek(tid(req), repId, now);
-        return res.json(withSales({ statement, bounds, structure: svc.getCurrentStructureForRep(tid(req), repId), locked: true }));
+        return res.json(withExtras({ statement, bounds, structure: svc.getCurrentStructureForRep(tid(req), repId), locked: true }));
       }
       if (e instanceof svc.CommissionError && e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT") {
-        return res.json({ statement: null, structure: null, noPlan: true, sales: svc.listWeekSalesForRep(tid(req), repId, now) });
+        return res.json({ statement: null, structure: null, noPlan: true, sales: svc.listWeekSalesForRep(tid(req), repId, now), adjustments: [] });
       }
       fail(res, e);
     }
@@ -196,11 +234,11 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       const ov = svc.getWeekOverview(tid(req), uid(req), weekReference, null);
       const money = (c: number) => (c / 100).toFixed(2);
       const lines = [
-        `Week,${ov.bounds.localWeekLabel.replace(/,/g, "")}`,
+        `Week,${csvCell(ov.bounds.localWeekLabel)}`,
         "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final",
         ...ov.rows.map(r => [
-          `"${r.repName.replace(/"/g, '""')}"`, r.status, r.qualifiedSaleCount,
-          `"${(r.tierLabel ?? (r.structure === "FLAT" ? "Flat" : "—")).replace(/"/g, '""')}"`,
+          csvCell(r.repName), csvCell(r.status), r.qualifiedSaleCount,
+          csvCell(r.tierLabel ?? (r.structure === "FLAT" ? "Flat" : "—")),
           money(r.rateCents), money(r.grossCommissionCents), money(r.adjustmentCents), money(r.finalCommissionCents),
         ].join(",")),
         `Total,,,,,${money(ov.rows.reduce((s, r) => s + r.grossCommissionCents, 0))},${money(ov.rows.reduce((s, r) => s + r.adjustmentCents, 0))},${money(ov.rows.reduce((s, r) => s + r.finalCommissionCents, 0))}`,
@@ -236,17 +274,31 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       const stmt = svc.getStatementById(tid(req), Number(req.params.id));
       if (!stmt) return res.status(404).json({ error: "Not found" });
       if (!canReadRep((req as any).user, stmt.rep_id)) return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
-      res.json({ statement: stmt, adjustments: svc.getStatementAdjustments(tid(req), stmt.id) });
+      // Locked statements read their FROZEN door snapshot (audit fidelity); open
+      // ones read live. Fall back to live if a legacy lock predates the snapshot.
+      const locked = stmt.status === "FINALIZED" || stmt.status === "PAID";
+      let sales: any[];
+      if (locked && stmt.contributing_sales) { try { sales = JSON.parse(stmt.contributing_sales); } catch { sales = svc.listWeekSalesForRep(tid(req), stmt.rep_id, stmt.week_start_utc); } }
+      else sales = svc.listWeekSalesForRep(tid(req), stmt.rep_id, stmt.week_start_utc);
+      res.json({ statement: stmt, adjustments: svc.getStatementAdjustments(tid(req), stmt.id), sales });
     } catch (e) { fail(res, e); }
   });
 
   app.post("/api/commission/statements/:id/transition", requireCapability("commission.read.all"), (req, res) => {
     const { action } = req.body || {};
+    // Validate the action ENUM — an unknown action must never fall through to a
+    // money-moving default (e.g. MARK_PAID). REOPEN is deliberate + audited.
+    if (!["FINALIZE", "REOPEN", "MARK_PAID"].includes(action)) {
+      return res.status(400).json({ error: "action must be FINALIZE, REOPEN, or MARK_PAID" });
+    }
     try { res.json(svc.transitionStatement(tid(req), uid(req), Number(req.params.id), action)); } catch (e) { fail(res, e); }
   });
 
   // ── Adjustments (create = structure.manage; approve = read.all, i.e. mgr/admin) ─
   app.post("/api/commission/adjustments", requireCapability("commission.structure.manage"), (req, res) => {
+    const stmt = svc.getStatementById(tid(req), Number(req.body?.statementId));
+    if (!stmt) return res.status(404).json({ error: "Statement not found" });
+    if (denyOutOfScope(req, res, stmt.rep_id)) return;
     try { res.status(201).json(svc.createAdjustment(tid(req), uid(req), req.body || {})); } catch (e) { fail(res, e); }
   });
   app.post("/api/commission/adjustments/:id/decide", requireCapability("commission.read.all"), (req, res) => {

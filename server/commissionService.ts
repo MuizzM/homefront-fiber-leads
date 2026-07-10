@@ -10,7 +10,7 @@ import { rawDb } from "./db";
 import { storage } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
 import {
-  validateTiers, calculateRetroactiveCommission, calculateFlatCommission,
+  validateTiers, calculateRetroactiveCommission, calculateFlatCommission, formatUsdCents,
   type CommissionTier, type RetroResult, DEFAULT_RETRO_TIERS,
 } from "@shared/commissionTiers";
 
@@ -471,14 +471,48 @@ export function transitionSale(tenantId: number, actorId: number | null, externa
   return { sale: updated, statement };
 }
 
-// Append an adjustment (PENDING). Never zero. Only APPROVED ones feed a statement.
+// A generous sanity bound so a fat-finger or rogue approver can't swing a payout
+// arbitrarily. $1,000,000 in cents — far beyond any real weekly commission.
+const MAX_ADJUSTMENT_CENTS = 100_000_000;
+
+// Re-apply the sum of APPROVED adjustments to a statement WITHOUT re-pricing its
+// gross from the sales ledger. This is the ONLY sanctioned way a FINALIZED week
+// changes: the frozen gross (count × rate) is never touched, but an approved,
+// audited adjustment lands on adjustment_cents + final. Never runs on PAID.
+export function applyApprovedAdjustments(tenantId: number, statementId: number, actorId: number | null): any {
+  const stmt = rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ? AND tenant_id = ?`).get(statementId, tenantId) as any;
+  if (!stmt) throw new CommissionError("CROSS_TENANT_ACCESS", "Statement not found in tenant.", 404);
+  if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID — money already moved; correct on a future week.", 409);
+  const sum = sumApprovedAdjustments(tenantId, statementId);
+  const final = stmt.gross_commission_cents + sum; // gross FROZEN — never re-read from the ledger
+  rawDb.prepare(
+    `UPDATE commission_statements SET adjustment_cents = ?, final_commission_cents = ?, calculation_version = calculation_version + 1, updated_at = ? WHERE id = ?`
+  ).run(sum, final, nowIso(), statementId);
+  storage.logActivity(actorId, "commission.statement.adjusted", "commission_statement", statementId,
+    { adjustmentCents: sum, finalCommissionCents: final, grossFrozen: stmt.gross_commission_cents }, undefined);
+  return rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ?`).get(statementId);
+}
+
+// Append an adjustment (PENDING). Never zero, bounded, reason required. Only
+// APPROVED ones feed a statement. Guards against double-correcting: a sale the
+// ledger already reversed on an OPEN week needs no adjustment — the retroactive
+// re-price already handled it. (On a FINALIZED week the gross is frozen, so a
+// clawback for a post-lock reversal IS the correct action and is allowed.)
 export function createAdjustment(tenantId: number, actorId: number | null, input: {
   statementId: number; amountCents: number; type?: string; reason: string; relatedSaleId?: number | null;
 }): any {
   const stmt = rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ? AND tenant_id = ?`).get(input.statementId, tenantId) as any;
   if (!stmt) throw new CommissionError("CROSS_TENANT_ACCESS", "Statement not found in tenant.", 404);
+  if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID — book corrections on a future week, not a paid one.", 409);
   if (!Number.isInteger(input.amountCents) || input.amountCents === 0) throw new CommissionError("INVALID_ADJUSTMENT", "amountCents must be a non-zero integer.");
+  if (Math.abs(input.amountCents) > MAX_ADJUSTMENT_CENTS) throw new CommissionError("INVALID_ADJUSTMENT", `Adjustment exceeds the ${formatUsdCents(MAX_ADJUSTMENT_CENTS)} limit.`);
   if (!input.reason || !input.reason.trim()) throw new CommissionError("INVALID_ADJUSTMENT", "A reason is required.");
+  if (input.relatedSaleId != null && (stmt.status === "OPEN" || stmt.status === "REVIEW")) {
+    const sale = rawDb.prepare(`SELECT status FROM commission_sales WHERE id = ? AND tenant_id = ?`).get(input.relatedSaleId, tenantId) as any;
+    if (sale && sale.status === "REVERSED") {
+      throw new CommissionError("INVALID_ADJUSTMENT", "That sale is already reversed and excluded from this open week — no adjustment needed.", 409);
+    }
+  }
   const info = rawDb.prepare(
     `INSERT INTO commission_adjustments (tenant_id, statement_id, rep_id, amount_cents, type, reason, related_sale_id, status, created_by, created_at)
      VALUES (?,?,?,?,?,?,?,'PENDING',?,?)`
@@ -487,14 +521,19 @@ export function createAdjustment(tenantId: number, actorId: number | null, input
   return rawDb.prepare(`SELECT * FROM commission_adjustments WHERE id = ?`).get(info.lastInsertRowid);
 }
 
-// Approve/reject an adjustment. Approval recalculates the statement so
-// finalCommissionCents = gross + Σ(approved adjustments) stays invariant.
+// Approve/reject an adjustment. Approval always makes final = gross + Σ(approved)
+// hold: on an OPEN week via full recompute; on a FINALIZED week by applying the
+// adjustment to the frozen gross (the sanctioned correction path). REJECT is
+// allowed on any status (it moves no money) so dangling items can be cleared;
+// APPROVE is blocked on PAID.
 export function decideAdjustment(tenantId: number, actorId: number | null, adjustmentId: number, decision: "APPROVE" | "REJECT"): any {
   const adj = rawDb.prepare(`SELECT * FROM commission_adjustments WHERE id = ? AND tenant_id = ?`).get(adjustmentId, tenantId) as any;
   if (!adj) throw new CommissionError("CROSS_TENANT_ACCESS", "Adjustment not found in tenant.", 404);
   if (adj.status !== "PENDING") throw new CommissionError("INVALID_ADJUSTMENT", `Adjustment already ${adj.status}.`, 409);
   const stmt = rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ? AND tenant_id = ?`).get(adj.statement_id, tenantId) as any;
-  if (stmt && (stmt.status === "PAID")) throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID; adjustments cannot change it.", 409);
+  if (decision === "APPROVE" && stmt && stmt.status === "PAID") {
+    throw new CommissionError("STATEMENT_LOCKED", "Statement is PAID; approve corrections on a future week.", 409);
+  }
   const now = nowIso();
   if (decision === "APPROVE") {
     rawDb.prepare(`UPDATE commission_adjustments SET status='APPROVED', approved_by=?, approved_at=? WHERE id=?`).run(actorId, now, adjustmentId);
@@ -505,11 +544,14 @@ export function decideAdjustment(tenantId: number, actorId: number | null, adjus
 
   let statement = stmt;
   if (decision === "APPROVE" && stmt) {
-    try {
-      statement = calculateOrRecalculateStatement({ tenantId, repId: stmt.rep_id, weekReference: stmt.week_start_utc, actorId, requestId: `adjustment:${adjustmentId}:approve` }).statement;
-    } catch (e) {
-      if (!(e instanceof CommissionError && e.code === "STATEMENT_LOCKED")) throw e;
-    }
+    // OPEN → full recompute (picks up gross from ledger + adjustments).
+    // FINALIZED → apply to the frozen gross (never re-price/re-tier a locked week).
+    statement = (stmt.status === "FINALIZED")
+      ? applyApprovedAdjustments(tenantId, stmt.id, actorId)
+      : calculateOrRecalculateStatement({ tenantId, repId: stmt.rep_id, weekReference: stmt.week_start_utc, actorId, requestId: `adjustment:${adjustmentId}:approve` }).statement;
+  } else if (decision === "REJECT" && stmt && (stmt.status === "OPEN" || stmt.status === "REVIEW")) {
+    // A rejected item shouldn't leave a stale sum on an open statement.
+    statement = calculateOrRecalculateStatement({ tenantId, repId: stmt.rep_id, weekReference: stmt.week_start_utc, actorId, requestId: `adjustment:${adjustmentId}:reject` }).statement;
   }
   return { adjustment: rawDb.prepare(`SELECT * FROM commission_adjustments WHERE id = ?`).get(adjustmentId), statement };
 }
@@ -561,6 +603,10 @@ export function getStatementAdjustments(tenantId: number, statementId: number): 
   return rawDb.prepare(`SELECT * FROM commission_adjustments WHERE tenant_id = ? AND statement_id = ? ORDER BY created_at ASC`).all(tenantId, statementId) as any[];
 }
 
+export function getSaleByExternalId(tenantId: number, externalId: string): any {
+  return rawDb.prepare(`SELECT * FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, externalId);
+}
+
 // Finalize / mark-paid transitions (immutability gate lives here).
 export function transitionStatement(tenantId: number, actorId: number | null, statementId: number, action: "FINALIZE" | "REOPEN" | "MARK_PAID"): any {
   const stmt = rawDb.prepare(`SELECT * FROM commission_statements WHERE id = ? AND tenant_id = ?`).get(statementId, tenantId) as any;
@@ -568,7 +614,10 @@ export function transitionStatement(tenantId: number, actorId: number | null, st
   const now = nowIso();
   if (action === "FINALIZE") {
     if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Paid statements cannot be re-finalized.", 409);
-    rawDb.prepare(`UPDATE commission_statements SET status='FINALIZED', finalized_at=?, finalized_by=?, updated_at=? WHERE id=?`).run(now, actorId, now, statementId);
+    // Freeze the exact doors that composed this locked number, so the audit
+    // drill-down always matches even if a sale is reversed afterward.
+    const snapshot = JSON.stringify(listWeekSalesForRep(tenantId, stmt.rep_id, stmt.week_start_utc).filter((s: any) => s.status === "QUALIFIED"));
+    rawDb.prepare(`UPDATE commission_statements SET status='FINALIZED', finalized_at=?, finalized_by=?, contributing_sales=?, updated_at=? WHERE id=?`).run(now, actorId, snapshot, now, statementId);
   } else if (action === "REOPEN") {
     if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Paid statements cannot be reopened.", 409);
     rawDb.prepare(`UPDATE commission_statements SET status='OPEN', finalized_at=NULL, finalized_by=NULL, updated_at=? WHERE id=?`).run(now, statementId);
@@ -902,9 +951,10 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
             ? c.retro.nextTierProjectedCommissionCents - c.grossCommissionCents : null,
         };
         projected += c.finalCommissionCents;
-        // Payroll exposure: if this rep is within 2 sales of a cliff, Sunday
-        // payroll could jump by the marginal amount.
-        if (row.salesUntilNextTier != null && row.salesUntilNextTier <= 2 && row.marginalJumpCents != null && row.marginalJumpCents > 0) {
+        // Payroll exposure: a rep who has ALREADY produced this week and is within
+        // 2 sales of the next tier could jump payroll by the marginal amount.
+        // Requires real production — a 0-sale rep "1 away from tier 1" is noise.
+        if (c.qualifiedSaleCount > 0 && row.salesUntilNextTier != null && row.salesUntilNextTier <= 2 && row.marginalJumpCents != null && row.marginalJumpCents > 0) {
           exposure += row.marginalJumpCents;
         }
       }
@@ -957,11 +1007,40 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
 } {
   const config = loadOrgConfig(tenantId);
   const bounds = weekBoundsFor(weekReference, config);
+  const basisCol = BASIS_COLUMN[config.qualificationBasis];
+  const results: Array<{ repId: number; statementId: number | null; result: string; finalCommissionCents?: number }> = [];
+  const blocked = new Set<number>();
+
+  // FINALIZE first ensures a statement EXISTS for every in-scope rep with
+  // qualified sales — a rep whose statement was never live-computed would
+  // otherwise be silently skipped. A rep with sales but no plan is reported as
+  // an explicit blocker (not finalized, not lost).
+  if (action === "FINALIZE") {
+    const salesByRep = rawDb.prepare(
+      `SELECT rep_id AS repId, COUNT(*) AS c FROM commission_sales
+       WHERE tenant_id = ? AND status = 'QUALIFIED'
+         AND COALESCE(${basisCol}, sold_at) >= ? AND COALESCE(${basisCol}, sold_at) < ?
+       GROUP BY rep_id`
+    ).all(tenantId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any[];
+    for (const s of salesByRep) {
+      if (repIds && !repIds.includes(s.repId)) continue;
+      try {
+        calculateOrRecalculateStatement({ tenantId, repId: s.repId, weekReference: bounds.weekStartUtc, actorId, requestId: "batch-finalize-ensure" });
+      } catch (e) {
+        if (e instanceof CommissionError && e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT") {
+          results.push({ repId: s.repId, statementId: null, result: `BLOCKED (${s.c} qualified sale(s), no plan assigned)` });
+          blocked.add(s.repId);
+        } else if (e instanceof CommissionError && e.code === "STATEMENT_LOCKED") {
+          /* already locked — handled in the main loop below */
+        } else { throw e; }
+      }
+    }
+  }
+
   const stmts = rawDb.prepare(
     `SELECT * FROM commission_statements WHERE tenant_id = ? AND week_start_utc = ?`
   ).all(tenantId, bounds.weekStartUtc) as any[];
 
-  const results: Array<{ repId: number; statementId: number | null; result: string; finalCommissionCents?: number }> = [];
   for (const s of stmts) {
     if (repIds && !repIds.includes(s.rep_id)) continue;
     if (action === "FINALIZE") {
@@ -977,6 +1056,7 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
       results.push({ repId: s.rep_id, statementId: paid.id, result: "PAID", finalCommissionCents: paid.final_commission_cents });
     }
   }
+
   storage.logActivity(actorId, `commission.week.${action.toLowerCase()}`, "commission_statement", undefined,
     { week: bounds.localWeekLabel, results: results.map(r => ({ repId: r.repId, result: r.result })) }, undefined);
   return { bounds, results };
