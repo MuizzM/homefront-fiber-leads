@@ -61,7 +61,7 @@ export function planCityDiscovery(city: string, state: string, budget: number): 
     city, state, env: primary.env, hasCoverage: true, needsAnchor: false,
     knownCount: primary.knownCount, bands: primary.bands.length,
     frontierCount: plan.frontier.length, gapCount: plan.gaps.length,
-    probeDfIds: plan.probes.map(cns => dfIdFor(primary.env, cns)),
+    probeDfIds: plan.probes.map(cns => dfIdFor(primary.env, cns, primary.pad)),
     reason: plan.reason,
   };
 }

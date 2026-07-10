@@ -10,16 +10,24 @@ import {
 // never re-probing known numbers, never past the assigned ceiling.
 
 describe("parseDfAddressId", () => {
-  it("splits ENV prefix + control number, uppercasing the env", () => {
-    expect(parseDfAddressId("MS3062552")).toEqual({ env: "MS", cns: 3062552 });
-    expect(parseDfAddressId("MS0000123")).toEqual({ env: "MS", cns: 123 });
-    expect(parseDfAddressId("mo123")).toEqual({ env: "MO", cns: 123 });
-    expect(parseDfAddressId("  PA0573208 ")).toEqual({ env: "PA", cns: 573208 });
+  it("format A: splits ENV prefix + control number, uppercasing the env", () => {
+    expect(parseDfAddressId("MS3062552")).toEqual({ env: "MS", cns: 3062552, pad: 7 });
+    expect(parseDfAddressId("MS0000123")).toEqual({ env: "MS", cns: 123, pad: 7 });
+    expect(parseDfAddressId("mo123")).toEqual({ env: "MO", cns: 123, pad: 3 });
+    expect(parseDfAddressId("  PA0573208 ")).toEqual({ env: "PA", cns: 573208, pad: 7 });
   });
-  it("returns null for anything that isn't <letters><digits>", () => {
+  it("format B: parses Kinetic's real 22-digit numeric df ids (prefix bucket + 9-digit tail)", () => {
+    // "8000000000000223381034" → env "8000000000000", cns 223381034 (safe int).
+    expect(parseDfAddressId("8000000000000223381034")).toEqual({ env: "8000000000000", cns: 223381034, pad: 9 });
+    expect(parseDfAddressId("8000000000000000006492")).toEqual({ env: "8000000000000", cns: 6492, pad: 9 });
+    // Round-trips exactly through dfIdFor.
+    const p = parseDfAddressId("8000000000000223381034")!;
+    expect(dfIdFor(p.env, p.cns, p.pad)).toBe("8000000000000223381034");
+  });
+  it("returns null for anything unparseable", () => {
     expect(parseDfAddressId(null)).toBeNull();
     expect(parseDfAddressId("")).toBeNull();
-    expect(parseDfAddressId("123")).toBeNull();       // no env
+    expect(parseDfAddressId("123")).toBeNull();       // too short to be a real numeric id, no env
     expect(parseDfAddressId("MS")).toBeNull();        // no number
     expect(parseDfAddressId("MS-123")).toBeNull();    // separator
     expect(parseDfAddressId("MS12A34")).toBeNull();   // interior letter
@@ -27,6 +35,7 @@ describe("parseDfAddressId", () => {
   it("dfIdFor matches the scanner's ENV + zero-padded form", () => {
     expect(dfIdFor("MS", 123)).toBe("MS0000123");
     expect(dfIdFor("MS", 3062552)).toBe("MS3062552");
+    expect(dfIdFor("8000000000000", 6492, 9)).toBe("8000000000000000006492");
   });
 });
 
