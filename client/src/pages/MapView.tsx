@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore
 declare const mapboxgl: any;
 import {
   AlertCircle, Pencil, X, Map as MapIcon, Bell, Target, Search, LocateFixed, Menu,
+  Lasso, Radar, Loader2, Layers, RefreshCw, CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -23,7 +24,9 @@ import {
   UNCLUSTERED_PAINT, UNCLUSTERED_GLOW_PAINT, SELECTED_RING_SPEC,
   SELECTED_RING_FILTER, sheetPeekPaddingPx, moveCamera,
   STREET_ZOOM, pickRepStartCamera, readCachedFix, writeCachedFix,
+  ensureHousenumLayer,
 } from "@/lib/mapPins";
+import { selectPointsInPolygon } from "@/lib/mapGeo";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -124,6 +127,25 @@ export default function MapView() {
   const [error, setError] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Scan lifecycle — a completed scan is a first-class RESULT, not just the
+  // absence of a spinner. `scanOutcome` drives the control's success / empty /
+  // error / cancelled / stale states and the same-scope rescan guard.
+  const [scanOutcome, setScanOutcome] = useState<{
+    kind: "success" | "empty" | "error" | "cancelled";
+    found: number; at: number;                 // epoch ms when the scan ended
+    boxKey: string | null;                     // scope identity for dedupe/stale
+  } | null>(null);
+  const foundTotalRef = useRef(0);             // authoritative found-count across polls
+  const boxKeyOf = (b: BBox | null) => b
+    ? [b.minLat, b.maxLat, b.minLng, b.maxLng].map(v => v.toFixed(5)).join(",")
+    : null;
+
+  // ── Icon-cluster panels ──
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [layersOpen, setLayersOpen] = useState(false);
+  const searchBtnRef = useRef<HTMLButtonElement | null>(null); // focus returns here on close
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Map style toggle
   const [mapStyleMode, setMapStyleMode] = useState<"dark" | "satellite" | "streets">("satellite");
@@ -596,6 +618,9 @@ export default function MapView() {
       // Added last so it can never be occluded by pins/glow.
       map.addLayer(SELECTED_RING_SPEC);
 
+      // Provider-native house numbers — fade in at z≥17.2, below our layers.
+      ensureHousenumLayer(map, mapStyleMode);
+
       // Click unclustered pin → show popup
       map.on("click", "lead-unclustered", (e: any) => {
         // No popups while a draw tool is active — a lasso stroke over a pin
@@ -961,6 +986,9 @@ export default function MapView() {
       }
       lassoLayerRef.current = false;
       lastRenderedCount.current = 0;
+      // House numbers are style layers too — re-enable on the fresh style with
+      // the palette that suits it (white-on-imagery vs ink-on-streets).
+      ensureHousenumLayer(map, mapStyleMode);
       // Re-trigger the lead-pin setData + territory render effects — the new
       // style starts with an empty source, so without this the pins vanish.
       setStyleEpoch(e => e + 1);
@@ -1001,14 +1029,7 @@ export default function MapView() {
       map.touchPitch?.disable();
     } catch {}
 
-    function ptInPoly(lat: number, lng: number, poly: [number, number][]): boolean {
-      let inside = false;
-      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-        const [xi, yi] = poly[i], [xj, yj] = poly[j];
-        if (((yi > lat) !== (yj > lat)) && (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi)) inside = !inside;
-      }
-      return inside;
-    }
+    // Point-in-polygon lives in lib/mapGeo.ts (bbox-rejected, unit-tested).
 
     // Stroke state lives in refs — zero React re-renders while the finger moves.
     let stroke: [number, number][] = [];        // [lng, lat]
@@ -1064,7 +1085,9 @@ export default function MapView() {
       if (stroke.length < 8) { stroke = []; clearPreview(); return; }
       render(true);
       const allLeads: MapPin[] = (window as any).__allLeads ?? [];
-      const selected = allLeads.filter(l => l.lat && l.lng && ptInPoly(l.lat, l.lng, stroke));
+      // Bounding-box rejection before the exact test: O(n + k·v) instead of
+      // O(n·v) — measured 1.9ms → 0.7ms on 3,355 pins (see lib/mapGeo.ts).
+      const selected = selectPointsInPolygon(allLeads, stroke);
       setLassoPoints(stroke);
       setLassoSelected(selected);
     };
@@ -1300,7 +1323,7 @@ export default function MapView() {
         addScanDot(r);
         found++;
       }
-      if (found > 0) setNewFound(p => p + found);
+      if (found > 0) { foundTotalRef.current += found; setNewFound(p => p + found); }
 
       // Live lead refresh: pull newly-saved leads onto the map every ~8 polls
       // (~3s) while scanning, so found leads appear as assignable pins in near
@@ -1310,29 +1333,75 @@ export default function MapView() {
         qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       }
 
-      if (status.status === "done") { stopPolling(); setScanning(false); qc.invalidateQueries({ queryKey: ["/api/leads"] }); qc.invalidateQueries({ queryKey: ["/api/leads/map"] }); }
-    } catch { /* keep polling */ }
+      if (status.status === "done") {
+        stopPolling(); setScanning(false);
+        setScanOutcome({ kind: foundTotalRef.current > 0 ? "success" : "empty", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null) });
+        qc.invalidateQueries({ queryKey: ["/api/leads"] }); qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      } else if (status.status === "error") {
+        // Previously unhandled: an errored job kept polling forever with the
+        // control stuck on "scanning". Now it lands as an explicit error state.
+        stopPolling(); setScanning(false);
+        setScanOutcome({ kind: "error", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null) });
+      }
+    } catch { /* transient fetch hiccup — keep polling */ }
   }, [addScanDot, stopPolling, qc]);
 
   const startScan = useCallback(async (endpoint: string, body: object) => {
     if (!mapReady) return;
     scanMarkersRef.current.forEach(m => m.remove());
     scanMarkersRef.current = []; lastRenderedCount.current = 0; pollTickRef.current = 0;
-    setNewFound(0); setDone(0); setError(null);
+    foundTotalRef.current = 0;
+    setNewFound(0); setDone(0); setError(null); setScanOutcome(null);
     stopPolling(); setScanning(true);
     try {
       const res = await apiRequest("POST", endpoint, body);
       const { jobId: id, total: t } = await res.json();
       setJobId(id); setTotal(t);
       pollRef.current = setInterval(() => pollJob(id, drawnBBox ?? undefined), POLL_MS);
-    } catch (e: any) { setScanning(false); setError(e.message); }
+    } catch (e: any) {
+      setScanning(false); setError(e.message);
+      setScanOutcome({ kind: "error", found: 0, at: Date.now(), boxKey: boxKeyOf(drawnBBox) });
+    }
   }, [mapReady, stopPolling, pollJob, drawnBBox]);
 
   const stopScan = useCallback(async () => {
     stopPolling();
     if (jobId) { try { await apiRequest("DELETE", `/api/scan/${jobId}`); } catch {} }
     setScanning(false);
-  }, [stopPolling, jobId]);
+    // Deliberate stop: keep whatever was found so far, say so explicitly.
+    setScanOutcome({ kind: "cancelled", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(drawnBBox) });
+  }, [stopPolling, jobId, drawnBBox]);
+
+  // ── Escape hatch — one keyboard path out of every map tool, in priority
+  // order: open panel → armed lasso → armed/boxed scan. Search close returns
+  // focus to the magnifier so keyboard users never lose their place. Defined
+  // AFTER stopScan/exitLasso (deps evaluate at render — TDZ otherwise).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (searchOpen) {
+        setSearchOpen(false); setSidebarSearch("");
+        searchBtnRef.current?.focus();
+      } else if (layersOpen) {
+        setLayersOpen(false);
+      } else if (lassoMode) {
+        exitLasso();
+      } else if (drawMode || drawnBBox) {
+        setDrawMode(false); setDrawnBBox(null);
+        if (scanning) void stopScan();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [searchOpen, layersOpen, lassoMode, drawMode, drawnBBox, scanning, exitLasso, stopScan]);
+
+  // Auto-focus the search field the instant the panel opens (next frame, after
+  // the element mounts) — the magnifier is a search affordance, not a toggle.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const r = requestAnimationFrame(() => searchInputRef.current?.focus());
+    return () => cancelAnimationFrame(r);
+  }, [searchOpen]);
 
   // When a box is drawn, fetch the deep-scan cost preview (grid points → $).
   useEffect(() => {
@@ -1569,6 +1638,11 @@ export default function MapView() {
   // noToken is true only after we confirmed the token is unavailable (never during load)
   const noToken = mapTokenFailed;
 
+  // A completed scan goes STALE when its box scope is cleared or redrawn — the
+  // result no longer describes what's on the map. Drives the control's stale
+  // state + the "rescan" affordance, and blocks a redundant same-box rescan.
+  const scanStale = !!scanOutcome && scanOutcome.boxKey !== boxKeyOf(drawnBBox);
+
   return (
     <div className="flex flex-col relative" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
 
@@ -1578,56 +1652,63 @@ export default function MapView() {
              relative, so this stack overlays the map below). ── */}
       <div className="absolute top-[108px] md:top-16 left-1/2 -translate-x-1/2 z-30 w-[min(620px,calc(100vw-24px))] space-y-1.5 pointer-events-none [&>*]:pointer-events-auto">
 
-      {/* Context banners — stay open after the box is drawn (drawMode flips off
-          on mouse-up) so the scan buttons remain visible. */}
-      {(drawMode || drawnBBox || scanning) && isAdmin && (
-        <div className="px-3 py-2 bg-black/80 backdrop-blur-md border border-orange-500/40 rounded-xl shadow-xl flex flex-wrap items-center gap-2">
-          <span className="text-[11px] text-orange-400">
-            {scanning ? `Scanning… ${done}/${total} · ${newFound} new fiber found`
-              : drawnBBox ? "Box drawn — pick a scan below (green dots = new fiber)"
-              : "Drag on the map to draw a box over the homes you want to scan"}
+      {/* ── Scan panel — the scan tool's full state surface. Scope is always the
+             DRAWN BOX. Communicates: drawing → box drawn → scanning → a result
+             (found / empty / error / cancelled) that goes stale if the box
+             changes. A fresh same-box result offers Rescan, never auto-repeats
+             the expensive scan. ── */}
+      {(drawMode || drawnBBox || scanning || (scanOutcome && !scanStale)) && isAdmin && (() => {
+        const freshSameBox = !!scanOutcome && !scanStale && scanOutcome.boxKey === boxKeyOf(drawnBBox);
+        return (
+        <div className={`px-3 py-2 bg-black/85 backdrop-blur-md border rounded-xl shadow-xl flex flex-wrap items-center gap-2 ${
+          scanOutcome?.kind === "error" ? "border-red-500/50" : scanOutcome?.kind === "success" ? "border-emerald-500/40" : "border-orange-500/40"
+        }`} data-testid="scan-panel" role="status" aria-live="polite">
+          <span className="text-[11px] flex items-center gap-1.5 text-white/80">
+            {scanning ? <><Loader2 className="w-3 h-3 animate-spin" /> Scanning {total ? `${done}/${total}` : ""} · {newFound} new fiber</>
+              : freshSameBox && scanOutcome?.kind === "success" ? <><CheckCircle2 className="w-3 h-3 text-emerald-400" /> Found {scanOutcome.found} new-fiber lead{scanOutcome.found === 1 ? "" : "s"} in this area</>
+              : freshSameBox && scanOutcome?.kind === "empty" ? <>No new fiber in this area right now</>
+              : freshSameBox && scanOutcome?.kind === "error" ? <><AlertCircle className="w-3 h-3 text-red-400" /> Scan failed — try again</>
+              : freshSameBox && scanOutcome?.kind === "cancelled" ? <>Scan stopped · {scanOutcome.found} found so far</>
+              : scanStale ? <>Area changed — rescan for current results</>
+              : drawnBBox ? "Box drawn — pick a scan (green dots = new fiber)"
+              : "Drag a box over the homes to scan"}
           </span>
-          {drawnBBox && !scanning && (
+          {drawnBBox && !scanning && !freshSameBox && (
             <>
-              {/* Free: OpenStreetMap addresses in the box (fast, but rural coverage is thin) */}
               <Button size="sm" variant="outline"
-                className="border-orange-500/40 text-orange-400 hover:bg-orange-500/10 h-6 text-[11px] px-2"
-                onClick={() => startScan("/api/scan/area", {
-                  minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat,
-                  minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng,
-                })}>
-                <Target className="w-3 h-3 mr-1" /> Quick scan · free
+                className="border-orange-500/40 text-orange-400 hover:bg-orange-500/10 h-7 text-[11px] px-2.5"
+                onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
+                <Radar className="w-3 h-3 mr-1" /> Quick scan · free
               </Button>
-              {/* Full coverage: Mapbox reverse-geocode grid → every home. Cost shown. */}
               <Button size="sm"
                 disabled={!areaEstimate || areaEstimate.overCap}
-                className="bg-orange-500 hover:bg-orange-600 text-white h-6 text-[11px] px-2 disabled:opacity-50"
+                className="bg-orange-500 hover:bg-orange-600 text-white h-7 text-[11px] px-2.5 disabled:opacity-50"
                 title={areaEstimate?.overCap ? "Box too big — draw a smaller box" : "Finds every address via Mapbox grid"}
-                onClick={() => startScan("/api/scan/area", {
-                  minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat,
-                  minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true,
-                })}>
-                <Target className="w-3 h-3 mr-1" />
-                {areaEstimate
-                  ? `Deep scan · ~${areaEstimate.estAddresses.toLocaleString()} addr · ${areaEstimate.withinFreeTier ? "free" : "$" + areaEstimate.estCostUsd}`
-                  : "Deep scan…"}
+                onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true })}>
+                <Radar className="w-3 h-3 mr-1" />
+                {areaEstimate ? `Deep · ~${areaEstimate.estAddresses.toLocaleString()} · ${areaEstimate.withinFreeTier ? "free" : "$" + areaEstimate.estCostUsd}` : "Deep scan…"}
               </Button>
-              {areaEstimate && (
-                <span className="text-[10px] text-orange-400/60">
-                  {areaEstimate.overCap
-                    ? `box too big (${areaEstimate.gridPoints.toLocaleString()} calls > cap) — draw smaller`
-                    : `deep = ${areaEstimate.gridPoints.toLocaleString()} Mapbox calls`}
-                </span>
-              )}
+              {areaEstimate?.overCap && <span className="text-[10px] text-orange-400/60">box too big — draw smaller</span>}
             </>
           )}
-          {scanning && (
-            <Button size="sm" variant="ghost" className="text-red-400 h-6 text-[11px]" onClick={() => stopScan()}>Stop</Button>
+          {/* Fresh result for THIS box → deliberate Rescan only (no silent repeat) */}
+          {freshSameBox && drawnBBox && (
+            <Button size="sm" variant="outline" className="border-white/20 text-white/70 hover:bg-white/10 h-7 text-[11px] px-2.5"
+              data-testid="scan-rescan"
+              onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
+              <RefreshCw className="w-3 h-3 mr-1" /> Rescan
+            </Button>
           )}
-          <Button size="sm" variant="ghost" className="text-muted-foreground h-6 text-[11px]"
-            onClick={() => { setDrawMode(false); setDrawnBBox(null); if (scanning) stopScan(); }}>Cancel</Button>
+          {scanning && (
+            <Button size="sm" variant="ghost" className="text-red-400 h-7 text-[11px]" onClick={() => stopScan()}>Stop</Button>
+          )}
+          <Button size="sm" variant="ghost" className="text-white/50 hover:text-white h-7 text-[11px] ml-auto" aria-label="Close scan"
+            onClick={() => { setDrawMode(false); setDrawnBBox(null); setScanOutcome(null); if (scanning) stopScan(); }}>
+            <X className="w-3.5 h-3.5" />
+          </Button>
         </div>
-      )}
+        );
+      })()}
       {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
 
       {error && (
@@ -1720,63 +1801,81 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── On-map street/address search — flies to the matching lead.
-                 Manager/desk tool: reps navigate by walking, not by typing —
-                 field mode keeps the top of the map clear. ── */}
-          {mapReady && !isRep && (
-            <div className="absolute top-[60px] md:top-3 left-1/2 -translate-x-1/2 z-20 w-[min(420px,70vw)]">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
-                <input
-                  value={sidebarSearch}
-                  onChange={e => setSidebarSearch(e.target.value)}
-                  placeholder="Search a street or address…"
-                  data-testid="map-search"
-                  className="w-full bg-black/80 backdrop-blur-md border border-white/15 rounded-lg pl-9 pr-8 py-2 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-1 focus:ring-teal-400 shadow-lg"
-                />
-                {sidebarSearch && (
-                  <button onClick={() => setSidebarSearch("")}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-white/40 hover:text-white text-sm">×</button>
+          {/* ── Search PANEL — opens only from the magnifier (no permanent bar).
+                 Scoped to the org's leads via the same /api/leads data the map
+                 already loads (server tenant-filters it); admin street "go to"
+                 uses the existing geocode fallback. Esc / × / backdrop close it
+                 and return focus to the magnifier. ── */}
+          {mapReady && !isRep && searchOpen && (
+            <>
+              <div className="absolute inset-0 z-20" onClick={() => { setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }} />
+              <div
+                role="dialog" aria-label="Search locations" aria-modal="false"
+                className="absolute top-[60px] md:top-3 left-1/2 -translate-x-1/2 z-30 w-[min(440px,calc(100vw-24px))]"
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/50" />
+                  <input
+                    ref={searchInputRef}
+                    value={sidebarSearch}
+                    onChange={e => setSidebarSearch(e.target.value)}
+                    placeholder="Search a street or address…"
+                    aria-label="Search a street or address"
+                    data-testid="map-search"
+                    className="w-full h-11 bg-black/85 backdrop-blur-md border border-white/15 rounded-xl pl-9 pr-10 text-sm text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-teal-400 shadow-2xl"
+                  />
+                  <button
+                    onClick={() => { setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }}
+                    aria-label="Close search"
+                    data-testid="map-search-close"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 h-8 w-8 flex items-center justify-center rounded-lg text-white/50 hover:text-white hover:bg-white/10"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                {searchMatches.length > 0 && (
+                  <div className="mt-1.5 bg-black/90 backdrop-blur-md border border-white/10 rounded-xl overflow-hidden shadow-2xl max-h-[min(60vh,360px)] overflow-y-auto">
+                    {searchMatches.map(l => {
+                      const pin = PIN_COLORS[l.leadStatus] ?? PIN_COLORS.prospect;
+                      return (
+                        <button
+                          key={l.id}
+                          onClick={() => { flyToLead(l); setSearchOpen(false); setSidebarSearch(""); }}
+                          className="w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:bg-white/10 transition-colors border-b border-white/5 last:border-0"
+                        >
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg }} />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-[13px] text-white font-medium truncate">{l.address}</span>
+                            <span className="block text-[11px] text-white/50 truncate">{l.city}, {l.state} {l.zip}</span>
+                          </span>
+                          {l.fiberStatus === "new_fiber" && <span className="text-[9px] font-bold text-teal-400 flex-shrink-0">NEW</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                {sidebarSearch.trim().length >= 3 && searchMatches.length === 0 && (
+                  <div className="mt-1.5 bg-black/90 border border-white/10 rounded-xl overflow-hidden shadow-xl">
+                    <div className="px-3 py-2.5 text-[12px] text-white/50">No lead in your org matches “{sidebarSearch}”</div>
+                    {isAdmin && (
+                      <button
+                        onClick={() => jumpToAddress(sidebarSearch)}
+                        disabled={geocoding}
+                        data-testid="map-search-goto"
+                        className="w-full flex items-center gap-2 px-3 py-2.5 text-left border-t border-white/10 hover:bg-white/10 text-[13px] text-teal-300 disabled:opacity-60"
+                      >
+                        <Target className="w-3.5 h-3.5 flex-shrink-0" />
+                        {geocoding ? "Locating…" : <>Go to “{sidebarSearch}” on the map</>}
+                      </button>
+                    )}
+                  </div>
+                )}
+                {sidebarSearch.trim().length > 0 && sidebarSearch.trim().length < 3 && (
+                  <div className="mt-1.5 bg-black/85 border border-white/10 rounded-xl px-3 py-2 text-[12px] text-white/40 shadow-xl">Keep typing…</div>
                 )}
               </div>
-              {searchMatches.length > 0 && (
-                <div className="mt-1 bg-black/90 backdrop-blur-md border border-white/10 rounded-lg overflow-hidden shadow-2xl max-h-72 overflow-y-auto">
-                  {searchMatches.map(l => {
-                    const pin = PIN_COLORS[l.leadStatus] ?? PIN_COLORS.prospect;
-                    return (
-                      <button
-                        key={l.id}
-                        onClick={() => { flyToLead(l); setSidebarSearch(""); }}
-                        className="w-full flex items-center gap-2.5 px-3 py-2 text-left hover:bg-white/10 transition-colors border-b border-white/5 last:border-0"
-                      >
-                        <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg }} />
-                        <span className="min-w-0 flex-1">
-                          <span className="block text-[13px] text-white font-medium truncate">{l.address}</span>
-                          <span className="block text-[11px] text-white/50 truncate">{l.city}, {l.state} {l.zip}</span>
-                        </span>
-                        {l.fiberStatus === "new_fiber" && <span className="text-[9px] font-bold text-teal-400 flex-shrink-0">NEW</span>}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              {sidebarSearch.trim().length >= 3 && searchMatches.length === 0 && (
-                <div className="mt-1 bg-black/90 border border-white/10 rounded-lg overflow-hidden shadow-xl">
-                  <div className="px-3 py-2 text-[12px] text-white/50">No existing lead matches “{sidebarSearch}”</div>
-                  {isAdmin && (
-                    <button
-                      onClick={() => jumpToAddress(sidebarSearch)}
-                      disabled={geocoding}
-                      data-testid="map-search-goto"
-                      className="w-full flex items-center gap-2 px-3 py-2 text-left border-t border-white/10 hover:bg-white/10 text-[13px] text-teal-300 disabled:opacity-60"
-                    >
-                      <Target className="w-3.5 h-3.5 flex-shrink-0" />
-                      {geocoding ? "Locating…" : <>Go to “{sidebarSearch}” on the map <span className="text-white/40 text-[11px]">then draw a Scan-Area box</span></>}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
+            </>
           )}
 
           {/* Rep mode has NO persistent map chrome — no HUD, no filter lenses,
@@ -1924,73 +2023,90 @@ export default function MapView() {
             <TerritoryActivityDrawer territoryId={activityTerritoryId} onClose={() => setActivityTerritoryId(null)} />
           )}
 
-          {/* ── Right control rail — layers + map mode (SalesRabbit/SPOTIO style) ── */}
-          {/* Admin/manager control rail — layer toggles + map modes. Reps get ONE
-              button instead: nothing on their screen that doesn't speed up knocking. */}
+          {/* ── ICON CONTROL CLUSTER — top-right, one coherent column. Every tool
+                 is icon-only while inactive: magnifier · lasso · scan · layers.
+                 44px targets, tooltips, aria, keyboard, active/disabled states.
+                 The map stays uncluttered; panels open on demand. ── */}
           {mapReady && !isRep && (
-            <div className="absolute top-[110px] right-3 z-20 w-[136px] rounded-xl bg-black/75 backdrop-blur-md border border-white/10 p-2 shadow-lg text-white space-y-0.5">
-              {/* ── Draw tools — moved from the (removed) top bar onto the map
-                    itself. Exactly ONE armed at a time. ── */}
+            <div
+              className="absolute top-3 right-3 z-30 flex flex-col gap-2"
+              style={{ paddingTop: "env(safe-area-inset-top)" }}
+              data-testid="map-control-cluster"
+            >
+              <MapIconBtn
+                icon={<Search className="w-5 h-5" />} label="Search a location"
+                testid="ctl-search" active={searchOpen} btnRef={searchBtnRef}
+                onClick={() => { setSearchOpen(o => !o); setLayersOpen(false); }}
+              />
               {canAssign && (
-                <button
+                <MapIconBtn
+                  icon={<Lasso className="w-5 h-5" />}
+                  label={lassoMode ? "Cancel area selection" : "Select an area (lasso)"}
+                  testid="ctl-lasso" active={lassoMode} tone="teal"
                   onClick={() => {
-                    if (lassoMode) {
-                      exitLasso();
-                    } else {
-                      exitLasso(); // clear any prior shape before re-arming
-                      setLassoMode(true);
-                      setDrawMode(false); setDrawnBBox(null);
-                    }
+                    if (lassoMode) { exitLasso(); }
+                    else { exitLasso(); setLassoMode(true); setDrawMode(false); setDrawnBBox(null); setSearchOpen(false); setLayersOpen(false); }
                   }}
-                  data-testid="rail-assign-area"
-                  title="Assign Area: drag a loop around leads, pick a rep — assigns them and color-codes the territory"
-                  className={`w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-semibold transition-colors ${
-                    lassoMode ? "bg-teal-500/80 text-white" : "bg-teal-500/15 text-teal-300 hover:bg-teal-500/25"
-                  }`}
-                >
-                  <Pencil className="w-3 h-3 flex-shrink-0" />
-                  {lassoMode ? (lassoSelected.length > 0 ? `Area (${lassoSelected.length})` : "Draw area…") : "Assign Area"}
-                </button>
+                />
               )}
               {isAdmin && (
-                <button
-                  onClick={() => { setDrawMode(!drawMode); setDrawnBBox(null); exitLasso(); }}
-                  data-testid="rail-scan-area"
-                  title="Scan Area: draw a box to scan Kinetic for new fiber leads"
-                  className={`w-full flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-semibold transition-colors ${
-                    drawMode ? "bg-orange-500/80 text-white" : "bg-orange-500/15 text-orange-300 hover:bg-orange-500/25"
-                  }`}
-                >
-                  <Target className="w-3 h-3 flex-shrink-0" />
-                  {drawMode ? "Drawing…" : "Scan Area"}
-                </button>
+                <MapIconBtn
+                  icon={
+                    scanning ? <Loader2 className="w-5 h-5 animate-spin" />
+                    : scanOutcome && !scanStale ? (scanOutcome.kind === "error" ? <AlertCircle className="w-5 h-5" /> : <Radar className="w-5 h-5" />)
+                    : <Radar className="w-5 h-5" />
+                  }
+                  label={
+                    scanning ? "Scanning — tap to stop"
+                    : drawMode ? "Cancel scan-area drawing"
+                    : "Scan an area for new fiber"
+                  }
+                  testid="ctl-scan"
+                  active={drawMode || scanning || !!drawnBBox}
+                  tone={scanOutcome?.kind === "error" ? "red" : "orange"}
+                  badge={scanning ? "…" : scanOutcome && !scanStale && scanOutcome.kind === "success" ? String(scanOutcome.found) : undefined}
+                  onClick={() => {
+                    if (scanning) { void stopScan(); return; }
+                    setDrawMode(v => !v); setDrawnBBox(null); exitLasso(); setSearchOpen(false); setLayersOpen(false);
+                  }}
+                />
               )}
-              <div className="pt-1 mt-1 border-t border-white/10" />
-              {[
-                { key: "leads", label: "Leads", on: showLeads, toggle: () => setShowLeads(v => !v) },
-                ...(canAssign ? [{ key: "terr", label: "Territories", on: showTerritories, toggle: () => setShowTerritories(v => !v) }] : []),
-              ].map(l => (
-                <button key={l.key} onClick={l.toggle} data-testid={`layer-${l.key}`}
-                  className="w-full flex items-center justify-between py-0.5 text-[11.5px] text-white/80 hover:text-white">
-                  <span>{l.label}</span>
-                  <span className={`w-6 h-3.5 rounded-full transition-colors relative ${l.on ? "bg-primary" : "bg-white/15"}`}>
-                    <span className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white transition-all ${l.on ? "left-3" : "left-0.5"}`} />
-                  </span>
-                </button>
-              ))}
-              <div className="grid grid-cols-3 gap-1 pt-1.5 mt-1 border-t border-white/10">
-                {([["satellite", "Sat"], ["streets", "St"], ["dark", "Dark"]] as const).map(([mode, label]) => (
-                  <button key={mode} onClick={() => setMapStyleMode(mode)} data-testid={`mapmode-${mode}`} disabled={!mapReady}
-                    className={`text-[10px] py-1 rounded-md transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/60 hover:bg-white/20"}`}>
-                    {label}
-                  </button>
-                ))}
-              </div>
+              <MapIconBtn
+                icon={<Layers className="w-5 h-5" />} label="Map layers & style"
+                testid="ctl-layers" active={layersOpen}
+                onClick={() => { setLayersOpen(o => !o); setSearchOpen(false); }}
+              />
+
+              {/* Layers popover — leads/territories toggles + basemap. */}
+              {layersOpen && (
+                <div className="absolute top-0 right-14 w-[168px] rounded-xl bg-black/85 backdrop-blur-md border border-white/10 p-2.5 shadow-2xl text-white" role="menu" aria-label="Map layers and style" data-testid="layers-popover">
+                  <div className="text-[10px] uppercase tracking-wider text-white/40 font-semibold mb-1.5">Layers</div>
+                  {[
+                    { key: "leads", label: "Leads", on: showLeads, toggle: () => setShowLeads(v => !v) },
+                    ...(canAssign ? [{ key: "terr", label: "Territories", on: showTerritories, toggle: () => setShowTerritories(v => !v) }] : []),
+                  ].map(l => (
+                    <button key={l.key} onClick={l.toggle} data-testid={`layer-${l.key}`} role="menuitemcheckbox" aria-checked={l.on}
+                      className="w-full flex items-center justify-between py-1.5 text-[12.5px] text-white/85 hover:text-white">
+                      <span>{l.label}</span>
+                      <span className={`w-8 h-4 rounded-full transition-colors relative ${l.on ? "bg-primary" : "bg-white/15"}`}>
+                        <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${l.on ? "left-4" : "left-0.5"}`} />
+                      </span>
+                    </button>
+                  ))}
+                  <div className="text-[10px] uppercase tracking-wider text-white/40 font-semibold mt-2 mb-1.5 pt-2 border-t border-white/10">Basemap</div>
+                  <div className="grid grid-cols-3 gap-1">
+                    {([["satellite", "Satellite"], ["streets", "Street"], ["dark", "Dark"]] as const).map(([mode, label]) => (
+                      <button key={mode} onClick={() => setMapStyleMode(mode)} data-testid={`mapmode-${mode}`} disabled={!mapReady}
+                        aria-pressed={mapStyleMode === mode} title={label}
+                        className={`text-[10px] py-1.5 rounded-md transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/60 hover:bg-white/20"}`}>
+                        {label.slice(0, 3)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-
-          {/* No style toggle in rep mode — one good field basemap (satellite-
-              streets), zero extra pills. Managers switch styles from the rail. */}
 
           {/* Locate-me FAB — big thumb target, bottom-right, above zoom controls */}
           {mapReady && (
@@ -2156,5 +2272,50 @@ export default function MapView() {
         </div>
       </div>
     </div>
+  );
+}
+
+// ── Icon-only map control ─────────────────────────────────────────────────────
+// One consistent affordance for the whole cluster: 44×44 hit area, real <button>
+// (keyboard + AT), tooltip via title AND aria-label, visible active/disabled/
+// focus states, optional count badge. Tone tints the active state to match the
+// tool (teal=lasso, orange/red=scan).
+function MapIconBtn({
+  icon, label, testid, onClick, active = false, disabled = false,
+  tone = "primary", badge, btnRef,
+}: {
+  icon: React.ReactNode; label: string; testid: string; onClick: () => void;
+  active?: boolean; disabled?: boolean; tone?: "primary" | "teal" | "orange" | "red";
+  badge?: string; btnRef?: React.RefObject<HTMLButtonElement | null>;
+}) {
+  const activeBg =
+    tone === "teal" ? "bg-teal-500/90 border-teal-300/60"
+    : tone === "orange" ? "bg-orange-500/90 border-orange-300/60"
+    : tone === "red" ? "bg-red-500/90 border-red-300/60"
+    : "bg-primary border-primary";
+  return (
+    <button
+      ref={btnRef as any}
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      data-testid={testid}
+      className={[
+        "relative h-11 w-11 rounded-xl flex items-center justify-center shadow-lg border transition-colors",
+        "focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-offset-1 focus-visible:ring-offset-black/40",
+        "active:scale-95 disabled:opacity-40 disabled:pointer-events-none",
+        active ? `${activeBg} text-white` : "bg-black/80 backdrop-blur-md border-white/15 text-white/90 hover:bg-black/90 hover:text-white",
+      ].join(" ")}
+    >
+      {icon}
+      {badge != null && (
+        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-white text-black text-[10px] font-bold flex items-center justify-center shadow">
+          {badge}
+        </span>
+      )}
+    </button>
   );
 }

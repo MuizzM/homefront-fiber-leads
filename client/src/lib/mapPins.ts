@@ -130,3 +130,48 @@ export function moveCamera(map: any, opts: any): void {
     else map.easeTo(opts);
   } catch { /* map mid-teardown */ }
 }
+
+// ── Progressive house numbers — PROVIDER-NATIVE, never fabricated ─────────────
+// None of our three basemaps ship a housenum layer, but they all carry the
+// mapbox-streets-v8 `composite` vector source, which includes the native
+// `housenum_label` source-layer. This enables it as one symbol layer: numbers
+// fade in from z17.2 (well past street level), Mapbox's collision engine
+// culls overlaps, and the layer sits BELOW our operational layers so a house
+// number never covers a lead pin, territory, or selection. Called from BOTH
+// the init layer-setup and every style.load re-add (setStyle wipes layers).
+// Cost: one GPU symbol layer over existing tiles — zero DOM, zero extra fetch.
+export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets" | "dark"): void {
+  try {
+    if (!map?.getSource?.("composite")) return;    // style without streets tiles
+    if (map.getLayer("hf-housenum")) map.removeLayer("hf-housenum");
+    const colors = styleMode === "satellite"
+      ? { text: "#ffffff", halo: "rgba(0,0,0,0.85)" }   // over imagery: white + dark halo
+      : styleMode === "dark"
+      ? { text: "#93a3b1", halo: "rgba(10,14,20,0.9)" }
+      : { text: "#57626c", halo: "rgba(255,255,255,0.92)" };
+    // Insert below the first of our operational layers that exists, so lead
+    // pins / clusters / selection rings always draw ON TOP of house numbers.
+    const before = ["lead-unclustered-glow", "lead-clusters-glow", "lead-clusters", "lead-selected-ring"]
+      .find(id => { try { return !!map.getLayer(id); } catch { return false; } });
+    map.addLayer({
+      id: "hf-housenum",
+      type: "symbol",
+      source: "composite",
+      "source-layer": "housenum_label",
+      minzoom: 17.2,
+      layout: {
+        "text-field": ["get", "house_num"],
+        "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 17.2, 9.5, 18.5, 12.5, 20, 15.5],
+        "text-padding": 3,
+      },
+      paint: {
+        "text-color": colors.text,
+        "text-halo-color": colors.halo,
+        "text-halo-width": 1.15,
+        // Fade in across a third of a zoom level — appears, never pops/flickers.
+        "text-opacity": ["interpolate", ["linear"], ["zoom"], 17.2, 0, 17.55, 1],
+      },
+    }, before);
+  } catch { /* a style variant without housenum tiles — skip, never fake it */ }
+}
