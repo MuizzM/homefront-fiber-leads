@@ -11,8 +11,11 @@
  *   npx tsx scripts/nc-live-scan.ts <City|all> <perCityCap> [--mapbox]
  */
 import "dotenv/config";
-import { storage, getDefaultTenantId } from "../server/storage";
+import { storage, getDefaultTenantId, runMigrations } from "../server/storage";
 import { rawDb } from "../server/db";
+// This runs as its own process against data.db — ensure the schema is current
+// (additive/idempotent) so new columns like coming_soon.df_address_id exist.
+runMigrations();
 import { scanAddress } from "../server/scanner";
 import { getCityAddresses } from "../server/overpass";
 import { harvestCityAddresses } from "../server/mapbox-addresses";
