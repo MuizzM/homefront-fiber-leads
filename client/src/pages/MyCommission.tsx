@@ -1,20 +1,23 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
+  FileSignature, CheckCircle2, Home,
 } from "lucide-react";
 
 // ── Rep-facing "My Commission this week" ──────────────────────────────────────
 // Reads GET /api/commission/statements/me/current — the caller's own live week.
-// Shows current earnings, the retroactive tier the week landed in, and the
-// "close N more sales to re-price the whole week" nudge that makes tiers land.
-
-function usd(cents: number | null | undefined): string {
-  const n = (cents || 0) / 100;
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: n % 1 === 0 ? 0 : 2 });
-}
+// Shows current earnings, the retroactive tier the week landed in, the exact
+// doors that count toward pay, and the "close N more sales to re-price the
+// whole week" nudge that makes tiers land. Plan acceptance happens here too.
 
 interface Tier { minimumSales: number; maximumSales: number | null; rateCents: number; label: string; }
+interface WeekSale {
+  id: number; status: string; sold_at: string; qualified_at: string | null;
+  reversed_at: string | null; lead_id: number | null; address: string | null; city: string | null;
+}
 interface WeekResponse {
   statement: any | null;
   computation?: {
@@ -26,7 +29,8 @@ interface WeekResponse {
     } | null;
   } | null;
   bounds?: { localWeekLabel: string } | null;
-  structure?: { structure: "FLAT" | "TIERED"; flatRateCents: number | null; tiers: Tier[]; planName: string } | null;
+  structure?: { structure: "FLAT" | "TIERED"; flatRateCents: number | null; tiers: Tier[]; planName: string; acceptedAt: string | null } | null;
+  sales?: WeekSale[];
   noPlan?: boolean; noRepProfile?: boolean; locked?: boolean;
 }
 
@@ -85,8 +89,46 @@ export default function MyCommission() {
         />
       )}
 
+      {/* Plan acceptance — the direct-onboarding handshake. Until accepted, the
+          terms are front and center with one clear action. */}
+      {!isLoading && data?.structure && !data.structure.acceptedAt && (
+        <AcceptPlanCard structure={data.structure} />
+      )}
+
       {!isLoading && data && !data.noPlan && !data.noRepProfile && (
         <WeekView data={data} />
+      )}
+
+      {/* What counts — the exact doors behind this week's number */}
+      {!isLoading && data && (data.sales?.length ?? 0) > 0 && (
+        <div className="rounded-2xl bg-card border border-border overflow-hidden" data-testid="week-sales">
+          <div className="px-4 py-3 border-b border-border flex items-center gap-2">
+            <Home className="w-4 h-4 text-muted-foreground" />
+            <span className="text-sm font-semibold text-foreground">What counts this week</span>
+            <span className="ml-auto text-[10px] text-muted-foreground">every door behind your number</span>
+          </div>
+          <div className="divide-y divide-border">
+            {data.sales!.map(s => (
+              <div key={s.id} className="px-4 py-2.5 flex items-center justify-between gap-3" data-testid={`sale-row-${s.id}`}>
+                <div className="min-w-0">
+                  <div className={`text-sm truncate ${s.status === "REVERSED" ? "text-muted-foreground line-through" : "text-foreground"}`}>
+                    {s.address ?? "Sale"}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    {new Date(s.qualified_at ?? s.sold_at).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}
+                    {s.city ? ` · ${s.city}` : ""}
+                  </div>
+                </div>
+                <SaleChip status={s.status} />
+              </div>
+            ))}
+          </div>
+          {(data.sales ?? []).some(s => s.status === "REVERSED") && (
+            <div className="px-4 py-2 bg-secondary/30 text-[11px] text-muted-foreground">
+              Reversed doors don't count toward pay. If you think one is wrong, ask your manager to review it.
+            </div>
+          )}
+        </div>
       )}
 
       {/* Past weeks */}
@@ -224,6 +266,79 @@ function WeekView({ data }: { data: WeekResponse }) {
         </div>
       )}
     </>
+  );
+}
+
+function SaleChip({ status }: { status: string }) {
+  const map: Record<string, [string, string]> = {
+    QUALIFIED: ["counts", "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"],
+    PENDING: ["pending", "bg-amber-500/15 text-amber-400 border-amber-500/30"],
+    REVERSED: ["reversed", "bg-red-500/10 text-red-400 border-red-500/25"],
+    DISQUALIFIED: ["disqualified", "bg-red-500/10 text-red-400 border-red-500/25"],
+    CANCELLED: ["cancelled", "bg-secondary text-muted-foreground border-border"],
+  };
+  const [label, cls] = map[status] ?? [status.toLowerCase(), "bg-secondary text-muted-foreground border-border"];
+  return <span className={`text-[10px] font-bold border px-2 py-0.5 rounded-full whitespace-nowrap ${cls}`}>{label}</span>;
+}
+
+// The commission-plan handshake: the rep sees the EXACT terms and accepts them.
+// The server freezes the terms + a SHA-256 into the assignment (audited).
+function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["structure"]> }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const accept = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/commission/my-plan/accept").then(r => r.json()),
+    onSuccess: () => {
+      toast({ title: "Plan accepted", description: "Your commission terms are locked to your file. Go sell." });
+      qc.invalidateQueries({ queryKey: ["/api/commission/statements/me/current"] });
+    },
+    onError: (e: any) => toast({ title: "Couldn't accept plan", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <div className="rounded-2xl border border-primary/40 bg-primary/5 p-5" data-testid="accept-plan-card">
+      <div className="flex items-center gap-2 mb-3">
+        <FileSignature className="w-5 h-5 text-primary" />
+        <span className="text-sm font-bold text-foreground">Review &amp; accept your commission plan</span>
+      </div>
+      <p className="text-xs text-muted-foreground mb-3">
+        This is how you're paid: <strong className="text-foreground">{structure.planName}</strong>.
+        Weeks run Monday–Sunday in your org's timezone. Accepting freezes these exact terms to your file.
+      </p>
+      {structure.structure === "TIERED" ? (
+        <div className="grid grid-cols-4 gap-1.5 mb-4">
+          {structure.tiers.map((t, i) => (
+            <div key={i} className="rounded-lg bg-card border border-border px-1.5 py-2 text-center">
+              <div className="text-[9px] text-muted-foreground leading-tight">
+                {t.minimumSales}{t.maximumSales == null ? "+" : `–${t.maximumSales}`} sales
+              </div>
+              <div className="text-sm font-bold text-primary">{usd(t.rateCents)}</div>
+              <div className="text-[8px] text-muted-foreground">per sale</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg bg-card border border-border px-3 py-2 mb-4 text-sm">
+          <strong className="text-primary">{usd(structure.flatRateCents)}</strong>
+          <span className="text-muted-foreground"> for every qualified sale.</span>
+        </div>
+      )}
+      {structure.structure === "TIERED" && (
+        <p className="text-[11px] text-muted-foreground mb-4">
+          Tiers are <strong className="text-foreground">retroactive</strong>: your total weekly sales set one rate for
+          <em> every</em> sale. Hit 8 and all 8 pay {usd(structure.tiers.find(t => t.minimumSales === 8)?.rateCents ?? 20000)} each.
+        </p>
+      )}
+      <button
+        onClick={() => accept.mutate()}
+        disabled={accept.isPending}
+        className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-white text-sm font-semibold py-2.5 rounded-xl transition-colors disabled:opacity-60"
+        data-testid="btn-accept-plan"
+      >
+        <CheckCircle2 className="w-4 h-4" />
+        {accept.isPending ? "Accepting…" : "I understand and accept this plan"}
+      </button>
+    </div>
   );
 }
 

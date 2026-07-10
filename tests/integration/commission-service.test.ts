@@ -83,13 +83,23 @@ describe("end-to-end statement calculation", () => {
     expect(out.statement.week_start_utc).toBe(weekStartUtc);
   });
 
-  it("is idempotent — recalculation keeps ONE row and bumps calculation_version", () => {
+  it("is idempotent — ONE row; calculation_version bumps ONLY on material change", () => {
     const first = svc.getStatementById(T1, svc.listStatements(T1, { repIds: [REP], weekStartUtc })[0].id);
+    // Unchanged inputs → pure read: same version, same money, no audit noise.
     svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP, weekReference: WEEK_REF, actorId: 1, requestId: "test-2" });
-    const rows = svc.listStatements(T1, { repIds: [REP], weekStartUtc });
+    let rows = svc.listStatements(T1, { repIds: [REP], weekStartUtc });
     expect(rows.length).toBe(1);
+    expect(rows[0].calculation_version).toBe(first.calculation_version);
+    expect(rows[0].final_commission_cents).toBe(160000);
+    // A material change (one more qualified sale) DOES bump the version.
+    svc.upsertSale(T1, 1, { repId: REP, externalId: "bump-1", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP, weekReference: WEEK_REF, actorId: 1, requestId: "test-2b" });
+    rows = svc.listStatements(T1, { repIds: [REP], weekStartUtc });
     expect(rows[0].calculation_version).toBeGreaterThan(first.calculation_version);
-    expect(rows[0].final_commission_cents).toBe(160000); // unchanged inputs → unchanged money
+    expect(rows[0].qualified_sale_count).toBe(9);
+    expect(rows[0].final_commission_cents).toBe(9 * 20000); // still tier 2 (8–12)
+    // put the ledger back so later tests keep their expectations
+    svc.transitionSale(T1, 1, "bump-1", "REVERSE");
   });
 
   it("half-open week boundary — a sale qualified before the week start does not count", () => {
@@ -239,5 +249,123 @@ describe("onboarding-facing structure assignment (flat vs tiered)", () => {
     let err: any;
     try { svc.assignStructureToRep(T1, 1, { repId: REP_STRUCT, structure: "FLAT", flatRateCents: 0, closeExisting: true }); } catch (e) { err = e; }
     expect(err?.code).toBe("INVALID_COMMISSION_PLAN");
+  });
+});
+
+describe("field-sale wiring: door → weekly ledger", () => {
+  const REP_FIELD = 1004;
+  let leadA: number, leadB: number;
+
+  beforeAll(() => {
+    seedRep(REP_FIELD, T1, null);
+    svc.assignStructureToRep(T1, 1, { repId: REP_FIELD, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    const mkLead = (addr: string) => Number(rawDb.prepare(
+      `INSERT INTO leads (address, city, state, zip, tenant_id, assigned_rep_id, lead_status, created_at, updated_at)
+       VALUES (?, 'Rockwell', 'NC', '28138', ?, ?, 'prospect', datetime('now'), datetime('now'))`
+    ).run(addr, T1, REP_FIELD).lastInsertRowid);
+    leadA = mkLead("10 Field St");
+    leadB = mkLead("12 Field St");
+  });
+
+  it("a sold knock creates ONE qualified sale per door and prices the week", () => {
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadA, knockId: 900, soldAt: inWeekTs, actorId: 1 });
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadA, knockId: 901, soldAt: inWeekTs, actorId: 1 }); // re-tap: idempotent
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadB, knockId: 902, soldAt: inWeekTs, actorId: 1 });
+    const sales = svc.listWeekSalesForRep(T1, REP_FIELD, WEEK_REF);
+    expect(sales.filter(s => s.status === "QUALIFIED").length).toBe(2); // two DOORS, not three knocks
+    const out = svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP_FIELD, weekReference: WEEK_REF, actorId: 1 });
+    expect(out.computation.qualifiedSaleCount).toBe(2);
+    expect(out.statement.gross_commission_cents).toBe(2 * 15000); // tier 1
+  });
+
+  it("un-selling the door reverses the sale and the week re-prices down", () => {
+    svc.reverseFieldSale(T1, leadB, 1);
+    const out = svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP_FIELD, weekReference: WEEK_REF, actorId: 1 });
+    expect(out.computation.qualifiedSaleCount).toBe(1);
+    const sales = svc.listWeekSalesForRep(T1, REP_FIELD, WEEK_REF);
+    expect(sales.find(s => s.lead_id === leadB)?.status).toBe("REVERSED");
+    // reversing again is a no-op, never an error
+    expect(() => svc.reverseFieldSale(T1, leadB, 1)).not.toThrow();
+  });
+
+  it("re-selling the same door re-qualifies the SAME ledger row", () => {
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadB, knockId: 903, soldAt: inWeekTs, actorId: 1 });
+    const sales = svc.listWeekSalesForRep(T1, REP_FIELD, WEEK_REF);
+    expect(sales.length).toBe(2); // still two rows total
+    expect(sales.every(s => s.status === "QUALIFIED")).toBe(true);
+  });
+
+  it("backfillFieldSales adopts currently-sold leads once, idempotently", () => {
+    const leadC = Number(rawDb.prepare(
+      `INSERT INTO leads (address, city, state, zip, tenant_id, assigned_rep_id, lead_status, created_at, updated_at)
+       VALUES ('14 Field St', 'Rockwell', 'NC', '28138', ?, ?, 'sold', datetime('now'), datetime('now'))`
+    ).run(T1, REP_FIELD).lastInsertRowid);
+    rawDb.prepare(
+      `INSERT INTO knock_log (lead_id, rep_id, tenant_id, knocked_at, was_home, outcome) VALUES (?, ?, ?, ?, 1, 'sold')`
+    ).run(leadC, REP_FIELD, T1, inWeekTs);
+    const first = svc.backfillFieldSales();
+    expect(first.created).toBeGreaterThanOrEqual(1);
+    const again = svc.backfillFieldSales();
+    expect(again.created).toBe(0); // second run adopts nothing new
+    const sales = svc.listWeekSalesForRep(T1, REP_FIELD, WEEK_REF);
+    expect(sales.filter(s => s.status === "QUALIFIED").length).toBe(3);
+  });
+});
+
+describe("week overview + Sunday closeout", () => {
+  it("aggregates production, projected payroll, and tier proximity", () => {
+    const ov = svc.getWeekOverview(T1, 1, WEEK_REF, null);
+    expect(ov.bounds.weekStartUtc).toBe(weekStartUtc);
+    const fieldRow = ov.rows.find(r => r.repId === 1004)!;
+    expect(fieldRow.qualifiedSaleCount).toBe(3);
+    expect(fieldRow.grossCommissionCents).toBe(3 * 15000);
+    expect(fieldRow.salesUntilNextTier).toBe(5);          // 3 → needs 8
+    expect(fieldRow.nextTierProjectedCommissionCents).toBe(8 * 20000);
+    expect(fieldRow.marginalJumpCents).toBe(8 * 20000 - 3 * 15000);
+    expect(ov.totals.projectedPayrollCents).toBeGreaterThan(0);
+    expect(ov.totals.qualifiedSales).toBeGreaterThanOrEqual(3);
+  });
+
+  it("flags reps whose plan is not accepted, and clears after acceptance", () => {
+    let ov = svc.getWeekOverview(T1, 1, WEEK_REF, null);
+    expect(ov.exceptions.some(e => e.type === "PLAN_NOT_ACCEPTED" && e.repId === 1004)).toBe(true);
+    const acc = svc.acceptCurrentPlan(T1, 1004, 42, "1.2.3.4");
+    expect(acc.accepted).toBe(true);
+    expect(acc.sha256).toMatch(/^[a-f0-9]{64}$/);
+    // second acceptance is a no-op
+    expect(svc.acceptCurrentPlan(T1, 1004, 42).alreadyAccepted).toBe(true);
+    ov = svc.getWeekOverview(T1, 1, WEEK_REF, null);
+    expect(ov.exceptions.some(e => e.type === "PLAN_NOT_ACCEPTED" && e.repId === 1004)).toBe(false);
+  });
+
+  it("batch FINALIZE locks every open statement (recalc-then-lock), idempotently", () => {
+    const out = svc.batchTransitionWeek(T1, 1, WEEK_REF, "FINALIZE");
+    const fieldRes = out.results.find(r => r.repId === 1004)!;
+    expect(fieldRes.result).toBe("FINALIZED");
+    expect(fieldRes.finalCommissionCents).toBe(3 * 15000);
+    // second run: everything already locked
+    const again = svc.batchTransitionWeek(T1, 1, WEEK_REF, "FINALIZE");
+    expect(again.results.every(r => r.result.startsWith("already"))).toBe(true);
+  });
+
+  it("a reversal AFTER finalize never changes the locked number — it becomes an exception", () => {
+    const before = svc.getStatementForWeek(T1, 1004, WEEK_REF).statement;
+    svc.reverseFieldSale(T1, undefined as any, 1); // guard: bogus lead id is a no-op
+    // reverse a real sold door post-finalize
+    const sale = svc.listWeekSalesForRep(T1, 1004, WEEK_REF).find(s => s.status === "QUALIFIED")!;
+    svc.reverseFieldSale(T1, sale.lead_id, 1);
+    const after = svc.getStatementForWeek(T1, 1004, WEEK_REF).statement;
+    expect(after.final_commission_cents).toBe(before.final_commission_cents); // locked money untouched
+    expect(after.status).toBe("FINALIZED");
+    const ov = svc.getWeekOverview(T1, 1, WEEK_REF, null);
+    expect(ov.exceptions.some(e => e.type === "REVERSED_AFTER_FINALIZE" && e.repId === 1004)).toBe(true);
+  });
+
+  it("MARK_PAID only touches FINALIZED statements and is idempotent", () => {
+    const out = svc.batchTransitionWeek(T1, 1, WEEK_REF, "MARK_PAID");
+    const fieldRes = out.results.find(r => r.repId === 1004)!;
+    expect(fieldRes.result).toBe("PAID");
+    const again = svc.batchTransitionWeek(T1, 1, WEEK_REF, "MARK_PAID");
+    expect(again.results.find(r => r.repId === 1004)!.result).toBe("already PAID");
   });
 });

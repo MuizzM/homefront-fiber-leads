@@ -207,10 +207,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Global rate limit: 150 req / 15 min per IP ───────────────────────────────
+// ── Global rate limit: 150 req / 15 min per IP (env-tunable for ops) ─────────
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 150,
+  max: Number(process.env.API_RATE_LIMIT_MAX) > 0 ? Number(process.env.API_RATE_LIMIT_MAX) : 150,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Try again in 15 minutes." },
@@ -295,6 +295,13 @@ app.use((req, res, next) => {
 
 (async () => {
   runMigrations();
+
+  // One-time, idempotent: adopt every currently-sold door into the weekly
+  // commission ledger so the engine reflects real production from day one.
+  try {
+    const { backfillFieldSales } = await import("./commissionService");
+    backfillFieldSales();
+  } catch (e: any) { console.warn("[commission] field-sale backfill skipped:", e?.message); }
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────
   setInterval(() => {

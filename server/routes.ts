@@ -1827,6 +1827,27 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const newStatus = OUTCOME_TO_STATUS[parsed.data.outcome as KnockOutcome];
     if (newStatus) storage.updateLead(Number(req.params.id), { leadStatus: newStatus });
     bustMapCache(); // a knock changes the pin's visited state — refresh the map layer
+    // ── WEEKLY COMMISSION ENGINE (authoritative pay system) ──────────────────
+    // Sold → one QUALIFIED commissionable sale per door in the weekly ledger
+    // (idempotent by lead); any other outcome on a previously-sold door reverses
+    // it. Best-effort: a ledger hiccup must never block the knock itself.
+    if (parsed.data.repId) {
+      try {
+        const knockLead = storage.getLeadById(Number(req.params.id));
+        const saleTenant = knockLead?.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
+        if (saleTenant != null) {
+          if (parsed.data.outcome === "sold") {
+            commissionSvc.recordFieldSaleFromKnock({
+              tenantId: saleTenant, repId: parsed.data.repId, leadId: Number(req.params.id),
+              knockId: knock.id, soldAt: knock.knockedAt || serverTs, actorId: (req as any).user?.id ?? null,
+            });
+          } else {
+            commissionSvc.reverseFieldSale(saleTenant, Number(req.params.id), (req as any).user?.id ?? null);
+          }
+        }
+      } catch (e: any) { console.warn("Weekly-ledger sale sync failed:", e?.message); }
+    }
+
     // Auto-create pending commission when outcome = sold. The structure IN
     // EFFECT for this rep AT SALE TIME scores it, and its id/version/calcType
     // freeze onto the record — a later plan edit never rewrites this payout.

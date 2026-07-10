@@ -5,6 +5,7 @@
 // query carries tenant_id AND we verify referenced rows share the tenant.
 // Deliberately isolated from the legacy commissions/commissionRates + any MLM.
 
+import crypto from "crypto";
 import { rawDb } from "./db";
 import { storage } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
@@ -253,6 +254,18 @@ export function calculateOrRecalculateStatement(input: {
     qualificationBasis: basis,
   });
   const now = new Date().toISOString();
+
+  // No-op guard: if nothing material changed (count, money, plan version), skip
+  // the write AND the audit entry — read-model views (the week console) recompute
+  // freely without bumping calculation_version or spamming the activity log.
+  if (existing
+    && existing.qualified_sale_count === comp.qualifiedSaleCount
+    && existing.gross_commission_cents === comp.grossCommissionCents
+    && existing.adjustment_cents === comp.adjustmentCents
+    && existing.final_commission_cents === comp.finalCommissionCents
+    && existing.commission_plan_version_id === version.id) {
+    return { statement: existing, computation: comp, bounds };
+  }
 
   // Transactional upsert — the unique (tenant,rep,week) index + synchronous
   // better-sqlite3 make duplicate creation impossible under concurrency.
@@ -684,11 +697,13 @@ export function getCurrentStructureForRep(tenantId: number, repId: number): any 
   const version = rawDb.prepare(`SELECT v.*, p.name AS plan_name, p.type AS plan_type, p.tier_mode FROM commission_plan_versions v JOIN commission_plans p ON p.id = v.commission_plan_id WHERE v.id = ? AND v.tenant_id = ?`).get(active.commissionPlanVersionId, tenantId) as any;
   if (!version) return null;
   const tiers = version.plan_type === "TIERED" ? getPlanVersionTiers(tenantId, version.id) : [];
+  const acceptedRow = rawDb.prepare(`SELECT accepted_at FROM rep_commission_assignments WHERE id = ?`).get(active.id) as any;
   return {
     assignmentId: active.id, effectiveFrom: active.effectiveFrom, effectiveTo: active.effectiveTo,
     structure: version.plan_type === "FLAT" ? "FLAT" : "TIERED",
     planName: version.plan_name, planId: version.commission_plan_id, commissionPlanVersionId: version.id,
     flatRateCents: version.flat_rate_cents,
+    acceptedAt: acceptedRow?.accepted_at ?? null,
     tiers: tiers.map((t: any) => ({ minimumSales: t.minimum_sales, maximumSales: t.maximum_sales, rateCents: t.rate_cents, label: t.label })),
   };
 }
@@ -703,4 +718,307 @@ export function getAssignablePlanOptions(tenantId: number): any {
       .filter((p: any) => p.status === "ACTIVE" && p.name !== STANDARD_TIERED_PLAN_NAME && p.name !== FLAT_PLAN_NAME)
       .map((p: any) => ({ id: p.id, name: p.name, type: p.type, latestVersionId: p.versions?.[p.versions.length - 1]?.id ?? null })),
   };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// FIELD-SALE WIRING — the bridge from door-knocking to the weekly engine.
+// One commissionable sale PER DOOR: externalId `lead:<leadId>`. Marking a door
+// sold (re-)qualifies that one row; un-marking flips it REVERSED. Never deletes,
+// never duplicates. A reversal against an already-FINALIZED week does NOT touch
+// the locked statement — it surfaces as an exception for a manager adjustment.
+// ════════════════════════════════════════════════════════════════════════════
+
+const fieldSaleExternalId = (leadId: number) => `lead:${leadId}`;
+
+export function recordFieldSaleFromKnock(input: {
+  tenantId: number; repId: number; leadId: number; knockId: number;
+  soldAt: string; actorId: number | null;
+}): void {
+  const { tenantId, repId, leadId, soldAt, actorId } = input;
+  upsertSale(tenantId, actorId, {
+    repId, externalId: fieldSaleExternalId(leadId), status: "QUALIFIED",
+    soldAt, qualifiedAt: soldAt, leadId,
+  });
+  // Keep the rep's live week fresh (best-effort — a locked week or missing plan
+  // must never block the knock).
+  try {
+    calculateOrRecalculateStatement({ tenantId, repId, weekReference: soldAt, actorId, requestId: `field-sale:lead:${leadId}` });
+  } catch (e) {
+    if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
+  }
+}
+
+export function reverseFieldSale(tenantId: number, leadId: number, actorId: number | null): void {
+  const externalId = fieldSaleExternalId(leadId);
+  const sale = rawDb.prepare(`SELECT id, status FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(tenantId, externalId) as any;
+  if (!sale || sale.status === "REVERSED") return; // nothing to reverse — not an error
+  transitionSale(tenantId, actorId, externalId, "REVERSE");
+}
+
+// Deterministic one-time backfill: every lead that is CURRENTLY sold becomes one
+// QUALIFIED sale dated by its most recent sold knock. Idempotent (upsert by
+// external id); leads without a rep/tenant are skipped, never guessed. Called
+// from server startup after migrations.
+export function backfillFieldSales(): { created: number; skipped: number } {
+  let created = 0, skipped = 0;
+  const soldLeads = rawDb.prepare(
+    `SELECT l.id, l.tenant_id AS tenantId, l.assigned_rep_id AS assignedRepId,
+            (SELECT k.knocked_at FROM knock_log k WHERE k.lead_id = l.id AND k.outcome = 'sold' ORDER BY k.knocked_at DESC LIMIT 1) AS soldAt,
+            (SELECT k.rep_id FROM knock_log k WHERE k.lead_id = l.id AND k.outcome = 'sold' ORDER BY k.knocked_at DESC LIMIT 1) AS soldByRepId
+     FROM leads l WHERE l.lead_status = 'sold'`
+  ).all() as any[];
+  for (const l of soldLeads) {
+    const repId = l.soldByRepId ?? l.assignedRepId;
+    if (!l.tenantId || !repId || !l.soldAt) { skipped++; continue; }
+    const existing = rawDb.prepare(`SELECT id FROM commission_sales WHERE tenant_id = ? AND external_id = ?`).get(l.tenantId, fieldSaleExternalId(l.id));
+    if (existing) { skipped++; continue; } // already in the ledger — never overwrite
+    upsertSale(l.tenantId, null, {
+      repId, externalId: fieldSaleExternalId(l.id), status: "QUALIFIED",
+      soldAt: l.soldAt, qualifiedAt: l.soldAt, leadId: l.id,
+    });
+    created++;
+  }
+  if (created > 0) {
+    storage.logActivity(null, "commission_sales.backfilled", "commission_sale", undefined, { created, skipped }, undefined);
+    console.log(`[commission] Backfilled ${created} field sales into the weekly ledger (${skipped} skipped)`);
+  }
+  return { created, skipped };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WEEK OVERVIEW — the manager/admin closeout read model. One call answers:
+// production, projected payroll, tier proximity, payroll exposure, exceptions,
+// and what's final. Live-computes OPEN weeks; never touches locked statements.
+// ════════════════════════════════════════════════════════════════════════════
+
+export interface WeekOverviewRepRow {
+  repId: number; repName: string; active: boolean;
+  statementId: number | null;
+  status: string;                       // OPEN | REVIEW | FINALIZED | PAID | NO_PLAN
+  qualifiedSaleCount: number;
+  pendingSaleCount: number;
+  reversedSaleCount: number;
+  tierLabel: string | null;
+  rateCents: number;
+  grossCommissionCents: number;
+  adjustmentCents: number;
+  finalCommissionCents: number;
+  structure: "FLAT" | "TIERED" | null;
+  planAccepted: boolean;
+  // Tier-movement intelligence (tiered plans, open weeks only)
+  salesUntilNextTier: number | null;
+  nextTierRateCents: number | null;
+  nextTierProjectedCommissionCents: number | null;
+  marginalJumpCents: number | null;     // payroll delta if this rep reaches the next tier
+}
+
+export function getWeekOverview(tenantId: number, actorId: number | null, weekReference: Date | string | number, repIds: number[] | null): {
+  bounds: WeekBounds; weekEnded: boolean; rows: WeekOverviewRepRow[];
+  totals: { projectedPayrollCents: number; finalizedPayrollCents: number; paidPayrollCents: number; exposureCents: number; qualifiedSales: number; repsWithSales: number };
+  exceptions: Array<{ type: string; repId: number; repName: string; detail: string }>;
+} {
+  const config = loadOrgConfig(tenantId);
+  const bounds = weekBoundsFor(weekReference, config);
+  const weekEnded = Date.now() >= Date.parse(bounds.nextWeekStartUtc);
+
+  // Reps in scope: tenant roster (optionally narrowed by caller's read scope).
+  let reps = storage.getTeamMembers(tenantId).filter((m: any) => m.role !== "manager");
+  if (repIds) reps = reps.filter((m: any) => repIds.includes(m.id));
+
+  const rows: WeekOverviewRepRow[] = [];
+  const exceptions: Array<{ type: string; repId: number; repName: string; detail: string }> = [];
+  let projected = 0, finalized = 0, paid = 0, exposure = 0, qualifiedSales = 0, repsWithSales = 0;
+
+  for (const rep of reps as any[]) {
+    // Per-status sale counts for the week (basis column from org config).
+    const basisCol = BASIS_COLUMN[config.qualificationBasis];
+    const counts = rawDb.prepare(
+      `SELECT status, COUNT(*) AS c FROM commission_sales
+       WHERE tenant_id = ? AND rep_id = ?
+         AND COALESCE(${basisCol}, sold_at) >= ? AND COALESCE(${basisCol}, sold_at) < ?
+       GROUP BY status`
+    ).all(tenantId, rep.id, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any[];
+    const byStatus: Record<string, number> = {};
+    for (const c of counts) byStatus[c.status] = Number(c.c);
+
+    const structure = getCurrentStructureForRep(tenantId, rep.id);
+    const acceptedAt = structure?.acceptedAt ?? null;
+
+    let row: WeekOverviewRepRow = {
+      repId: rep.id, repName: rep.name, active: !!rep.active,
+      statementId: null, status: "NO_PLAN",
+      qualifiedSaleCount: byStatus["QUALIFIED"] ?? 0,
+      pendingSaleCount: byStatus["PENDING"] ?? 0,
+      reversedSaleCount: byStatus["REVERSED"] ?? 0,
+      tierLabel: null, rateCents: 0, grossCommissionCents: 0,
+      adjustmentCents: 0, finalCommissionCents: 0,
+      structure: structure?.structure ?? null, planAccepted: !!acceptedAt,
+      salesUntilNextTier: null, nextTierRateCents: null,
+      nextTierProjectedCommissionCents: null, marginalJumpCents: null,
+    };
+
+    try {
+      const existing = rawDb.prepare(
+        `SELECT * FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`
+      ).get(tenantId, rep.id, bounds.weekStartUtc) as any;
+
+      if (existing && (existing.status === "FINALIZED" || existing.status === "PAID")) {
+        // Locked — read as stored, never recompute.
+        row = { ...row,
+          statementId: existing.id, status: existing.status,
+          qualifiedSaleCount: existing.qualified_sale_count,
+          tierLabel: existing.tier_label, rateCents: existing.rate_cents,
+          grossCommissionCents: existing.gross_commission_cents,
+          adjustmentCents: existing.adjustment_cents,
+          finalCommissionCents: existing.final_commission_cents,
+        };
+        if (existing.status === "PAID") paid += existing.final_commission_cents;
+        else finalized += existing.final_commission_cents;
+        // Exception: a door was un-sold AFTER this week locked → money already
+        // finalized against a reversed sale. Needs a manager adjustment.
+        const lateReversals = rawDb.prepare(
+          `SELECT COUNT(*) AS c FROM commission_sales
+           WHERE tenant_id = ? AND rep_id = ? AND status = 'REVERSED'
+             AND COALESCE(${basisCol}, sold_at) >= ? AND COALESCE(${basisCol}, sold_at) < ?
+             AND reversed_at > ?`
+        ).get(tenantId, rep.id, bounds.weekStartUtc, bounds.nextWeekStartUtc, existing.finalized_at ?? existing.updated_at) as any;
+        if (Number(lateReversals?.c ?? 0) > 0) {
+          exceptions.push({ type: "REVERSED_AFTER_FINALIZE", repId: rep.id, repName: rep.name,
+            detail: `${lateReversals.c} sale(s) un-sold after the week was ${existing.status.toLowerCase()} — book a clawback adjustment.` });
+        }
+      } else {
+        // Open (or missing) — live recompute so the console is always current.
+        const out = calculateOrRecalculateStatement({ tenantId, repId: rep.id, weekReference: bounds.weekStartUtc, actorId, requestId: "week-overview" });
+        const c = out.computation;
+        row = { ...row,
+          statementId: out.statement.id, status: out.statement.status,
+          qualifiedSaleCount: c.qualifiedSaleCount, tierLabel: c.tierLabel,
+          rateCents: c.rateCents, grossCommissionCents: c.grossCommissionCents,
+          adjustmentCents: c.adjustmentCents, finalCommissionCents: c.finalCommissionCents,
+          salesUntilNextTier: c.retro?.salesUntilNextTier ?? null,
+          nextTierRateCents: c.retro?.nextTierRateCents ?? null,
+          nextTierProjectedCommissionCents: c.retro?.nextTierProjectedCommissionCents ?? null,
+          marginalJumpCents: c.retro?.nextTierProjectedCommissionCents != null
+            ? c.retro.nextTierProjectedCommissionCents - c.grossCommissionCents : null,
+        };
+        projected += c.finalCommissionCents;
+        // Payroll exposure: if this rep is within 2 sales of a cliff, Sunday
+        // payroll could jump by the marginal amount.
+        if (row.salesUntilNextTier != null && row.salesUntilNextTier <= 2 && row.marginalJumpCents != null && row.marginalJumpCents > 0) {
+          exposure += row.marginalJumpCents;
+        }
+      }
+    } catch (e) {
+      if (e instanceof CommissionError && e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT") {
+        if ((row.qualifiedSaleCount + row.pendingSaleCount) > 0) {
+          exceptions.push({ type: "SALES_WITHOUT_PLAN", repId: rep.id, repName: rep.name,
+            detail: `${row.qualifiedSaleCount + row.pendingSaleCount} sale(s) this week but no commission plan assigned — these pay $0 until a plan is set.` });
+        }
+      } else { throw e; }
+    }
+
+    if (structure && !acceptedAt && row.status !== "NO_PLAN") {
+      exceptions.push({ type: "PLAN_NOT_ACCEPTED", repId: rep.id, repName: rep.name,
+        detail: "Commission plan has not been accepted by the rep yet." });
+    }
+    qualifiedSales += row.qualifiedSaleCount;
+    if (row.qualifiedSaleCount > 0) repsWithSales++;
+    rows.push(row);
+  }
+
+  // Pending adjustments anywhere in this week are a closeout blocker worth seeing.
+  const pendingAdj = rawDb.prepare(
+    `SELECT a.rep_id AS repId, COUNT(*) AS c FROM commission_adjustments a
+     JOIN commission_statements s ON s.id = a.statement_id
+     WHERE a.tenant_id = ? AND a.status = 'PENDING' AND s.week_start_utc = ?
+     GROUP BY a.rep_id`
+  ).all(tenantId, bounds.weekStartUtc) as any[];
+  for (const p of pendingAdj) {
+    const rep = rows.find(r => r.repId === p.repId);
+    exceptions.push({ type: "PENDING_ADJUSTMENT", repId: p.repId, repName: rep?.repName ?? `Rep ${p.repId}`,
+      detail: `${p.c} pending adjustment(s) awaiting a decision.` });
+  }
+
+  rows.sort((a, b) => b.finalCommissionCents - a.finalCommissionCents || a.repName.localeCompare(b.repName));
+  return {
+    bounds, weekEnded, rows,
+    totals: { projectedPayrollCents: projected, finalizedPayrollCents: finalized, paidPayrollCents: paid, exposureCents: exposure, qualifiedSales, repsWithSales },
+    exceptions,
+  };
+}
+
+// ── Batch closeout (the Sunday ritual) ───────────────────────────────────────
+// Recalculates then finalizes every OPEN statement in the week; already-locked
+// statements are skipped, never re-touched. Returns per-rep results so the UI
+// can show exactly what happened. MARK_PAID is idempotent per statement.
+export function batchTransitionWeek(tenantId: number, actorId: number | null, weekReference: Date | string | number, action: "FINALIZE" | "MARK_PAID", repIds?: number[] | null): {
+  bounds: WeekBounds;
+  results: Array<{ repId: number; statementId: number | null; result: string; finalCommissionCents?: number }>;
+} {
+  const config = loadOrgConfig(tenantId);
+  const bounds = weekBoundsFor(weekReference, config);
+  const stmts = rawDb.prepare(
+    `SELECT * FROM commission_statements WHERE tenant_id = ? AND week_start_utc = ?`
+  ).all(tenantId, bounds.weekStartUtc) as any[];
+
+  const results: Array<{ repId: number; statementId: number | null; result: string; finalCommissionCents?: number }> = [];
+  for (const s of stmts) {
+    if (repIds && !repIds.includes(s.rep_id)) continue;
+    if (action === "FINALIZE") {
+      if (s.status === "FINALIZED" || s.status === "PAID") { results.push({ repId: s.rep_id, statementId: s.id, result: `already ${s.status}` }); continue; }
+      // Recompute right before locking so the frozen number matches the ledger.
+      const fresh = calculateOrRecalculateStatement({ tenantId, repId: s.rep_id, weekReference: bounds.weekStartUtc, actorId, requestId: "batch-finalize" });
+      const locked = transitionStatement(tenantId, actorId, fresh.statement.id, "FINALIZE");
+      results.push({ repId: s.rep_id, statementId: locked.id, result: "FINALIZED", finalCommissionCents: locked.final_commission_cents });
+    } else {
+      if (s.status === "PAID") { results.push({ repId: s.rep_id, statementId: s.id, result: "already PAID" }); continue; }
+      if (s.status !== "FINALIZED") { results.push({ repId: s.rep_id, statementId: s.id, result: `skipped (${s.status} — finalize first)` }); continue; }
+      const paid = transitionStatement(tenantId, actorId, s.id, "MARK_PAID");
+      results.push({ repId: s.rep_id, statementId: paid.id, result: "PAID", finalCommissionCents: paid.final_commission_cents });
+    }
+  }
+  storage.logActivity(actorId, `commission.week.${action.toLowerCase()}`, "commission_statement", undefined,
+    { week: bounds.localWeekLabel, results: results.map(r => ({ repId: r.repId, result: r.result })) }, undefined);
+  return { bounds, results };
+}
+
+// ── Plan acceptance (direct onboarding's handshake) ──────────────────────────
+// The rep accepts their CURRENT effective assignment. The exact terms they saw
+// are frozen into agreement_snapshot with a content hash — a later plan change
+// creates a NEW assignment which needs a fresh acceptance.
+export function acceptCurrentPlan(tenantId: number, repId: number, actorUserId: number | null, ip?: string | null): any {
+  const current = getCurrentStructureForRep(tenantId, repId);
+  if (!current) throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT", "No commission plan is assigned to you yet.");
+  const existing = rawDb.prepare(`SELECT accepted_at FROM rep_commission_assignments WHERE id = ? AND tenant_id = ?`).get(current.assignmentId, tenantId) as any;
+  if (existing?.accepted_at) return { alreadyAccepted: true, acceptedAt: existing.accepted_at };
+
+  const terms = {
+    structure: current.structure, planName: current.planName,
+    flatRateCents: current.flatRateCents, tiers: current.tiers,
+    effectiveFrom: current.effectiveFrom, weekBasis: "Monday–Sunday, org timezone",
+  };
+  const termsJson = JSON.stringify(terms);
+  const hash = crypto.createHash("sha256").update(termsJson).digest("hex");
+  const acceptedAt = new Date().toISOString();
+  rawDb.prepare(
+    `UPDATE rep_commission_assignments SET accepted_at = ?, agreement_snapshot = ? WHERE id = ? AND tenant_id = ?`
+  ).run(acceptedAt, JSON.stringify({ terms, sha256: hash, acceptedAt, acceptedByUserId: actorUserId, ip: ip ?? null }), current.assignmentId, tenantId);
+  storage.logActivity(actorUserId, "commission_plan.accepted", "rep_commission_assignment", current.assignmentId,
+    { repId, sha256: hash }, ip ?? undefined);
+  return { accepted: true, acceptedAt, sha256: hash };
+}
+
+// The sales behind a rep's week — the "what counts toward my pay" list.
+export function listWeekSalesForRep(tenantId: number, repId: number, weekReference: Date | string | number): any[] {
+  const config = loadOrgConfig(tenantId);
+  const bounds = weekBoundsFor(weekReference, config);
+  const basisCol = BASIS_COLUMN[config.qualificationBasis];
+  return rawDb.prepare(
+    `SELECT cs.id, cs.external_id, cs.status, cs.sold_at, cs.qualified_at, cs.reversed_at,
+            cs.lead_id, l.address, l.city
+     FROM commission_sales cs LEFT JOIN leads l ON l.id = cs.lead_id
+     WHERE cs.tenant_id = ? AND cs.rep_id = ?
+       AND COALESCE(cs.${basisCol}, cs.sold_at) >= ? AND COALESCE(cs.${basisCol}, cs.sold_at) < ?
+     ORDER BY COALESCE(cs.${basisCol}, cs.sold_at) DESC`
+  ).all(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any[];
 }

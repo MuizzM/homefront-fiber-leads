@@ -22,6 +22,7 @@ import {
   Bell,
   DollarSign,
   Wallet,
+  Banknote,
   Clock,
   Radio,
 } from "lucide-react";
@@ -82,6 +83,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/scanner",      label: "Scanner",       icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
+  { href: "/commission-console", label: "Payroll", icon: Banknote,     show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/applications", label: "Applications",  icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   // ── Governance (Phase 2) ──────────────────────────────────────────────────

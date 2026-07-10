@@ -140,24 +140,84 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   // Rep-facing "my commission this week" — the caller computes/reads their OWN
   // current-week statement (self-scoped write is fine and keeps it fresh). Falls
   // back to read-only on a locked week, and an empty state when unassigned.
+  // Always carries the per-sale list ("what counts") + plan acceptance state.
   app.get("/api/commission/statements/me/current", requireCapability("commission.read.self"), (req, res) => {
     const user = (req as any).user;
     const repId = user?.teamMemberId;
     if (!repId) return res.json({ statement: null, structure: null, noRepProfile: true });
     const now = new Date();
+    const withSales = (payload: any) => ({ ...payload, sales: svc.listWeekSalesForRep(tid(req), repId, now) });
     try {
       const out = svc.calculateOrRecalculateStatement({ tenantId: tid(req), repId, weekReference: now, actorId: uid(req), requestId: rid(req) });
-      res.json({ ...out, structure: svc.getCurrentStructureForRep(tid(req), repId) });
+      res.json(withSales({ ...out, structure: svc.getCurrentStructureForRep(tid(req), repId) }));
     } catch (e) {
       if (e instanceof svc.CommissionError && e.code === "STATEMENT_LOCKED") {
         const { statement, bounds } = svc.getStatementForWeek(tid(req), repId, now);
-        return res.json({ statement, bounds, structure: svc.getCurrentStructureForRep(tid(req), repId), locked: true });
+        return res.json(withSales({ statement, bounds, structure: svc.getCurrentStructureForRep(tid(req), repId), locked: true }));
       }
       if (e instanceof svc.CommissionError && e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT") {
-        return res.json({ statement: null, structure: null, noPlan: true });
+        return res.json({ statement: null, structure: null, noPlan: true, sales: svc.listWeekSalesForRep(tid(req), repId, now) });
       }
       fail(res, e);
     }
+  });
+
+  // Rep accepts their current plan — the direct-onboarding handshake. Terms are
+  // frozen with a SHA-256 into the assignment row; audited.
+  app.post("/api/commission/my-plan/accept", requireCapability("commission.read.self"), (req, res) => {
+    const user = (req as any).user;
+    if (!user?.teamMemberId) return res.status(400).json({ error: "No rep profile linked to your login." });
+    try { res.json(svc.acceptCurrentPlan(tid(req), user.teamMemberId, uid(req), req.ip)); } catch (e) { fail(res, e); }
+  });
+
+  // ── Week overview — the manager/admin closeout read model ────────────────────
+  // Production, projected payroll, tier proximity + payroll exposure, exceptions,
+  // per-rep statements. Scoped: team leads see their team, managers the tenant.
+  app.get("/api/commission/week-overview", requireCapability("commission.read.team"), (req, res) => {
+    const scope = readScope((req as any).user);
+    const weekReference = parseWeekRef(req.query.week) ?? new Date().toISOString();
+    try { res.json(svc.getWeekOverview(tid(req), uid(req), weekReference, scope.repIds)); } catch (e) { fail(res, e); }
+  });
+
+  // Batch closeout — the Sunday ritual. Finalize recalculates-then-locks every
+  // OPEN statement in the week; mark-paid only touches FINALIZED ones. Both are
+  // idempotent and per-rep reported.
+  app.post("/api/commission/week/transition", requireCapability("commission.read.all"), (req, res) => {
+    const { week, action, repIds } = req.body || {};
+    if (action !== "FINALIZE" && action !== "MARK_PAID") return res.status(400).json({ error: "action must be FINALIZE or MARK_PAID" });
+    const weekReference = parseWeekRef(week) ?? new Date().toISOString();
+    try { res.json(svc.batchTransitionWeek(tid(req), uid(req), weekReference, action, Array.isArray(repIds) ? repIds.map(Number) : null)); } catch (e) { fail(res, e); }
+  });
+
+  // Penny-exact payroll CSV for the week — what the payroll provider ingests.
+  app.get("/api/commission/week-export.csv", requireCapability("commission.read.all"), (req, res) => {
+    const weekReference = parseWeekRef(req.query.week) ?? new Date().toISOString();
+    try {
+      const ov = svc.getWeekOverview(tid(req), uid(req), weekReference, null);
+      const money = (c: number) => (c / 100).toFixed(2);
+      const lines = [
+        `Week,${ov.bounds.localWeekLabel.replace(/,/g, "")}`,
+        "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final",
+        ...ov.rows.map(r => [
+          `"${r.repName.replace(/"/g, '""')}"`, r.status, r.qualifiedSaleCount,
+          `"${(r.tierLabel ?? (r.structure === "FLAT" ? "Flat" : "—")).replace(/"/g, '""')}"`,
+          money(r.rateCents), money(r.grossCommissionCents), money(r.adjustmentCents), money(r.finalCommissionCents),
+        ].join(",")),
+        `Total,,,,,${money(ov.rows.reduce((s, r) => s + r.grossCommissionCents, 0))},${money(ov.rows.reduce((s, r) => s + r.adjustmentCents, 0))},${money(ov.rows.reduce((s, r) => s + r.finalCommissionCents, 0))}`,
+      ];
+      storage.logActivity(uid(req), "commission.week.exported", "commission_statement", undefined, { week: ov.bounds.localWeekLabel, rows: ov.rows.length }, req.ip);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="payroll-${ov.bounds.weekStartUtc.slice(0, 10)}.csv"`);
+      res.send(lines.join("\n"));
+    } catch (e) { fail(res, e); }
+  });
+
+  // The sales behind any rep's week — statement explainability for managers.
+  app.get("/api/commission/reps/:repId/week-sales", requireCapability("commission.read.team"), (req, res) => {
+    const repId = Number(req.params.repId);
+    if (!canReadRep((req as any).user, repId)) return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
+    const weekReference = parseWeekRef(req.query.week) ?? new Date().toISOString();
+    try { res.json(svc.listWeekSalesForRep(tid(req), repId, weekReference)); } catch (e) { fail(res, e); }
   });
 
   app.get("/api/commission/statements", requireCapability("commission.read.self"), (req, res) => {
