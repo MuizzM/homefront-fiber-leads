@@ -32,7 +32,10 @@ function buildAgent(proxyUrl: string) {
     maxRedirections: 2,
     connect: {
       timeout: CONN_TIMEOUT,
-      rejectUnauthorized: false,
+      // TLS verification is ON by default so a MITM on the proxy egress can't
+      // capture the Kinetic bearer token / KFS_AUTH_BASIC. Only an explicit
+      // PROXY_INSECURE_TLS=true opt-in disables it (some proxies need it).
+      rejectUnauthorized: process.env.PROXY_INSECURE_TLS !== "true",
     },
   });
 }
@@ -61,26 +64,27 @@ loadUndici();
 export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<Response> {
   const proxyUrl = process.env.PROXY_URL;
 
-  if (proxyUrl && _sharedDispatcher && _undiciFetch) {
+  // When a proxy is configured it is REQUIRED: we must never silently fall back
+  // to a direct request. A direct call would de-anonymize the origin IP (getting
+  // it blocked) and break the "authorized outbound transport only" guarantee. So
+  // if the proxy path fails we retry once (on a socket reset) and otherwise THROW
+  // — fail closed — rather than leaking the request out our own IP.
+  if (proxyUrl) {
+    if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing a direct (de-anonymized) request");
+    if (!_sharedDispatcher) _sharedDispatcher = buildAgent(proxyUrl);
     try {
       return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
     } catch (err: any) {
-      if (err.message?.includes("destroyed") || err.message?.includes("closed") || err.message?.includes("reset")) {
-        try {
-          _sharedDispatcher = buildAgent(proxyUrl);
-          console.log("[proxy-fetch] Pool rebuilt after socket reset");
-          return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
-        } catch {}
+      if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
+        _sharedDispatcher = buildAgent(proxyUrl);
+        console.log("[proxy-fetch] Pool rebuilt after socket reset");
+        return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
       }
-      // Fall through to direct
+      throw err; // fail closed — do NOT go direct
     }
-  } else if (proxyUrl && _ProxyAgent && _undiciFetch && !_sharedDispatcher) {
-    try {
-      const dispatcher = buildAgent(proxyUrl);
-      return await _undiciFetch(url, { ...opts, dispatcher } as any) as unknown as Response;
-    } catch {}
   }
 
+  // No proxy configured (local/dev): a direct request is the intended behaviour.
   return fetch(url, opts);
 }
 

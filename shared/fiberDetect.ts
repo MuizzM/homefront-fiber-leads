@@ -49,7 +49,7 @@ export function isHotFiber(r: ScanResult): boolean {
 }
 
 // Classify prev-snapshot × fresh-result → availability transition. This is the
-// heart of "detect new fiber before competitors operationalize it".
+// heart of detecting new fiber as early as HomeFront can observe it.
 export function classifyAvailabilityTransition(prev: ScanSnapshot, result: ScanResult): TransitionOutcome {
   // FAILED CHECK GUARD (product law): a timeout/error tells us nothing. Do not
   // record it, do not count it as unavailable, do not fire "went stale". The

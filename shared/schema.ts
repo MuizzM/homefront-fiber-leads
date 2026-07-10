@@ -185,6 +185,7 @@ export type Lead = typeof leads.$inferSelect;
 // ── Fiber scan results ────────────────────────────────────────────────────────
 export const fiberChecks = sqliteTable("fiber_checks", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id"),              // owning tenant — scopes reads
   address: text("address").notNull(),
   lat: real("lat"),
   lng: real("lng"),

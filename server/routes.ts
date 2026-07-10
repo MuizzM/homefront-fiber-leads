@@ -94,6 +94,7 @@ import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshToken
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
 import * as scanSvc from "./scanService";
+import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { getCronStatus, triggerManualScan, startNightlyCron } from "./cron-scanner";
@@ -845,6 +846,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ pins, total: pins.length });
   });
 
+  // Raw provider fabric identifiers (Kinetic's internal address/access/exchange
+  // ids) are ops-internal — FIELD roles (rep, team_lead) must never see them.
+  // Managers/admins keep them for provider reference. Strip on the way out.
+  const PROVIDER_INTERNAL_FIELDS = ["dfAddressId", "accessId", "exchangeId"] as const;
+  function stripProviderIds<T extends Record<string, any>>(lead: T, user: any): T {
+    if (!lead) return lead;
+    const role = user?.role;
+    if (role === "admin" || role === "manager" || role === "super_admin") return lead;
+    const clone: any = { ...lead };
+    for (const f of PROVIDER_INTERNAL_FIELDS) delete clone[f];
+    return clone;
+  }
+
   app.get("/api/leads", requireAuth, (req, res) => {
     const { search, limit, offset, status, zip, city, state } = req.query;
     const user = (req as any).user;
@@ -874,7 +888,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const { rows, total } = search
       ? storage.searchLeadsPage(String(search), tid, repFilter, filterOpts)
       : storage.getLeadsPage(tid, repFilter, filterOpts);
-    res.json({ leads: rows, total, limit: lim, offset: off });
+    res.json({ leads: rows.map(r => stripProviderIds(r, user)), total, limit: lim, offset: off });
   });
   app.get("/api/leads/:id", requireAuth, (req, res) => {
     const lead = storage.getLeadById(Number(req.params.id));
@@ -884,7 +898,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!lead || (tid && lead.tenantId !== tid)) return res.status(404).json({ error: "Not found" });
     // Reps can only view leads assigned to them — 404 (not 403) to avoid leaking existence
     if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
-    res.json(lead);
+    res.json(stripProviderIds(lead, user));
   });
   // Team lead+ can create leads; manager+ can update status/delete
   // Helper to bust map pin cache after any lead mutation
@@ -965,8 +979,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     const result = await scanAddress(address, city, state, zip);
 
-    // Log to history
+    // Log to history — stamped with the caller's tenant so reads can be scoped.
     storage.createFiberCheck({
+      tenantId: (req as any).user?.tenantId ?? null,
       address: `${address}, ${city}, ${state} ${zip}`,
       lat: result.lat, lng: result.lng,
       result: JSON.stringify(result.rawResponse ?? result),
@@ -1354,6 +1369,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }));
   });
 
+  // ═══ MARKET BIRTH RADAR — transition intelligence (read; manager+, tenant-scoped) ═══
+  // The command-center overview: monitored targets, freshness, and how many
+  // addresses are baseline / candidate / verified New Fiber. ZERO proxy.
+  app.get("/api/radar/overview", requireManager, (req: any, res) => {
+    res.json(radarStore.radarOverview(tid(req)));
+  });
+  // The "what changed" feed — transition episodes with their honest
+  // interval-censored detection window. Never leaks provider ids/credentials.
+  app.get("/api/radar/transitions", requireManager, (req: any, res) => {
+    res.json({ transitions: radarStore.radarTransitions(tid(req), { status: qstr(req.query.status) || undefined, limit: req.query.limit ? Number(req.query.limit) : undefined }) });
+  });
+  app.get("/api/radar/transitions/:id", requireManager, (req: any, res) => {
+    const ep = radarStore.radarTransition(tid(req), Number(req.params.id));
+    if (!ep) return res.status(404).json({ error: "Transition not found" });
+    res.json(ep);
+  });
+
   // Preview a budgeted run's cost — how many addresses would be verified and what
   // it would cost. NO spend. Estimate-first is a hard product rule (two prior
   // billing incidents). Admin only (it reveals spend controls).
@@ -1663,7 +1695,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // Fiber check history
-  app.get("/api/fiber-checks", requireAuth, (_req, res) => res.json(storage.getRecentChecks(100)));
+  // Recent raw checks are an ops/debug log carrying full provider payloads — gate
+  // to manager+, scope to the caller's tenant, and NEVER return the raw provider
+  // `result` blob (it embeds dfAddressId/accessId/exchangeId + competitor intel).
+  app.get("/api/fiber-checks", requireManager, (req, res) => {
+    const rows = storage.getRecentChecks(100, (req as any).user?.tenantId);
+    res.json(rows.map(({ result, ...safe }: any) => safe));
+  });
 
   // ── Team Members ─────────────────────────────────────────────────────────────
   app.get("/api/team", requireAuth, (req, res) => {
@@ -1790,7 +1828,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const repName = storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`;
       storage.addLeadEvent(updated.id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
     }
-    res.json(updated);
+    res.json(stripProviderIds(updated, user));
   });
 
   // ── Bulk assign leads to a rep (lasso selection) ────────────────────────────
@@ -1913,8 +1951,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.patch("/api/leads/:id/enrichment", requireTeamLead, (req, res) => {
     const { ownerName, ownerPhone, ownerEmail, yearsAtAddress, isHomeowner } = req.body;
     const lead = storage.getLeadById(Number(req.params.id));
-    const _etid = (req as any).user?.tenantId;
+    const _euser = (req as any).user;
+    const _etid = _euser?.tenantId;
     if (!lead || (_etid && lead.tenantId !== _etid)) return res.status(404).json({ error: "Not found" });
+    // Team scope: a team_lead may only enrich leads they can access (own team) —
+    // matches the enrichment GET's scope; managers/admins pass.
+    if (!repCanAccessLead(_euser, lead)) return res.status(404).json({ error: "Not found" });
     const updated = storage.updateLead(lead.id, {
       ownerName: ownerName ?? lead.ownerName,
       ownerPhone: ownerPhone ?? lead.ownerPhone,
@@ -1922,17 +1964,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       yearsAtAddress: yearsAtAddress ?? lead.yearsAtAddress,
       isHomeowner: isHomeowner ?? lead.isHomeowner,
     } as any);
-    res.json(updated);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json(stripProviderIds(updated, (req as any).user));
   });
 
   // ── Knock log ────────────────────────────────────────────────────────────────
   app.get("/api/leads/:id/knocks", requireAuth, (req, res) => {
     const user = (req as any).user;
-    // Reps can only see knock history for their own assigned leads
-    if (user?.role === "rep") {
-      const lead = storage.getLeadById(Number(req.params.id));
-      if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
-    }
+    // Tenant wall for EVERY role (a manager/team_lead of tenant A must not read
+    // tenant B's knock history by guessing an id), then rep-scope on top.
+    const _ktid = user?.tenantId;
+    const _klead = storage.getLeadById(Number(req.params.id));
+    if (!_klead || (_ktid && _klead.tenantId !== _ktid)) return res.status(404).json({ error: "Not found" });
+    if (user?.role === "rep" && !repCanAccessLead(user, _klead)) return res.status(404).json({ error: "Not found" });
     // History rows carry who made the change — the card renders "Sold · 3:12 PM
     // · M. Muhammad" without a second round-trip per row.
     const rows = storage.getKnocksByLead(Number(req.params.id)).map(k => ({
@@ -1954,7 +1998,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const baseUpdatedAt = typeof req.body?.baseUpdatedAt === "string" ? req.body.baseUpdatedAt : null;
     if (typeof notes !== "string" || notes.length > 2000) return res.status(400).json({ error: "notes must be a string ≤2000 chars" });
     const lead = storage.getLeadById(Number(req.params.id));
-    if (!lead) return res.status(404).json({ error: "Not found" });
+    const _ntid = user?.tenantId;
+    // Tenant wall for EVERY role — this is a WRITE; a cross-tenant note edit must 404.
+    if (!lead || (_ntid && lead.tenantId !== _ntid)) return res.status(404).json({ error: "Not found" });
     if (user?.role === "rep" && !repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     if (notes === (lead.notes ?? "")) return res.json({ id: lead.id, notes, updatedAt: lead.updatedAt }); // no-op: no write, no event
     if (baseUpdatedAt && lead.updatedAt && lead.updatedAt > baseUpdatedAt && (lead.notes ?? "") !== "") {
@@ -1975,7 +2021,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/leads/:id/history", requireAuth, (req, res) => {
     const user = (req as any).user;
     const lead = storage.getLeadById(Number(req.params.id));
-    if (!lead) return res.status(404).json({ error: "Not found" });
+    const _htid = user?.tenantId;
+    // Tenant wall for EVERY role (history leaks rep GPS + outcomes cross-tenant).
+    if (!lead || (_htid && lead.tenantId !== _htid)) return res.status(404).json({ error: "Not found" });
     if (user?.role === "rep" && !repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     // One indexed team scan → O(1) name lookups per row (not a query per knock).
     const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
@@ -2190,6 +2238,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (typeof notes !== "string" || notes.length > 2000) return res.status(400).json({ error: "notes must be a string ≤2000 chars" });
     const knock = storage.getKnockById(Number(req.params.id));
     if (!knock) return res.status(404).json({ error: "Not found" });
+    // Tenant wall for EVERY role (this is a WRITE and the row carries rep GPS):
+    // resolve the knock's lead and 404 across tenants.
+    const _ktid = user?.tenantId;
+    const _klead = knock.leadId != null ? storage.getLeadById(knock.leadId) : null;
+    if (_ktid && _klead && _klead.tenantId !== _ktid) return res.status(404).json({ error: "Not found" });
     if (user?.role === "rep" && knock.repId !== user.teamMemberId) return res.status(404).json({ error: "Not found" });
     const updated = storage.updateKnockNotes(knock.id, notes);
     storage.logActivity(user?.id ?? null, "knock.note_updated", "knock", knock.id, { leadId: knock.leadId }, req.ip);
@@ -3490,8 +3543,8 @@ export function registerSaasRoutes(app: any) {
   });
 
   // ── Coming Soon Pipeline ─────────────────────────────────────────────────────
-  app.get("/api/coming-soon", requireAuth, (_req: Request, res: Response) => {
-    res.json(storage.getComingSoonAddresses());
+  app.get("/api/coming-soon", requireAuth, (req: Request, res: Response) => {
+    res.json(storage.getComingSoonAddresses((req as any).user?.tenantId));
   });
 
   app.post("/api/coming-soon", requireManager, (req: Request, res: Response) => {
@@ -3499,7 +3552,7 @@ export function registerSaasRoutes(app: any) {
     const { address, city, state, zip, lat, lng, reason } = req.body;
     if (!address || !city || !zip) return res.status(400).json({ error: "address, city, zip required" });
     try {
-      const entry = storage.createComingSoon({ address, city, state: state ?? "NC", zip, lat, lng, reason: reason ?? "no_service", addedBy: user.id, lastChecked: new Date().toISOString() });
+      const entry = storage.createComingSoon({ tenantId: user?.tenantId ?? getDefaultTenantId(), address, city, state: state ?? "NC", zip, lat, lng, reason: reason ?? "no_service", addedBy: user.id, lastChecked: new Date().toISOString() });
       storage.logActivity(user.id, "coming_soon.added", "coming_soon", entry.id, { address }, req.ip);
       res.json(entry);
     } catch (e: any) {
@@ -3510,6 +3563,10 @@ export function registerSaasRoutes(app: any) {
 
   app.delete("/api/coming-soon/:id", requireManager, (req: Request, res: Response) => {
     const id = Number(req.params.id);
+    const tid = (req as any).user?.tenantId;
+    // Tenant wall: a manager may only delete their own tenant's watchlist rows.
+    const entry = storage.getComingSoonAddresses(tid).find(a => a.id === id);
+    if (!entry) return res.status(404).json({ error: "Not found" });
     storage.deleteComingSoon(id);
     res.json({ ok: true });
   });
@@ -3518,7 +3575,8 @@ export function registerSaasRoutes(app: any) {
   app.post("/api/coming-soon/:id/promote", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
     const id = Number(req.params.id);
-    const entry = storage.getComingSoonAddresses().find(a => a.id === id);
+    // Tenant-scoped lookup — a manager can't promote another tenant's entry.
+    const entry = storage.getComingSoonAddresses(user?.tenantId).find(a => a.id === id);
     if (!entry) return res.status(404).json({ error: "Not found" });
     // Create lead from this address
     const lead = storage.createLead({

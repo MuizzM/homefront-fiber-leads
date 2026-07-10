@@ -140,7 +140,7 @@ export interface IStorage {
   getClockSessionsByRep(repId: number): ClockSession[];
   getAllClockSessions(date?: string): ClockSession[];
   // ── Coming Soon Pipeline ───────────────────────────────────────────────────
-  getComingSoonAddresses(): ComingSoonAddress[];
+  getComingSoonAddresses(tenantId?: number): ComingSoonAddress[];
   createComingSoon(addr: InsertComingSoon): ComingSoonAddress;
   updateComingSoon(id: number, updates: Partial<ComingSoonAddress>): ComingSoonAddress | undefined;
   deleteComingSoon(id: number): boolean;
@@ -229,6 +229,7 @@ export function runMigrations() {
     `ALTER TABLE leads ADD COLUMN max_download INTEGER`,
     `ALTER TABLE leads ADD COLUMN is_new_deployment INTEGER DEFAULT 0`,
     `ALTER TABLE fiber_checks ADD COLUMN billing_status TEXT`,
+    `ALTER TABLE fiber_checks ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
     `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
     `ALTER TABLE tenants ADD COLUMN brand_logo TEXT`,
@@ -465,6 +466,155 @@ export function runMigrations() {
     // heals the ~2,800 rows left dangling before that fix. Idempotent (0 rows
     // once healed), keeps each lead's rep assignment — only clears the dead ref.
     `UPDATE leads SET assigned_territory_id = NULL WHERE assigned_territory_id IS NOT NULL AND assigned_territory_id NOT IN (SELECT id FROM territories)`,
+
+    // ═══ MARKET BIRTH RADAR — transition-truth control plane ════════════════════
+    // A monitoring control plane SEPARATE from the leads table: authorized
+    // provider targets, an append-only observation ledger, per-target current
+    // state (compare-and-set), transition episodes (OLD→NEW→OLD→NEW = 2), and a
+    // transactional notification outbox for exactly-once alerts.
+
+    // Authorized provider feeds — the ONLY thing we may monitor. Every target
+    // must trace to one of these, with provenance + scope + expiry + budgets.
+    `CREATE TABLE IF NOT EXISTS authorized_sources (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       provider TEXT NOT NULL DEFAULT 'kinetic',
+       source_type TEXT NOT NULL,          -- kfs_integration | licensed_feed | customer_import | partner
+       provenance TEXT NOT NULL,           -- human/audit description of how we got authorization
+       allowed_markets TEXT,               -- JSON — city/zip scope, null = any within tenant
+       allowed_identifier_scope TEXT,      -- JSON — permitted provider id ranges/sets
+       max_qps REAL NOT NULL DEFAULT 1,
+       max_concurrency INTEGER NOT NULL DEFAULT 8,
+       daily_budget INTEGER,
+       monthly_budget INTEGER,
+       authorization_starts_at TEXT,
+       authorization_expires_at TEXT,
+       active INTEGER NOT NULL DEFAULT 1,
+       created_by INTEGER,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_auth_sources_tenant ON authorized_sources(tenant_id, active)`,
+
+    // The monitored authorized targets — the scheduler's work list.
+    `CREATE TABLE IF NOT EXISTS monitor_targets (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       authorized_source_id INTEGER NOT NULL,
+       provider TEXT NOT NULL DEFAULT 'kinetic',
+       provider_target_key TEXT NOT NULL,   -- e.g. dfAddressId (authorized)
+       normalized_address TEXT,
+       city TEXT, state TEXT, zip TEXT,
+       lat REAL, lng REAL,
+       coordinate_source TEXT,              -- provider | first_party | licensed_open | none
+       coordinate_accuracy TEXT,
+       active INTEGER NOT NULL DEFAULT 1,
+       priority_class TEXT NOT NULL DEFAULT 'warm',  -- hot | warm | cold | retry | exploration
+       priority_score REAL NOT NULL DEFAULT 0,
+       monitoring_policy TEXT,              -- JSON — cadence overrides
+       next_check_at TEXT,                  -- the scheduler orders by this
+       last_attempt_at TEXT,
+       last_successful_observation_at TEXT,
+       lease_owner TEXT,
+       lease_expires_at TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    // Uniqueness is TENANT-SCOPED: two tenants legitimately monitor the same
+    // provider address, and a global unique index would both block that and leak
+    // a cross-tenant existence oracle. (Drop the earlier global index if present.)
+    `DROP INDEX IF EXISTS idx_monitor_provider_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_monitor_provider_key ON monitor_targets(tenant_id, provider, provider_target_key)`,
+    // Due-target selection: active targets ordered by next_check_at → O(log N + k).
+    `CREATE INDEX IF NOT EXISTS idx_monitor_due ON monitor_targets(active, next_check_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_monitor_tenant ON monitor_targets(tenant_id, active)`,
+
+    // Append-only ledger of EVERY attempt (success or failure). Idempotent by
+    // attempt_key so a retry/replay can never double-record.
+    `CREATE TABLE IF NOT EXISTS target_observations (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       target_id INTEGER NOT NULL,
+       tenant_id INTEGER NOT NULL,
+       attempt_key TEXT NOT NULL UNIQUE,    -- idempotency
+       provider_observed_at TEXT,           -- provider's own 'as of' time
+       ingested_at TEXT NOT NULL DEFAULT (datetime('now')),
+       raw_segment TEXT,
+       normalized_segment TEXT,             -- CanonicalState
+       conclusive INTEGER NOT NULL DEFAULT 0,
+       outcome TEXT NOT NULL,               -- TransitionAction outcome
+       result_category TEXT,                -- ok | timeout | rate_limited | auth | challenge | server | malformed | heuristic
+       latency_ms INTEGER,
+       schema_version INTEGER NOT NULL DEFAULT 1,
+       evidence_hash TEXT,                  -- sha256 of the raw evidence (tamper-evidence, no raw dump)
+       response_reference TEXT,             -- pointer to fiber_checks row / evidence store
+       schema_drift INTEGER NOT NULL DEFAULT 0,
+       is_fixture INTEGER NOT NULL DEFAULT 0, -- labelled fixture evidence, never mixes with live
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_target_obs_target ON target_observations(target_id, ingested_at DESC)`,
+
+    // One current-state row per target — compare-and-set via state_version so a
+    // late/duplicate observation cannot overwrite newer truth.
+    `CREATE TABLE IF NOT EXISTS target_state (
+       target_id INTEGER PRIMARY KEY,
+       tenant_id INTEGER NOT NULL,
+       canonical_state TEXT NOT NULL DEFAULT 'UNKNOWN',
+       discovery_state TEXT NOT NULL DEFAULT 'NON_NEW',
+       state_version INTEGER NOT NULL DEFAULT 0,
+       baseline_observed_at TEXT,
+       last_non_new_observed_at TEXT,
+       first_new_observed_at TEXT,
+       verified_at TEXT,
+       last_successful_observation_id INTEGER,
+       last_conclusive_at TEXT,
+       stale_after TEXT,
+       is_fixture INTEGER NOT NULL DEFAULT 0, -- this target's evidence class (fixture vs live)
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+
+    // Transition episodes — one per proven non-New→New flip; OLD→NEW→OLD→NEW = 2.
+    `CREATE TABLE IF NOT EXISTS transition_episodes (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       target_id INTEGER NOT NULL,
+       episode_sequence INTEGER NOT NULL,
+       previous_state TEXT,
+       candidate_observation_id INTEGER,
+       candidate_at TEXT,
+       verification_rule TEXT,              -- JSON {n,m}
+       confirmation_count INTEGER NOT NULL DEFAULT 1,
+       verified_observation_id INTEGER,
+       verified_at TEXT,
+       regressed_at TEXT,
+       status TEXT NOT NULL DEFAULT 'candidate', -- candidate | verified | regressed
+       detection_from TEXT,                 -- interval-censored window start (last non-New)
+       detection_to TEXT,                   -- window end (first New)
+       evidence_summary TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_episode_target_seq ON transition_episodes(target_id, episode_sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_episode_tenant_status ON transition_episodes(tenant_id, status, candidate_at DESC)`,
+
+    // Transactional outbox — a state change and its alert commit together, so a
+    // crash after the state write still delivers the alert exactly once.
+    `CREATE TABLE IF NOT EXISTS notification_outbox (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       dedupe_key TEXT NOT NULL UNIQUE,     -- exactly-once
+       kind TEXT NOT NULL,                  -- candidate_new | verified_new | regression
+       target_id INTEGER,
+       episode_id INTEGER,
+       payload TEXT,                        -- JSON
+       status TEXT NOT NULL DEFAULT 'pending', -- pending | sent | failed
+       attempts INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       sent_at TEXT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_outbox_pending ON notification_outbox(status, created_at)`,
+    // Additive: fixture/live evidence isolation columns for DBs created before it.
+    `ALTER TABLE target_observations ADD COLUMN is_fixture INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE target_state ADD COLUMN is_fixture INTEGER NOT NULL DEFAULT 0`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -824,8 +974,10 @@ export class Storage implements IStorage {
   createFiberCheck(check: InsertFiberCheck): FiberCheck {
     return db.insert(fiberChecks).values({ ...check, checkedAt: new Date().toISOString() }).returning().get();
   }
-  getRecentChecks(limit = 100, _tenantId?: number): FiberCheck[] {
-    return db.select().from(fiberChecks).orderBy(desc(fiberChecks.checkedAt)).limit(limit).all();
+  getRecentChecks(limit = 100, tenantId?: number): FiberCheck[] {
+    const q = db.select().from(fiberChecks);
+    const scoped = tenantId != null ? q.where(eq(fiberChecks.tenantId, tenantId)) : q;
+    return scoped.orderBy(desc(fiberChecks.checkedAt)).limit(limit).all();
   }
 
   // ── Team members ───────────────────────────────────────────────────────────
@@ -1179,8 +1331,10 @@ export class Storage implements IStorage {
   }
 
   // ── Coming Soon Pipeline ───────────────────────────────────────────────────
-  getComingSoonAddresses(): ComingSoonAddress[] {
-    return db.select().from(comingSoonAddresses).orderBy(desc(comingSoonAddresses.createdAt)).all();
+  getComingSoonAddresses(tenantId?: number): ComingSoonAddress[] {
+    const q = db.select().from(comingSoonAddresses);
+    const scoped = tenantId != null ? q.where(eq(comingSoonAddresses.tenantId, tenantId)) : q;
+    return scoped.orderBy(desc(comingSoonAddresses.createdAt)).all();
   }
   createComingSoon(addr: InsertComingSoon): ComingSoonAddress {
     return db.insert(comingSoonAddresses).values({ ...addr, createdAt: new Date().toISOString() }).returning().get();

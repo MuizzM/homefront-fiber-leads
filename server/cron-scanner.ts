@@ -434,9 +434,14 @@ async function runNightlyPoolRescan(): Promise<void> {
       try {
         const r = await scanAddress(t.address, t.city, t.state, t.zip);
         // Transition detection: compare the stored snapshot against this fresh
-        // scan to tell a genuine unavailable→live FLIP (newly_live, first-to-
-        // market) from a first-ever scan of an already-live address.
-        const outcome = classifyAvailabilityTransition(snapshotFromTarget(t), r);
+        // scan to tell a genuine unavailable→live FLIP (newly_live) from a
+        // first-ever scan of an already-live address. CRITICAL: the failed-check
+        // guard keys on `checkFailed`, which the scanner does NOT set — it signals
+        // failure via apiSource="failed". Map it here or a timeout/401/429 would
+        // be misclassified as a real transition and overwrite fiber state (a
+        // non-answer must never change status).
+        const rr = { ...r, checkFailed: r.apiSource === "failed" };
+        const outcome = classifyAvailabilityTransition(snapshotFromTarget(t), rr);
         let leadId: number | null = null;
         const qual = outcome.shouldCreateLead ? qualifyDetection(t.address, inventory) : null;
         if (qual) exclusionReasons.push(qual.reason);
@@ -453,7 +458,7 @@ async function runNightlyPoolRescan(): Promise<void> {
               competitorName: r.competitorName, dfAddressId: r.dfAddressId,
               leadStatus: "prospect",
               deploymentNotes: outcome.isNewlyLive
-                ? "Nightly re-scan — NEWLY LIVE fiber (flipped from unavailable). First to market."
+                ? "Nightly re-scan — NEWLY LIVE fiber (flipped from unavailable). First observed by HomeFront."
                 : "Nightly re-scan — live fiber (first observation).",
             });
             leadId = lead.id;
@@ -462,11 +467,15 @@ async function runNightlyPoolRescan(): Promise<void> {
           newFiberAddrs.push(t.address);
           cronStatus.totalNewFiberFound++;
         }
-        storage.recordScanTargetResult(t.id, {
-          fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
-          dfAddressId: r.dfAddressId, convertedToLeadId: leadId,
-          availabilityStatus: outcome.status, newlyLive: outcome.isNewlyLive,
-        });
+        // Only persist the snapshot when the check produced a real signal — a
+        // failed check must not erase the last known state (recordSnapshot=false).
+        if (outcome.recordSnapshot) {
+          storage.recordScanTargetResult(t.id, {
+            fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
+            dfAddressId: r.dfAddressId, convertedToLeadId: leadId,
+            availabilityStatus: outcome.status, newlyLive: outcome.isNewlyLive,
+          });
+        }
       } catch { /* token expiry / timeout — skip this address, keep going */ }
     }));
     await new Promise(res => setTimeout(res, 60));

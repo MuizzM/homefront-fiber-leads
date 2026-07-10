@@ -363,7 +363,7 @@ function ActivityView() {
             </div>
           ) : (
             <div className="rounded-xl border border-border bg-secondary/40 p-4 text-[13px] text-muted-foreground text-center">
-              No new-fiber flips detected yet. Run a rescan on a verified market to hunt for change — first-to-market opportunity shows up here.
+              No new-fiber flips detected yet. Run a rescan on a verified market to hunt for change — newly-live opportunities first observed by HomeFront show up here.
             </div>
           )}
         </section>

@@ -305,7 +305,7 @@ export default function Dashboard() {
       )}
       {openRepId != null && <RepActivityCard repId={openRepId} onClose={() => setOpenRepId(null)} />}
 
-      {/* ── New Fiber Today — first-to-market detections from the nightly scan ── */}
+      {/* ── New Fiber Today — first-observed-by-HomeFront detections from the nightly scan ── */}
       {isManager && newFiber && (
         <div data-testid="new-fiber-today">
           <div className="flex items-baseline justify-between mb-2">
@@ -327,7 +327,7 @@ export default function Dashboard() {
                   <div className="min-w-0 flex-1">
                     <div className="text-[14px] font-medium text-foreground truncate">{a.address}, {a.city}</div>
                     <div className="text-[11px] text-muted-foreground">
-                      Flipped live {new Date(a.firstSeenLiveAt.replace(" ", "T") + "Z").toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                      First observed live {new Date(a.firstSeenLiveAt.replace(" ", "T") + "Z").toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                     </div>
                   </div>
                   <span className={`shrink-0 h-[20px] px-2 rounded-full text-[10px] font-bold uppercase tracking-wide leading-[20px] ${a.leadId

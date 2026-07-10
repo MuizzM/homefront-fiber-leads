@@ -284,7 +284,8 @@ export async function scanAddress(
   address: string,
   city: string,
   state: string,
-  zip: string
+  zip: string,
+  _retriedAfterAuth = false, // internal: guards the single 401/403 refresh-retry
 ): Promise<ScanResult> {
   const base: ScanResult = {
     address, city, state, zip,
@@ -323,11 +324,19 @@ export async function scanAddress(
       signal: AbortSignal.timeout(5000), // 7s per address — frees slot quickly on slow/blocked requests
     });
 
-    // On 401/403 — token expired mid-scan. Force refresh and retry once automatically.
+    // On 401/403 — token expired mid-scan. Force refresh and retry EXACTLY once.
+    // The _retriedAfterAuth guard caps this at a single refresh+retry: without it,
+    // a revoked credential or a 403-answering challenge would recurse without
+    // bound, and each level makes two proxy (Decodo) requests — unbounded spend.
     if (!res.ok && (res.status === 401 || res.status === 403)) {
+      if (_retriedAfterAuth) {
+        base.notes = `Auth still failing (${res.status}) after one token refresh`;
+        base.apiSource = "failed";
+        return base;
+      }
       try {
         await refreshTokenFromApi();
-        return await scanAddress(address, city, state, zip); // retry with fresh token
+        return await scanAddress(address, city, state, zip, true); // one retry with a fresh token
       } catch {
         base.notes = `Token refresh failed after ${res.status}`;
         base.apiSource = "failed";
@@ -343,12 +352,22 @@ export async function scanAddress(
     const data: KineticAddressResponse = await res.json();
     base.rawResponse = data;
 
-    // Address not in Kinetic fabric
-    if (!data.success || data.validationResult === "AddressNotFound") {
+    // Address explicitly not in Kinetic fabric → a genuine, conclusive no-service.
+    if (data.validationResult === "AddressNotFound") {
       base.fiberStatus = "no_service";
       base.apiSource = "kinetic_live";
       base.confidence = "HIGH";
       base.notes = "Address not found in Kinetic service fabric";
+      return base;
+    }
+    // A soft `success:false` WITHOUT an explicit AddressNotFound is a NON-ANSWER
+    // (provider hiccup / degraded / schema change), NOT a confirmed "no service".
+    // Treating it as conclusive would let a provider outage flip the whole pool
+    // to unavailable and then fabricate "newly live" flips the next healthy night.
+    if (!data.success) {
+      base.apiSource = "failed";
+      base.confidence = "LOW";
+      base.notes = `Non-conclusive response (success=false, ${data.validationResult ?? "no validationResult"})`;
       return base;
     }
 

@@ -123,6 +123,7 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
   // provider-verification claim is auditable, not a bare boolean.
   try {
     storage.createFiberCheck({
+      tenantId,  // stamp the run's tenant so scoped reads (and boot adoption) stay correct
       address: `${t.address}, ${t.city}, ${t.state} ${t.zip}`,
       lat: result.lat ?? t.lat, lng: result.lng ?? t.lng,
       result: JSON.stringify(result.rawResponse ?? result),
