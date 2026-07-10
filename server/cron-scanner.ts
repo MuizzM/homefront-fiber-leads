@@ -16,7 +16,6 @@
 import { mailTransport, mailFrom, adminInbox } from "./mail";
 import { storage } from "./storage";
 import { getAuthToken, scanAddress } from "./scanner";
-import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { KINETIC_ENVS, probeKineticDfId } from "./cns-scanner";
 import { classifyAvailabilityTransition, snapshotFromTarget } from "@shared/fiberDetect";
 import {
@@ -218,103 +217,78 @@ async function runNightlyCnsScan(): Promise<void> {
 }
 
 // ── Coming Soon Auto-Promote ──────────────────────────────────────────────────
-async function runComingSoonCheck(): Promise<void> {
-  console.log("[cron] Checking Coming Soon addresses...");
-
-  let addresses: any[];
+// Promote a watchlist address to a lead the moment its fiber goes live, dedup by
+// address, mark the watchlist row converted, and alert. Returns true if a NEW lead
+// was created (so we only alert on genuine, first-time go-lives).
+function promoteComingSoon(cs: any, billing: string | null, segment: string | null, promoted: string[]): void {
+  const fullAddress = `${cs.address}, ${cs.city}, ${cs.state} ${cs.zip}`;
   try {
-    addresses = storage.getComingSoonAddresses();
-  } catch {
-    console.warn("[cron] getComingSoonAddresses failed — Coming Soon table may not exist yet");
-    return;
-  }
+    const up = storage.upsertLeadByAddress({
+      tenantId: cs.tenantId ?? undefined,
+      address: cs.address, city: cs.city, state: cs.state, zip: cs.zip,
+      lat: cs.lat ?? undefined, lng: cs.lng ?? undefined,
+      fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
+      billingStatus: billing, householdSegmentType: segment,
+      dfAddressId: cs.dfAddressId ?? undefined, leadStatus: "prospect",
+      deploymentNotes: `Coming Soon → LIVE: fiber went live (watched since ${cs.createdAt}).`,
+    } as any);
+    try { storage.markComingSoonAvailable(cs.id, up.lead.id); } catch { /* ignore */ }
+    if (up.created) {
+      promoted.push(fullAddress);
+      sendAlertEmail(`🔥 FIBER WENT LIVE: ${cs.address}`, comingSoonPromotedHtml(1, [fullAddress])).catch(() => {});
+    }
+  } catch { /* dedup/constraint — skip */ }
+}
 
-  if (addresses.length === 0) {
-    console.log("[cron] No Coming Soon addresses to check");
-    return;
-  }
+async function runComingSoonCheck(): Promise<void> {
+  console.log("[cron] Rechecking Coming Soon watchlist…");
+
+  // Fast lane: addresses that carry Kinetic's dfAddressId → recheck by EXACT key.
+  let watch: any[] = [], legacy: any[] = [];
+  try { watch = storage.getComingSoonWithDfId(); } catch { /* table may lack the column pre-migration */ }
+  try { legacy = storage.getComingSoonAddresses().filter((c: any) => !c.dfAddressId && !c.fiberAvailable); } catch { /* ignore */ }
+  if (!watch.length && !legacy.length) { console.log("[cron] Coming Soon watchlist empty"); return; }
 
   let token: string;
-  try {
-    token = await getAuthToken();
-  } catch (err: any) {
-    console.warn("[cron] Cannot check Coming Soon — no auth token:", err.message);
-    return;
-  }
+  try { token = await getAuthToken(); }
+  catch (err: any) { console.warn("[cron] Cannot recheck Coming Soon — no auth token:", err.message); return; }
 
   const promoted: string[] = [];
+  let consecBlocked = 0;
 
-  for (const cs of addresses) {
-    try {
-      // Re-check via address search
-      const { proxyFetch: pf } = await import("./proxy-fetch");
-      const res = await pf(KFS_SCAN_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "Authorization": `Bearer ${token}`,
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-          "device-id": "698ca1e5-f077-4a62-a1e7-e97f484c7231",
-          "Referer": KFS_REFERER,
-          "Origin": KFS_ORIGIN,
-        },
-        body: JSON.stringify({
-          addressLine1: cs.address,
-          addressLine2: "",
-          city: cs.city,
-          state: cs.state,
-          postalCode: cs.zip,
-        }),
-        signal: AbortSignal.timeout(8000),
-      });
+  // ── Phase A: exact dfAddressId recheck (the fast, reliable path) ─────────────
+  for (const cs of watch) {
+    if (consecBlocked >= 15) { console.warn("[cron] proxy blocked — pausing Coming Soon recheck for tonight"); break; }
+    const probe = await probeKineticDfId(cs.dfAddressId, token);
+    if (probe.kind === "fail") {
+      // A non-answer NEVER demotes a watched address — just recheck next night.
+      if (probe.reason === "token_expired") { try { token = await getAuthToken(); consecBlocked = 0; } catch { /* keep old */ } }
+      else if (probe.reason === "blocked") consecBlocked++;
+      continue;
+    }
+    consecBlocked = 0;
+    try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
+    if (probe.kind === "hit" && probe.result.isNewFiber && probe.result.billingStatus === "N") {
+      promoteComingSoon(cs, probe.result.billingStatus, probe.result.householdSegmentType, promoted);
+    }
+    await new Promise(r => setTimeout(r, 120));
+  }
 
-      if (!res.ok) { await new Promise(r => setTimeout(r, 500)); continue; }
-
-      const data = await res.json();
-      if (!data.success || !data.address) { await new Promise(r => setTimeout(r, 300)); continue; }
-
-      const segment = data.address?.householdSegmentType ?? "";
-      const isNewFiber = segment === "NEW FIBER";
-
-      // Update last checked
-      try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
-
-      if (isNewFiber) {
-        // Fiber went live! Promote to lead.
-        const fullAddress = `${cs.address}, ${cs.city}, ${cs.state} ${cs.zip}`;
-        promoted.push(fullAddress);
-
-        try {
-          const lead = storage.createLead({
-            tenantId: cs.tenantId ?? undefined, // promoted lead stays in its watchlist's org
-            address: cs.address,
-            city: cs.city,
-            state: cs.state,
-            zip: cs.zip,
-            lat: cs.lat ?? undefined,
-            lng: cs.lng ?? undefined,
-            fiberStatus: "new_fiber",
-            isNewFiber: true,
-            isTenured: false,
-            billingStatus: data.address?.billingStatus ?? null,
-            householdSegmentType: segment,
-            techType: data.techType ?? data.address?.maxQualTechnologyType ?? null,
-            leadStatus: "prospect",
-            deploymentNotes: `Coming Soon promoted: fiber went live. Previously in pipeline since ${cs.createdAt}.`,
-          });
-          try { storage.markComingSoonAvailable(cs.id, lead.id); } catch { /* ignore */ }
-        } catch { /* duplicate — still mark available */ }
-
-        // Immediate alert
-        sendAlertEmail(
-          `🟡 Coming Soon → LIVE: ${cs.address}`,
-          comingSoonPromotedHtml(1, [fullAddress])
-        ).catch(() => {});
-      }
-
-      await new Promise(r => setTimeout(r, 200));
-    } catch { /* skip this address */ }
+  // ── Phase B: legacy rows without a dfAddressId — recheck by address, and
+  // BACKFILL the dfAddressId so next night uses the fast lane. ─────────────────
+  for (const cs of legacy) {
+    if (consecBlocked >= 15) break;
+    let r: any;
+    try { r = await scanAddress(cs.address, cs.city, cs.state, cs.zip); } catch { continue; }
+    if (r.apiSource === "failed") { if (/blocked \(403\)/.test(r.notes ?? "")) consecBlocked++; continue; }
+    consecBlocked = 0;
+    try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
+    if (r.dfAddressId) {
+      // Backfill Kinetic's key onto this watchlist row.
+      try { storage.upsertComingSoonByDfAddressId({ address: cs.address, city: cs.city, state: cs.state, zip: cs.zip, tenantId: cs.tenantId ?? null, reason: cs.reason, lat: cs.lat, lng: cs.lng, dfAddressId: r.dfAddressId, householdSegmentType: r.householdSegmentType } as any); } catch { /* ignore */ }
+    }
+    if (r.isNewFiber && r.billingStatus === "N") promoteComingSoon(cs, r.billingStatus, r.householdSegmentType, promoted);
+    await new Promise(r2 => setTimeout(r2, 150));
   }
 
   if (promoted.length > 0) {

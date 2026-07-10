@@ -23,7 +23,7 @@ import {
   type ActivityLogEntry,
   type Tenant, type InsertTenant,
 } from "@shared/schema";
-import { eq, desc, or, and, gt, isNull, inArray, sql } from "drizzle-orm";
+import { eq, desc, or, and, gt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 
 // Legacy scanner columns that exist in SQLite but predate the drizzle schema —
@@ -146,6 +146,8 @@ export interface IStorage {
   deleteComingSoon(id: number): boolean;
   markComingSoonAvailable(id: number, leadId: number): ComingSoonAddress | undefined;
   markComingSoonChecked(id: number): ComingSoonAddress | undefined;
+  upsertComingSoonByDfAddressId(addr: InsertComingSoon & { dfAddressId?: string | null; householdSegmentType?: string | null; buildStatus?: string | null }): ComingSoonAddress;
+  getComingSoonWithDfId(limit?: number): ComingSoonAddress[];
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null; dfAddressId?: string | null; scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null }>): number;
   getScanTargetsToRescan(limit: number): any[];
@@ -234,6 +236,11 @@ export function runMigrations() {
     `ALTER TABLE leads ADD COLUMN is_new_deployment INTEGER DEFAULT 0`,
     `ALTER TABLE fiber_checks ADD COLUMN billing_status TEXT`,
     `ALTER TABLE fiber_checks ADD COLUMN tenant_id INTEGER`,
+    // dfAddressId watchlist — the moat: recheck these by Kinetic's own key nightly.
+    `ALTER TABLE coming_soon_addresses ADD COLUMN df_address_id TEXT`,
+    `ALTER TABLE coming_soon_addresses ADD COLUMN household_segment_type TEXT`,
+    `ALTER TABLE coming_soon_addresses ADD COLUMN build_status TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_coming_soon_df ON coming_soon_addresses(df_address_id) WHERE df_address_id IS NOT NULL`,
     `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
     `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
     `ALTER TABLE tenants ADD COLUMN brand_logo TEXT`,
@@ -1362,6 +1369,35 @@ export class Storage implements IStorage {
     return db.update(comingSoonAddresses)
       .set({ lastChecked: new Date().toISOString() })
       .where(eq(comingSoonAddresses.id, id)).returning().get();
+  }
+  // Add/refresh a watchlist address keyed by Kinetic's dfAddressId (the exact,
+  // stable key). Dedups by dfAddressId when present, else by address. Refreshes the
+  // segment/build status on re-sight. Idempotent — safe to call every scan.
+  upsertComingSoonByDfAddressId(addr: InsertComingSoon & { dfAddressId?: string | null; householdSegmentType?: string | null; buildStatus?: string | null }): ComingSoonAddress {
+    const df = addr.dfAddressId ?? null;
+    // Match by dfAddressId first (the exact key), else by address — so a legacy
+    // address-only row gets its df backfilled instead of colliding on UNIQUE(address).
+    const existing =
+      (df ? db.select().from(comingSoonAddresses).where(eq(comingSoonAddresses.dfAddressId, df)).get() : undefined)
+      ?? db.select().from(comingSoonAddresses).where(eq(comingSoonAddresses.address, addr.address)).get();
+    if (existing) {
+      return db.update(comingSoonAddresses).set({
+        dfAddressId: df ?? existing.dfAddressId,
+        householdSegmentType: addr.householdSegmentType ?? existing.householdSegmentType,
+        buildStatus: addr.buildStatus ?? existing.buildStatus,
+        reason: addr.reason ?? existing.reason,
+        lat: addr.lat ?? existing.lat, lng: addr.lng ?? existing.lng,
+        lastChecked: new Date().toISOString(),
+      }).where(eq(comingSoonAddresses.id, existing.id)).returning().get();
+    }
+    return db.insert(comingSoonAddresses).values({ ...addr, createdAt: new Date().toISOString() }).returning().get();
+  }
+  // The nightly-recheck work list: watchlist addresses that carry a dfAddressId and
+  // haven't converted to a lead yet — rechecked by exact key, oldest-checked first.
+  getComingSoonWithDfId(limit = 100000): ComingSoonAddress[] {
+    return db.select().from(comingSoonAddresses)
+      .where(and(isNotNull(comingSoonAddresses.dfAddressId), eq(comingSoonAddresses.fiberAvailable, false)))
+      .orderBy(sql`last_checked IS NOT NULL, last_checked ASC`).limit(limit).all();
   }
 
   // ── Scan targets (persistent address pool) ───────────────────────────────────

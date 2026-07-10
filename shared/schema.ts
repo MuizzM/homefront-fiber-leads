@@ -383,6 +383,12 @@ export const comingSoonAddresses = sqliteTable("coming_soon_addresses", {
   fiberAvailable: integer("fiber_available", { mode: "boolean" }).default(false),
   convertedToLeadId: integer("converted_to_lead_id"), // set when promoted to lead
   addedBy: integer("added_by"),                // users.id
+  // Kinetic's own address key — enables the exact, fast nightly recheck by
+  // dfAddressId (no address parsing). THIS is what catches "went live" the
+  // moment it flips, so a rep can knock the day the installer leaves.
+  dfAddressId: text("df_address_id"),
+  householdSegmentType: text("household_segment_type"), // COMING SOON | PROSPECT | EXISTING COPPER | …
+  buildStatus: text("build_status"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export const insertComingSoonSchema = createInsertSchema(comingSoonAddresses).omit({
