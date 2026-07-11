@@ -369,6 +369,14 @@ export default function MapView() {
       enabled: !!user,
       staleTime: 30_000,
       retry: 2,
+      // Auto-refresh so leads added out-of-band (a scan, the nightly cron,
+      // another rep) appear on the map without a manual reload. The server's
+      // DB-derived ETag makes an unchanged poll a cheap 304, so this is nearly
+      // free when nothing changed. Paused while the tab is hidden (battery/data),
+      // and a return to the tab pulls fresh immediately.
+      refetchInterval: 60_000,
+      refetchIntervalInBackground: false,
+      refetchOnWindowFocus: true,
     }
   );
   const leads: MapPin[] = mapPinData?.pins ?? [];

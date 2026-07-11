@@ -785,7 +785,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // real user has a tenant since bootstrap — so it never hit in production).
   // Only the unscoped org-wide view per tenant is cached; scoped team_lead/rep
   // views are always computed fresh so role visibility can never leak via cache.
-  const _mapPinCache = new Map<number, { ts: number; pins: any[] }>();
+  const _mapPinCache = new Map<number, { ts: number; pins: any[]; ver?: string }>();
   const MAP_CACHE_TTL = 8_000; // 8s — fast enough for real-time feel
   // Monotonic data version — powers the /api/leads/map ETag so a steady-state
   // poll returns 304 for the cost of a string compare, not a query + 50k-row
@@ -798,13 +798,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   let _leadsEpoch = 0;
   const _leadsBustByTenant = new Map<number, number>();
 
-  function getMapPins(tenantId?: number, repFilter?: number | number[]) {
+  function getMapPins(tenantId?: number, repFilter?: number | number[], dataVer?: string) {
     const now = Date.now();
     const unscoped = repFilter == null || (Array.isArray(repFilter) && repFilter.length === 0);
     const cacheKey = tenantId ?? 0;
     if (unscoped) {
       const hit = _mapPinCache.get(cacheKey);
-      if (hit && now - hit.ts < MAP_CACHE_TTL) return hit.pins;
+      // Reuse only within TTL AND if the DB hasn't changed (a scan in another
+      // process bumps dataVer) — never serve stale pins after new leads land.
+      if (hit && now - hit.ts < MAP_CACHE_TTL && (dataVer == null || hit.ver === dataVer)) return hit.pins;
     }
     // Narrow 16-column projection, no ORDER BY — scoped reads come straight
     // off idx_leads_tenant_rep with no temp B-tree (measured 31ms → sub-ms
@@ -826,7 +828,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         lastKnockedAt: v?.lastAt ?? null,
       });
     }
-    if (unscoped) _mapPinCache.set(cacheKey, { ts: Date.now(), pins });
+    if (unscoped) _mapPinCache.set(cacheKey, { ts: Date.now(), pins, ver: dataVer });
     return pins;
   }
 
@@ -849,12 +851,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // 304 for the cost of a string compare. The scope key keeps role scoping
     // airtight — a rep's 304 token can never validate a manager's payload.
     const scopeKey = repFilter == null ? "all" : [repFilter].flat().sort((a, b) => a - b).join(",");
-    const ver = `${_leadsEpoch}.${_leadsBustByTenant.get(tid ?? 0) ?? 0}`;
+    // DB-derived version makes the ETag change on ANY cross-process lead write
+    // (scan runner, nightly cron) — not just this process's own mutations. Without
+    // it, a browser holding the pre-scan ETag would 304 forever and never see the
+    // new leads. The in-memory epoch stays for instant same-process busts.
+    const dbVer = storage.getLeadsDataVersion(tid);
+    const ver = `${_leadsEpoch}.${_leadsBustByTenant.get(tid ?? 0) ?? 0}.${dbVer}`;
     const etag = `W/"pins-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${ver}"`;
     res.set("Cache-Control", "private, no-cache");
     res.set("ETag", etag);
     if (req.headers["if-none-match"] === etag) return res.status(304).end();
-    const pins = getMapPins(tid, repFilter);
+    const pins = getMapPins(tid, repFilter, dbVer);
     res.json({ pins, total: pins.length });
   });
 

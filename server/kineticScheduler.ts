@@ -35,6 +35,13 @@ export interface SchedulerDeps {
   onRound?: (snap: RoundSnapshot) => void;   // observability hook (per round)
   maxRounds?: number;                         // safety bound (runaway guard)
   timeBudgetMs?: number;                      // stop pulling new work after this wall-clock (0 = unbounded)
+  // Circuit breaker (opt-in; 0 = off = grind until drained/budget). Stop the run
+  // after this many CONSECUTIVE hard-backoffs — the Kinetic bucket is genuinely
+  // drained and not refilling, so more probes just burn proxy $ on 403s that
+  // carry no availability signal. The un-answered targets stay queued (their
+  // last_scanned_at is untouched) and a later run sweeps them once the rolling
+  // window refills. Any answered round resets the counter.
+  stopAfterHardBackoffs?: number;
 }
 
 export interface RoundSnapshot {
@@ -51,6 +58,9 @@ export interface RunSummary {
   finalCwnd: number; maxCwnd: number;
   elapsedMs: number; effChecksPerMin: number;
   cwndTrace: number[];
+  // Why the run ended: work exhausted, time budget hit, sustained throttle
+  // (circuit breaker), or the runaway maxRounds guard.
+  stopReason: "drained" | "budget" | "throttled" | "maxRounds";
 }
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -65,6 +75,7 @@ export class KineticScheduler {
   private readonly onRound?: (snap: RoundSnapshot) => void;
   private readonly maxRounds: number;
   private readonly timeBudgetMs: number;
+  private readonly stopAfterHardBackoffs: number;
 
   private sessionRefreshes = 0;
   private hardBackoffs = 0;
@@ -83,6 +94,7 @@ export class KineticScheduler {
     this.onRound = deps.onRound;
     this.maxRounds = deps.maxRounds ?? 1_000_000;
     this.timeBudgetMs = deps.timeBudgetMs ?? 0;
+    this.stopAfterHardBackoffs = deps.stopAfterHardBackoffs ?? 0;
   }
 
   get isRunning() { return this.running; }
@@ -106,12 +118,14 @@ export class KineticScheduler {
     this.startedAt = this.now();
     const active = sources.slice();
     let roundNo = 0;
+    let consecHardBackoff = 0;
+    let stopReason: RunSummary["stopReason"] = "maxRounds";
     try {
       while (roundNo < this.maxRounds) {
-        if (this.timeBudgetMs && (this.now() - this.startedAt) > this.timeBudgetMs) break; // budget spent — rest stays queued
+        if (this.timeBudgetMs && (this.now() - this.startedAt) > this.timeBudgetMs) { stopReason = "budget"; break; } // budget spent — rest stays queued
         const conc = Math.max(this.cfg.minC, Math.floor(this.state.cwnd));
         const batch = await this.pull(active, conc);
-        if (batch.length === 0) break; // nothing left anywhere
+        if (batch.length === 0) { stopReason = "drained"; break; } // nothing left anywhere
 
         const outcomes = await Promise.all(batch.map(async ({ task, source }) => {
           let outcome: ProbeOutcome;
@@ -135,6 +149,9 @@ export class KineticScheduler {
           blockRate: metrics(this.state).blockRate,
         });
 
+        // Any answered work means the bucket refilled — reset the throttle streak.
+        if (round.ok > 0) consecHardBackoff = 0;
+
         if (d.action === "refresh_session") {
           const ok = await this.refreshSession();
           this.sessionRefreshes++;
@@ -142,12 +159,19 @@ export class KineticScheduler {
           if (!ok) await this.sleep(this.cfg.baseBackoffMs); // refresh failed → brief wait before re-probing
         } else if (d.action === "hard_backoff") {
           this.hardBackoffs++;
+          consecHardBackoff++;
+          // Circuit breaker: the bucket is drained and not refilling — stop
+          // burning proxy bytes on 403s. The rest stays queued for a later run.
+          if (this.stopAfterHardBackoffs && consecHardBackoff >= this.stopAfterHardBackoffs) {
+            stopReason = "throttled";
+            break;
+          }
           await this.sleep(d.backoffMs);
         } else if (d.recoveryPauseMs > 0) {
           await this.sleep(d.recoveryPauseMs);
         }
       }
-      return this.summary(roundNo);
+      return this.summary(roundNo, stopReason);
     } finally {
       this.running = false;
     }
@@ -169,12 +193,13 @@ export class KineticScheduler {
     return out;
   }
 
-  private summary(rounds: number): RunSummary {
+  private summary(rounds: number, stopReason: RunSummary["stopReason"] = "drained"): RunSummary {
     const m = metrics(this.state);
     const elapsedMs = this.now() - this.startedAt;
     const elapsedMin = Math.max(1e-6, elapsedMs / 60000);
     return {
       rounds,
+      stopReason,
       totalOk: this.state.totalOk, totalBlocked: this.state.totalBlocked, totalNeutral: this.state.totalNeutral,
       blockRate: m.blockRate,
       sessionRefreshes: this.sessionRefreshes, hardBackoffs: this.hardBackoffs,

@@ -27,6 +27,10 @@ const STATE = ((args.find((a) => a.startsWith("--state=")) ?? "").split("=")[1] 
 const CAP = Number((args.find((a) => a.startsWith("--cap=")) ?? "").split("=")[1] || 500);
 const BUDGET_MS = Number((args.find((a) => a.startsWith("--budget=")) ?? "").split("=")[1] || 420) * 1000;
 // --fringe or --fringe=radius:budget → flood-fill neighbors of every NEW FIBER hit.
+// Stop after N consecutive hard-backoffs (bucket drained, not refilling) so a
+// manual run doesn't grind on 403s — the rest stays queued for a later sweep.
+// 0 disables the breaker (grind to budget). Default 8.
+const MAXTHROTTLE = Number((args.find((a) => a.startsWith("--maxthrottle=")) ?? "").split("=")[1] || 8);
 const fringeArg = args.find((a) => a.startsWith("--fringe"));
 const FRINGE = fringeArg
   ? (() => { const [r, b] = (fringeArg.split("=")[1] ?? "").split(":"); return { radius: Number(r) || 8, budget: Number(b) || 400 }; })()
@@ -77,11 +81,13 @@ async function harvestCity(city: string, zip?: string): Promise<void> {
   console.log(`\nScanning ${sources.length} cities through ONE shared window (cap ${CAP}/city, budget ${BUDGET_MS / 1000}s${FRINGE ? `, fringe r${FRINGE.radius}/${FRINGE.budget}` : ""})…`);
   const sch = new KineticScheduler({
     timeBudgetMs: BUDGET_MS,
+    stopAfterHardBackoffs: MAXTHROTTLE,
     onRound: (s) => { if (s.round % 8 === 0 || s.action !== "continue") console.log(`  r${s.round}: cwnd=${s.cwnd} ${s.action}  +${s.ok}ok/${s.blocked}blk  blockRate=${(s.blockRate * 100).toFixed(1)}%`); },
   });
   const sum = await sch.run(sources);
 
   console.log(`\n═══ ENGINE SUMMARY ═══`);
+  console.log(`stop reason: ${sum.stopReason}${sum.stopReason === "throttled" ? " (Kinetic bucket drained — un-answered targets stay queued; re-run later to sweep)" : ""}`);
   console.log(`rounds=${sum.rounds}  checks: ${sum.totalOk} ok / ${sum.totalBlocked} blocked / ${sum.totalNeutral} neutral`);
   console.log(`BLOCK RATE = ${(sum.blockRate * 100).toFixed(1)}%  ·  cwnd max=${sum.maxCwnd} final=${sum.finalCwnd}  ·  ${sum.effChecksPerMin}/min  ·  refreshes=${sum.sessionRefreshes}  ·  ${(sum.elapsedMs / 1000).toFixed(0)}s`);
   let L = 0, NF = 0, CS = 0, FQ = 0, FL = 0;
@@ -91,5 +97,18 @@ async function harvestCity(city: string, zip?: string): Promise<void> {
     console.log(`  ${c.city.padEnd(12)} leads=${k.leads} newFiber=${k.newFiber} comingSoon=${k.comingSoon} noService=${k.noService} existing=${k.existing}${FRINGE ? ` · fringe=${k.fringeQueued}q/${k.fringeLeads}✓` : ""} (blk=${k.blocked} incon=${k.inconclusive} drop=${k.dropped})`);
   }
   console.log(`TOTAL: ${L} new leads · ${NF} new-fiber · ${CS} coming-soon watched${FRINGE ? ` · fringe: ${FQ} neighbor-probes → ${FL} leads OSM would have MISSED` : ""}`);
+
+  // What's still queued (never conclusively scanned) — so "get every lead" is a
+  // known, resumable state, not a silent gap. Re-run the same command later.
+  let remaining = 0;
+  for (const { c } of built) {
+    // never-scanned (last_scanned_at IS NULL) remaining in the pool for this city
+    remaining += loadCityPoolAddresses(c.city, c.zip, 1_000_000).length;
+  }
+  if (remaining > 0) {
+    console.log(`STILL QUEUED: ${remaining} address(es) un-answered (blocked/inconclusive under throttle). Re-run to sweep — the Kinetic rolling window refills over time.`);
+  } else {
+    console.log(`POOL DRAINED: every harvested address for these cities has a conclusive result.`);
+  }
   process.exit(0);
 })();

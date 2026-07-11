@@ -68,6 +68,7 @@ export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }>;
+  getLeadsDataVersion(tenantId?: number): string;
   getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[];
   getLeadsPage(
     tenantId: number | undefined,
@@ -457,6 +458,9 @@ export function runMigrations() {
     // Field photo evidence attached to a door (see shared/schema.ts leadPhotos).
     `CREATE TABLE IF NOT EXISTS lead_photos (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, lead_id INTEGER NOT NULL, user_id INTEGER, rep_id INTEGER, path TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_lead_photos_lead ON lead_photos(lead_id)`,
+    // Serves MAX(updated_at) per tenant for the map data-version (cross-process
+    // ETag) without scanning the tenant's rows.
+    `CREATE INDEX IF NOT EXISTS idx_leads_tenant_updated ON leads(tenant_id, updated_at)`,
 
     // ── SCAN INTELLIGENCE — persistent, resumable, budgeted verification runs ──
     // A scan is no longer an in-memory job that dies on restart. Each run is a
@@ -821,6 +825,18 @@ export class Storage implements IStorage {
   // the ENTIRE map pin set (every lead, hydrated) just to build two selects.
   // Same visibility semantics as getLeads: tenant wall + optional rep scope
   // (empty scope matches nothing, fail-closed).
+  // Cheap cross-process data-version for the map ETag: changes whenever a lead is
+  // inserted (COUNT + MAX id) or updated (MAX updated_at) by ANY process — the
+  // scan runner, nightly cron, or another app instance. This is what lets the map
+  // auto-refresh pick up scan-added leads (the in-memory epoch alone can't see
+  // writes from a separate process). Index-served via idx_leads_tenant_updated.
+  getLeadsDataVersion(tenantId?: number): string {
+    const row = (tenantId != null
+      ? rawDb.prepare("SELECT COUNT(*) c, COALESCE(MAX(id),0) mx, COALESCE(MAX(updated_at),'') mu FROM leads WHERE tenant_id = ?").get(tenantId)
+      : rawDb.prepare("SELECT COUNT(*) c, COALESCE(MAX(id),0) mx, COALESCE(MAX(updated_at),'') mu FROM leads").get()
+    ) as { c: number; mx: number; mu: string };
+    return `${row.c}.${row.mx}.${row.mu}`;
+  }
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }> {
     const conds: string[] = [];
     const params: (number | string)[] = [];
