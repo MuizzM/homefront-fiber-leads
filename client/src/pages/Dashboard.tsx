@@ -31,46 +31,29 @@ interface ActivityEntry {
   at: string;
 }
 
-// Soft tinted icon tiles keyed by semantic color — premium, theme-aware look.
-const TILE: Record<string, string> = {
-  teal:   "bg-primary/15 text-primary",
-  blue:   "bg-blue-500/15 text-blue-400",
-  purple: "bg-violet-500/15 text-violet-400",
-  amber:  "bg-amber-500/15 text-amber-400",
-  sky:    "bg-sky-500/15 text-sky-400",
-  orange: "bg-orange-500/15 text-orange-400",
-  rose:   "bg-rose-500/15 text-rose-400",
-  slate:  "bg-muted text-muted-foreground",
-};
-
-function StatCard({
-  title, value, sub, icon: Icon, accent, loading
-}: {
-  title: string; value: string | number; sub?: string;
-  icon: any; accent: keyof typeof TILE; loading?: boolean;
+// KPI metric strip — one hairline-divided bar (Pinterest pattern) instead of eight
+// competing cards. Each cell: a tinted micro-icon, label, big tabular number, sub.
+function MetricStrip({ items, loading }: {
+  items: { label: string; value: string | number; sub?: string; icon: any; tone: string }[];
+  loading?: boolean;
 }) {
   return (
-    <Card
-      className="bg-card border-border transition-all hover:border-primary/30 hover:shadow-lg hover:shadow-black/20 hover:-translate-y-0.5"
-      data-testid={`stat-card-${title.toLowerCase().replace(/\s/g,"-")}`}
-    >
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex-1 min-w-0">
-            <p className="text-[11px] text-muted-foreground uppercase tracking-wider font-semibold mb-1.5">{title}</p>
-            {loading ? (
-              <Skeleton className="h-8 w-20" />
-            ) : (
-              <p className="text-2xl font-bold text-foreground tabular-nums">{value}</p>
-            )}
-            {sub && !loading && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
+    <div className="flex flex-wrap rounded-xl border border-border bg-card overflow-hidden" data-testid="metric-strip">
+      {items.map((m, i) => {
+        const Icon = m.icon;
+        return (
+          <div key={i} className="flex-1 min-w-[148px] px-4 py-3.5 border-l border-border first:border-l-0">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+              <Icon className={`w-3.5 h-3.5 ${m.tone}`} />{m.label}
+            </div>
+            {loading
+              ? <Skeleton className="h-7 w-16 mt-2" />
+              : <div className="text-[25px] font-bold tracking-tight tabular-nums mt-1.5 text-foreground leading-none">{m.value}</div>}
+            {m.sub && !loading && <div className="text-[11.5px] text-muted-foreground mt-1">{m.sub}</div>}
           </div>
-          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${TILE[accent]}`}>
-            <Icon className="w-5 h-5" />
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+        );
+      })}
+    </div>
   );
 }
 
@@ -344,61 +327,24 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* KPI Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="New Fiber Leads" icon={Zap} accent="teal"
-          value={stats?.leads.newFiber ?? "—"}
-          sub={`${stats?.leads.unassigned ?? 0} unassigned`}
-          loading={statsLoading}
-        />
-        <StatCard
-          title="Knocks Today" icon={Target} accent="blue"
-          value={stats?.knocks.today ?? "—"}
-          sub={`${stats?.knocks.todaySales ?? 0} sales today`}
-          loading={statsLoading}
-        />
-        <StatCard
-          title="Week Sales" icon={TrendingUp} accent="purple"
-          value={stats?.knocks.weekSales ?? "—"}
-          sub="last 7 days"
-          loading={statsLoading}
-        />
-        <StatCard
-          title="Pending Payout" icon={DollarSign} accent="amber"
-          value={stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : "—"}
-          sub={`$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid total`}
-          loading={statsLoading}
-        />
-      </div>
-
-      {/* Second row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          title="Active Reps" icon={Users} accent="slate"
-          value={stats?.team.activeClockedIn ?? "—"}
-          sub={`of ${stats?.team.total ?? 0} total reps`}
-          loading={statsLoading}
-        />
-        <StatCard
-          title="Total Leads" icon={MapPin} accent="sky"
-          value={stats?.leads.total ?? "—"}
-          sub={`${stats?.leads.sold ?? 0} sold`}
-          loading={statsLoading}
-        />
-        <StatCard
-          title="Coming Soon" icon={Wifi} accent="orange"
-          value={stats?.comingSoon.total ?? "—"}
-          sub={`${stats?.comingSoon.converted ?? 0} converted`}
-          loading={statsLoading}
-        />
-        <StatCard
-          title="Field Hours Today" icon={Clock} accent="rose"
-          value={isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : "—"}
-          sub="total clocked time"
-          loading={statsLoading}
-        />
-      </div>
+      {/* KPI metric strip — one clean bar (Pinterest pattern), not eight cards */}
+      <MetricStrip
+        loading={statsLoading}
+        items={[
+          { label: "New fiber leads", icon: Zap, tone: "text-primary",
+            value: stats?.leads.newFiber ?? "—", sub: `${stats?.leads.unassigned ?? 0} unassigned` },
+          { label: "Knocks today", icon: Target, tone: "text-sky-400",
+            value: stats?.knocks.today ?? "—", sub: `${stats?.knocks.todaySales ?? 0} sales today` },
+          { label: "Week sales", icon: TrendingUp, tone: "text-violet-400",
+            value: stats?.knocks.weekSales ?? "—", sub: "last 7 days" },
+          { label: "Pending payout", icon: DollarSign, tone: "text-amber-400",
+            value: stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : "—", sub: `$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid` },
+          { label: "Coming soon", icon: Wifi, tone: "text-orange-400",
+            value: stats?.comingSoon.total ?? "—", sub: `${stats?.comingSoon.converted ?? 0} converted` },
+          { label: "Field hours", icon: Clock, tone: "text-rose-400",
+            value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : "—", sub: "clocked today" },
+        ]}
+      />
 
       {/* Quick Actions — admin/manager only */}
       {isManager && (

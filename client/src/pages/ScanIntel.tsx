@@ -56,7 +56,7 @@ export default function ScanIntel() {
   );
 }
 
-// ── Header + view switch ──────────────────────────────────────────────────────
+// ── Header + saved-view tabs ──────────────────────────────────────────────────
 function ScanHeader({ view, setView, isAdmin }: { view: View; setView: (v: View) => void; isAdmin: boolean }) {
   const tabs: Array<{ id: View; label: string; Icon: React.ElementType }> = [
     { id: "markets", label: "Markets", Icon: TrendingUp },
@@ -64,31 +64,34 @@ function ScanHeader({ view, setView, isAdmin }: { view: View; setView: (v: View)
     { id: "activity", label: "Activity", Icon: Activity },
   ];
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-card flex-shrink-0">
-      <div className="flex items-center gap-2 mr-1">
-        <div className="w-8 h-8 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center">
-          <Radar className="w-4.5 h-4.5 text-primary" style={{ width: 18, height: 18 }} />
+    <header className="flex-shrink-0 border-b border-border bg-card">
+      <div className="flex items-center gap-3 px-4 pt-3 pb-2">
+        <div className="w-8 h-8 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center flex-shrink-0">
+          <Radar className="text-primary" style={{ width: 18, height: 18 }} />
         </div>
-        <div className="leading-tight hidden sm:block">
-          <div className="text-sm font-semibold text-foreground">Scan Intelligence</div>
-          <div className="text-[11px] text-muted-foreground">Find markets before your competitors</div>
+        <div className="leading-tight min-w-0">
+          <h1 className="text-sm font-semibold tracking-tight text-foreground">Scan Intelligence</h1>
+          <p className="text-[11px] text-muted-foreground">Find markets before your competitors</p>
         </div>
+        {!isAdmin && <span className="ml-auto hidden md:inline text-[11px] text-muted-foreground/70">view-only · scans are admin-run</span>}
       </div>
-      <div className="flex items-center gap-1 ml-auto rounded-xl bg-secondary/60 p-1">
-        {tabs.map(({ id, label, Icon }) => (
-          <button key={id} onClick={() => setView(id)} data-testid={`scan-view-${id}`}
-            aria-label={label} aria-pressed={view === id} title={label}
-            className={`flex items-center gap-1.5 px-3 h-9 rounded-lg text-[13px] font-medium transition-colors ${view === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
-            <Icon className="w-4 h-4" /> <span className="hidden sm:inline">{label}</span>
-          </button>
-        ))}
-      </div>
-      {!isAdmin && <span className="hidden md:inline text-[11px] text-muted-foreground/70 ml-1">view-only · scans are admin-run</span>}
-    </div>
+      <nav role="tablist" aria-label="Scan views" className="flex items-center gap-1 px-2 -mb-px">
+        {tabs.map(({ id, label, Icon }) => {
+          const active = view === id;
+          return (
+            <button key={id} role="tab" onClick={() => setView(id)} data-testid={`scan-view-${id}`}
+              aria-label={label} aria-selected={active} title={label}
+              className={`relative flex items-center gap-1.5 px-3 h-10 text-[13px] font-medium border-b-2 transition-colors rounded-t focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+              <Icon className="w-4 h-4" /> <span className="hidden sm:inline">{label}</span>
+            </button>
+          );
+        })}
+      </nav>
+    </header>
   );
 }
 
-// ── Active-run banner (persistent, resumable) ─────────────────────────────────
+// ── Active-run banner (persistent, resumable, live) ───────────────────────────
 function ActiveRunBanner({ run, isAdmin, onOpen }: { run: ScanRun; isAdmin: boolean; onOpen: () => void }) {
   const qc = useQueryClient();
   const { data: live } = useQuery({ queryKey: ["/api/scan/runs", run.id], queryFn: () => scanApi.run(run.id), refetchInterval: 1500 });
@@ -97,8 +100,16 @@ function ActiveRunBanner({ run, isAdmin, onOpen }: { run: ScanRun; isAdmin: bool
     try { await scanApi.controlRun(r.id, action); qc.invalidateQueries({ queryKey: ["/api/scan/runs"] }); } catch {}
   };
   return (
-    <div className="flex items-center gap-3 px-4 py-2 bg-primary/10 border-b border-primary/20 flex-shrink-0" data-testid="scan-active-run">
-      {r.status === "running" ? <Loader2 className="w-4 h-4 text-primary animate-spin" /> : <Pause className="w-4 h-4 text-amber-500" />}
+    <div className="flex items-center gap-3 px-4 py-2 bg-primary/[0.08] border-b border-primary/20 flex-shrink-0" data-testid="scan-active-run">
+      {r.status === "running" ? (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary flex-shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Live
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-400 flex-shrink-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Paused
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-[13px]">
           <span className="font-semibold text-foreground truncate">{r.label}</span>
@@ -138,15 +149,17 @@ function MarketsView({ isAdmin, onScan, onOpportunity }: { isAdmin: boolean; onS
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-6xl mx-auto px-4 py-4">
-        {/* Summary strip */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
-          <SummaryStat label="Markets" value={markets.length.toLocaleString()} Icon={TrendingUp} />
-          <SummaryStat label="Addresses to verify" value={unverified.toLocaleString()} Icon={Search} />
-          <SummaryStat label="Est. opportunity" value={totalOpp.toLocaleString()} Icon={Sparkles} accent />
-          <div className="relative ml-auto">
+        {/* Metric strip + city filter */}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-5">
+          <div className="flex items-stretch rounded-xl border border-border bg-card divide-x divide-border overflow-hidden">
+            <MetricCell label="Markets" value={markets.length.toLocaleString()} />
+            <MetricCell label="To verify" value={unverified.toLocaleString()} />
+            <MetricCell label="Est. opportunity" value={totalOpp.toLocaleString()} />
+          </div>
+          <div className="relative sm:ml-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground/60" />
             <input value={q} onChange={e => setQ(e.target.value)} placeholder="Find a city…" data-testid="scan-market-search"
-              className="h-9 w-40 sm:w-52 pl-8 pr-3 rounded-lg bg-secondary/60 border border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+              className="h-9 w-full sm:w-52 pl-8 pr-3 rounded-lg bg-secondary/60 border border-border text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" />
           </div>
         </div>
 
@@ -162,8 +175,9 @@ function MarketsView({ isAdmin, onScan, onOpportunity }: { isAdmin: boolean; onS
 
 function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAdmin: boolean; onScan: () => void; onOpportunity: () => void }) {
   const tint = BAND_TINT[m.priorityBand];
+  const verifyPct = m.poolSize > 0 ? Math.min(100, (m.verified / m.poolSize) * 100) : 0;
   return (
-    <div className="rounded-2xl border border-border bg-card p-4 flex flex-col gap-3 hover:border-primary/30 transition-colors" data-testid={`scan-market-${m.city}`}>
+    <div className="rounded-xl border border-border bg-card p-4 flex flex-col gap-3 hover:border-primary/30 transition-colors" data-testid={`scan-market-${m.city}`}>
       <div className="flex items-start gap-3">
         {/* Priority dial */}
         <div className="relative w-12 h-12 flex-shrink-0" title={`Priority ${m.priority}/100`}>
@@ -172,12 +186,14 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
             <circle cx="18" cy="18" r="15.5" fill="none" stroke={tint} strokeWidth="3" strokeLinecap="round"
               strokeDasharray={`${(m.priority / 100) * 97.4} 97.4`} />
           </svg>
-          <div className="absolute inset-0 flex items-center justify-center text-[13px] font-bold" style={{ color: tint }}>{m.priority}</div>
+          <div className="absolute inset-0 flex items-center justify-center text-[13px] font-bold tabular-nums" style={{ color: tint }}>{m.priority}</div>
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h3 className="text-[15px] font-semibold text-foreground truncate">{m.city}</h3>
-            <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded font-semibold" style={{ background: tint + "22", color: tint }}>{m.priorityBand}</span>
+            <h3 className="text-[15px] font-semibold tracking-tight text-foreground truncate">{m.city}</h3>
+            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full font-semibold" style={{ background: tint + "1f", color: tint }}>
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint }} /> {m.priorityBand}
+            </span>
           </div>
           <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${m.confidence === "high" ? "bg-emerald-500" : m.confidence === "medium" ? "bg-amber-500" : "bg-slate-400"}`} />
@@ -196,7 +212,7 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
       </ul>
 
       {/* THE DECISION: unworked opportunity is the headline, not vanity counts. */}
-      <div className="flex items-end justify-between rounded-xl bg-secondary/40 border border-border px-3 py-2 mt-auto">
+      <div className="flex items-end justify-between rounded-xl bg-secondary/40 border border-border px-3 py-2">
         <div>
           <div className="text-[22px] font-bold leading-none tabular-nums" style={{ color: tint }}>
             {m.estRemainingOpportunity.toLocaleString()}
@@ -204,17 +220,28 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
           <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-1">est. opportunity</div>
         </div>
         <div className="text-right text-[11px] text-muted-foreground leading-tight">
-          <div>{m.unworkedLeads.toLocaleString()} unworked</div>
-          <div className="text-muted-foreground/60">{m.poolSize.toLocaleString()} in pool</div>
+          <div className="tabular-nums">{m.unworkedLeads.toLocaleString()} unworked</div>
+          <div className="text-muted-foreground/60 tabular-nums">{m.poolSize.toLocaleString()} in pool</div>
+        </div>
+      </div>
+
+      {/* Verification coverage — subtle "among" progress row */}
+      <div>
+        <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1">
+          <span className="tabular-nums">{m.verified.toLocaleString()} of {m.poolSize.toLocaleString()} verified</span>
+          <span className="tabular-nums">{Math.round(verifyPct)}%</span>
+        </div>
+        <div className="h-1.5 rounded-full bg-secondary overflow-hidden">
+          <div className="h-full rounded-full bg-muted-foreground/40" style={{ width: `${verifyPct}%` }} />
         </div>
       </div>
 
       <div className="flex items-center gap-2 mt-auto pt-1">
-        <button onClick={onOpportunity} data-testid={`scan-market-open-${m.city}`} className="flex-1 h-9 rounded-lg bg-secondary/70 hover:bg-secondary text-[13px] font-medium text-foreground flex items-center justify-center gap-1.5">
+        <button onClick={onOpportunity} data-testid={`scan-market-open-${m.city}`} className="flex-1 h-9 rounded-lg bg-secondary/70 hover:bg-secondary text-[13px] font-medium text-foreground flex items-center justify-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
           <MapPinned className="w-3.5 h-3.5" /> Opportunity
         </button>
         {isAdmin && (
-          <button onClick={onScan} data-testid={`scan-market-scan-${m.city}`} className="flex-1 h-9 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-[13px] font-semibold flex items-center justify-center gap-1.5">
+          <button onClick={onScan} data-testid={`scan-market-scan-${m.city}`} className="flex-1 h-9 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-[13px] font-semibold flex items-center justify-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
             <Zap className="w-3.5 h-3.5" /> Scan
           </button>
         )}
@@ -263,13 +290,15 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
       <aside role="dialog" aria-label={`Scan ${city}`} onClick={e => e.stopPropagation()}
         className="relative w-full max-w-md h-full bg-card border-l border-border shadow-2xl flex flex-col animate-in slide-in-from-right duration-200"
         data-testid="scan-run-panel">
-        <header className="flex items-center gap-2 px-4 py-3 border-b border-border">
-          <Zap className="w-4 h-4 text-primary" />
+        <header className="flex items-center gap-2 px-4 py-3 border-b border-border flex-shrink-0">
+          <div className="w-8 h-8 rounded-xl bg-primary/15 border border-primary/25 flex items-center justify-center flex-shrink-0">
+            <Zap className="w-4 h-4 text-primary" />
+          </div>
           <div className="min-w-0 flex-1">
-            <div className="text-[15px] font-semibold text-foreground truncate">{city}, {state}</div>
+            <div className="text-[15px] font-semibold tracking-tight text-foreground truncate">{city}, {state}</div>
             {card && <div className="text-[11px] text-muted-foreground">Priority {card.priority} · {card.confidence} confidence</div>}
           </div>
-          <button onClick={onClose} aria-label="Close" className="w-9 h-9 rounded-lg hover:bg-secondary flex items-center justify-center text-muted-foreground"><X className="w-4 h-4" /></button>
+          <button onClick={onClose} aria-label="Close" className="w-9 h-9 rounded-lg hover:bg-secondary flex items-center justify-center text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"><X className="w-4 h-4" /></button>
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -288,7 +317,7 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
                 <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 text-center space-y-3">
                   <Loader2 className="w-6 h-6 text-primary animate-spin mx-auto" />
                   <p className="text-[13px] text-foreground">Scan running. Results appear on the map as fiber is verified — you can leave and come back.</p>
-                  <button onClick={() => { onClose(); onViewOpportunity(); }} className="h-9 px-4 rounded-lg bg-primary text-primary-foreground text-[13px] font-semibold">Watch on the Opportunity Map</button>
+                  <button onClick={() => { onClose(); onViewOpportunity(); }} className="h-9 px-4 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">Watch on the Opportunity Map</button>
                 </div>
               ) : isAdmin ? (
                 <>
@@ -299,12 +328,12 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
                         const active = chosenBudget === t.checks;
                         return (
                           <button key={t.key} onClick={() => setBudget(t.checks)} data-testid={`scan-budget-${t.key}`}
-                            className={`text-left rounded-xl border p-3 transition-colors ${active ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`}>
+                            className={`text-left rounded-xl border p-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"}`}>
                             <div className="flex items-center justify-between">
                               <span className="text-[13px] font-semibold text-foreground">{t.label}</span>
                               <span className="text-[11px] text-muted-foreground tabular-nums">{usdCompact(t.cost.estUsd)}</span>
                             </div>
-                            <div className="text-[11px] text-muted-foreground mt-0.5">{t.checks.toLocaleString()} checks · {t.blurb}</div>
+                            <div className="text-[11px] text-muted-foreground mt-0.5"><span className="tabular-nums">{t.checks.toLocaleString()}</span> checks · {t.blurb}</div>
                           </button>
                         );
                       })}
@@ -314,6 +343,7 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
                   {/* Cost preview — always shown BEFORE spending (product law) */}
                   {preview && (
                     <div className="rounded-xl border border-border bg-secondary/40 p-3 space-y-1.5" data-testid="scan-cost-preview">
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold mb-1">Before you spend</div>
                       <Row Icon={Search} label="Addresses available to verify" value={preview.available.toLocaleString()} />
                       {preview.highValue > 0 && <Row Icon={Sparkles} label="High-value (near known fiber)" value={preview.highValue.toLocaleString()} />}
                       <Row Icon={Gauge} label="Will verify this run" value={preview.willVerify.toLocaleString()} />
@@ -323,7 +353,7 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
                   )}
 
                   <button onClick={start} disabled={starting || !chosenBudget || (preview?.willVerify ?? 0) === 0} data-testid="scan-start"
-                    className="w-full h-11 rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground text-[14px] font-semibold flex items-center justify-center gap-2">
+                    className="w-full h-11 rounded-xl bg-primary hover:bg-primary/90 disabled:opacity-50 text-primary-foreground text-[14px] font-semibold flex items-center justify-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
                     {starting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
                     {preview?.willVerify === 0 ? "Everything here was just verified" : `Verify ${(preview?.willVerify ?? chosenBudget).toLocaleString()} addresses`}
                   </button>
@@ -334,7 +364,7 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
                 </div>
               )}
 
-              <button onClick={() => { onClose(); onViewOpportunity(); }} className="w-full h-9 rounded-lg bg-secondary/70 hover:bg-secondary text-[13px] font-medium text-foreground flex items-center justify-center gap-1.5">
+              <button onClick={() => { onClose(); onViewOpportunity(); }} className="w-full h-9 rounded-lg bg-secondary/70 hover:bg-secondary text-[13px] font-medium text-foreground flex items-center justify-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
                 <MapPinned className="w-3.5 h-3.5" /> Open the Opportunity Map
               </button>
             </>
@@ -353,13 +383,13 @@ function ActivityView() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-4 py-4 space-y-5">
+      <div className="max-w-3xl mx-auto px-4 py-4 space-y-6">
         <section>
-          <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5 mb-2"><Sparkles className="w-4 h-4 text-orange-500" /> What changed — last 72h</h2>
+          <h2 className="text-[11px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1.5 mb-2"><Sparkles className="w-3.5 h-3.5 text-orange-500" /> What changed — last 72h</h2>
           {changes && changes.newlyLive.count > 0 ? (
             <div className="rounded-xl border border-orange-500/30 bg-orange-500/5 p-3">
-              <div className="text-[14px] font-semibold text-foreground">{changes.newlyLive.count} addresses just went live</div>
-              <div className="text-[12px] text-muted-foreground">{changes.newlyLive.readyToAssign} already turned into leads and ready to assign.</div>
+              <div className="text-[14px] font-semibold text-foreground tabular-nums">{changes.newlyLive.count} addresses just went live</div>
+              <div className="text-[12px] text-muted-foreground"><span className="tabular-nums">{changes.newlyLive.readyToAssign}</span> already turned into leads and ready to assign.</div>
             </div>
           ) : (
             <div className="rounded-xl border border-border bg-secondary/40 p-4 text-[13px] text-muted-foreground text-center">
@@ -369,7 +399,7 @@ function ActivityView() {
         </section>
 
         <section>
-          <h2 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5 mb-2"><Activity className="w-4 h-4 text-primary" /> Recent scans</h2>
+          <h2 className="text-[11px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1.5 mb-2"><Activity className="w-3.5 h-3.5 text-primary" /> Recent scans</h2>
           {runs.length === 0 ? (
             <div className="rounded-xl border border-border bg-secondary/40 p-4 text-[13px] text-muted-foreground text-center">No scans yet.</div>
           ) : (
@@ -384,36 +414,46 @@ function ActivityView() {
 }
 
 function RunRow({ run }: { run: ScanRun }) {
-  const statusColor = run.status === "done" ? "text-emerald-500" : run.status === "running" ? "text-primary" : run.status === "error" ? "text-red-500" : run.status === "cancelled" ? "text-muted-foreground" : "text-amber-500";
+  const pill = run.status === "done" ? "bg-emerald-500/15 text-emerald-400"
+    : run.status === "running" ? "bg-primary/15 text-primary"
+    : run.status === "error" ? "bg-rose-500/15 text-rose-400"
+    : run.status === "cancelled" ? "bg-muted text-muted-foreground"
+    : "bg-amber-500/15 text-amber-400";
+  const dot = run.status === "done" ? "bg-emerald-500"
+    : run.status === "running" ? "bg-primary animate-pulse"
+    : run.status === "error" ? "bg-rose-500"
+    : run.status === "cancelled" ? "bg-muted-foreground"
+    : "bg-amber-500";
   return (
     <div className="rounded-xl border border-border bg-card p-3 flex items-center gap-3" data-testid={`scan-run-${run.id}`}>
       <div className="min-w-0 flex-1">
-        <div className="text-[13px] font-medium text-foreground truncate">{run.label}</div>
-        <div className="text-[11px] text-muted-foreground flex items-center gap-2 flex-wrap">
-          <span className={`font-semibold capitalize ${statusColor}`}>{run.status}</span>
+        <div className="flex items-center gap-2">
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize flex-shrink-0 ${pill}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${dot}`} /> {run.status}
+          </span>
+          <span className="text-[13px] font-medium text-foreground truncate">{run.label}</span>
+        </div>
+        <div className="text-[11px] text-muted-foreground flex items-center gap-2 flex-wrap mt-1">
           <span className="tabular-nums">{run.verified.toLocaleString()} verified</span>
           <span className="tabular-nums text-primary font-semibold">{run.newFiber} new-fiber</span>
           {run.newlyLive > 0 && <span className="tabular-nums text-orange-500">{run.newlyLive} newly live</span>}
           {run.failed > 0 && <span className="tabular-nums text-amber-500">{run.failed} failed</span>}
         </div>
       </div>
-      <div className="text-right">
+      <div className="text-right flex-shrink-0">
         <div className="text-[13px] font-semibold text-foreground tabular-nums">{usdCompact(run.costUsd)}</div>
-        <div className="text-[10px] text-muted-foreground">proxy cost</div>
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">proxy cost</div>
       </div>
     </div>
   );
 }
 
 // ── Small building blocks ─────────────────────────────────────────────────────
-function SummaryStat({ label, value, Icon, accent }: { label: string; value: string; Icon: React.ElementType; accent?: boolean }) {
+function MetricCell({ label, value }: { label: string; value: string }) {
   return (
-    <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 ${accent ? "border-primary/30 bg-primary/5" : "border-border bg-card"}`}>
-      <Icon className={`w-4 h-4 ${accent ? "text-primary" : "text-muted-foreground"}`} />
-      <div className="leading-tight">
-        <div className="text-[15px] font-bold text-foreground tabular-nums">{value}</div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      </div>
+    <div className="px-4 py-2 first:pl-4">
+      <div className="text-[17px] font-bold text-foreground tabular-nums leading-none">{value}</div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-1 whitespace-nowrap">{label}</div>
     </div>
   );
 }

@@ -775,12 +775,12 @@ export default function Leads() {
   const handleCityChange = (c: string) => { setFilterCity(c); setPage(0); };
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-4 sm:p-6 space-y-5">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-xl font-bold">Lead Management</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{totalLeads.toLocaleString()} lead{totalLeads !== 1 ? "s" : ""}</p>
+          <h1 className="text-xl font-bold tracking-tight">Lead Management</h1>
+          <p className="text-sm text-muted-foreground mt-0.5 tabular-nums">{totalLeads.toLocaleString()} lead{totalLeads !== 1 ? "s" : ""}</p>
         </div>
         {canAddLead && (
           <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-white text-sm h-9"
@@ -790,65 +790,79 @@ export default function Leads() {
         )}
       </div>
 
-      {/* Filters */}
-      <div className="flex gap-2 flex-wrap">
-        <div className="relative flex-1 min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input value={search} onChange={e => handleSearchChange(e.target.value)}
-            placeholder="Search address, city, contact…"
-            className="pl-9 pr-9 bg-secondary border-input text-sm h-9 focus-visible:ring-primary/40"
-            data-testid="input-search-leads" />
-          {(searching || (isFetching && !isLoading)) && (
-            <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />
-          )}
-        </div>
-        <Select value={filterState} onValueChange={handleStateChange}>
-          <SelectTrigger className="bg-secondary border-input w-28 text-sm h-9" data-testid="filter-state">
-            <SelectValue placeholder="State" />
-          </SelectTrigger>
-          <SelectContent className="bg-card border-border">
-            <SelectItem value="all">All states</SelectItem>
-            {states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <Select value={filterCity} onValueChange={handleCityChange}>
-          <SelectTrigger className="bg-secondary border-input w-40 text-sm h-9" data-testid="filter-city">
-            <SelectValue placeholder="City" />
-          </SelectTrigger>
-          <SelectContent className="bg-card border-border max-h-64">
-            <SelectItem value="all">All cities</SelectItem>
-            {cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </div>
+      <div className="flex flex-col lg:flex-row gap-5">
+        {/* Filter rail — saved views (status) + location */}
+        <aside className="lg:w-52 lg:flex-shrink-0 space-y-5">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2 px-1">Views</div>
+            <div className="flex flex-wrap lg:flex-col gap-1" data-testid="filter-lead-status">
+              {["all", ...LEAD_STATUSES].map(s => {
+                const active = filterStatus === s;
+                const accent = STATUS_ACCENT[s];
+                return (
+                  <button key={s} onClick={() => handleStatusChange(s)}
+                    className={`flex items-center gap-2 lg:w-full text-left px-2.5 py-1.5 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                      active
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                    }`}>
+                    <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
+                      style={{ background: s === "all" ? (active ? "currentColor" : "#64748b") : accent }} />
+                    <span className="truncate">{s === "all" ? "All leads" : STATUS_LABEL[s]}</span>
+                    {s === "all" && totalLeads > 0 && (
+                      <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{totalLeads.toLocaleString()}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
-      {/* Status filter chips — the primary status control (dropdown removed as dup) */}
-      <div className="flex gap-1.5 flex-wrap" data-testid="filter-lead-status">
-        {["all", ...LEAD_STATUSES].map(s => {
-          const active = filterStatus === s;
-          const accent = STATUS_ACCENT[s];
-          return (
-            <button key={s} onClick={() => handleStatusChange(s)}
-              className={`px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-                active
-                  ? "bg-primary text-white border-primary shadow-sm"
-                  : "bg-secondary text-muted-foreground border-transparent hover:text-foreground hover:border-border"
-              }`}>
-              {s !== "all" && !active && (
-                <span className="inline-block w-1.5 h-1.5 rounded-full mr-1.5 align-middle" style={{ background: accent }} />
-              )}
-              {s === "all" ? `All${totalLeads > 0 ? ` · ${totalLeads.toLocaleString()}` : ""}` : STATUS_LABEL[s]}
-            </button>
-          );
-        })}
-      </div>
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2 px-1">Location</div>
+            <div className="grid grid-cols-2 lg:grid-cols-1 gap-2">
+              <Select value={filterState} onValueChange={handleStateChange}>
+                <SelectTrigger className="bg-secondary border-input text-sm h-9" data-testid="filter-state">
+                  <SelectValue placeholder="State" />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border">
+                  <SelectItem value="all">All states</SelectItem>
+                  {states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Select value={filterCity} onValueChange={handleCityChange}>
+                <SelectTrigger className="bg-secondary border-input text-sm h-9" data-testid="filter-city">
+                  <SelectValue placeholder="City" />
+                </SelectTrigger>
+                <SelectContent className="bg-card border-border max-h-64">
+                  <SelectItem value="all">All cities</SelectItem>
+                  {cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </aside>
+
+        {/* Content column */}
+        <div className="flex-1 min-w-0 space-y-4">
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input value={search} onChange={e => handleSearchChange(e.target.value)}
+              placeholder="Search address, city, contact…"
+              className="pl-9 pr-9 bg-secondary border-input text-sm h-9 focus-visible:ring-primary/40"
+              data-testid="input-search-leads" />
+            {(searching || (isFetching && !isLoading)) && (
+              <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />
+            )}
+          </div>
 
       {/* Lead list */}
       {isLoading ? (
-        <div className="space-y-2">
+        <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3">
-              <Skeleton className="w-1 h-9 rounded-full" />
+            <div key={i} className="flex items-center gap-3 px-4 py-3">
+              <Skeleton className="w-9 h-9 rounded-lg" />
               <div className="flex-1 space-y-2">
                 <Skeleton className="h-3.5 w-1/3" />
                 <Skeleton className="h-3 w-1/2" />
@@ -872,45 +886,47 @@ export default function Leads() {
           </div>
         </div>
       ) : (
-        <div className="space-y-1.5 animate-in fade-in duration-200">
+        <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border animate-in fade-in duration-200">
           {filtered.map((lead) => {
             const statusCls = STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground";
             const accent = STATUS_ACCENT[lead.leadStatus] ?? "#64748b";
             const hot = (lead.leadScore ?? 0) >= 80;
             const speed = lead.maxDownloadMbps ? (lead.maxDownloadMbps >= 1000 ? `${lead.maxDownloadMbps / 1000}G` : `${lead.maxDownloadMbps}M`) : null;
+            const initial = ((lead.contactName?.trim()?.[0]) ?? (lead.address?.trim()?.[0]) ?? "?").toUpperCase();
 
             return (
               <div
                 key={lead.id}
                 data-testid={`card-lead-${lead.id}`}
-                className="group flex items-stretch gap-0 rounded-xl border border-border bg-card overflow-hidden hover:border-primary/40 hover:bg-card/80 transition-all"
+                className="group flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-muted/50 transition-colors"
               >
-                {/* Status accent bar */}
-                <div className="w-1 flex-shrink-0" style={{ background: accent }} />
-
-                {/* Mobile: content stacks, then a status+actions row below (address
-                    gets the full width). Desktop (md+): one horizontal row. */}
-                <div className="flex-1 min-w-0 flex flex-col md:flex-row md:items-center gap-1.5 md:gap-3 pl-3.5 pr-3 py-2.5">
+                {/* Identity — first-letter avatar tinted by status + address */}
+                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  <div className="w-9 h-9 rounded-lg flex items-center justify-center text-[13px] font-bold flex-shrink-0"
+                    style={{ background: `${accent}22`, color: accent }} aria-hidden="true">
+                    {initial}
+                  </div>
                   <div className="flex-1 min-w-0">
                     {/* Address + badges (fiber status omitted — every lead is new
                         fiber, so the badge was noise on every row). */}
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-[13px] text-foreground truncate">{lead.address}</span>
-                      {speed && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-400">{speed}</span>}
+                      {speed && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-400 tabular-nums">{speed}</span>}
                       {hot && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-bold bg-orange-500/15 text-orange-400">HOT</span>}
                     </div>
                     {/* Meta row — address/phone only; assignment removed for a
                         cleaner list (managers still assign via the row action). */}
                     <div className="flex items-center gap-2.5 mt-0.5 flex-wrap text-[11px] text-muted-foreground">
-                      <span>{lead.city}, {lead.state} {lead.zip}</span>
+                      <span className="tabular-nums">{lead.city}, {lead.state} {lead.zip}</span>
                       {lead.contactPhone && (
-                        <span className="flex items-center gap-1"><Phone className="w-2.5 h-2.5" /> {lead.contactPhone}</span>
+                        <span className="flex items-center gap-1 tabular-nums"><Phone className="w-2.5 h-2.5" /> {lead.contactPhone}</span>
                       )}
                     </div>
                   </div>
+                </div>
 
-                  {/* Status + actions — own row on mobile (justify-between), inline on desktop */}
-                  <div className="flex items-center justify-between md:justify-end gap-1 flex-shrink-0">
+                {/* Status + actions — own row on mobile (justify-between), inline on desktop */}
+                <div className="flex items-center justify-between sm:justify-end gap-1 flex-shrink-0 pl-12 sm:pl-0">
                   {/* Status pill (always visible) */}
                   <Badge className={`text-[10px] px-2 py-0.5 rounded-full border-0 font-semibold flex-shrink-0 ${statusCls}`}>
                     {STATUS_LABEL[lead.leadStatus]}
@@ -960,7 +976,6 @@ export default function Leads() {
                       </Button>
                     )}
                   </div>
-                  </div>
                 </div>
               </div>
             );
@@ -981,6 +996,8 @@ export default function Leads() {
           </div>
         </div>
       )}
+        </div>
+      </div>
 
       {/* Dialogs */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>

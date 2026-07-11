@@ -14,33 +14,35 @@
     /* Light teal: #5FB8A5 → HSL 169 38% 55% */
     /* Steel: #CBD4DD  →  HSL 210 17% 83%  */
 
-    --background:   210 53% 9%;       /* very dark navy */
-    --foreground:   210 20% 94%;      /* near-white */
+    /* v3 — near-neutral ink (Linear/Spotify school), teal kept as the one accent.
+       Surfaces went navy → low-saturation ink; brand teal + semantics unchanged. */
+    --background:   216 22% 6%;       /* near-black ink ground */
+    --foreground:   210 16% 96%;      /* near-white */
 
-    --card:         210 50% 13%;      /* dark navy card */
-    --card-foreground: 210 20% 94%;
+    --card:         216 20% 9%;       /* surface */
+    --card-foreground: 210 16% 96%;
 
-    --popover:      210 50% 13%;
-    --popover-foreground: 210 20% 94%;
+    --popover:      216 20% 10%;
+    --popover-foreground: 210 16% 96%;
 
-    --primary:      172 44% 44%;      /* HomeFront Fiber teal #3EA394 */
+    --primary:      172 44% 46%;      /* HomeFront Fiber teal #3EA394 — kept */
     --primary-foreground: 0 0% 100%;
 
-    --secondary:    210 40% 20%;      /* medium navy */
-    --secondary-foreground: 210 20% 80%;
+    --secondary:    216 15% 14%;      /* elevated / secondary surface */
+    --secondary-foreground: 210 14% 82%;
 
-    --muted:        210 40% 17%;
-    --muted-foreground: 210 15% 55%;
+    --muted:        216 15% 12%;
+    --muted-foreground: 214 10% 62%;
 
-    --accent:       169 38% 55%;      /* lighter teal #5FB8A5 */
-    --accent-foreground: 0 0% 100%;
+    --accent:       216 15% 15%;      /* NEUTRAL hover surface (was teal) */
+    --accent-foreground: 210 16% 96%;
 
-    --destructive:  0 72% 51%;
+    --destructive:  0 72% 55%;
     --destructive-foreground: 0 0% 100%;
 
-    --border:       210 35% 22%;
-    --input:        210 35% 22%;
-    --ring:         172 44% 44%;      /* teal ring */
+    --border:       216 15% 16%;      /* hairline */
+    --input:        216 15% 16%;
+    --ring:         172 44% 52%;      /* teal ring */
 
     /* 12px base radius — cards/buttons/inputs inherit (design-system standard) */
     --radius: 0.75rem;
@@ -49,23 +51,27 @@
   /* Light theme tokens — same brand hues on light surfaces (WCAG AA). Applied
      when a `.light` class is set on <html>; the app defaults to dark. */
   .light {
-    --background:   210 25% 97%;
-    --foreground:   210 53% 12%;
+    /* Exa/Notion clean neutral — warm off-white ground, hairline borders,
+       neutral hover, teal darkened for AA on white. */
+    --background:   48 12% 98%;
+    --foreground:   220 16% 12%;
     --card:         0 0% 100%;
-    --card-foreground: 210 53% 12%;
+    --card-foreground: 220 16% 12%;
     --popover:      0 0% 100%;
-    --popover-foreground: 210 53% 12%;
-    --primary:      172 48% 34%;      /* darker teal for contrast on white */
+    --popover-foreground: 220 16% 12%;
+    --primary:      172 62% 32%;      /* darker teal for AA on white */
     --primary-foreground: 0 0% 100%;
-    --secondary:    210 25% 92%;
-    --secondary-foreground: 210 40% 22%;
-    --muted:        210 25% 93%;
-    --muted-foreground: 210 15% 40%;
-    --accent:       172 44% 40%;
-    --accent-foreground: 0 0% 100%;
-    --border:       210 20% 86%;
-    --input:        210 20% 86%;
-    --ring:         172 48% 34%;
+    --secondary:    220 14% 95%;
+    --secondary-foreground: 220 14% 28%;
+    --muted:        220 14% 96%;
+    --muted-foreground: 220 8% 42%;
+    --accent:       220 14% 95%;      /* neutral hover (was teal) */
+    --accent-foreground: 220 16% 12%;
+    --destructive:  0 72% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --border:       220 13% 91%;
+    --input:        220 13% 91%;
+    --ring:         172 62% 32%;
   }
 
   * {

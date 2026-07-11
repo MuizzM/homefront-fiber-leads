@@ -13,17 +13,9 @@ type LeaderboardEntry = {
 
 const RANK_COLORS = [
   "text-yellow-400",   // 1st
-  "text-slate-400",    // 2nd
+  "text-slate-300",    // 2nd
   "text-amber-600",    // 3rd
 ];
-
-const RANK_BG = [
-  "bg-yellow-400/10 border-yellow-400/30",
-  "bg-slate-400/10 border-slate-400/30",
-  "bg-amber-600/10 border-amber-600/30",
-];
-
-const MEDALS = ["🥇", "🥈", "🥉"];
 
 function conversionRate(contacts: number, sales: number) {
   if (contacts === 0) return "0%";
@@ -47,31 +39,43 @@ export default function Leaderboard() {
   );
 
   return (
-    <div className="p-6 space-y-5">
-      <div>
-        <h1 className="text-xl font-bold flex items-center gap-2">
-          <Trophy className="w-5 h-5 text-yellow-400" /> Sales Leaderboard
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">Live rep performance — ranked by sales</p>
+    <div className="p-6 space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight flex items-center gap-2 text-foreground">
+            <Trophy className="w-5 h-5 text-muted-foreground" /> Sales Leaderboard
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Rep performance, ranked by sales
+          </p>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0 pt-1" aria-label="Live, updates every 30 seconds">
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+          </span>
+          <span className="text-[11px] uppercase tracking-wide font-medium text-primary">Live</span>
+        </div>
       </div>
 
-      {/* Team totals */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      {/* Team totals — hairline metric strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px rounded-xl overflow-hidden border border-border bg-border">
         {[
-          { label: "Total Knocks", val: totals.knocks, icon: DoorOpen, color: "text-primary" },
-          { label: "Contacts Made", val: totals.contacts, icon: PhoneCall, color: "text-blue-400" },
-          { label: "Callbacks", val: totals.callbacks, icon: CalendarCheck, color: "text-amber-400" },
-          { label: "Total Sales", val: totals.sales, icon: Zap, color: "text-green-400" },
-        ].map(({ label, val, icon: Icon, color }) => (
-          <Card key={label} className="bg-card border-border">
-            <CardContent className="p-4">
-              <div className="flex items-center gap-2 mb-1">
-                <Icon className={`w-4 h-4 ${color}`} />
-                <span className="text-xs text-muted-foreground">{label}</span>
-              </div>
-              <div className={`text-2xl font-bold ${color}`}>{val}</div>
-            </CardContent>
-          </Card>
+          { label: "Total Knocks", val: totals.knocks, icon: DoorOpen, accent: false },
+          { label: "Contacts Made", val: totals.contacts, icon: PhoneCall, accent: false },
+          { label: "Callbacks", val: totals.callbacks, icon: CalendarCheck, accent: false },
+          { label: "Total Sales", val: totals.sales, icon: Zap, accent: true },
+        ].map(({ label, val, icon: Icon, accent }) => (
+          <div key={label} className="bg-card px-4 py-3">
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </div>
+            <div className={`text-2xl font-bold tabular-nums mt-1 ${accent ? "text-emerald-400" : "text-foreground"}`}>
+              {val}
+            </div>
+          </div>
         ))}
       </div>
 
@@ -88,94 +92,81 @@ export default function Leaderboard() {
           </CardContent>
         </Card>
       ) : (
-        <div className="space-y-2">
+        <Card className="bg-card border-border overflow-hidden">
           {board.map((entry, idx) => {
             const rankCls = RANK_COLORS[idx] ?? "text-muted-foreground";
-            const cardCls = RANK_BG[idx] ?? "bg-card border-border";
-            const medal = MEDALS[idx];
+            const teamPct = totals.sales > 0 ? (entry.sales / totals.sales) * 100 : 0;
+            const isManager = entry.rep.role === "manager";
 
             return (
-              <Card
+              <div
                 key={entry.rep.id}
-                className={`border ${cardCls} transition-colors`}
                 data-testid={`row-rep-${entry.rep.id}`}
+                className="relative flex items-center gap-3 sm:gap-4 px-4 py-3 border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors overflow-hidden"
               >
-                <CardContent className="py-3 px-4">
-                  <div className="flex items-center gap-3">
-                    {/* Rank */}
-                    <div className={`text-xl font-bold w-8 text-center flex-shrink-0 ${rankCls}`}>
-                      {medal ?? `#${idx + 1}`}
-                    </div>
+                {/* Rank */}
+                <div className="w-6 flex-shrink-0 text-center">
+                  <span className={`text-base font-bold tabular-nums ${rankCls}`}>{idx + 1}</span>
+                </div>
 
-                    {/* Avatar */}
-                    <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
-                      entry.rep.role === "manager"
-                        ? "bg-amber-500/20 text-amber-400"
-                        : "bg-primary/20 text-primary"
-                    }`}>
-                      {entry.rep.name.charAt(0).toUpperCase()}
-                    </div>
+                {/* Avatar */}
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
+                  isManager
+                    ? "bg-amber-500/15 text-amber-400"
+                    : "bg-secondary text-foreground"
+                }`}>
+                  {entry.rep.name.charAt(0).toUpperCase()}
+                </div>
 
-                    {/* Name + role */}
-                    <div className="flex-1 min-w-0">
-                      <div className="font-semibold text-sm text-foreground truncate" title={entry.rep.name}>{entry.rep.name}</div>
-                      <div className="text-xs text-muted-foreground capitalize">{entry.rep.role}</div>
-                    </div>
+                {/* Name + role */}
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-sm text-foreground truncate" title={entry.rep.name}>{entry.rep.name}</div>
+                  <div className="text-xs text-muted-foreground capitalize">{entry.rep.role}</div>
+                </div>
 
-                    {/* Stats */}
-                    <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-                      <StatPill icon={DoorOpen} val={entry.knocks} label="knocks" color="text-muted-foreground" />
-                      <StatPill icon={PhoneCall} val={entry.contacts} label="contacts" color="text-blue-400" />
-                      <StatPill icon={CalendarCheck} val={entry.callbacks} label="callbacks" color="text-amber-400" />
-                      <StatPill icon={Zap} val={entry.sales} label="sales" color="text-green-400" />
+                {/* Secondary metrics — muted, desktop only */}
+                <div className="hidden md:flex items-center gap-6 flex-shrink-0">
+                  <Metric icon={DoorOpen} val={entry.knocks} label="Knocks" />
+                  <Metric icon={PhoneCall} val={entry.contacts} label="Contacts" />
+                  <Metric icon={CalendarCheck} val={entry.callbacks} label="Callbacks" />
+                  <Metric val={conversionRate(entry.contacts, entry.sales)} label="Conv." />
+                </div>
 
-                      {/* Conversion rate */}
-                      <div className="hidden sm:flex flex-col items-center min-w-[48px]">
-                        <div className="text-sm font-bold text-foreground">
-                          {conversionRate(entry.contacts, entry.sales)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">conv.</div>
-                      </div>
-                    </div>
-                  </div>
+                {/* Primary metric — sales, big + tabular */}
+                <div className="text-right flex-shrink-0 min-w-[52px] pl-2 sm:pl-4">
+                  <div className="text-xl font-bold tabular-nums text-emerald-400 leading-none">{entry.sales}</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-1">Sales</div>
+                </div>
 
-                  {/* Progress bar — sales as % of team total */}
-                  {totals.sales > 0 && (
-                    <div className="mt-2 ml-[68px]">
-                      <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
-                        <span>{entry.sales} sales</span>
-                        <span>{Math.round((entry.sales / totals.sales) * 100)}% of team</span>
-                      </div>
-                      <div className="h-1.5 bg-secondary rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-green-400 rounded-full transition-all duration-500"
-                          style={{ width: `${(entry.sales / totals.sales) * 100}%` }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                {/* Sales share — thin hairline accent along the bottom edge */}
+                {totals.sales > 0 && (
+                  <div
+                    className="absolute bottom-0 left-0 h-0.5 bg-emerald-400/40"
+                    style={{ width: `${teamPct}%` }}
+                    aria-hidden="true"
+                  />
+                )}
+              </div>
             );
           })}
-        </div>
+        </Card>
       )}
     </div>
   );
 }
 
-function StatPill({
-  icon: Icon, val, label, color
+function Metric({
+  icon: Icon, val, label
 }: {
-  icon: React.ElementType; val: number; label: string; color: string;
+  icon?: React.ElementType; val: React.ReactNode; label: string;
 }) {
   return (
-    <div className="flex flex-col items-center min-w-[36px]">
-      <div className={`flex items-center gap-0.5 text-sm font-bold ${color}`}>
-        <Icon className="w-3 h-3" />
+    <div className="flex flex-col items-end min-w-[44px]">
+      <div className="flex items-center gap-1 text-sm font-semibold tabular-nums text-foreground">
+        {Icon && <Icon className="w-3.5 h-3.5 text-muted-foreground" />}
         {val}
       </div>
-      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
     </div>
   );
 }

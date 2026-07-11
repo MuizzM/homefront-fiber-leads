@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "homefront",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 5000
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "PORT=5050 npm run dev"],
+      "port": 5050
     }
   ]
 }

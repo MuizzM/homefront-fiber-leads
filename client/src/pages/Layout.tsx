@@ -211,14 +211,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         href={href}
                         onClick={() => setMobileOpen(false)}
                         className={cn(
-                          "flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                          "flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors",
                           isActive
-                            ? "bg-primary/15 text-primary"
-                            : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+                            ? "bg-secondary text-foreground"
+                            : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
                         )}
                         data-testid={`nav-${label.toLowerCase().replace(/\s/g, "-")}`}
                       >
-                        <Icon className="w-4 h-4 flex-shrink-0" />
+                        <Icon className={cn("w-4 h-4 flex-shrink-0", isActive && "text-primary")} />
                         <span className="flex-1 text-[13px]">{label}</span>
                         {badgeCount > 0 && (
                           <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-[10px] font-bold text-black flex items-center justify-center px-1">

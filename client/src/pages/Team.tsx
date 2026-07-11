@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import {
   UserPlus, Edit2, Trash2, Phone, Mail,
-  User, CheckCircle2, XCircle, Users, Crown, Star, ChevronUp,
+  User, CheckCircle2, Users, Crown, Star, ChevronUp,
   Wallet, Layers, DollarSign
 } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
@@ -355,117 +355,134 @@ export default function Team() {
   const leads = team.filter(m => m.role === "team_lead");
   const reps = team.filter(m => m.role === "rep");
 
+  // Team totals for the metric strip (derived from leaderboard/team — no new calls)
+  const activeCount = team.filter(m => m.active).length;
+  const totalKnocks = leaderboard.reduce((a, l) => a + l.knocks, 0);
+  const totalContacts = leaderboard.reduce((a, l) => a + l.contacts, 0);
+  const totalCallbacks = leaderboard.reduce((a, l) => a + l.callbacks, 0);
+  const totalSales = leaderboard.reduce((a, l) => a + l.sales, 0);
+
   const RoleSection = ({ title, members, role }: { title: string; members: TeamMember[]; role: string }) => {
     const ri = roleInfo(role);
     if (members.length === 0) return null;
     return (
       <div>
-        <div className="flex items-center gap-2 mb-3">
-          <div className={`w-6 h-6 rounded-full flex items-center justify-center ${ri.avatarColor}`}>
-            <ri.Icon className="w-3 h-3" />
+        {/* Section header — micro-label + count */}
+        <div className="flex items-center gap-2 mb-2 px-1">
+          <div className={`w-5 h-5 rounded-full flex items-center justify-center ${ri.avatarColor}`}>
+            <ri.Icon className="w-2.5 h-2.5" />
           </div>
-          <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-          <span className="text-xs text-muted-foreground">({members.length})</span>
+          <h2 className="text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">{title}</h2>
+          <span className="text-[11px] text-muted-foreground tabular-nums">{members.length}</span>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {members.map(member => {
-            const s = statsFor(member.id);
-            const ri2 = roleInfo(member.role);
-            return (
-              <Card key={member.id} className="bg-card border-border hover:border-primary/30 transition-colors"
-                data-testid={`card-rep-${member.id}`}>
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${ri2.avatarColor}`}>
-                        {member.name.charAt(0).toUpperCase()}
-                      </div>
-                      <div>
-                        <div className="font-semibold text-sm text-foreground leading-tight">{member.name}</div>
-                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
-                          <Badge className={`text-xs px-1.5 py-0 rounded-full border-0 ${ri2.color}`}>
-                            <ri2.Icon className="w-2.5 h-2.5 mr-0.5" />
-                            {ri2.short}
-                          </Badge>
-                          {member.active ? (
-                            <Badge className="text-xs px-1.5 py-0 rounded-full bg-green-500/15 text-green-400 border-0">
-                              <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" />Active
-                            </Badge>
-                          ) : (
-                            <Badge className="text-xs px-1.5 py-0 rounded-full bg-muted text-muted-foreground border-0">
-                              <XCircle className="w-2.5 h-2.5 mr-0.5" />Inactive
-                            </Badge>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex gap-1 flex-shrink-0">
-                      {canManageCommission && member.role !== "manager" && (
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
-                          onClick={() => setCommissionMember(member)} data-testid={`btn-commission-rep-${member.id}`}
-                          title="Commission structure">
-                          <Wallet className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                      {canAddMembers && (
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
-                          onClick={() => openEdit(member)} data-testid={`btn-edit-rep-${member.id}`}>
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                      {canDeleteMembers && (
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-red-400"
-                          onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                    </div>
+
+        {/* Roster — hairline-divided rows */}
+        <Card className="bg-card border-border overflow-hidden">
+          <div className="divide-y divide-border">
+            {members.map(member => {
+              const s = statsFor(member.id);
+              const ri2 = roleInfo(member.role);
+              const sup = (member as any).reportsToId
+                ? team.find(t => t.id === (member as any).reportsToId)
+                : null;
+              const metrics = [
+                { label: "Knocks", val: s.knocks },
+                { label: "Contacts", val: s.contacts },
+                { label: "Callbacks", val: s.callbacks },
+                { label: "Sales", val: s.sales, highlight: true },
+              ];
+              return (
+                <div key={member.id} data-testid={`card-rep-${member.id}`}
+                  className="flex items-center gap-3 p-4 hover:bg-secondary/40 transition-colors">
+                  {/* Avatar */}
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${ri2.avatarColor}`}>
+                    {member.name.charAt(0).toUpperCase()}
                   </div>
 
-                  {/* Contact info */}
-                  <div className="mt-3 space-y-1">
-                    {(member as any).reportsToId && (() => {
-                      const sup = team.find(t => t.id === (member as any).reportsToId);
-                      return sup ? (
-                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  {/* Identity */}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm text-foreground leading-tight truncate">{member.name}</span>
+                      <Badge className={`text-[11px] px-1.5 py-0 rounded-full border-0 ${ri2.color}`}>
+                        <ri2.Icon className="w-2.5 h-2.5 mr-0.5" />
+                        {ri2.short}
+                      </Badge>
+                      <span className="inline-flex items-center gap-1 text-[11px]">
+                        <span className={`w-1.5 h-1.5 rounded-full ${member.active ? "bg-emerald-500" : "bg-muted-foreground/40"}`} />
+                        <span className={member.active ? "text-emerald-400" : "text-muted-foreground"}>
+                          {member.active ? "Active" : "Inactive"}
+                        </span>
+                      </span>
+                    </div>
+
+                    {/* Secondary line — reports-to + contact */}
+                    <div className="flex items-center gap-x-3 gap-y-0.5 mt-1 flex-wrap text-[11px] text-muted-foreground">
+                      {sup && (
+                        <span className="inline-flex items-center gap-1">
                           <ChevronUp className="w-3 h-3" /> Reports to <span className="text-foreground/80">{sup.name}</span>
+                        </span>
+                      )}
+                      {member.phone && (
+                        <span className="inline-flex items-center gap-1">
+                          <Phone className="w-3 h-3" /> {member.phone}
+                        </span>
+                      )}
+                      {member.email && (
+                        <span className="inline-flex items-center gap-1">
+                          <Mail className="w-3 h-3" /> {member.email}
+                          <span className="text-[10px] px-1.5 py-0 rounded-full bg-primary/15 text-primary">login</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Metrics — mobile (below identity) */}
+                    <div className="flex md:hidden items-center gap-4 mt-2">
+                      {metrics.map(({ label, val, highlight }) => (
+                        <div key={label}>
+                          <span className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-emerald-400" : "text-foreground"}`}>{val}</span>
+                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground ml-1">{label}</span>
                         </div>
-                      ) : null;
-                    })()}
-                    {member.phone && (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Phone className="w-3 h-3" /> {member.phone}
-                      </div>
-                    )}
-                    {member.email && (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                        <Mail className="w-3 h-3" /> {member.email}
-                        <span className="text-[10px] px-1.5 py-0 rounded-full bg-teal-500/15 text-teal-400">login</span>
-                      </div>
-                    )}
+                      ))}
+                    </div>
                   </div>
 
-                  {/* Mini stats */}
-                  <div className="mt-3 grid grid-cols-4 gap-1 text-center">
-                    {[
-                      { label: "Knocks", val: s.knocks },
-                      { label: "Contacts", val: s.contacts },
-                      { label: "Callbacks", val: s.callbacks },
-                      { label: "Sales", val: s.sales, highlight: true },
-                    ].map(({ label, val, highlight }) => (
-                      <div key={label} className="bg-secondary rounded p-1.5">
-                        <div className={`text-base font-bold ${highlight && val > 0 ? "text-green-400" : "text-foreground"}`}>
-                          {val}
-                        </div>
-                        <div className="text-xs text-muted-foreground leading-tight">{label}</div>
+                  {/* Metrics — desktop (tabular columns) */}
+                  <div className="hidden md:flex items-center gap-5 flex-shrink-0">
+                    {metrics.map(({ label, val, highlight }) => (
+                      <div key={label} className="w-14 text-right">
+                        <div className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-emerald-400" : "text-foreground"}`}>{val}</div>
+                        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
                       </div>
                     ))}
                   </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+
+                  {/* Row actions */}
+                  <div className="flex gap-1 flex-shrink-0">
+                    {canManageCommission && member.role !== "manager" && (
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-primary"
+                        onClick={() => setCommissionMember(member)} data-testid={`btn-commission-rep-${member.id}`}
+                        title="Commission structure">
+                        <Wallet className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                    {canAddMembers && (
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => openEdit(member)} data-testid={`btn-edit-rep-${member.id}`}>
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                    {canDeleteMembers && (
+                      <Button variant="ghost" size="sm" className="h-7 w-7 p-0 text-muted-foreground hover:text-rose-400"
+                        onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}>
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
       </div>
     );
   };
@@ -494,6 +511,26 @@ export default function Team() {
           </Button>
         )}
       </div>
+
+      {/* Team totals — hairline-divided metric strip */}
+      {team.length > 0 && (
+        <Card className="bg-card border-border overflow-hidden">
+          <div className="flex divide-x divide-border overflow-x-auto">
+            {[
+              { label: "Active Members", val: activeCount },
+              { label: "Knocks", val: totalKnocks },
+              { label: "Contacts", val: totalContacts },
+              { label: "Callbacks", val: totalCallbacks },
+              { label: "Sales", val: totalSales, highlight: true },
+            ].map(({ label, val, highlight }) => (
+              <div key={label} className="flex-1 min-w-[110px] px-4 py-3">
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</div>
+                <div className={`text-xl font-bold tabular-nums mt-0.5 ${highlight ? "text-emerald-400" : "text-foreground"}`}>{val}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* Role legend — stacks on phones so the icon + label + description of each
           role stays readable instead of being crushed into a third of 320px. */}

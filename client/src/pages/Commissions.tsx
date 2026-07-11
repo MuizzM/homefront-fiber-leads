@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { useCan } from "@/lib/capabilities";
-import { DollarSign, TrendingUp, Clock, CheckCircle, Plus, Filter, Download, User } from "lucide-react";
+import { DollarSign, TrendingUp, Plus, Filter, Download, User } from "lucide-react";
 import { useState } from "react";
 
 interface Commission {
@@ -28,10 +28,16 @@ interface TeamMember { id: number; name: string; role: string; active: boolean; 
 interface CommissionRate { id: number; name: string; role: string | null; repId: number | null; ratePerSale: number; isActive: boolean; }
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  approved: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  paid: "bg-emerald-500/20 text-emerald-400 border-emerald-500/30",
-  disputed: "bg-red-500/20 text-red-400 border-red-500/30",
+  pending: "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  approved: "bg-sky-500/15 text-sky-400 border-sky-500/20",
+  paid: "bg-emerald-500/15 text-emerald-400 border-emerald-500/20",
+  disputed: "bg-rose-500/15 text-rose-400 border-rose-500/20",
+};
+const STATUS_DOT: Record<string, string> = {
+  pending: "bg-amber-400",
+  approved: "bg-sky-400",
+  paid: "bg-emerald-400",
+  disputed: "bg-rose-400",
 };
 
 export default function Commissions() {
@@ -137,11 +143,11 @@ export default function Commissions() {
 
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="flex items-end justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-xl font-bold text-white">Commissions</h1>
-          <p className="text-sm text-muted-foreground" data-testid="commission-running-total">
-            {commissions.length} sale{commissions.length === 1 ? "" : "s"} · <span className="text-primary font-semibold">${runningTotal.toFixed(0)}</span> total
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Commissions</h1>
+          <p className="text-sm text-muted-foreground mt-0.5" data-testid="commission-running-total">
+            {commissions.length} sale{commissions.length === 1 ? "" : "s"} · <span className="text-primary font-semibold tabular-nums">${runningTotal.toFixed(0)}</span> total
           </p>
         </div>
         <div className="flex gap-2">
@@ -155,7 +161,7 @@ export default function Commissions() {
                   Rate Plans
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-card border-border text-white">
+              <DialogContent className="bg-card border-border text-foreground">
                 <DialogHeader><DialogTitle>Commission Rate Plans</DialogTitle></DialogHeader>
                 <p className="text-xs text-muted-foreground -mt-1">
                   Set a rate for a whole role, or override it for one rep. A rep-specific
@@ -211,18 +217,18 @@ export default function Commissions() {
                   <Plus className="w-4 h-4 mr-2" /> Log Sale
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-card border-border text-white">
+              <DialogContent className="bg-card border-border text-foreground">
                 <DialogHeader><DialogTitle>Log Commission</DialogTitle></DialogHeader>
                 <div className="space-y-3">
                   <Select value={form.repId} onValueChange={v => setForm(f => ({...f, repId: v}))}>
-                    <SelectTrigger className="bg-secondary border-border text-white" data-testid="select-rep"><SelectValue placeholder="Select Rep" /></SelectTrigger>
+                    <SelectTrigger className="bg-secondary border-border text-foreground" data-testid="select-rep"><SelectValue placeholder="Select Rep" /></SelectTrigger>
                     <SelectContent className="bg-card border-border">
                       {members.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
-                  <Input type="number" placeholder="Amount ($)" value={form.amount} onChange={e => setForm(f => ({...f, amount: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-amount" />
-                  <Input type="date" value={form.saleDate} onChange={e => setForm(f => ({...f, saleDate: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-sale-date" />
-                  <Input placeholder="Notes (optional)" value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-notes" />
+                  <Input type="number" placeholder="Amount ($)" value={form.amount} onChange={e => setForm(f => ({...f, amount: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-amount" />
+                  <Input type="date" value={form.saleDate} onChange={e => setForm(f => ({...f, saleDate: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-sale-date" />
+                  <Input placeholder="Notes (optional)" value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-notes" />
                   {rates.length > 0 && (
                     <p className="text-xs text-muted-foreground">Rate plans: {rates.map(r => `${r.name}: $${r.ratePerSale}`).join(", ")}</p>
                   )}
@@ -236,63 +242,50 @@ export default function Commissions() {
         </div>
       </div>
 
-      {/* Summary Cards — 3-up everywhere, but the icon stacks over the value on
-          the narrowest phones so nothing overflows at 320px. */}
-      <div className="grid grid-cols-3 gap-2 sm:gap-4">
-        <Card className="bg-card border-border">
-          <CardContent className="p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center gap-1.5 sm:gap-3">
-            <div className="w-9 h-9 rounded-lg bg-amber-600/20 flex items-center justify-center">
-              <Clock className="w-4 h-4 text-amber-400" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Pending</p>
-              <p className="text-lg font-bold text-white" data-testid="stat-pending">${totalPending.toFixed(0)}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardContent className="p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center gap-1.5 sm:gap-3">
-            <div className="w-9 h-9 rounded-lg bg-blue-600/20 flex items-center justify-center">
-              <CheckCircle className="w-4 h-4 text-blue-400" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Approved</p>
-              <p className="text-lg font-bold text-white" data-testid="stat-approved">${totalApproved.toFixed(0)}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardContent className="p-3 sm:p-4 flex flex-col sm:flex-row items-start sm:items-center gap-1.5 sm:gap-3">
-            <div className="w-9 h-9 rounded-lg bg-emerald-600/20 flex items-center justify-center">
-              <DollarSign className="w-4 h-4 text-emerald-400" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Total Paid</p>
-              <p className="text-lg font-bold text-white" data-testid="stat-paid">${totalPaid.toFixed(0)}</p>
-            </div>
-          </CardContent>
-        </Card>
+      {/* Metric strip — hairline-divided money totals; numbers are the hero.
+          gap-px over a bg-border ground draws clean 1px rules in both the 2x2
+          phone layout and the 1x4 desktop row. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px bg-border rounded-xl overflow-hidden border border-border">
+        <div className="bg-card p-4">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total Earned</p>
+          <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-foreground">${runningTotal.toFixed(0)}</p>
+        </div>
+        <div className="bg-card p-4">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Paid</p>
+          <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-emerald-400" data-testid="stat-paid">${totalPaid.toFixed(0)}</p>
+        </div>
+        <div className="bg-card p-4">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Approved</p>
+          <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-sky-400" data-testid="stat-approved">${totalApproved.toFixed(0)}</p>
+        </div>
+        <div className="bg-card p-4">
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Pending</p>
+          <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums text-amber-400" data-testid="stat-pending">${totalPending.toFixed(0)}</p>
+        </div>
       </div>
 
       {/* Per-rep summary (manager only) */}
       {isManager && summary.filter(s => s.sales > 0).length > 0 && (
         <Card className="bg-card border-border">
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-primary" /> Rep Earnings Summary
+            <CardTitle className="text-[11px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-2">
+              <TrendingUp className="w-3.5 h-3.5 text-primary" /> Rep Earnings Summary
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <div className="divide-y divide-border">
-              {summary.filter(s => s.sales > 0).sort((a, b) => b.total - a.total).map(s => (
-                <div key={s.repId} className="px-4 py-3 flex items-center justify-between" data-testid={`summary-rep-${s.repId}`}>
-                  <div>
-                    <p className="text-sm text-white font-medium">{s.repName}</p>
-                    <p className="text-xs text-muted-foreground">{s.sales} sales · ${s.paid.toFixed(0)} paid</p>
+              {summary.filter(s => s.sales > 0).sort((a, b) => b.total - a.total).map((s, i) => (
+                <div key={s.repId} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`summary-rep-${s.repId}`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-xs font-semibold tabular-nums text-muted-foreground w-4 text-right">{i + 1}</span>
+                    <div className="min-w-0">
+                      <p className="text-sm text-foreground font-medium truncate">{s.repName}</p>
+                      <p className="text-xs text-muted-foreground tabular-nums">{s.sales} sales · ${s.paid.toFixed(0)} paid</p>
+                    </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-bold text-primary">${s.total.toFixed(0)}</p>
-                    {s.pending > 0 && <p className="text-xs text-amber-400">${s.pending.toFixed(0)} pending</p>}
+                    <p className="text-sm font-bold text-foreground tabular-nums">${s.total.toFixed(0)}</p>
+                    {s.pending > 0 && <p className="text-xs text-amber-400 tabular-nums">${s.pending.toFixed(0)} pending</p>}
                   </div>
                 </div>
               ))}
@@ -304,9 +297,9 @@ export default function Commissions() {
       {/* Commission Table */}
       <Card className="bg-card border-border">
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
-              <DollarSign className="w-4 h-4 text-primary" /> Commission Records
+          <div className="flex items-center justify-between gap-2">
+            <CardTitle className="text-[11px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-2">
+              <DollarSign className="w-3.5 h-3.5 text-primary" /> Commission Records
             </CardTitle>
             <div className="flex items-center gap-2">
               <Filter className="w-3 h-3 text-muted-foreground" />
@@ -333,11 +326,11 @@ export default function Commissions() {
               {filtered.map(c => (
                 <div key={c.id} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`commission-row-${c.id}`}>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-[15px] text-white font-semibold tabular-nums">${c.amount.toFixed(2)}</p>
-                      <Badge className={`text-xs capitalize ${STATUS_COLORS[c.status] ?? "bg-secondary text-muted-foreground"}`}>{c.status}</Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
+                    <Badge className={`text-[11px] capitalize rounded-full inline-flex items-center gap-1.5 font-medium ${STATUS_COLORS[c.status] ?? "bg-secondary text-muted-foreground border-border"}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[c.status] ?? "bg-muted-foreground"}`} />
+                      {c.status}
+                    </Badge>
+                    <p className="text-xs text-muted-foreground mt-1.5">
                       {new Date(c.saleDate + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" })}
                       {" · "}{c.repName ?? `Rep #${c.repId}`}
                     </p>
@@ -345,16 +338,19 @@ export default function Commissions() {
                       <p className="text-[11px] text-muted-foreground/70 truncate">{c.address}{c.city ? `, ${c.city}` : ""}</p>
                     )}
                   </div>
-                  {isManager && c.status === "pending" && (
-                    <Button size="sm" variant="outline" disabled={updateMutation.isPending} className="border-blue-500/30 text-blue-400 hover:bg-blue-500/10 text-xs h-7 disabled:opacity-50" onClick={() => updateMutation.mutate({ id: c.id, status: "approved" })} data-testid={`button-approve-${c.id}`}>
-                      Approve
-                    </Button>
-                  )}
-                  {isManager && c.status === "approved" && (
-                    <Button size="sm" disabled={updateMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 disabled:opacity-50" onClick={() => updateMutation.mutate({ id: c.id, status: "paid" })} data-testid={`button-mark-paid-${c.id}`}>
-                      Mark Paid
-                    </Button>
-                  )}
+                  <div className="flex items-center gap-3 flex-shrink-0">
+                    <p className="text-base font-semibold tabular-nums text-foreground">${c.amount.toFixed(2)}</p>
+                    {isManager && c.status === "pending" && (
+                      <Button size="sm" variant="outline" disabled={updateMutation.isPending} className="border-sky-500/30 text-sky-400 hover:bg-sky-500/10 text-xs h-7 disabled:opacity-50" onClick={() => updateMutation.mutate({ id: c.id, status: "approved" })} data-testid={`button-approve-${c.id}`}>
+                        Approve
+                      </Button>
+                    )}
+                    {isManager && c.status === "approved" && (
+                      <Button size="sm" disabled={updateMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs h-7 disabled:opacity-50" onClick={() => updateMutation.mutate({ id: c.id, status: "paid" })} data-testid={`button-mark-paid-${c.id}`}>
+                        Mark Paid
+                      </Button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
