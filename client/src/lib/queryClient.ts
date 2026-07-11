@@ -58,6 +58,20 @@ export async function apiRequest(
   return res;
 }
 
+// Multipart upload — same session + CSRF headers and 401→re-auth path as
+// apiRequest, but leaves Content-Type unset so the browser writes the multipart
+// boundary. Use for file uploads (apiRequest JSON-encodes its body).
+export async function apiUpload(url: string, form: FormData): Promise<Response> {
+  const res = await fetch(`${API_BASE}${url}`, {
+    method: "POST",
+    headers: authHeaders({}, true), // x-session-id + x-csrf-token; NO content-type
+    body: form,
+  });
+  notifyIfSessionExpired(res.status);
+  await throwIfResNotOk(res);
+  return res;
+}
+
 type UnauthorizedBehavior = "returnNull" | "throw";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;

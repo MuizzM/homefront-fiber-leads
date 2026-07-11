@@ -457,6 +457,21 @@ export const insertCommissionSchema = createInsertSchema(commissions).omit({ id:
 export type InsertCommission = z.infer<typeof insertCommissionSchema>;
 export type Commission = typeof commissions.$inferSelect;
 
+// ── Lead Photos ───────────────────────────────────────────────────────────────
+// Field evidence a rep attaches to a door (damage, competitor equipment, notes
+// on paper, the house itself). Immutable like knocks; tenant inherited from the
+// LEAD at insert (never client-supplied). Files live under DATA_DIR/uploads.
+export const leadPhotos = sqliteTable("lead_photos", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id"),
+  leadId: integer("lead_id").notNull(),
+  userId: integer("user_id"),                  // uploader (users.id)
+  repId: integer("rep_id"),                    // uploader's team_members.id (null = office)
+  path: text("path").notNull(),                // server-relative under uploads/lead-photos
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type LeadPhoto = typeof leadPhotos.$inferSelect;
+
 // ── Activity Log ─────────────────────────────────────────────────────────────
 // Immutable audit trail — every significant action is logged
 export const activityLog = sqliteTable("activity_log", {

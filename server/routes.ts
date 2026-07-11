@@ -3127,7 +3127,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // Serve uploaded files (admin only) — path traversal protected
-  app.use("/uploads", requireAdmin, (_req, res, next) => {
+  app.use("/uploads", requireAdmin, (req, res, next) => {
+    // lead-photos/ has its OWN tenant-walled route (GET /api/photos/:id/file).
+    // Block it here so a tenant admin can't read another tenant's photo through
+    // the untenanted static path if a filename ever leaks.
+    if (req.path.startsWith("/lead-photos/")) return res.status(404).json({ error: "File not found" });
     res.setHeader("Content-Disposition", "inline");
     res.setHeader("X-Content-Type-Options", "nosniff");
     next();
@@ -3139,6 +3143,96 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     if (!fs.existsSync(requestedPath)) return res.status(404).json({ error: "File not found" });
     res.sendFile(requestedPath);
+  });
+
+  // ── Lead photos — field evidence attached to a door ─────────────────────────
+  // Same visibility wall as every single-lead read: tenant + repCanAccessLead
+  // (rep = own doors, team_lead = team, manager/admin = tenant). 404 not 403 so
+  // existence never leaks. Files live OUTSIDE the admin-only /uploads route and
+  // are streamed through an authed endpoint — an <img src> can't carry the
+  // session header, so the client fetches blobs (see PropertyDetail AuthedImg).
+  const leadPhotosDir = path.join(uploadsDir, "lead-photos");
+  if (!fs.existsSync(leadPhotosDir)) fs.mkdirSync(leadPhotosDir, { recursive: true });
+  const LEAD_PHOTO_CAP = 24; // per lead — plenty for field evidence, bounds disk
+  const photoUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, leadPhotosDir),
+      filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).toLowerCase()),
+    }),
+    // The route consumes NO text fields — fields:0/parts:2 stops a multipart body
+    // of unlimited buffered-in-RAM text parts (which bypass the 64kb json limit)
+    // from OOMing the process before the file handler runs.
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0, parts: 2, fieldSize: 1024 },
+    fileFilter: (_req, file, cb) => {
+      const ok = [".jpg", ".jpeg", ".png", ".webp"].includes(path.extname(file.originalname).toLowerCase());
+      if (ok) cb(null, true);
+      else cb(new Error("Only JPG, PNG or WebP photos"));
+    },
+  });
+  // Wrap so multer validation errors (wrong type, too big, too many parts) become
+  // clean 4xx with a usable message instead of a generic 500 from the global
+  // handler — a rep needs to know WHY the upload was rejected.
+  const runPhotoUpload = (req: Request, res: Response, next: NextFunction) =>
+    photoUpload.single("photo")(req as any, res as any, (err: any) => {
+      if (!err) return next();
+      const tooBig = err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE";
+      return res.status(tooBig ? 413 : 400).json({ error: err.message || "Upload rejected" });
+    });
+
+  // Guard shared by all three photo routes. Returns the lead or responds 404.
+  const photoLeadOr404 = (req: Request, res: Response): any | null => {
+    const user = (req as any).user;
+    const lead = storage.getLeadById(Number(req.params.id));
+    const tid = user?.tenantId;
+    if (!lead || (tid && lead.tenantId !== tid)) { res.status(404).json({ error: "Not found" }); return null; }
+    if (!repCanAccessLead(user, lead)) { res.status(404).json({ error: "Not found" }); return null; }
+    return lead;
+  };
+
+  app.get("/api/leads/:id/photos", requireAuth, (req, res) => {
+    const lead = photoLeadOr404(req as any, res);
+    if (!lead) return;
+    const names = new Map(storage.getTeamMembers((req as any).user?.tenantId ?? undefined).map(m => [m.id, m.name]));
+    res.json(storage.getLeadPhotos(lead.id).map(p => ({
+      id: p.id, createdAt: p.createdAt,
+      takenBy: (p.repId != null ? names.get(p.repId) : null) ?? null,
+    })));
+  });
+
+  app.post("/api/leads/:id/photos", requireAuth, runPhotoUpload, (req, res) => {
+    const user = (req as any).user;
+    const lead = photoLeadOr404(req as any, res);
+    if (!lead) { if (req.file) try { fs.unlinkSync(req.file.path); } catch {} return; }
+    if (!req.file) return res.status(400).json({ error: "Attach a photo file" });
+    // Bound disk use per door — an authed account can't fill the volume.
+    if (storage.getLeadPhotos(lead.id).length >= LEAD_PHOTO_CAP) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+      return res.status(400).json({ error: `Up to ${LEAD_PHOTO_CAP} photos per property` });
+    }
+    const photo = storage.createLeadPhoto({
+      leadId: lead.id, userId: user.id, repId: user.teamMemberId ?? null,
+      path: "lead-photos/" + req.file.filename,
+    });
+    storage.logActivity(user.id, "lead.photo_added", "lead", lead.id, { photoId: photo.id }, req.ip);
+    res.status(201).json({ id: photo.id, createdAt: photo.createdAt });
+  });
+
+  app.get("/api/photos/:photoId/file", requireAuth, (req, res) => {
+    const photo = storage.getLeadPhotoById(Number(req.params.photoId));
+    if (!photo) return res.status(404).json({ error: "Not found" });
+    // Authorize through the photo's LEAD with the same wall as the list route.
+    (req as any).params.id = String(photo.leadId);
+    const lead = photoLeadOr404(req as any, res);
+    if (!lead) return;
+    // Path is server-built (uuid + ext under lead-photos/) — resolve + verify
+    // anyway so a tampered DB row can never traverse out of the uploads dir.
+    const abs = path.resolve(uploadsDir, photo.path);
+    if (!abs.startsWith(leadPhotosDir + path.sep)) return res.status(400).json({ error: "Invalid path" });
+    if (!fs.existsSync(abs)) return res.status(404).json({ error: "File missing" });
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, max-age=3600"); // photos are immutable
+    res.sendFile(abs);
   });
 
   // Delete any files multer already wrote to disk for a request we're rejecting,

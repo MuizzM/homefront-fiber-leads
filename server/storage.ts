@@ -5,7 +5,8 @@ import {
   users, sessions, otpCodes, territories, repApplications,
   territoryRequests, locationPings, clockSessions,
   comingSoonAddresses, commissions, commissionRates, activityLog, tenants,
-  activityOverrides,
+  activityOverrides, leadPhotos,
+  type LeadPhoto,
   type ActivityOverride,
   type Lead, type InsertLead,
   type FiberCheck, type InsertFiberCheck,
@@ -100,6 +101,10 @@ export interface IStorage {
   getKnocksByLead(leadId: number): Knock[];
   getKnocksByRep(repId: number): Knock[];
   getOpenCallbacks(tenantId?: number): OpenCallback[];
+  // ── Lead photos ─────────────────────────────────────────────────────────────
+  createLeadPhoto(p: { leadId: number; userId?: number | null; repId?: number | null; path: string }): LeadPhoto;
+  getLeadPhotos(leadId: number): LeadPhoto[];
+  getLeadPhotoById(id: number): LeadPhoto | undefined;
   createKnock(knock: InsertKnock, verdict?: KnockVerdict): Knock;
   getKnockById(id: number): Knock | undefined;
   getKnockByClientId(clientId: string): Knock | undefined;
@@ -449,6 +454,9 @@ export function runMigrations() {
     // Follow-ups (getOpenCallbacks): a partial index over just the scheduled-callback
     // rows so the outer query SEEKS candidates instead of scanning all of knock_log.
     `CREATE INDEX IF NOT EXISTS idx_knock_log_open_callback ON knock_log(lead_id) WHERE outcome = 'callback' AND callback_date IS NOT NULL`,
+    // Field photo evidence attached to a door (see shared/schema.ts leadPhotos).
+    `CREATE TABLE IF NOT EXISTS lead_photos (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, lead_id INTEGER NOT NULL, user_id INTEGER, rep_id INTEGER, path TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_lead_photos_lead ON lead_photos(lead_id)`,
 
     // ── SCAN INTELLIGENCE — persistent, resumable, budgeted verification runs ──
     // A scan is no longer an in-memory job that dies on restart. Each run is a
@@ -1115,6 +1123,24 @@ export class Storage implements IStorage {
     `).all(...(tenantId != null ? [tenantId] : [])) as OpenCallback[];
     return rows;
   }
+  // ── Lead photos ─────────────────────────────────────────────────────────────
+  // Tenancy comes from the LEAD (never client-supplied), same rule as knocks.
+  createLeadPhoto(p: { leadId: number; userId?: number | null; repId?: number | null; path: string }): LeadPhoto {
+    const tenantId = this.getLeadById(p.leadId)?.tenantId ?? null;
+    return db.insert(leadPhotos).values({
+      leadId: p.leadId, tenantId,
+      userId: p.userId ?? null, repId: p.repId ?? null,
+      path: p.path, createdAt: new Date().toISOString(),
+    }).returning().get();
+  }
+  getLeadPhotos(leadId: number): LeadPhoto[] {
+    return db.select().from(leadPhotos).where(eq(leadPhotos.leadId, leadId))
+      .orderBy(desc(leadPhotos.createdAt)).all();
+  }
+  getLeadPhotoById(id: number): LeadPhoto | undefined {
+    return db.select().from(leadPhotos).where(eq(leadPhotos.id, id)).get();
+  }
+
   createKnock(knock: InsertKnock, verdict?: KnockVerdict): Knock {
     // Respect a client-supplied knockedAt — offline-queued knocks flush minutes or
     // hours after the tap, and the tap time is the truthful field timestamp.

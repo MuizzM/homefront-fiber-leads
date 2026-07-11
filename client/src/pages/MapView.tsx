@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore
 declare const mapboxgl: any;
 import {
   AlertCircle, Pencil, X, Map as MapIcon, Bell, Target, Search, LocateFixed, Menu,
-  Lasso, Radar, Loader2, Layers, RefreshCw, CheckCircle2, List,
+  Lasso, Radar, Loader2, Layers, RefreshCw, CheckCircle2, List, Navigation,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -19,7 +19,7 @@ import { LeadKnockSheet } from "@/components/LeadKnockSheet";
 import { LeadsInViewPanel } from "@/components/LeadsInViewPanel";
 import { getKnockQueue, type KnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
 import { captureFieldFix } from "@/lib/geoFix";
-import { OUTCOME_TO_STATUS, pinDisplayState, STATE_COLORS, STATE_LABELS, type KnockOutcome } from "@shared/knock";
+import { OUTCOME_TO_STATUS, pinDisplayState, STATE_COLORS, STATE_LABELS, nearestUnworkedLead, type KnockOutcome, type RoutablePin } from "@shared/knock";
 import { saveLeadNote, flushPendingNotes, type NotePoster, type NoteSaveResult } from "@/lib/leadNotes";
 import {
   UNCLUSTERED_PAINT, UNCLUSTERED_GLOW_PAINT, SELECTED_RING_SPEC,
@@ -1585,6 +1585,31 @@ export default function MapView() {
     });
   }, []);
 
+  // "Next door" — the map's next-best-property flow. Same routing brain as the
+  // Today hero (shared nearestUnworkedLead): from where the rep is STANDING
+  // (fresh/cached GPS via captureFieldFix — never rejects; falls back to the
+  // map center), fly to the nearest unworked/not-home door, skipping the doors
+  // just worked this session (recentIdsRef), and open its knock sheet.
+  const nextBestDoor = useCallback(() => {
+    const open = leads.filter(p => {
+      const s = pinDisplayState(p);
+      return (s === "unworked" || s === "not_home") && p.lat != null && p.lng != null;
+    });
+    if (!open.length) {
+      toast({ title: "Every door is worked", description: "No open doors on your map right now — nice work." });
+      return;
+    }
+    captureFieldFix().then(fix => {
+      const c = mapRef.current?.getCenter?.();
+      const from = fix.repLat != null && fix.repLng != null
+        ? { lat: fix.repLat, lng: fix.repLng }
+        : c ? { lat: c.lat, lng: c.lng } : { lat: open[0].lat!, lng: open[0].lng! };
+      const exclude = new Set(recentIdsRef.current);
+      const next = (nearestUnworkedLead(from, open as unknown as RoutablePin[], exclude) as MapPin | null) ?? open[0];
+      flyToLead(next);
+    });
+  }, [leads, flyToLead, toast]);
+
   // Leads-panel row tap — the SAME path a pin tap takes (flyToLead →
   // setSelectedLeadId → card/sheet). Phone closes the drawer to reveal the map.
   const onLeadsRowTap = useCallback((id: number) => {
@@ -2368,6 +2393,23 @@ export default function MapView() {
               className="absolute right-3 z-20 rounded-full ring-1 ring-inset ring-white/[0.18] flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform bg-primary text-white hover:bg-primary/90"
             >
               <LocateFixed className="w-6 h-6" />
+            </button>
+          )}
+
+          {/* Next-door FAB — REP-ONLY, bottom-left (thumb reach, mirrors the
+              locate FAB on the right). One tap: nearest unworked door from
+              where the rep is standing → fly + open its knock sheet. Hidden
+              while a sheet is open so it never covers the outcome buttons. */}
+          {mapReady && isRep && selectedLeadId == null && leads.length > 0 && (
+            <button
+              onClick={nextBestDoor}
+              aria-label="Go to the next unworked door"
+              data-testid="next-door"
+              style={{ height: 52, bottom: "calc(env(safe-area-inset-bottom) + 2rem)", boxShadow: "var(--glass-shadow-1)" }}
+              className="glass-capsule glass-opaque absolute left-3 z-20 flex items-center gap-2 px-4 text-white font-semibold text-[14px] active:scale-[0.97] transform-gpu transition-transform"
+            >
+              <Navigation className="w-4.5 h-4.5 text-teal-300" style={{ width: 18, height: 18 }} />
+              Next door
             </button>
           )}
 

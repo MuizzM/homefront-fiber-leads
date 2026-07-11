@@ -3,10 +3,11 @@
 // score, contact), the full knock timeline with location verification, and act:
 // Navigate · Call · Log (the same shared OutcomeSheet + offline logger). Wired to
 // GET /api/leads/:id and /api/leads/:id/history — real data, real states.
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, apiUpload } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { OUTCOME_META, STATE_COLORS, pinDisplayState, type KnockOutcome } from "@shared/knock";
@@ -14,7 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronLeft, Navigation, Phone, Zap, Wifi, Building2, Trophy, User as UserIcon,
   ShieldCheck, AlertTriangle, ShieldX, StickyNote, UserPlus, RefreshCw, MapPin,
-  WifiOff, CloudUpload,
+  WifiOff, CloudUpload, Camera,
 } from "lucide-react";
 
 interface Lead {
@@ -130,6 +131,9 @@ export default function PropertyDetail() {
               {(lead.contactName || lead.contactPhone) && <Fact icon={Phone} tone="text-muted-foreground" label="Contact" value={[lead.contactName, lead.contactPhone].filter(Boolean).join(" · ") || "—"} />}
             </div>
 
+            {/* Photos — field evidence on this door */}
+            <PhotoStrip leadId={lead.id} online={snap.online} />
+
             {/* Timeline */}
             <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mt-5 mb-2">Activity</h2>
             {histQ.isLoading ? (
@@ -165,6 +169,108 @@ export default function PropertyDetail() {
           setSheetOpen(false);
         }}
       />
+    </div>
+  );
+}
+
+// ── Photos — field evidence on this door ──────────────────────────────────────
+// Auth is header-based (x-session-id), which a plain <img src> can't carry, so
+// AuthedImg fetches the file as a blob through the authed endpoint and renders
+// an object URL. Capture uses the native camera sheet (input capture) — zero
+// typing. Uploads need a connection; offline the tile disables with a hint.
+interface LeadPhotoRow { id: number; createdAt: string; takenBy: string | null }
+
+function AuthedImg({ photoId, alt, className, onClick }: { photoId: number; alt: string; className?: string; onClick?: () => void }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let alive = true;
+    apiRequest("GET", `/api/photos/${photoId}/file`)
+      .then(r => r.blob())
+      .then(b => { if (!alive) return; objectUrl = URL.createObjectURL(b); setUrl(objectUrl); })
+      .catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [photoId]);
+  if (failed) return <div className={`${className} bg-secondary flex items-center justify-center`}><AlertTriangle className="w-4 h-4 text-muted-foreground" /></div>;
+  if (!url) return <Skeleton className={className} />;
+  return <img src={url} alt={alt} className={className} onClick={onClick} loading="lazy" />;
+}
+
+function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [viewer, setViewer] = useState<number | null>(null);
+
+  const photosQ = useQuery<LeadPhotoRow[]>({
+    queryKey: [`/api/leads/${leadId}/photos`],
+    queryFn: () => apiRequest("GET", `/api/leads/${leadId}/photos`).then(r => r.json()),
+  });
+  const photos = photosQ.data ?? [];
+
+  const upload = async (file: File) => {
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("photo", file);
+      // Shared multipart helper: session + CSRF headers, API_BASE prefix, and
+      // 401 → global re-auth — same guarantees as every other mutation.
+      await apiUpload(`/api/leads/${leadId}/photos`, fd);
+      qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/photos`] });
+      toast({ title: "Photo added" });
+    } catch (e: any) {
+      toast({ title: "Couldn't upload the photo", description: String(e?.message ?? e).slice(0, 120), variant: "destructive" });
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  };
+
+  return (
+    <div className="mt-4">
+      <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Photos</h2>
+      <div className="flex gap-2 overflow-x-auto pb-1" data-testid="photo-strip">
+        <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden"
+          aria-label="Take or choose a photo"
+          onChange={e => { const f = e.target.files?.[0]; if (f) void upload(f); }} />
+        <button
+          onClick={() => fileRef.current?.click()}
+          disabled={!online || uploading}
+          data-testid="photo-add"
+          className="shrink-0 w-20 h-20 rounded-xl border border-dashed border-border bg-card flex flex-col items-center justify-center gap-1 text-muted-foreground active:scale-95 transition-transform disabled:opacity-50"
+        >
+          {uploading ? <RefreshCw className="w-5 h-5 animate-spin text-primary" /> : <Camera className="w-5 h-5" />}
+          <span className="text-[10px] font-semibold">{uploading ? "Uploading…" : online ? "Add" : "Offline"}</span>
+        </button>
+        {photos.map(p => (
+          <button key={p.id} onClick={() => setViewer(p.id)}
+            aria-label={`View door photo${p.takenBy ? ` by ${p.takenBy}` : ""}`}
+            className="shrink-0 rounded-xl active:scale-95 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+            <AuthedImg photoId={p.id} alt={`Door photo${p.takenBy ? ` by ${p.takenBy}` : ""}`}
+              className="w-20 h-20 rounded-xl object-cover border border-border" />
+          </button>
+        ))}
+        {!photosQ.isLoading && photos.length === 0 && (
+          <div className="flex items-center text-[12px] text-muted-foreground pl-1">No photos yet — snap the house, equipment, or paperwork.</div>
+        )}
+      </div>
+
+      {/* Full-screen viewer — Escape/tap to close, close button auto-focused */}
+      {viewer != null && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Photo viewer" onClick={() => setViewer(null)}>
+          <AuthedImg photoId={viewer} alt="Door photo (full size)" className="max-w-full max-h-full rounded-xl object-contain" />
+          <button
+            autoFocus onClick={() => setViewer(null)}
+            onKeyDown={e => { if (e.key === "Escape") setViewer(null); }}
+            aria-label="Close photo"
+            className="absolute top-[max(1rem,env(safe-area-inset-top))] right-4 w-11 h-11 rounded-full bg-black/50 text-white text-2xl leading-none flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }
