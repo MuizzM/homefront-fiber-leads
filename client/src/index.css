@@ -135,10 +135,12 @@
   border-radius: 0.5rem;
 }
 
+/* Popups/controls stay ink-dark to match the (always-dark) map, aligned to the v3
+   ink surfaces — deliberately not theme-switched, since the map tiles don't change. */
 .mapboxgl-popup-content {
-  background: hsl(210 50% 13%) !important;
-  color: hsl(210 20% 94%) !important;
-  border: 1px solid hsl(210 35% 22%) !important;
+  background: hsl(216 20% 9%) !important;
+  color: hsl(210 16% 96%) !important;
+  border: 1px solid hsl(216 15% 16%) !important;
   border-radius: 12px !important;
   padding: 12px 14px !important;
   font-family: 'Geist Variable', 'Inter Variable', system-ui, sans-serif !important;
@@ -148,12 +150,12 @@
 }
 
 .mapboxgl-popup-tip {
-  border-top-color: hsl(210 50% 13%) !important;
+  border-top-color: hsl(216 20% 9%) !important;
 }
 
 .mapboxgl-ctrl-group {
-  background: hsl(210 50% 13%) !important;
-  border: 1px solid hsl(210 35% 22%) !important;
+  background: hsl(216 20% 9%) !important;
+  border: 1px solid hsl(216 15% 16%) !important;
 }
 
 .mapboxgl-ctrl-group button {
