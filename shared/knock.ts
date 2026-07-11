@@ -155,6 +155,15 @@ export function distanceHint(meters: number): string {
   return `${(meters / 1609.34).toFixed(1)}mi`;
 }
 
+// Local-calendar date as "YYYY-MM-DD". Callback dates are the rep's own picked
+// local date, so grouping/counting them MUST use local — never UTC (toISOString),
+// which rolls a day early every evening in the Americas. Shared so the Today
+// badge and the Follow-ups page can never disagree.
+export function todayISO(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // ── Offline queue item (persisted shape — logic in client/src/lib/knockQueue.ts) ─
 export interface QueuedKnock {
   clientId: string;             // idempotency key

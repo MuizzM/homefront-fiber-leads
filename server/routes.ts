@@ -2266,6 +2266,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(rows);
   });
 
+  // ── Follow-ups — open scheduled callbacks the caller owns ────────────────────
+  // Closes the loop the OutcomeSheet opens: every "callback" a rep schedules
+  // surfaces here (grouped Overdue/Today/Upcoming client-side) until the door is
+  // re-worked. Tenant-scoped in SQL; then rep-scoped so a rep sees only callbacks
+  // they set or on leads assigned to them, and a team_lead only their team's.
+  app.get("/api/followups", requireAuth, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined; // super_admin (null) = all tenants
+    const rows = storage.getOpenCallbacks(tid);
+    const scope = leadVisibilityScope(user); // undefined = org-wide (admin/manager)
+    const scoped = Array.isArray(scope)
+      ? rows.filter(r => scope.includes(r.repId) || (r.assignedRepId != null && scope.includes(r.assignedRepId)))
+      : rows;
+    res.json(scoped);
+  });
+
   // ── Rep activity — the dashboard's rep card ──────────────────────────────────
   // Recent dispositions for one rep, timestamped, with the door they happened
   // at. Reps may read ONLY their own activity; team lead+ may read anyone's

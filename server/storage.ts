@@ -31,6 +31,23 @@ import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 // upsertLeadByAddress still persists them when a scanner payload carries them.
 type LegacyScanFields = { maxDownload?: number | null; isNewDeployment?: boolean | null };
 
+// An open follow-up: a lead whose latest knock is a scheduled callback (see
+// getOpenCallbacks). Display fields come from the lead; the schedule + note from
+// the knock. No provider-internal ids are ever included.
+export interface OpenCallback {
+  leadId: number;
+  address: string; city: string; state: string | null; zip: string | null;
+  lat: number | null; lng: number | null;
+  leadStatus: string; leadTag: string | null; leadScore: number | null;
+  contactName: string | null; contactPhone: string | null;
+  assignedRepId: number | null;
+  repId: number;                 // the rep who scheduled the callback
+  callbackDate: string;          // "YYYY-MM-DD"
+  callbackTime: string | null;   // "HH:MM"
+  notes: string | null;
+  setAt: string;                 // when the callback was logged
+}
+
 // Server-computed location verdict written alongside a knock (never client-set).
 export type KnockVerdict = {
   serverTs: string;
@@ -81,6 +98,7 @@ export interface IStorage {
   getKnocks(tenantId?: number): Knock[];
   getKnocksByLead(leadId: number): Knock[];
   getKnocksByRep(repId: number): Knock[];
+  getOpenCallbacks(tenantId?: number): OpenCallback[];
   createKnock(knock: InsertKnock, verdict?: KnockVerdict): Knock;
   getKnockById(id: number): Knock | undefined;
   getKnockByClientId(clientId: string): Knock | undefined;
@@ -427,6 +445,9 @@ export function runMigrations() {
     // (EXPLAIN showed USE TEMP B-TREE); this one lets each partition stream
     // off the index in order.
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead_time_desc ON knock_log(lead_id, knocked_at DESC, id DESC)`,
+    // Follow-ups (getOpenCallbacks): a partial index over just the scheduled-callback
+    // rows so the outer query SEEKS candidates instead of scanning all of knock_log.
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_open_callback ON knock_log(lead_id) WHERE outcome = 'callback' AND callback_date IS NOT NULL`,
 
     // ── SCAN INTELLIGENCE — persistent, resumable, budgeted verification runs ──
     // A scan is no longer an in-memory job that dies on restart. Each run is a
@@ -1044,6 +1065,36 @@ export class Storage implements IStorage {
   }
   getKnocksByRep(repId: number): Knock[] {
     return db.select().from(knockLog).where(eq(knockLog.repId, repId)).all();
+  }
+  // Open follow-ups: leads whose MOST-RECENT knock is a scheduled callback (the
+  // rep asked to come back and hasn't re-worked the door since). Joins the lead
+  // for display + tenant scope. The outer driver seeks scheduled-callback rows via
+  // the partial idx_knock_log_open_callback; the correlated "latest knock" subquery
+  // rides idx_knock_log_lead_time_desc (lead_id, knocked_at DESC, id DESC).
+  // Rep-scoping is applied by the route.
+  getOpenCallbacks(tenantId?: number): OpenCallback[] {
+    const rows = rawDb.prepare(`
+      SELECT
+        l.id AS leadId, l.address AS address, l.city AS city, l.state AS state, l.zip AS zip,
+        l.lat AS lat, l.lng AS lng, l.lead_status AS leadStatus, l.lead_tag AS leadTag,
+        l.lead_score AS leadScore, l.contact_name AS contactName, l.contact_phone AS contactPhone,
+        l.assigned_rep_id AS assignedRepId,
+        k.rep_id AS repId, k.callback_date AS callbackDate, k.callback_time AS callbackTime,
+        k.notes AS notes, k.knocked_at AS setAt
+      FROM knock_log k
+      JOIN leads l ON l.id = k.lead_id
+      WHERE k.id = (
+        SELECT k2.id FROM knock_log k2
+        WHERE k2.lead_id = k.lead_id
+        ORDER BY k2.knocked_at DESC, k2.id DESC
+        LIMIT 1
+      )
+      AND k.outcome = 'callback'
+      AND k.callback_date IS NOT NULL
+      ${tenantId != null ? "AND l.tenant_id = ?" : ""}
+      ORDER BY k.callback_date ASC, COALESCE(k.callback_time, '99:99') ASC
+    `).all(...(tenantId != null ? [tenantId] : [])) as OpenCallback[];
+    return rows;
   }
   createKnock(knock: InsertKnock, verdict?: KnockVerdict): Knock {
     // Respect a client-supplied knockedAt — offline-queued knocks flush minutes or

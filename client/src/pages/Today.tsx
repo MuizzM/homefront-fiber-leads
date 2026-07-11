@@ -14,12 +14,12 @@ import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
-  nearestUnworkedLead, distanceHint, haversineMeters, type RoutablePin,
+  nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
 } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Navigation, Clock, WifiOff, RefreshCw, ChevronRight, MapPin as MapPinIcon,
-  Zap, Flame, Repeat, DollarSign, Trophy, Sun,
+  Zap, Flame, Repeat, DollarSign, Trophy, Sun, CalendarClock,
 } from "lucide-react";
 
 interface Pin extends RoutablePin {
@@ -77,6 +77,10 @@ export default function Today() {
   const clockQ = useQuery<{ clockedIn: boolean; session: any }>({
     queryKey: ["/api/clock/status"], queryFn: () => apiRequest("GET", "/api/clock/status").then(r => r.json()), staleTime: 10_000,
   });
+  // Follow-ups due — callbacks scheduled for today or earlier (still owed).
+  const followupsQ = useQuery<Array<{ callbackDate: string }>>({
+    queryKey: ["/api/followups"], queryFn: () => apiRequest("GET", "/api/followups").then(r => r.json()), staleTime: 30_000,
+  });
   const clockIn = useMutation({
     mutationFn: () => apiRequest("POST", "/api/clock/in", {}).then(r => r.json()),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/clock/status"] }); toast({ title: "Clocked in — have a great shift" }); },
@@ -115,6 +119,12 @@ export default function Today() {
   const [sheetLead, setSheetLead] = useState<Pin | null>(null);
   const loading = pinsQ.isLoading || boardQ.isLoading;
   const offline = snap.online === false;
+
+  // Callbacks due today or earlier (still owed) — the top of the follow-up loop.
+  // LOCAL date (via shared todayISO) so this badge can't disagree with the
+  // Follow-ups page or over-count in the evening the way a UTC date would.
+  const todayStr = todayISO();
+  const followupsDue = (followupsQ.data ?? []).filter(f => f.callbackDate <= todayStr).length;
 
   return (
     <div className="min-h-full bg-background pb-24">
@@ -170,6 +180,18 @@ export default function Today() {
           <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-emerald-400" border />
           <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" border />
         </div>
+
+        {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}
+        {followupsDue > 0 && (
+          <Link href="/followups" className="mt-4 flex items-center gap-3 rounded-xl border border-cyan-500/25 bg-cyan-500/[0.07] px-4 py-3.5 active:scale-[.99] transition-transform" data-testid="today-followups">
+            <span className="w-9 h-9 rounded-lg bg-cyan-500/15 text-cyan-400 flex items-center justify-center shrink-0"><CalendarClock className="w-5 h-5" /></span>
+            <span className="flex-1">
+              <span className="block text-[14px] font-semibold text-foreground">{followupsDue} follow-up{followupsDue === 1 ? "" : "s"} due</span>
+              <span className="block text-[12px] text-muted-foreground">Callbacks scheduled for today or earlier</span>
+            </span>
+            <ChevronRight className="w-4 h-4 text-muted-foreground" />
+          </Link>
+        )}
 
         <div className="mt-5">
           <div className="flex items-center justify-between mb-2">

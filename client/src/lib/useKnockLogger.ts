@@ -32,6 +32,7 @@ export function useKnockLogger() {
       onSaved: (leadId: number) => {
         qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
         qc.invalidateQueries({ queryKey: ["/api/leads"] });
+        qc.invalidateQueries({ queryKey: ["/api/followups"] }); // re-working a door clears/updates its callback
         qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}`] });
         qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/history`] });
       },
