@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap } from "lucide-react";
+import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap, RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { useAuth } from "@/lib/auth";
 import type { TeamMember } from "@shared/schema";
 
 type LeaderboardEntry = {
@@ -23,10 +24,16 @@ function conversionRate(contacts: number, sales: number) {
 }
 
 export default function Leaderboard() {
-  const { data: board = [], isLoading } = useQuery<LeaderboardEntry[]>({
+  const { user } = useAuth();
+  const { data: board = [], isLoading, isError, refetch } = useQuery<LeaderboardEntry[]>({
     queryKey: ["/api/leaderboard"],
     refetchInterval: 30000, // refresh every 30s
   });
+
+  // The signed-in rep's own row — powers the tinted self-row + rank summary
+  // (Duolingo/Deezer leaderboard pattern: you always find yourself instantly).
+  const myIdx = board.findIndex(e => e.rep.id === user?.teamMemberId);
+  const me = myIdx >= 0 ? board[myIdx] : null;
 
   const totals = board.reduce(
     (acc, e) => ({
@@ -79,9 +86,38 @@ export default function Leaderboard() {
         ))}
       </div>
 
+      {/* Your rank — pinned summary so a rep never scrolls to find themselves */}
+      {me && !isLoading && !isError && (
+        <div className="flex items-center gap-3 rounded-xl border border-primary/25 bg-primary/[0.07] px-4 py-3" data-testid="leaderboard-me">
+          <div className="w-9 h-9 rounded-full bg-primary/15 text-primary flex items-center justify-center text-sm font-bold flex-shrink-0">
+            {me.rep.name.charAt(0).toUpperCase()}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-sm font-semibold text-foreground">Your rank</div>
+            <div className="text-xs text-muted-foreground">#{myIdx + 1} of {board.length} · {me.knocks} knocks · {conversionRate(me.contacts, me.sales)} conv.</div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <div className="text-xl font-bold tabular-nums text-emerald-400 leading-none">{me.sales}</div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-1">Sales</div>
+          </div>
+        </div>
+      )}
+
       {/* Rankings */}
       {isLoading ? (
         <div className="text-center py-12 text-muted-foreground text-sm">Loading leaderboard...</div>
+      ) : isError ? (
+        <Card className="bg-card border-border">
+          <CardContent className="py-12 text-center" data-testid="leaderboard-error">
+            <Trophy className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
+            <div className="text-sm font-semibold text-foreground">Couldn't load the leaderboard</div>
+            <div className="text-sm text-muted-foreground mt-1">Check your connection and try again.</div>
+            <button onClick={() => refetch()}
+              className="mt-4 inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground">
+              <RefreshCw className="w-4 h-4" />Retry
+            </button>
+          </CardContent>
+        </Card>
       ) : board.length === 0 ? (
         <Card className="bg-card border-border">
           <CardContent className="py-12 text-center">
@@ -97,12 +133,15 @@ export default function Leaderboard() {
             const rankCls = RANK_COLORS[idx] ?? "text-muted-foreground";
             const teamPct = totals.sales > 0 ? (entry.sales / totals.sales) * 100 : 0;
             const isManager = entry.rep.role === "manager";
+            const isMe = entry.rep.id === user?.teamMemberId;
 
             return (
               <div
                 key={entry.rep.id}
                 data-testid={`row-rep-${entry.rep.id}`}
-                className="relative flex items-center gap-3 sm:gap-4 px-4 py-3 border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors overflow-hidden"
+                className={`relative flex items-center gap-3 sm:gap-4 px-4 py-3 border-b border-border last:border-b-0 transition-colors overflow-hidden ${
+                  isMe ? "bg-primary/[0.08]" : "hover:bg-muted/40"
+                }`}
               >
                 {/* Rank */}
                 <div className="w-6 flex-shrink-0 text-center">
@@ -111,16 +150,21 @@ export default function Leaderboard() {
 
                 {/* Avatar */}
                 <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${
-                  isManager
-                    ? "bg-amber-500/15 text-amber-400"
-                    : "bg-secondary text-foreground"
+                  isMe
+                    ? "bg-primary/15 text-primary"
+                    : isManager
+                      ? "bg-amber-500/15 text-amber-400"
+                      : "bg-secondary text-foreground"
                 }`}>
                   {entry.rep.name.charAt(0).toUpperCase()}
                 </div>
 
                 {/* Name + role */}
                 <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm text-foreground truncate" title={entry.rep.name}>{entry.rep.name}</div>
+                  <div className="font-semibold text-sm text-foreground truncate flex items-center gap-1.5" title={entry.rep.name}>
+                    <span className="truncate">{entry.rep.name}</span>
+                    {isMe && <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-primary bg-primary/15 rounded-full px-1.5 py-0.5">You</span>}
+                  </div>
                   <div className="text-xs text-muted-foreground capitalize">{entry.rep.role}</div>
                 </div>
 

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useLocation } from "wouter";
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
@@ -676,6 +677,7 @@ export default function Leads() {
   const { user } = useAuth();
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [, navigate] = useLocation();
 
   // Permission flags
   const canAssign   = ["admin", "manager", "team_lead"].includes(user?.role ?? "");
@@ -900,8 +902,15 @@ export default function Leads() {
                 data-testid={`card-lead-${lead.id}`}
                 className="group flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-muted/50 transition-colors"
               >
-                {/* Identity — first-letter avatar tinted by status + address */}
-                <div className="flex items-center gap-3 flex-1 min-w-0">
+                {/* Identity — first-letter avatar tinted by status + address.
+                    Tapping opens the property record (Attio/Mailchimp row→detail
+                    pattern) so the list is never a dead end for a rep. */}
+                <button
+                  onClick={() => navigate(`/lead/${lead.id}`)}
+                  data-testid={`open-lead-${lead.id}`}
+                  aria-label={`Open ${lead.address}`}
+                  className="flex items-center gap-3 flex-1 min-w-0 text-left rounded-lg -m-1 p-1 hover:bg-transparent active:scale-[.99] transition-transform"
+                >
                   <div className="w-9 h-9 rounded-lg flex items-center justify-center text-[13px] font-bold flex-shrink-0"
                     style={{ background: `${accent}22`, color: accent }} aria-hidden="true">
                     {initial}
@@ -923,7 +932,8 @@ export default function Leads() {
                       )}
                     </div>
                   </div>
-                </div>
+                  <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 sm:hidden" aria-hidden="true" />
+                </button>
 
                 {/* Status + actions — own row on mobile (justify-between), inline on desktop */}
                 <div className="flex items-center justify-between sm:justify-end gap-1 flex-shrink-0 pl-12 sm:pl-0">
