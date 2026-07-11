@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { db, rawDb } from "./db";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -77,7 +78,7 @@ export interface IStorage {
   updateTeamMember(id: number, updates: Partial<InsertTeamMember>, tenantId?: number): TeamMember | undefined;
   deleteTeamMember(id: number, tenantId?: number): boolean;
   // ── Knock log ──────────────────────────────────────────────────────────────
-  getKnocks(): Knock[];
+  getKnocks(tenantId?: number): Knock[];
   getKnocksByLead(leadId: number): Knock[];
   getKnocksByRep(repId: number): Knock[];
   createKnock(knock: InsertKnock, verdict?: KnockVerdict): Knock;
@@ -125,20 +126,20 @@ export interface IStorage {
   createTerritoryRequest(repId: number, userId: number, message?: string): TerritoryRequest;
   updateTerritoryRequest(id: number, status: string): TerritoryRequest | undefined;
   // ── Rep Applications ───────────────────────────────────────────────────────
-  getRepApplications(status?: string): RepApplication[];
+  getRepApplications(status?: string, tenantId?: number): RepApplication[];
   getRepApplicationById(id: number): RepApplication | undefined;
   createRepApplication(app: any): RepApplication;
   updateRepApplication(id: number, updates: Partial<RepApplication>): RepApplication | undefined;
   // ── GPS Location Pings ─────────────────────────────────────────────────────
   createLocationPing(ping: InsertLocationPing): LocationPing;
-  getLatestPingPerRep(): LocationPing[];
+  getLatestPingPerRep(tenantId?: number): LocationPing[];
   getPingsByRep(repId: number, limit?: number): LocationPing[];
   // ── Clock Sessions ─────────────────────────────────────────────────────────
   clockIn(repId: number, userId: number, notes?: string): ClockSession;
   clockOut(sessionId: number): ClockSession | undefined;
   getActiveClockSession(repId: number): ClockSession | undefined;
   getClockSessionsByRep(repId: number): ClockSession[];
-  getAllClockSessions(date?: string): ClockSession[];
+  getAllClockSessions(date?: string, tenantId?: number): ClockSession[];
   // ── Coming Soon Pipeline ───────────────────────────────────────────────────
   getComingSoonAddresses(tenantId?: number): ComingSoonAddress[];
   createComingSoon(addr: InsertComingSoon): ComingSoonAddress;
@@ -160,7 +161,7 @@ export interface IStorage {
   getFirstSeenLive(sinceHours: number, limit?: number, tenantId?: number): any[];
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
-  getCommissions(repId?: number): Commission[];
+  getCommissions(tenantId?: number, repId?: number): Commission[];
   getCommissionById(id: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
   updateCommission(id: number, updates: Partial<Commission>): Commission | undefined;
@@ -172,7 +173,7 @@ export interface IStorage {
   updateCommissionRate(id: number, updates: Partial<CommissionRate>): CommissionRate | undefined;
   // ── Activity Log ───────────────────────────────────────────────────────────
   logActivity(userId: number | null, action: string, entityType?: string, entityId?: number, details?: object, ip?: string): void;
-  getActivityLog(limit?: number): ActivityLogEntry[];
+  getActivityLog(limit?: number, tenantId?: number): ActivityLogEntry[];
   // ── Tenants (SaaS) ────────────────────────────────────────────────────────
   getTenants(): Tenant[];
   getTenantById(id: number): Tenant | undefined;
@@ -188,6 +189,14 @@ export interface IStorage {
 export function runMigrations() {
   const raw = (db as any).driver ?? (db as any).$client;
   const stmts = [
+    // ── tenants — MUST be first ────────────────────────────────────────────────
+    // Historically this table only ever came from `drizzle-kit push`, so a fresh
+    // deploy (build → start, no db:push) booted WITHOUT it: the `ALTER TABLE
+    // tenants …` statements below and bootstrapDefaultTenant() both silently
+    // failed ("no such table: tenants"), leaving the entire multi-tenant model
+    // broken. Create the base table idempotently here; the ALTERs further down
+    // add the remaining optional columns.
+    `CREATE TABLE IF NOT EXISTS tenants (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE, company_name TEXT NOT NULL, owner_name TEXT NOT NULL, owner_email TEXT NOT NULL UNIQUE, brand_name TEXT NOT NULL, tagline TEXT DEFAULT 'Field Sales Intelligence', plan TEXT NOT NULL DEFAULT 'trial', status TEXT NOT NULL DEFAULT 'active', created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     // Existing tables
     `CREATE TABLE IF NOT EXISTS team_members (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, phone TEXT, email TEXT, role TEXT NOT NULL DEFAULT 'rep', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS knock_log (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, knocked_at TEXT NOT NULL DEFAULT (datetime('now')), was_home INTEGER NOT NULL, outcome TEXT NOT NULL, callback_date TEXT, callback_time TEXT, notes TEXT)`,
@@ -273,6 +282,12 @@ export function runMigrations() {
     `ALTER TABLE commission_rates ADD COLUMN updated_by TEXT`,
     `ALTER TABLE knock_log ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE clock_sessions ADD COLUMN tenant_id INTEGER`,
+    // Audit stream is now tenant-scoped on read — stamp the actor's tenant at write.
+    `ALTER TABLE activity_log ADD COLUMN tenant_id INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_activity_log_tenant ON activity_log(tenant_id, at)`,
+    // Inbound rep applications carry the org they're joining (null = unrouted).
+    // Bootstrap adopts existing null rows into the default tenant.
+    `ALTER TABLE rep_applications ADD COLUMN tenant_id INTEGER`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
     // Persistent address pool — harvest once, re-scan for fiber-status changes
@@ -688,7 +703,13 @@ export function bootstrapDefaultTenant(raw: any): void {
     for (const table of tables) {
       const cols = (raw.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map(c => c.name);
       if (!cols.includes("tenant_id")) continue;
-      const res = raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE tenant_id IS NULL`).run(tenant.id);
+      // activity_log: only adopt USER-attributed rows. System actions (user_id
+      // NULL — nightly scans, cron, first-run) must stay tenant-less so they're
+      // visible only to super_admin, matching logActivity's write-time contract.
+      const where = table === "activity_log"
+        ? "tenant_id IS NULL AND user_id IS NOT NULL"
+        : "tenant_id IS NULL";
+      const res = raw.prepare(`UPDATE ${table} SET tenant_id = ? WHERE ${where}`).run(tenant.id);
       adopted += res.changes;
     }
     if (adopted > 0) {
@@ -1013,8 +1034,10 @@ export class Storage implements IStorage {
   }
 
   // ── Knock log ──────────────────────────────────────────────────────────────
-  getKnocks(): Knock[] {
-    return db.select().from(knockLog).orderBy(desc(knockLog.knockedAt)).all();
+  getKnocks(tenantId?: number): Knock[] {
+    const q = db.select().from(knockLog);
+    return (tenantId != null ? q.where(eq(knockLog.tenantId, tenantId)) : q)
+      .orderBy(desc(knockLog.knockedAt)).all();
   }
   getKnocksByLead(leadId: number): Knock[] {
     return db.select().from(knockLog).where(eq(knockLog.leadId, leadId)).orderBy(desc(knockLog.knockedAt)).all();
@@ -1193,9 +1216,16 @@ export class Storage implements IStorage {
 
   // ── OTP ────────────────────────────────────────────────────────────────────
   createOtp(email: string): string {
-    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const normalized = email.toLowerCase();
+    // Cryptographically-secure code (Math.random is a predictable non-CSPRNG whose
+    // state is recoverable from prior outputs — unacceptable for a sole auth factor).
+    const code = String(crypto.randomInt(100000, 1000000));
+    // Invalidate any still-live prior codes for this email so only the newest code
+    // is ever valid — re-requesting must not widen the guessable set.
+    db.update(otpCodes).set({ used: true })
+      .where(and(eq(otpCodes.email, normalized), eq(otpCodes.used, false))).run();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    db.insert(otpCodes).values({ email: email.toLowerCase(), code, expiresAt, createdAt: new Date().toISOString() }).run();
+    db.insert(otpCodes).values({ email: normalized, code, expiresAt, createdAt: new Date().toISOString() }).run();
     return code;
   }
   verifyOtp(email: string, code: string): boolean {
@@ -1278,9 +1308,12 @@ export class Storage implements IStorage {
   }
 
   // ── Rep Applications ───────────────────────────────────────────────────────
-  getRepApplications(status?: string): RepApplication[] {
-    if (status) return db.select().from(repApplications).where(eq(repApplications.status, status)).all();
-    return db.select().from(repApplications).all();
+  getRepApplications(status?: string, tenantId?: number): RepApplication[] {
+    const conds = [] as any[];
+    if (status) conds.push(eq(repApplications.status, status));
+    if (tenantId != null) conds.push(eq(repApplications.tenantId, tenantId));
+    const q = db.select().from(repApplications);
+    return (conds.length ? q.where(and(...conds)) : q).all();
   }
   getRepApplicationById(id: number): RepApplication | undefined {
     return db.select().from(repApplications).where(eq(repApplications.id, id)).get();
@@ -1296,11 +1329,22 @@ export class Storage implements IStorage {
   createLocationPing(ping: InsertLocationPing): LocationPing {
     return db.insert(locationPings).values({ ...ping, pingAt: new Date().toISOString() }).returning().get();
   }
-  getLatestPingPerRep(): LocationPing[] {
+  getLatestPingPerRep(tenantId?: number): LocationPing[] {
+    // location_pings has no tenant_id column — scope through the rep's tenant by
+    // restricting to team members in that tenant, so one org never sees another
+    // org's live rep locations.
+    const allowed = tenantId != null
+      ? new Set(this.getTeamMembers(tenantId).map(m => m.id))
+      : null;
     // Get all pings, group by repId keeping most recent
     const all = db.select().from(locationPings).orderBy(desc(locationPings.pingAt)).all();
     const seen = new Set<number>();
-    return all.filter(p => { if (seen.has(p.repId)) return false; seen.add(p.repId); return true; });
+    return all.filter(p => {
+      if (allowed && !allowed.has(p.repId)) return false;
+      if (seen.has(p.repId)) return false;
+      seen.add(p.repId);
+      return true;
+    });
   }
   getPingsByRep(repId: number, limit = 50): LocationPing[] {
     return db.select().from(locationPings).where(eq(locationPings.repId, repId))
@@ -1331,9 +1375,12 @@ export class Storage implements IStorage {
     return db.select().from(clockSessions).where(eq(clockSessions.repId, repId))
       .orderBy(desc(clockSessions.clockedIn)).all();
   }
-  getAllClockSessions(date?: string): ClockSession[] {
-    if (date) return db.select().from(clockSessions).where(eq(clockSessions.date, date)).all();
-    return db.select().from(clockSessions).orderBy(desc(clockSessions.clockedIn)).all();
+  getAllClockSessions(date?: string, tenantId?: number): ClockSession[] {
+    const conds = [] as any[];
+    if (tenantId != null) conds.push(eq(clockSessions.tenantId, tenantId));
+    if (date) conds.push(eq(clockSessions.date, date));
+    const q = db.select().from(clockSessions);
+    return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(clockSessions.clockedIn)).all();
   }
 
   // ── Coming Soon Pipeline ───────────────────────────────────────────────────
@@ -1574,9 +1621,12 @@ export class Storage implements IStorage {
   }
 
   // ── Commissions ────────────────────────────────────────────────────────────
-  getCommissions(repId?: number): Commission[] {
-    if (repId) return db.select().from(commissions).where(eq(commissions.repId, repId)).orderBy(desc(commissions.createdAt)).all();
-    return db.select().from(commissions).orderBy(desc(commissions.createdAt)).all();
+  getCommissions(tenantId?: number, repId?: number): Commission[] {
+    const conds = [] as any[];
+    if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
+    if (repId != null) conds.push(eq(commissions.repId, repId));
+    const q = db.select().from(commissions);
+    return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(commissions.createdAt)).all();
   }
   getCommissionById(id: number): Commission | undefined {
     return db.select().from(commissions).where(eq(commissions.id, id)).get();
@@ -1624,8 +1674,13 @@ export class Storage implements IStorage {
 
   // ── Activity Log ───────────────────────────────────────────────────────────
   logActivity(userId: number | null, action: string, entityType?: string, entityId?: number, details?: object, ip?: string): void {
+    // Stamp the acting user's tenant so the audit stream can be read back
+    // tenant-scoped (a manager only sees their own org's activity). System
+    // actions (userId null) stay tenant-less (visible only to super_admin).
+    const tenantId = userId != null ? (this.getUserById(userId)?.tenantId ?? null) : null;
     db.insert(activityLog).values({
       userId: userId ?? null,
+      tenantId,
       action,
       entityType: entityType ?? null,
       entityId: entityId ?? null,
@@ -1634,8 +1689,10 @@ export class Storage implements IStorage {
       at: new Date().toISOString(),
     }).run();
   }
-  getActivityLog(limit = 100): ActivityLogEntry[] {
-    return db.select().from(activityLog).orderBy(desc(activityLog.at)).limit(limit).all();
+  getActivityLog(limit = 100, tenantId?: number): ActivityLogEntry[] {
+    const q = db.select().from(activityLog);
+    return (tenantId != null ? q.where(eq(activityLog.tenantId, tenantId)) : q)
+      .orderBy(desc(activityLog.at)).limit(limit).all();
   }
 
   // ── Tenants ─────────────────────────────────────────────────────────────────

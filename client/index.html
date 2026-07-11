@@ -28,32 +28,48 @@
       })();
     </script>
     <!-- Fonts are self-hosted (@fontsource-variable/inter, bundled by Vite) — no
-         Google Fonts requests. Mapbox is the only third-party origin; preconnect
-         twice: plain for the script/CSS tags (non-CORS), crossorigin for the
-         library's tile/style fetches. -->
+         Google Fonts requests. Mapbox GL (~230KB gz + CSS) is the only third-party
+         origin and is LAZY-loaded (see below): login + the entire rep flow never
+         download it. Preconnect so the eventual map-screen load is fast. -->
     <link rel="preconnect" href="https://api.mapbox.com" />
     <link rel="preconnect" href="https://api.mapbox.com" crossorigin />
-    <!-- Loaded normally: the media="print" onload-flip trick silently failed in
-         some environments, leaving Mapbox's CSS print-only — the user-location
-         dot rendered as an unstyled invisible div. ~12KB gz from a preconnected
-         origin is cheaper than a broken blue dot. -->
-    <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
     <script>
-      // Signal when mapboxgl CDN is ready — no polling needed
-      window.__mapboxReady = false;
-      window.__mapboxReadyCallbacks = [];
-      window.__onMapboxReady = function(cb) {
-        // Resolve if the flag is set OR the library is already present — a
-        // cached/re-executed script can miss the onload event, leaving the
-        // flag false while mapboxgl is fully loaded. Without this fallback the
-        // map's token fetch stays queued forever ("Loading map…" hang).
-        if (window.__mapboxReady || typeof window.mapboxgl !== "undefined") { cb(); }
-        else { window.__mapboxReadyCallbacks.push(cb); }
-      };
+      // ── Lazy Mapbox loader ───────────────────────────────────────────────────
+      // Mapbox GL used to load on EVERY page (login, Today, Leads…) even though
+      // only the admin/scan map screens use it. Now the library + CSS are injected
+      // on the FIRST call to window.__onMapboxReady(cb) / window.__loadMapbox() —
+      // so a session that never opens a map screen never pays the ~230KB. The
+      // __onMapboxReady(cb) contract is unchanged for existing callers.
+      (function () {
+        var V = "https://api.mapbox.com/mapbox-gl-js/v3.3.0/";
+        window.__mapboxReady = false;
+        window.__mapboxReadyCallbacks = [];
+        window.__loadMapbox = function () {
+          if (window.__mapboxLoading || window.__mapboxReady || typeof window.mapboxgl !== "undefined") return;
+          window.__mapboxLoading = true;
+          if (!document.getElementById("mapbox-css")) {
+            var css = document.createElement("link");
+            css.id = "mapbox-css"; css.rel = "stylesheet"; css.href = V + "mapbox-gl.css";
+            document.head.appendChild(css);
+          }
+          var js = document.createElement("script");
+          js.src = V + "mapbox-gl.js"; js.async = true;
+          js.onload = function () {
+            window.__mapboxReady = true;
+            window.__mapboxReadyCallbacks.forEach(function (cb) { cb(); });
+            window.__mapboxReadyCallbacks = [];
+          };
+          document.head.appendChild(js);
+        };
+        window.__onMapboxReady = function (cb) {
+          // Already present (cached / re-exec) → resolve immediately; else queue
+          // the callback AND kick off the lazy load.
+          if (window.__mapboxReady || typeof window.mapboxgl !== "undefined") { cb(); return; }
+          window.__mapboxReadyCallbacks.push(cb);
+          window.__loadMapbox();
+        };
+      })();
     </script>
-    <!-- defer: load in the background so it never blocks first paint on non-map
-         pages; the __onMapboxReady callback pattern above handles readiness. -->
-    <script defer src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js" onload="window.__mapboxReady=true;window.__mapboxReadyCallbacks.forEach(function(cb){cb();});window.__mapboxReadyCallbacks=[];"></script>
   </head>
   <body>
     <div id="root"></div>

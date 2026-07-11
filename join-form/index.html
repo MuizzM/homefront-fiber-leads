@@ -616,6 +616,8 @@
 // Replace this with your deployed Fiber Scout server URL
 const FIBER_SCOUT_SERVER = "FIBER_SCOUT_SERVER_PLACEHOLDER";
 const API_ENDPOINT = FIBER_SCOUT_SERVER + "/api/onboarding/apply";
+// Which org this link belongs to (injected by /join/:slug). Blank = default org.
+const ORG_SLUG = "FIBER_SCOUT_ORG_PLACEHOLDER";
 
 // ── Experience toggle ────────────────────────────────────────────────────────
 function setExp(hasExp) {
@@ -705,6 +707,7 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
   fd.append("salesExperienceDetails", document.getElementById("salesExpDetails").value.trim());
   fd.append("preferredCarriers", carriers.join(","));
   fd.append("referralSource", document.getElementById("referralSource").value);
+  if (ORG_SLUG) fd.append("orgSlug", ORG_SLUG);
   const headshotFile = document.getElementById("headshotFile").files[0];
   const licenseFile = document.getElementById("licenseFile").files[0];
   if (headshotFile) fd.append("headshot", headshotFile);

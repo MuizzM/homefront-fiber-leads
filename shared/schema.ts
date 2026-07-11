@@ -294,6 +294,7 @@ export type ActivityOverride = typeof activityOverrides.$inferSelect;
 // ── Rep Applications ──────────────────────────────────────────────────────────
 export const repApplications = sqliteTable("rep_applications", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id"),              // which org this applicant is joining (null = unrouted inbound)
   fullName: text("full_name").notNull(),
   email: text("email").notNull(),
   phone: text("phone").notNull(),
@@ -461,6 +462,7 @@ export type Commission = typeof commissions.$inferSelect;
 export const activityLog = sqliteTable("activity_log", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   userId: integer("user_id"),                  // who did it (null = system)
+  tenantId: integer("tenant_id"),              // resolved from the actor at write time (null = system/global)
   action: text("action").notNull(),
   // e.g. "lead.created" | "lead.assigned" | "rep.clocked_in" | "territory.assigned"
   entityType: text("entity_type"),             // "lead" | "rep" | "territory" | "commission"

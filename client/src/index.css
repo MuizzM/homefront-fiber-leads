@@ -26,7 +26,9 @@
     --popover-foreground: 210 16% 96%;
 
     --primary:      172 44% 46%;      /* HomeFront Fiber teal #3EA394 — kept */
-    --primary-foreground: 0 0% 100%;
+    /* Dark teal-ink ON the teal (was pure white = 2.85:1, failed WCAG AA).
+       Matches the Sold-button #04120d ink; ~6:1 on the teal = AA pass. */
+    --primary-foreground: 172 65% 8%;
 
     --secondary:    216 15% 14%;      /* elevated / secondary surface */
     --secondary-foreground: 210 14% 82%;

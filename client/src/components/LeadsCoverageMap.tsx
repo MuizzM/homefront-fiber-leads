@@ -95,6 +95,7 @@ export default function LeadsCoverageMap({ pins }: { pins: CoveragePin[] }) {
     if (!token || !containerRef.current || mapRef.current) return;
     const mapboxgl = (window as any).mapboxgl;
     if (!mapboxgl) {
+      (window as any).__loadMapbox?.(); // Mapbox GL is lazy-loaded (index.html)
       const t = setInterval(() => { if ((window as any).mapboxgl) { clearInterval(t); setEpoch(e => e + 1); } }, 150);
       return () => clearInterval(t);
     }

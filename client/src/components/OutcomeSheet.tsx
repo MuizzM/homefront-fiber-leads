@@ -57,7 +57,7 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                 <div className="text-[16px] font-bold text-foreground leading-tight">{lead.address}</div>
                 <div className="text-[12px] text-muted-foreground">{lead.city}{lead.zip ? ` ${lead.zip}` : ""}{lead.contactName ? ` · ${lead.contactName}` : ""}</div>
               </div>
-              <button onClick={onClose} aria-label="Close" className="w-9 h-9 -mr-2 -mt-1 flex items-center justify-center text-muted-foreground"><X className="w-5 h-5" /></button>
+              <button onClick={onClose} aria-label="Close" className="w-11 h-11 -mr-2 -mt-2 flex items-center justify-center text-muted-foreground"><X className="w-5 h-5" /></button>
             </div>
 
             <div className="px-5 pt-4 pb-2 grid grid-cols-2 gap-2.5">
@@ -67,12 +67,17 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
                 return (
                   <button
                     key={o.key} onClick={() => fire(o.key)} data-testid={`outcome-${o.key}`}
-                    className="h-14 rounded-xl font-semibold text-[14px] flex items-center justify-center gap-2 active:scale-95 transition-transform border"
+                    className="h-14 rounded-xl font-semibold text-[14px] flex items-center justify-center gap-2 active:scale-95 transition-transform border-2"
                     style={win
                       ? { background: o.color, color: "#04120d", borderColor: o.color }
-                      : { background: `${o.color}${armed ? "33" : "1f"}`, color: o.color, borderColor: `${o.color}${armed ? "aa" : "55"}` }}
+                      // Text is the always-AA card-foreground; the outcome HUE is carried
+                      // by a saturated dot + border, not the (low-contrast) text color.
+                      : { background: `${o.color}${armed ? "33" : "1f"}`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}${armed ? "dd" : "99"}` }}
                   >
-                    {win && <CheckCircle2 className="w-4 h-4" />}{o.key === "callback" && <CalendarClock className="w-4 h-4" />}{o.label}
+                    {win && <CheckCircle2 className="w-4 h-4" />}
+                    {o.key === "callback" && <CalendarClock className="w-4 h-4" style={{ color: o.color }} />}
+                    {!win && o.key !== "callback" && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: o.color }} />}
+                    {o.label}
                   </button>
                 );
               })}
@@ -83,9 +88,9 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
               <div className="mx-5 mt-2 rounded-xl border border-cyan-500/30 bg-cyan-500/[0.06] p-3" data-testid="callback-schedule">
                 <div className="text-[11px] font-semibold uppercase tracking-wide text-cyan-400 mb-2">Schedule the callback</div>
                 <div className="flex gap-2">
-                  <input type="date" value={cbDate} onChange={e => setCbDate(e.target.value)} data-testid="cb-date"
+                  <input type="date" aria-label="Callback date" value={cbDate} onChange={e => setCbDate(e.target.value)} data-testid="cb-date"
                     className="flex-1 min-w-0 rounded-lg bg-background border border-border px-3 py-2.5 text-[14px] text-foreground focus:border-cyan-500 focus:outline-none" />
-                  <input type="time" value={cbTime} onChange={e => setCbTime(e.target.value)} data-testid="cb-time"
+                  <input type="time" aria-label="Callback time" value={cbTime} onChange={e => setCbTime(e.target.value)} data-testid="cb-time"
                     className="w-28 rounded-lg bg-background border border-border px-3 py-2.5 text-[14px] text-foreground focus:border-cyan-500 focus:outline-none" />
                 </div>
                 <button onClick={() => onLog("callback", { notes: note.trim() || null, callbackDate: cbDate, callbackTime: cbTime })}
@@ -97,7 +102,7 @@ export function OutcomeSheet({ lead, onClose, onLog }: {
 
             <div className="px-5 pt-3 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
               {noteOpen ? (
-                <textarea autoFocus value={note} onChange={e => setNote(e.target.value)} rows={2}
+                <textarea autoFocus aria-label="Quick note" value={note} onChange={e => setNote(e.target.value)} rows={2}
                   placeholder="Quick note (optional)…" data-testid="outcome-note"
                   className="w-full rounded-xl bg-background border border-border px-3 py-2.5 text-[14px] text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none" />
               ) : (

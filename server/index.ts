@@ -6,6 +6,7 @@ import { registerRoutes, registerSaasRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import { runMigrations } from "./storage";
+import { rawDb } from "./db";
 import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import cors from "cors";
@@ -373,4 +374,26 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // ── Graceful shutdown ────────────────────────────────────────────────────────
+  // A deploy/restart sends SIGTERM. Without this, the process is killed mid-flight:
+  // in-flight requests are severed and the SQLite WAL isn't checkpointed cleanly.
+  // Drain the HTTP server (stop accepting new conns, let active ones finish), then
+  // close the DB (checkpoints WAL — safe for Litestream), then exit. A hard 10s cap
+  // guarantees the platform's kill-timer never has to SIGKILL us.
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    log(`${signal} received — draining connections…`);
+    const force = setTimeout(() => { log("drain timed out — forcing exit"); process.exit(1); }, 10_000);
+    force.unref();
+    httpServer.close(() => {
+      try { rawDb.close(); } catch (e: any) { console.warn("[shutdown] db close:", e?.message); }
+      log("drained cleanly — exiting");
+      process.exit(0);
+    });
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 })();

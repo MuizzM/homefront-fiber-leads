@@ -40,7 +40,12 @@ function reasons(p: Pin): { label: string; icon: any; tone: string }[] {
   if (!out.length && (p.leadScore ?? 0) >= 80) out.push({ label: "High-priority", icon: Trophy, tone: "text-violet-400" });
   return out.slice(0, 2);
 }
-const directionsUrl = (p: Pin) => `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
+const directionsUrl = (p: Pin) => {
+  const dest = p.lat != null && p.lng != null
+    ? `${p.lat},${p.lng}`
+    : encodeURIComponent([p.address, p.city, p.state, p.zip].filter(Boolean).join(", "));
+  return `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+};
 
 export default function Today() {
   const { user } = useAuth();
@@ -77,6 +82,19 @@ export default function Today() {
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["/api/clock/status"] }); toast({ title: "Clocked in — have a great shift" }); },
     onError: (e: any) => toast({ title: "Couldn't clock in", description: String(e?.message ?? e), variant: "destructive" }),
   });
+  // Clock-OUT lives here too so end-of-shift is one tap from the rep's home
+  // (there is no clock tab). Tap-to-confirm guards against an accidental tap.
+  const [confirmOut, setConfirmOut] = useState(false);
+  const clockOut = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/clock/out", {}).then(r => r.json()),
+    onSuccess: (s: any) => {
+      qc.invalidateQueries({ queryKey: ["/api/clock/status"] });
+      const m = s?.durationMinutes;
+      toast({ title: "Clocked out — shift saved", description: typeof m === "number" ? `${Math.floor(m / 60)}h ${m % 60}m logged` : undefined });
+      setConfirmOut(false);
+    },
+    onError: (e: any) => { setConfirmOut(false); toast({ title: "Couldn't clock out", description: String(e?.message ?? e), variant: "destructive" }); },
+  });
 
   const myRow = useMemo(() => (boardQ.data ?? []).find(r => r.rep.id === user?.teamMemberId) ?? null, [boardQ.data, user?.teamMemberId]);
   const pins = pinsQ.data?.pins ?? [];
@@ -112,7 +130,19 @@ export default function Today() {
             </h1>
           </div>
           {clockQ.data?.clockedIn && (
-            <span className="shrink-0 mt-1 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 px-2.5 py-1 text-[11px] font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />On the clock</span>
+            <button
+              onClick={() => { if (confirmOut) clockOut.mutate(); else { setConfirmOut(true); setTimeout(() => setConfirmOut(false), 3000); } }}
+              disabled={clockOut.isPending}
+              data-testid="today-clock-out"
+              aria-label={confirmOut ? "Tap again to clock out" : "On the clock — tap to clock out"}
+              className={`shrink-0 mt-1 inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold active:scale-95 transition disabled:opacity-60 ${confirmOut ? "bg-rose-500/15 text-rose-400 border-rose-500/30" : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"}`}
+            >
+              {clockOut.isPending
+                ? <><RefreshCw className="w-3 h-3 animate-spin" />Clocking out…</>
+                : confirmOut
+                  ? <><Clock className="w-3 h-3" />Tap to clock out</>
+                  : <><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />On the clock</>}
+            </button>
           )}
         </header>
 
@@ -229,7 +259,8 @@ function HeroCard({ p, loc, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng | nul
         <span className="w-3 h-3 rounded-full mt-1.5 shrink-0" style={{ background: STATE_COLORS[st], boxShadow: `0 0 0 4px ${STATE_COLORS[st]}22` }} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: STATE_COLORS[st] }}>{STATE_LABELS[st]}</span>
+            {/* Hue is carried by the status dot (left); keep the LABEL text high-contrast (was state-color = failed AA). */}
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-foreground">{STATE_LABELS[st]}</span>
             {dist && <span className="text-[11px] text-muted-foreground inline-flex items-center gap-0.5"><Navigation className="w-3 h-3" />{dist} away</span>}
           </div>
           <div className="text-[20px] font-bold text-foreground leading-tight mt-0.5">{p.address}</div>

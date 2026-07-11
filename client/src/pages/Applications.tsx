@@ -5,7 +5,7 @@ import { useAuth } from "@/lib/auth";
 import {
   CheckCircle2, XCircle, Clock, User, Mail, Phone, MapPin,
   Briefcase, FileText, Image, ExternalLink, ChevronDown, ChevronUp,
-  AlertTriangle, RefreshCw, Layers, DollarSign, TrendingUp
+  AlertTriangle, RefreshCw, Layers, DollarSign, TrendingUp, Link2, Copy, Check
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -76,6 +76,27 @@ export default function Applications() {
     },
     enabled: canReview,
   });
+
+  // The org's shareable recruiting link — applicants who use it are routed
+  // straight to this tenant (server resolves the slug → tenantId at apply time).
+  const { data: joinLink } = useQuery<{ url: string; path: string; companyName: string | null }>({
+    queryKey: ["/api/onboarding/join-link"],
+    queryFn: () => apiRequest("GET", "/api/onboarding/join-link").then(r => r.json()),
+    enabled: canReview,
+    staleTime: 5 * 60_000,
+  });
+  const [copied, setCopied] = useState(false);
+  const copyJoinLink = async () => {
+    if (!joinLink?.url) return;
+    try {
+      await navigator.clipboard.writeText(joinLink.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+      toast({ title: "Join link copied", description: "Share it with candidates — they'll land in your org." });
+    } catch {
+      toast({ title: "Couldn't copy", description: joinLink.url, variant: "destructive" });
+    }
+  };
 
   const reviewMutation = useMutation({
     mutationFn: ({ id, status, notes, commission }: { id: number; status: string; notes?: string; commission?: any }) =>
@@ -155,6 +176,38 @@ export default function Applications() {
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Recruiting link — the per-org join URL to share with candidates */}
+      {joinLink?.url && (
+        <div className="rounded-xl border border-border bg-card p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Link2 className="w-4 h-4 text-primary" />
+            <p className="text-sm font-medium text-foreground">Your recruiting link</p>
+            {joinLink.companyName && (
+              <span className="text-[11px] text-muted-foreground">· routes applicants to {joinLink.companyName}</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 min-w-0 truncate rounded-lg bg-secondary border border-border px-3 py-2 text-[13px] text-foreground font-mono" data-testid="join-link-url">
+              {joinLink.url}
+            </code>
+            <button
+              onClick={copyJoinLink}
+              data-testid="copy-join-link"
+              className="shrink-0 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-primary text-primary-foreground text-[13px] font-semibold active:scale-95 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              {copied ? <><Check className="w-4 h-4" />Copied</> : <><Copy className="w-4 h-4" />Copy</>}
+            </button>
+            <a
+              href={joinLink.url} target="_blank" rel="noreferrer"
+              aria-label="Open join form"
+              className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            >
+              <ExternalLink className="w-4 h-4" />
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* Metric strip */}
       <div className="rounded-xl border border-border bg-card grid grid-cols-2 divide-x divide-border">

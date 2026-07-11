@@ -81,10 +81,11 @@ export default function LiveMap() {
     toast({ title: "Location sharing stopped" });
   }
 
-  // Init map — mapboxgl loaded via CDN <script> in index.html
+  // Init map — Mapbox GL is lazy-loaded (index.html); trigger the fetch on mount.
   useEffect(() => {
     if (!config?.token || !mapContainer.current || mapRef.current) return;
     const token = config.token;
+    (window as any).__loadMapbox?.(); // kick off the lazy library load
     const tryInit = () => {
       const mgl = (window as any).mapboxgl;
       if (!mgl) { setTimeout(tryInit, 150); return; }

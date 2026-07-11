@@ -7,6 +7,18 @@ let _sessionId: string | null = null;
 export function setSessionId(id: string | null) { _sessionId = id; }
 export function getStoredSessionId() { return _sessionId; }
 
+// Global 401 handler — registered by the auth context. When a request comes back
+// 401 while we HELD a session, the session expired server-side: fail the whole
+// app to a single re-auth path instead of letting each screen silently error
+// (which used to leave reps staring at stale data with no way back in).
+let _onUnauthorized: (() => void) | null = null;
+export function setUnauthorizedHandler(fn: (() => void) | null) { _onUnauthorized = fn; }
+function notifyIfSessionExpired(status: number) {
+  // Only when we actually had a session — a 401 during login (no token yet) is
+  // a normal "wrong code", not an expiry, and must NOT trigger a logout.
+  if (status === 401 && _sessionId) _onUnauthorized?.();
+}
+
 function authHeaders(extra?: Record<string, string>, includeCsrf = false): Record<string, string> {
   const h: Record<string, string> = { ...extra };
   if (_sessionId) {
@@ -41,6 +53,7 @@ export async function apiRequest(
     body: data ? JSON.stringify(data) : undefined,
   });
 
+  notifyIfSessionExpired(res.status);
   await throwIfResNotOk(res);
   return res;
 }
@@ -55,6 +68,7 @@ export const getQueryFn: <T>(options: {
       headers: authHeaders(),
     });
 
+    notifyIfSessionExpired(res.status);
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
     }

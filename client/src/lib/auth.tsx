@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { setSessionId as syncSessionToQueryClient } from "@/lib/queryClient";
+import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler } from "@/lib/queryClient";
+import { toast } from "@/hooks/use-toast";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -54,6 +55,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     checkStatus(_memSession);
+  }, []);
+
+  // Global session-expiry recovery: if any request 401s while we held a session,
+  // clear it locally (the server already invalidated it) and route back to Login
+  // with a clear message — instead of every screen silently erroring on stale
+  // data. Queued knocks are NOT lost; they resync after sign-in.
+  useEffect(() => {
+    setUnauthorizedHandler(() => {
+      if (!_memSession) return;
+      _memSession = null;
+      writePersistedSession(null);
+      setSid(null);
+      syncSessionToQueryClient(null);
+      setUser(null);
+      toast({ title: "Session expired", description: "Please sign back in — anything you logged is saved and will sync." });
+    });
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   async function checkStatus(existingSid: string | null) {

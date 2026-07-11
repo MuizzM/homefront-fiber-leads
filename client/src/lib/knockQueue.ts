@@ -73,8 +73,10 @@ export interface KnockQueue {
 }
 
 // 4xx that a retry can never fix — dead-letter immediately so poison items
-// don't block the FIFO behind them.
-const DEAD_STATUSES = new Set([400, 401, 403, 404]);
+// don't block the FIFO behind them. NOTE: 401 is handled separately (session
+// expired = valid knock waiting for re-auth, never poison); 403 falls through to
+// bounded retry (a CSRF-token 403 resolves once the session refreshes).
+const DEAD_STATUSES = new Set([400, 404]);
 const SAVED_FLASH_MS = 2000;
 const INTERVAL_MS = 30_000;
 const RECENT_SAVES_CAP = 50;
@@ -265,6 +267,17 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
           const message = err instanceof Error ? err.message : String(err);
           const status = parseInt(message, 10); // apiRequest throws Error("<status>: <text>")
           item.lastError = message;
+          if (status === 401) {
+            // Session expired — the knock is VALID, it just needs the rep to sign
+            // back in. Pause the line WITHOUT consuming an attempt so it survives
+            // until re-auth (the global 401 handler routes them to Login); the
+            // flush retries on the next heartbeat / online / re-login.
+            item.nextAttemptAt = now() + retryDelayMs(1);
+            persistPending();
+            setLeadState(item.leadId, "queued");
+            markChanged();
+            break; // everything behind this item needs auth too
+          }
           if (DEAD_STATUSES.has(status)) {
             deadLetter(idx, item); // poison — park it and keep the line moving
             continue;

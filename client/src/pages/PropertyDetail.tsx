@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   ChevronLeft, Navigation, Phone, Zap, Wifi, Building2, Trophy, User as UserIcon,
   ShieldCheck, AlertTriangle, ShieldX, StickyNote, UserPlus, RefreshCw, MapPin,
+  WifiOff, CloudUpload,
 } from "lucide-react";
 
 interface Lead {
@@ -37,7 +38,14 @@ const FIBER_LABEL: Record<string, string> = {
   copper: "Copper / DSL", no_service: "No service", unknown: "Unknown",
 };
 const fmtTime = (iso: string) => new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-const directionsUrl = (l: Lead) => `https://www.google.com/maps/dir/?api=1&destination=${l.lat},${l.lng}`;
+// Prefer exact coords; fall back to the postal address so Navigate never opens a
+// broken "destination=null,null" link when a lead has no lat/lng.
+const directionsUrl = (l: Lead) => {
+  const dest = l.lat != null && l.lng != null
+    ? `${l.lat},${l.lng}`
+    : encodeURIComponent([l.address, l.city, l.state, l.zip].filter(Boolean).join(", "));
+  return `https://www.google.com/maps/dir/?api=1&destination=${dest}`;
+};
 
 function VerifyBadge({ v }: { v?: string | null }) {
   if (v === "verified") return <span className="inline-flex items-center gap-1 text-[10.5px] font-semibold text-emerald-400"><ShieldCheck className="w-3 h-3" />Verified</span>;
@@ -50,7 +58,7 @@ export default function PropertyDetail() {
   const [, params] = useRoute("/lead/:id");
   const [, navigate] = useLocation();
   const id = Number(params?.id);
-  const { log } = useKnockLogger();
+  const { log, snap } = useKnockLogger();
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const leadQ = useQuery<Lead>({
@@ -143,6 +151,7 @@ export default function PropertyDetail() {
       {lead && (
         <div className="fixed inset-x-0 bottom-14 z-20 md:bottom-0 pointer-events-none">
           <div className="mx-auto max-w-lg px-4 pb-2" style={{ paddingBottom: "calc(0.5rem + env(safe-area-inset-bottom))" }}>
+            <SaveState state={snap.byLead[lead.id]} online={snap.online} />
             <button onClick={() => setSheetOpen(true)} data-testid="detail-log-cta" className="pointer-events-auto w-full h-13 py-3.5 rounded-2xl bg-primary text-primary-foreground font-bold text-[15px] shadow-lg shadow-black/30 active:scale-[.98] transition-transform">Log outcome</button>
           </div>
         </div>
@@ -156,6 +165,26 @@ export default function PropertyDetail() {
           setSheetOpen(false);
         }}
       />
+    </div>
+  );
+}
+
+// Per-lead knock save state — confirms a tap actually landed (or is queued
+// offline / failed) instead of leaving the rep guessing after they log.
+function SaveState({ state, online }: { state?: string; online: boolean }) {
+  if (!state || state === "idle" || state === "saved") return null;
+  const map: Record<string, { icon: any; text: string; cls: string; spin?: boolean }> = {
+    saving: { icon: RefreshCw, text: "Saving…", cls: "bg-primary/10 border-primary/25 text-primary", spin: true },
+    queued: online
+      ? { icon: CloudUpload, text: "Queued — syncing", cls: "bg-primary/10 border-primary/25 text-primary" }
+      : { icon: WifiOff, text: "Saved offline — will sync", cls: "bg-muted border-border text-muted-foreground" },
+    error: { icon: AlertTriangle, text: "Didn't save — will retry", cls: "bg-rose-500/10 border-rose-500/30 text-rose-400" },
+  };
+  const m = map[state]; if (!m) return null;
+  const Icon = m.icon;
+  return (
+    <div className={`pointer-events-auto mb-2 flex items-center justify-center gap-1.5 rounded-xl border px-3 py-1.5 text-[12px] font-semibold ${m.cls}`} data-testid="detail-save-state" role="status">
+      <Icon className={`w-3.5 h-3.5 ${m.spin ? "animate-spin" : ""}`} />{m.text}
     </div>
   );
 }

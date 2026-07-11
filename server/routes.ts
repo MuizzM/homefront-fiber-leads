@@ -2276,6 +2276,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const isSelf = user?.teamMemberId === repId;
     const canViewOthers = ["admin", "manager", "team_lead"].includes(user?.role);
     if (!isSelf && !canViewOthers) return res.status(404).json({ error: "Not found" });
+    // Viewing another rep must stay inside the caller's tenant AND (for a
+    // team_lead) their own team — otherwise repId is an incrementing IDOR that
+    // discloses any rep's identity + knock outcomes across orgs.
+    if (!isSelf) {
+      if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Not found" });
+      if (!repInVisibilityScope(user, repId)) return res.status(404).json({ error: "Not found" });
+    }
     const rep = storage.getTeamMemberById(repId);
     if (!rep) return res.status(404).json({ error: "Not found" });
     // Capped, newest-first (getKnocksByRep is unordered — id desc = insertion
@@ -2798,12 +2805,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (territories.length === 0) return res.json([]);
 
     const leads = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null);
-    const members = storage.getTeamMembers();
+    const members = storage.getTeamMembers(tid);
     const geoConfig = storage.getGeoConfig(tid ?? null);
 
     // Group knocks by lead once (O(knocks)) so each territory is O(leads-inside).
+    // Tenant-scoped so a shared DB doesn't load every org's knocks to discard them.
     const knocksByLead = new Map<number, any[]>();
-    for (const k of storage.getKnocks()) {
+    for (const k of storage.getKnocks(tid)) {
       const arr = knocksByLead.get(k.leadId); if (arr) arr.push(k); else knocksByLead.set(k.leadId, [k]);
     }
     // Is this a WORKED outcome (door done for the pass)? Mirrors OUTCOME_META.
@@ -2877,8 +2885,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       ? storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, poly))
       : [];
     const leadById = new Map(within.map((l: any) => [l.id, l]));
-    const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
-    const activities = storage.getKnocks()
+    const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
+    const activities = storage.getKnocks(tid)
       .filter(k => leadById.has(k.leadId))
       .map(k => {
         const l: any = leadById.get(k.leadId);
@@ -3023,20 +3031,34 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // ── Public /join page — serve the HomeFront application form ────────────────
-  app.get("/join", (_req, res) => {
-    const joinPath = path.join(process.cwd(), "join-form", "index.html");
-    const fallbackPath = path.join(__dirname, "..", "join-form", "index.html");
-    const resolved = fs.existsSync(joinPath) ? joinPath : fallbackPath;
-    if (!fs.existsSync(resolved)) {
+  // Two shapes: bare `/join` (routes to the default org) and `/join/:slug`
+  // (routes applicants to a SPECIFIC tenant — this is the per-tenant recruiting
+  // link a manager shares). The slug is injected into the form and travels back
+  // on submit; the apply endpoint resolves it to a tenant.
+  const serveJoinForm = (req: Request, res: Response, orgSlug: string | string[] | undefined) => {
+    // __dirname is defined under the CJS prod bundle but NOT under the tsx/ESM dev
+    // runtime — guard with typeof (never throws) so both the packaged and dev paths
+    // resolve. The cwd path is the primary; the bundle‑relative one is the fallback.
+    const candidates = [path.join(process.cwd(), "join-form", "index.html")];
+    if (typeof __dirname !== "undefined") candidates.push(path.join(__dirname, "..", "join-form", "index.html"));
+    const resolved = candidates.find(p => fs.existsSync(p));
+    if (!resolved) {
       return res.status(404).send("Join form not found");
     }
-    // Inject the server URL dynamically so form submits to itself
+    // Inject the server URL (so the form submits to itself) + the org slug.
     let html = fs.readFileSync(resolved, "utf-8");
-    const serverUrl = `${_req.protocol}://${_req.get("host")}`;
-    html = html.replace("FIBER_SCOUT_SERVER_PLACEHOLDER", serverUrl);
+    const serverUrl = `${req.protocol}://${req.get("host")}`;
+    // Slug is [a-z0-9-] only (matches tenant slugs) — strip anything else so it
+    // can't break out of the injected JS string literal.
+    const safeSlug = String(orgSlug || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
+    html = html
+      .replace("FIBER_SCOUT_SERVER_PLACEHOLDER", serverUrl)
+      .replace("FIBER_SCOUT_ORG_PLACEHOLDER", safeSlug);
     res.setHeader("Content-Type", "text/html");
     res.send(html);
-  });
+  };
+  app.get("/join", (req: Request, res: Response) => serveJoinForm(req, res, ""));
+  app.get("/join/:slug", (req: Request, res: Response) => serveJoinForm(req, res, req.params.slug));
 
     // ── Rep Onboarding Application ─────────────────────────────────────────────
   // Public endpoint — no auth required (this is the application form)
@@ -3114,7 +3136,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     (req, res) => {
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { fullName, email, phone, city, zip, state, hasSalesExperience,
-              salesExperienceDetails, preferredCarriers, referralSource } = req.body;
+              salesExperienceDetails, preferredCarriers, referralSource, orgSlug } = req.body;
 
       if (!fullName || !email || !phone || !city || !zip || !preferredCarriers) {
         cleanupUploads(files);
@@ -3129,8 +3151,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         return res.status(400).json({ error: "Invalid or oversized field values." });
       }
 
-      // Check for duplicate application
-      const existing = storage.getRepApplications().find(
+      // Route the applicant to the org whose join link they used. An unknown or
+      // absent slug falls back to the default tenant so a bad link never drops an
+      // application on the floor. Slug is sanitized to [a-z0-9-].
+      const cleanSlug = typeof orgSlug === "string" ? orgSlug.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64) : "";
+      const routedTenantId = (cleanSlug ? storage.getTenantBySlug(cleanSlug)?.id : null) ?? getDefaultTenantId() ?? undefined;
+
+      // Duplicate check is per-tenant: the same person may legitimately apply to
+      // two different orgs, but not twice to the same one.
+      const existing = storage.getRepApplications(undefined, routedTenantId).find(
         a => a.email.toLowerCase() === email.toLowerCase() && a.status === "pending"
       );
       if (existing) {
@@ -3142,6 +3171,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const licenseFile = files?.license?.[0];
 
       const app2 = storage.createRepApplication({
+        tenantId: routedTenantId,
         fullName,
         email: email.toLowerCase(),
         phone,
@@ -3194,10 +3224,31 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
   );
 
-  // GET /api/onboarding/applications — admin/manager only
+  // GET /api/onboarding/applications — admin/manager only, tenant-scoped
+  // (super_admin sees all orgs' inbound; a tenant admin sees only their own).
+  // NOTE: the public /join form does not yet route applicants to a tenant, so
+  // cross-tenant recruiting needs a per-tenant join link — tracked as follow-up.
   app.get("/api/onboarding/applications", requireManager, (req, res) => {
+    const tid = (req as any).user?.tenantId ?? undefined;
     const status = req.query.status as string | undefined;
-    res.json(storage.getRepApplications(status));
+    res.json(storage.getRepApplications(status, tid));
+  });
+
+  // GET /api/onboarding/join-link — the caller's per-tenant recruiting link.
+  // Applicants who use it are routed straight to this org. Falls back to the
+  // default tenant's slug (or bare /join) so there's always a usable link.
+  app.get("/api/onboarding/join-link", requireManager, (req, res) => {
+    const user = (req as any).user;
+    const tenantId = user?.tenantId ?? getDefaultTenantId();
+    const tenant = tenantId != null ? storage.getTenantById(tenantId) : undefined;
+    const slug = tenant?.slug ?? "";
+    const origin = `${req.protocol}://${req.get("host")}`;
+    res.json({
+      slug,
+      companyName: tenant?.companyName ?? null,
+      path: slug ? `/join/${slug}` : "/join",
+      url: slug ? `${origin}/join/${slug}` : `${origin}/join`,
+    });
   });
 
   // ── CNS Scanner Routes ────────────────────────────────────────────────────────
@@ -3517,9 +3568,12 @@ export function registerSaasRoutes(app: any) {
   });
 
   // GET /api/location-pings/latest — latest ping per rep (admin/manager view)
-  app.get("/api/location-pings/latest", requireManager, (_req: Request, res: Response) => {
-    const pings = storage.getLatestPingPerRep();
-    const members = storage.getTeamMembers();
+  // Tenant-scoped: an org only ever sees its OWN reps' live locations.
+  app.get("/api/location-pings/latest", requireManager, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tid = user.tenantId ?? undefined; // super_admin (null) sees all
+    const pings = storage.getLatestPingPerRep(tid);
+    const members = storage.getTeamMembers(tid);
     const result = pings.map(p => ({
       ...p,
       repName: members.find(m => m.id === p.repId)?.name ?? "Unknown",
@@ -3531,10 +3585,13 @@ export function registerSaasRoutes(app: any) {
   app.get("/api/location-pings/:repId", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
     const repId = Number(req.params.repId);
-    // Reps can only view their own; managers can view all
+    // Reps can only view their own; a scoped role only within their team; and
+    // NO role may cross the tenant wall (IDOR on an incrementing repId).
     if (user.role === "rep" && user.teamMemberId !== repId) {
       return res.status(403).json({ error: "Forbidden" });
     }
+    if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
+    if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "Forbidden" });
     res.json(storage.getPingsByRep(repId, 100));
   });
 
@@ -3582,13 +3639,15 @@ export function registerSaasRoutes(app: any) {
   app.get("/api/clock/sessions", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
     const date = req.query.date as string | undefined;
+    const tid = user.tenantId ?? undefined; // super_admin (null) sees all
     let sessions;
     if (user.role === "rep") {
       sessions = storage.getClockSessionsByRep(user.teamMemberId ?? 0);
     } else {
-      sessions = storage.getAllClockSessions(date);
+      // Tenant-scoped — a manager never sees another org's labor records.
+      sessions = storage.getAllClockSessions(date, tid);
     }
-    const members = storage.getTeamMembers();
+    const members = storage.getTeamMembers(tid);
     const result = sessions.map(s => ({
       ...s,
       repName: members.find(m => m.id === s.repId)?.name ?? "Unknown",
@@ -3649,11 +3708,21 @@ export function registerSaasRoutes(app: any) {
   // GET /api/commissions — admin sees all, rep sees own
   app.get("/api/commissions", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
-    const repId = user.role === "rep" ? (user.teamMemberId ?? -1) : (req.query.repId ? Number(req.query.repId) : undefined);
-    const comms = storage.getCommissions(user.role === "rep" ? repId : undefined);
+    const tid = user.tenantId ?? undefined; // super_admin (null) = all tenants
+    let repId: number | undefined;
+    if (user.role === "rep") {
+      repId = user.teamMemberId ?? -1;
+    } else if (req.query.repId) {
+      repId = Number(req.query.repId);
+      // The ?repId filter must not become a cross-tenant IDOR — a manager may
+      // only target a rep inside their own org.
+      if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
+    }
+    // Tenant-scoped: a manager/admin never receives another org's payout ledger.
+    const comms = storage.getCommissions(tid, repId);
     // Mobile entries read "sold date · rep · address, city" — enrich once here
     // (two Map builds, O(1) per row) instead of N client round-trips.
-    const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
     const leadIds = new Set(comms.map(c => c.leadId).filter((id): id is number => id != null));
     const leadAddr = new Map(
       storage.getLeads(user?.tenantId ?? undefined)
@@ -3763,10 +3832,12 @@ export function registerSaasRoutes(app: any) {
   // A read-model over the append-only activity stream: health cards, categorized
   // failures, and the permission-denial feed. Gated on audit.read.org.
   app.get("/api/diagnostics", requireCapability("audit.read.org"), (req: Request, res: Response) => {
+    const tid = (req as any).user?.tenantId ?? undefined; // super_admin (null) = platform-wide
     const windowHours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 168);
     // Pull a generous slice; buildDiagnostics windows + caps it. Cheap: one
-    // indexed desc scan, no per-row joins.
-    const raw = storage.getActivityLog(1000).map(e => ({
+    // indexed desc scan, no per-row joins. Tenant-scoped — a manager's health
+    // cards reflect only their own org's activity.
+    const raw = storage.getActivityLog(1000, tid).map(e => ({
       action: e.action, at: e.at, userId: e.userId,
       details: e.details ? (() => { try { return JSON.parse(e.details as string); } catch { return null; } })() : null,
     }));
@@ -3814,9 +3885,12 @@ export function registerSaasRoutes(app: any) {
 
   // ── Activity Log ──────────────────────────────────────────────────────────────
   app.get("/api/activity-log", requireManager, (req: Request, res: Response) => {
+    const tid = (req as any).user?.tenantId ?? undefined; // super_admin (null) = all tenants
     const limit = Number(req.query.limit ?? 100);
-    const entries = storage.getActivityLog(limit);
-    const users = storage.getAllUsers();
+    // Tenant-scoped audit stream — a manager never reads another org's actions,
+    // actor names, or client IPs.
+    const entries = storage.getActivityLog(limit, tid);
+    const users = storage.getAllUsers(tid);
     const result = entries.map(e => ({
       ...e,
       userName: users.find(u => u.id === e.userId)?.name ?? "System",
@@ -3835,14 +3909,19 @@ export function registerSaasRoutes(app: any) {
     // to exactly the same reps as the leads above.
     const scopeIds = Array.isArray(repScope) ? repScope : null;
 
-    // Reps see their own stats; team leads their team's; admins/managers tenant-wide
-    const leads = storage.getLeads(user?.tenantId ?? undefined, repScope);
-    const members = storage.getTeamMembers(user?.tenantId ?? undefined).filter(m => m.active);
+    // Reps see their own stats; team leads their team's; admins/managers tenant-wide.
+    // EVERY source is tenant-scoped so the org-wide (scopeIds===null) path can never
+    // aggregate another tenant's knocks/commissions/hours/pipeline into this dashboard.
+    const tid = user?.tenantId ?? undefined; // super_admin (null) = platform-wide
+    const leads = storage.getLeads(tid, repScope);
+    const members = storage.getTeamMembers(tid).filter(m => m.active);
     const scopedMembers = scopeIds ? members.filter(m => scopeIds.includes(m.id)) : members;
-    const knocks = scopeIds ? storage.getKnocks().filter((k: any) => scopeIds.includes(k.repId)) : storage.getKnocks();
-    const comingSoon = storage.getComingSoonAddresses();
-    const commissions = scopeIds ? storage.getCommissions().filter((c: any) => scopeIds.includes(c.repId)) : storage.getCommissions();
-    const allSessions = storage.getAllClockSessions();
+    const allKnocks = storage.getKnocks(tid);
+    const knocks = scopeIds ? allKnocks.filter((k: any) => scopeIds.includes(k.repId)) : allKnocks;
+    const comingSoon = storage.getComingSoonAddresses(tid);
+    const allCommissions = storage.getCommissions(tid);
+    const commissions = scopeIds ? allCommissions.filter((c: any) => scopeIds.includes(c.repId)) : allCommissions;
+    const allSessions = storage.getAllClockSessions(undefined, tid);
     const sessions = scopeIds ? allSessions.filter(s => scopeIds.includes(s.repId)) : allSessions;
 
     const today = new Date().toISOString().slice(0, 10);
