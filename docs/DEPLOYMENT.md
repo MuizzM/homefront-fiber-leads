@@ -77,7 +77,7 @@ sudo install -d -o deploy -g deploy /srv/homefront && cd /srv/homefront
 git clone https://github.com/MuizzM/homefront-fiber-leads.git .
 
 # Secrets — copy the template and fill REAL values (never commit .env)
-cp .env.example .env && nano .env      # see §Environment in INFRASTRUCTURE.md / .env.example
+cp .env.example .env && nano .env      # .env.example documents every variable
 #   set APP_ORIGIN=https://portal.homefrontsolutionsllc.com, SMTP (port 465),
 #   MAPBOX_*, SUPER_ADMIN_EMAILS, SCANNER_SUBMIT_SECRET (openssl rand -hex 32)
 
@@ -138,3 +138,7 @@ before infra changes** (snapshot ≠ app backup).
    pipeline's staging stage.
 6. Wire Sentry + an uptime monitor (§7).
 7. Enable HSTS only after HTTPS is verified (Caddyfile note + helmet).
+8. **Marketing site "Portal" tab** (separate codebase — `homefrontsolutionsllc.com`,
+   NOT this repo): point its Portal nav link to
+   `https://portal.homefrontsolutionsllc.com`. Do this only AFTER the portal's
+   HTTPS health check passes, so the button never lands on a broken cert.

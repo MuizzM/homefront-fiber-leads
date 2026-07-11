@@ -1,98 +1,64 @@
-# Deployment runbook — portal.homefrontsolutionsllc.com
+# Deployment — portal.homefrontsolutionsllc.com
 
-Production is a single Node process (Express 5 + better‑sqlite3) that serves both the
-API and the built React client on one port. State lives in one SQLite file on a
-**persistent volume**, continuously replicated to object storage by Litestream.
+**The canonical, step-by-step guide is [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**
+(Hetzner + Docker Compose + Caddy auto-HTTPS). Also:
 
-> This is a runbook, not an automated deploy. Nothing here runs on its own — a human
-> with credentials performs the steps.
+- **[docs/DNS.md](docs/DNS.md)** — the one `A` record to add (and the Microsoft-365
+  mail records to leave untouched).
+- **[docs/INCIDENT_RUNBOOK.md](docs/INCIDENT_RUNBOOK.md)** — rollback, restore, DR.
+- **[.env.example](.env.example)** — every environment variable, documented.
+
+This file is a one-screen orientation; when they disagree, `docs/` wins.
 
 ---
 
-## 1. Build & run
+## The shape
 
-| Step | Command | Notes |
-|------|---------|-------|
-| Build | `npm run build` | Emits `dist/public/` (client) + `dist/index.cjs` (server). No source maps in `dist`. |
-| Start (raw) | `npm start` → `node dist/index.cjs` | Direct run, **no backup**. |
-| Start (prod) | `deploy/start.sh` | Restores `data.db` from Litestream if the volume is empty, then runs the app under `litestream replicate`. Container `CMD`. |
+One Node process serves the API **and** the built React SPA on port 5000. State
+is one SQLite file + `uploads/` on a Docker volume (`/data`), streamed offsite by
+Litestream. Caddy is the only thing bound to host ports (80/443) and terminates
+TLS; the app is reachable only on the internal Docker network.
 
-`Dockerfile` builds the image; `deploy/start.sh` is the entrypoint; `deploy/litestream.yml`
-configures replication.
+```
+homefrontsolutionsllc.com / www   → public marketing site (unchanged, NOT here)
+portal.homefrontsolutionsllc.com  → this app, on the Hetzner box behind Caddy
+```
 
-## 2. Boot sequence (server/index.ts)
+## Deploy / roll back
 
-1. `runMigrations()` — **idempotent + additive** (`CREATE TABLE IF NOT EXISTS` + duplicate‑column‑swallowing `ALTER`s). Safe to run on every boot. Creates the `tenants` table first, so a **fresh volume with no `db:push` boots correctly**.
-2. `bootstrapDefaultTenant()` — creates the "Home Front Solutions" tenant by slug if missing and adopts unowned (`tenant_id IS NULL`) rows. System audit rows (`user_id IS NULL`) are left tenant‑less by design.
-3. One‑time commission backfill + resume of any interrupted scan runs.
-4. `listen()` on `PORT`, host `0.0.0.0`.
-5. **Graceful shutdown**: `SIGTERM`/`SIGINT` drain the HTTP server, close SQLite (checkpoints WAL — clean for Litestream), then exit. Hard 10 s cap.
+```bash
+scripts/deploy.sh          # immutable SHA image · pre-deploy backup · health-gated · auto-rollback
+scripts/rollback.sh        # redeploy the previous SHA
+scripts/restore.sh <bk>    # roll back DATA from a backup (see the runbook)
+```
 
-No separate migration step is required in the pipeline — migrations run in‑process at boot.
+Migrations run in-process at boot and are **additive/idempotent only** (`CREATE …
+IF NOT EXISTS`, duplicate-column-swallowing `ALTER`s) — no separate migration
+step, safe on every boot. Destructive schema changes are a manual, approval-gated
+procedure (runbook).
 
-## 3. Environment variables
+## Environment variables (names only — real values live in `.env` on the server)
 
-Names only — set the real values in the platform's secret store. **Never** commit secrets.
+| Group | Vars | Without them |
+|---|---|---|
+| Core | `NODE_ENV=production` · `PORT` · `DATA_DIR=/data` · `APP_ORIGIN` · `TRUST_PROXY=1` · `SUPER_ADMIN_EMAILS` | `APP_ORIGIN` unset ⇒ empty CORS allowlist ⇒ browser blocked |
+| Login (OTP email) | `SMTP_HOST/PORT/USER/PASS` · `MAIL_FROM` · `MAIL_ADMIN` | no email ⇒ **no one can sign in** |
+| Field map | `MAPBOX_PUBLIC_TOKEN` (pk, url-restricted) · `MAPBOX_TOKEN` (secret, server-only) | map returns 503 |
+| Scanning (moat) | `KFS_AUTH_URL` · `KFS_AUTH_BASIC` · `PROXY_URL` · `SCANNER_SUBMIT_SECRET` | scanning disabled |
+| Backups | `LITESTREAM_BUCKET` + S3/B2 creds | runs, but **no continuous backup** (logged loudly) |
+| Nightly scan (opt-in) | `ENABLE_NIGHTLY_SCAN` · `NIGHTLY_*` | off by default (spends proxy $ when on) |
 
-### Required — app won't work correctly without these
-| Var | Purpose |
-|-----|---------|
-| `NODE_ENV=production` | Enables static serving, `trust proxy`, prod rate‑limit metering. |
-| `PORT` | Platform‑assigned listen port. |
-| `DATA_DIR` | Directory holding `data.db` — **must be a persistent volume** (default `/data`). |
-| `APP_ORIGIN=https://portal.homefrontsolutionsllc.com` | Canonical origin. **If unset the CORS allowlist is empty** and browsers are blocked. |
-| `SUPER_ADMIN_EMAILS` | Comma‑separated super‑admin emails (platform operator). |
+## Health
 
-### Required for login (OTP email)
-`SMTP_HOST` · `SMTP_PORT` · `SMTP_USER` · `SMTP_PASS` · `MAIL_FROM` · `MAIL_ADMIN`
-Without working SMTP, OTP codes can't be delivered → **no one can log in**. Verify a test send before cutover.
+`GET /api/health` — no auth, DB round-trip, returns `{ ok, version, db, uptimeSec }`
+or **503** on a wedged handle. Caddy/uptime-monitor gate on it. `SIGTERM` drains
+in-flight requests and checkpoints SQLite before exit (10 s hard cap).
 
-### Required for the field map
-| Var | Purpose |
-|-----|---------|
-| `MAPBOX_PUBLIC_TOKEN` | Public `pk.*` token, **URL‑restricted to styles/tiles only** (never geocoding). Served to the browser at runtime via `/api/config/map` — not in the bundle. |
-| `MAPBOX_TOKEN` | Secret geocoding token, **server‑side only**. |
+## Pre-cutover checklist
 
-If neither is set the map returns 503 and reps see no map. (Mapbox GL is now lazy‑loaded — the rep flow, login, and non‑map screens never download it.)
-
-### Scanning (the moat) — Kinetic + Decodo proxy
-`KFS_BASE_URL` · `KFS_AUTH_URL` · `KFS_AUTH_BASIC` · `PROXY_URL` · `PROXY_INSECURE_TLS`
-Cost guardrails: `SCAN_USD_PER_GB` · `SCAN_BYTES_PER_CHECK` · `MAPBOX_HARVEST_CAP`.
-See the "Mapbox cost guardrails" and "Decodo proxy & spend map" notes — geocoding fallbacks are intentionally **not** silent.
-
-### Nightly auto‑scan (opt‑in — leave OFF unless intended)
-`ENABLE_NIGHTLY_SCAN=true` · `NIGHTLY_BUDGET_MIN` · `NIGHTLY_SCAN_COUNT` · `NIGHTLY_SCAN_ENV`
-Default is OFF (logged loudly). Turning it on spends proxy bandwidth.
-
-### Backups (strongly recommended)
-`LITESTREAM_BUCKET` (+ the bucket's credentials per `litestream.yml`). **If unset, `start.sh` runs with NO continuous backup** — the whole DB lives on one volume. Set this before real data lands.
-
-### Ops tuning (optional)
-`TRUST_PROXY` (default `1` in prod) · `API_RATE_LIMIT_MAX` (default `150`/15 min) · `EXTRA_ORIGINS` · `EMBED_ANCESTORS` · `DB_PATH` · `RADAR_LIVE` · `TRACERFY_API_KEY`.
-
-## 4. Health check
-
-`GET /api/health` — no auth, no secrets. Exercises the DB (`storage.getSession`) and returns
-`{ ok, status, version, db, uptimeSec }`, or **503** if the SQLite handle is wedged. Point the
-platform's deploy gate / uptime monitor at it.
-
-## 5. Reverse proxy / TLS
-
-- Terminate TLS at the platform edge; forward to the app port.
-- Keep `X‑Forwarded‑For` intact — `trust proxy` + per‑IP rate limiting depend on it. Set `TRUST_PROXY=2` if a CDN sits in front of the load balancer.
-- HSTS (2 yr, preload), CSP, and the secret‑stripping response sanitizer are enforced in‑app (`server/index.ts`); no extra proxy config needed.
-
-## 6. Pre‑cutover checklist
-
-- [ ] `npm run check` · `npm test` · `npm run build` all green (CI gate).
-- [ ] `DATA_DIR` on a **persistent** volume; `LITESTREAM_BUCKET` set and a restore rehearsed.
-- [ ] `APP_ORIGIN` = the real HTTPS origin; SMTP send verified; both Mapbox tokens set and scoped.
-- [ ] `SUPER_ADMIN_EMAILS` correct; `ENABLE_NIGHTLY_SCAN` intentionally set (default OFF).
-- [ ] First boot: confirm logs show `SQLite WAL + indexes applied`, a tenant bootstrap line, and `serving on port …`; then `GET /api/health` → 200.
-- [ ] Smoke: OTP login as a rep → Today loads → log one outcome → confirm it persists.
-
-## 7. Rollback
-
-Images are immutable — redeploy the previous image. Migrations are additive‑only (no destructive
-`DROP`/`ALTER … DROP`), so an older image runs against the newer DB safely. For data loss, restore
-`data.db` from the Litestream replica onto a fresh volume and boot.
+- [ ] `npm run check` · `npm test` · `npm run build` green (CI gate).
+- [ ] DNS `A portal → server IP` resolves **before** first deploy (Caddy ACME needs it).
+- [ ] `.env` on the server: `APP_ORIGIN` = the real HTTPS origin, SMTP verified, both Mapbox tokens set, `LITESTREAM_BUCKET` + creds set and a restore rehearsed.
+- [ ] First boot: logs show migrations applied + a tenant line + `serving on port …`; `curl https://portal…/api/health` → 200.
+- [ ] Smoke: OTP login → Today loads → log one outcome → it persists.
+- [ ] Only then: point the marketing site's **Portal** tab at `https://portal.homefrontsolutionsllc.com`.

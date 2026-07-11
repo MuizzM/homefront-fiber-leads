@@ -22,9 +22,12 @@ portal.homefrontsolutionsllc.com {
 		# Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 	}
 
-	# Uploads can be a few MB (headshot + license); allow headroom.
+	# Body cap sized to the app's real upload limits so a legit upload never 413s
+	# at the proxy: the /join form accepts headshot + license (2 × 10MB) and the
+	# lead-photo endpoint 1 × 10MB. 25MB covers both with field/multipart overhead.
+	# The app enforces its own per-file limits (multer) below this ceiling.
 	request_body {
-		max_size 12MB
+		max_size 25MB
 	}
 
 	log {
