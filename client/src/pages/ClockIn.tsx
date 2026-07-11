@@ -45,7 +45,7 @@ export default function ClockIn() {
   const isManager = user?.role === "admin" || user?.role === "manager";
   const today = new Date().toISOString().slice(0, 10);
 
-  const { data: clockStatus, isLoading: statusLoading } = useQuery<{ clockedIn: boolean; session: ClockSession | null }>({
+  const { data: clockStatus, isLoading: statusLoading, isError: statusError, refetch: refetchStatus } = useQuery<{ clockedIn: boolean; session: ClockSession | null }>({
     queryKey: ["/api/clock/status"],
     queryFn: () => apiRequest("GET", "/api/clock/status").then(r => r.json()),
     refetchInterval: 10000,
@@ -100,6 +100,17 @@ export default function ClockIn() {
         <CardContent className="p-6">
           {statusLoading ? (
             <Skeleton className="h-24 bg-secondary" />
+          ) : statusError ? (
+            // NEVER show "Off Duty" on a failed fetch — a clocked-in rep would
+            // think their hours stopped counting (they didn't; the server has it).
+            <div className="text-center py-4" data-testid="clock-status-error">
+              <div className="text-sm font-semibold text-foreground">Can't reach the server</div>
+              <div className="text-sm text-muted-foreground mt-1">Your clock status is unknown right now — if you clocked in, your hours are still counting.</div>
+              <button onClick={() => refetchStatus()}
+                className="mt-3 inline-flex items-center justify-center h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
+                Retry
+              </button>
+            </div>
           ) : (
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-8">
               <div className="space-y-3 text-center sm:text-left">

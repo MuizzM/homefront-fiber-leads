@@ -830,6 +830,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     return pins;
   }
 
+  // Distinct city/state pairs for the Leads filter dropdowns — a two-column
+  // DISTINCT instead of the whole hydrated pin set. Same visibility scope as
+  // the list/map reads.
+  app.get("/api/leads/facets", requireAuth, (req: any, res: any) => {
+    const user = req.user;
+    const tid = user?.tenantId ?? undefined;
+    const scope = leadVisibilityScope(user);
+    const repScope = Array.isArray(scope) ? scope : (scope != null ? [scope] : undefined);
+    res.json({ facets: storage.getLeadFacets(tid, repScope) });
+  });
+
   app.get("/api/leads/map", requireAuth, (req: any, res: any) => {
     const user = req.user;
     const tid = user?.tenantId ?? undefined;

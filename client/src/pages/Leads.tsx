@@ -27,8 +27,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
-import type { CoveragePin } from "@/components/LeadsCoverageMap";
-import type { Lead, InsertLead, TeamMember, Knock, InsertKnock } from "@shared/schema";
+import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
+import { OUTCOMES, makeClientId } from "@shared/knock";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -79,6 +79,10 @@ const OUTCOME_COLORS: Record<string, string> = {
   callback:      "text-amber-400",
   sold:          "text-green-400",
 };
+
+// The manager's quick-log uses the SAME one-tap outcome model as the rep's
+// OutcomeSheet (needs_verification excluded — it's a system verdict, not a tap).
+const KNOCK_GRID = OUTCOMES.filter(o => o.key !== "needs_verification");
 
 // ── Lead Form ─────────────────────────────────────────────────────────────────
 function LeadForm({ initial, onSave, onCancel, saving }: {
@@ -178,12 +182,17 @@ function KnockLogger({ lead, team }: {
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  const [repId, setRepId] = useState("");
-  const [wasHome, setWasHome] = useState("true");
-  const [outcome, setOutcome] = useState("not_home");
+  // Smart default: credit the lead's assigned rep — for the common case the
+  // manager opens the dialog and logs in ONE tap. (Was: empty picker + wasHome
+  // toggle + outcome + submit = 4 interactions.)
+  const [repId, setRepId] = useState(lead.assignedRepId ? String(lead.assignedRepId) : "");
+  const [cbOpen, setCbOpen] = useState(false);
   const [callbackDate, setCallbackDate] = useState("");
   const [callbackTime, setCallbackTime] = useState("");
   const [notes, setNotes] = useState("");
+  // One idempotency key per dialog-open: a double-tap or retry after a lost
+  // response replays as the SAME knock server-side, never a duplicate.
+  const [clientId, setClientId] = useState(() => makeClientId());
 
   const { data: knocks = [] } = useQuery<Knock[]>({
     queryKey: ["/api/leads", lead.id, "knocks"],
@@ -194,7 +203,7 @@ function KnockLogger({ lead, team }: {
   });
 
   const knockMutation = useMutation({
-    mutationFn: async (data: Omit<InsertKnock, "leadId">) => {
+    mutationFn: async (data: Record<string, unknown>) => {
       const res = await apiRequest("POST", `/api/leads/${lead.id}/knock`, data);
       return res.json();
     },
@@ -203,11 +212,30 @@ function KnockLogger({ lead, team }: {
       qc.invalidateQueries({ queryKey: ["/api/leads", lead.id, "knocks"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
-      setNotes(""); setCallbackDate(""); setCallbackTime("");
+      qc.invalidateQueries({ queryKey: ["/api/followups"] });
+      // Reset for the next log; fresh idempotency key for a genuinely new knock.
+      setNotes(""); setCallbackDate(""); setCallbackTime(""); setCbOpen(false);
+      setClientId(makeClientId());
     },
+    // On error every field is preserved (only onSuccess clears) — the manager
+    // fixes the problem and re-taps without retyping the note.
+    onError: (e: any) => toast({ title: "Couldn't log the knock", description: String(e?.message ?? e), variant: "destructive" }),
   });
 
-  const homeTrue = wasHome === "true";
+  // One-tap log — the server derives wasHome from the outcome, same as the rep
+  // flow, so no separate Home/Not-home toggle is needed.
+  const fire = (o: (typeof KNOCK_GRID)[number]) => {
+    if (!repId) { toast({ title: "Pick who gets credit first", variant: "destructive" }); return; }
+    if (o.key === "callback" && !cbOpen) { setCbOpen(true); return; } // reveal the schedule first
+    knockMutation.mutate({
+      clientId,
+      repId: Number(repId),
+      outcome: o.key,
+      callbackDate: o.key === "callback" && callbackDate ? callbackDate : undefined,
+      callbackTime: o.key === "callback" && callbackTime ? callbackTime : undefined,
+      notes: notes || undefined,
+    });
+  };
 
   return (
     <DialogContent className="bg-card border-border text-foreground max-w-lg">
@@ -219,68 +247,55 @@ function KnockLogger({ lead, team }: {
       </DialogHeader>
       <div className="space-y-3">
         <div>
-          <Label className="text-xs text-muted-foreground">Rep *</Label>
+          <Label className="text-xs text-muted-foreground">Credit rep *</Label>
           <Select value={repId} onValueChange={setRepId}>
             <SelectTrigger className="bg-secondary border-input mt-1" data-testid="knock-rep-select">
               <SelectValue placeholder="Select rep..." />
             </SelectTrigger>
             <SelectContent className="bg-card border-border">
               {team.filter(m => m.active).map(m => (
-                <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>
+                <SelectItem key={m.id} value={String(m.id)}>
+                  {m.name}{lead.assignedRepId === m.id ? " · assigned" : ""}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
         </div>
 
+        {/* One-tap outcomes — the SAME 7-outcome model + colors as the rep's
+            OutcomeSheet, so logging reads identically everywhere. Tapping logs
+            immediately (callback first reveals its schedule). */}
         <div>
-          <Label className="text-xs text-muted-foreground">Was anyone home?</Label>
+          <Label className="text-xs text-muted-foreground">Outcome — tap to log</Label>
           <div className="grid grid-cols-2 gap-2 mt-1">
-            {[
-              { val: "true",  label: "Home",     Icon: Home,    cls: homeTrue  ? "border-green-500/60 bg-green-500/10 text-green-400" : "border-border bg-secondary text-muted-foreground" },
-              { val: "false", label: "Not Home", Icon: PhoneOff, cls: !homeTrue ? "border-red-500/60 bg-red-500/10 text-red-400"     : "border-border bg-secondary text-muted-foreground" },
-            ].map(({ val, label, Icon, cls }) => (
-              <button key={val} onClick={() => { setWasHome(val); if (val === "false") setOutcome("not_home"); }}
-                className={`flex items-center gap-2 px-3 py-2 rounded-md border text-sm font-medium transition-colors ${cls}`}
-                data-testid={`knock-home-${val}`}>
-                <Icon className="w-4 h-4" /> {label}
-              </button>
-            ))}
+            {KNOCK_GRID.map(o => {
+              const win = o.key === "sold";
+              const armed = o.key === "callback" && cbOpen;
+              return (
+                <button
+                  key={o.key} onClick={() => fire(o)} disabled={knockMutation.isPending}
+                  data-testid={`knock-outcome-${o.key}`}
+                  className="h-11 rounded-lg font-semibold text-[13px] flex items-center justify-center gap-2 active:scale-95 transition-transform border-2 disabled:opacity-60"
+                  style={win
+                    ? { background: o.color, color: "#04120d", borderColor: o.color }
+                    : { background: `${o.color}${armed ? "33" : "1f"}`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}${armed ? "dd" : "99"}` }}
+                >
+                  {!win && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: o.color }} />}
+                  {o.label}
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {homeTrue && (
-          <div>
-            <Label className="text-xs text-muted-foreground">Outcome</Label>
-            <div className="grid grid-cols-2 gap-2 mt-1">
-              {[
-                { val: "not_interested", label: "Not Interested", color: "text-red-400" },
-                { val: "interested",     label: "Interested",     color: "text-violet-400" },
-                { val: "callback",       label: "Needs Callback", color: "text-amber-400" },
-                { val: "sold",           label: "Sold",           color: "text-green-400" },
-              ].map(({ val, label, color }) => (
-                <button key={val} onClick={() => setOutcome(val)}
-                  className={`px-3 py-2 rounded-md border text-sm font-medium transition-colors ${
-                    outcome === val ? `${color} border-current bg-current/10` : "bg-secondary border-border text-muted-foreground"
-                  }`}
-                  data-testid={`knock-outcome-${val}`}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {homeTrue && outcome === "callback" && (
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label className="text-xs text-muted-foreground">Callback Date</Label>
-              <Input type="date" value={callbackDate} onChange={e => setCallbackDate(e.target.value)}
-                className="bg-secondary border-input mt-1 text-sm" data-testid="knock-callback-date" />
-            </div>
-            <div>
-              <Label className="text-xs text-muted-foreground">Callback Time</Label>
-              <Input type="time" value={callbackTime} onChange={e => setCallbackTime(e.target.value)}
-                className="bg-secondary border-input mt-1 text-sm" data-testid="knock-callback-time" />
+        {cbOpen && (
+          <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/[0.06] p-3" data-testid="knock-callback-schedule">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-cyan-400 mb-2">Schedule the callback, then tap Callback again</div>
+            <div className="grid grid-cols-2 gap-3">
+              <Input type="date" aria-label="Callback date" value={callbackDate} onChange={e => setCallbackDate(e.target.value)}
+                className="bg-secondary border-input text-sm" data-testid="knock-callback-date" />
+              <Input type="time" aria-label="Callback time" value={callbackTime} onChange={e => setCallbackTime(e.target.value)}
+                className="bg-secondary border-input text-sm" data-testid="knock-callback-time" />
             </div>
           </div>
         )}
@@ -292,21 +307,9 @@ function KnockLogger({ lead, team }: {
             placeholder="Optional notes..." data-testid="knock-notes" />
         </div>
 
-        <Button onClick={() => {
-          if (!repId) { toast({ title: "Select a rep first", variant: "destructive" }); return; }
-          knockMutation.mutate({
-            repId: Number(repId), wasHome: homeTrue,
-            outcome: homeTrue ? outcome : "not_home",
-            callbackDate: outcome === "callback" ? callbackDate : undefined,
-            callbackTime: outcome === "callback" ? callbackTime : undefined,
-            notes: notes || undefined,
-          });
-        }}
-          disabled={knockMutation.isPending || !repId}
-          className="w-full bg-primary hover:bg-primary/90 text-white"
-          data-testid="btn-log-knock">
-          {knockMutation.isPending ? "Logging..." : "Log Knock"}
-        </Button>
+        {knockMutation.isPending && (
+          <div className="flex items-center gap-2 text-[12px] text-muted-foreground"><RefreshCw className="w-3.5 h-3.5 animate-spin" />Logging…</div>
+        )}
 
         {knocks.length > 0 && (
           <div className="border-t border-border pt-3">
@@ -711,19 +714,20 @@ export default function Leads() {
   const totalLeads = leadsResp?.total ?? 0;
   const totalPages = Math.ceil(totalLeads / PAGE_SIZE);
 
-  // Lightweight pin list (city/state only) — feeds the City / State filter
-  // dropdowns. Free, cached; no map is rendered on this page.
-  const { data: mapData } = useQuery<{ pins: CoveragePin[]; total: number }>({
-    queryKey: ["/api/leads/map"],
-    queryFn: async () => (await apiRequest("GET", "/api/leads/map")).json(),
-    staleTime: 60000,
+  // Distinct city/state pairs for the filter dropdowns — a tiny facets payload
+  // instead of downloading the ENTIRE map pin set (every lead) just to build
+  // two selects.
+  const { data: facetsData } = useQuery<{ facets: Array<{ city: string; state: string }> }>({
+    queryKey: ["/api/leads/facets"],
+    queryFn: async () => (await apiRequest("GET", "/api/leads/facets")).json(),
+    staleTime: 5 * 60_000,
   });
-  const allPins = mapData?.pins ?? [];
+  const facets = facetsData?.facets ?? [];
 
   // Distinct states + cities for the dropdowns (cities scoped to the chosen state)
-  const states = Array.from(new Set(allPins.map(p => p.state).filter(Boolean))).sort();
+  const states = Array.from(new Set(facets.map(f => f.state).filter(Boolean))).sort();
   const cities = Array.from(new Set(
-    allPins.filter(p => filterState === "all" || p.state === filterState).map(p => p.city).filter(Boolean)
+    facets.filter(f => filterState === "all" || f.state === filterState).map(f => f.city).filter(Boolean)
   )).sort();
 
   const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"] });

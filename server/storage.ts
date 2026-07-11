@@ -66,6 +66,7 @@ export type MapPinRow = Pick<Lead,
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
+  getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }>;
   getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[];
   getLeadsPage(
     tenantId: number | undefined,
@@ -807,6 +808,24 @@ export class Storage implements IStorage {
   }
   getLeadById(id: number): Lead | undefined {
     return db.select().from(leads).where(eq(leads.id, id)).get();
+  }
+  // Distinct city/state pairs for the Leads filter dropdowns — replaces fetching
+  // the ENTIRE map pin set (every lead, hydrated) just to build two selects.
+  // Same visibility semantics as getLeads: tenant wall + optional rep scope
+  // (empty scope matches nothing, fail-closed).
+  getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }> {
+    const conds: string[] = [];
+    const params: (number | string)[] = [];
+    if (tenantId != null) { conds.push("tenant_id = ?"); params.push(tenantId); }
+    if (Array.isArray(repScope)) {
+      if (!repScope.length) return [];
+      conds.push(`assigned_rep_id IN (${repScope.map(() => "?").join(",")})`);
+      params.push(...repScope);
+    }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    return rawDb.prepare(
+      `SELECT DISTINCT city, state FROM leads ${where} ORDER BY state, city`
+    ).all(...params) as Array<{ city: string; state: string }>;
   }
 
   // Map-pin projection: ONLY the 16 fields a pin/popup uses (leads has 53

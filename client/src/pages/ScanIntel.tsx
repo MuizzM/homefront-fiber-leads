@@ -94,7 +94,13 @@ function ScanHeader({ view, setView, isAdmin }: { view: View; setView: (v: View)
 // ── Active-run banner (persistent, resumable, live) ───────────────────────────
 function ActiveRunBanner({ run, isAdmin, onOpen }: { run: ScanRun; isAdmin: boolean; onOpen: () => void }) {
   const qc = useQueryClient();
-  const { data: live } = useQuery({ queryKey: ["/api/scan/runs", run.id], queryFn: () => scanApi.run(run.id), refetchInterval: 1500 });
+  // Fast poll only while the run is actually RUNNING; a paused run just needs a
+  // slow heartbeat to notice an external resume — not 40 requests/minute.
+  const { data: live } = useQuery({
+    queryKey: ["/api/scan/runs", run.id],
+    queryFn: () => scanApi.run(run.id),
+    refetchInterval: (q) => (((q.state.data as ScanRun | undefined) ?? run).status === "running" ? 1500 : 10_000),
+  });
   const r = live ?? run;
   const control = async (action: "pause" | "resume" | "cancel") => {
     try { await scanApi.controlRun(r.id, action); qc.invalidateQueries({ queryKey: ["/api/scan/runs"] }); } catch {}

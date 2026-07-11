@@ -45,7 +45,7 @@ const WEEK_STATE: Record<string, { label: string; cls: string; icon: "lock" | "c
 };
 
 export default function MyCommission() {
-  const { data, isLoading, isError } = useQuery<WeekResponse>({
+  const { data, isLoading, isError, refetch } = useQuery<WeekResponse>({
     queryKey: ["/api/commission/statements/me/current"],
     queryFn: () => apiRequest("GET", "/api/commission/statements/me/current").then(r => r.json()),
   });
@@ -78,8 +78,13 @@ export default function MyCommission() {
       )}
 
       {isError && (
-        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center text-sm text-muted-foreground">
-          Couldn't load your commission right now. Pull to refresh in a moment.
+        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center" data-testid="commission-error">
+          <div className="text-sm font-semibold text-foreground">Couldn't load your commission</div>
+          <div className="text-sm text-muted-foreground mt-1">Check your connection and try again — your money data is safe.</div>
+          <button onClick={() => refetch()}
+            className="mt-4 inline-flex items-center justify-center h-10 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
+            Retry
+          </button>
         </div>
       )}
 
