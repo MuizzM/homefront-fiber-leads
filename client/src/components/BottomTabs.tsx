@@ -6,11 +6,12 @@
 
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { Map, LayoutDashboard, DollarSign, User as UserIcon } from "lucide-react";
+import { Navigation, Map, DollarSign, User as UserIcon } from "lucide-react";
 
 const TABS = [
+  // Today is the rep-first home: next best door + one-tap logging.
+  { href: "/today", label: "Today", icon: Navigation },
   { href: "/map", label: "Map", icon: Map },
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
   // The authoritative weekly-commission rep view (the legacy /commissions page
   // remains in the sidebar for its per-sale records).
   { href: "/my-commission", label: "Commission", icon: DollarSign },

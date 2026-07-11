@@ -18,6 +18,7 @@ import { UpdatePrompt } from "@/components/UpdatePrompt";
 // initial load). The first paint only pulls the shell + login; the landing
 // page and any route the user visits are fetched on demand.
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
+const Today = lazy(() => import("@/pages/Today"));
 const MapView = lazy(() => import("@/pages/MapView"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Scanners = lazy(() => import("@/pages/Scanners"));
@@ -110,7 +111,9 @@ function AppRoutes() {
         <div key={location} className="flex-1 flex flex-col min-h-0 overflow-y-auto animate-in fade-in slide-in-from-bottom-1 duration-200">
         <Switch>
           {/* ── All roles ── */}
-          <Route path="/" component={Dashboard} />
+          {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
+          <Route path="/">{role === "rep" ? <Redirect to="/today" /> : <Dashboard />}</Route>
+          <Route path="/today" component={Today} />
           <Route path="/map" component={MapView} />
           <Route path="/leads" component={Leads} />
           <Route path="/leaderboard" component={Leaderboard} />
