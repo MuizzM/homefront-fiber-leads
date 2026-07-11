@@ -39,9 +39,11 @@ const fringeArg = args.find((a) => a.startsWith("--fringe"));
 const FRINGE = fringeArg
   ? (() => { const [r, b] = (fringeArg.split("=")[1] ?? "").split(":"); return { radius: Number(r) || 8, budget: Number(b) || 400 }; })()
   : undefined;
+// "City" → ZIPS default · "City:28001" → explicit · "City:*" → ALL zips (multi-zip
+// towns like Concord 28025/28027 where the ZIPS pin would silently drop half the town).
 const cities = args.filter((a) => !a.startsWith("--")).map((a) => {
   const [c, z] = a.split(":");
-  return { city: c, zip: z || ZIPS[c.toLowerCase()] };
+  return { city: c, zip: z === "*" ? undefined : (z || ZIPS[c.toLowerCase()]) };
 });
 
 async function harvestCity(city: string, zip?: string): Promise<void> {
