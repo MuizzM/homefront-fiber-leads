@@ -55,14 +55,14 @@ interface ActiveScan {
 }
 
 const PRIORITY_BADGE = {
-  critical: "bg-red-500/20 text-red-300 border-red-500/30",
-  high:     "bg-orange-500/20 text-orange-300 border-orange-500/30",
-  medium:   "bg-yellow-500/20 text-yellow-300 border-yellow-500/30",
+  critical: "bg-rose-500/15 text-rose-400 border-rose-500/20",
+  high:     "bg-amber-500/15 text-amber-400 border-amber-500/20",
+  medium:   "bg-sky-500/15 text-sky-400 border-sky-500/20",
 };
 const STATUS_DOT = {
-  active:  "bg-green-400 animate-pulse",
-  planned: "bg-yellow-400",
-  complete: "bg-slate-400",
+  active:  "bg-emerald-400 animate-pulse",
+  planned: "bg-amber-400",
+  complete: "bg-muted-foreground",
 };
 
 const STATE_NAMES: Record<string, string> = {
@@ -237,68 +237,86 @@ export default function USAScanner() {
   const criticalCount = markets.filter(m => m.priority === "critical").length;
 
   return (
-    <div className="p-5 space-y-5 max-w-5xl">
+    <div className="p-5 space-y-6 max-w-5xl">
 
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div className="flex items-start gap-3">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
             <Globe className="w-5 h-5 text-primary" />
-            USA Fiber Intelligence
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {marketsData
-              ? `${markets.length} active Kinetic markets · ${marketsData.totalNewPassings.toLocaleString()} new passings · ${marketsData.lastUpdated}`
-              : "Loading FCC broadband data…"}
-          </p>
+          </div>
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">
+              USA Fiber Intelligence
+            </h1>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {marketsData
+                ? `FCC BDC coverage · updated ${marketsData.lastUpdated}`
+                : "Loading FCC broadband data…"}
+            </p>
+          </div>
         </div>
         {marketsData && (
-          <div className="flex items-center gap-3">
-            <div className="text-center">
-              <div className="text-lg font-black text-red-400">{criticalCount}</div>
-              <div className="text-xs text-muted-foreground">CRITICAL</div>
-            </div>
-            <div className="text-center">
-              <div className="text-lg font-black text-foreground">{markets.filter(m=>m.buildStatus==="active").length}</div>
-              <div className="text-xs text-muted-foreground">ACTIVE BUILD</div>
-            </div>
-            <div className="text-center">
-              <div className="text-lg font-black text-primary">{(marketsData.totalNewPassings/1000).toFixed(0)}K</div>
-              <div className="text-xs text-muted-foreground">NEW HOMES</div>
-            </div>
-          </div>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Live feed
+          </span>
         )}
       </div>
 
+      {/* Metric strip */}
+      {marketsData && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 rounded-xl border border-border bg-card overflow-hidden divide-x divide-y sm:divide-y-0 divide-border">
+          <div className="px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Active Markets</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{markets.length.toLocaleString()}</div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Critical</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-rose-400">{criticalCount.toLocaleString()}</div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Active Builds</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{markets.filter(m=>m.buildStatus==="active").length.toLocaleString()}</div>
+          </div>
+          <div className="px-4 py-3">
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">New Homes</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{(marketsData.totalNewPassings/1000).toFixed(0)}K</div>
+          </div>
+        </div>
+      )}
+
       {/* Active scan panel */}
       {activeScan && (
-        <Card className={`border-2 ${
-          activeScan.status === "error" ? "border-red-500/40 bg-red-500/5" :
-          activeScan.status === "done"  ? "border-green-500/40 bg-green-500/5" :
-          "border-primary/40 bg-primary/5"
-        }`}>
-          <CardContent className="pt-4 pb-4 space-y-3">
+        <Card className="border-border bg-card overflow-hidden">
+          <div className={`h-0.5 w-full ${
+            activeScan.status === "error" ? "bg-rose-500" :
+            activeScan.status === "done"  ? "bg-emerald-500" :
+            "bg-primary"
+          }`} />
+          <CardContent className="pt-4 pb-4 space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-3">
               <div className="flex items-center gap-3">
                 {isScanning ? <Loader2 className="w-5 h-5 text-primary animate-spin" /> :
-                 activeScan.status === "done" ? <CheckCircle className="w-5 h-5 text-green-400" /> :
-                 <AlertCircle className="w-5 h-5 text-red-400" />}
+                 activeScan.status === "done" ? <CheckCircle className="w-5 h-5 text-emerald-400" /> :
+                 <AlertCircle className="w-5 h-5 text-rose-400" />}
                 <div>
-                  <div className="font-bold text-sm text-foreground">
+                  <div className="font-semibold tracking-tight text-sm text-foreground">
                     {activeScan.city}, {activeScan.state}
                     {activeScan.status === "pulling" && <span className="text-muted-foreground ml-2 font-normal">— harvesting addresses…</span>}
                     {activeScan.status === "scanning" && activeScan.total > 0 &&
-                      <span className="text-muted-foreground ml-2 font-normal">— {activeScan.done.toLocaleString()} / {activeScan.total.toLocaleString()}</span>}
-                    {activeScan.status === "done" && <span className="text-green-400 ml-2 font-normal">— complete</span>}
+                      <span className="text-muted-foreground ml-2 font-normal tabular-nums">— {activeScan.done.toLocaleString()} / {activeScan.total.toLocaleString()}</span>}
+                    {activeScan.status === "done" && <span className="text-emerald-400 ml-2 font-normal">— complete</span>}
                   </div>
                   {activeScan.newFiber > 0 && (
-                    <div className="flex items-center gap-1 mt-0.5">
-                      <Zap className="w-3.5 h-3.5 text-green-400" />
-                      <span className="text-sm font-bold text-green-400">{activeScan.newFiber} new fiber leads</span>
+                    <div className="flex items-center gap-1.5 mt-1">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                        <Zap className="w-3 h-3" />{activeScan.newFiber} new fiber leads
+                      </span>
                       <span className="text-xs text-muted-foreground">saved to map</span>
                     </div>
                   )}
-                  {activeScan.error && <p className="text-xs text-red-400 mt-0.5">{activeScan.error}</p>}
+                  {activeScan.error && <p className="text-xs text-rose-400 mt-1">{activeScan.error}</p>}
                 </div>
               </div>
               <div className="flex items-center gap-2">
@@ -317,34 +335,34 @@ export default function USAScanner() {
 
             {isScanning && activeScan.total > 0 && (
               <div className="space-y-1.5">
-                <Progress value={pct} className="h-2" />
-                <div className="flex justify-between text-xs text-muted-foreground">
+                <Progress value={pct} className="h-1.5" />
+                <div className="flex justify-between text-xs text-muted-foreground tabular-nums">
                   <span>{activeScan.done.toLocaleString()} checked</span>
-                  <span className="font-bold text-foreground">{pct}%</span>
+                  <span className="font-semibold text-foreground">{pct}%</span>
                 </div>
               </div>
             )}
 
             {/* Live worker metrics (FiberFocus-style) */}
             {isScanning && scannerState && scannerState.isRunning && (
-              <div className="grid grid-cols-4 gap-2 pt-2 border-t border-border/50">
-                <div className="text-center">
-                  <div className="text-base font-black font-mono text-primary">{scannerState.checksPerSec.toFixed(1)}</div>
-                  <div className="text-xs text-muted-foreground">checks/sec</div>
+              <div className="grid grid-cols-4 rounded-lg border border-border divide-x divide-border overflow-hidden">
+                <div className="px-3 py-2">
+                  <div className="text-lg font-semibold tracking-tight font-mono tabular-nums text-primary">{scannerState.checksPerSec.toFixed(1)}</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">checks/sec</div>
                 </div>
-                <div className="text-center">
-                  <div className="text-base font-black font-mono text-foreground">{scannerState.concurrency}</div>
-                  <div className="text-xs text-muted-foreground">in-flight</div>
+                <div className="px-3 py-2">
+                  <div className="text-lg font-semibold tracking-tight font-mono tabular-nums text-foreground">{scannerState.concurrency}</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">in-flight</div>
                 </div>
-                <div className="text-center">
-                  <div className="text-base font-black font-mono text-green-400">{scannerState.diagNewFiber}</div>
-                  <div className="text-xs text-muted-foreground">new fiber</div>
+                <div className="px-3 py-2">
+                  <div className="text-lg font-semibold tracking-tight font-mono tabular-nums text-emerald-400">{scannerState.diagNewFiber}</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">new fiber</div>
                 </div>
-                <div className="text-center">
-                  <div className={`text-base font-black font-mono ${scannerState.diagHttpError > 5 ? "text-red-400" : "text-muted-foreground"}`}>
+                <div className="px-3 py-2">
+                  <div className={`text-lg font-semibold tracking-tight font-mono tabular-nums ${scannerState.diagHttpError > 5 ? "text-rose-400" : "text-muted-foreground"}`}>
                     {scannerState.diagHttpError}
                   </div>
-                  <div className="text-xs text-muted-foreground">errors</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">errors</div>
                 </div>
               </div>
             )}
@@ -375,10 +393,10 @@ export default function USAScanner() {
           <button
             key={p}
             onClick={() => setFilterPriority(p)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${
               filterPriority === p
                 ? "bg-primary text-primary-foreground border-primary"
-                : "bg-card border-border text-muted-foreground hover:border-primary/50"
+                : "bg-card border-border text-muted-foreground hover:text-foreground hover:border-border"
             }`}
           >
             {p === "all" ? "All Priority" : p.charAt(0).toUpperCase() + p.slice(1)}
@@ -389,7 +407,7 @@ export default function USAScanner() {
         <select
           value={filterState}
           onChange={e => setFilterState(e.target.value)}
-          className="h-9 px-2 bg-background border border-border rounded-lg text-xs text-foreground"
+          className="h-9 px-2 bg-background border border-border rounded-lg text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
         >
           <option value="all">All States</option>
           {allStates.map(s => <option key={s} value={s}>{s} — {STATE_NAMES[s]}</option>)}
@@ -417,31 +435,31 @@ export default function USAScanner() {
             return (
               <Card key={abbr} className="bg-card border-border overflow-hidden">
                 <button
-                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/20 transition-colors"
+                  className="w-full px-4 py-3 flex items-center justify-between hover:bg-muted/20 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                   onClick={() => setExpandedState(isOpen && !search.trim() && filterPriority === "all" ? null : abbr)}
                   data-testid={`state-${abbr}`}
                 >
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${
-                      hasCritical ? "bg-red-500/10 border-red-500/30" : "bg-primary/10 border-primary/20"
+                      hasCritical ? "bg-rose-500/10 border-rose-500/20" : "bg-secondary border-border"
                     }`}>
-                      <span className={`text-xs font-black ${hasCritical ? "text-red-400" : "text-primary"}`}>{abbr}</span>
+                      <span className={`text-xs font-semibold tracking-tight ${hasCritical ? "text-rose-400" : "text-muted-foreground"}`}>{abbr}</span>
                     </div>
                     <div className="text-left">
-                      <div className="font-bold text-sm text-foreground flex items-center gap-2">
+                      <div className="font-semibold tracking-tight text-sm text-foreground">
                         {STATE_NAMES[abbr]}
-                        {hasCritical && <span className="text-xs text-red-400 font-semibold">● ACTIVE BUILDS</span>}
                       </div>
-                      <div className="text-xs text-muted-foreground">
+                      <div className="text-xs text-muted-foreground tabular-nums">
                         {cityList.length} markets · {(totalPassings/1000).toFixed(1)}K new passings
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     {cityList.filter(m=>m.priority==="critical").length > 0 && (
-                      <Badge className="bg-red-500/20 text-red-300 border-red-500/30 text-xs">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-medium text-rose-400 tabular-nums">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
                         {cityList.filter(m=>m.priority==="critical").length} critical
-                      </Badge>
+                      </span>
                     )}
                     {isOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
                   </div>
@@ -466,19 +484,19 @@ export default function USAScanner() {
                             <div className={`w-2 h-2 rounded-full flex-shrink-0 ${STATUS_DOT[market.buildStatus]}`} />
                             <div className="min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-semibold text-sm text-foreground">{market.city}</span>
-                                <span className="text-xs text-muted-foreground font-mono">{market.zip}</span>
-                                <Badge variant="outline" className={`text-xs py-0 ${PRIORITY_BADGE[market.priority]}`}>
+                                <span className="font-semibold tracking-tight text-sm text-foreground">{market.city}</span>
+                                <span className="text-xs text-muted-foreground font-mono tabular-nums">{market.zip}</span>
+                                <Badge variant="outline" className={`text-xs py-0 rounded-full ${PRIORITY_BADGE[market.priority]}`}>
                                   {market.priority}
                                 </Badge>
                               </div>
                               <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
-                                <span className="flex items-center gap-1">
+                                <span className="flex items-center gap-1 tabular-nums">
                                   <Building className="w-3 h-3" />
                                   {market.newPassings.toLocaleString()} new homes
                                 </span>
-                                <span>{market.buildDate}</span>
-                                <span className={`font-semibold ${market.buildStatus === "active" ? "text-green-400" : "text-yellow-400"}`}>
+                                <span className="tabular-nums">{market.buildDate}</span>
+                                <span className={`font-medium ${market.buildStatus === "active" ? "text-emerald-400" : "text-amber-400"}`}>
                                   {market.buildStatus}
                                 </span>
                               </div>
@@ -487,12 +505,12 @@ export default function USAScanner() {
 
                           <div className="flex items-center gap-2 flex-shrink-0">
                             {isRunning && activeScan.newFiber > 0 && (
-                              <span className="text-xs text-green-400 font-bold flex items-center gap-1">
+                              <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1 tabular-nums">
                                 <Zap className="w-3 h-3" />{activeScan.newFiber}
                               </span>
                             )}
                             {isDone && !isRunning && (
-                              <span className="text-xs text-green-400 flex items-center gap-1">
+                              <span className="text-xs text-emerald-400 flex items-center gap-1">
                                 <CheckCircle className="w-3 h-3" /> done
                               </span>
                             )}
@@ -527,26 +545,26 @@ export default function USAScanner() {
       {/* How it beats FiberFocus */}
       <Card className="bg-card border-border">
         <CardContent className="pt-4 pb-4">
-          <p className="text-xs font-bold text-foreground mb-3 uppercase tracking-wide">Scan Engine</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-            <div>
-              <div className="text-lg font-black text-primary">200</div>
-              <div className="text-xs text-muted-foreground">proxy connections</div>
+          <p className="text-[11px] font-medium text-muted-foreground mb-3 uppercase tracking-wide">Scan Engine</p>
+          <div className="grid grid-cols-2 sm:grid-cols-4 rounded-lg border border-border divide-x divide-y sm:divide-y-0 divide-border overflow-hidden">
+            <div className="px-4 py-3">
+              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">200</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">proxy connections</div>
             </div>
-            <div>
-              <div className="text-lg font-black text-foreground">×2</div>
-              <div className="text-xs text-muted-foreground">pipeline per socket</div>
+            <div className="px-4 py-3">
+              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">×2</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">pipeline per socket</div>
             </div>
-            <div>
-              <div className="text-lg font-black text-green-400">4</div>
-              <div className="text-xs text-muted-foreground">parallel zone workers</div>
+            <div className="px-4 py-3">
+              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">4</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">parallel zone workers</div>
             </div>
-            <div>
-              <div className="text-lg font-black text-orange-400">5s</div>
-              <div className="text-xs text-muted-foreground">timeout (fast recycle)</div>
+            <div className="px-4 py-3">
+              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">5s</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">timeout (fast recycle)</div>
             </div>
           </div>
-          <p className="text-xs text-muted-foreground text-center mt-3">
+          <p className="text-xs text-muted-foreground mt-3">
             400 simultaneous proxy slots · FCC BDC data tells you exactly where fiber is going before Kinetic announces it
           </p>
         </CardContent>

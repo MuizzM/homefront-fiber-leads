@@ -30,38 +30,46 @@ function UserPreview({ members }: { members: TeamMember[] }) {
     staleTime: 60_000,
   });
   return (
-    <section className="rounded-2xl bg-card border border-border p-4 space-y-3" data-testid="gov-user-preview">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+    <section className="rounded-xl bg-card border border-border overflow-hidden" data-testid="gov-user-preview">
+      <div className="flex items-center justify-between gap-3 flex-wrap px-4 py-3.5 border-b border-border">
         <div>
-          <h2 className="text-[13px] font-semibold text-foreground">Effective permissions by user</h2>
-          <p className="text-[11px] text-muted-foreground">What a specific person can do, from their role.</p>
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Effective permissions</div>
+          <h2 className="text-[15px] font-semibold tracking-tight text-foreground">Preview a person's access</h2>
         </div>
         <select
           value={uid} onChange={e => setUid(e.target.value ? Number(e.target.value) : "")}
           data-testid="gov-user-select"
-          className="h-9 rounded-xl bg-secondary border border-border px-3 text-[13px] text-foreground"
+          className="h-9 rounded-lg bg-secondary border border-border px-3 text-[13px] text-foreground focus:outline-none focus:border-primary/60"
         >
           <option value="">Select a person…</option>
           {members.filter(m => m.active).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
       </div>
-      {data && (
-        <div>
-          <div className="text-[12px] text-muted-foreground mb-2">
-            <span className="font-semibold text-foreground">{data.user.name}</span> · {ROLE_LABEL[data.user.role] ?? data.user.role} · {data.grantedCount} capabilities
+      {data ? (
+        <div className="p-4 space-y-3">
+          <div className="flex items-center gap-2 text-[13px]">
+            <span className="font-semibold tracking-tight text-foreground">{data.user.name}</span>
+            <span className="inline-flex items-center h-5 px-2 rounded-full bg-muted text-[11px] font-medium text-muted-foreground">
+              {ROLE_LABEL[data.user.role] ?? data.user.role}
+            </span>
+            <span className="text-muted-foreground tabular-nums">{data.grantedCount} capabilities</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {data.groups.flatMap(g => g.capabilities).filter(c => c.granted).map(c => (
               <span key={c.capability}
-                className={`inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11px] font-medium border ${c.highRisk
-                  ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
-                  : "bg-primary/10 text-primary border-primary/20"}`}>
-                {c.highRisk && <AlertTriangle className="w-3 h-3" />}
+                className={`inline-flex items-center gap-1 h-6 px-2.5 rounded-full text-[11px] font-medium ${c.highRisk
+                  ? "bg-amber-500/15 text-amber-400"
+                  : "bg-primary/10 text-primary"}`}>
+                {c.highRisk
+                  ? <AlertTriangle className="w-3 h-3" />
+                  : <span className="w-1.5 h-1.5 rounded-full bg-primary" />}
                 {c.capability}
               </span>
             ))}
           </div>
         </div>
+      ) : (
+        <p className="px-4 py-4 text-[12px] text-muted-foreground">Select a person to see exactly what their role grants.</p>
       )}
     </section>
   );
@@ -89,47 +97,69 @@ export default function Governance() {
   }, [data, q]);
 
   const roles = data?.roles ?? [];
+  const totalCaps = data?.groups.reduce((n, g) => n + g.capabilities.length, 0) ?? 0;
+  const highRiskCaps = data?.groups.reduce((n, g) => n + g.capabilities.filter(c => c.highRisk).length, 0) ?? 0;
 
   return (
-    <div className="p-4 md:p-6 pb-24 md:pb-6 max-w-5xl mx-auto space-y-5">
+    <div className="p-4 md:p-6 pb-24 md:pb-6 max-w-5xl mx-auto space-y-6">
       <div>
-        <h1 className="text-lg font-bold text-foreground">Permissions</h1>
-        <p className="text-[13px] text-muted-foreground">
-          Capability governance · what each role can do · <AlertTriangle className="inline w-3 h-3 text-amber-400 -mt-0.5" /> = high-risk grant
-        </p>
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Capability governance</div>
+        <h1 className="text-lg font-semibold tracking-tight text-foreground">Permissions</h1>
+        <p className="text-[13px] text-muted-foreground">What each role can do — read straight from the map the middleware enforces.</p>
+      </div>
+
+      {/* Hairline metric strip */}
+      <div className="flex items-stretch rounded-xl bg-card border border-border divide-x divide-border">
+        <div className="flex-1 px-4 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Roles</div>
+          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{roles.length}</div>
+        </div>
+        <div className="flex-1 px-4 py-3">
+          <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Capabilities</div>
+          <div className="text-[18px] font-semibold tracking-tight text-foreground tabular-nums">{totalCaps}</div>
+        </div>
+        <div className="flex-1 px-4 py-3">
+          <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <AlertTriangle className="w-3 h-3 text-amber-400" /> High-risk
+          </div>
+          <div className="text-[18px] font-semibold tracking-tight text-amber-400 tabular-nums">{highRiskCaps}</div>
+        </div>
       </div>
 
       <UserPreview members={members} />
 
-      <input
-        value={q}
-        onChange={e => setQ(e.target.value)}
-        placeholder="Search capabilities…"
-        data-testid="gov-search"
-        className="w-full max-w-sm h-10 rounded-xl bg-card border border-border px-3.5 text-[14px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/60"
-      />
+      <div className="flex items-center justify-between gap-3 flex-wrap pt-1">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Role × capability matrix</div>
+        <input
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          placeholder="Search capabilities…"
+          data-testid="gov-search"
+          className="w-full max-w-xs h-9 rounded-lg bg-card border border-border px-3.5 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:border-primary/60"
+        />
+      </div>
 
       {isLoading ? (
-        <div className="space-y-2">{[0, 1, 2].map(i => <Skeleton key={i} className="h-24 rounded-2xl" />)}</div>
+        <div className="space-y-2">{[0, 1, 2].map(i => <Skeleton key={i} className="h-24 rounded-xl" />)}</div>
       ) : (
         <div className="space-y-6">
           {groups.map(g => (
             <section key={g.domain} data-testid={`gov-domain-${g.domain}`}>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground mb-2">{g.domain}</div>
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">{g.domain}</div>
               {/* Matrix scrolls horizontally on narrow screens instead of
                   crushing capability names to a few characters (WCAG 1.4.10
                   reflow — content stays reachable, it just scrolls). */}
-              <div className="rounded-2xl bg-card border border-border overflow-x-auto">
+              <div className="rounded-xl bg-card border border-border overflow-x-auto">
                 {/* Header row of roles */}
-                <div className="flex items-center gap-2 px-3.5 py-2 border-b border-border bg-white/[0.02] min-w-[520px]">
-                  <span className="flex-1 text-[11px] font-semibold text-muted-foreground">Capability</span>
+                <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-border min-w-[520px]">
+                  <span className="flex-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Capability</span>
                   {roles.map(r => (
-                    <span key={r} className="w-[68px] text-center text-[11px] font-semibold text-muted-foreground">{ROLE_LABEL[r] ?? r}</span>
+                    <span key={r} className="w-[68px] text-center text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{ROLE_LABEL[r] ?? r}</span>
                   ))}
                 </div>
                 {g.capabilities.map(cap => (
                   <div key={cap.capability} data-testid={`gov-cap-${cap.capability}`}
-                    className="flex items-center gap-2 px-3.5 py-2.5 border-b border-border/60 last:border-0 min-w-[520px]">
+                    className="flex items-center gap-2 px-3.5 py-2.5 border-b border-border last:border-0 min-w-[520px]">
                     <span className="flex-1 min-w-0 flex items-center gap-1.5">
                       {cap.highRisk && <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
                       <code className="text-[12.5px] text-foreground truncate">{cap.capability}</code>
@@ -140,8 +170,8 @@ export default function Governance() {
                         <span key={r} className="w-[68px] flex justify-center" data-granted={granted}>
                           <span
                             className={`w-4 h-4 rounded-full ${granted
-                              ? (cap.highRisk ? "bg-amber-400/90" : "bg-primary")
-                              : "bg-white/[0.06] border border-white/10"}`}
+                              ? (cap.highRisk ? "bg-amber-400" : "bg-primary")
+                              : "bg-muted border border-border"}`}
                             title={granted ? `${ROLE_LABEL[r] ?? r} has ${cap.capability}` : "not granted"}
                           />
                         </span>

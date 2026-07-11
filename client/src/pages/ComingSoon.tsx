@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
-import { Wifi, Plus, ArrowUpRight, Trash2, Search, Filter } from "lucide-react";
+import { Wifi, Plus, ArrowUpRight, Trash2, Search, Filter, Clock } from "lucide-react";
 import { useState } from "react";
 
 interface ComingSoonAddress {
@@ -25,12 +25,15 @@ const REASON_LABELS: Record<string, string> = {
   coming_soon: "Coming Soon",
 };
 
-const REASON_COLORS: Record<string, string> = {
-  no_service: "bg-red-500/20 text-red-400 border-red-500/30",
-  copper_only: "bg-amber-500/20 text-amber-400 border-amber-500/30",
-  competitor_only: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  coming_soon: "bg-blue-500/20 text-blue-400 border-blue-500/30",
+const REASON_STYLES: Record<string, { pill: string; dot: string }> = {
+  no_service: { pill: "bg-rose-500/15 text-rose-400", dot: "bg-rose-400" },
+  copper_only: { pill: "bg-amber-500/15 text-amber-400", dot: "bg-amber-400" },
+  competitor_only: { pill: "bg-violet-500/15 text-violet-400", dot: "bg-violet-400" },
+  coming_soon: { pill: "bg-sky-500/15 text-sky-400", dot: "bg-sky-400" },
 };
+
+const fmtDate = (s: string | null) =>
+  s ? new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—";
 
 export default function ComingSoon() {
   const { user } = useAuth();
@@ -86,35 +89,49 @@ export default function ComingSoon() {
     reason: k, label: v, count: addresses.filter(a => a.reason === k && !a.fiberAvailable).length
   }));
 
+  const metrics = [
+    { key: "monitoring", label: "Monitoring", value: addresses.filter(a => !a.fiberAvailable).length, accent: "text-foreground" },
+    { key: "converted", label: "Converted", value: converted.length, accent: "text-emerald-400" },
+    ...byReason.map(r => ({ key: r.reason, label: r.label, value: r.count, accent: "text-foreground" })),
+  ];
+
   return (
     <div className="p-6 max-w-7xl mx-auto space-y-6">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-white">Coming Soon Pipeline</h1>
-          <p className="text-sm text-muted-foreground">Track addresses where fiber isn't available yet — future lead pipeline</p>
+      {/* Header */}
+      <div className="flex items-start justify-between flex-wrap gap-3">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-primary">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full rounded-full bg-primary opacity-75 animate-ping" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+            </span>
+            Live watchlist
+          </div>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Coming Soon Pipeline</h1>
+          <p className="text-sm text-muted-foreground">Track addresses where fiber isn't available yet — your future lead pipeline.</p>
         </div>
         {isManager && (
           <Dialog open={addOpen} onOpenChange={setAddOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" className="bg-primary hover:bg-primary/90 text-white" data-testid="button-add-coming-soon">
+              <Button size="sm" className="bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="button-add-coming-soon">
                 <Plus className="w-4 h-4 mr-2" /> Add Address
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-card border-border text-white">
-              <DialogHeader><DialogTitle>Add to Pipeline</DialogTitle></DialogHeader>
+            <DialogContent className="bg-card border-border text-foreground">
+              <DialogHeader><DialogTitle className="font-semibold tracking-tight">Add to Pipeline</DialogTitle></DialogHeader>
               <div className="space-y-3">
-                <Input placeholder="Street address" value={form.address} onChange={e => setForm(f => ({...f, address: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-address" />
+                <Input placeholder="Street address" value={form.address} onChange={e => setForm(f => ({...f, address: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-address" />
                 <div className="grid grid-cols-2 gap-2">
-                  <Input placeholder="City" value={form.city} onChange={e => setForm(f => ({...f, city: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-city" />
-                  <Input placeholder="ZIP" value={form.zip} onChange={e => setForm(f => ({...f, zip: e.target.value}))} className="bg-secondary border-border text-white" data-testid="input-zip" />
+                  <Input placeholder="City" value={form.city} onChange={e => setForm(f => ({...f, city: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-city" />
+                  <Input placeholder="ZIP" value={form.zip} onChange={e => setForm(f => ({...f, zip: e.target.value}))} className="bg-secondary border-border text-foreground" data-testid="input-zip" />
                 </div>
                 <Select value={form.reason} onValueChange={v => setForm(f => ({...f, reason: v}))}>
-                  <SelectTrigger className="bg-secondary border-border text-white" data-testid="select-reason"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="bg-secondary border-border text-foreground" data-testid="select-reason"><SelectValue /></SelectTrigger>
                   <SelectContent className="bg-card border-border">
                     {Object.entries(REASON_LABELS).map(([k, v]) => <SelectItem key={k} value={k}>{v}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                <Button onClick={() => addMutation.mutate(form)} disabled={addMutation.isPending || !form.address} className="w-full bg-primary hover:bg-primary/90 text-white" data-testid="button-submit-coming-soon">
+                <Button onClick={() => addMutation.mutate(form)} disabled={addMutation.isPending || !form.address} className="w-full bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="button-submit-coming-soon">
                   Add to Pipeline
                 </Button>
               </div>
@@ -123,27 +140,13 @@ export default function ComingSoon() {
         )}
       </div>
 
-      {/* Stats row */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
-        <Card className="bg-card border-border lg:col-span-1">
-          <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-white">{addresses.filter(a => !a.fiberAvailable).length}</p>
-            <p className="text-xs text-muted-foreground">Monitoring</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-card border-border">
-          <CardContent className="p-3 text-center">
-            <p className="text-2xl font-bold text-emerald-400">{converted.length}</p>
-            <p className="text-xs text-muted-foreground">Converted</p>
-          </CardContent>
-        </Card>
-        {byReason.slice(0, 3).map(r => (
-          <Card key={r.reason} className="bg-card border-border">
-            <CardContent className="p-3 text-center">
-              <p className="text-2xl font-bold text-white">{r.count}</p>
-              <p className="text-xs text-muted-foreground">{r.label}</p>
-            </CardContent>
-          </Card>
+      {/* Metric strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 rounded-xl border border-border bg-card overflow-hidden">
+        {metrics.map(m => (
+          <div key={m.key} className="p-4 border-t border-l border-border">
+            <p className={`text-2xl font-semibold tracking-tight tabular-nums ${m.accent}`}>{m.value}</p>
+            <p className="mt-1 text-[11px] uppercase tracking-wide text-muted-foreground">{m.label}</p>
+          </div>
         ))}
       </div>
 
@@ -151,7 +154,7 @@ export default function ComingSoon() {
       <div className="flex items-center gap-3 flex-wrap">
         <div className="relative flex-1 min-w-48">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input placeholder="Search addresses..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 bg-card border-border text-white placeholder:text-muted-foreground" data-testid="input-search" />
+          <Input placeholder="Search addresses..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 bg-card border-border text-foreground placeholder:text-muted-foreground" data-testid="input-search" />
         </div>
         <div className="flex items-center gap-2">
           <Filter className="w-4 h-4 text-muted-foreground" />
@@ -165,70 +168,81 @@ export default function ComingSoon() {
         </div>
       </div>
 
-      {/* Address table */}
-      <Card className="bg-card border-border">
+      {/* Watchlist */}
+      <Card className="bg-card border-border rounded-xl">
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
+          <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
             <Wifi className="w-4 h-4 text-primary" /> Monitored Addresses
-            <Badge className="bg-secondary text-muted-foreground border-border ml-2">{filtered.length}</Badge>
+            <Badge className="bg-muted text-muted-foreground border-border ml-2 tabular-nums">{filtered.length}</Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-14 bg-secondary" />)}</div>
+            <div className="p-4 space-y-2">{[1,2,3,4].map(i => <Skeleton key={i} className="h-16 bg-muted" />)}</div>
           ) : filtered.length === 0 ? (
-            <div className="p-6 text-center">
+            <div className="p-10 text-center">
               <Wifi className="w-8 h-8 text-muted-foreground/50 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No addresses in pipeline{search ? " matching search" : ""}</p>
             </div>
           ) : (
             <div className="divide-y divide-border">
-              {filtered.map(a => (
-                <div key={a.id} className="px-4 py-3 flex items-center justify-between gap-3" data-testid={`coming-soon-row-${a.id}`}>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-white font-medium truncate">{a.address}</p>
-                    <p className="text-xs text-muted-foreground">{a.city}, {a.state} {a.zip}</p>
+              {filtered.map(a => {
+                const style = REASON_STYLES[a.reason] ?? { pill: "bg-muted text-muted-foreground", dot: "bg-muted-foreground" };
+                return (
+                  <div key={a.id} className="px-4 py-3.5 flex items-center justify-between gap-3 hover:bg-muted/40 transition-colors" data-testid={`coming-soon-row-${a.id}`}>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-foreground truncate">{a.address}</p>
+                      <div className="mt-1 flex items-center gap-x-3 gap-y-1 flex-wrap text-xs text-muted-foreground">
+                        <span className="tabular-nums">{a.city}, {a.state} {a.zip}</span>
+                        <span className="inline-flex items-center gap-1 tabular-nums"><Clock className="w-3 h-3" /> First seen {fmtDate(a.createdAt)}</span>
+                        <span className="tabular-nums">Last checked {fmtDate(a.lastChecked)}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${style.pill}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+                        {REASON_LABELS[a.reason] ?? a.reason}
+                      </span>
+                      {isManager && (
+                        <>
+                          <Button size="sm" variant="outline" onClick={() => promoteMutation.mutate(a.id)} disabled={promoteMutation.isPending} className="border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 text-xs h-7 px-2" data-testid={`button-promote-${a.id}`}>
+                            <ArrowUpRight className="w-3 h-3 mr-1" /> Promote
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => deleteMutation.mutate(a.id)} disabled={deleteMutation.isPending} className="text-rose-400 hover:bg-rose-500/10 h-7 w-7 p-0" data-testid={`button-delete-${a.id}`}>
+                            <Trash2 className="w-3 h-3" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <Badge className={`text-xs ${REASON_COLORS[a.reason] ?? "bg-secondary text-muted-foreground"}`}>
-                      {REASON_LABELS[a.reason] ?? a.reason}
-                    </Badge>
-                    {isManager && (
-                      <>
-                        <Button size="sm" variant="outline" onClick={() => promoteMutation.mutate(a.id)} disabled={promoteMutation.isPending} className="border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/10 text-xs h-7 px-2" data-testid={`button-promote-${a.id}`}>
-                          <ArrowUpRight className="w-3 h-3 mr-1" /> Promote
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => deleteMutation.mutate(a.id)} disabled={deleteMutation.isPending} className="text-red-400 hover:bg-red-500/10 h-7 w-7 p-0" data-testid={`button-delete-${a.id}`}>
-                          <Trash2 className="w-3 h-3" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </CardContent>
       </Card>
 
-      {/* Converted section */}
+      {/* Converted */}
       {converted.length > 0 && (
-        <Card className="bg-card border-border">
+        <Card className="bg-card border-border rounded-xl">
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-white flex items-center gap-2">
+            <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
               <ArrowUpRight className="w-4 h-4 text-emerald-400" /> Converted to Leads
-              <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 ml-2">{converted.length}</Badge>
+              <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 ml-2 tabular-nums">{converted.length}</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
             <div className="divide-y divide-border">
               {converted.map(a => (
-                <div key={a.id} className="px-4 py-3 flex items-center justify-between" data-testid={`converted-row-${a.id}`}>
-                  <div>
-                    <p className="text-sm text-white">{a.address}</p>
-                    <p className="text-xs text-muted-foreground">{a.city}, {a.state} {a.zip}</p>
+                <div key={a.id} className="px-4 py-3.5 flex items-center justify-between gap-3" data-testid={`converted-row-${a.id}`}>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">{a.address}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">{a.city}, {a.state} {a.zip}</p>
                   </div>
-                  <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30 text-xs">Fiber Available</Badge>
+                  <span className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium bg-emerald-500/15 text-emerald-400 flex-shrink-0">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    Fiber Available
+                  </span>
                 </div>
               ))}
             </div>

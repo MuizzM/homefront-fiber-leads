@@ -48,13 +48,13 @@ interface CnsJobDetail extends CnsJob {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function statusBadge(s: string) {
-  const map: Record<string, string> = {
-    running: "bg-green-500/20 text-green-400 border-green-500/30",
-    paused:  "bg-amber-500/20 text-amber-400 border-amber-500/30",
-    done:    "bg-sky-500/20   text-sky-400   border-sky-500/30",
-    stopped: "bg-slate-500/20 text-slate-400 border-slate-500/30",
-    error:   "bg-red-500/20   text-red-400   border-red-500/30",
+function statusStyle(s: string): { pill: string; dot: string } {
+  const map: Record<string, { pill: string; dot: string }> = {
+    running: { pill: "bg-primary/15 text-primary",                dot: "bg-primary" },
+    paused:  { pill: "bg-amber-500/15 text-amber-400",           dot: "bg-amber-400" },
+    done:    { pill: "bg-sky-500/15 text-sky-400",               dot: "bg-sky-400" },
+    stopped: { pill: "bg-muted text-muted-foreground",           dot: "bg-muted-foreground" },
+    error:   { pill: "bg-rose-500/15 text-rose-400",             dot: "bg-rose-400" },
   };
   return map[s] ?? map.stopped;
 }
@@ -256,19 +256,20 @@ export default function CnsScanner() {
   }, [displayedResults, viewJobId]);
 
   const selectedEnvInfo = envs.find(e => e.code === selectedEnv);
+  const rangeSize = Math.max(0, (parseInt(endCns) || 0) - (parseInt(startCns) || 0));
 
   return (
-    <div className="p-6 space-y-5">
+    <div className="p-6 max-w-5xl mx-auto space-y-6">
       {/* Token warning */}
       {!tokenOk && (
-        <div className="flex items-center gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4">
-          <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
+        <div className="flex items-center gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4">
+          <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
           <div className="flex-1">
-            <p className="text-sm font-semibold text-red-400">API token required for CNS scanning</p>
+            <p className="text-sm font-semibold text-rose-400">API token required for CNS scanning</p>
             <p className="text-xs text-muted-foreground mt-0.5">Paste a valid Kinetic token in Token Setup before running scans.</p>
           </div>
           <a href="#/token"
-            className="flex items-center gap-1.5 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap">
+            className="flex items-center gap-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 text-xs font-semibold px-3 py-1.5 transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/50">
             <KeyRound className="w-3.5 h-3.5" /> Set Token
           </a>
         </div>
@@ -276,59 +277,55 @@ export default function CnsScanner() {
 
       {/* Header */}
       <div>
-        <h1 className="text-xl font-bold flex items-center gap-2">
+        <h1 className="text-xl font-semibold tracking-tight flex items-center gap-2">
           <ScanSearch className="w-5 h-5 text-primary" />
           CNS Scanner
         </h1>
-        <p className="text-sm text-muted-foreground mt-1">
+        <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
           Brute-force scan Kinetic control numbers to discover new fiber builds before anyone else.
           Finds NEW FIBER addresses directly by their internal address ID — works across all markets.
         </p>
       </div>
 
-      {/* How it works */}
-      <Card className="bg-card border-primary/20">
-        <CardContent className="pt-4 pb-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-            <div>
-              <div className="font-semibold text-primary mb-1.5">What is a CNS?</div>
-              <p className="text-muted-foreground">
-                Every address in Kinetic's network has an internal ID: <span className="font-mono text-foreground">ENV + 7-digit control number</span>.
-                e.g. <span className="font-mono text-green-400">MS0012345</span>
-              </p>
-            </div>
-            <div>
-              <div className="font-semibold text-primary mb-1.5">How we find new fiber</div>
-              <p className="text-muted-foreground">
-                We iterate CNS values sequentially. When the API returns
-                <span className="font-mono text-green-400 mx-1">householdSegmentType = "NEW FIBER"</span>
-                that address just entered the Kinetic network — it's a brand-new build.
-              </p>
-            </div>
-            <div>
-              <div className="font-semibold text-primary mb-1.5">What happens to hits</div>
-              <p className="text-muted-foreground">
-                Every NEW FIBER address is auto-saved as a lead in Lead Management.
-                TENURED and other segment types are shown in results but not saved.
-              </p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      {/* How it works — calm reference row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4 rounded-xl border border-border bg-card p-5">
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">What is a CNS?</div>
+          <p className="text-xs text-muted-foreground">
+            Every address in Kinetic's network has an internal ID: <span className="font-mono text-foreground">ENV + 7-digit control number</span>.
+            e.g. <span className="font-mono text-emerald-400">MS0012345</span>
+          </p>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">How we find new fiber</div>
+          <p className="text-xs text-muted-foreground">
+            We iterate CNS values sequentially. When the API returns
+            <span className="font-mono text-emerald-400 mx-1">householdSegmentType = "NEW FIBER"</span>
+            that address just entered the Kinetic network — it's a brand-new build.
+          </p>
+        </div>
+        <div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">What happens to hits</div>
+          <p className="text-xs text-muted-foreground">
+            Every NEW FIBER address is auto-saved as a lead in Lead Management.
+            TENURED and other segment types are shown in results but not saved.
+          </p>
+        </div>
+      </div>
 
-      {/* Start new scan */}
-      <Card className="bg-card border-border">
+      {/* Start new scan — config console */}
+      <Card className="bg-card border-border rounded-xl">
         <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
             <Globe className="w-4 h-4 text-primary" />
             Start New CNS Scan
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <CardContent className="space-y-5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {/* ENV selector */}
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground font-medium">Region (ENV)</label>
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Region (ENV)</label>
               <Select value={selectedEnv} onValueChange={setSelectedEnv}>
                 <SelectTrigger data-testid="select-env" className="h-9 text-sm">
                   <SelectValue />
@@ -343,81 +340,101 @@ export default function CnsScanner() {
                 </SelectContent>
               </Select>
               {selectedEnvInfo && (
-                <div className="text-xs text-muted-foreground">
+                <div className="text-xs text-muted-foreground tabular-nums">
                   {selectedEnvInfo.states} · up to {fmtCns(selectedEnvInfo.upperLimit)} addresses
                 </div>
               )}
             </div>
 
             {/* Start CNS */}
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground font-medium">Start CNS</label>
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Start CNS</label>
               <Input
                 type="number"
                 value={startCns}
                 onChange={e => setStartCns(e.target.value)}
-                className="h-9 text-sm font-mono"
+                className="h-9 text-sm font-mono tabular-nums"
                 data-testid="input-start-cns"
                 min={1}
               />
             </div>
 
             {/* End CNS */}
-            <div className="space-y-1">
-              <label className="text-xs text-muted-foreground font-medium">End CNS</label>
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wide text-muted-foreground">End CNS</label>
               <Input
                 type="number"
                 value={endCns}
                 onChange={e => setEndCns(e.target.value)}
-                className="h-9 text-sm font-mono"
+                className="h-9 text-sm font-mono tabular-nums"
                 data-testid="input-end-cns"
                 min={2}
               />
-              <div className="text-xs text-muted-foreground">
-                Max 100,000 per job · {Math.max(0, (parseInt(endCns) || 0) - (parseInt(startCns) || 0)).toLocaleString()} addresses
+              <div className="text-xs text-muted-foreground tabular-nums">
+                Max 100,000 per job · {rangeSize.toLocaleString()} addresses
               </div>
             </div>
           </div>
 
-          <Button
-            onClick={handleStart}
-            disabled={starting || !tokenOk}
-            className="bg-primary hover:bg-primary/90 text-white"
-            data-testid="btn-start-cns"
-          >
-            {starting ? (
-              <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Starting…</>
-            ) : (
-              <><Play className="w-4 h-4 mr-2" /> Start Scan</>
-            )}
-          </Button>
+          <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
+            <div className="text-xs text-muted-foreground">
+              <span className="font-mono font-semibold text-foreground">{selectedEnv}</span>
+              <span className="mx-1.5">·</span>
+              <span className="tabular-nums">CNS {fmtCns(parseInt(startCns) || 0)} – {fmtCns(parseInt(endCns) || 0)}</span>
+            </div>
+            <Button
+              onClick={handleStart}
+              disabled={starting || !tokenOk}
+              size="lg"
+              className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+              data-testid="btn-start-cns"
+            >
+              {starting ? (
+                <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Starting…</>
+              ) : (
+                <><Play className="w-4 h-4 mr-2" /> Start Scan</>
+              )}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
       {/* Active Jobs */}
       {jobs.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-sm font-semibold text-foreground">Scan Jobs</h2>
+          <h2 className="text-[11px] uppercase tracking-wide text-muted-foreground">Scan Jobs</h2>
           {jobs.map(job => {
             const isStreaming = streamJobId === job.id;
+            const isOpen = viewJobId === job.id;
+            const st = statusStyle(job.status);
             const pct = job.endCns > job.startCns
               ? Math.round(((job.currentCns - job.startCns) / (job.endCns - job.startCns)) * 100)
               : 0;
 
+            const metrics: { label: string; value: string; accent?: boolean }[] = [
+              { label: "Current CNS", value: fmtCns(job.currentCns) },
+              { label: "Scanned",     value: job.scanned.toLocaleString() },
+              { label: "Rate",        value: `${job.ratePerMin}/min` },
+              { label: "Found",       value: job.hits.toLocaleString() },
+              { label: "New Fiber",   value: job.newFiberHits.toLocaleString(), accent: true },
+              { label: "ETA",         value: fmtEta(job.estimatedMinutes) },
+            ];
+
             return (
-              <Card key={job.id} className={`border transition-all ${
-                isStreaming ? "border-primary/40 bg-primary/5" : "border-border"
+              <Card key={job.id} className={`rounded-xl border transition-colors ${
+                isStreaming ? "border-primary/40 bg-primary/[0.03]" : "border-border bg-card"
               }`}>
                 <CardContent className="pt-4 pb-4">
                   {/* Header row */}
                   <div className="flex items-center gap-3 flex-wrap">
-                    <span className={`px-2 py-0.5 rounded border text-xs font-semibold ${statusBadge(job.status)}`}>
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold ${st.pill}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${st.dot} ${job.status === "running" ? "animate-pulse" : ""}`} />
                       {job.status}
                     </span>
                     <span className="font-mono text-sm font-bold text-foreground">
                       {job.env}
                     </span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs text-muted-foreground tabular-nums">
                       {fmtCns(job.startCns)} → {fmtCns(job.endCns)}
                     </span>
                     <span className="text-xs text-muted-foreground">{job.envLabel}</span>
@@ -425,7 +442,8 @@ export default function CnsScanner() {
                     <div className="ml-auto flex items-center gap-2">
                       {/* New fiber badge */}
                       {job.newFiberHits > 0 && (
-                        <span className="px-2 py-0.5 rounded-full bg-green-500/20 text-green-400 text-xs font-bold border border-green-500/30">
+                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-xs font-semibold tabular-nums">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                           {job.newFiberHits} new fiber
                         </span>
                       )}
@@ -438,14 +456,14 @@ export default function CnsScanner() {
                             <PauseCircle className="w-3.5 h-3.5 mr-1" /> Pause
                           </Button>
                           <Button size="sm" variant="outline"
-                            className="h-7 text-xs px-2 border-destructive text-destructive hover:bg-destructive/10"
+                            className="h-7 text-xs px-2 border-rose-500/50 text-rose-400 hover:bg-rose-500/10"
                             onClick={() => handleStop(job.id)} data-testid={`btn-stop-${job.id}`}>
                             <Square className="w-3.5 h-3.5 mr-1" /> Stop
                           </Button>
                         </>
                       )}
                       {job.status === "paused" && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs px-2 border-green-500/50 text-green-400 hover:bg-green-500/10"
+                        <Button size="sm" variant="outline" className="h-7 text-xs px-2 border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10"
                           onClick={() => handleResume(job.id)} data-testid={`btn-resume-${job.id}`}>
                           <PlayCircle className="w-3.5 h-3.5 mr-1" /> Resume
                         </Button>
@@ -456,56 +474,61 @@ export default function CnsScanner() {
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
                       )}
-                      <Button size="sm" variant={viewJobId === job.id ? "default" : "outline"}
+                      <Button size="sm" variant={isOpen ? "default" : "outline"}
                         className="h-7 text-xs px-2"
                         onClick={() => {
-                          setViewJobId(viewJobId === job.id ? null : job.id);
-                          if (viewJobId !== job.id && job.status === "running") {
+                          setViewJobId(isOpen ? null : job.id);
+                          if (!isOpen && job.status === "running") {
                             connectStream(job.id);
                           }
                         }}
                         data-testid={`btn-view-${job.id}`}>
-                        {viewJobId === job.id ? <ChevronUp className="w-3.5 h-3.5 mr-1" /> : <ChevronDown className="w-3.5 h-3.5 mr-1" />}
+                        {isOpen ? <ChevronUp className="w-3.5 h-3.5 mr-1" /> : <ChevronDown className="w-3.5 h-3.5 mr-1" />}
                         Results
                       </Button>
                     </div>
                   </div>
 
+                  {/* Metric strip — hairline divided */}
+                  <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px rounded-lg overflow-hidden border border-border bg-border">
+                    {metrics.map(m => (
+                      <div key={m.label} className="bg-card px-3 py-2">
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{m.label}</div>
+                        <div className={`text-sm font-semibold tabular-nums ${m.accent ? "text-emerald-400" : "text-foreground"}`}>
+                          {m.value}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
                   {/* Progress bar */}
-                  <div className="mt-3 space-y-1.5">
-                    <div className="flex justify-between text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1.5">
+                  <div className="mt-4 space-y-1.5">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="flex items-center gap-1.5 text-muted-foreground">
                         {job.status === "running" && <Activity className="w-3 h-3 animate-pulse text-primary" />}
-                        CNS {fmtCns(job.currentCns)} · {job.scanned.toLocaleString()} scanned · {job.ratePerMin} /min
+                        <span className="tabular-nums">{job.hits} in fabric</span>
+                        <span className="text-emerald-400 font-semibold tabular-nums">· {job.newFiberHits} saved as leads</span>
                       </span>
-                      <span>
+                      <span className="tabular-nums text-muted-foreground">
                         {pct}% · ETA {fmtEta(job.estimatedMinutes)}
                       </span>
                     </div>
                     <Progress value={pct} className="h-1.5" />
-                    <div className="flex gap-4 text-xs pt-0.5">
-                      <span className="text-muted-foreground">
-                        {job.hits} addresses found in fabric
-                      </span>
-                      <span className="text-green-400 font-semibold">
-                        {job.newFiberHits} NEW FIBER saved as leads
-                      </span>
-                    </div>
                     {job.lastError && (
-                      <div className="text-xs text-red-400 bg-red-500/10 rounded px-2 py-1 mt-1">
+                      <div className="text-xs text-rose-400 bg-rose-500/10 rounded-lg px-2 py-1 mt-1">
                         {job.lastError}
                       </div>
                     )}
                   </div>
 
                   {/* Results panel */}
-                  {viewJobId === job.id && (
+                  {isOpen && (
                     <div className="mt-4 border-t border-border pt-4 space-y-3">
                       <div className="flex items-center justify-between">
-                        <div className="text-xs text-muted-foreground">
+                        <div className="text-xs text-muted-foreground tabular-nums">
                           Showing {displayedResults.length} addresses found in Kinetic fabric
                           {newFiberResults.length > 0 && (
-                            <span className="ml-2 text-green-400 font-semibold">
+                            <span className="ml-2 text-emerald-400 font-semibold">
                               ({newFiberResults.length} NEW FIBER)
                             </span>
                           )}
@@ -519,7 +542,7 @@ export default function CnsScanner() {
                       </div>
 
                       {displayedResults.length === 0 ? (
-                        <div className="text-xs text-muted-foreground text-center py-4">
+                        <div className="text-xs text-muted-foreground text-center py-6">
                           {job.status === "running" ? "Scanning… results will appear here as they're found." : "No addresses found in this range."}
                         </div>
                       ) : (
@@ -528,18 +551,14 @@ export default function CnsScanner() {
                             <div key={i}
                               className={`rounded-lg border text-xs px-3 py-2 flex items-center gap-2.5 ${
                                 r.isNewFiber
-                                  ? "border-green-500/30 bg-green-500/5"
+                                  ? "border-emerald-500/30 bg-emerald-500/[0.06]"
                                   : "border-border bg-card"
                               }`}
                               data-testid={`cns-result-${i}`}
                             >
-                              {r.isNewFiber ? (
-                                <div className="w-2 h-2 rounded-full bg-green-400 flex-shrink-0" />
-                              ) : (
-                                <div className="w-2 h-2 rounded-full bg-slate-500 flex-shrink-0" />
-                              )}
+                              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${r.isNewFiber ? "bg-emerald-400" : "bg-muted-foreground"}`} />
 
-                              <span className="font-mono text-muted-foreground text-[10px] w-14 flex-shrink-0">
+                              <span className="font-mono text-muted-foreground text-[10px] w-14 flex-shrink-0 tabular-nums">
                                 {r.dfAddressId}
                               </span>
 
@@ -550,15 +569,15 @@ export default function CnsScanner() {
                               {r.householdSegmentType && (
                                 <span className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] flex-shrink-0 ${
                                   r.isNewFiber
-                                    ? "bg-green-500/20 text-green-300"
-                                    : "bg-slate-500/20 text-slate-400"
+                                    ? "bg-emerald-500/15 text-emerald-400"
+                                    : "bg-muted text-muted-foreground"
                                 }`}>
                                   {r.householdSegmentType}
                                 </span>
                               )}
 
                               {r.maxDownloadMbps && (
-                                <span className="text-muted-foreground flex items-center gap-0.5 flex-shrink-0">
+                                <span className="text-muted-foreground flex items-center gap-0.5 flex-shrink-0 tabular-nums">
                                   <Zap className="w-3 h-3 text-primary" />
                                   {r.maxDownloadMbps >= 1000
                                     ? `${r.maxDownloadMbps / 1000}G`
@@ -571,7 +590,7 @@ export default function CnsScanner() {
                               )}
 
                               {r.isNewFiber && (
-                                <span className="text-green-400 font-bold text-[10px] flex-shrink-0">SAVED</span>
+                                <span className="text-emerald-400 font-bold text-[10px] flex-shrink-0">SAVED</span>
                               )}
                             </div>
                           ))}
@@ -588,7 +607,7 @@ export default function CnsScanner() {
 
       {/* Empty state */}
       {jobs.length === 0 && (
-        <Card className="bg-card border-border border-dashed">
+        <Card className="bg-card border-border border-dashed rounded-xl">
           <CardContent className="py-12 text-center">
             <ScanSearch className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
             <div className="text-sm text-muted-foreground mb-1">No CNS scans yet</div>

@@ -53,19 +53,19 @@ interface OverpassResult {
   addresses: { address: string; city: string; state: string; zip: string; lat: number; lng: number }[];
 }
 
-const STATUS_CONFIG: Record<string, { label: string; dot: string; bg: string }> = {
-  new_fiber:      { label: "NEW FIBER",  dot: "bg-green-400",  bg: "bg-green-400/10 border-green-400/30" },
-  tenured_fiber:  { label: "TENURED",    dot: "bg-purple-400", bg: "bg-purple-400/10 border-purple-400/30" },
-  existing_fiber: { label: "FIBER",      dot: "bg-sky-400",    bg: "bg-sky-400/10 border-sky-400/30" },
-  copper:         { label: "COPPER/DSL", dot: "bg-amber-400",  bg: "bg-amber-400/10 border-amber-400/30" },
-  no_service:     { label: "NO SERVICE", dot: "bg-red-400",    bg: "bg-red-400/10 border-red-400/30" },
-  unknown:        { label: "UNKNOWN",    dot: "bg-slate-500",  bg: "bg-slate-500/10 border-slate-500/30" },
+const STATUS_CONFIG: Record<string, { label: string; dot: string; pill: string }> = {
+  new_fiber:      { label: "New fiber",  dot: "bg-emerald-400", pill: "bg-emerald-500/15 text-emerald-400" },
+  tenured_fiber:  { label: "Tenured",    dot: "bg-violet-400",  pill: "bg-violet-500/15 text-violet-400" },
+  existing_fiber: { label: "Fiber",      dot: "bg-sky-400",     pill: "bg-sky-500/15 text-sky-400" },
+  copper:         { label: "Copper/DSL", dot: "bg-amber-400",   pill: "bg-amber-500/15 text-amber-400" },
+  no_service:     { label: "No service", dot: "bg-rose-400",    pill: "bg-rose-500/15 text-rose-400" },
+  unknown:        { label: "Unknown",    dot: "bg-muted-foreground", pill: "bg-muted text-muted-foreground" },
 };
 
 const TAG_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
-  hot_lead:       { label: "HOT LEAD",       icon: "🔥", color: "text-orange-400" },
-  coming_soon:    { label: "COMING SOON",     icon: "⏳", color: "text-yellow-400" },
-  upgrade_target: { label: "UPGRADE TARGET",  icon: "⬆️", color: "text-sky-400" },
+  hot_lead:       { label: "HOT LEAD",       icon: "🔥", color: "bg-amber-500/15 text-amber-400" },
+  coming_soon:    { label: "COMING SOON",     icon: "⏳", color: "bg-amber-500/15 text-amber-400" },
+  upgrade_target: { label: "UPGRADE TARGET",  icon: "⬆️", color: "bg-sky-500/15 text-sky-400" },
 };
 
 type FilterKey = "all" | "new_fiber" | "tenured_fiber" | "copper" | "no_service";
@@ -367,25 +367,61 @@ export default function CityScanner() {
   const hotLeads = results.filter(r => r.leadTag === "hot_lead").length;
 
   return (
-    <div className="p-6 space-y-5">
-      <div>
-        <h1 className="text-xl font-bold">City Scanner</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Type any city in the USA — pulls all addresses via Overpass, then scans each live against Kinetic. Hot Leads saved automatically.
-        </p>
+    <div className="p-6 max-w-5xl mx-auto space-y-6">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <div className="flex items-center gap-2">
+            <Radar className="w-5 h-5 text-primary" />
+            <h1 className="text-xl font-semibold tracking-tight text-foreground">City Scanner</h1>
+          </div>
+          <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
+            Type any city in the USA — pulls all addresses via Overpass, then scans each live against Kinetic. Hot Leads saved automatically.
+          </p>
+        </div>
+        {scanning && (
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-3 py-1 text-xs font-medium text-primary">
+            <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Scanning live
+          </span>
+        )}
       </div>
 
+      {/* Address-pool metric strip */}
+      {poolStats && poolStats.total > 0 && (
+        <div className="rounded-xl border border-border bg-card">
+          <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-border">
+            <div className="p-4">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Pool stored</div>
+              <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{poolStats.total.toLocaleString()}</div>
+            </div>
+            <div className="p-4">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Scanned</div>
+              <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{poolStats.scanned.toLocaleString()}</div>
+            </div>
+            <div className="p-4">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Never scanned</div>
+              <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{poolStats.neverScanned.toLocaleString()}</div>
+            </div>
+            <div className="p-4">
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">New fiber found</div>
+              <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-primary">{poolStats.newFiber.toLocaleString()}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* City search */}
-      <Card className="bg-card border-border">
+      <Card className="bg-card border-border rounded-xl">
         <CardContent className="pt-5 pb-5">
           <div className="space-y-4">
-            <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <div className="flex items-center gap-2">
               <Globe className="w-4 h-4 text-primary" />
-              Step 1: Select City
+              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Step 1</span>
+              <span className="text-sm font-semibold tracking-tight text-foreground">Select City</span>
             </div>
             <div className="flex gap-3 flex-wrap">
               <div className="flex-1 min-w-[200px]">
-                <label className="text-xs text-muted-foreground mb-1 block">City Name</label>
+                <label className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5 block">City Name</label>
                 <Input
                   data-testid="input-city"
                   placeholder="e.g. Rockwell, Charlotte, Concord..."
@@ -397,13 +433,13 @@ export default function CityScanner() {
                 />
               </div>
               <div className="w-24">
-                <label className="text-xs text-muted-foreground mb-1 block">State</label>
+                <label className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5 block">State</label>
                 <select
                   data-testid="select-state"
                   value={stateInput}
                   onChange={e => setStateInput(e.target.value)}
                   disabled={scanning}
-                  className="w-full h-9 px-2 bg-background border border-border rounded-md text-sm text-foreground"
+                  className="w-full h-9 px-2 bg-background border border-border rounded-md text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {US_STATES.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
@@ -424,15 +460,15 @@ export default function CityScanner() {
 
             {/* Overpass result */}
             {overpassResult && (
-              <div className="space-y-3">
-                <div className="flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
-                  <MapPin className="w-4 h-4 text-primary flex-shrink-0" />
-                  <div className="flex-1">
-                    <span className="text-sm font-semibold text-foreground">{overpassResult.count.toLocaleString()} addresses</span>
-                    <span className="text-xs text-muted-foreground ml-2">in {overpassResult.cityName}</span>
-                  </div>
-                  <span className="text-xs text-green-400 font-semibold">Ready to scan</span>
+              <div className="flex items-center gap-3 rounded-xl border border-border bg-secondary/40 p-3">
+                <MapPin className="w-4 h-4 text-primary flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <span className="text-sm font-semibold tabular-nums text-foreground">{overpassResult.count.toLocaleString()} addresses</span>
+                  <span className="text-xs text-muted-foreground ml-2">in {overpassResult.cityName}</span>
                 </div>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Ready to scan
+                </span>
                 {/* No static-map preview: it was a billable Mapbox Static Images
                     request (with a hardcoded token) for pure decoration. The scan
                     results land on the Field Map anyway. */}
@@ -440,11 +476,12 @@ export default function CityScanner() {
             )}
 
             {/* ── Zero-Mapbox discovery — find fresh leads from Kinetic's own index ── */}
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
-              <div className="flex items-center gap-2">
+            <div className="rounded-xl border border-border bg-secondary/30 p-4 space-y-2.5">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Flame className="w-4 h-4 text-amber-400" />
-                <span className="text-sm font-semibold text-foreground">Discover fresh — no Mapbox</span>
-                <span className="text-[10px] text-muted-foreground ml-auto">probes Kinetic's CNS frontier directly</span>
+                <span className="text-sm font-semibold tracking-tight text-foreground">Discover fresh</span>
+                <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">no Mapbox</span>
+                <span className="text-[11px] text-muted-foreground ml-auto">probes Kinetic's CNS frontier directly</span>
               </div>
               <p className="text-xs text-muted-foreground">
                 Targets the control-number bands where this city already lives (learned for free from past scans) and checks the frontier for brand-new builds. Zero geocoding.
@@ -462,17 +499,17 @@ export default function CityScanner() {
                 <div className="text-xs text-muted-foreground">
                   {coverage.needsAnchor
                     ? <span className="text-amber-400">No CNS history yet — run an ordinary scan or the nightly sweep here first (both feed the index for free).</span>
-                    : <span><b className="text-foreground">{coverage.knownAddresses?.toLocaleString()}</b> known · <b className="text-foreground">{coverage.cnsBands}</b> band(s) · ENV {coverage.env} · ~{coverage.suggestedProbes?.toLocaleString()} probe candidates</span>}
+                    : <span className="tabular-nums"><b className="text-foreground">{coverage.knownAddresses?.toLocaleString()}</b> known · <b className="text-foreground">{coverage.cnsBands}</b> band(s) · ENV {coverage.env} · ~{coverage.suggestedProbes?.toLocaleString()} probe candidates</span>}
                 </div>
               )}
               {discovery && (
-                <div className="rounded-md bg-background/60 border border-border p-2 text-xs space-y-1">
+                <div className="rounded-lg bg-background/60 border border-border p-3 text-xs space-y-1.5 tabular-nums">
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Probed <b className="text-foreground">{discovery.probed ?? 0}</b>/{discovery.planned ?? 0}</span>
                     <span className="text-amber-400 font-semibold">{discovery.newFiber ?? 0} new fiber · {discovery.leadsCreated ?? 0} lead(s)</span>
                   </div>
                   <div className="text-muted-foreground">In {cityInput}: <b className="text-foreground">{discovery.sameCityHits ?? 0}</b> · pool +{discovery.poolAdded ?? 0} · failures {discovery.failures ?? 0}</div>
-                  {discovery.reason && <div className="text-[11px] text-muted-foreground/80 pt-1 border-t border-border">{discovery.reason}</div>}
+                  {discovery.reason && <div className="text-[11px] text-muted-foreground/80 pt-1.5 border-t border-border">{discovery.reason}</div>}
                 </div>
               )}
             </div>
@@ -481,25 +518,21 @@ export default function CityScanner() {
       </Card>
 
       {/* Scan control */}
-      <Card className="bg-card border-border">
+      <Card className="bg-card border-border rounded-xl">
         <CardContent className="pt-5 pb-5">
-          <div className="flex items-center gap-2 text-sm font-semibold text-foreground mb-4">
+          <div className="flex items-center gap-2 mb-4">
             <Radar className="w-4 h-4 text-primary" />
-            Step 2: Run Kinetic Scan
+            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">Step 2</span>
+            <span className="text-sm font-semibold tracking-tight text-foreground">Run Kinetic Scan</span>
           </div>
           <div className="flex items-center justify-between flex-wrap gap-3">
-            <div>
+            <div className="min-w-0">
               {overpassResult
-                ? <p className="text-sm text-foreground">{overpassResult.count.toLocaleString()} addresses in <span className="font-semibold">{cityInput}, {stateInput}</span></p>
+                ? <p className="text-sm text-foreground tabular-nums">{overpassResult.count.toLocaleString()} addresses in <span className="font-semibold">{cityInput}, {stateInput}</span></p>
                 : <p className="text-sm text-muted-foreground">Pull addresses first, or scan will use built-in Rockwell list</p>
               }
-              {poolStats && poolStats.total > 0 && (
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Address pool: <span className="font-semibold text-foreground">{poolStats.total.toLocaleString()}</span> stored · <span className="text-teal-400">{poolStats.newFiber.toLocaleString()}</span> new fiber found
-                </p>
-              )}
               {scanning && checkedCount > 0 && (
-                <p className="text-xs text-muted-foreground mt-0.5 font-mono truncate max-w-[280px]">→ {currentAddr}</p>
+                <p className="text-xs text-muted-foreground mt-1 font-mono truncate max-w-[280px]">→ {currentAddr}</p>
               )}
             </div>
             <div className="flex gap-2">
@@ -547,12 +580,12 @@ export default function CityScanner() {
 
           {/* Progress bar */}
           {(scanning || done) && total > 0 && (
-            <div className="mt-4 space-y-2">
-              <div className="flex justify-between text-xs text-muted-foreground">
-                <span>{checkedCount.toLocaleString()} / {total.toLocaleString()} scanned</span>
-                <span className="font-mono font-bold text-foreground">{pct}%</span>
+            <div className="mt-5 space-y-2">
+              <div className="flex justify-between text-xs">
+                <span className="text-muted-foreground tabular-nums">{checkedCount.toLocaleString()} / {total.toLocaleString()} scanned</span>
+                <span className="font-mono font-semibold text-primary tabular-nums">{pct}%</span>
               </div>
-              <Progress value={pct} className="h-2.5" />
+              <Progress value={pct} className="h-2" />
               {scanning && currentAddr && (
                 <p className="text-xs text-muted-foreground font-mono truncate">⟶ {currentAddr}</p>
               )}
@@ -561,87 +594,80 @@ export default function CityScanner() {
         </CardContent>
       </Card>
 
-      {/* FiberFocus-style live worker stats — shown while scanning */}
+      {/* Live worker stats — shown while scanning */}
       {scanning && scannerState && (
-        <Card className={`border ${scannerState.isStuck ? "border-red-500/40 bg-red-500/5" : "border-primary/30 bg-primary/5"}`}>
-          <CardContent className="pt-3 pb-3">
-            <div className="flex items-center gap-2 mb-3">
-              <Activity className={`w-4 h-4 ${scannerState.isStuck ? "text-red-400" : "text-primary animate-pulse"}`} />
-              <span className="text-xs font-bold uppercase tracking-wider text-foreground">Worker State</span>
-              {scannerState.isStuck && (
-                <span className="flex items-center gap-1 text-xs text-red-400 font-semibold">
-                  <AlertCircle className="w-3 h-3" /> STUCK — no heartbeat {scannerState.secondsSinceHeartbeat}s
+        <Card className="bg-card border-border rounded-xl">
+          <CardContent className="pt-4 pb-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Activity className={`w-4 h-4 ${scannerState.isStuck ? "text-rose-400" : "text-primary animate-pulse"}`} />
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Worker State</span>
+              {scannerState.isStuck ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-500/15 px-2.5 py-0.5 text-xs font-medium text-rose-400">
+                  <AlertCircle className="w-3 h-3" /> Stuck — no heartbeat {scannerState.secondsSinceHeartbeat}s
+                </span>
+              ) : scannerState.isRunning && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2.5 py-0.5 text-xs font-medium text-primary">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Running
                 </span>
               )}
-              {!scannerState.isStuck && scannerState.isRunning && (
-                <span className="text-xs text-green-400 font-semibold">RUNNING</span>
-              )}
             </div>
-            <div className="grid grid-cols-4 gap-3">
-              <div className="text-center">
-                <div className="text-lg font-black font-mono text-primary">{scannerState.checksPerSec.toFixed(1)}</div>
-                <div className="text-xs text-muted-foreground">checks/sec</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-border border-y border-border">
+              <div className="px-4 py-3">
+                <div className="text-lg font-semibold font-mono tabular-nums text-primary">{scannerState.checksPerSec.toFixed(1)}</div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">checks/sec</div>
               </div>
-              <div className="text-center">
-                <div className="text-lg font-black font-mono text-foreground">{scannerState.concurrency}</div>
-                <div className="text-xs text-muted-foreground">in-flight</div>
+              <div className="px-4 py-3">
+                <div className="text-lg font-semibold font-mono tabular-nums text-foreground">{scannerState.concurrency}</div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">in-flight</div>
               </div>
-              <div className="text-center">
-                <div className="text-lg font-black font-mono text-green-400">{scannerState.diagNewFiber}</div>
-                <div className="text-xs text-muted-foreground">new fiber</div>
+              <div className="px-4 py-3">
+                <div className="text-lg font-semibold font-mono tabular-nums text-emerald-400">{scannerState.diagNewFiber}</div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">new fiber</div>
               </div>
-              <div className="text-center">
-                <div className={`text-lg font-black font-mono ${scannerState.diagHttpError > 0 ? "text-red-400" : "text-muted-foreground"}`}>
+              <div className="px-4 py-3">
+                <div className={`text-lg font-semibold font-mono tabular-nums ${scannerState.diagHttpError > 0 ? "text-rose-400" : "text-muted-foreground"}`}>
                   {scannerState.diagHttpError}
                 </div>
-                <div className="text-xs text-muted-foreground">errors</div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">errors</div>
               </div>
             </div>
-            <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-              <span className="font-mono">{scannerState.totalChecked.toLocaleString()} total checks this session</span>
-              <span className="font-mono">max {scannerState.maxInFlight} concurrent</span>
+            <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
+              <span className="font-mono tabular-nums">{scannerState.totalChecked.toLocaleString()} total checks this session</span>
+              <span className="font-mono tabular-nums">max {scannerState.maxInFlight} concurrent</span>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* Summary cards */}
+      {/* Summary metric strip */}
       {summary && (
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card className="bg-green-500/10 border-green-500/30">
-            <CardContent className="pt-3 pb-3 text-center">
-              <div className="text-2xl font-bold text-green-400">{summary.new_fiber}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">NEW FIBER</div>
-            </CardContent>
-          </Card>
-          {hotLeads > 0 && (
-            <Card className="bg-orange-500/10 border-orange-500/30">
-              <CardContent className="pt-3 pb-3 text-center">
-                <div className="text-2xl font-bold text-orange-400 flex items-center justify-center gap-1">
+        <div className="rounded-xl border border-border bg-card">
+          <div className={`grid ${hotLeads > 0 ? "grid-cols-2 md:grid-cols-5" : "grid-cols-2 md:grid-cols-4"} divide-x divide-border`}>
+            <div className="p-4">
+              <div className="text-2xl font-semibold tracking-tight tabular-nums text-emerald-400">{summary.new_fiber}</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">New fiber</div>
+            </div>
+            {hotLeads > 0 && (
+              <div className="p-4">
+                <div className="flex items-center gap-1.5 text-2xl font-semibold tracking-tight tabular-nums text-amber-400">
                   <Flame className="w-5 h-5" />{hotLeads}
                 </div>
-                <div className="text-xs text-muted-foreground mt-0.5">HOT LEADS</div>
-              </CardContent>
-            </Card>
-          )}
-          <Card className="bg-purple-500/10 border-purple-500/30">
-            <CardContent className="pt-3 pb-3 text-center">
-              <div className="text-2xl font-bold text-purple-400">{summary.tenured_fiber}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">TENURED</div>
-            </CardContent>
-          </Card>
-          <Card className="bg-amber-500/10 border-amber-500/30">
-            <CardContent className="pt-3 pb-3 text-center">
-              <div className="text-2xl font-bold text-amber-400">{summary.copper}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">COPPER/DSL</div>
-            </CardContent>
-          </Card>
-          <Card className="bg-card border-border">
-            <CardContent className="pt-3 pb-3 text-center">
-              <div className="text-2xl font-bold text-foreground">{summary.scanned}</div>
-              <div className="text-xs text-muted-foreground mt-0.5">SCANNED</div>
-            </CardContent>
-          </Card>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Hot leads</div>
+              </div>
+            )}
+            <div className="p-4">
+              <div className="text-2xl font-semibold tracking-tight tabular-nums text-violet-400">{summary.tenured_fiber}</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Tenured</div>
+            </div>
+            <div className="p-4">
+              <div className="text-2xl font-semibold tracking-tight tabular-nums text-amber-400">{summary.copper}</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Copper/DSL</div>
+            </div>
+            <div className="p-4">
+              <div className="text-2xl font-semibold tracking-tight tabular-nums text-foreground">{summary.scanned}</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Scanned</div>
+            </div>
+          </div>
         </div>
       )}
 
@@ -656,14 +682,14 @@ export default function CityScanner() {
                 data-testid={`filter-${f}`}
                 key={f}
                 onClick={() => setFilter(f)}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                   filter === f
                     ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-card text-muted-foreground border-border hover:border-primary/50"
+                    : "bg-card text-muted-foreground border-border hover:border-primary/50 hover:text-foreground"
                 }`}
               >
-                {cfg && <span className={`w-2 h-2 rounded-full ${cfg.dot}`} />}
-                {f === "all" ? "All" : cfg?.label} ({count})
+                {cfg && <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />}
+                {f === "all" ? "All" : cfg?.label} <span className="tabular-nums opacity-70">({count})</span>
               </button>
             );
           })}
@@ -681,7 +707,7 @@ export default function CityScanner() {
               <div
                 key={i}
                 data-testid={`result-row-${i}`}
-                className={`rounded-xl border bg-card transition-all cursor-pointer hover:border-primary/40 ${cfg.bg}`}
+                className="rounded-xl border border-border bg-card transition-colors cursor-pointer hover:border-primary/40"
                 onClick={() => setExpandedIdx(isExpanded ? null : i)}
               >
                 <div className="px-4 py-3 flex items-center gap-3">
@@ -691,72 +717,72 @@ export default function CityScanner() {
                       <span className="font-medium text-sm text-foreground truncate">{r.address}</span>
                       <span className="text-xs text-muted-foreground">{r.city}, {r.state} {r.zip}</span>
                     </div>
-                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      <span className="text-xs text-muted-foreground">{cfg.label}</span>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${cfg.pill}`}>{cfg.label}</span>
                       {tag && (
-                        <span className={`text-xs font-semibold ${tag.color}`}>{tag.icon} {tag.label}</span>
+                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${tag.color}`}>{tag.icon} {tag.label}</span>
                       )}
                       {r.leadScore > 0 && (
-                        <span className="text-xs text-muted-foreground">Score: <span className={`font-semibold ${r.leadScore >= 85 ? "text-orange-400" : r.leadScore >= 60 ? "text-green-400" : "text-muted-foreground"}`}>{r.leadScore}</span></span>
+                        <span className="text-xs text-muted-foreground">Score: <span className={`font-semibold tabular-nums ${r.leadScore >= 85 ? "text-amber-400" : r.leadScore >= 60 ? "text-emerald-400" : "text-muted-foreground"}`}>{r.leadScore}</span></span>
                       )}
                       {r.billingStatus === "N" && (
-                        <span className="text-xs font-semibold text-green-400">No subscriber</span>
+                        <span className="text-xs font-semibold text-emerald-400">No subscriber</span>
                       )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {r.maxDownloadMbps && (
-                      <span className="text-xs text-sky-400 font-mono">
+                      <span className="text-xs text-sky-400 font-mono tabular-nums">
                         {r.maxDownloadMbps >= 1000 ? (r.maxDownloadMbps / 1000).toFixed(0) + "G" : r.maxDownloadMbps + "M"}
                       </span>
                     )}
-                    {r.fiberAvailable && <Wifi className="w-3.5 h-3.5 text-green-400" />}
-                    {r.isNewFiber && <Zap className="w-3.5 h-3.5 text-green-400" />}
+                    {r.fiberAvailable && <Wifi className="w-3.5 h-3.5 text-emerald-400" />}
+                    {r.isNewFiber && <Zap className="w-3.5 h-3.5 text-emerald-400" />}
                   </div>
                 </div>
 
                 {isExpanded && (
-                  <div className="px-4 pb-4 pt-0 border-t border-border/50">
+                  <div className="px-4 pb-4 pt-0 border-t border-border">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3 text-xs">
                       <div>
-                        <div className="text-muted-foreground mb-1">Segment</div>
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Segment</div>
                         <div className="font-mono text-foreground">{r.householdSegmentType ?? "—"}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground mb-1">Subscriber</div>
-                        <div className={`font-semibold ${r.billingStatus === "N" ? "text-green-400" : "text-foreground"}`}>
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Subscriber</div>
+                        <div className={`font-semibold ${r.billingStatus === "N" ? "text-emerald-400" : "text-foreground"}`}>
                           {r.billingStatus === "N" ? "Not subscribed — prime target" : r.billingStatus === "Y" ? "Active subscriber" : "—"}
                         </div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground mb-1">Technology</div>
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Technology</div>
                         <div className="font-mono text-foreground">{r.techType ?? "—"} {r.chipSetType ? `/ ${r.chipSetType}` : ""}</div>
                       </div>
                       <div>
-                        <div className="text-muted-foreground mb-1">Max Speed</div>
-                        <div className="font-mono text-sky-400">{r.maxDownloadMbps ? `${r.maxDownloadMbps} Mbps` : "—"}</div>
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Max Speed</div>
+                        <div className="font-mono text-sky-400 tabular-nums">{r.maxDownloadMbps ? `${r.maxDownloadMbps} Mbps` : "—"}</div>
                       </div>
                       {r.competitorName && (
                         <div>
-                          <div className="text-muted-foreground mb-1">Competitor</div>
+                          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Competitor</div>
                           <div className="font-mono text-amber-400">{r.competitorName} {r.competitorSpeedMbps ? `${r.competitorSpeedMbps}M` : ""}</div>
                         </div>
                       )}
                       <div>
-                        <div className="text-muted-foreground mb-1">Catalog Date</div>
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Catalog Date</div>
                         <div className="font-mono text-foreground">{r.addressCatalogDate ?? "—"}</div>
                       </div>
                       {r.leadScore > 0 && (
                         <div>
-                          <div className="text-muted-foreground mb-1">Lead Score</div>
-                          <div className={`font-bold ${r.leadScore >= 85 ? "text-orange-400" : r.leadScore >= 60 ? "text-green-400" : "text-foreground"}`}>
+                          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Lead Score</div>
+                          <div className={`font-bold tabular-nums ${r.leadScore >= 85 ? "text-amber-400" : r.leadScore >= 60 ? "text-emerald-400" : "text-foreground"}`}>
                             {r.leadScore} / 100
                           </div>
                         </div>
                       )}
                     </div>
                     {r.notes && (
-                      <div className="mt-3 text-xs text-muted-foreground border-t border-border/50 pt-2">{r.notes}</div>
+                      <div className="mt-3 text-xs text-muted-foreground border-t border-border pt-2">{r.notes}</div>
                     )}
                   </div>
                 )}
@@ -768,8 +794,8 @@ export default function CityScanner() {
 
       {/* Empty state */}
       {done && results.length === 0 && (
-        <Card className="bg-card border-border">
-          <CardContent className="pt-8 pb-8 text-center">
+        <Card className="bg-card border-border rounded-xl">
+          <CardContent className="pt-10 pb-10 text-center">
             <CheckCircle className="w-8 h-8 text-muted-foreground mx-auto mb-3" />
             <p className="text-sm text-muted-foreground">Scan complete — no addresses returned results. Try a different city or check token status.</p>
           </CardContent>

@@ -187,119 +187,129 @@ function TenantForm({ initial, onSave, onCancel, saving }: {
   );
 }
 
-// ── Tenant Card ───────────────────────────────────────────────────────────────
+// ── Tenant Row ────────────────────────────────────────────────────────────────
 function TenantCard({ tenant, onEdit, onDelete }: {
   tenant: Tenant; onEdit: () => void; onDelete: () => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { toast } = useToast();
   const yourCut = (tenant.monthlyFee || 0) * (tenant.revenueSharePct || 0.2);
+  const active = tenant.status === "active";
 
   return (
-    <Card className="bg-card border-border hover:border-primary/20 transition-colors" data-testid={`card-tenant-${tenant.id}`}>
-      <CardContent className="py-4 px-5">
-        <div className="flex items-start gap-3">
-          {/* Brand color dot */}
-          <div className="w-10 h-10 rounded-xl flex-shrink-0 flex items-center justify-center mt-0.5"
-            style={{ background: tenant.brandColor + "22", border: `1px solid ${tenant.brandColor}44` }}>
-            <Building2 className="w-5 h-5" style={{ color: tenant.brandColor }} />
-          </div>
-
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-semibold text-sm text-foreground">{tenant.brandName}</span>
-              <span className="text-xs text-muted-foreground">· {tenant.companyName}</span>
-              <Badge className={`text-xs px-2 py-0 rounded-full border-0 ${PLAN_COLORS[tenant.plan] ?? "bg-secondary text-muted-foreground"}`}>
-                {tenant.plan}
-              </Badge>
-              {tenant.status !== "active" && (
-                <Badge className="text-xs px-2 py-0 rounded-full border-0 bg-red-500/15 text-red-400">{tenant.status}</Badge>
-              )}
+    <>
+      <tr className="border-t border-border hover:bg-secondary/40 transition-colors" data-testid={`card-tenant-${tenant.id}`}>
+        {/* Tenant */}
+        <td className="py-3 px-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center"
+              style={{ background: tenant.brandColor + "22", border: `1px solid ${tenant.brandColor}44` }}>
+              <Building2 className="w-4 h-4" style={{ color: tenant.brandColor }} />
             </div>
-
-            <div className="flex items-center gap-4 mt-1.5 flex-wrap">
-              <span className="text-xs text-muted-foreground">{tenant.ownerName} · {tenant.ownerEmail}</span>
-              <span className="text-xs text-primary font-mono">/{tenant.slug}</span>
-            </div>
-
-            {/* Stats row */}
-            <div className="flex items-center gap-4 mt-2">
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <Users className="w-3 h-3" /> {tenant.stats.reps} reps
-              </span>
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <Zap className="w-3 h-3" /> {tenant.stats.leads} leads
-              </span>
-              <span className="text-xs text-green-400 flex items-center gap-1">
-                <CheckCircle className="w-3 h-3" /> {tenant.stats.sold} sold
-              </span>
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <Globe className="w-3 h-3" /> {tenant.stats.territories} territories
-              </span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm text-foreground tracking-tight truncate">{tenant.brandName}</span>
+                <span className="text-[11px] text-primary font-mono">/{tenant.slug}</span>
+              </div>
+              <div className="text-xs text-muted-foreground truncate">{tenant.companyName} · {tenant.ownerEmail}</div>
             </div>
           </div>
+        </td>
 
-          {/* Revenue */}
-          <div className="text-right flex-shrink-0">
-            <div className="text-sm font-bold text-foreground">${(tenant.monthlyFee || 0).toFixed(0)}<span className="text-xs font-normal text-muted-foreground">/mo</span></div>
-            <div className="text-xs text-primary font-medium">Your cut: ${yourCut.toFixed(0)}</div>
+        {/* Plan */}
+        <td className="py-3 px-4">
+          <Badge className={`text-xs px-2 py-0 rounded-full border-0 ${PLAN_COLORS[tenant.plan] ?? "bg-secondary text-muted-foreground"}`}>
+            {tenant.plan}
+          </Badge>
+        </td>
+
+        {/* Status */}
+        <td className="py-3 px-4">
+          <span className={`inline-flex items-center gap-1.5 text-xs rounded-full px-2 py-0.5 ${active ? "bg-emerald-500/15 text-emerald-400" : "bg-rose-500/15 text-rose-400"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${active ? "bg-emerald-400" : "bg-rose-400"}`} />
+            {tenant.status}
+          </span>
+        </td>
+
+        {/* Activity */}
+        <td className="py-3 px-4">
+          <div className="flex items-center gap-3 text-xs text-muted-foreground tabular-nums">
+            <span className="flex items-center gap-1" title="Reps"><Users className="w-3 h-3" /> {tenant.stats.reps}</span>
+            <span className="flex items-center gap-1" title="Leads"><Zap className="w-3 h-3" /> {tenant.stats.leads}</span>
+            <span className="flex items-center gap-1 text-emerald-400" title="Sold"><CheckCircle className="w-3 h-3" /> {tenant.stats.sold}</span>
+            <span className="flex items-center gap-1" title="Territories"><Globe className="w-3 h-3" /> {tenant.stats.territories}</span>
           </div>
+        </td>
 
-          {/* Actions */}
-          <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+        {/* MRR */}
+        <td className="py-3 px-4 text-right whitespace-nowrap">
+          <div className="text-sm font-semibold text-foreground tabular-nums">${(tenant.monthlyFee || 0).toFixed(0)}<span className="text-xs font-normal text-muted-foreground">/mo</span></div>
+          <div className="text-xs text-primary tabular-nums">+${yourCut.toFixed(0)} yours</div>
+        </td>
+
+        {/* Actions */}
+        <td className="py-3 px-4">
+          <div className="flex items-center justify-end gap-1">
             <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+              aria-label={expanded ? "Collapse tenant details" : "Expand tenant details"}
               onClick={() => setExpanded(v => !v)}>
               {expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </Button>
             <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary"
+              aria-label="Edit tenant"
               onClick={onEdit} data-testid={`btn-edit-tenant-${tenant.id}`}>
               <Edit2 className="w-3.5 h-3.5" />
             </Button>
-            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400"
+            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-rose-400"
+              aria-label="Cancel tenant"
               onClick={onDelete} data-testid={`btn-delete-tenant-${tenant.id}`}>
               <Trash2 className="w-3.5 h-3.5" />
             </Button>
           </div>
-        </div>
+        </td>
+      </tr>
 
-        {/* Expanded detail */}
-        {expanded && (
-          <div className="mt-4 pt-4 border-t border-border/50 space-y-3">
-            <div className="grid grid-cols-2 gap-4 text-xs">
-              <div>
-                <div className="text-muted-foreground mb-0.5">Revenue Share</div>
-                <div className="text-foreground">{Math.round((tenant.revenueSharePct || 0.2) * 100)}%</div>
+      {/* Expanded detail */}
+      {expanded && (
+        <tr className="border-t border-border bg-secondary/20">
+          <td colSpan={6} className="px-4 py-4">
+            <div className="space-y-3 pl-12">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Revenue Share</div>
+                  <div className="text-foreground tabular-nums">{Math.round((tenant.revenueSharePct || 0.2) * 100)}%</div>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Max Reps</div>
+                  <div className="text-foreground tabular-nums">{tenant.maxReps}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Trial Ends</div>
+                  <div className="text-foreground">{tenant.trialEndsAt || "—"}</div>
+                </div>
+                <div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-0.5">Created</div>
+                  <div className="text-foreground">{new Date(tenant.createdAt).toLocaleDateString()}</div>
+                </div>
               </div>
-              <div>
-                <div className="text-muted-foreground mb-0.5">Max Reps</div>
-                <div className="text-foreground">{tenant.maxReps}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground mb-0.5">Trial Ends</div>
-                <div className="text-foreground">{tenant.trialEndsAt || "—"}</div>
-              </div>
-              <div>
-                <div className="text-muted-foreground mb-0.5">Created</div>
-                <div className="text-foreground">{new Date(tenant.createdAt).toLocaleDateString()}</div>
+              {tenant.notes && (
+                <div className="text-xs text-muted-foreground bg-secondary/50 rounded-lg p-2">{tenant.notes}</div>
+              )}
+              <div className="flex gap-4">
+                <button onClick={() => { navigator.clipboard.writeText(tenant.slug); toast({ title: "Slug copied" }); }}
+                  className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
+                  <Copy className="w-3 h-3" /> Copy slug
+                </button>
+                <button onClick={() => { navigator.clipboard.writeText(tenant.ownerEmail); toast({ title: "Email copied" }); }}
+                  className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
+                  <Copy className="w-3 h-3" /> Copy email
+                </button>
               </div>
             </div>
-            {tenant.notes && (
-              <div className="text-xs text-muted-foreground bg-secondary/50 rounded-lg p-2">{tenant.notes}</div>
-            )}
-            <div className="flex gap-2">
-              <button onClick={() => { navigator.clipboard.writeText(tenant.slug); toast({ title: "Slug copied" }); }}
-                className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1">
-                <Copy className="w-3 h-3" /> Copy slug
-              </button>
-              <button onClick={() => { navigator.clipboard.writeText(tenant.ownerEmail); toast({ title: "Email copied" }); }}
-                className="text-xs text-muted-foreground hover:text-primary flex items-center gap-1 ml-3">
-                <Copy className="w-3 h-3" /> Copy email
-              </button>
-            </div>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          </td>
+        </tr>
+      )}
+    </>
   );
 }
 
@@ -343,14 +353,21 @@ export default function SuperAdmin() {
     onSuccess: () => { toast({ title: "Tenant cancelled" }); qc.invalidateQueries({ queryKey: ["/api/sa/tenants"] }); setDeleteTenant(null); },
   });
 
+  const metrics = [
+    { label: "Active Tenants", value: revenue?.tenantCount ?? 0, icon: Building2, color: "text-muted-foreground" },
+    { label: "Total MRR", value: `$${(revenue?.totalMrr ?? 0).toFixed(0)}`, icon: TrendingUp, color: "text-emerald-400" },
+    { label: "Your MRR Cut", value: `$${(revenue?.yourMrr ?? 0).toFixed(0)}`, icon: DollarSign, color: "text-primary" },
+    { label: "Total Leads", value: tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-sky-400" },
+  ];
+
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-6 space-y-6 max-w-6xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <div className="flex items-center gap-2">
             <Shield className="w-5 h-5 text-primary" />
-            <h1 className="text-xl font-bold">SaaS Control Center</h1>
+            <h1 className="text-xl font-semibold tracking-tight">SaaS Control Center</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">Your proprietary platform · white-label to any Kinetic market</p>
         </div>
@@ -360,43 +377,43 @@ export default function SuperAdmin() {
         </Button>
       </div>
 
-      {/* Revenue KPI cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {[
-          { label: "Active Tenants", value: revenue?.tenantCount ?? 0, icon: Building2, color: "text-primary" },
-          { label: "Total MRR", value: `$${(revenue?.totalMrr ?? 0).toFixed(0)}`, icon: TrendingUp, color: "text-green-400" },
-          { label: "Your MRR Cut", value: `$${(revenue?.yourMrr ?? 0).toFixed(0)}`, icon: DollarSign, color: "text-amber-400" },
-          { label: "Total Leads", value: tenants.reduce((s, t) => s + (t.stats?.leads ?? 0), 0), icon: BarChart2, color: "text-blue-400" },
-        ].map(({ label, value, icon: Icon, color }) => (
-          <Card key={label} className="bg-card border-border">
-            <CardContent className="py-4 px-4">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-xs text-muted-foreground">{label}</span>
-                <Icon className={`w-4 h-4 ${color}`} />
+      {/* Metric strip */}
+      <div className="rounded-xl border border-border bg-card">
+        <div className="grid grid-cols-2 sm:grid-cols-4">
+          {metrics.map(({ label, value, icon: Icon, color }, i) => (
+            <div key={label} className={[
+              "p-4",
+              i % 2 === 1 ? "border-l border-border" : "",
+              i % 2 === 0 && i > 0 ? "sm:border-l sm:border-border" : "",
+              i >= 2 ? "border-t border-border sm:border-t-0" : "",
+            ].join(" ")}>
+              <div className="flex items-center justify-between mb-1.5">
+                <span className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</span>
+                <Icon className={`w-3.5 h-3.5 ${color}`} />
               </div>
-              <div className="text-xl font-bold text-foreground">{value}</div>
-            </CardContent>
-          </Card>
-        ))}
+              <div className="text-2xl font-semibold tracking-tight text-foreground tabular-nums">{value}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Plan breakdown */}
+      {/* Revenue by tenant — statement rows */}
       {revenue && revenue.summary.length > 0 && (
         <Card className="bg-card border-border">
           <CardHeader className="pb-2 pt-4 px-5">
-            <CardTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
               <DollarSign className="w-4 h-4 text-primary" /> Revenue by Tenant
             </CardTitle>
           </CardHeader>
           <CardContent className="px-5 pb-4">
-            <div className="space-y-2">
+            <div className="divide-y divide-border">
               {revenue.summary.map(t => (
-                <div key={t.tenantId} className="flex items-center gap-3 text-xs">
-                  <span className="flex-1 text-foreground font-medium">{t.brandName}</span>
+                <div key={t.tenantId} className="flex items-center gap-3 text-xs py-2">
+                  <span className="flex-1 min-w-0 truncate text-foreground font-medium">{t.brandName}</span>
                   <Badge className={`text-xs px-2 py-0 rounded-full border-0 ${PLAN_COLORS[t.plan] ?? ""}`}>{t.plan}</Badge>
-                  <span className="text-muted-foreground">${t.monthlyFee}/mo</span>
-                  <span className="text-primary font-medium">→ ${t.yourCut.toFixed(0)} yours</span>
-                  <span className="text-muted-foreground">{t.leads} leads · {t.sold} sold</span>
+                  <span className="text-muted-foreground tabular-nums w-16 text-right">${t.monthlyFee}/mo</span>
+                  <span className="text-primary font-medium tabular-nums w-24 text-right">→ ${t.yourCut.toFixed(0)} yours</span>
+                  <span className="hidden sm:inline text-muted-foreground tabular-nums w-28 text-right">{t.leads} leads · {t.sold} sold</span>
                 </div>
               ))}
             </div>
@@ -404,9 +421,9 @@ export default function SuperAdmin() {
         </Card>
       )}
 
-      {/* Tenant list */}
+      {/* Tenants table */}
       <div>
-        <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-3">Tenants</h2>
+        <h2 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-3">Tenants</h2>
         {isLoading ? (
           <div className="text-center py-12 text-muted-foreground text-sm">Loading...</div>
         ) : tenants.length === 0 ? (
@@ -417,12 +434,28 @@ export default function SuperAdmin() {
             </CardContent>
           </Card>
         ) : (
-          <div className="space-y-2">
-            {tenants.map(t => (
-              <TenantCard key={t.id} tenant={t}
-                onEdit={() => setEditTenant(t)}
-                onDelete={() => setDeleteTenant(t)} />
-            ))}
+          <div className="rounded-xl border border-border bg-card overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left">
+                <thead>
+                  <tr className="bg-secondary/40">
+                    <th className="py-2.5 px-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Tenant</th>
+                    <th className="py-2.5 px-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Plan</th>
+                    <th className="py-2.5 px-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Status</th>
+                    <th className="py-2.5 px-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Activity</th>
+                    <th className="py-2.5 px-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground text-right">MRR</th>
+                    <th className="py-2.5 px-4 text-[11px] font-medium uppercase tracking-wide text-muted-foreground text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tenants.map(t => (
+                    <TenantCard key={t.id} tenant={t}
+                      onEdit={() => setEditTenant(t)}
+                      onDelete={() => setDeleteTenant(t)} />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>

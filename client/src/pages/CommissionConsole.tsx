@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { usd, usdSigned } from "@/lib/money";
 import {
   Banknote, ChevronLeft, ChevronRight, Lock, CheckCircle2, AlertTriangle,
-  Download, TrendingUp, Users, Zap, X, FileText, Plus, ShieldCheck, Layers, DollarSign,
+  Download, Users, Zap, X, FileText, Plus, ShieldCheck, Layers, DollarSign,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,18 +42,24 @@ interface Overview {
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 
 const STATUS_STYLE: Record<string, string> = {
-  OPEN: "bg-amber-500/15 text-amber-400 border-amber-500/30",
-  REVIEW: "bg-blue-500/15 text-blue-400 border-blue-500/30",
-  FINALIZED: "bg-primary/15 text-primary border-primary/30",
-  PAID: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  NO_PLAN: "bg-red-500/15 text-red-400 border-red-500/30",
+  OPEN: "bg-amber-500/15 text-amber-400",
+  REVIEW: "bg-sky-500/15 text-sky-400",
+  FINALIZED: "bg-primary/15 text-primary",
+  PAID: "bg-emerald-500/15 text-emerald-400",
+  NO_PLAN: "bg-rose-500/15 text-rose-400",
+};
+const STATUS_DOT: Record<string, string> = {
+  OPEN: "bg-amber-400",
+  REVIEW: "bg-sky-400",
+  FINALIZED: "bg-primary",
+  PAID: "bg-emerald-400",
+  NO_PLAN: "bg-rose-400",
 };
 
 function StatusChip({ status }: { status: string }) {
   return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-bold border px-1.5 py-0.5 rounded-full whitespace-nowrap ${STATUS_STYLE[status] || "bg-secondary text-muted-foreground border-border"}`}>
-      {status === "FINALIZED" && <Lock className="w-2.5 h-2.5" />}
-      {status === "PAID" && <CheckCircle2 className="w-2.5 h-2.5" />}
+    <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${STATUS_STYLE[status] || "bg-secondary text-muted-foreground"}`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || "bg-muted-foreground"}`} />
       {status === "NO_PLAN" ? "no plan" : status.toLowerCase()}
     </span>
   );
@@ -105,11 +111,11 @@ export default function CommissionConsole() {
       {/* Header + week nav */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="text-xl font-bold flex items-center gap-2">
+          <h1 className="text-xl font-semibold tracking-tight flex items-center gap-2">
             <Banknote className="w-5 h-5 text-primary" /> Commission Console
           </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Weekly production, projected payroll, and the Sunday closeout
+          <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium mt-1">
+            Weekly closeout · projected payroll · Sunday finalize
           </p>
         </div>
         <div className="flex items-center gap-1.5" data-testid="week-nav">
@@ -135,7 +141,7 @@ export default function CommissionConsole() {
       </div>
 
       {isError && (
-        <div className="rounded-2xl bg-card border border-red-500/30 p-6 text-center text-sm text-muted-foreground">
+        <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center text-sm text-muted-foreground">
           Couldn't load the week. Retry in a moment.
         </div>
       )}
@@ -143,32 +149,48 @@ export default function CommissionConsole() {
 
       {ov && (
         <>
-          {/* Payroll summary — the ONE total dominates; Projected/Finalized/Paid
-              are an unambiguous breakdown of it, never overlapping figures. */}
-          <div className="grid gap-2 sm:gap-3 lg:grid-cols-3">
-            <div className="rounded-2xl bg-gradient-to-br from-primary/15 to-primary/5 border border-primary/25 p-4 lg:col-span-1" data-testid="tile-total">
-              <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-primary font-semibold">
-                <TrendingUp className="w-3.5 h-3.5" /> Total payroll this week
-              </div>
-              <div className="mt-1.5 text-3xl font-bold tabular-nums text-foreground">{usd(totalPayroll)}</div>
-              <div className="text-[11px] text-muted-foreground mt-0.5">
-                {ov.totals.qualifiedSales} qualified sale{ov.totals.qualifiedSales === 1 ? "" : "s"} · {ov.totals.repsWithSales} rep{ov.totals.repsWithSales === 1 ? "" : "s"} producing
-              </div>
-              {ov.totals.exposureCents > 0 && (
-                <div className="mt-2.5 flex items-start gap-1.5 text-[11px] text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-2 py-1.5">
-                  <Zap className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                  <span>Could rise <strong className="tabular-nums">+{usd(ov.totals.exposureCents)}</strong> if {nearTier.length} rep{nearTier.length === 1 ? "" : "s"} hit{nearTier.length === 1 ? "s" : ""} the next tier by Sunday</span>
+          {/* Payroll totals — a hairline-divided metric strip. The ONE total
+              dominates; Projected / Finalized / Paid are its unambiguous
+              breakdown, never overlapping figures. */}
+          <div className="rounded-xl bg-card border border-border overflow-hidden">
+            <div className="flex flex-col sm:flex-row divide-y sm:divide-y-0 sm:divide-x divide-border">
+              <div className="flex-1 p-4 sm:pr-6" data-testid="tile-total">
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-primary font-semibold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" /> Total payroll
                 </div>
-              )}
+                <div className="mt-1.5 text-3xl font-semibold tracking-tight tabular-nums text-foreground">{usd(totalPayroll)}</div>
+                <div className="text-[11px] text-muted-foreground mt-1">
+                  {ov.totals.qualifiedSales} qualified sale{ov.totals.qualifiedSales === 1 ? "" : "s"} · {ov.totals.repsWithSales} rep{ov.totals.repsWithSales === 1 ? "" : "s"} producing
+                </div>
+              </div>
+              <div className="flex-1 p-4" data-testid="tile-projected">
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400" /> Still projected
+                </div>
+                <div className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{usd(ov.totals.projectedPayrollCents)}</div>
+                <div className="text-[11px] text-muted-foreground mt-1">{openCount > 0 ? `${openCount} open week${openCount === 1 ? "" : "s"}` : "All settled"}</div>
+              </div>
+              <div className="flex-1 p-4" data-testid="tile-finalized">
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" /> Finalized
+                </div>
+                <div className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{usd(ov.totals.finalizedPayrollCents)}</div>
+                <div className="text-[11px] text-muted-foreground mt-1">{finalizedCount > 0 ? `${finalizedCount} locked` : "None yet"}</div>
+              </div>
+              <div className="flex-1 p-4" data-testid="tile-paid">
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Paid
+                </div>
+                <div className="mt-1.5 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{usd(ov.totals.paidPayrollCents)}</div>
+                <div className="text-[11px] text-muted-foreground mt-1">{ov.totals.paidPayrollCents > 0 ? "Money moved" : "Awaiting payout"}</div>
+              </div>
             </div>
-            <div className="grid grid-cols-3 gap-2 sm:gap-3 lg:col-span-2">
-              <SummaryTile icon={<TrendingUp className="w-4 h-4" />} label="Still projected" value={usd(ov.totals.projectedPayrollCents)}
-                sub={openCount > 0 ? `${openCount} open week${openCount === 1 ? "" : "s"}` : "All settled"} tone="amber" testid="tile-projected" />
-              <SummaryTile icon={<Lock className="w-4 h-4" />} label="Finalized" value={usd(ov.totals.finalizedPayrollCents)}
-                sub={finalizedCount > 0 ? `${finalizedCount} locked` : "None yet"} tone="teal" testid="tile-finalized" />
-              <SummaryTile icon={<CheckCircle2 className="w-4 h-4" />} label="Paid" value={usd(ov.totals.paidPayrollCents)}
-                sub={ov.totals.paidPayrollCents > 0 ? "Money moved" : "Awaiting payout"} tone="emerald" testid="tile-paid" />
-            </div>
+            {ov.totals.exposureCents > 0 && (
+              <div className="border-t border-border px-4 py-2.5 flex items-start gap-1.5 text-[11px] text-amber-400 bg-amber-500/[0.06]">
+                <Zap className="w-3.5 h-3.5 mt-px flex-shrink-0" />
+                <span>Could rise <strong className="tabular-nums">+{usd(ov.totals.exposureCents)}</strong> if {nearTier.length} rep{nearTier.length === 1 ? "" : "s"} hit{nearTier.length === 1 ? "s" : ""} the next tier by Sunday</span>
+              </div>
+            )}
           </div>
 
           {/* Needs review — actionable, never decorative */}
@@ -254,14 +276,14 @@ export default function CommissionConsole() {
               <div className="hidden sm:block overflow-x-auto">
                 <table className="w-full text-sm min-w-[640px]">
                   <thead>
-                    <tr className="text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
-                      <th className="text-left font-semibold px-4 py-2">Rep</th>
-                      <th className="text-right font-semibold px-2 py-2">Sales</th>
-                      <th className="text-left font-semibold px-2 py-2">Tier · rate</th>
-                      <th className="text-left font-semibold px-2 py-2">Next tier</th>
-                      <th className="text-right font-semibold px-2 py-2">Adj</th>
-                      <th className="text-right font-semibold px-2 py-2">Commission</th>
-                      <th className="text-right font-semibold px-4 py-2">Status</th>
+                    <tr className="text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border bg-secondary/30">
+                      <th className="text-left font-semibold px-4 py-2.5">Rep</th>
+                      <th className="text-right font-semibold px-2 py-2.5">Sales</th>
+                      <th className="text-left font-semibold px-2 py-2.5">Tier · rate</th>
+                      <th className="text-left font-semibold px-2 py-2.5">Next tier</th>
+                      <th className="text-right font-semibold px-2 py-2.5">Adj</th>
+                      <th className="text-right font-semibold px-2 py-2.5">Commission</th>
+                      <th className="text-right font-semibold px-4 py-2.5">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -400,28 +422,6 @@ function downloadCsv(weekRef: string) {
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     });
-}
-
-function SummaryTile({ icon, label, value, sub, tone, testid }: {
-  icon: React.ReactNode; label: string; value: string; sub: string;
-  tone: "primary" | "amber" | "teal" | "emerald"; testid: string;
-}) {
-  const tones: Record<string, string> = {
-    primary: "bg-primary/10 border-primary/20 text-primary",
-    amber: "bg-amber-500/10 border-amber-500/20 text-amber-400",
-    teal: "bg-primary/10 border-primary/20 text-primary",
-    emerald: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
-  };
-  return (
-    <div className="rounded-2xl bg-card border border-border p-3.5" data-testid={testid}>
-      <div className="flex items-center gap-2">
-        <span className={`w-7 h-7 rounded-lg border flex items-center justify-center ${tones[tone]}`}>{icon}</span>
-        <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold leading-tight">{label}</span>
-      </div>
-      <div className="mt-2 text-xl font-bold tabular-nums text-foreground">{value}</div>
-      <div className="text-[11px] text-muted-foreground mt-0.5 leading-tight">{sub}</div>
-    </div>
-  );
 }
 
 // ── Drill-down: explain every dollar ──────────────────────────────────────────
