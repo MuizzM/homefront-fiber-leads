@@ -19,6 +19,7 @@ import { UpdatePrompt } from "@/components/UpdatePrompt";
 // page and any route the user visits are fetched on demand.
 const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Today = lazy(() => import("@/pages/Today"));
+const PropertyDetail = lazy(() => import("@/pages/PropertyDetail"));
 const MapView = lazy(() => import("@/pages/MapView"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Scanners = lazy(() => import("@/pages/Scanners"));
@@ -114,6 +115,7 @@ function AppRoutes() {
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
           <Route path="/">{role === "rep" ? <Redirect to="/today" /> : <Dashboard />}</Route>
           <Route path="/today" component={Today} />
+          <Route path="/lead/:id" component={PropertyDetail} />
           <Route path="/map" component={MapView} />
           <Route path="/leads" component={Leads} />
           <Route path="/leaderboard" component={Leaderboard} />
