@@ -24,12 +24,24 @@ let manualToken: string | null = null; // set via POST /api/set-token
 let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
 let lastRefreshAttempt: number = 0;
 let refreshFailCount: number = 0;
+let refreshInFlight: Promise<string> | null = null; // mutex: coalesce concurrent refreshes
+
+// Decode a JWT's `exp` claim → ms epoch (minus a 60s safety margin), so token life
+// is DERIVED, not a hard-coded 28min guess. Returns null if unparseable.
+function jwtExpiryMs(token: string): number | null {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return null;
+    const json = JSON.parse(Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
+    return typeof json.exp === "number" ? json.exp * 1000 - 60_000 : null;
+  } catch { return null; }
+}
 
 /** Called from routes.ts when user pastes a JWT from their browser */
 export function setManualToken(token: string) {
   manualToken = token;
   cachedToken = token;
-  tokenExpiry = Date.now() + 28 * 60 * 1000; // assume 28 min life
+  tokenExpiry = jwtExpiryMs(token) ?? Date.now() + 28 * 60 * 1000; // real exp, else 28min fallback
   refreshFailCount = 0;
   // Start auto-refresh keepalive whenever a manual token is set
   startTokenKeepalive();
@@ -68,31 +80,38 @@ function startTokenKeepalive() {
 }
 
 export async function refreshTokenFromApi(): Promise<string> {
-  const kfsUrl = process.env.KFS_AUTH_URL ?? "";
-  const kfsBasic = process.env.KFS_AUTH_BASIC ?? "";
-  if (!kfsUrl || !kfsBasic) throw new Error("KFS_AUTH_URL or KFS_AUTH_BASIC not configured");
+  // MUTEX: a mid-batch keepalive tick, a 401-retry, a manual paste, and the
+  // scheduler's block-driven refresh can all fire at once. Without coalescing they
+  // race and clobber cachedToken; share ONE in-flight refresh so callers all await it.
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    const kfsUrl = process.env.KFS_AUTH_URL ?? "";
+    const kfsBasic = process.env.KFS_AUTH_BASIC ?? "";
+    if (!kfsUrl || !kfsBasic) throw new Error("KFS_AUTH_URL or KFS_AUTH_BASIC not configured");
 
-  const res = await proxyFetch(kfsUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": kfsBasic,
-      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-      "Accept": "application/json",
-    },
-    body: JSON.stringify({ brazeDeviceId: "" }),
-    signal: AbortSignal.timeout(5000), // 5s — faster slot recycling
-  });
+    const res = await proxyFetch(kfsUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": kfsBasic,
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+        "Accept": "application/json",
+      },
+      body: JSON.stringify({ brazeDeviceId: "" }),
+      signal: AbortSignal.timeout(5000), // 5s — faster slot recycling
+    });
 
-  if (!res.ok) throw new Error(`Auto-auth blocked (${res.status})`);
-  const data = await res.json();
-  if (!data.token) throw new Error("No token in response");
+    if (!res.ok) throw new Error(`Auto-auth blocked (${res.status})`);
+    const data = await res.json();
+    if (!data.token) throw new Error("No token in response");
 
-  cachedToken = data.token;
-  // Manual token is now refreshed — update expiry
-  manualToken = data.token;
-  tokenExpiry = Date.now() + 28 * 60 * 1000;
-  return cachedToken!;
+    cachedToken = data.token;
+    manualToken = data.token;                                  // manual token refreshed
+    tokenExpiry = jwtExpiryMs(data.token) ?? Date.now() + 28 * 60 * 1000; // real exp, else fallback
+    return cachedToken!;
+  })();
+  try { return await refreshInFlight; }
+  finally { refreshInFlight = null; }
 }
 
 /** Exported for use by CNS scanner and routes */
@@ -242,6 +261,7 @@ export interface ScanResult {
   // Meta
   confidence: "HIGH" | "MEDIUM" | "LOW";
   apiSource: "kinetic_live" | "knowledge_base" | "failed";
+  blocked: boolean; // true ONLY for a 403 throttle — a typed back-pressure signal (NOT a no-service); consumers must never regex `notes` to detect this
   notes: string;
   rawResponse?: any;
 
@@ -296,7 +316,7 @@ export async function scanAddress(
     competitorName: null, competitorSpeedMbps: null, competitorTech: null, inCompetitorArea: false,
     addressCatalogDate: null, householdSegmentType: null, billingStatus: null,
     exchangeId: null, dfAddressId: null, accessId: null,
-    confidence: "LOW", apiSource: "failed", notes: "",
+    confidence: "LOW", apiSource: "failed", blocked: false, notes: "",
     leadTag: null, leadScore: 0,
   };
 
@@ -324,13 +344,15 @@ export async function scanAddress(
       signal: AbortSignal.timeout(5000), // 7s per address — frees slot quickly on slow/blocked requests
     });
 
-    // 403 = the Decodo egress IP is WAF/geo-BLOCKED (or a bot challenge). Refreshing
-    // the token can't fix a blocked IP and the refresh call is ALSO proxied, so it
-    // just burns two more blocked requests — fail fast instead (a non-answer, never
-    // a no-service). The caller should back off / rotate the proxy IP.
+    // 403 = Kinetic's refilling token-bucket pushing back (VERIFIED live: NOT a
+    // WAF/geo IP block). It is a typed back-pressure signal, never a no-service.
+    // We do NOT rotate the IP (same account from many IPs = permanent token ban) and
+    // do NOT blindly refresh here; the scheduler's congestion controller owns the
+    // response — shrink the window, and refresh the session only when at the floor.
     if (!res.ok && res.status === 403) {
-      base.notes = "Proxy egress blocked (403) — back off / rotate IP";
+      base.notes = "Kinetic throttle (403) — rate-limited";
       base.apiSource = "failed";
+      base.blocked = true;
       return base;
     }
     // On 401 — token expired mid-scan. Force refresh and retry EXACTLY once.

@@ -184,11 +184,14 @@ export class KineticProvider implements AvailabilityProvider {
   }
 }
 
-// Map a failed scanner result note to a coarse failure kind for backoff policy.
+// Map a failed scanner result to a coarse failure kind for backoff policy. A 403
+// throttle is read from the TYPED `blocked` field (not a note substring) and is
+// rate-limiting, not an auth problem — so radar backs off rather than churning tokens.
 function classifyFailure(result: any): ProviderObservation["failureKind"] {
+  if (result?.blocked) return "rate_limited";        // typed 403 token-bucket throttle
   const note = String(result?.notes ?? "").toLowerCase();
   if (note.includes("429")) return "rate_limited";
-  if (note.includes("401") || note.includes("403") || note.includes("token")) return "auth";
+  if (note.includes("401") || note.includes("token")) return "auth";
   if (note.includes("timeout") || note.includes("timed out")) return "timeout";
   if (note.includes("challenge") || note.includes("captcha") || note.includes("cloudflare")) return "challenge";
   return "server";

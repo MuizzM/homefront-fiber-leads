@@ -1,24 +1,25 @@
 /**
- * Nightly CNS Cron + Coming Soon Auto-Promote
+ * Nightly scan jobs — now driven by the ONE closed-loop scheduler.
  *
- * Runs two background jobs at server boot:
- *
- * 1. NIGHTLY CNS SCAN (2 AM EST)
- *    - Scans the top 50,000 CNS numbers for the MS ENV (covers NC/SC/IN/MI)
- *    - Any NEW FIBER hit with billingStatus=N → instant email alert + create lead
- *    - Persists last scanned CNS in DB via settings table
- *
- * 2. COMING SOON AUTO-PROMOTE (2 AM EST, after CNS scan)
- *    - Re-checks all addresses in coming_soon_addresses table
- *    - If householdSegmentType changed to NEW FIBER → promote to lead + email
+ * The three overnight jobs (CNS frontier sweep, Coming-Soon watchlist recheck, pool
+ * re-scan) used to be three self-pacing loops with their own hand-tuned sleeps and
+ * consecutive-fail circuit breakers, all hitting the SAME Kinetic token-bucket at
+ * different aggressiveness — which is what caused the block storms. They are now
+ * three WorkSources submitted to ONE KineticScheduler, so their COMBINED probe rate
+ * is governed by a single AIMD congestion window. No pacing constant lives here.
  */
 
 import { mailTransport, mailFrom, adminInbox } from "./mail";
 import { storage } from "./storage";
-import { getAuthToken, scanAddress } from "./scanner";
-import { KINETIC_ENVS, probeKineticDfId, type CnsProbe } from "./cns-scanner";
-
-const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+import { KINETIC_ENVS } from "./cns-scanner";
+import { KineticScheduler, type ProbeTask } from "./kineticScheduler";
+import { StreamSource, arrayPuller, cnsRangePuller, dfTasksFromRows, addrTasksFromTargets } from "./scanSources";
+import type { ProbeOutcome, ProbeKey } from "./kineticProbe";
+import { classifyAvailabilityTransition, snapshotFromTarget } from "@shared/fiberDetect";
+import {
+  buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
+  type ExclusionReason,
+} from "@shared/leadQualify";
 
 // Address-match guard: only promote if Kinetic's answer is for the SAME address we
 // watched (zip match, or normalized street match) — a re-keyed/recycled dfAddressId
@@ -28,11 +29,6 @@ function sameWatchedAddress(cs: any, r: { address?: string | null; zip?: string 
   const n = (s: any) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   return !!r.address && n(r.address) === n(cs.address);
 }
-import { classifyAvailabilityTransition, snapshotFromTarget } from "@shared/fiberDetect";
-import {
-  buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
-  type ExclusionReason,
-} from "@shared/leadQualify";
 
 // ── Email (shared transport — see server/mail.ts; Resend/SMTP via env) ──
 async function sendAlertEmail(subject: string, html: string) {
@@ -75,8 +71,7 @@ function comingSoonPromotedHtml(count: number, addresses: string[]): string {
   </div>`;
 }
 
-// ── CNS Nightly Scan ──────────────────────────────────────────────────────────
-// Cron state (in-memory, not persisted)
+// ── Cron state (in-memory, not persisted) ─────────────────────────────────────
 export interface CronStatus {
   lastRunAt: string | null;
   lastRunResult: string | null;
@@ -87,150 +82,80 @@ export interface CronStatus {
 }
 
 const cronStatus: CronStatus = {
-  lastRunAt: null,
-  lastRunResult: null,
-  nextRunAt: null,
-  isRunning: false,
-  totalNewFiberFound: 0,
-  totalRunCount: 0,
+  lastRunAt: null, lastRunResult: null, nextRunAt: null,
+  isRunning: false, totalNewFiberFound: 0, totalRunCount: 0,
 };
 
-export function getCronStatus(): CronStatus {
-  return { ...cronStatus };
+export function getCronStatus(): CronStatus { return { ...cronStatus }; }
+
+// The scheduler currently draining the nightly/manual batch (for GET engine-status).
+let activeScheduler: KineticScheduler | null = null;
+export function getEngineStatus(): any {
+  return activeScheduler ? { ...activeScheduler.snapshot(), cronRunning: cronStatus.isRunning } : { running: false, cronRunning: cronStatus.isRunning };
 }
 
-
-/**
- * Run the nightly CNS scan for MS ENV (NC/SC/IN/MI)
- * Scans from (upperLimit - 50000) to upperLimit to catch newest addresses
- */
-async function runNightlyCnsScan(): Promise<void> {
-  console.log("[cron] Starting nightly CNS scan...");
-  cronStatus.isRunning = true;
-  cronStatus.lastRunAt = new Date().toISOString();
-
+// ── CNS frontier sweep, as a WorkSource ───────────────────────────────────────
+// Advancing-frontier sweep of df-ids: re-check a recent overlap (catch flips) then
+// probe NEW territory just above the frontier. Every hit harvests into the pool; a
+// NEW FIBER + billing-N hit becomes a lead. Records hit/miss into the negative cache.
+function buildCnsFrontierSource(): { source: StreamSource; finalize: () => void } {
   const ENV = process.env.NIGHTLY_SCAN_ENV || "MS";
   const envInfo = KINETIC_ENVS.find(e => e.code === ENV);
   const SCAN_COUNT = Number(process.env.NIGHTLY_SCAN_COUNT ?? 50_000);
-  // ADVANCING FRONTIER: sweep a window that STRADDLES the observed frontier, not a
-  // frozen constant. Re-check a recent overlap (catch flips) then probe NEW
-  // territory just above the frontier (where Kinetic numbers its newest builds).
-  // The frontier grows itself — harvest-as-you-scan records every hit into the
-  // negative cache, so getMaxHitCns advances night over night. Recent misses are
-  // skipped so we don't re-buy unassigned numbers.
   const observedMax = storage.getMaxHitCns(ENV) ?? 0;
   const frontier = Math.max(envInfo?.upperLimit ?? 0, observedMax);
   const overlap = Math.min(Math.floor(SCAN_COUNT / 2), 10_000);
   const startCns = Math.max(1, frontier - overlap);
   const endCns = frontier + (SCAN_COUNT - overlap);
-  const recentMiss = new Set(storage.getProbedCns(ENV, 30));  // skip recently-probed unassigned numbers
+  const recentMiss = new Set(storage.getProbedCns(ENV, 30));
 
-  const newFiberAddresses: string[] = [];
+  const newFiber: string[] = [];
   const probeOutcomes: Array<{ cns: number; result: "hit" | "miss" }> = [];
-  const flushProbes = () => { if (probeOutcomes.length) { try { storage.recordCnsProbes(ENV, probeOutcomes.splice(0)); } catch { /* best-effort */ } } };
-  let token: string;
+  const flush = () => { if (probeOutcomes.length) { try { storage.recordCnsProbes(ENV, probeOutcomes.splice(0)); } catch { /* best-effort */ } } };
 
-  try {
-    token = await getAuthToken();
-  } catch (err: any) {
-    cronStatus.isRunning = false;
-    cronStatus.lastRunResult = `Failed to get auth token: ${err.message}`;
-    console.warn("[cron] Cannot start — no auth token:", err.message);
-    return;
-  }
-  console.log(`[cron] Nightly sweep ENV=${ENV} window ${startCns}–${endCns} (frontier ${frontier})`);
-
-  let consecutiveErrors = 0;
-
-  for (let cns = startCns; cns <= endCns; cns++) {
-    // Skip a control number we conclusively probed in the last 30 days if it was a
-    // MISS still below the frontier (re-checking a known hit for flips is fine, so
-    // only skip numbers ABOVE the frontier that recently missed = still unassigned).
-    if (cns > frontier && recentMiss.has(cns)) continue;
-
-    // Re-fetch token every ~1000 checks
-    if (cns % 1000 === 0) {
-      try { token = await getAuthToken(); consecutiveErrors = 0; } catch { /* keep existing */ }
-    }
-
-    const probe = await probeKineticDfId(`${ENV}${String(cns).padStart(7, "0")}`, token);
-
-    if (probe.kind === "fail") {
-      if (probe.reason === "token_expired") { console.warn("[cron] Token expired mid-scan — stopping for tonight"); break; }
-      consecutiveErrors++;
-      if (consecutiveErrors >= 20) { console.warn("[cron] Too many consecutive errors — aborting scan"); break; }
-      await new Promise(r => setTimeout(r, 500));
-      continue;
-    }
-    consecutiveErrors = 0;
-    probeOutcomes.push({ cns, result: probe.kind === "hit" ? "hit" : "miss" });
-    if (probeOutcomes.length >= 500) flushProbes();
-
-    if (probe.kind === "hit") {
-      const result = probe.result;
-      // HARVEST-AS-YOU-SCAN: persist EVERY discovery into the shared pool (Kinetic
-      // gave us the full address + coords + df id for free). Zero Mapbox.
+  const handler = (task: ProbeTask, o: ProbeOutcome) => {
+    const cns = task.ctx?.cns as number;
+    if (o.kind === "no_service") { probeOutcomes.push({ cns, result: "miss" }); if (probeOutcomes.length >= 500) flush(); return; }
+    if (o.kind !== "answered") return; // inconclusive → don't record; re-probe another sweep
+    const r = o.result;
+    probeOutcomes.push({ cns, result: "hit" }); if (probeOutcomes.length >= 500) flush();
+    try {
+      storage.upsertScanTargets([{
+        address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng,
+        source: "kinetic-cns", tenantId: null, dfAddressId: r.dfAddressId, scannedNow: true,
+        fiberStatus: r.isNewFiber ? "new_fiber" : "other", isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
+      }]);
+    } catch { /* pool best-effort */ }
+    if (r.isNewFiber && r.billingStatus === "N") {
+      const full = `${r.address}, ${r.city}, ${r.state} ${r.zip}`;
       try {
-        storage.upsertScanTargets([{
-          address: result.address, city: result.city, state: result.state, zip: result.zip,
-          lat: result.lat, lng: result.lng, source: "kinetic-cns", tenantId: null,
-          dfAddressId: result.dfAddressId, scannedNow: true,
-          fiberStatus: result.isNewFiber ? "new_fiber" : "other",
-          isNewFiber: result.isNewFiber, billingStatus: result.billingStatus,
-        }]);
-      } catch { /* pool write is best-effort */ }
-
-      if (result.isNewFiber && result.billingStatus === "N") {
-        // HOT LEAD — no existing subscriber. Deduped by address (upsert), so the
-        // fixed-overlap re-check never spawns a duplicate lead per night.
-        const fullAddress = `${result.address}, ${result.city}, ${result.state} ${result.zip}`;
-        try {
-          const up = storage.upsertLeadByAddress({
-            address: result.address, city: result.city, state: result.state, zip: result.zip,
-            lat: result.lat ?? undefined, lng: result.lng ?? undefined,
-            fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
-            billingStatus: result.billingStatus, householdSegmentType: result.householdSegmentType,
-            techType: result.techType, speedTier: result.speedTier, maxDownloadMbps: result.maxDownloadMbps,
-            competitorName: result.competitorName, addressCatalogDate: result.addressCatalogDate,
-            dfAddressId: result.dfAddressId, leadStatus: "prospect",
-            deploymentNotes: `Nightly CNS scan: ENV=${ENV} CNS=${cns}. Hot Lead — NEW FIBER, no subscriber.`,
-          } as any);
-          if (up?.created) {
-            newFiberAddresses.push(fullAddress);
-            cronStatus.totalNewFiberFound++;
-            if (newFiberAddresses.length === 1) {
-              sendAlertEmail("🔥 NEW FIBER Lead Found — HomeFront Fiber Nightly Scan", newFiberAlertHtml(1, newFiberAddresses))
-                .catch(err => console.warn("[cron] Email alert failed:", err.message));
-            }
-          }
-        } catch { /* dedup/constraint — skip */ }
-      }
+        const up = storage.upsertLeadByAddress({
+          address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat ?? undefined, lng: r.lng ?? undefined,
+          fiberStatus: "new_fiber", isNewFiber: true, isTenured: false, billingStatus: r.billingStatus,
+          householdSegmentType: r.householdSegmentType, techType: r.techType, speedTier: r.speedTier,
+          maxDownloadMbps: r.maxDownloadMbps, competitorName: r.competitorName, addressCatalogDate: r.addressCatalogDate,
+          dfAddressId: r.dfAddressId, leadStatus: "prospect", deploymentNotes: `Nightly CNS sweep ENV=${ENV}. Hot Lead — NEW FIBER, no subscriber.`,
+        } as any);
+        if (up?.created) {
+          newFiber.push(full); cronStatus.totalNewFiberFound++;
+          if (newFiber.length === 1) sendAlertEmail("🔥 NEW FIBER Lead Found — HomeFront Fiber Nightly Scan", newFiberAlertHtml(1, newFiber)).catch(() => {});
+        }
+      } catch { /* dedup — skip */ }
     }
+  };
 
-    await new Promise(r => setTimeout(r, 80)); // ~750/min — respectful
-  }
-  flushProbes();
-
-  // Summary email if we found multiple
-  if (newFiberAddresses.length > 1) {
-    sendAlertEmail(
-      `🔥 ${newFiberAddresses.length} NEW FIBER Leads — HomeFront Fiber Nightly Scan`,
-      newFiberAlertHtml(newFiberAddresses.length, newFiberAddresses)
-    ).catch(err => console.warn("[cron] Summary email failed:", err.message));
-  }
-
-  cronStatus.isRunning = false;
-  cronStatus.lastRunResult = newFiberAddresses.length > 0
-    ? `Found ${newFiberAddresses.length} new fiber leads`
-    : "No new fiber leads found tonight";
-  cronStatus.totalRunCount++;
-  console.log(`[cron] Nightly scan complete: ${cronStatus.lastRunResult}`);
+  console.log(`[cron] CNS frontier source ENV=${ENV} window ${startCns}–${endCns} (frontier ${frontier})`);
+  const source = new StreamSource("cns-frontier", "cns", cnsRangePuller(ENV, startCns, endCns, recentMiss, frontier), handler, 0, () => Math.max(0, endCns - startCns));
+  const finalize = () => {
+    flush();
+    if (newFiber.length > 1) sendAlertEmail(`🔥 ${newFiber.length} NEW FIBER Leads — HomeFront Fiber Nightly Scan`, newFiberAlertHtml(newFiber.length, newFiber)).catch(() => {});
+  };
+  return { source, finalize };
 }
 
 // ── Coming Soon Auto-Promote ──────────────────────────────────────────────────
 // Promote a watchlist address to a lead the moment its fiber goes live, dedup by
-// address, mark the watchlist row converted, and alert. Returns true if a NEW lead
-// was created (so we only alert on genuine, first-time go-lives).
+// address, mark the watchlist row converted, and alert only on a genuine first go-live.
 function promoteComingSoon(cs: any, billing: string | null, segment: string | null, promoted: string[]): void {
   const fullAddress = `${cs.address}, ${cs.city}, ${cs.state} ${cs.zip}`;
   try {
@@ -251,93 +176,166 @@ function promoteComingSoon(cs: any, billing: string | null, segment: string | nu
   } catch { /* dedup/constraint — skip */ }
 }
 
-export interface ComingSoonRecheckDeps {
-  getToken?: () => Promise<string>;
-  probe?: (dfId: string, token: string) => Promise<CnsProbe>;
-  scan?: (address: string, city: string, state: string, zip: string) => Promise<any>;
-  perNightBudget?: number; // hard cap on proxy probes per night
-  paceMs?: number;         // inter-probe pace (default 120)
-  blockPaceMs?: number;    // back-off pause on a 403 block (default 800)
+// The watchlist recheck, as a WorkSource. A non-answer NEVER demotes; only a NEW
+// FIBER + billing-N hit for the SAME watched address promotes (exactly once).
+function buildWatchlistSource(rows: any[], promoted: string[]): StreamSource {
+  const handler = (task: ProbeTask, o: ProbeOutcome) => {
+    const cs = task.ctx;
+    if (o.kind === "inconclusive") return; // non-answer: never demote, recheck next night
+    try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
+    if (o.kind === "answered" && o.result.isNewFiber && o.result.billingStatus === "N" && sameWatchedAddress(cs, o.result)) {
+      promoteComingSoon(cs, o.result.billingStatus, o.result.householdSegmentType, promoted);
+    }
+  };
+  const tasks = dfTasksFromRows(rows);
+  return new StreamSource("watchlist", "watchlist", arrayPuller(tasks), handler, 3, () => tasks.length);
 }
 
-export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Promise<void> {
-  console.log("[cron] Rechecking Coming Soon watchlist…");
-  const getToken = deps.getToken ?? getAuthToken;
-  const probe = deps.probe ?? probeKineticDfId;
-  const scan = deps.scan ?? scanAddress;
-  const BUDGET = Math.max(1, deps.perNightBudget ?? 20_000);
-  const PACE = deps.paceMs ?? 120, BLOCK_PACE = deps.blockPaceMs ?? 800;
-  const MAX_FAIL = 20; // abort the night after this many CONSECUTIVE non-answers
-
-  // Fast lane: addresses that carry Kinetic's dfAddressId → recheck by EXACT key.
-  let watch: any[] = [], legacy: any[] = [];
-  try { watch = storage.getComingSoonWithDfId(BUDGET); } catch { /* pre-migration */ }
-  try { legacy = storage.getComingSoonAddresses().filter((c: any) => !c.dfAddressId && !c.fiberAvailable).slice(0, Math.max(0, BUDGET - watch.length)); } catch { /* ignore */ }
-  if (!watch.length && !legacy.length) { console.log("[cron] Coming Soon watchlist empty"); return; }
-
-  let token: string;
-  try { token = await getToken(); }
-  catch (err: any) { console.warn("[cron] Cannot recheck Coming Soon — no auth token:", err.message); return; }
-
-  const promoted: string[] = [];
-  let consecFail = 0;
-
-  // ── Phase A: exact dfAddressId recheck (the fast, reliable path) ─────────────
-  for (const cs of watch) {
-    if (consecFail >= MAX_FAIL) { console.warn(`[cron] ${consecFail} consecutive failures — pausing recheck for tonight`); break; }
-    let p: CnsProbe;
-    try { p = await probe(cs.dfAddressId, token); } catch { consecFail++; await sleep(400); continue; }
-    if (p.kind === "fail") {
-      // A non-answer NEVER demotes a watched address. Count it, pace, back off on a
-      // 403 block, and try a token refresh on 401 — then recheck next night.
-      consecFail++;
-      if (p.reason === "token_expired") { try { token = await getToken(); } catch { /* keep old */ } }
-      await sleep(p.reason === "blocked" ? BLOCK_PACE : PACE);
-      continue;
-    }
-    consecFail = 0;
+// Legacy watchlist rows without a dfAddressId — recheck by address AND backfill the
+// dfAddressId so next night uses the fast exact-key lane.
+function buildLegacyWatchlistSource(promoted: string[], budget: number): StreamSource {
+  let rows: any[] = [];
+  try { rows = storage.getComingSoonAddresses().filter((c: any) => !c.dfAddressId && !c.fiberAvailable).slice(0, Math.max(0, budget)); } catch { /* ignore */ }
+  const tasks = rows.map((cs) => ({ key: { kind: "addr", address: cs.address, city: cs.city, state: cs.state, zip: cs.zip } as ProbeKey, ctx: cs }));
+  const handler = (task: ProbeTask, o: ProbeOutcome) => {
+    const cs = task.ctx;
+    if (o.kind === "inconclusive") return;
     try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
-    if (p.kind === "hit" && p.result.isNewFiber && p.result.billingStatus === "N" && sameWatchedAddress(cs, p.result)) {
-      promoteComingSoon(cs, p.result.billingStatus, p.result.householdSegmentType, promoted);
-    }
-    await sleep(PACE);
-  }
-
-  // ── Phase B: legacy rows without a dfAddressId — recheck by address, and
-  // BACKFILL the dfAddressId so next night uses the fast lane. ─────────────────
-  for (const cs of legacy) {
-    if (consecFail >= MAX_FAIL) break;
-    let r: any;
-    try { r = await scan(cs.address, cs.city, cs.state, cs.zip); } catch { consecFail++; await sleep(400); continue; }
-    if (r.apiSource === "failed") { consecFail++; await sleep(/blocked \(403\)/.test(r.notes ?? "") ? BLOCK_PACE : PACE); continue; }
-    consecFail = 0;
-    try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
-    if (r.dfAddressId) {
-      // Backfill Kinetic's key onto this watchlist row.
+    const r = o.kind === "answered" || o.kind === "no_service" ? o.result : null;
+    if (r?.dfAddressId) {
       try { storage.upsertComingSoonByDfAddressId({ address: cs.address, city: cs.city, state: cs.state, zip: cs.zip, tenantId: cs.tenantId ?? null, reason: cs.reason, lat: cs.lat, lng: cs.lng, dfAddressId: r.dfAddressId, householdSegmentType: r.householdSegmentType } as any); } catch { /* ignore */ }
     }
-    if (r.isNewFiber && r.billingStatus === "N" && sameWatchedAddress(cs, r)) promoteComingSoon(cs, r.billingStatus, r.householdSegmentType, promoted);
-    await sleep(PACE);
-  }
+    if (o.kind === "answered" && r && r.isNewFiber && r.billingStatus === "N" && sameWatchedAddress(cs, r)) {
+      promoteComingSoon(cs, r.billingStatus, r.householdSegmentType, promoted);
+    }
+  };
+  return new StreamSource("watchlist-legacy", "watchlist", arrayPuller(tasks), handler, 3, () => tasks.length);
+}
+
+export interface ComingSoonRecheckDeps {
+  probe?: (key: ProbeKey) => Promise<ProbeOutcome>; // injected for tests (zero proxy)
+  budget?: number;
+  scheduler?: KineticScheduler;
+}
+
+// Standalone watchlist recheck (also runs inside the nightly batch). Kept injectable
+// so the moat's promote loop stays testable without any network.
+export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Promise<void> {
+  console.log("[cron] Rechecking Coming Soon watchlist…");
+  const budget = Math.max(1, deps.budget ?? 20_000);
+  let watch: any[] = [];
+  try { watch = storage.getComingSoonWithDfId(budget); } catch { /* pre-migration */ }
+  const promoted: string[] = [];
+  const legacy = buildLegacyWatchlistSource(promoted, Math.max(0, budget - watch.length));
+  if (!watch.length && legacy.remaining() === 0) { console.log("[cron] Coming Soon watchlist empty"); return; }
+
+  const scheduler = deps.scheduler ?? new KineticScheduler(
+    deps.probe ? { probe: deps.probe, refreshSession: async () => false, sleep: async () => {}, maxRounds: 100_000 } : {},
+  );
+  await scheduler.run([buildWatchlistSource(watch, promoted), legacy]);
 
   if (promoted.length > 0) {
     console.log(`[cron] Coming Soon promoted ${promoted.length} addresses to leads`);
-    if (promoted.length > 1) {
-      sendAlertEmail(
-        `🟡 ${promoted.length} Coming Soon Addresses Now LIVE — HomeFront Fiber`,
-        comingSoonPromotedHtml(promoted.length, promoted)
-      ).catch(() => {});
-    }
+    if (promoted.length > 1) sendAlertEmail(`🟡 ${promoted.length} Coming Soon Addresses Now LIVE — HomeFront Fiber`, comingSoonPromotedHtml(promoted.length, promoted)).catch(() => {});
   } else {
     console.log("[cron] Coming Soon check complete — no changes");
+  }
+}
+
+// ── Pool re-scan, as a WorkSource ─────────────────────────────────────────────
+// Re-scans the stored address pool for newly-lit fiber; transition detection tells a
+// genuine unavailable→live FLIP from a first-ever scan of an already-live address.
+function buildPoolRescanSource(): { source: StreamSource; finalize: () => void } {
+  const targets = storage.getScanTargetsToRescan(100000);
+  const inventory = buildInventoryIndex(storage.getLeads() as any[]);
+  const exclusionReasons: ExclusionReason[] = [];
+  const newFiberAddrs: string[] = [];
+  if (!targets.length) console.log("[cron] Address pool empty — skipping pool re-scan");
+
+  const handler = (task: ProbeTask, o: ProbeOutcome) => {
+    const t = task.ctx;
+    if (o.kind !== "answered" && o.kind !== "no_service") return; // failed/blocked check → never changes fiber state
+    const r = o.result;
+    // A real signal (answered or conclusive no_service) → run transition detection.
+    const outcome = classifyAvailabilityTransition(snapshotFromTarget(t), { ...r, checkFailed: false } as any);
+    let leadId: number | null = null;
+    const qual = outcome.shouldCreateLead ? qualifyDetection(t.address, inventory) : null;
+    if (qual) exclusionReasons.push(qual.reason);
+    if (qual?.qualified) {
+      try {
+        const lead = storage.createLead({
+          tenantId: t.tenant_id ?? t.tenantId ?? undefined,
+          address: r.address, city: r.city, state: r.state, zip: r.zip,
+          lat: r.lat ?? t.lat ?? undefined, lng: r.lng ?? t.lng ?? undefined,
+          fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
+          billingStatus: r.billingStatus, householdSegmentType: r.householdSegmentType,
+          techType: r.techType, speedTier: r.speedTier, maxDownloadMbps: r.maxDownloadMbps,
+          competitorName: r.competitorName, dfAddressId: r.dfAddressId, leadStatus: "prospect",
+          deploymentNotes: outcome.isNewlyLive
+            ? "Nightly re-scan — NEWLY LIVE fiber (flipped from unavailable). First observed by HomeFront."
+            : "Nightly re-scan — live fiber (first observation).",
+        });
+        leadId = lead.id;
+      } catch { /* duplicate — skip */ }
+      inventory.set(normalizeAddressKey(t.address), { leadStatus: "prospect", assignedRepId: null });
+      newFiberAddrs.push(t.address); cronStatus.totalNewFiberFound++;
+    }
+    if (outcome.recordSnapshot) {
+      try {
+        storage.recordScanTargetResult(t.id, {
+          fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
+          dfAddressId: r.dfAddressId, convertedToLeadId: leadId,
+          availabilityStatus: outcome.status, newlyLive: outcome.isNewlyLive,
+        });
+      } catch { /* best-effort */ }
+    }
+  };
+
+  const source = new StreamSource("pool-rescan", "rescan", arrayPuller(addrTasksFromTargets(targets)), handler, 3, () => targets.length);
+  const finalize = () => {
+    const summary = summarizeExclusions(exclusionReasons);
+    console.log(`[cron] Pool re-scan done: ${newFiberAddrs.length} new fiber from ${targets.length} · qualification: ${JSON.stringify(summary)}`);
+    try { storage.logActivity(null, "scan.pool_rescan_completed", "scan_batch", undefined, { targets: targets.length, created: newFiberAddrs.length, exclusions: summary }); } catch { /* audit best-effort */ }
+    if (newFiberAddrs.length > 0) sendAlertEmail(`🔥 ${newFiberAddrs.length} NEW FIBER lead(s) — HomeFront pool re-scan`, newFiberAlertHtml(newFiberAddrs.length, newFiberAddrs)).catch(() => {});
+  };
+  return { source, finalize };
+}
+
+// ── The nightly batch — all three sources on ONE shared window ────────────────
+async function runNightlyBatch(): Promise<void> {
+  cronStatus.isRunning = true;
+  cronStatus.lastRunAt = new Date().toISOString();
+  const budgetMin = Number(process.env.NIGHTLY_BUDGET_MIN ?? 240);
+  const scheduler = new KineticScheduler({ timeBudgetMs: budgetMin * 60_000 });
+  activeScheduler = scheduler;
+  const before = cronStatus.totalNewFiberFound;
+  try {
+    const cns = buildCnsFrontierSource();
+    const pool = buildPoolRescanSource();
+    const promoted: string[] = [];
+    let watchRows: any[] = [];
+    try { watchRows = storage.getComingSoonWithDfId(20_000); } catch { /* pre-migration */ }
+    const watch = buildWatchlistSource(watchRows, promoted);
+    // Fair round-robin: the moat recheck shares the window, never starved behind the sweep.
+    const sum = await scheduler.run([watch, cns.source, pool.source]);
+    cns.finalize(); pool.finalize();
+    if (promoted.length > 1) sendAlertEmail(`🟡 ${promoted.length} Coming Soon Addresses Now LIVE — HomeFront Fiber`, comingSoonPromotedHtml(promoted.length, promoted)).catch(() => {});
+    const created = cronStatus.totalNewFiberFound - before;
+    cronStatus.lastRunResult = `${created} new fiber this run · ${sum.totalOk} checks · block ${(sum.blockRate * 100).toFixed(1)}% · ${sum.sessionRefreshes} refresh`;
+    cronStatus.totalRunCount++;
+    console.log(`[cron] Nightly batch complete: ${cronStatus.lastRunResult}`);
+  } catch (err: any) {
+    cronStatus.lastRunResult = `Nightly run failed: ${err.message}`;
+    console.error("[cron] Nightly run failed:", err.message);
+  } finally {
+    cronStatus.isRunning = false;
+    activeScheduler = null;
   }
 }
 
 // ── Scheduler ─────────────────────────────────────────────────────────────────
 function msUntilNext2AM(): number {
   const now = new Date();
-  // 2 AM Eastern = 7 AM UTC (EST) or 6 AM UTC (EDT)
-  // Use a simple approach: next 2 AM in the server's local time
   const next = new Date(now);
   next.setHours(2, 0, 0, 0);
   if (next <= now) next.setDate(next.getDate() + 1);
@@ -346,108 +344,11 @@ function msUntilNext2AM(): number {
 
 let cronScheduled = false;
 
-// ── Nightly pool re-scan ──────────────────────────────────────────────────────
-// Re-scans the persistent address pool for newly-lit fiber. Zero geocoding
-// (addresses are already stored), dedups against existing leads, and records the
-// result on each target. This is the cheap, repeatable "detect new fiber over
-// time" engine — the FiberFocus model.
-async function runNightlyPoolRescan(): Promise<void> {
-  const targets = storage.getScanTargetsToRescan(100000);
-  if (!targets.length) { console.log("[cron] Address pool empty — skipping pool re-scan"); return; }
-  console.log(`[cron] Pool re-scan starting: ${targets.length} stored addresses`);
-
-  // Net-new qualification: one O(n) inventory index per batch, O(1) checks,
-  // and a NAMED exclusion reason for every detection that doesn't convert.
-  const inventory = buildInventoryIndex(storage.getLeads() as any[]);
-  const exclusionReasons: ExclusionReason[] = [];
-  const newFiberAddrs: string[] = [];
-  const BATCH = 25;
-
-  let consecBlockedBatches = 0;
-  for (let i = 0; i < targets.length; i += BATCH) {
-    const batch = targets.slice(i, i + BATCH);
-    let blockedInBatch = 0;
-    await Promise.all(batch.map(async (t: any) => {
-      try {
-        const r = await scanAddress(t.address, t.city, t.state, t.zip);
-        // 403 = the proxy egress is blocked. Count it so we can stop hammering a
-        // blocked proxy (a non-answer, so it changes no state either way).
-        if (r.apiSource === "failed" && /blocked \(403\)/.test(r.notes ?? "")) { blockedInBatch++; return; }
-        // Transition detection: compare the stored snapshot against this fresh
-        // scan to tell a genuine unavailable→live FLIP (newly_live) from a
-        // first-ever scan of an already-live address. CRITICAL: the failed-check
-        // guard keys on `checkFailed`, which the scanner does NOT set — it signals
-        // failure via apiSource="failed". Map it here or a timeout/401/429 would
-        // be misclassified as a real transition and overwrite fiber state (a
-        // non-answer must never change status).
-        const rr = { ...r, checkFailed: r.apiSource === "failed" };
-        const outcome = classifyAvailabilityTransition(snapshotFromTarget(t), rr);
-        let leadId: number | null = null;
-        const qual = outcome.shouldCreateLead ? qualifyDetection(t.address, inventory) : null;
-        if (qual) exclusionReasons.push(qual.reason);
-        if (qual?.qualified) {
-          try {
-            const lead = storage.createLead({
-              // scan_targets rows are raw SELECT * (snake_case) — inherit the target's org
-              tenantId: (t as any).tenant_id ?? (t as any).tenantId ?? undefined,
-              address: r.address, city: r.city, state: r.state, zip: r.zip,
-              lat: r.lat ?? t.lat ?? undefined, lng: r.lng ?? t.lng ?? undefined,
-              fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
-              billingStatus: r.billingStatus, householdSegmentType: r.householdSegmentType,
-              techType: r.techType, speedTier: r.speedTier, maxDownloadMbps: r.maxDownloadMbps,
-              competitorName: r.competitorName, dfAddressId: r.dfAddressId,
-              leadStatus: "prospect",
-              deploymentNotes: outcome.isNewlyLive
-                ? "Nightly re-scan — NEWLY LIVE fiber (flipped from unavailable). First observed by HomeFront."
-                : "Nightly re-scan — live fiber (first observation).",
-            });
-            leadId = lead.id;
-          } catch { /* duplicate — skip */ }
-          inventory.set(normalizeAddressKey(t.address), { leadStatus: "prospect", assignedRepId: null });
-          newFiberAddrs.push(t.address);
-          cronStatus.totalNewFiberFound++;
-        }
-        // Only persist the snapshot when the check produced a real signal — a
-        // failed check must not erase the last known state (recordSnapshot=false).
-        if (outcome.recordSnapshot) {
-          storage.recordScanTargetResult(t.id, {
-            fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
-            dfAddressId: r.dfAddressId, convertedToLeadId: leadId,
-            availabilityStatus: outcome.status, newlyLive: outcome.isNewlyLive,
-          });
-        }
-      } catch { /* token expiry / timeout — skip this address, keep going */ }
-    }));
-    // If most of a batch is 403-blocked for several batches running, the proxy IP
-    // is blocked — stop for tonight rather than burn the whole pool on blocks.
-    if (blockedInBatch >= BATCH * 0.6) { if (++consecBlockedBatches >= 3) { console.warn("[cron] Pool re-scan: proxy blocked — stopping for tonight"); break; } }
-    else consecBlockedBatches = 0;
-    await new Promise(res => setTimeout(res, 60));
-  }
-
-  const exclusionSummary = summarizeExclusions(exclusionReasons);
-  console.log(`[cron] Pool re-scan done: ${newFiberAddrs.length} new fiber lead(s) from ${targets.length} addresses · qualification: ${JSON.stringify(exclusionSummary)}`);
-  // Auditable scan-batch record: why detections did or didn't convert.
-  try {
-    storage.logActivity(null, "scan.pool_rescan_completed", "scan_batch", undefined,
-      { targets: targets.length, created: newFiberAddrs.length, exclusions: exclusionSummary });
-  } catch { /* audit best-effort */ }
-  if (newFiberAddrs.length > 0) {
-    await sendAlertEmail(
-      `🔥 ${newFiberAddrs.length} NEW FIBER lead(s) — HomeFront pool re-scan`,
-      newFiberAlertHtml(newFiberAddrs.length, newFiberAddrs),
-    ).catch(err => console.warn("[cron] Pool re-scan email failed:", err.message));
-  }
-}
-
 export function startNightlyCron() {
   if (cronScheduled) return;
-
-  // COST GUARD: the nightly scan pushes ~50,000 Kinetic address checks through
-  // the Decodo residential proxy EVERY night — that is billed per GB and is the
-  // main ongoing proxy cost. It stays OFF unless explicitly enabled so an idle
-  // deployment never silently burns proxy bandwidth. Turn on with
-  // ENABLE_NIGHTLY_SCAN=true once you actually want automated overnight scans.
+  // COST GUARD: the nightly scan pushes tens of thousands of Kinetic checks through
+  // the Decodo residential proxy — billed per GB. It stays OFF unless explicitly
+  // enabled so an idle deployment never silently burns proxy bandwidth.
   if (process.env.ENABLE_NIGHTLY_SCAN !== "true") {
     cronStatus.nextRunAt = null;
     cronStatus.lastRunResult = "Nightly auto-scan disabled (set ENABLE_NIGHTLY_SCAN=true to enable)";
@@ -456,35 +357,21 @@ export function startNightlyCron() {
   }
   cronScheduled = true;
 
-  // How many CNS records to sweep per night. Default 50k; lower it to cut the
-  // per-night proxy bandwidth (NIGHTLY_SCAN_COUNT env).
-  const nightlyCount = Number(process.env.NIGHTLY_SCAN_COUNT ?? 50_000);
-
   function scheduleNext() {
     const ms = msUntilNext2AM();
     const nextRun = new Date(Date.now() + ms);
     cronStatus.nextRunAt = nextRun.toISOString();
-    console.log(`[cron] Next nightly scan scheduled at ${nextRun.toLocaleString()} (${nightlyCount.toLocaleString()} records)`);
-
+    console.log(`[cron] Next nightly scan scheduled at ${nextRun.toLocaleString()}`);
     setTimeout(async () => {
-      try {
-        await runNightlyCnsScan();
-        await runComingSoonCheck();
-        await runNightlyPoolRescan();   // re-scan the stored address pool for new fiber
-      } catch (err: any) {
-        console.error("[cron] Nightly run failed:", err.message);
-      }
-      scheduleNext(); // Schedule next night
+      try { await runNightlyBatch(); } catch (err: any) { console.error("[cron] Nightly run failed:", err.message); }
+      scheduleNext();
     }, ms);
   }
-
   scheduleNext();
 }
 
 // ── Manual trigger (for admin testing) ───────────────────────────────────────
 export async function triggerManualScan(): Promise<void> {
   if (cronStatus.isRunning) throw new Error("Cron scan already running");
-  runNightlyCnsScan().catch(err => console.error("[cron] Manual scan failed:", err.message));
-  runComingSoonCheck().catch(() => {});
-  runNightlyPoolRescan().catch(err => console.error("[cron] Pool re-scan failed:", err.message));
+  runNightlyBatch().catch(err => console.error("[cron] Manual scan failed:", err.message));
 }

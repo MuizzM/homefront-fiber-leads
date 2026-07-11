@@ -128,6 +128,9 @@ export async function runCityDiscovery(opts: RunCityDiscoveryOpts): Promise<Disc
       // refresh won't help — do NOT reset the failure counter, or a blocked proxy
       // would burn the entire budget. Only a real token refresh resets it.
       if (probe1.reason === "token_expired") { try { token = await getToken(); consecFail = 0; } catch { /* keep old */ } }
+      // A 403 means the token-bucket is drained — back off (bounded, exponential) so a
+      // blocked run doesn't spin through the plan hammering the proxy before it aborts.
+      else if (probe1.reason === "blocked") { await new Promise(r => setTimeout(r, Math.min(15_000, 500 * 2 ** Math.min(consecFail, 5)))); }
       continue;
     }
     consecFail = 0;

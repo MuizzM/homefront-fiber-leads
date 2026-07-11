@@ -122,15 +122,15 @@ async function scanCity(city: string, zip: string) {
     let r: any;
     try { r = await scanAddress(a.address, a.city, a.state, a.zip); }
     catch (e: any) { failReasons["exception:" + (e?.message ?? "?").slice(0, 40)] = (failReasons["exception:" + (e?.message ?? "?").slice(0, 40)] ?? 0) + 1; failed++; return "fail"; }
-    checked++;
     if (r.apiSource === "failed") {
-      const blocked = /blocked \(403\)/.test(r.notes ?? "");
+      const blocked = r.blocked;
+      if (blocked) return "blocked";          // 403 = drained window → NO answer; not "checked", retried after a rest
       const k = (r.rawResponse?.validationResult ?? r.notes ?? "failed").slice(0, 60);
       failReasons[k] = (failReasons[k] ?? 0) + 1;
-      if (blocked) return "blocked";          // retry after cooldown (proxy IP block)
-      failed++;
+      checked++; failed++;
       return "fail";                          // a non-answer is never a negative
     }
+    checked++;
     // Persist to pool with the fresh status (baseline for new rows; enrich for existing).
     try {
       storage.upsertScanTargets([{ address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng, source: `nc-live-${source}`, tenantId: null, dfAddressId: r.dfAddressId, scannedNow: true, fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus }]);
@@ -165,22 +165,38 @@ async function scanCity(city: string, zip: string) {
     return blockedOut;
   }
 
-  // Kinetic rate-limits to ~40-50 checks per burst, then 403-blocks for minutes.
-  // So scan in small BURSTs with a COOLDOWN whenever a burst gets blocked — this
-  // works WITH the limit instead of hammering through it. Self-limits to a wall-
-  // clock budget; whatever's unscanned stays queued in the pool for next time.
-  const BURST = 40, COOLDOWN_MS = 60_000, TIME_BUDGET_MS = 7 * 60_000;
+  // Kinetic's 403 is a REFILLING rolling-window throttle, not a hard cap (verified):
+  // a burst drains the window, a rest refills it. EVERY burst spends the window — even
+  // a clean one — so we must rest long enough to refill BETWEEN bursts (the old 4s
+  // "clean" cooldown just re-hammered a drained window). Rest proportional to how
+  // blocked we got, then give 403'd addresses ONE retry pass after a full refill —
+  // they only hit a drained window and usually answer once it recovers.
+  const BURST = 35, TIME_BUDGET_MS = 6 * 60_000;
   const t0 = Date.now();
+  const retry: any[] = [];
+  let burstNo = 0;
   for (let start = 0; start < batch.length; start += BURST) {
     if (Date.now() - t0 > TIME_BUDGET_MS) { console.log(`   ⏹ time budget reached — ${batch.length - start} left queued in pool`); break; }
     const chunk = batch.slice(start, start + BURST);
     const blocked = await drain(chunk);
-    failed += blocked.length;
-    console.log(`   burst ${Math.floor(start / BURST) + 1}: ${chunk.length - blocked.length} ok, ${blocked.length} blocked · running: ${leads} leads, ${newFiber} new-fiber`);
-    if (start + BURST < batch.length) await sleep(blocked.length > chunk.length * 0.25 ? COOLDOWN_MS : 4000);
+    retry.push(...blocked);
+    const rate = blocked.length / chunk.length;
+    console.log(`   burst ${++burstNo}: ${chunk.length - blocked.length} ok, ${blocked.length} blocked · running: ${leads} leads, ${newFiber} new-fiber`);
+    // Always rest ≥75s to let the window refill; longer the more we drained it.
+    if (start + BURST < batch.length) await sleep(rate < 0.15 ? 75_000 : rate < 0.5 ? 110_000 : 150_000);
   }
+  // One retry pass on everything that 403'd, after a full-refill rest.
+  let stillBlocked = retry.length;
+  if (retry.length) {
+    console.log(`   ↻ resting 80s, then retrying ${retry.length} blocked…`);
+    await sleep(80_000);
+    const still = await drain(retry);
+    stillBlocked = still.length;
+    console.log(`   ↻ retry: ${retry.length - still.length} recovered, ${still.length} still blocked`);
+  }
+  failed += stillBlocked;
 
-  console.log(`   ✓ checked ${checked} · ${newFiber} new-fiber (${leads} new leads) · ${comingSoon} coming-soon · ${existing} existing · ${noService} no-service · ${failed} failed · ~$${usd(checked)}`);
+  console.log(`   ✓ checked ${checked} · ${newFiber} new-fiber (${leads} new leads) · ${comingSoon} coming-soon · ${existing} existing · ${noService} no-service · ${failed} failed (${stillBlocked} still-blocked) · ~$${usd(checked)}`);
   const topFails = Object.entries(failReasons).sort((a, b) => b[1] - a[1]).slice(0, 4);
   if (topFails.length) console.log(`     fail reasons: ${topFails.map(([k, v]) => `${v}×"${k}"`).join(" | ")}`);
   return { city, source, checked, newFiber, comingSoon, noService, existing, failed, leads };

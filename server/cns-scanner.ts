@@ -201,11 +201,14 @@ export async function probeKineticDfId(dfAddressId: string, token: string, timeo
 }
 
 // ── CNS lookup via dfAddressId field (thin wrapper over the canonical probe) ──
-async function lookupCns(env: string, cns: number, token: string): Promise<{ found: boolean; result?: CnsResult }> {
+async function lookupCns(env: string, cns: number, token: string): Promise<{ status: "hit" | "miss" | "fail"; reason?: string; result?: CnsResult }> {
   const probe = await probeKineticDfId(`${env}${String(cns).padStart(7, "0")}`, token);
   if (probe.kind === "fail" && probe.reason === "token_expired") throw new Error("TOKEN_EXPIRED: 401");
-  if (probe.kind === "hit") return { found: true, result: probe.result };
-  return { found: false };
+  if (probe.kind === "hit") return { status: "hit", result: probe.result };
+  if (probe.kind === "miss") return { status: "miss" };
+  // A 403 block / transport failure is NOT "no address here" — surface it so the
+  // caller backs off instead of recording a phantom miss and hammering a blocked proxy.
+  return { status: "fail", reason: probe.reason };
 }
 
 // ── Main scanner loop ─────────────────────────────────────────────────────────
@@ -242,7 +245,19 @@ export async function runCnsScan(
 
     try {
       const token = await getToken();
-      const { found, result } = await lookupCns(env, cns, token);
+      const lk = await lookupCns(env, cns, token);
+      if (lk.status === "fail") {
+        // 403/transport failure — a non-answer, never a miss. Back off (longer on a
+        // 403 block) and count it toward the consecutive-error abort. Do NOT advance
+        // as if this control number were unassigned.
+        consecutiveErrors++;
+        job.lastError = `probe ${lk.reason}`;
+        if (consecutiveErrors >= 10) { job.status = "error"; job.completedAt = new Date().toISOString(); return; }
+        await new Promise(r => setTimeout(r, lk.reason === "blocked" ? 2000 : 300));
+        continue;
+      }
+      const found = lk.status === "hit";
+      const result = lk.result;
 
       rateWindow.push(Date.now());
       // Keep only last 60 timestamps for rolling rate

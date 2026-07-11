@@ -98,7 +98,7 @@ import * as scanSvc from "./scanService";
 import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
-import { getCronStatus, triggerManualScan, startNightlyCron } from "./cron-scanner";
+import { getCronStatus, triggerManualScan, startNightlyCron, getEngineStatus } from "./cron-scanner";
 import { getProxyStatus } from "./proxy-fetch";
 
 /**
@@ -4057,6 +4057,12 @@ export function registerSaasRoutes(app: any) {
   // ── Nightly Cron Status + Manual Trigger ──────────────────────────────────────
   app.get("/api/cron/status", requireManager, (_req: Request, res: Response) => {
     res.json(getCronStatus());
+  });
+
+  // Live closed-loop scan engine status — the AIMD window, block rate, effective
+  // throughput, and session refreshes of whatever scan is currently draining.
+  app.get("/api/scan/engine-status", requireManager, (_req: Request, res: Response) => {
+    res.json(getEngineStatus());
   });
 
   app.post("/api/cron/trigger", requireAdmin, async (_req: Request, res: Response) => {

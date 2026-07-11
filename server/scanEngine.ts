@@ -9,10 +9,11 @@
 // The Kinetic checker is injectable so the whole pipeline (ranking → persistence
 // → transition → lead creation → resume) is verifiable by REPLAYING real
 // recorded responses, with zero proxy bandwidth spent.
-import { scanAddress, type ScanResult } from "./scanner";
+import { scanAddress, refreshTokenFromApi, type ScanResult } from "./scanner";
 import { storage } from "./storage";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
 import { classifyAvailabilityTransition } from "@shared/fiberDetect";
+import { initController, observeRound, onSessionRefreshed, DEFAULT_RATE_CFG, type RateState } from "./rateController";
 import {
   getRun, setRunStatus, claimRunTargets, finalizeRunTarget, touchRun,
   getTargetSnapshot, countQueued, getResumableRuns, resetInflightTargets, type ScanRunRow,
@@ -39,11 +40,6 @@ const liveChecker: Checker = async (a) => {
   return { result, bytes, checkFailed };
 };
 
-// Concurrency is deliberately modest — the proxy pool has 400 slots but a
-// budgeted run is about spending carefully, not maximum burn. 25 in flight
-// verifies a 1,000-address run in well under a minute without hammering.
-const CONCURRENCY = 25;
-
 // In-process guard so a run is never dispatched by two workers at once (e.g. a
 // resume racing a still-live worker). Cleared when the worker exits.
 const activeRuns = new Set<string>();
@@ -55,6 +51,11 @@ export function isRunActive(runId: string): boolean { return activeRuns.has(runI
 export async function runScanWorker(runId: string, tenantId: number, checker: Checker = liveChecker): Promise<void> {
   if (activeRuns.has(runId)) return;
   activeRuns.add(runId);
+  // Batch size is the AIMD congestion window, not a fixed 25 — it self-tunes to
+  // Kinetic's 403 push-back so a budgeted market run obeys the same one-bucket
+  // discipline as every other scan (measures blocked per batch, shrinks/refreshes).
+  let ctrl: RateState = initController();
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
   try {
     for (;;) {
       const run = getRun(runId, tenantId);
@@ -65,10 +66,13 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
       const remainingBudget = run.budget - (run.verified + run.failed);
       // Atomically CLAIM the batch (marks them inflight) so a racing dispatch
       // can't grab the same targets and double-spend the proxy.
-      const batch = claimRunTargets(runId, Math.min(CONCURRENCY, remainingBudget));
+      const conc = Math.max(1, Math.min(Math.floor(ctrl.cwnd), remainingBudget));
+      const batch = claimRunTargets(runId, conc);
       if (batch.length === 0) { finish(run, "done"); return; } // queue drained
       touchRun(runId); // heartbeat before a batch of slow network calls
 
+      const t0 = Date.now();
+      let ok = 0, blocked = 0, neutral = 0;
       await Promise.all(batch.map(async (t) => {
         // Re-check status mid-batch so a cancel takes effect promptly. A claimed
         // target on a now-cancelled run is left 'inflight' — resume/reaper resets
@@ -78,11 +82,22 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
         try {
           const { result, bytes, checkFailed } = await checker({ address: t.address, city: t.city, state: t.state, zip: t.zip });
           applyCheck(runId, tenantId, t, result, bytes, checkFailed);
+          if (result.blocked) blocked++; else if (checkFailed) neutral++; else ok++;
         } catch (err: any) {
           // An unexpected throw is still a FAILED check — never a negative.
           finalizeRunTarget(runId, t.targetId, "failed", "failed", { failed: 1, estBytes: DEFAULT_BYTES_PER_CHECK });
+          neutral++;
         }
       }));
+
+      // Feed the round to the controller; act on its verdict (grow / shrink+pause /
+      // refresh the session at the floor / wall-clock backoff when truly drained).
+      const meanRttMs = (Date.now() - t0) / Math.max(1, batch.length);
+      const d = observeRound(ctrl, { ok, blocked, neutral, meanRttMs }, DEFAULT_RATE_CFG);
+      ctrl = d.state;
+      if (d.action === "refresh_session") { try { await refreshTokenFromApi(); } catch { /* stays throttled */ } ctrl = onSessionRefreshed(ctrl); }
+      else if (d.action === "hard_backoff") await sleep(d.backoffMs);
+      else if (d.recoveryPauseMs > 0) await sleep(d.recoveryPauseMs);
     }
   } catch (err: any) {
     setRunStatus(runId, "error", String(err?.message ?? err).slice(0, 300));
