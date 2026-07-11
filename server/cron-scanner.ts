@@ -254,7 +254,15 @@ function buildPoolRescanSource(): { source: StreamSource; finalize: () => void }
 
   const handler = (task: ProbeTask, o: ProbeOutcome) => {
     const t = task.ctx;
-    if (o.kind !== "answered" && o.kind !== "no_service") return; // failed/blocked check → never changes fiber state
+    if (o.kind === "inconclusive") {
+      // No availability signal (typically Kinetic doesn't recognize this address).
+      // Count it against the never-scanned row so it eventually parks and the nightly
+      // stops re-buying an answerless probe on it forever. No-op once conclusively
+      // scanned. A 403/blocked is transient throttle — deliberately NOT counted.
+      if (t?.id != null) { try { storage.bumpScanTargetInconclusive({ id: t.id }); } catch { /* best-effort */ } }
+      return;
+    }
+    if (o.kind !== "answered" && o.kind !== "no_service") return; // blocked → transient, never changes fiber state
     const r = o.result;
     // A real signal (answered or conclusive no_service) → run transition detection.
     const outcome = classifyAvailabilityTransition(snapshotFromTarget(t), { ...r, checkFailed: false } as any);

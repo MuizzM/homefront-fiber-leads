@@ -10,6 +10,7 @@ import { rawDb } from "./db";
 import type { WorkSource, ProbeTask } from "./kineticScheduler";
 import type { ProbeOutcome } from "./kineticProbe";
 import { fringeCandidates, normAddr } from "@shared/fringe";
+import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 
 const taskId = (t: ProbeTask): string => t.key.kind === "df" ? t.key.dfAddressId : t.key.address;
 
@@ -117,8 +118,11 @@ export class ManualCitySource implements WorkSource {
     if (o.kind === "inconclusive") {
       // Timeout / soft-fail (mostly deterministic AddressNeedsFix): retrying the SAME
       // address just re-fails. Leave it un-scanned in the pool (last_scanned_at stays
-      // NULL) for the nightly rather than spinning on it now.
+      // NULL) for the nightly rather than spinning on it now — but COUNT the miss, so
+      // after INCONCLUSIVE_GIVEUP such probes the row parks itself out of the re-probe
+      // rotation instead of costing a proxy probe on every future sweep forever.
       this.counters.inconclusive++;
+      if (task.key.kind === "addr") storage.bumpScanTargetInconclusive({ address: task.key.address });
       return;
     }
     this.counters.answered++;
@@ -219,12 +223,16 @@ export function addrTasksFromTargets(targets: any[]): ProbeTask[] {
 }
 
 // Load never-scanned pool addresses for a city (optionally constrained to a ZIP),
-// oldest-first. Zero proxy — the pool is the free address source.
+// oldest-first. Zero proxy — the pool is the free address source. Exhausted rows
+// (probed inconclusive INCONCLUSIVE_GIVEUP+ times — Kinetic doesn't recognize them)
+// are skipped so a sweep stops re-buying 403-free-but-answerless probes; pass
+// includeExhausted to deliberately re-open them (manual --retry-exhausted).
 export function loadCityPoolAddresses(
-  city: string, zip: string | undefined, limit: number,
+  city: string, zip: string | undefined, limit: number, includeExhausted = false,
 ): Array<{ address: string; city: string; state: string; zip: string }> {
+  const parkClause = includeExhausted ? "" : ` AND inconclusive_attempts < ${INCONCLUSIVE_GIVEUP}`;
   const rows = zip
-    ? rawDb.prepare("SELECT address, city, state, zip FROM scan_targets WHERE lower(city)=lower(?) AND (zip=? OR zip IS NULL) AND last_scanned_at IS NULL ORDER BY id LIMIT ?").all(city, zip, limit)
-    : rawDb.prepare("SELECT address, city, state, zip FROM scan_targets WHERE lower(city)=lower(?) AND last_scanned_at IS NULL ORDER BY id LIMIT ?").all(city, limit);
+    ? rawDb.prepare(`SELECT address, city, state, zip FROM scan_targets WHERE lower(city)=lower(?) AND (zip=? OR zip IS NULL) AND last_scanned_at IS NULL${parkClause} ORDER BY id LIMIT ?`).all(city, zip, limit)
+    : rawDb.prepare(`SELECT address, city, state, zip FROM scan_targets WHERE lower(city)=lower(?) AND last_scanned_at IS NULL${parkClause} ORDER BY id LIMIT ?`).all(city, limit);
   return (rows as any[]).map((r) => ({ address: r.address, city: r.city, state: r.state, zip: r.zip ?? zip ?? "" }));
 }

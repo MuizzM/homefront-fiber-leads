@@ -27,6 +27,7 @@ import {
 } from "@shared/schema";
 import { eq, desc, or, and, gt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
+import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 
 // Legacy scanner columns that exist in SQLite but predate the drizzle schema —
 // upsertLeadByAddress still persists them when a scanner payload carries them.
@@ -183,6 +184,8 @@ export interface IStorage {
   getProbedCns(env: string, withinDays?: number): number[];
   getMaxHitCns(env: string): number | null;
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean }): { prevIsNewFiber: boolean };
+  bumpScanTargetInconclusive(ref: { id?: number; address?: string }): void;
+  getScanTargetExhaustedCount(city?: string, zip?: string): number;
   getFirstSeenLive(sinceHours: number, limit?: number, tenantId?: number): any[];
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
@@ -320,6 +323,15 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN first_seen_live_at TEXT`,
     `ALTER TABLE scan_targets ADD COLUMN last_availability_status TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`,
+    // Per-address inconclusive circuit breaker (see shared/scanPolicy.ts). Counts
+    // consecutive inconclusive probes with no conclusive answer; once it reaches the
+    // give-up threshold the never-scanned row is "exhausted" and stops being re-probed
+    // (nightly + manual), killing the recurring proxy-cost leak on addresses Kinetic
+    // doesn't recognize. A conclusive answer resets the count to 0.
+    `ALTER TABLE scan_targets ADD COLUMN inconclusive_attempts INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE scan_targets ADD COLUMN last_inconclusive_at TEXT`,
+    // Partial-ish index for the re-probe selection (never-scanned, not-yet-exhausted).
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`,
     // CNS negative cache — conclusive probe outcomes so discovery/nightly never
     // re-buy the same misses; the frontier advances instead of re-scanning.
     `CREATE TABLE IF NOT EXISTS cns_probes (env TEXT NOT NULL, cns INTEGER NOT NULL, result TEXT NOT NULL, probed_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (env, cns))`,
@@ -1597,7 +1609,7 @@ export class Storage implements IStorage {
     const baselineStmt = rawDb.prepare(
       `UPDATE scan_targets SET
          last_fiber_status = @fs, last_is_new_fiber = @nf, last_billing_status = @bs,
-         last_scanned_at = @scannedAt, scan_count = 1
+         last_scanned_at = @scannedAt, scan_count = 1, inconclusive_attempts = 0
        WHERE address = @address AND lower(city) = lower(@city) AND lower(state) = lower(@state)
          AND last_scanned_at IS NULL`
     );
@@ -1634,11 +1646,17 @@ export class Storage implements IStorage {
     });
     return tx(addrs);
   }
-  // Oldest-scanned (and never-scanned) targets first — the re-scan queue.
+  // Oldest-scanned (and never-scanned) targets first — the re-scan queue. Skips
+  // never-scanned rows that have been probed inconclusive `INCONCLUSIVE_GIVEUP`+
+  // times (exhausted — Kinetic doesn't recognize them; re-probing burns proxy $ for
+  // nothing). Already-scanned rows are never parked — the nightly moat keeps
+  // re-checking them so a real unavailable→live flip is still caught.
   getScanTargetsToRescan(limit: number): any[] {
     return rawDb.prepare(
-      `SELECT * FROM scan_targets ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC LIMIT ?`
-    ).all(limit);
+      `SELECT * FROM scan_targets
+         WHERE last_scanned_at IS NOT NULL OR inconclusive_attempts < ?
+         ORDER BY (last_scanned_at IS NOT NULL), last_scanned_at ASC LIMIT ?`
+    ).all(INCONCLUSIVE_GIVEUP, limit);
   }
   // Pool lookup by city — lets scans reuse already-harvested addresses instead
   // of re-geocoding (harvest once, re-scan free).
@@ -1697,6 +1715,9 @@ export class Storage implements IStorage {
          last_availability_status=COALESCE(@avail, last_availability_status),
          -- first-seen-live is stamped ONCE on the first newly_live flip, never overwritten
          first_seen_live_at=CASE WHEN @newly=1 AND first_seen_live_at IS NULL THEN datetime('now') ELSE first_seen_live_at END,
+         -- a conclusive answer clears the inconclusive streak (belt-and-suspenders:
+         -- the row also leaves the never-scanned pool now that last_scanned_at is set)
+         inconclusive_attempts=0,
          last_scanned_at=datetime('now'), scan_count=scan_count+1 WHERE id=@id`
     ).run({
       id, fs: r.fiberStatus ?? null, nf: r.isNewFiber ? 1 : 0, bs: r.billingStatus ?? null,
@@ -1704,6 +1725,38 @@ export class Storage implements IStorage {
       avail: r.availabilityStatus ?? null, newly: r.newlyLive ? 1 : 0,
     });
     return { prevIsNewFiber: !!(prev && prev.last_is_new_fiber) };
+  }
+  // Count ONE inconclusive probe against a pooled address (by id, or by its globally
+  // unique address). At INCONCLUSIVE_GIVEUP the row is "exhausted" and the re-probe
+  // selectors (getScanTargetsToRescan + loadCityPoolAddresses) skip it. No-op if the
+  // address isn't pooled (e.g. a fringe candidate that never got persisted) or the
+  // row was already conclusively answered (last_scanned_at set) — we never park a row
+  // that has a real answer. Idempotent per (address, run): callers bump once per probe.
+  bumpScanTargetInconclusive(ref: { id?: number; address?: string }): void {
+    if (ref.id != null) {
+      rawDb.prepare(
+        `UPDATE scan_targets
+           SET inconclusive_attempts = inconclusive_attempts + 1, last_inconclusive_at = datetime('now')
+         WHERE id = ? AND last_scanned_at IS NULL`
+      ).run(ref.id);
+    } else if (ref.address) {
+      rawDb.prepare(
+        `UPDATE scan_targets
+           SET inconclusive_attempts = inconclusive_attempts + 1, last_inconclusive_at = datetime('now')
+         WHERE address = ? AND last_scanned_at IS NULL`
+      ).run(ref.address);
+    }
+  }
+  // How many pooled addresses are exhausted (parked out of re-probe) — for honest
+  // "STILL QUEUED vs GIVEN UP" reporting so a silenced address is never a silent gap.
+  getScanTargetExhaustedCount(city?: string, zip?: string): number {
+    const where = ["last_scanned_at IS NULL", "inconclusive_attempts >= ?"];
+    const args: any[] = [INCONCLUSIVE_GIVEUP];
+    if (city) { where.push("lower(city) = lower(?)"); args.push(city); }
+    if (zip) { where.push("(zip = ? OR zip IS NULL)"); args.push(zip); }
+    return (rawDb.prepare(
+      `SELECT COUNT(*) c FROM scan_targets WHERE ${where.join(" AND ")}`
+    ).get(...args) as any).c;
   }
   // First-to-market feed: addresses that FLIPPED live within the window, newest
   // first. Indexed scan on first_seen_live_at; capped. Tenant-scoped when a

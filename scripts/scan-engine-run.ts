@@ -9,6 +9,7 @@ runMigrations();
 import { KineticScheduler } from "../server/kineticScheduler";
 import { ManualCitySource, loadCityPoolAddresses } from "../server/scanSources";
 import { getCityAddresses } from "../server/overpass";
+import { INCONCLUSIVE_GIVEUP } from "../shared/scanPolicy";
 
 // Known ZIPs for towns we scan (keeps neighboring-town spillover out).
 const ZIPS: Record<string, string> = {
@@ -31,6 +32,9 @@ const BUDGET_MS = Number((args.find((a) => a.startsWith("--budget=")) ?? "").spl
 // manual run doesn't grind on 403s — the rest stays queued for a later sweep.
 // 0 disables the breaker (grind to budget). Default 8.
 const MAXTHROTTLE = Number((args.find((a) => a.startsWith("--maxthrottle=")) ?? "").split("=")[1] || 8);
+// Re-open addresses parked after repeated inconclusive probes (Kinetic doesn't
+// recognize them). Off by default so a normal sweep doesn't re-buy answerless probes.
+const RETRY_EXHAUSTED = args.includes("--retryexhausted");
 const fringeArg = args.find((a) => a.startsWith("--fringe"));
 const FRINGE = fringeArg
   ? (() => { const [r, b] = (fringeArg.split("=")[1] ?? "").split(":"); return { radius: Number(r) || 8, budget: Number(b) || 400 }; })()
@@ -70,8 +74,9 @@ async function harvestCity(city: string, zip?: string): Promise<void> {
   const tenantId = getDefaultTenantId();
   // Keep each source paired with its city so the per-city report never misaligns.
   const built = cities.map((c) => {
-    const addrs = loadCityPoolAddresses(c.city, c.zip, CAP);
-    console.log(`  ${c.city}${c.zip ? ` ${c.zip}` : ""}: ${addrs.length} never-scanned queued`);
+    const addrs = loadCityPoolAddresses(c.city, c.zip, CAP, RETRY_EXHAUSTED);
+    const parked = storage.getScanTargetExhaustedCount(c.city, c.zip);
+    console.log(`  ${c.city}${c.zip ? ` ${c.zip}` : ""}: ${addrs.length} never-scanned queued${parked > 0 ? ` (+${parked} exhausted${RETRY_EXHAUSTED ? " — re-opened" : " — parked, use --retryexhausted"})` : ""}`);
     return { c, source: addrs.length ? new ManualCitySource(c.city, addrs, tenantId, c.city.toLowerCase(), 4, FRINGE) : null };
   }).filter((x): x is { c: typeof cities[number]; source: ManualCitySource } => x.source !== null);
 
@@ -99,16 +104,22 @@ async function harvestCity(city: string, zip?: string): Promise<void> {
   console.log(`TOTAL: ${L} new leads · ${NF} new-fiber · ${CS} coming-soon watched${FRINGE ? ` · fringe: ${FQ} neighbor-probes → ${FL} leads OSM would have MISSED` : ""}`);
 
   // What's still queued (never conclusively scanned) — so "get every lead" is a
-  // known, resumable state, not a silent gap. Re-run the same command later.
-  let remaining = 0;
+  // known, resumable state, not a silent gap. Re-run the same command later. Parked
+  // (exhausted) addresses are reported SEPARATELY so a silenced address is never a
+  // silent gap — they're Kinetic-unrecognized, not "will answer if you retry".
+  let remaining = 0, parked = 0;
   for (const { c } of built) {
-    // never-scanned (last_scanned_at IS NULL) remaining in the pool for this city
+    // never-scanned, not-yet-parked remaining in the pool for this city
     remaining += loadCityPoolAddresses(c.city, c.zip, 1_000_000).length;
+    parked += storage.getScanTargetExhaustedCount(c.city, c.zip);
   }
   if (remaining > 0) {
     console.log(`STILL QUEUED: ${remaining} address(es) un-answered (blocked/inconclusive under throttle). Re-run to sweep — the Kinetic rolling window refills over time.`);
   } else {
-    console.log(`POOL DRAINED: every harvested address for these cities has a conclusive result.`);
+    console.log(`POOL DRAINED: every harvestable address for these cities has a conclusive result${parked > 0 ? " (parked ones excluded)" : ""}.`);
+  }
+  if (parked > 0) {
+    console.log(`GIVEN UP: ${parked} address(es) parked after ${INCONCLUSIVE_GIVEUP}+ inconclusive probes (Kinetic doesn't recognize them — likely Mapbox-grid over-capture). Excluded from re-probe; run with --retryexhausted to force a recheck.`);
   }
   process.exit(0);
 })();
