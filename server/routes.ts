@@ -99,6 +99,8 @@ import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { validateScanBbox, adaptiveGridStep, pooledMap, backoffDelayMs, type BboxLL } from "./bboxScan";
+import { gatherCoverage, providerStatus, type BBox as CoverageBBox, type RawAddress } from "./providers";
+import { createTileScanJob, runTileScan, type TileScanJob, type Tile } from "./tileScan";
 import { getCronStatus, triggerManualScan, startNightlyCron, getEngineStatus } from "./cron-scanner";
 import { getProxyStatus } from "./proxy-fetch";
 
@@ -596,6 +598,41 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
   console.log(`[scan] Job ${jobId} complete: ${job.done} checked, ${_scanWorkerState.diagNewFiber} new fiber`);
 }
 
+// ── Qualify a resolved address list through Kinetic (bounded + backoff) ───────
+// Shared by the tiled region worker. Probes each address with capped concurrency,
+// retries transient throttles, writes new-fiber leads, and returns counts. Does
+// NOT touch scanJobs — the caller owns progress. tenantId stamps the leads.
+async function qualifyAddressesViaKinetic(
+  addresses: RawAddress[],
+  tenantId: number,
+  opts: { concurrency?: number; shouldStop?: () => boolean } = {},
+): Promise<{ leads: number; scanned: number }> {
+  const concurrency = opts.concurrency ?? Number(process.env.AREA_SCAN_CONCURRENCY ?? 10);
+  let leads = 0, scanned = 0;
+  await pooledMap(addresses, concurrency, async (a) => {
+    if (opts.shouldStop?.()) return null; // cancelled → stop spending on new probes
+    let result: ScanResult | null = null;
+    for (let attempt = 0; attempt <= 2; attempt++) {
+      try { result = await scanAddress(a.address, a.city, a.state, a.zip || ""); }
+      catch { result = null; }
+      const throttled = !result || (result.apiSource === "failed" && result.blocked);
+      if (!throttled) break;
+      if (attempt < 2) await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 400, capMs: 3000 })));
+    }
+    scanned++;
+    if (result) {
+      if (!result.lat && a.lat) result.lat = a.lat;
+      if (!result.lng && a.lng) result.lng = a.lng;
+      recordCheck(result.isNewFiber && result.billingStatus === "N", result.apiSource === "failed");
+      const lead = leadInsertFromResult(result, a);
+      if (lead) { (lead as any).tenantId = tenantId; enqueueLeadWrite(lead); leads++; }
+    }
+    return result;
+  });
+  flushWriteQueue();
+  return { leads, scanned };
+}
+
 // ── Drawn-box qualifier: bounded concurrency + backoff ────────────────────────
 // A drawn box is a small, resolved address list (a subdivision, not a whole
 // city), so it doesn't need the 4×200 city-scan fan-out — and MUST NOT open
@@ -730,6 +767,54 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const result = { lng, lat, placeName: f.place_name ?? q };
       geocodeCache.set(key, result);
       if (geocodeCache.size > 2000) geocodeCache.delete(geocodeCache.keys().next().value!); // FIFO bound
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // ── Reverse geocode a tapped map point → an address (tap-a-house) ───────────
+  // A rep taps a rooftop on the map; we turn the lat/lng into a street address so
+  // they can add it as a lead without typing. Cached by ~11 m rounded point so
+  // repeat taps on the same house cost nothing. requireAuth — any field user.
+  const revGeocodeCache = new Map<string, { address: string; city: string; state: string; zip: string; lat: number; lng: number; placeName: string }>();
+  // requireTeamLead: only roles that can actually CREATE a lead need tap-a-house,
+  // and gating it (+ the global per-IP rate limit + ~11 m cache) bounds paid
+  // Mapbox exposure per the billing guardrails.
+  app.get("/api/geocode/reverse", requireTeamLead, async (req, res) => {
+    const lat = Number(req.query.lat), lng = Number(req.query.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      return res.status(400).json({ error: "valid lat & lng required" });
+    }
+    const key = `${lat.toFixed(4)},${lng.toFixed(4)}`; // ~11 m grid
+    const cached = revGeocodeCache.get(key);
+    if (cached) return res.json({ ...cached, cached: true });
+    const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
+    if (!token) return res.status(503).json({ error: "Geocoding not configured" });
+    try {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
+        `?access_token=${token}&country=us&types=address&limit=1`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return res.status(502).json({ error: `Mapbox reverse geocode failed: ${r.status}` });
+      const data = await r.json();
+      const f = data.features?.[0];
+      if (!f) return res.status(404).json({ error: "No address at that point" });
+      const place: string = f.place_name ?? "";
+      const parts = place.split(",").map((s: string) => s.trim());
+      const zipMatch = place.match(/\b(\d{5})\b/);
+      const ctx: any[] = f.context ?? [];
+      const cityCtx = ctx.find((c) => String(c.id).startsWith("place"))?.text ?? (parts[1] ?? "");
+      const stCtx = ctx.find((c) => String(c.id).startsWith("region"))?.short_code?.replace("US-", "") ?? "";
+      const result = {
+        address: parts[0] ?? place,
+        city: cityCtx,
+        state: stCtx || "NC",
+        zip: zipMatch ? zipMatch[1] : "",
+        lat: f.center?.[1] ?? lat, lng: f.center?.[0] ?? lng,
+        placeName: place,
+      };
+      revGeocodeCache.set(key, result);
+      if (revGeocodeCache.size > 4000) revGeocodeCache.delete(revGeocodeCache.keys().next().value!);
       res.json(result);
     } catch (e: any) {
       res.status(500).json({ error: e.message });
@@ -1253,6 +1338,125 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       source,
       bbox: { minLat: bbox.south, maxLat: bbox.north, minLng: bbox.west, maxLng: bbox.east },
     });
+  });
+
+  // ── Coverage preview — how complete is our address enumeration here? ─────────
+  // FREE by default: runs the parcel/rooftop/overpass providers (no paid Mapbox
+  // grid unless includeMapbox=true, admin). Shows the coverageRatio + how many
+  // fresh new-builds the primary enumerator would miss — so a gap is visible
+  // BEFORE spending on a scan. Zero Kinetic, zero proxy.
+  app.get("/api/coverage/providers", requireManager, (_req, res) => res.json({ providers: providerStatus() }));
+  app.post("/api/coverage/preview", requireAdmin, async (req, res) => {
+    const v = validateScanBbox(req.body ?? {});
+    if (!v.ok) return res.status(400).json({ error: v.message, reason: v.code });
+    const includeMapbox = req.body?.includeMapbox === true;
+    const bbox: CoverageBBox = { south: v.bbox.south, north: v.bbox.north, west: v.bbox.west, east: v.bbox.east };
+    const include = includeMapbox ? undefined : (["parcel", "rooftop", "overpass"] as const).slice();
+    try {
+      const rep = await gatherCoverage(bbox, { state: req.body?.state ?? "NC", include: include as any });
+      // Lean payload — counts + classification + a sample of new-build candidates.
+      res.json({
+        bbox, coverageRatio: rep.coverageRatio, classification: rep.classification,
+        estimated: rep.estimated, knownCount: rep.knownCount, primaryCount: rep.primaryCount,
+        mergedCount: rep.merged.length, newBuildCount: rep.newBuildCandidates.length,
+        providers: rep.providers,
+        newBuildSample: rep.newBuildCandidates.slice(0, 25).map((a) => ({ address: a.address, city: a.city, sources: a.sources })),
+      });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+
+  // ── Tiled region scan — cover a whole region without missing new builds ──────
+  // Admin-only. Splits the region into tiles; each tile enumerates via the
+  // providers and qualifies through Kinetic with bounded concurrency + retry.
+  // Cost discipline (honors the Mapbox billing guardrails):
+  //   • FREE by default (parcel/rooftop/overpass). The paid Mapbox grid runs ONLY
+  //     with explicit deep:true, and its total call count is estimated + capped
+  //     up front — never a silent metro-wide harvest.
+  //   • Kinetic spend is bounded by `budget` (max addresses qualified) + a
+  //     job-level dedupe set (each address scanned once, never re-scanned across
+  //     overlapping tiles or against existing leads).
+  //   • Cancel stops qualification immediately (no more proxy probes).
+  const tiledJobs = new Map<string, { job: TileScanJob; tenantId: number; cancelled: boolean }>();
+  let tiledJobSeq = 0;
+  app.post("/api/scan/tiled", requireAdmin, scanLimiter, async (req, res) => {
+    const v = validateScanBbox(req.body ?? {});
+    if (!v.ok) return res.status(400).json({ error: v.message, reason: v.code });
+    const region: CoverageBBox = { south: v.bbox.south, north: v.bbox.north, west: v.bbox.west, east: v.bbox.east };
+    const tileDeg = Math.min(0.05, Math.max(0.008, Number(req.body?.tileDeg ?? 0.02)));
+    const state = String(req.body?.state ?? "NC");
+    const deep = req.body?.deep === true; // include the paid Mapbox grid (finds new builds)
+    const budget = Math.max(1, Math.min(20000, Number(req.body?.budget ?? 4000))); // Kinetic probe ceiling
+    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
+
+    const id = `tiled_${Date.now()}_${++tiledJobSeq}`; // unique even within one ms
+    const job = createTileScanJob(id, region, { tileDeg });
+
+    // Guard 1: refuse an absurd tile count.
+    const MAX_TILES = Number(process.env.MAX_TILE_SCAN_TILES ?? 400);
+    if (job.tiles.length > MAX_TILES) {
+      return res.status(400).json({ error: `Region too large: ${job.tiles.length} tiles (cap ${MAX_TILES}). Draw a smaller region or raise tileDeg.`, reason: "too_many_tiles", tiles: job.tiles.length });
+    }
+    // Guard 2: when deep, estimate the total Mapbox reverse-geocode calls and cap
+    // BEFORE running — cost is explicit, never silent (the guardrail from the two
+    // prior billing incidents).
+    let estMapboxCalls = 0;
+    if (deep) {
+      for (const t of job.tiles) estMapboxCalls += bboxGridSize(t.bbox, adaptiveGridStep(t.bbox, { minSamplesPerSide: 6, maxPoints: 5000 }));
+      const CAP = Number(process.env.MAX_TILE_MAPBOX_CALLS ?? 8000);
+      if (estMapboxCalls > CAP) {
+        return res.status(400).json({ error: `Deep tiled scan would cost ~${estMapboxCalls.toLocaleString()} Mapbox calls (cap ${CAP.toLocaleString()}). Use a smaller region, a larger tileDeg, or free mode (deep:false).`, reason: "mapbox_over_cap", estMapboxCalls, cap: CAP });
+      }
+    }
+
+    const entry = { job, tenantId, cancelled: false };
+    tiledJobs.set(id, entry);
+    res.json({ jobId: id, tiles: job.tiles.length, region, tileDeg, deep, budget, estMapboxCalls });
+
+    // Job-level dedupe: never re-scan an address across overlapping tile edges or
+    // one already in leads — kills the cross-tile double-spend + inflated totals.
+    const seen = new Set<string>(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address || "")));
+    let remaining = budget;
+    const include = deep ? undefined : (["parcel", "rooftop", "overpass"] as const).slice();
+
+    runTileScan(job, {
+      gather: (bbox) => gatherCoverage(bbox, { state, include: include as any }),
+      qualify: async (addresses) => {
+        if (entry.cancelled || remaining <= 0) return { leads: 0, scanned: 0 };
+        const fresh: RawAddress[] = [];
+        for (const a of addresses) {
+          if (fresh.length >= remaining) break;
+          const key = normalizeAddrForDedup(a.address || "");
+          if (!key || seen.has(key)) continue;
+          seen.add(key); fresh.push(a);
+        }
+        remaining -= fresh.length;
+        return qualifyAddressesViaKinetic(fresh, tenantId, {
+          concurrency: Number(process.env.TILE_QUALIFY_CONCURRENCY ?? 6),
+          shouldStop: () => entry.cancelled || remaining < 0,
+        });
+      },
+      cancelled: () => entry.cancelled,
+    }, { tileDeg, tileConcurrency: Number(process.env.TILE_CONCURRENCY ?? 2), maxAttempts: 3 })
+      .catch((e) => { job.status = "error"; console.error(`[tiled-scan] ${id} failed:`, e?.message); });
+  });
+  app.get("/api/scan/tiled/:id", requireManager, (req, res) => {
+    const entry = tiledJobs.get(qstr(req.params.id));
+    const tid = (req as any).user?.tenantId;
+    if (!entry || (tid != null && entry.tenantId !== tid)) return res.status(404).json({ error: "Not found" });
+    const { job } = entry;
+    res.json({
+      id: job.id, status: entry.cancelled ? "cancelled" : job.status, region: job.region,
+      totals: job.totals,
+      tiles: job.tiles.map((t: Tile) => ({ id: t.id, status: t.status, coverage: t.coverage, addressCount: t.addressCount, newBuildCount: t.newBuildCount, leadCount: t.leadCount, bbox: t.bbox })),
+      startedAt: job.startedAt, completedAt: job.completedAt,
+    });
+  });
+  app.post("/api/scan/tiled/:id/cancel", requireAdmin, (req, res) => {
+    const entry = tiledJobs.get(qstr(req.params.id));
+    const tid = (req as any).user?.tenantId;
+    if (!entry || (tid != null && entry.tenantId !== tid)) return res.status(404).json({ error: "Not found" });
+    entry.cancelled = true;
+    res.json({ ok: true });
   });
 
   // City scan — start. Free sources by default (pool → GIS → Overpass);

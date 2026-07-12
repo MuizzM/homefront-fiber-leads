@@ -3,12 +3,15 @@ import { useEffect, useRef, useState, useCallback, useMemo, useSyncExternalStore
 declare const mapboxgl: any;
 import {
   AlertCircle, Pencil, X, Map as MapIcon, Bell, Target, Search, LocateFixed, Menu,
-  Lasso, Radar, Loader2, Layers, RefreshCw, CheckCircle2, List, Navigation,
+  Lasso, Radar, Loader2, Layers, RefreshCw, CheckCircle2, List, Navigation, Plus, Crosshair,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { LeadCard, type CardProperty } from "@/components/LeadCard";
+import { AddLeadSheet } from "@/components/AddLeadSheet";
+import { reverseGeocode } from "@/lib/reverseGeocode";
 import { useAuth } from "@/lib/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
 import type { TeamMember, Territory } from "@shared/schema";
@@ -115,17 +118,6 @@ const POLL_MS = 400; // 400ms — scan dots appear almost instantly
 // a fresh object per call would loop the store subscription forever.
 const EMPTY_QUEUE_SNAP: QueueSnapshot = { pendingCount: 0, deadCount: 0, byLead: {}, online: true };
 
-// HTML-escape untrusted text interpolated into scan-dot popups (XSS guard).
-function escapeHtml(v: unknown): string {
-  if (v == null) return "";
-  return String(v)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
-}
-
 // Compact "3m ago / 2h ago / 4d ago" for the visited banner.
 
 export default function MapView() {
@@ -210,6 +202,14 @@ export default function MapView() {
 
   // Assign-Area (freehand draw) mode
   const [lassoMode, setLassoMode] = useState(false);
+  // ── Add-lead / tap-a-house ──────────────────────────────────────────────────
+  // addMode: a single map tap reverse-geocodes a rooftop into an address.
+  // cardProperty: the property card sheet (from a tapped house or a scanned dot).
+  // addLeadInitial: opens the manual add-lead form, prefilled from card/tap/blank.
+  const [addMode, setAddMode] = useState(false);
+  const [cardProperty, setCardProperty] = useState<CardProperty | null>(null);
+  const [addLeadInitial, setAddLeadInitial] = useState<Partial<CardProperty> | null>(null);
+  const [tapResolving, setTapResolving] = useState(false);
   const [lassoPoints, setLassoPoints] = useState<[number, number][]>([]);
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
   const [lassoRepId, setLassoRepId] = useState("");
@@ -228,6 +228,28 @@ export default function MapView() {
   const canManage = user?.role === "admin" || user?.role === "manager";
   // Admin, manager, and team lead can carve out areas and assign them to reps.
   const canAssign = user?.role === "admin" || user?.role === "manager" || user?.role === "team_lead";
+
+  // Tap-a-house wiring: the shared map click handler (set up once at init) reads
+  // these window globals — the same pattern lasso/draw use — so toggling the mode
+  // never re-registers the map listener.
+  useEffect(() => {
+    (window as any).__tapAddressMode = addMode;
+    (window as any).__onTapAddress = async (lat: number, lng: number) => {
+      setTapResolving(true);
+      try {
+        const a = await reverseGeocode(lat, lng);
+        setCardProperty({ address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng, source: "tap" });
+      } catch {
+        toast({ title: "No address there", description: "Tap directly on a rooftop and try again.", variant: "destructive" });
+      } finally {
+        setTapResolving(false);
+        setAddMode(false);
+      }
+    };
+    const map = mapRef.current;
+    if (map) { try { map.getCanvas().style.cursor = addMode ? "crosshair" : ""; } catch {} }
+    return () => { (window as any).__tapAddressMode = false; };
+  }, [addMode, toast]);
 
   // ── Rep knocking workflow (bottom sheet + offline queue + next door) ────────
   // Reps always get the sheet; admins/managers get it on mobile (desktop keeps
@@ -705,6 +727,11 @@ export default function MapView() {
       // Tap a territory region → open its detail panel. Lead pins win over the
       // region beneath them; draw tools suppress it entirely.
       map.on("click", (e: any) => {
+        // Tap-a-house: in add mode a single tap resolves the rooftop → address.
+        if ((window as any).__tapAddressMode) {
+          (window as any).__onTapAddress?.(e.lngLat.lat, e.lngLat.lng);
+          return;
+        }
         if (drawToolActive()) return;
         const feats = map.queryRenderedFeatures(e.point);
         if (feats.some((f: any) => f.layer?.id === "lead-unclustered" || f.layer?.id === "lead-clusters")) return;
@@ -1457,17 +1484,23 @@ export default function MapView() {
     el.addEventListener("mouseenter", () => { el.style.transform = "scale(1.4)"; });
     el.addEventListener("mouseleave", () => { el.style.transform = "scale(1)"; });
 
-    const popup = new (window as any).mapboxgl.Popup({ offset: 14, closeButton: false })
-      .setHTML(`
-        <div style="font-size:11px;color:#e2e8f0;max-width:220px;">
-          <div style="font-weight:700;margin-bottom:2px;">${escapeHtml(row.address)}</div>
-          <div style="color:${bg};font-weight:600;">${escapeHtml(label)}</div>
-          ${row.techType ? `<div style="color:#94a3b8;">${escapeHtml(row.techType)} ${row.chipSetType ? "/ " + escapeHtml(row.chipSetType) : ""}</div>` : ""}
-          ${row.maxDownloadMbps ? `<div style="color:#38bdf8;">Max: ${row.maxDownloadMbps >= 1000 ? (row.maxDownloadMbps/1000).toFixed(0)+"G" : row.maxDownloadMbps+"M"} Mbps</div>` : ""}
-          ${row.competitorName ? `<div style="color:#f59e0b;">Competitor: ${escapeHtml(row.competitorName)}</div>` : ""}
-        </div>
-      `);
-    const m = new (window as any).mapboxgl.Marker({ element: el }).setLngLat([row.lng, row.lat]).setPopup(popup).addTo(map);
+    // Persistently tappable: a scanned dot is a real target, not a hover hint —
+    // tapping it opens the rich property card (address, fiber, speed, competitor
+    // + Add-as-lead / Copy). Native title gives a quick hover label on desktop.
+    el.title = `${row.address} — ${label}`;
+    el.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      setCardProperty({
+        address: row.address, city: row.city, state: row.state, zip: row.zip,
+        lat: row.lat, lng: row.lng,
+        fiberStatus: row.fiberStatus, isNewFiber: row.isNewFiber, billingStatus: row.billingStatus,
+        maxDownloadMbps: (row as any).maxDownloadMbps ?? null, speedTier: (row as any).speedTier ?? null,
+        competitorName: (row as any).competitorName ?? null,
+        leadTag: row.leadTag ?? null, leadScore: row.leadScore ?? null,
+        source: "scan",
+      });
+    });
+    const m = new (window as any).mapboxgl.Marker({ element: el }).setLngLat([row.lng, row.lat]).addTo(map);
     scanMarkersRef.current.push(m);
   }, []);
 
@@ -2545,6 +2578,34 @@ export default function MapView() {
             </button>
           )}
 
+          {/* ── Add-lead FAB — team_lead+ (matches POST /api/leads permission).
+                 Toggles tap-a-house: tap a rooftop → reverse-geocode → property
+                 card → add. Bottom-right; these roles have no locate FAB so it
+                 doesn't collide. ── */}
+          {mapReady && canAssign && (
+            <button
+              onClick={() => setAddMode(v => !v)}
+              aria-label={addMode ? "Cancel add-lead" : "Add a lead — tap a house"}
+              aria-pressed={addMode}
+              data-testid="add-lead-fab"
+              style={{ height: 52, width: 52, bottom: "calc(env(safe-area-inset-bottom) + 2rem)", boxShadow: "var(--glass-shadow-1)" }}
+              className={`absolute right-3 z-20 rounded-full ring-1 ring-inset flex items-center justify-center active:scale-[0.97] transform-gpu transition ${addMode ? "bg-orange-500 text-white ring-white/20" : "bg-primary text-white ring-white/[0.18] hover:bg-primary/90"}`}
+            >
+              {tapResolving ? <Loader2 className="w-6 h-6 animate-spin" /> : addMode ? <Crosshair className="w-6 h-6" /> : <Plus className="w-6 h-6" />}
+            </button>
+          )}
+
+          {/* Tap-a-house hint — shown while add mode is armed. */}
+          {mapReady && canAssign && addMode && (
+            <div className="absolute left-1/2 -translate-x-1/2 z-30 glass-surface glass-opaque px-3 py-2 flex items-center gap-2 text-[12px] text-white/85"
+              style={{ bottom: "calc(env(safe-area-inset-bottom) + 5.5rem)" }} data-testid="tap-hint">
+              <Crosshair className="w-3.5 h-3.5 text-orange-400" />
+              Tap a house to grab its address
+              <button className="ml-1 underline underline-offset-2 text-white/70 hover:text-white" onClick={() => { setAddMode(false); setAddLeadInitial({}); }}>Type it</button>
+              <button className="text-white/50 hover:text-white" aria-label="Cancel" onClick={() => setAddMode(false)}><X className="w-3.5 h-3.5" /></button>
+            </div>
+          )}
+
           {/* Next-door FAB — REP-ONLY, bottom-left (thumb reach, mirrors the
               locate FAB on the right). One tap: nearest unworked door from
               where the rep is standing → fly + open its knock sheet. Hidden
@@ -2738,6 +2799,22 @@ export default function MapView() {
             repNameById={repNameById}
           />
         )}
+
+        {/* Property card — opens from tapping a scanned dot or a house (tap mode).
+            View + Copy for everyone; "Add as lead" only for team_lead+ (canAssign,
+            matching POST /api/leads). */}
+        <LeadCard
+          property={cardProperty}
+          canAdd={canAssign}
+          onClose={() => setCardProperty(null)}
+          onAddLead={(p) => { setCardProperty(null); setAddLeadInitial(p); }}
+          onOpen={(id) => { setCardProperty(null); (window as any).__openLeadSheet?.(id); }}
+        />
+        {/* Manual add-lead form — prefilled from a tap/dot or blank ("Type it"). */}
+        <AddLeadSheet
+          initial={addLeadInitial}
+          onClose={() => setAddLeadInitial(null)}
+        />
       </div>
     </div>
   );
