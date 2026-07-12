@@ -171,6 +171,8 @@ export interface IStorage {
   getComingSoonHistory(tenantId?: number, limit?: number): ComingSoonAddress[];
   archiveComingSoon(id: number, reason: string): ComingSoonAddress | undefined;
   ageOutComingSoon(maxChecks?: number, maxAgeDays?: number): number;
+  wasDeepSeeded(city: string, state: string): boolean;
+  markDeepSeeded(city: string, state: string, addressCount: number): void;
   createComingSoon(addr: InsertComingSoon): ComingSoonAddress;
   updateComingSoon(id: number, updates: Partial<ComingSoonAddress>): ComingSoonAddress | undefined;
   deleteComingSoon(id: number): boolean;
@@ -249,6 +251,10 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS clock_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, rep_id INTEGER NOT NULL, user_id INTEGER NOT NULL, clocked_in TEXT NOT NULL, clocked_out TEXT, duration_minutes INTEGER, notes TEXT, date TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS coming_soon_addresses (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, city TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'NC', zip TEXT NOT NULL, lat REAL, lng REAL, reason TEXT NOT NULL DEFAULT 'no_service', last_checked TEXT, fiber_available INTEGER DEFAULT 0, converted_to_lead_id INTEGER, added_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS commissions (id INTEGER PRIMARY KEY AUTOINCREMENT, rep_id INTEGER NOT NULL, lead_id INTEGER, knock_id INTEGER, amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'pending', sale_date TEXT NOT NULL, paid_date TEXT, notes TEXT, approved_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    // Persistent marker: a town deep-Mapbox-grid-seeded into the pool. Its whole
+    // job is to make the nightly deep-seed run ONCE per town, ever (the one-time
+    // Mapbox cost), independent of pool row counts.
+    `CREATE TABLE IF NOT EXISTS deep_seed_log (city_key TEXT PRIMARY KEY, city TEXT NOT NULL, state TEXT NOT NULL, address_count INTEGER NOT NULL DEFAULT 0, seeded_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS commission_rates (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, role TEXT, rep_id INTEGER, rate_per_sale REAL NOT NULL, is_active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS activity_log (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, action TEXT NOT NULL, entity_type TEXT, entity_id INTEGER, details TEXT, ip TEXT, at TEXT NOT NULL DEFAULT (datetime('now')))`,
     // Lead scoring columns (safe to run on existing DB)
@@ -1575,6 +1581,16 @@ export class Storage implements IStorage {
         eq(comingSoonAddresses.fiberAvailable, false),
         sql`(check_count >= ${maxChecks} OR created_at < ${cutoff})`,
       )).run().changes;
+  }
+  // ── Deep-seed marker — a town's one-time Mapbox-grid seed happened. ──────────
+  wasDeepSeeded(city: string, state: string): boolean {
+    const key = `${city.trim().toLowerCase()}|${state.trim().toLowerCase()}`;
+    return !!rawDb.prepare("SELECT 1 FROM deep_seed_log WHERE city_key = ?").get(key);
+  }
+  markDeepSeeded(city: string, state: string, addressCount: number): void {
+    const key = `${city.trim().toLowerCase()}|${state.trim().toLowerCase()}`;
+    rawDb.prepare("INSERT OR REPLACE INTO deep_seed_log (city_key, city, state, address_count, seeded_at) VALUES (?,?,?,?,datetime('now'))")
+      .run(key, city.trim(), state.trim().toUpperCase(), addressCount);
   }
   createComingSoon(addr: InsertComingSoon): ComingSoonAddress {
     return db.insert(comingSoonAddresses).values({ ...addr, createdAt: new Date().toISOString() }).returning().get();

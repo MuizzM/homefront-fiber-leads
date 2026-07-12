@@ -20,6 +20,8 @@ import {
   buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
   type ExclusionReason,
 } from "@shared/leadQualify";
+import { geocodeCity, tileBbox } from "./overpass";
+import { harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 
 // Address-match guard: only promote if Kinetic's answer is for the SAME address we
 // watched (zip match, or normalized street match) — a re-keyed/recycled dfAddressId
@@ -321,6 +323,63 @@ function buildPoolRescanSource(): { source: StreamSource; finalize: () => void }
 }
 
 // ── The nightly batch — all three sources on ONE shared window ────────────────
+// ── Deep-seed priority cities into the pool (Mapbox grid, once per city) ──────
+// New Kinetic fiber lands on brand-new streets OSM doesn't have (proven: Lexington
+// had 7,887 addresses OSM missed, ~87% fiber-served). A normal scan captures ~3%.
+// So ONCE per configured town, run the deep Mapbox grid to enumerate every address
+// into the pool — then the nightly pool re-scan qualifies them through Kinetic for
+// free every night. Idempotent (skips an already-seeded city) and capped, so
+// Mapbox spend is a one-time, bounded cost per town — never a recurring bill.
+async function deepSeedPriorityCities(): Promise<void> {
+  const list = (process.env.NIGHTLY_DEEP_SEED_CITIES ?? "").split(";").map((s) => s.trim()).filter(Boolean);
+  if (!list.length) return;
+  const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
+  if (!token) { console.log("[cron] deep-seed skipped — no Mapbox token"); return; }
+  const maxMapbox = Number(process.env.NIGHTLY_DEEP_SEED_MAX_MAPBOX ?? 12000); // per-night Mapbox ceiling
+  const step = 0.0012; // ~133m
+  let spent = 0;
+
+  for (const entry of list) {
+    const [cityRaw, stateRaw] = entry.split(",").map((s) => s.trim());
+    const city = cityRaw, state = (stateRaw || "NC").toUpperCase();
+    if (!city) continue;
+    // Idempotent via a PERSISTENT marker — a town is deep-gridded ONCE, ever. (A
+    // pool-row-count heuristic is unreliable: rows already pooled under another
+    // source wouldn't count, so the town would re-grid nightly = runaway Mapbox.)
+    if (storage.wasDeepSeeded(city, state)) { console.log(`[cron] deep-seed ${city}, ${state}: already seeded — skip`); continue; }
+    if (spent >= maxMapbox) { console.log(`[cron] deep-seed: nightly Mapbox budget reached — deferring ${city} to a later night`); break; }
+    try {
+      const geo = await geocodeCity(city, state);
+      if (!geo) { console.warn(`[cron] deep-seed ${city}: geocode failed — will retry next night`); continue; } // not marked → retry
+      const tiles = tileBbox({ south: geo.bbox.south, north: geo.bbox.north, west: geo.bbox.west, east: geo.bbox.east }, 0.04);
+      const seen = new Set<string>();
+      const addrs: any[] = [];
+      let completed = true;
+      for (const t of tiles) {
+        if (spent >= maxMapbox) { completed = false; break; } // budget cut mid-city → resume next night
+        try {
+          const a = await harvestBboxAddresses(t as any, state, token, undefined, step);
+          spent += bboxGridSize(t as any, step);
+          for (const x of a) { const k = x.address.toLowerCase(); if (!seen.has(k)) { seen.add(k); addrs.push(x); } }
+        } catch (e: any) { console.warn(`[cron] deep-seed ${city} tile: ${e.message}`); }
+      }
+      if (addrs.length) {
+        storage.upsertScanTargets(addrs.map((a) => ({ address: a.address, city, state, zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: "mapbox-deep-seed" })));
+      }
+      // Mark done ONLY if the whole city's grid finished — a budget-cut city stays
+      // unmarked so it resumes (and completes) on a later night, never re-billing
+      // a town we already finished.
+      if (completed) {
+        storage.markDeepSeeded(city, state, addrs.length);
+        console.log(`[cron] deep-seed ${city}, ${state}: +${addrs.length} addresses to pool (Mapbox ~${spent}) — marked seeded`);
+      } else {
+        console.log(`[cron] deep-seed ${city}, ${state}: +${addrs.length} so far (budget cut) — resumes next night`);
+      }
+    } catch (e: any) { console.warn(`[cron] deep-seed ${city} failed: ${e.message}`); } // not marked → retry
+  }
+  console.log(`[cron] deep-seed complete — ~${spent} Mapbox calls this run`);
+}
+
 async function runNightlyBatch(): Promise<void> {
   cronStatus.isRunning = true;
   cronStatus.lastRunAt = new Date().toISOString();
@@ -329,6 +388,9 @@ async function runNightlyBatch(): Promise<void> {
   activeScheduler = scheduler;
   const before = cronStatus.totalNewFiberFound;
   try {
+    // Seed the priority towns' new builds into the pool FIRST (Mapbox grid, once
+    // per town) so the pool re-scan below qualifies them this same run.
+    try { await deepSeedPriorityCities(); } catch (e: any) { console.warn("[cron] deep-seed error:", e.message); }
     const cns = buildCnsFrontierSource();
     const pool = buildPoolRescanSource();
     const promoted: string[] = [];

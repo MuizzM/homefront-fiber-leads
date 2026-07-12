@@ -23,6 +23,14 @@ services:
       NODE_ENV: production
       PORT: "5000"
       DATA_DIR: /data          # data.db + uploads/ both live here (one volume)
+      # ── Nightly auto-scan (2 AM): CNS frontier + Coming-Soon recheck + pool
+      #    re-scan, plus a ONE-TIME deep Mapbox-grid seed of the priority NC towns
+      #    (new Kinetic fiber lands on new streets OSM lacks — Lexington had ~7,900
+      #    OSM-missed addresses, ~87% fiber). Deep-seed is idempotent per town and
+      #    capped, so Mapbox is a bounded one-time cost that spreads across nights.
+      ENABLE_NIGHTLY_SCAN: "true"
+      NIGHTLY_DEEP_SEED_CITIES: "Lexington,NC;Albemarle,NC;Concord,NC;Kannapolis,NC;Indian Trail,NC;Wingate,NC;Broadway,NC;Pine Bluff,NC;Tryon,NC;Morven,NC"
+      NIGHTLY_DEEP_SEED_MAX_MAPBOX: "12000"
     volumes:
       - app-data:/data         # DB + uploads — the ONLY stateful mount
     expose:

@@ -82,3 +82,17 @@ describe("coming-soon lifecycle", () => {
     expect(archived).toBe(0);                     // already promoted, not re-archived as junk
   });
 });
+
+describe("deep-seed marker (nightly one-time seed idempotence)", () => {
+  it("marks a city seeded once; case-insensitive; independent of pool rows", () => {
+    expect(storage.wasDeepSeeded("Lexington", "NC")).toBe(false);
+    storage.markDeepSeeded("Lexington", "NC", 7887);
+    expect(storage.wasDeepSeeded("Lexington", "NC")).toBe(true);
+    expect(storage.wasDeepSeeded("lexington", "nc")).toBe(true); // case-insensitive key
+    expect(storage.wasDeepSeeded("Concord", "NC")).toBe(false);  // a different town isn't seeded
+    // Re-mark is idempotent (INSERT OR REPLACE) — no duplicate rows.
+    storage.markDeepSeeded("Lexington", "NC", 8000);
+    const rows: any = rawDb.prepare("SELECT COUNT(*) c FROM deep_seed_log WHERE lower(city)='lexington'").get();
+    expect(rows.c).toBe(1);
+  });
+});
