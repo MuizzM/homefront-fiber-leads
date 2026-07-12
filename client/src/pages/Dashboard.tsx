@@ -97,12 +97,19 @@ interface RepActivity {
   events: { id: number; outcome: string; at: string; address: string | null }[];
 }
 
-// One horizontally-scrollable tile — number first, label under it.
-function FieldTile({ label, value, tone }: { label: string; value: number | string; tone: string }) {
+// KPI card — a tinted icon chip, a colored top-accent hairline, the number, the
+// label. Horizontally scrollable; each reads as a sharp stat, not a plain box.
+function FieldTile({ label, value, tone, icon: Icon, chip, accent }: {
+  label: string; value: number | string; tone: string; icon: any; chip: string; accent: string;
+}) {
   return (
-    <div className="shrink-0 w-[124px] rounded-2xl bg-card border border-border px-4 py-3.5"
+    <div className="relative shrink-0 w-[132px] rounded-2xl bg-card border border-border px-3.5 pt-3.5 pb-3 overflow-hidden"
       data-testid={`field-tile-${label.toLowerCase().replace(/\s/g, "-")}`}>
-      <div className={`text-[22px] font-bold leading-none tabular-nums ${tone}`}>{value}</div>
+      <span className={`absolute inset-x-0 top-0 h-[3px] ${accent}`} aria-hidden="true" />
+      <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg mb-2.5 ${chip}`}>
+        <Icon className={`w-4 h-4 ${tone}`} />
+      </span>
+      <div className={`text-[24px] font-bold leading-none tabular-nums ${tone}`}>{value}</div>
       <div className="text-[11px] text-muted-foreground font-medium mt-1.5">{label}</div>
     </div>
   );
@@ -219,15 +226,15 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 pb-10 max-w-7xl mx-auto space-y-6">
-      {/* Header */}
+      {/* Header — time-aware, personalized greeting */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-bold text-foreground">
-            {isRep ? `Welcome back, ${user?.name?.split(" ")[0] ?? "Rep"}` : "Dashboard"}
+          <h1 className="text-[22px] font-bold tracking-tight text-foreground">
+            {(() => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; })()}, {user?.name?.split(" ")[0] ?? "there"}
           </h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="text-sm text-muted-foreground mt-0.5">
             {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
-            {isRep && " · Your personal dashboard"}
+            {isRep ? " · Your field summary" : " · Team overview"}
           </p>
         </div>
         {stats && !isRep && (
@@ -250,11 +257,11 @@ export default function Dashboard() {
       {/* ── Field summary — thumb-scrollable tiles, the day at a glance ── */}
       <div className="-mx-6 px-6 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pill-row-fade"
         data-testid="field-tiles">
-        <FieldTile label="Knocks today" value={stats?.knocks.today ?? "—"} tone="text-foreground" />
-        <FieldTile label="Assigned" value={assigned} tone="text-foreground" />
-        <FieldTile label="Dispositioned" value={dispositioned} tone="text-sky-400" />
-        <FieldTile label="Sold" value={leadStats?.byStatus?.sold ?? 0} tone="text-emerald-400" />
-        <FieldTile label="Follow-ups due" value={leadStats?.byStatus?.follow_up ?? 0} tone="text-yellow-400" />
+        <FieldTile label="Knocks today" value={stats?.knocks.today ?? "—"} tone="text-primary" icon={Zap} chip="bg-primary/15" accent="bg-primary" />
+        <FieldTile label="Assigned" value={assigned} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
+        <FieldTile label="Dispositioned" value={dispositioned} tone="text-sky-400" icon={Activity} chip="bg-sky-500/15" accent="bg-sky-500" />
+        <FieldTile label="Sold" value={leadStats?.byStatus?.sold ?? 0} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
+        <FieldTile label="Follow-ups due" value={leadStats?.byStatus?.follow_up ?? 0} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
       </div>
 
       {/* ── Team today — one row per rep; tap for their recent doors ── */}
