@@ -946,7 +946,9 @@ export default function MapView() {
     const map = mapRef.current;
     if (!map || !mapReady || didAutoFitRef.current) return;
     if (gpsCenteredRef.current) { didAutoFitRef.current = true; return; } // live GPS won the race
-    if (isRep) {
+    // EVERY role opens where they're standing (Apple/Google-Maps behavior): paint
+    // the last-known GPS fix instantly at street zoom while live GPS warms up.
+    {
       const start = pickRepStartCamera(readCachedFix(), Date.now());
       if (start) {
         map.jumpTo({ center: start.center, zoom: start.zoom });
@@ -954,8 +956,8 @@ export default function MapView() {
         return;
       }
     }
-    // No location signal yet (first run / cleared storage) or manager view:
-    // frame the assigned leads so the map is never a blank town center.
+    // No location signal yet (first run / cleared storage): frame the assigned
+    // leads so the map is never a blank town center until the live fix lands.
     const pts = leads.filter(l => l.lat && l.lng);
     if (pts.length === 0) return;
     try {
@@ -966,18 +968,18 @@ export default function MapView() {
     } catch {}
   }, [leads, mapReady, isRep, user]);
 
-  // ── Auto-start live location for reps (SalesRabbit launch behavior) ───────────
-  // One trigger per session: prompts for permission if needed, shows the blue
-  // dot immediately, centers at street zoom on the first fix, and follows the
-  // rep as they walk (trackUserLocation). The Locate FAB re-triggers the same
+  // ── Auto-start live location on open — EVERY role (Apple/Google-Maps launch) ──
+  // One trigger per session: prompts for permission if needed, shows the big blue
+  // location dot immediately, centers at street zoom on the first fix, and follows
+  // as the user moves (trackUserLocation). The Locate FAB re-triggers the same
   // control, so one tap always snaps back to current location.
   useEffect(() => {
-    if (!mapReady || !isRep || geoAutoStartedRef.current) return;
+    if (!mapReady || geoAutoStartedRef.current) return;
     geoAutoStartedRef.current = true;
     try { geolocateRef.current?.trigger(); } catch { /* control not ready — FAB still works */ }
     // Robust default-to-current-location: even if the GeolocateControl doesn't
     // center (deferred permission, iOS standalone stall), a direct fix opens the
-    // map on the rep. No-ops if the live control already centered, or if location
+    // map on the user. No-ops if the live control already centered, or if location
     // isn't granted yet (then last-known/lead-bounds from the effect above stands).
     captureFieldFix(8000).then(fix => {
       const m = mapRef.current;
@@ -986,7 +988,7 @@ export default function MapView() {
         moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 600, essential: true });
       }
     }).catch(() => {});
-  }, [mapReady, isRep]);
+  }, [mapReady]);
 
   // ── Render color-coded territory regions (area name + owner label) ─────────
   // Managers/team leads see EVERY area: rep-colored fill + a two-line centroid
@@ -2606,12 +2608,10 @@ export default function MapView() {
             </div>
           )}
 
-          {/* Locate-me FAB — REP-ONLY. A field rep walking a street needs to
-              recenter on their blue dot constantly; a manager at a desk reviewing
-              territory does not, and the button only crowded their map. Removed
-              for non-rep roles per operator feedback; the GeolocateControl is
-              still wired, so reps keep the thumb target. */}
-          {mapReady && isRep && (
+          {/* Locate-me FAB — EVERY role. Now that the map opens on your location
+              with the blue dot (Apple/Google-Maps behavior), everyone gets the
+              one-tap "recenter on me" thumb target too. Bottom-right. */}
+          {mapReady && (
             <button
               onClick={() => {
                 // Primary path: the GeolocateControl (blue dot + live tracking).
@@ -2638,15 +2638,14 @@ export default function MapView() {
 
           {/* ── Add-lead FAB — team_lead+ (matches POST /api/leads permission).
                  Toggles tap-a-house: tap a rooftop → reverse-geocode → property
-                 card → add. Bottom-right; these roles have no locate FAB so it
-                 doesn't collide. ── */}
+                 card → add. Stacked ABOVE the locate FAB (bottom-right). ── */}
           {mapReady && canAssign && (
             <button
               onClick={() => setAddMode(v => !v)}
               aria-label={addMode ? "Cancel add-lead" : "Add a lead — tap a house"}
               aria-pressed={addMode}
               data-testid="add-lead-fab"
-              style={{ height: 52, width: 52, bottom: "calc(env(safe-area-inset-bottom) + 2rem)", boxShadow: "var(--glass-shadow-1)" }}
+              style={{ height: 52, width: 52, bottom: "calc(env(safe-area-inset-bottom) + 6rem)", boxShadow: "var(--glass-shadow-1)" }}
               className={`absolute right-3 z-20 rounded-full ring-1 ring-inset flex items-center justify-center active:scale-[0.97] transform-gpu transition ${addMode ? "bg-orange-500 text-white ring-white/20" : "bg-primary text-white ring-white/[0.18] hover:bg-primary/90"}`}
             >
               {tapResolving ? <Loader2 className="w-6 h-6 animate-spin" /> : addMode ? <Crosshair className="w-6 h-6" /> : <Plus className="w-6 h-6" />}
