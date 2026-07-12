@@ -32,24 +32,21 @@ export default function Profile() {
           <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-1">
             Account
           </h2>
-          <div className="rounded-xl bg-card border border-border divide-y divide-border overflow-hidden">
-            {/* Identity row */}
-            <div className="p-5 flex items-center gap-4">
-              <div className="w-14 h-14 rounded-full bg-primary/20 text-primary flex items-center justify-center text-lg font-bold shrink-0">
+          <div className="rounded-2xl bg-card border border-border overflow-hidden">
+            {/* Gradient banner + overlapping avatar — a proper identity header */}
+            <div className="h-16 bg-gradient-to-r from-primary/30 via-primary/12 to-transparent" aria-hidden="true" />
+            <div className="px-5 pb-5 -mt-9">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-emerald-600 text-white flex items-center justify-center text-xl font-bold ring-4 ring-card shadow-lg">
                 {user.name?.slice(0, 2).toUpperCase()}
               </div>
-              <div className="min-w-0">
-                <div className="text-[17px] font-semibold tracking-tight text-foreground truncate">{user.name}</div>
-                <div className="text-[13px] text-muted-foreground truncate">{user.email}</div>
+              <div className="mt-3 flex items-center gap-2 flex-wrap">
+                <h3 className="text-[18px] font-bold tracking-tight text-foreground">{user.name}</h3>
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/12 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary" aria-hidden="true" />
+                  {ROLE_LABEL[user.role] ?? user.role}
+                </span>
               </div>
-            </div>
-            {/* Role row — label + control */}
-            <div className="px-5 py-4 flex items-center justify-between gap-4">
-              <span className="text-[14px] text-foreground">Role</span>
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <span className="w-1.5 h-1.5 rounded-full bg-primary" aria-hidden="true" />
-                {ROLE_LABEL[user.role] ?? user.role}
-              </span>
+              <div className="text-[13px] text-muted-foreground mt-1 truncate">{user.email}</div>
             </div>
           </div>
         </section>
