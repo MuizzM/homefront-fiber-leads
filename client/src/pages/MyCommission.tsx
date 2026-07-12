@@ -1,11 +1,49 @@
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/lib/auth";
 import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
-  FileSignature, CheckCircle2, Home,
+  FileSignature, CheckCircle2, Home, FileText, Printer,
 } from "lucide-react";
+import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
+
+// Map the live week / a past-week snapshot into the printable statement shape.
+function currentWeekModel(data: WeekResponse, repName: string): StatementModel {
+  const c = data.computation;
+  const label = data.bounds?.localWeekLabel ?? "This week";
+  return {
+    repName, weekLabel: label,
+    status: data.statement?.status ?? "OPEN",
+    qualifiedSaleCount: c?.qualifiedSaleCount ?? 0,
+    rateCents: c?.rateCents ?? 0,
+    grossCents: c?.grossCommissionCents ?? 0,
+    adjustmentCents: c?.adjustmentCents ?? 0,
+    finalCents: c?.finalCommissionCents ?? 0,
+    tierLabel: c?.tierLabel ?? null,
+    planName: data.structure?.planName ?? null,
+    sales: (data.sales ?? []).map(s => ({ date: s.qualified_at ?? s.sold_at, address: s.address, city: s.city, status: s.status })),
+    adjustments: (data.adjustments ?? []).map(a => ({ amount_cents: a.amount_cents, reason: a.reason })),
+    statementNo: `HFS-${label.replace(/[^0-9]/g, "").slice(0, 8) || "CUR"}`,
+  };
+}
+function historyModel(s: any, repName: string): StatementModel {
+  const gross = s.gross_commission_cents ?? (s.rate_cents ?? 0) * (s.qualified_sale_count ?? 0);
+  return {
+    repName, weekLabel: s.local_week_label,
+    status: s.status,
+    qualifiedSaleCount: s.qualified_sale_count ?? 0,
+    rateCents: s.rate_cents ?? 0,
+    grossCents: gross,
+    adjustmentCents: s.adjustment_cents ?? 0,
+    finalCents: s.final_commission_cents ?? gross,
+    tierLabel: s.tier_label ?? null,
+    planName: null, sales: [], adjustments: [],
+    statementNo: `HFS-${String(s.id).padStart(5, "0")}`,
+  };
+}
 
 // ── Rep-facing "My Commission this week" ──────────────────────────────────────
 // Reads GET /api/commission/statements/me/current — the caller's own live week.
@@ -45,6 +83,9 @@ const WEEK_STATE: Record<string, { label: string; cls: string; icon: "lock" | "c
 };
 
 export default function MyCommission() {
+  const { user } = useAuth();
+  const repName = user?.name ?? "Field Representative";
+  const [stmt, setStmt] = useState<StatementModel | null>(null);
   const { data, isLoading, isError, refetch } = useQuery<WeekResponse>({
     queryKey: ["/api/commission/statements/me/current"],
     queryFn: () => apiRequest("GET", "/api/commission/statements/me/current").then(r => r.json()),
@@ -65,10 +106,24 @@ export default function MyCommission() {
             {data?.bounds?.localWeekLabel ? `Week of ${data.bounds.localWeekLabel}` : "This week's earnings"}
           </p>
         </div>
-        <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-          <DollarSign className="w-5 h-5 text-primary" />
+        <div className="flex items-center gap-2">
+          {!isLoading && data && !data.noPlan && !data.noRepProfile && (
+            <button
+              type="button"
+              onClick={() => setStmt(currentWeekModel(data, repName))}
+              data-testid="open-statement"
+              className="inline-flex items-center gap-1.5 h-10 px-3 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform"
+            >
+              <FileText className="w-4 h-4" /> Statement
+            </button>
+          )}
+          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <DollarSign className="w-5 h-5 text-primary" />
+          </div>
         </div>
       </div>
+
+      {stmt && <CommissionStatement model={stmt} onClose={() => setStmt(null)} />}
 
       {isLoading && (
         <div className="space-y-4">
@@ -165,6 +220,15 @@ export default function MyCommission() {
                 <div className="flex items-center gap-3 flex-shrink-0">
                   <span className="text-sm font-semibold text-foreground tabular-nums">{usd(s.final_commission_cents)}</span>
                   <StatusPill status={s.status} />
+                  <button
+                    type="button"
+                    onClick={() => setStmt(historyModel(s, repName))}
+                    aria-label={`Open statement for ${s.local_week_label}`}
+                    data-testid={`statement-${s.id}`}
+                    className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 active:scale-95 transition-all"
+                  >
+                    <Printer className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             ))}

@@ -359,3 +359,23 @@
     radial-gradient(640px 340px at 50% 30%, hsl(var(--primary) / 0.08), transparent 70%),
     hsl(var(--background));
 }
+
+/* ── Print isolation for the commission statement ─────────────────────────────
+   When printing (or Save-as-PDF), hide the whole app and show ONLY the paper
+   statement, full-bleed on white. Keeps the dark app chrome out of the PDF. */
+@media print {
+  body * { visibility: hidden !important; }
+  .stmt-paper, .stmt-paper * { visibility: visible !important; }
+  .stmt-overlay {
+    position: absolute !important; inset: 0 !important; z-index: 0 !important;
+    background: #fff !important; backdrop-filter: none !important;
+    padding: 0 !important; overflow: visible !important;
+  }
+  .stmt-paper {
+    position: absolute !important; left: 0 !important; top: 0 !important;
+    width: 100% !important; max-width: none !important;
+    box-shadow: none !important; border-radius: 0 !important; margin: 0 !important;
+  }
+  .no-print { display: none !important; }
+  @page { margin: 14mm; }
+}
