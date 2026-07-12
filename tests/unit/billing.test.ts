@@ -22,10 +22,14 @@ describe("plan catalog", () => {
     expect(planHasFeature("enterprise", "sso")).toBe(true);
     expect(planHasFeature("professional", "sso")).toBe(false);
   });
-  it("enterprise is unlimited/custom (null credits + seats), prices unset", () => {
+  it("enterprise is unlimited/custom (null credits + seats + price = Contact us)", () => {
     expect(PLANS.enterprise.monthlyCredits).toBeNull();
     expect(PLANS.enterprise.seats).toBeNull();
-    for (const p of Object.values(PLANS)) expect(p.monthlyPriceUsd).toBeNull(); // owner sets later
+    expect(PLANS.enterprise.monthlyPriceUsd).toBeNull(); // "Contact us"
+    // Paid tiers carry a (placeholder) price; ascending by tier.
+    expect(PLANS.starter.monthlyPriceUsd).toBeGreaterThan(0);
+    expect(PLANS.growth.monthlyPriceUsd!).toBeGreaterThan(PLANS.starter.monthlyPriceUsd!);
+    expect(PLANS.professional.monthlyPriceUsd!).toBeGreaterThan(PLANS.growth.monthlyPriceUsd!);
   });
 });
 

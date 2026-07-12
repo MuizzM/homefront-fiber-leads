@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
+import { BillingOps } from "@/components/BillingOps";
 import {
   Building2, Plus, DollarSign, Users, Zap, BarChart2,
   Edit2, Trash2, Shield, Globe, CheckCircle,
@@ -396,6 +397,9 @@ export default function SuperAdmin() {
           ))}
         </div>
       </div>
+
+      {/* Billing & credits — cross-tenant lead-credit metering ops */}
+      <BillingOps />
 
       {/* Revenue by tenant — statement rows */}
       {revenue && revenue.summary.length > 0 && (

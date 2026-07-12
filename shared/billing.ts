@@ -35,11 +35,12 @@ const F_GROWTH: Feature[] = [...F_STARTER, "lead_assignment", "rep_metrics", "ma
 const F_PRO: Feature[] = [...F_GROWTH, "advanced_analytics", "auto_lead_delivery", "white_label", "priority_scanning", "advanced_permissions"];
 const F_ENT: Feature[] = [...F_PRO, "sso", "scim", "audit_logs", "api_access", "custom_retention"];
 
-// Credit allowances/seats are sensible defaults; prices are null (owner sets).
+// Credit allowances/seats are sensible defaults. Prices are PLACEHOLDERS — edit
+// these four numbers to set real pricing (Enterprise stays null = "Contact us").
 export const PLANS: Record<PlanKey, Plan> = {
-  starter:      { key: "starter",      name: "Starter",      monthlyCredits: 250,   seats: 3,    features: F_STARTER, monthlyPriceUsd: null, overagePerCreditUsd: null },
-  growth:       { key: "growth",       name: "Growth",       monthlyCredits: 1500,  seats: 10,   features: F_GROWTH,  monthlyPriceUsd: null, overagePerCreditUsd: null },
-  professional: { key: "professional", name: "Professional", monthlyCredits: 6000,  seats: 40,   features: F_PRO,     monthlyPriceUsd: null, overagePerCreditUsd: null },
+  starter:      { key: "starter",      name: "Starter",      monthlyCredits: 250,   seats: 3,    features: F_STARTER, monthlyPriceUsd: 99,  overagePerCreditUsd: 0.75 },
+  growth:       { key: "growth",       name: "Growth",       monthlyCredits: 1500,  seats: 10,   features: F_GROWTH,  monthlyPriceUsd: 299, overagePerCreditUsd: 0.50 },
+  professional: { key: "professional", name: "Professional", monthlyCredits: 6000,  seats: 40,   features: F_PRO,     monthlyPriceUsd: 799, overagePerCreditUsd: 0.35 },
   enterprise:   { key: "enterprise",   name: "Enterprise",   monthlyCredits: null,  seats: null, features: F_ENT,     monthlyPriceUsd: null, overagePerCreditUsd: null },
 };
 

@@ -1160,11 +1160,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ══ BILLING — SaaS lead-credit "banking" (see shared/billing.ts + billingStore.ts) ══
   // DARK by default: a tenant without a tenant_billing row reports enabled:false +
   // full access, so nothing here disturbs the live portal until billing is set up.
-  // Reads are tenant-admin scoped; mutations are super_admin-only (platform ops)
-  // until the payment-provider adapter drives them.
-  function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
+  // Reads are tenant-admin scoped; mutations are PLATFORM-OWNER-only (same gate as
+  // the /api/sa tenant-management routes — an owner-email allow-list, since the
+  // owner runs as role "admin", not a distinct super_admin role).
+  function requireBillingOwner(req: Request, res: Response, next: NextFunction) {
     requireAuth(req, res, () => {
-      if ((req as any).user?.role !== "super_admin") return res.status(403).json({ error: "Super admin only" });
+      const u = (req as any).user;
+      const owners = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
+        .split(",").map(e => e.trim().toLowerCase());
+      if (!u || !["admin", "super_admin"].includes(u.role) || !owners.includes(String(u.email).toLowerCase())) {
+        return res.status(403).json({ error: "Platform owner only" });
+      }
       next();
     });
   }
@@ -1204,7 +1210,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Requires an EXPLICIT tenantId and validates every enum so a tenant can never be
   // written into an unrecoverable state (an invalid `state` has no legal transition
   // out — it would brick the org).
-  app.post("/api/billing/provision", requireSuperAdmin, (req, res) => {
+  app.post("/api/billing/provision", requireBillingOwner, (req, res) => {
     const { planKey, state, overageMode, trialEndsAt } = req.body ?? {};
     const tenantId = explicitBillingTenantId(req);
     if (tenantId == null) return res.status(400).json({ error: "explicit tenantId required" });
@@ -1218,7 +1224,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.status(201).json(billingSummary(row.tenantId));
   });
   // Move a tenant through the billing state machine (validated transition).
-  app.post("/api/billing/state", requireSuperAdmin, (req, res) => {
+  app.post("/api/billing/state", requireBillingOwner, (req, res) => {
     const to = String(req.body?.state ?? "");
     if (!isBillingEnabled(billingTenantId(req))) return res.status(404).json({ error: "Billing not provisioned" });
     const r = setBillingState(billingTenantId(req), to as any, `super_admin:${(req as any).user?.id}`);
@@ -1226,7 +1232,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(billingSummary(billingTenantId(req)));
   });
   // Change plan (swaps allowance). Super-admin ops until self-serve upgrade ships.
-  app.post("/api/billing/plan", requireSuperAdmin, (req, res) => {
+  app.post("/api/billing/plan", requireBillingOwner, (req, res) => {
     const planKey = String(req.body?.planKey ?? "");
     if (!(planKey in BILLING_PLANS)) return res.status(400).json({ error: "Unknown plan" });
     if (!isBillingEnabled(billingTenantId(req))) return res.status(404).json({ error: "Billing not provisioned" });
@@ -1234,7 +1240,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(billingSummary(billingTenantId(req)));
   });
   // Grant/purchase extra credits (adapter/admin top-up).
-  app.post("/api/billing/credits", requireSuperAdmin, (req, res) => {
+  app.post("/api/billing/credits", requireBillingOwner, (req, res) => {
     const amount = Math.floor(Number(req.body?.amount));
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "amount must be > 0" });
     if (!isBillingEnabled(billingTenantId(req))) return res.status(404).json({ error: "Billing not provisioned" });
@@ -4676,6 +4682,20 @@ export function registerSaasRoutes(app: any) {
       stats: storage.getTenantStats(t.id),
     }));
     res.json(enriched);
+  });
+
+  // GET  /api/sa/billing           — cross-tenant billing overview (ops dashboard)
+  // One row per tenant with its live billing summary (dark tenants report
+  // enabled:false). Reuses billingSummary so it always matches the tenant's own
+  // /api/billing view.
+  app.get("/api/sa/billing", requireAuth, requireSuperAdmin, (_req: Request, res: Response) => {
+    const tenants = storage.getTenants().map(t => ({
+      tenantId: t.id,
+      companyName: t.companyName,
+      slug: t.slug,
+      ...billingSummary(t.id),
+    }));
+    res.json({ plans: Object.values(BILLING_PLANS), tenants });
   });
 
   // POST /api/sa/tenants           — create a new tenant
