@@ -10,6 +10,7 @@ import {
   Activity, Target, Wifi, Calendar, AlertCircle, Radar, X,
 } from "lucide-react";
 import { OUTCOME_META, isKnockOutcome } from "@shared/knock";
+import { KpiTile } from "@/components/KpiTile";
 
 interface SaasStats {
   leads: { total: number; newFiber: number; sold: number; unassigned: number };
@@ -97,22 +98,9 @@ interface RepActivity {
   events: { id: number; outcome: string; at: string; address: string | null }[];
 }
 
-// KPI card — a tinted icon chip, a colored top-accent hairline, the number, the
-// label. Horizontally scrollable; each reads as a sharp stat, not a plain box.
-function FieldTile({ label, value, tone, icon: Icon, chip, accent }: {
-  label: string; value: number | string; tone: string; icon: any; chip: string; accent: string;
-}) {
-  return (
-    <div className="relative shrink-0 w-[132px] rounded-2xl bg-card border border-border px-3.5 pt-3.5 pb-3 overflow-hidden"
-      data-testid={`field-tile-${label.toLowerCase().replace(/\s/g, "-")}`}>
-      <span className={`absolute inset-x-0 top-0 h-[3px] ${accent}`} aria-hidden="true" />
-      <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg mb-2.5 ${chip}`}>
-        <Icon className={`w-4 h-4 ${tone}`} />
-      </span>
-      <div className={`text-[24px] font-bold leading-none tabular-nums ${tone}`}>{value}</div>
-      <div className="text-[11px] text-muted-foreground font-medium mt-1.5">{label}</div>
-    </div>
-  );
+// Dashboard field tiles use the shared KPI card (fixed width for the thumb-scroll row).
+function FieldTile(props: { label: string; value: number | string; tone: string; icon: any; chip: string; accent: string }) {
+  return <KpiTile {...props} className="w-[132px]" />;
 }
 
 // Tap-a-rep activity card: recent dispositions with the door + timestamp.

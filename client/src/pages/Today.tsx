@@ -176,9 +176,9 @@ export default function Today() {
         )}
 
         <div className="mt-4 grid grid-cols-3 rounded-xl border border-border bg-card overflow-hidden">
-          <Stat label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)} tone="text-foreground" />
-          <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-emerald-400" border />
-          <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" border />
+          <Stat label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)} tone="text-foreground" accent="bg-primary" />
+          <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-emerald-400" accent="bg-emerald-500" border />
+          <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" accent="bg-sky-500" border />
         </div>
 
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}
@@ -249,10 +249,12 @@ export default function Today() {
   );
 }
 
-function Stat({ label, value, tone, border }: { label: string; value: number | null; tone: string; border?: boolean }) {
+function Stat({ label, value, tone, accent = "bg-muted-foreground/50", border }: { label: string; value: number | null; tone: string; accent?: string; border?: boolean }) {
   return (
     <div className={`px-3 py-3 ${border ? "border-l border-border" : ""}`}>
-      <div className="text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className={`w-1.5 h-1.5 rounded-full ${accent}`} aria-hidden="true" />{label}
+      </div>
       {value == null ? <Skeleton className="h-7 w-10 mt-1.5" /> : <div className={`text-[24px] font-bold tabular-nums leading-none mt-1.5 ${tone}`}>{value}</div>}
     </div>
   );

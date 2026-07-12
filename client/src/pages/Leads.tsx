@@ -8,8 +8,10 @@ import {
   Users, Search, Plus, Edit2, Trash2, Phone,
   DoorOpen, UserCheck, CalendarClock, Zap, Home, PhoneOff,
   BarChart2, Wifi, WifiOff, Building2, DollarSign, Map, Info,
-  RefreshCw, ShieldCheck, ShieldX, User, Mail, ChevronLeft, ChevronRight
+  RefreshCw, ShieldCheck, ShieldX, User, Mail, ChevronLeft, ChevronRight,
+  Target, Star, Calendar
 } from "lucide-react";
+import { KpiTile } from "@/components/KpiTile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -724,6 +726,14 @@ export default function Leads() {
   });
   const facets = facetsData?.facets ?? [];
 
+  // Pipeline breakdown for the KPI strip (tenant/role-scoped server-side).
+  const { data: leadStats } = useQuery<{ total: number; byStatus: Record<string, number> }>({
+    queryKey: ["/api/stats"],
+    queryFn: async () => (await apiRequest("GET", "/api/stats")).json(),
+    staleTime: 30_000,
+  });
+  const bs = leadStats?.byStatus ?? {};
+
   // Distinct states + cities for the dropdowns (cities scoped to the chosen state)
   const states = Array.from(new Set(facets.map(f => f.state).filter(Boolean))).sort();
   const cities = Array.from(new Set(
@@ -794,6 +804,14 @@ export default function Leads() {
             <Plus className="w-4 h-4 mr-1" /> Add Lead
           </Button>
         )}
+      </div>
+
+      {/* Pipeline KPI strip — the funnel at a glance (matches the Dashboard cards) */}
+      <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="leads-kpi">
+        <KpiTile className="w-[124px]" label="Prospect" value={bs.prospect ?? 0} tone="text-foreground" icon={Target} chip="bg-secondary" accent="bg-muted-foreground/40" />
+        <KpiTile className="w-[124px]" label="Interested" value={bs.interested ?? 0} tone="text-sky-400" icon={Star} chip="bg-sky-500/15" accent="bg-sky-500" />
+        <KpiTile className="w-[124px]" label="Follow-up" value={bs.follow_up ?? 0} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
+        <KpiTile className="w-[124px]" label="Sold" value={bs.sold ?? 0} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
       </div>
 
       <div className="flex flex-col lg:flex-row gap-5">
