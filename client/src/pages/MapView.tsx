@@ -1745,6 +1745,19 @@ export default function MapView() {
     return acc;
   }, [repFilteredLeads]);
 
+  // ── SalesRabbit-style disposition chips ─────────────────────────────────────
+  // The status-filter bar over the map: "All" + one chip per disposition that has
+  // pins, each with its pin color + live count. Order follows the canvassing
+  // funnel (fresh → worked → closed). Tapping a chip filters the pins.
+  const STATUS_ORDER = ["prospect", "follow_up", "interested", "sold", "not_interested", "contacted"] as const;
+  const statusChips = useMemo(
+    () => STATUS_ORDER
+      .filter((k) => (statusCounts[k] ?? 0) > 0)
+      .map((k) => ({ key: k as string, count: statusCounts[k] ?? 0, ...PIN_COLORS[k] })),
+    [statusCounts],
+  );
+  const totalLeadCount = useMemo(() => repFilteredLeads.length, [repFilteredLeads]);
+
   // Per-rep lead tallies for the legend's rep dropdown — ONE counting pass,
   // memoized. The options used to run leads.filter(...) per rep per render:
   // O(n·reps) ≈ 2.5M predicate calls/render at 50k leads × 50 reps, at 400ms
@@ -1969,6 +1982,51 @@ export default function MapView() {
           : scanOutcome.kind === "cancelled" ? `Scan stopped. ${scanOutcome.found} found so far.` : ""
         ) : ""}
       </div>
+
+      {/* ── SalesRabbit-style disposition filter bar ─────────────────────────
+             A horizontal, scrollable row of status chips over the top of the
+             map — "All" + one colored chip per disposition with its live count.
+             Tap to filter the pins to that status; tap again (or All) to clear.
+             The right inset clears the top-right control cluster on manager
+             roles. This is the canvasser's at-a-glance board of where the
+             territory stands. ── */}
+      {mapReady && leads.length > 0 && !lassoMode && !drawMode && (
+        <div
+          style={{ top: "calc(env(safe-area-inset-top) + 0.6rem)", right: isRep ? 8 : 64 }}
+          className="absolute left-2 z-20 pointer-events-none"
+          data-testid="status-filter-bar"
+        >
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pointer-events-auto pr-2" role="tablist" aria-label="Filter leads by status">
+            <button
+              type="button" role="tab" aria-selected={filterStatus === "all"}
+              onClick={() => setFilterStatus("all")}
+              data-testid="status-chip-all"
+              className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-2.5 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition ${
+                filterStatus === "all" ? "bg-white text-slate-900 shadow" : "glass-surface text-white/85 hover:text-white"}`}
+            >
+              All
+              <span className={`tabular-nums text-[11px] rounded-full px-1.5 py-0.5 ${filterStatus === "all" ? "bg-slate-900/10 text-slate-900" : "bg-white/10 text-white/70"}`}>{totalLeadCount}</span>
+            </button>
+            {statusChips.map((c) => {
+              const active = filterStatus === c.key;
+              return (
+                <button
+                  key={c.key} type="button" role="tab" aria-selected={active}
+                  onClick={() => setFilterStatus(active ? "all" : c.key)}
+                  data-testid={`status-chip-${c.key}`}
+                  title={`${c.label} · ${c.count}`}
+                  className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-2.5 pr-2 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition glass-surface ${active ? "ring-2" : "text-white/85 hover:text-white"}`}
+                  style={active ? { boxShadow: `inset 0 0 0 1px ${c.bg}`, background: `${c.bg}26`, color: "#fff", ["--tw-ring-color" as any]: `${c.bg}80` } : undefined}
+                >
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.bg, boxShadow: `0 0 5px ${c.bg}99` }} />
+                  {c.label}
+                  <span className="tabular-nums text-[11px] rounded-full bg-white/12 px-1.5 py-0.5 text-white/80">{c.count}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* On mobile: left-3 → right-[68px] so the banner clears the icon cluster
           in the top-right corner. On desktop: centered. */}

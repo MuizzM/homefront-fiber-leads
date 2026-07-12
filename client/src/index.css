@@ -204,6 +204,10 @@
   *::-webkit-scrollbar-thumb:hover { background: hsl(210 35% 34%); }
   *::-webkit-scrollbar-track { background: transparent; }
 
+  /* Scroll rows that should show no scrollbar (e.g. the map status-filter bar) */
+  .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+  .no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
   /* Snappy, consistent feedback on interactive elements */
   button, a, [role="button"], [role="tab"], [role="option"] {
     transition: background-color .15s ease, border-color .15s ease,
