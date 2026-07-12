@@ -3108,8 +3108,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // __dirname is defined under the CJS prod bundle but NOT under the tsx/ESM dev
     // runtime — guard with typeof (never throws) so both the packaged and dev paths
     // resolve. The cwd path is the primary; the bundle‑relative one is the fallback.
-    const candidates = [path.join(process.cwd(), "join-form", "index.html")];
-    if (typeof __dirname !== "undefined") candidates.push(path.join(__dirname, "..", "join-form", "index.html"));
+    // Dev serves from the repo root (join-form/); the prod build copies it to
+    // dist/join-form/, and the container ships only dist — so check BOTH, or /join
+    // 404s in production (cwd=/app has no join-form, only dist/join-form).
+    const candidates = [
+      path.join(process.cwd(), "join-form", "index.html"),          // dev (repo root)
+      path.join(process.cwd(), "dist", "join-form", "index.html"),  // prod (cwd=/app → /app/dist/join-form)
+    ];
+    if (typeof __dirname !== "undefined") {
+      candidates.push(path.join(__dirname, "join-form", "index.html"));       // prod bundle: dist/index.cjs → dist/join-form
+      candidates.push(path.join(__dirname, "..", "join-form", "index.html")); // dev bundle fallback
+    }
     const resolved = candidates.find(p => fs.existsSync(p));
     if (!resolved) {
       return res.status(404).send("Join form not found");

@@ -2,743 +2,570 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Apply — Home Front Solutions</title>
+<meta name="description" content="Apply to join Home Front Solutions' field sales team. Uncapped commission, paid certification, and a clear path from rep to area manager.">
+<meta name="robots" content="noindex">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;1,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
   :root {
-    --teal: #3d9e8c;
-    --teal-dark: #2e7d71;
-    --navy: #1b2f4e;
-    --navy-light: #243a5e;
-    --cream: #f5f3ee;
-    --gray-soft: #6b7280;
-    --gray-light: #e5e7eb;
-    --white: #ffffff;
-    --red: #dc2626;
-    --green: #16a34a;
-    --font-display: 'Playfair Display', Georgia, serif;
-    --font-body: 'Inter', system-ui, sans-serif;
+    --ink: #0F2A44;
+    --ink-soft: #1F3D5C;
+    --signal: #1E6D6B;
+    --signal-deep: #155159;
+    --signal-soft: #E4F0EE;
+    --accent: #F5B942;
+    --paper: #FFFFFF;
+    --paper-deep: #F6F8F9;
+    --rule: #E3E8ED;
+    --muted: #5A6B76;
+    --subtle: #8A96A0;
+    --red: #C2410C;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
   }
 
+  html { -webkit-text-size-adjust: 100%; }
   body {
-    font-family: var(--font-body);
-    background: var(--cream);
-    color: var(--navy);
+    font-family: var(--font);
+    background: var(--paper-deep);
+    color: var(--ink);
     min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
   }
 
-  /* ── Nav ── */
-  nav {
-    background: var(--white);
-    border-bottom: 1px solid var(--gray-light);
-    padding: 14px 24px;
+  /* ── Header ── */
+  header {
+    background: var(--paper);
+    border-bottom: 1px solid var(--rule);
+    padding: 14px 20px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     position: sticky;
     top: 0;
     z-index: 100;
-    box-shadow: 0 1px 4px rgba(0,0,0,.05);
   }
-  .nav-logo {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    text-decoration: none;
-    color: var(--navy);
+  .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; color: var(--ink); }
+  .brand-mark {
+    width: 34px; height: 34px; border-radius: 9px;
+    background: var(--signal); color: #fff;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
   }
-  .nav-logo img { height: 36px; width: auto; }
-  .nav-logo-text { font-size: 13px; font-weight: 700; line-height: 1.2; }
-  .nav-logo-sub { font-size: 10px; font-weight: 400; color: var(--gray-soft); }
-  .nav-back {
-    font-size: 13px;
-    color: var(--teal);
-    font-weight: 600;
-    text-decoration: none;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    transition: color .2s;
+  .brand-name { font-size: 14px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.1; }
+  .brand-sub { font-size: 11.5px; font-weight: 500; color: var(--muted); }
+  .back {
+    font-size: 13.5px; color: var(--signal); font-weight: 600; text-decoration: none;
+    display: inline-flex; align-items: center; gap: 6px;
   }
-  .nav-back:hover { color: var(--teal-dark); }
+  .back:hover { color: var(--signal-deep); }
+  @media (max-width: 420px) { .brand-sub, .back span { display: none; } }
 
   /* ── Hero ── */
   .hero {
-    background: var(--navy);
-    color: var(--white);
-    padding: 56px 24px 48px;
-    text-align: center;
+    background: linear-gradient(160deg, #0B2540 0%, #0F2A44 55%, #143A56 100%);
+    color: #fff;
+    padding: 52px 20px 64px;
   }
-  .hero-eyebrow {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 2px;
-    color: var(--teal);
-    text-transform: uppercase;
-    margin-bottom: 14px;
-  }
+  .hero-inner { max-width: 640px; margin: 0 auto; }
+  .hero-eyebrow { font-size: 13.5px; font-weight: 600; color: #6FC5B8; margin-bottom: 14px; }
   .hero h1 {
-    font-family: var(--font-display);
-    font-size: clamp(28px, 5vw, 42px);
-    line-height: 1.15;
-    font-weight: 700;
-    color: var(--white);
-    margin-bottom: 16px;
+    font-size: clamp(28px, 6vw, 40px);
+    line-height: 1.06; font-weight: 700; letter-spacing: -0.025em;
+    color: #fff; margin-bottom: 14px; text-wrap: balance;
   }
-  .hero h1 em {
-    font-style: italic;
-    color: var(--teal);
-  }
-  .hero p {
-    font-size: 15px;
-    color: rgba(255,255,255,.7);
-    max-width: 500px;
-    margin: 0 auto;
-    line-height: 1.7;
-  }
+  .hero p { font-size: 15.5px; color: rgba(255,255,255,.72); max-width: 46ch; line-height: 1.6; }
   .hero-stats {
-    display: flex;
-    gap: 32px;
-    justify-content: center;
-    flex-wrap: wrap;
-    margin-top: 32px;
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    margin-top: 30px; border-top: 1px solid rgba(255,255,255,.14); padding-top: 22px;
   }
-  .hero-stat { text-align: center; }
-  .hero-stat-num {
-    font-size: 24px;
-    font-weight: 800;
-    color: var(--white);
-  }
-  .hero-stat-label {
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: rgba(255,255,255,.45);
-    margin-top: 2px;
-  }
+  .hero-stat-num { font-size: clamp(19px, 4.5vw, 24px); font-weight: 700; letter-spacing: -0.02em; color: #fff; }
+  .hero-stat-label { font-size: 12px; font-weight: 500; color: rgba(255,255,255,.6); margin-top: 3px; }
 
-  /* ── Form container ── */
-  .form-wrap {
-    max-width: 640px;
-    margin: -28px auto 60px;
-    padding: 0 16px;
-  }
+  /* ── Form card ── */
+  .form-wrap { max-width: 640px; margin: -36px auto 56px; padding: 0 16px; }
   .form-card {
-    background: var(--white);
-    border-radius: 18px;
-    box-shadow: 0 8px 40px rgba(0,0,0,.1);
-    padding: 36px;
+    background: var(--paper);
+    border: 1px solid var(--rule);
+    border-radius: 16px;
+    box-shadow: 0 12px 40px rgba(15,42,68,.08);
+    padding: 32px 28px;
   }
-  .form-title {
-    font-size: 17px;
-    font-weight: 700;
-    color: var(--navy);
-    margin-bottom: 6px;
-  }
-  .form-subtitle {
-    font-size: 13px;
-    color: var(--gray-soft);
-    margin-bottom: 28px;
-    line-height: 1.5;
-  }
+  @media (min-width: 560px) { .form-card { padding: 40px 36px; } }
+  .form-title { font-size: 19px; font-weight: 700; letter-spacing: -0.015em; }
+  .form-subtitle { font-size: 14px; color: var(--muted); margin-top: 6px; margin-bottom: 8px; }
 
-  /* ── Section separators ── */
+  /* ── Progress hint ── */
+  .steps { display: flex; gap: 6px; margin: 18px 0 4px; }
+  .step-bar { height: 4px; flex: 1; border-radius: 99px; background: var(--rule); transition: background .3s ease; }
+  .step-bar.on { background: var(--signal); }
+
+  /* ── Section ── */
   .section-label {
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 1.5px;
-    text-transform: uppercase;
-    color: var(--teal);
-    margin: 26px 0 14px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--gray-light);
+    font-size: 13.5px; font-weight: 600; color: var(--signal);
+    margin: 28px 0 14px; padding-top: 22px; border-top: 1px solid var(--rule);
   }
-  .section-label:first-of-type { margin-top: 0; }
+  fieldset { border: none; }
 
   /* ── Fields ── */
-  .field-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 14px;
-    margin-bottom: 14px;
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+  .row.single { grid-template-columns: 1fr; }
+  @media (max-width: 500px) { .row { grid-template-columns: 1fr; } }
+  .field label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .req { color: var(--signal); }
+  .field input[type="text"], .field input[type="email"], .field input[type="tel"],
+  .field select, .field textarea {
+    width: 100%; border: 1.5px solid var(--rule); border-radius: 10px;
+    padding: 12px 14px; font-size: 15px; font-family: var(--font); color: var(--ink);
+    background: var(--paper); transition: border-color .18s, box-shadow .18s; outline: none;
+    -webkit-appearance: none; appearance: none;
   }
-  .field-row.single { grid-template-columns: 1fr; }
-  @media (max-width: 520px) { .field-row { grid-template-columns: 1fr; } }
+  .field select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5 6 6.5 11 1.5' stroke='%235A6B76' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 14px center; padding-right: 38px;
+  }
+  .field input::placeholder, .field textarea::placeholder { color: var(--subtle); }
+  .field input:focus, .field select:focus, .field textarea:focus {
+    border-color: var(--signal); box-shadow: 0 0 0 3px rgba(30,109,107,.14);
+  }
+  .field input[aria-invalid="true"], .field select[aria-invalid="true"], .field textarea[aria-invalid="true"] {
+    border-color: var(--red); background: rgba(194,65,12,.03);
+  }
+  .field textarea { resize: vertical; min-height: 84px; }
+  .err { font-size: 12px; color: var(--red); margin-top: 5px; display: none; }
+  .err.show { display: block; }
+  .hint { font-size: 12px; color: var(--subtle); margin-top: 5px; }
 
-  .field label {
-    display: block;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--navy);
-    margin-bottom: 6px;
+  /* ── Carrier options ── */
+  .carriers { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 420px) { .carriers { grid-template-columns: 1fr; } }
+  .carrier {
+    display: flex; align-items: center; gap: 11px;
+    border: 1.5px solid var(--rule); border-radius: 11px; padding: 12px 14px;
+    cursor: pointer; transition: border-color .18s, background .18s; user-select: none;
   }
-  .field label .req { color: var(--teal); }
-
-  .field input[type="text"],
-  .field input[type="email"],
-  .field input[type="tel"],
-  .field select,
-  .field textarea {
-    width: 100%;
-    border: 1.5px solid var(--gray-light);
-    border-radius: 10px;
-    padding: 10px 14px;
-    font-size: 14px;
-    font-family: var(--font-body);
-    color: var(--navy);
-    background: var(--white);
-    transition: border-color .2s, box-shadow .2s;
-    outline: none;
-    appearance: none;
+  .carrier:has(input:checked) { border-color: var(--signal); background: var(--signal-soft); }
+  .carrier:focus-within { box-shadow: 0 0 0 3px rgba(30,109,107,.14); }
+  .carrier input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .box {
+    width: 20px; height: 20px; border-radius: 6px; border: 1.5px solid var(--rule);
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center; transition: all .18s;
   }
-  .field input:focus,
-  .field select:focus,
-  .field textarea:focus {
-    border-color: var(--teal);
-    box-shadow: 0 0 0 3px rgba(61,158,140,.12);
-  }
-  .field input.error,
-  .field select.error,
-  .field textarea.error {
-    border-color: var(--red);
-  }
-  .field-error {
-    font-size: 11px;
-    color: var(--red);
-    margin-top: 4px;
-    display: none;
-  }
-  .field-error.show { display: block; }
-  .field textarea { resize: vertical; min-height: 80px; }
-
-  /* ── Carrier checkboxes ── */
-  .carrier-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-  .carrier-opt {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    border: 1.5px solid var(--gray-light);
-    border-radius: 10px;
-    padding: 10px 14px;
-    cursor: pointer;
-    transition: border-color .2s, background .2s;
-    user-select: none;
-  }
-  .carrier-opt:has(input:checked) {
-    border-color: var(--teal);
-    background: rgba(61,158,140,.06);
-  }
-  .carrier-opt input { display: none; }
-  .carrier-dot {
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    border: 2px solid var(--gray-light);
-    flex-shrink: 0;
-    transition: all .2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-  .carrier-opt:has(input:checked) .carrier-dot {
-    background: var(--teal);
-    border-color: var(--teal);
-  }
-  .carrier-dot::after {
-    content: '';
-    display: none;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: white;
-  }
-  .carrier-opt:has(input:checked) .carrier-dot::after { display: block; }
-  .carrier-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--navy);
-  }
-  .carrier-sub { font-size: 11px; color: var(--gray-soft); }
-  .carrier-error {
-    font-size: 11px;
-    color: var(--red);
-    margin-top: 6px;
-    display: none;
-  }
-  .carrier-error.show { display: block; }
+  .carrier:has(input:checked) .box { background: var(--signal); border-color: var(--signal); }
+  .box svg { opacity: 0; }
+  .carrier:has(input:checked) .box svg { opacity: 1; }
+  .carrier-name { font-size: 14px; font-weight: 600; }
+  .carrier-sub { font-size: 12px; color: var(--muted); }
 
   /* ── Experience toggle ── */
-  .toggle-row {
-    display: flex;
-    gap: 10px;
+  .toggle { display: flex; gap: 10px; }
+  .toggle button {
+    flex: 1; border: 1.5px solid var(--rule); border-radius: 10px; padding: 12px;
+    background: var(--paper); font: inherit; font-size: 13.5px; font-weight: 600;
+    color: var(--muted); cursor: pointer; transition: all .18s;
   }
-  .toggle-opt {
-    flex: 1;
-    border: 1.5px solid var(--gray-light);
-    border-radius: 10px;
-    padding: 10px 14px;
-    text-align: center;
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--gray-soft);
-    transition: all .2s;
-    user-select: none;
-  }
-  .toggle-opt.active {
-    border-color: var(--teal);
-    background: rgba(61,158,140,.08);
-    color: var(--teal);
-  }
+  .toggle button[aria-pressed="true"] { border-color: var(--signal); background: var(--signal-soft); color: var(--signal-deep); }
+  .toggle button:focus-visible { box-shadow: 0 0 0 3px rgba(30,109,107,.14); outline: none; }
 
-  /* ── File upload ── */
-  .upload-area {
-    border: 2px dashed var(--gray-light);
-    border-radius: 12px;
-    padding: 20px;
-    text-align: center;
-    cursor: pointer;
-    transition: border-color .2s, background .2s;
-    position: relative;
+  /* ── Upload ── */
+  .upload {
+    border: 1.5px dashed var(--rule); border-radius: 12px; padding: 18px 14px;
+    text-align: center; cursor: pointer; transition: border-color .18s, background .18s; position: relative;
   }
-  .upload-area:hover {
-    border-color: var(--teal);
-    background: rgba(61,158,140,.04);
-  }
-  .upload-area.has-file {
-    border-color: var(--teal);
-    background: rgba(61,158,140,.06);
-  }
-  .upload-area input[type="file"] {
-    position: absolute;
-    inset: 0;
-    opacity: 0;
-    cursor: pointer;
-    width: 100%;
-    height: 100%;
-  }
-  .upload-icon { font-size: 24px; margin-bottom: 6px; }
-  .upload-text { font-size: 13px; font-weight: 600; color: var(--navy); }
-  .upload-sub { font-size: 11px; color: var(--gray-soft); margin-top: 2px; }
-  .upload-filename {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--teal);
-    margin-top: 6px;
-    display: none;
-  }
-  .upload-area.has-file .upload-filename { display: block; }
+  .upload:hover { border-color: var(--signal); background: rgba(30,109,107,.03); }
+  .upload.has { border-color: var(--signal); border-style: solid; background: var(--signal-soft); }
+  .upload input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .upload .u-icon { color: var(--signal); margin-bottom: 8px; display: inline-flex; }
+  .upload .u-text { font-size: 13.5px; font-weight: 600; }
+  .upload .u-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .upload .u-file { font-size: 12.5px; font-weight: 600; color: var(--signal-deep); margin-top: 7px; display: none; word-break: break-all; }
+  .upload.has .u-file { display: block; }
 
   /* ── Submit ── */
-  .submit-btn {
-    width: 100%;
-    background: var(--teal);
-    color: var(--white);
-    border: none;
-    border-radius: 12px;
-    padding: 16px 24px;
-    font-size: 15px;
-    font-weight: 700;
-    font-family: var(--font-body);
-    cursor: pointer;
-    transition: background .2s, transform .1s;
-    margin-top: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
+  .submit {
+    width: 100%; background: var(--signal); color: #fff; border: none; border-radius: 11px;
+    padding: 16px; font: inherit; font-size: 15.5px; font-weight: 600; cursor: pointer;
+    margin-top: 28px; display: flex; align-items: center; justify-content: center; gap: 9px;
+    transition: background .18s, transform .1s;
   }
-  .submit-btn:hover { background: var(--teal-dark); }
-  .submit-btn:active { transform: scale(.99); }
-  .submit-btn:disabled { background: #94a3b8; cursor: not-allowed; }
-
-  /* ── Spinner ── */
-  .spinner {
-    width: 16px; height: 16px;
-    border: 2px solid rgba(255,255,255,.4);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: spin .7s linear infinite;
-    display: none;
-  }
+  .submit:hover { background: var(--signal-deep); }
+  .submit:active { transform: scale(.99); }
+  .submit:disabled { background: var(--subtle); cursor: default; }
+  .spinner { width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  /* ── Success / Error states ── */
-  .result-card {
-    display: none;
-    text-align: center;
-    padding: 36px 24px;
+  .legal { font-size: 12px; color: var(--muted); margin-top: 16px; line-height: 1.6; text-align: center; }
+  .legal a { color: var(--signal); text-decoration: none; }
+  .legal a:hover { text-decoration: underline; }
+
+  /* ── Result states ── */
+  .result { display: none; text-align: center; padding: 24px 8px; }
+  .result.show { display: block; }
+  .result-badge {
+    width: 56px; height: 56px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+    margin-bottom: 18px;
   }
-  .result-card.show { display: block; }
-  .result-icon { font-size: 48px; margin-bottom: 16px; }
-  .result-title { font-family: var(--font-display); font-size: 22px; color: var(--navy); margin-bottom: 10px; }
-  .result-msg { font-size: 14px; color: var(--gray-soft); line-height: 1.7; max-width: 380px; margin: 0 auto; }
+  .result-badge.ok { background: var(--signal-soft); color: var(--signal); }
+  .result-badge.bad { background: rgba(194,65,12,.1); color: var(--red); }
+  .result-title { font-size: 21px; font-weight: 700; letter-spacing: -0.015em; margin-bottom: 10px; }
+  .result-msg { font-size: 14.5px; color: var(--muted); line-height: 1.65; max-width: 40ch; margin: 0 auto; }
   .result-cta {
-    display: inline-block;
-    margin-top: 20px;
-    background: var(--teal);
-    color: var(--white);
-    text-decoration: none;
-    padding: 10px 22px;
-    border-radius: 99px;
-    font-size: 13px;
-    font-weight: 600;
-    transition: background .2s;
+    display: inline-flex; align-items: center; gap: 7px; margin-top: 22px;
+    background: var(--signal); color: #fff; text-decoration: none; padding: 12px 22px;
+    border-radius: 10px; font-size: 14px; font-weight: 600; border: none; cursor: pointer; font-family: var(--font);
   }
-  .result-cta:hover { background: var(--teal-dark); }
+  .result-cta:hover { background: var(--signal-deep); }
 
-  /* ── Legal note ── */
-  .legal {
-    text-align: center;
-    font-size: 11px;
-    color: var(--gray-soft);
-    margin-top: 16px;
-    line-height: 1.6;
-  }
-  .legal a { color: var(--teal); text-decoration: none; }
+  footer { background: var(--ink); color: rgba(255,255,255,.5); text-align: center; padding: 22px; font-size: 12.5px; }
+  footer a { color: rgba(255,255,255,.72); text-decoration: none; }
 
-  /* ── Footer ── */
-  footer {
-    background: var(--navy);
-    color: rgba(255,255,255,.45);
-    text-align: center;
-    padding: 20px;
-    font-size: 12px;
-  }
-  footer a { color: rgba(255,255,255,.6); text-decoration: none; }
+  /* Honeypot — hidden from humans, catches bots */
+  .hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
 <body>
 
-<nav>
-  <a href="https://www.homefrontsolutionsllc.com" class="nav-logo">
-    <img src="https://www.homefrontsolutionsllc.com/logo.png" alt="Home Front Solutions"
-         onerror="this.style.display='none'" />
-    <div>
-      <div class="nav-logo-text">Home Front Solutions</div>
-      <div class="nav-logo-sub">Nationwide Field Sales</div>
-    </div>
+<header>
+  <a href="https://www.homefrontsolutionsllc.com" class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M4 11 L12 4 L20 11 V20 H15 V14 H9 V20 H4 Z"/></svg>
+    </span>
+    <span>
+      <span class="brand-name" style="display:block;">Home Front Solutions</span>
+      <span class="brand-sub">Nationwide field sales</span>
+    </span>
   </a>
-  <a href="https://www.homefrontsolutionsllc.com/careers" class="nav-back">
-    ← Back to Careers
-  </a>
-</nav>
+  <a href="https://www.homefrontsolutionsllc.com/careers" class="back">← <span>Back to careers</span></a>
+</header>
 
-<div class="hero">
-  <div class="hero-eyebrow">Now Hiring · Rockwell & Surrounding Markets</div>
-  <h1>A real career in field sales.<br><em>Built in, not bolted on.</em></h1>
-  <p>Uncapped commission. Paid certification before your first door. A clear path from rep to team lead to area manager.</p>
-  <div class="hero-stats">
-    <div class="hero-stat"><div class="hero-stat-num">$100K+</div><div class="hero-stat-label">First-Year Earnings</div></div>
-    <div class="hero-stat"><div class="hero-stat-num">Paid</div><div class="hero-stat-label">6-Module Training</div></div>
-    <div class="hero-stat"><div class="hero-stat-num">Fast</div><div class="hero-stat-label">Promotion From Within</div></div>
+<section class="hero">
+  <div class="hero-inner">
+    <div class="hero-eyebrow">Now hiring field sales reps</div>
+    <h1>A real career in field sales.</h1>
+    <p>Uncapped commission paid weekly, paid certification before your first door, and a clear path from rep to team lead to area manager.</p>
+    <div class="hero-stats">
+      <div><div class="hero-stat-num">$150K+</div><div class="hero-stat-label">Top rep, year one</div></div>
+      <div><div class="hero-stat-num">5-day</div><div class="hero-stat-label">Paid certification</div></div>
+      <div><div class="hero-stat-num">Weekly</div><div class="hero-stat-label">Commission payouts</div></div>
+    </div>
   </div>
-</div>
+</section>
 
 <div class="form-wrap">
   <div class="form-card">
 
-    <!-- Success state (hidden by default) -->
-    <div class="result-card" id="successCard">
-      <div class="result-icon">✅</div>
-      <div class="result-title">Application received!</div>
-      <div class="result-msg">Thank you for applying to Home Front Solutions. Our team reviews every application personally. We'll be in touch within 1–2 business days.</div>
-      <a href="https://www.homefrontsolutionsllc.com/careers" class="result-cta">Back to Careers</a>
+    <!-- Success -->
+    <div class="result" id="successCard" role="status">
+      <span class="result-badge ok" aria-hidden="true">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg>
+      </span>
+      <div class="result-title">Application received</div>
+      <div class="result-msg">Thanks for applying to Home Front Solutions. A real person reviews every application — we'll be in touch within one to two business days.</div>
+      <a href="https://www.homefrontsolutionsllc.com/careers" class="result-cta">Back to careers →</a>
     </div>
 
-    <!-- Error state (hidden by default) -->
-    <div class="result-card" id="errorCard">
-      <div class="result-icon">⚠️</div>
+    <!-- Error -->
+    <div class="result" id="errorCard" role="alert">
+      <span class="result-badge bad" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8 v5"/><path d="M12 16.5 v.01"/><circle cx="12" cy="12" r="9"/></svg>
+      </span>
       <div class="result-title">Something went wrong</div>
-      <div class="result-msg" id="errorMsg">We couldn't submit your application. Please try again or email us directly.</div>
-      <button onclick="resetForm()" class="result-cta" style="border:none;cursor:pointer;">Try Again</button>
+      <div class="result-msg" id="errorMsg">We couldn't submit your application. Please try again, or email <a href="mailto:info@homefrontsolutionsllc.com" style="color:var(--signal)">info@homefrontsolutionsllc.com</a>.</div>
+      <button type="button" class="result-cta" id="retryBtn">Try again</button>
     </div>
 
-    <!-- The form -->
+    <!-- Form -->
     <form id="applyForm" novalidate>
-      <div class="form-title">Apply to Join the Team</div>
-      <div class="form-subtitle">Takes about 3 minutes. We review every application — no bots, no automated rejection.</div>
-
-      <!-- Personal Info -->
-      <div class="section-label">Personal Information</div>
-      <div class="field-row">
-        <div class="field">
-          <label>Full Name <span class="req">*</span></label>
-          <input type="text" id="fullName" name="fullName" placeholder="Muizz Muhammad" autocomplete="name" />
-          <div class="field-error" id="fullName-err">Please enter your full name</div>
-        </div>
-        <div class="field">
-          <label>Phone Number <span class="req">*</span></label>
-          <input type="tel" id="phone" name="phone" placeholder="(336) 555-0100" autocomplete="tel" />
-          <div class="field-error" id="phone-err">Please enter a valid phone number</div>
-        </div>
-      </div>
-      <div class="field-row single">
-        <div class="field">
-          <label>Email Address <span class="req">*</span></label>
-          <input type="email" id="email" name="email" placeholder="you@email.com" autocomplete="email" />
-          <div class="field-error" id="email-err">Please enter a valid email address</div>
-        </div>
-      </div>
-      <div class="field-row">
-        <div class="field">
-          <label>City <span class="req">*</span></label>
-          <input type="text" id="city" name="city" placeholder="Rockwell" autocomplete="address-level2" />
-          <div class="field-error" id="city-err">Required</div>
-        </div>
-        <div class="field">
-          <label>ZIP Code <span class="req">*</span></label>
-          <input type="text" id="zip" name="zip" placeholder="28138" autocomplete="postal-code" maxlength="10" />
-          <div class="field-error" id="zip-err">Required</div>
-        </div>
+      <h1 class="form-title">Apply to join the team</h1>
+      <p class="form-subtitle">About 3 minutes. Every application is reviewed by a person — no bots, no automated rejection.</p>
+      <div class="steps" aria-hidden="true">
+        <span class="step-bar on" id="s1"></span><span class="step-bar" id="s2"></span>
+        <span class="step-bar" id="s3"></span><span class="step-bar" id="s4"></span>
       </div>
 
-      <!-- Carriers -->
-      <div class="section-label">Which carrier(s) do you want to sell? <span class="req">*</span></div>
-      <div class="carrier-grid">
-        <label class="carrier-opt">
-          <input type="checkbox" name="carriers" value="Kinetic">
-          <div class="carrier-dot"></div>
-          <div><div class="carrier-name">Kinetic</div><div class="carrier-sub">Windstream fiber</div></div>
-        </label>
-        <label class="carrier-opt">
-          <input type="checkbox" name="carriers" value="Brightspeed">
-          <div class="carrier-dot"></div>
-          <div><div class="carrier-name">Brightspeed</div><div class="carrier-sub">Fiber internet</div></div>
-        </label>
-        <label class="carrier-opt">
-          <input type="checkbox" name="carriers" value="Frontier">
-          <div class="carrier-dot"></div>
-          <div><div class="carrier-name">Frontier</div><div class="carrier-sub">Fiber network</div></div>
-        </label>
-        <label class="carrier-opt">
-          <input type="checkbox" name="carriers" value="T-Fiber">
-          <div class="carrier-dot"></div>
-          <div><div class="carrier-name">T-Fiber</div><div class="carrier-sub">T-Mobile fiber</div></div>
-        </label>
-      </div>
-      <div class="carrier-error" id="carriers-err">Select at least one carrier</div>
-
-      <!-- Experience -->
-      <div class="section-label">Sales Experience</div>
-      <div class="field">
-        <label>Do you have prior sales experience?</label>
-        <div class="toggle-row">
-          <div class="toggle-opt active" id="expNo" onclick="setExp(false)">No — I'm new to sales</div>
-          <div class="toggle-opt" id="expYes" onclick="setExp(true)">Yes — I have experience</div>
-        </div>
-        <input type="hidden" id="hasSalesExp" name="hasSalesExperience" value="false" />
-      </div>
-      <div class="field field-row single" id="expDetailsWrap" style="display:none;margin-top:12px;">
-        <div class="field">
-          <label>Tell us a little about your experience</label>
-          <textarea id="salesExpDetails" name="salesExperienceDetails" placeholder="e.g. 2 years door-to-door solar, worked with SunPower..."></textarea>
-        </div>
-      </div>
-
-      <!-- Files -->
-      <div class="section-label">Identity & Photo Verification</div>
-      <div class="field-row">
-        <div class="field">
-          <label>Headshot Photo <span class="req">*</span></label>
-          <div class="upload-area" id="headshotArea">
-            <input type="file" id="headshotFile" name="headshot" accept="image/jpeg,image/png,image/webp" />
-            <div class="upload-icon">🤳</div>
-            <div class="upload-text">Upload Headshot</div>
-            <div class="upload-sub">JPG or PNG, clear face photo</div>
-            <div class="upload-filename" id="headshotName"></div>
+      <fieldset>
+        <div class="section-label" style="border-top:none;padding-top:14px;">Your details</div>
+        <div class="row">
+          <div class="field">
+            <label for="fullName">Full name <span class="req">*</span></label>
+            <input type="text" id="fullName" name="fullName" placeholder="Alex Martinez" autocomplete="name" autocapitalize="words" aria-describedby="fullName-err">
+            <div class="err" id="fullName-err">Please enter your full name</div>
           </div>
-          <div class="field-error" id="headshot-err">Please upload a headshot photo</div>
-        </div>
-        <div class="field">
-          <label>Driver's License or ID <span class="req">*</span></label>
-          <div class="upload-area" id="licenseArea">
-            <input type="file" id="licenseFile" name="license" accept="image/jpeg,image/png,image/webp,application/pdf" />
-            <div class="upload-icon">🪪</div>
-            <div class="upload-text">Upload License / ID</div>
-            <div class="upload-sub">JPG, PNG, or PDF</div>
-            <div class="upload-filename" id="licenseName"></div>
+          <div class="field">
+            <label for="phone">Phone number <span class="req">*</span></label>
+            <input type="tel" id="phone" name="phone" placeholder="(336) 555-0100" autocomplete="tel" inputmode="tel" aria-describedby="phone-err">
+            <div class="err" id="phone-err">Please enter a valid phone number</div>
           </div>
-          <div class="field-error" id="license-err">Please upload your license or ID</div>
         </div>
-      </div>
+        <div class="row single">
+          <div class="field">
+            <label for="email">Email address <span class="req">*</span></label>
+            <input type="email" id="email" name="email" placeholder="you@email.com" autocomplete="email" inputmode="email" aria-describedby="email-err">
+            <div class="err" id="email-err">Please enter a valid email address</div>
+          </div>
+        </div>
+        <div class="row">
+          <div class="field">
+            <label for="city">City <span class="req">*</span></label>
+            <input type="text" id="city" name="city" placeholder="Charlotte" autocomplete="address-level2" autocapitalize="words" aria-describedby="city-err">
+            <div class="err" id="city-err">Please enter your city</div>
+          </div>
+          <div class="field">
+            <label for="zip">ZIP code <span class="req">*</span></label>
+            <input type="text" id="zip" name="zip" placeholder="28202" autocomplete="postal-code" inputmode="numeric" maxlength="5" aria-describedby="zip-err">
+            <div class="err" id="zip-err">Please enter a 5-digit ZIP</div>
+          </div>
+        </div>
+      </fieldset>
 
-      <!-- How did you hear -->
-      <div class="section-label">One More Thing</div>
-      <div class="field">
-        <label>How did you hear about us?</label>
-        <select id="referralSource" name="referralSource">
-          <option value="">Select one…</option>
-          <option value="Indeed">Indeed</option>
-          <option value="LinkedIn">LinkedIn</option>
-          <option value="Instagram">Instagram</option>
-          <option value="Facebook">Facebook</option>
-          <option value="Friend or family">Friend or family</option>
-          <option value="Existing rep referral">Existing rep referral</option>
-          <option value="Google Search">Google Search</option>
-          <option value="Door knock / in person">Door knock / in person</option>
-          <option value="Other">Other</option>
-        </select>
-      </div>
+      <fieldset>
+        <div class="section-label" id="carriers-label">Which carriers do you want to sell? <span class="req">*</span></div>
+        <div class="carriers" role="group" aria-labelledby="carriers-label">
+          <label class="carrier"><input type="checkbox" name="carriers" value="Kinetic"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">Kinetic</span><span class="carrier-sub">Windstream fiber</span></span></label>
+          <label class="carrier"><input type="checkbox" name="carriers" value="Brightspeed"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">Brightspeed</span><span class="carrier-sub">Fiber internet</span></span></label>
+          <label class="carrier"><input type="checkbox" name="carriers" value="Frontier"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">Frontier</span><span class="carrier-sub">Fiber network</span></span></label>
+          <label class="carrier"><input type="checkbox" name="carriers" value="T-Fiber"><span class="box" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12 l5 5 L20 7"/></svg></span><span><span class="carrier-name" style="display:block;">T-Fiber</span><span class="carrier-sub">T-Mobile fiber</span></span></label>
+        </div>
+        <div class="err" id="carriers-err">Please select at least one carrier</div>
+      </fieldset>
 
-      <button type="submit" class="submit-btn" id="submitBtn">
-        <span id="submitText">Submit Application →</span>
-        <div class="spinner" id="submitSpinner"></div>
+      <fieldset>
+        <div class="section-label">Sales experience</div>
+        <div class="field">
+          <label id="exp-label">Do you have prior sales experience?</label>
+          <div class="toggle" role="group" aria-labelledby="exp-label">
+            <button type="button" id="expNo" aria-pressed="true">No — I'm new to sales</button>
+            <button type="button" id="expYes" aria-pressed="false">Yes — I have experience</button>
+          </div>
+          <input type="hidden" id="hasSalesExp" name="hasSalesExperience" value="false">
+        </div>
+        <div class="field row single" id="expDetailsWrap" style="display:none;margin-top:14px;">
+          <div class="field">
+            <label for="salesExpDetails">Tell us a little about it</label>
+            <textarea id="salesExpDetails" name="salesExperienceDetails" placeholder="e.g. 2 years door-to-door solar with SunPower…"></textarea>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <div class="section-label">Identity &amp; photo</div>
+        <div class="row">
+          <div class="field">
+            <label for="headshotFile">Headshot photo <span class="req">*</span></label>
+            <div class="upload" id="headshotArea">
+              <input type="file" id="headshotFile" name="headshot" accept="image/jpeg,image/png,image/webp" aria-describedby="headshot-err">
+              <span class="u-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="3.2"/><path d="M5 20 c1-3.5 4-5 7-5 s6 1.5 7 5"/></svg></span>
+              <div class="u-text">Upload headshot</div>
+              <div class="u-sub">JPG, PNG or WebP · clear face</div>
+              <div class="u-file" id="headshotName"></div>
+            </div>
+            <div class="err" id="headshot-err">Please upload a headshot photo</div>
+          </div>
+          <div class="field">
+            <label for="licenseFile">Driver's license or ID <span class="req">*</span></label>
+            <div class="upload" id="licenseArea">
+              <input type="file" id="licenseFile" name="license" accept="image/jpeg,image/png,image/webp,application/pdf" aria-describedby="license-err">
+              <span class="u-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="11" r="1.8"/><path d="M13 9 h5 M13 12.5 h5 M6 16 h12"/></svg></span>
+              <div class="u-text">Upload license / ID</div>
+              <div class="u-sub">JPG, PNG or PDF</div>
+              <div class="u-file" id="licenseName"></div>
+            </div>
+            <div class="err" id="license-err">Please upload your license or ID</div>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <div class="section-label">One more thing</div>
+        <div class="field">
+          <label for="referralSource">How did you hear about us?</label>
+          <select id="referralSource" name="referralSource">
+            <option value="">Select one…</option>
+            <option value="Indeed">Indeed</option>
+            <option value="LinkedIn">LinkedIn</option>
+            <option value="Instagram">Instagram</option>
+            <option value="Facebook">Facebook</option>
+            <option value="Friend or family">Friend or family</option>
+            <option value="Existing rep referral">Existing rep referral</option>
+            <option value="Google Search">Google search</option>
+            <option value="Door knock / in person">Door knock / in person</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+      </fieldset>
+
+      <!-- Honeypot -->
+      <div class="hp" aria-hidden="true"><label>Leave this empty<input type="text" id="website" name="website" tabindex="-1" autocomplete="off"></label></div>
+
+      <button type="submit" class="submit" id="submitBtn">
+        <span id="submitText">Submit application</span>
+        <span class="spinner" id="submitSpinner" aria-hidden="true"></span>
       </button>
 
-      <div class="legal">
+      <p class="legal">
         By submitting you agree to our
-        <a href="https://www.homefrontsolutionsllc.com" target="_blank">privacy policy</a>.
-        We never sell your information.
-        Your license/ID is used for identity verification only and stored securely.
-      </div>
+        <a href="https://www.homefrontsolutionsllc.com" target="_blank" rel="noopener">privacy policy</a>.
+        We never sell your information. Your license/ID is used for identity verification only and stored securely.
+      </p>
     </form>
-
   </div>
 </div>
 
 <footer>
-  &copy; 2026 Home Front Solutions, LLC &nbsp;·&nbsp;
-  <a href="https://www.homefrontsolutionsllc.com">homefrontsolutionsllc.com</a>
+  © 2026 Home Front Solutions, LLC · <a href="https://www.homefrontsolutionsllc.com">homefrontsolutionsllc.com</a>
 </footer>
 
 <script>
-// ── Config ──────────────────────────────────────────────────────────────────
-// Replace this with your deployed Fiber Scout server URL
+// ── Config (injected server-side by /join/:slug) ─────────────────────────────
 const FIBER_SCOUT_SERVER = "FIBER_SCOUT_SERVER_PLACEHOLDER";
 const API_ENDPOINT = FIBER_SCOUT_SERVER + "/api/onboarding/apply";
-// Which org this link belongs to (injected by /join/:slug). Blank = default org.
 const ORG_SLUG = "FIBER_SCOUT_ORG_PLACEHOLDER";
+
+const $ = (id) => document.getElementById(id);
 
 // ── Experience toggle ────────────────────────────────────────────────────────
 function setExp(hasExp) {
-  document.getElementById("hasSalesExp").value = hasExp ? "true" : "false";
-  document.getElementById("expYes").classList.toggle("active", hasExp);
-  document.getElementById("expNo").classList.toggle("active", !hasExp);
-  document.getElementById("expDetailsWrap").style.display = hasExp ? "block" : "none";
+  $("hasSalesExp").value = hasExp ? "true" : "false";
+  $("expYes").setAttribute("aria-pressed", String(hasExp));
+  $("expNo").setAttribute("aria-pressed", String(!hasExp));
+  $("expDetailsWrap").style.display = hasExp ? "block" : "none";
 }
+$("expNo").addEventListener("click", () => setExp(false));
+$("expYes").addEventListener("click", () => setExp(true));
 
-// ── File upload preview ──────────────────────────────────────────────────────
-function setupUpload(inputId, areaId, nameId) {
-  const input = document.getElementById(inputId);
-  const area = document.getElementById(areaId);
-  const nameEl = document.getElementById(nameId);
+// ── Live phone formatting → (xxx) xxx-xxxx ───────────────────────────────────
+$("phone").addEventListener("input", (e) => {
+  const d = e.target.value.replace(/\D/g, "").slice(0, 10);
+  let out = d;
+  if (d.length > 6) out = "(" + d.slice(0,3) + ") " + d.slice(3,6) + "-" + d.slice(6);
+  else if (d.length > 3) out = "(" + d.slice(0,3) + ") " + d.slice(3);
+  else if (d.length > 0) out = "(" + d;
+  e.target.value = out;
+});
+$("zip").addEventListener("input", (e) => { e.target.value = e.target.value.replace(/\D/g, "").slice(0, 5); });
+
+// ── File upload preview + size guard (10 MB, matches server) ─────────────────
+function setupUpload(inputId, areaId, nameId, errId) {
+  const input = $(inputId), area = $(areaId), nameEl = $(nameId);
   input.addEventListener("change", () => {
-    if (input.files[0]) {
-      area.classList.add("has-file");
-      nameEl.textContent = "✓ " + input.files[0].name;
-    } else {
-      area.classList.remove("has-file");
-      nameEl.textContent = "";
+    const f = input.files[0];
+    if (f && f.size > 10 * 1024 * 1024) {
+      input.value = ""; area.classList.remove("has"); nameEl.textContent = "";
+      showErr(errId, "That file is over 10 MB — please choose a smaller one"); return;
     }
+    if (f) { area.classList.add("has"); nameEl.textContent = "✓ " + f.name; showErr(errId, false); }
+    else { area.classList.remove("has"); nameEl.textContent = ""; }
   });
 }
-setupUpload("headshotFile", "headshotArea", "headshotName");
-setupUpload("licenseFile", "licenseArea", "licenseName");
+setupUpload("headshotFile", "headshotArea", "headshotName", "headshot");
+setupUpload("licenseFile", "licenseArea", "licenseName", "license");
 
-// ── Validation ───────────────────────────────────────────────────────────────
-function showErr(id, show) {
-  const el = document.getElementById(id + "-err");
-  const input = document.getElementById(id);
+// ── Validation (inline on blur + on submit) ──────────────────────────────────
+function showErr(id, msgOrShow) {
+  const el = $(id + "-err"), input = $(id);
   if (!el) return;
+  const show = !!msgOrShow;
+  if (typeof msgOrShow === "string" && msgOrShow) el.textContent = msgOrShow;
   el.classList.toggle("show", show);
-  if (input) input.classList.toggle("error", show);
+  if (input) input.setAttribute("aria-invalid", show ? "true" : "false");
 }
+const isEmail = (v) => /^[^\s@]+@[^\s@]+\.[A-Za-z]{2,}$/.test(v);
+function checkField(id) {
+  const v = ($(id).value || "").trim();
+  if (id === "fullName") return v.length >= 2 || (showErr(id, true), false);
+  if (id === "email")    return isEmail(v) || (showErr(id, true), false);
+  if (id === "phone")    return v.replace(/\D/g,"").length === 10 || (showErr(id, true), false);
+  if (id === "city")     return v.length >= 2 || (showErr(id, true), false);
+  if (id === "zip")      return /^\d{5}$/.test(v) || (showErr(id, true), false);
+  showErr(id, false); return true;
+}
+["fullName","email","phone","city","zip"].forEach(id => {
+  $(id).addEventListener("blur", () => checkField(id));
+  $(id).addEventListener("input", () => { if ($(id + "-err").classList.contains("show")) checkField(id); });
+});
+
+// ── Progress bar (fills as required groups complete) ─────────────────────────
+function updateSteps() {
+  const s1 = ["fullName","email","phone","city","zip"].every(id => {
+    const v = ($(id).value||"").trim();
+    if (id==="email") return isEmail(v); if (id==="phone") return v.replace(/\D/g,"").length===10;
+    if (id==="zip") return /^\d{5}$/.test(v); return v.length>=2;
+  });
+  const s2 = document.querySelectorAll("input[name='carriers']:checked").length > 0;
+  const s3 = !!$("headshotFile").files[0];
+  const s4 = !!$("licenseFile").files[0];
+  [["s1",s1],["s2",s2],["s3",s3],["s4",s4]].forEach(([id,on]) => $(id).classList.toggle("on", on));
+}
+document.getElementById("applyForm").addEventListener("input", updateSteps);
+document.getElementById("applyForm").addEventListener("change", updateSteps);
 
 function validate() {
-  let valid = true;
-  const fn = document.getElementById("fullName").value.trim();
-  const em = document.getElementById("email").value.trim();
-  const ph = document.getElementById("phone").value.trim();
-  const ci = document.getElementById("city").value.trim();
-  const zp = document.getElementById("zip").value.trim();
-  const carriers = [...document.querySelectorAll("input[name='carriers']:checked")];
-  const headshot = document.getElementById("headshotFile").files[0];
-  const license = document.getElementById("licenseFile").files[0];
-
-  if (!fn) { showErr("fullName", true); valid = false; } else showErr("fullName", false);
-  if (!em || !em.includes("@")) { showErr("email", true); valid = false; } else showErr("email", false);
-  if (!ph || ph.length < 7) { showErr("phone", true); valid = false; } else showErr("phone", false);
-  if (!ci) { showErr("city", true); valid = false; } else showErr("city", false);
-  if (!zp) { showErr("zip", true); valid = false; } else showErr("zip", false);
-  if (carriers.length === 0) {
-    document.getElementById("carriers-err").classList.add("show"); valid = false;
-  } else {
-    document.getElementById("carriers-err").classList.remove("show");
-  }
-  if (!headshot) { showErr("headshot", true); valid = false; } else showErr("headshot", false);
-  if (!license) { showErr("license", true); valid = false; } else showErr("license", false);
-
-  return valid;
+  let ok = true;
+  ["fullName","email","phone","city","zip"].forEach(id => { if (!checkField(id)) ok = false; });
+  const carriers = document.querySelectorAll("input[name='carriers']:checked").length;
+  $("carriers-err").classList.toggle("show", carriers === 0); if (carriers === 0) ok = false;
+  if (!$("headshotFile").files[0]) { showErr("headshot", true); ok = false; } else showErr("headshot", false);
+  if (!$("licenseFile").files[0]) { showErr("license", true); ok = false; } else showErr("license", false);
+  return ok;
 }
 
 // ── Submit ───────────────────────────────────────────────────────────────────
 document.getElementById("applyForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!validate()) return;
+  if ($("website").value) return; // honeypot tripped — silently drop
+  if (!validate()) {
+    const firstErr = document.querySelector(".err.show, #carriers-err.show");
+    if (firstErr) firstErr.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  const btn = $("submitBtn"), txt = $("submitText"), spin = $("submitSpinner");
+  btn.disabled = true; txt.textContent = "Submitting…"; spin.style.display = "block";
 
-  const btn = document.getElementById("submitBtn");
-  const txt = document.getElementById("submitText");
-  const spin = document.getElementById("submitSpinner");
-  btn.disabled = true;
-  txt.textContent = "Submitting…";
-  spin.style.display = "block";
-
-  const carriers = [...document.querySelectorAll("input[name='carriers']:checked")]
-    .map(c => c.value);
-
+  const carriers = [...document.querySelectorAll("input[name='carriers']:checked")].map(c => c.value);
   const fd = new FormData();
-  fd.append("fullName", document.getElementById("fullName").value.trim());
-  fd.append("email", document.getElementById("email").value.trim());
-  fd.append("phone", document.getElementById("phone").value.trim());
-  fd.append("city", document.getElementById("city").value.trim());
-  fd.append("zip", document.getElementById("zip").value.trim());
+  fd.append("fullName", $("fullName").value.trim());
+  fd.append("email", $("email").value.trim());
+  fd.append("phone", $("phone").value.trim());
+  fd.append("city", $("city").value.trim());
+  fd.append("zip", $("zip").value.trim());
   fd.append("state", "NC");
-  fd.append("hasSalesExperience", document.getElementById("hasSalesExp").value);
-  fd.append("salesExperienceDetails", document.getElementById("salesExpDetails").value.trim());
+  fd.append("hasSalesExperience", $("hasSalesExp").value);
+  fd.append("salesExperienceDetails", $("salesExpDetails").value.trim());
   fd.append("preferredCarriers", carriers.join(","));
-  fd.append("referralSource", document.getElementById("referralSource").value);
+  fd.append("referralSource", $("referralSource").value);
   if (ORG_SLUG) fd.append("orgSlug", ORG_SLUG);
-  const headshotFile = document.getElementById("headshotFile").files[0];
-  const licenseFile = document.getElementById("licenseFile").files[0];
-  if (headshotFile) fd.append("headshot", headshotFile);
-  if (licenseFile) fd.append("license", licenseFile);
+  if ($("headshotFile").files[0]) fd.append("headshot", $("headshotFile").files[0]);
+  if ($("licenseFile").files[0]) fd.append("license", $("licenseFile").files[0]);
 
   try {
     const r = await fetch(API_ENDPOINT, { method: "POST", body: fd });
-    const d = await r.json();
-
+    const d = await r.json().catch(() => ({}));
     if (r.ok && d.success) {
       document.getElementById("applyForm").style.display = "none";
-      document.getElementById("successCard").classList.add("show");
+      $("successCard").classList.add("show");
       window.scrollTo({ top: 0, behavior: "smooth" });
     } else {
       throw new Error(d.error || "Submission failed");
     }
   } catch (err) {
     document.getElementById("applyForm").style.display = "none";
-    document.getElementById("errorMsg").textContent = err.message || "Submission failed. Please try again.";
-    document.getElementById("errorCard").classList.add("show");
+    $("errorCard").classList.add("show");
+    window.scrollTo({ top: 0, behavior: "smooth" });
   } finally {
-    btn.disabled = false;
-    txt.textContent = "Submit Application →";
-    spin.style.display = "none";
+    btn.disabled = false; txt.textContent = "Submit application"; spin.style.display = "none";
   }
 });
 
-function resetForm() {
-  document.getElementById("errorCard").classList.remove("show");
+$("retryBtn").addEventListener("click", () => {
+  $("errorCard").classList.remove("show");
   document.getElementById("applyForm").style.display = "block";
-}
+});
 </script>
 </body>
 </html>

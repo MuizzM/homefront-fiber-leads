@@ -933,6 +933,17 @@ export default function MapView() {
     if (!mapReady || !isRep || geoAutoStartedRef.current) return;
     geoAutoStartedRef.current = true;
     try { geolocateRef.current?.trigger(); } catch { /* control not ready — FAB still works */ }
+    // Robust default-to-current-location: even if the GeolocateControl doesn't
+    // center (deferred permission, iOS standalone stall), a direct fix opens the
+    // map on the rep. No-ops if the live control already centered, or if location
+    // isn't granted yet (then last-known/lead-bounds from the effect above stands).
+    captureFieldFix(8000).then(fix => {
+      const m = mapRef.current;
+      if (m && !gpsCenteredRef.current && fix.repLat != null && fix.repLng != null) {
+        writeCachedFix(fix.repLat, fix.repLng, Date.now());
+        moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 600, essential: true });
+      }
+    }).catch(() => {});
   }, [mapReady, isRep]);
 
   // ── Render color-coded territory regions (area name + owner label) ─────────
