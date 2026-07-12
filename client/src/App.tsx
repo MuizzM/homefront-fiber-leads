@@ -38,6 +38,7 @@ const ClockIn = lazy(() => import("@/pages/ClockIn"));
 const Profile = lazy(() => import("@/pages/Profile"));
 const Diagnostics = lazy(() => import("@/pages/Diagnostics"));
 const Governance = lazy(() => import("@/pages/Governance"));
+const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
@@ -139,6 +140,9 @@ function AppRoutes() {
           </Route>
           <Route path="/governance">
             <Guard role={role} allowed={["admin"]}><Governance /></Guard>
+          </Route>
+          <Route path="/billing">
+            <Guard role={role} allowed={["admin"]}><Billing /></Guard>
           </Route>
 
           {/* ── Team Lead + Manager + Admin ── */}

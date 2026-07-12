@@ -7,6 +7,8 @@ import { mailTransport, mailFrom, adminInbox, emailShell, escapeHtml, logoAttach
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage, getDefaultTenantId } from "./storage";
+import { meterQualifiedLead, billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits } from "./billingStore";
+import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
 import Database from "better-sqlite3";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
@@ -469,7 +471,23 @@ function flushWriteQueue() {
   }
   const batch = _writeQueue.splice(0, 200); // process up to 200 at a time
   for (const lead of batch) {
-    try { storage.upsertLeadByAddress(lead); } catch (e: any) {
+    try {
+      const { lead: saved, created } = storage.upsertLeadByAddress(lead);
+      // Billing: a lead credit is consumed ONLY when a NEW qualified opportunity is
+      // delivered to a tenant (never on a re-scan update). No-op for tenants without
+      // a billing row — dark by default, so the live portal is unaffected. Idempotent
+      // per lead, and metering must never break a scan write, so it's best-effort.
+      // KNOWN LIMITATION (multi-tenant): upsertLeadByAddress dedupes leads by address
+      // ACROSS all tenants, so an address is billed once, to whichever tenant scans it
+      // first (later tenants get created:false → not charged). Irrelevant for the
+      // single-tenant live org today; when true multi-tenant billing goes live, lead
+      // ownership/dedupe must become tenant-scoped so each org is billed for its own
+      // deliveries. Tracked in memory: billing-lead-credit-system.
+      if (created && saved?.tenantId != null) {
+        try { meterQualifiedLead(saved.tenantId, saved.id); }
+        catch (e: any) { console.error(`[billing] meter error: ${e.message}`); }
+      }
+    } catch (e: any) {
       console.error(`[write-queue] Insert error: ${e.message}`);
     }
   }
@@ -1137,6 +1155,91 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = (req as any).user?.tenantId ?? undefined;
     if (!storage.deleteLead(Number(req.params.id), tid)) return res.status(404).json({ error: "Not found" });
     res.json({ success: true });
+  });
+
+  // ══ BILLING — SaaS lead-credit "banking" (see shared/billing.ts + billingStore.ts) ══
+  // DARK by default: a tenant without a tenant_billing row reports enabled:false +
+  // full access, so nothing here disturbs the live portal until billing is set up.
+  // Reads are tenant-admin scoped; mutations are super_admin-only (platform ops)
+  // until the payment-provider adapter drives them.
+  function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
+    requireAuth(req, res, () => {
+      if ((req as any).user?.role !== "super_admin") return res.status(403).json({ error: "Super admin only" });
+      next();
+    });
+  }
+  // Which tenant a billing call targets. A tenant admin is pinned to their own org
+  // (can never touch another's billing); a super_admin may target any via ?tenantId.
+  function billingTenantId(req: Request): number {
+    const u = (req as any).user;
+    if (u?.tenantId != null) return u.tenantId;
+    const q = Number((req.query?.tenantId ?? (req.body as any)?.tenantId));
+    return Number.isFinite(q) && q > 0 ? q : (getDefaultTenantId() ?? 1);
+  }
+  // Provision (the ONLY row-creating path) must target an EXPLICIT tenant — never
+  // the implicit default. This stops a super_admin's empty-body call from flipping
+  // the live single-tenant org from dark → metered by accident (the whole point of
+  // dark-by-default). A tenant admin is implicitly explicit (their own org).
+  function explicitBillingTenantId(req: Request): number | null {
+    const u = (req as any).user;
+    if (u?.tenantId != null) return u.tenantId;
+    const q = Number((req.query?.tenantId ?? (req.body as any)?.tenantId));
+    return Number.isFinite(q) && q > 0 ? q : null;
+  }
+
+  // Plan catalog (prices are null until the owner sets them — UI shows "Contact us").
+  app.get("/api/billing/plans", requireAuth, (_req, res) => {
+    res.json({ plans: Object.values(BILLING_PLANS) });
+  });
+  // This tenant's billing snapshot (credits, state, access, usage level).
+  app.get("/api/billing", requireAdmin, (req, res) => {
+    res.json(billingSummary(billingTenantId(req)));
+  });
+  // Recent credit-ledger events for the usage panel.
+  app.get("/api/billing/ledger", requireAdmin, (req, res) => {
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    res.json({ events: getCreditLedger(billingTenantId(req), limit) });
+  });
+  // Provision billing for a tenant (dark → metered). Idempotent. Super-admin ops.
+  // Requires an EXPLICIT tenantId and validates every enum so a tenant can never be
+  // written into an unrecoverable state (an invalid `state` has no legal transition
+  // out — it would brick the org).
+  app.post("/api/billing/provision", requireSuperAdmin, (req, res) => {
+    const { planKey, state, overageMode, trialEndsAt } = req.body ?? {};
+    const tenantId = explicitBillingTenantId(req);
+    if (tenantId == null) return res.status(400).json({ error: "explicit tenantId required" });
+    if (planKey != null && !(planKey in BILLING_PLANS)) return res.status(400).json({ error: "Unknown plan" });
+    if (state != null && !isBillingState(state)) return res.status(400).json({ error: "Invalid billing state" });
+    if (overageMode != null && !isOverageMode(overageMode)) return res.status(400).json({ error: "Invalid overage mode" });
+    if (trialEndsAt != null && (typeof trialEndsAt !== "string" || Number.isNaN(Date.parse(trialEndsAt)))) {
+      return res.status(400).json({ error: "Invalid trialEndsAt" });
+    }
+    const row = ensureBilling(tenantId, { planKey, state, overageMode, trialEndsAt });
+    res.status(201).json(billingSummary(row.tenantId));
+  });
+  // Move a tenant through the billing state machine (validated transition).
+  app.post("/api/billing/state", requireSuperAdmin, (req, res) => {
+    const to = String(req.body?.state ?? "");
+    if (!isBillingEnabled(billingTenantId(req))) return res.status(404).json({ error: "Billing not provisioned" });
+    const r = setBillingState(billingTenantId(req), to as any, `super_admin:${(req as any).user?.id}`);
+    if (!r.ok) return res.status(409).json({ error: r.reason });
+    res.json(billingSummary(billingTenantId(req)));
+  });
+  // Change plan (swaps allowance). Super-admin ops until self-serve upgrade ships.
+  app.post("/api/billing/plan", requireSuperAdmin, (req, res) => {
+    const planKey = String(req.body?.planKey ?? "");
+    if (!(planKey in BILLING_PLANS)) return res.status(400).json({ error: "Unknown plan" });
+    if (!isBillingEnabled(billingTenantId(req))) return res.status(404).json({ error: "Billing not provisioned" });
+    setPlan(billingTenantId(req), planKey as any, `super_admin:${(req as any).user?.id}`);
+    res.json(billingSummary(billingTenantId(req)));
+  });
+  // Grant/purchase extra credits (adapter/admin top-up).
+  app.post("/api/billing/credits", requireSuperAdmin, (req, res) => {
+    const amount = Math.floor(Number(req.body?.amount));
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: "amount must be > 0" });
+    if (!isBillingEnabled(billingTenantId(req))) return res.status(404).json({ error: "Billing not provisioned" });
+    grantCredits(billingTenantId(req), amount, "grant", `super_admin:${(req as any).user?.id}`);
+    res.json(billingSummary(billingTenantId(req)));
   });
 
   // Manual token injection — user pastes JWT from their browser

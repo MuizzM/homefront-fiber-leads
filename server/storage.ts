@@ -712,6 +712,54 @@ export function runMigrations() {
     // Additive: fixture/live evidence isolation columns for DBs created before it.
     `ALTER TABLE target_observations ADD COLUMN is_fixture INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE target_state ADD COLUMN is_fixture INTEGER NOT NULL DEFAULT 0`,
+
+    // ═══ BILLING — SaaS lead-credit "banking" (see shared/billing.ts) ════════════
+    // Provider-agnostic: the payment provider is an adapter that only ever calls
+    // setBillingState()/grantCredits(). Nothing here talks to Stripe. This is the
+    // durable side of the pure engine — one billing row per tenant + an append-only
+    // credit ledger. DARK by default: a tenant with NO billing row is never metered
+    // or gated, so the live single-tenant portal is untouched until billing is set up.
+    `CREATE TABLE IF NOT EXISTS tenant_billing (
+       tenant_id INTEGER PRIMARY KEY,
+       plan_key TEXT NOT NULL DEFAULT 'starter',      -- starter|growth|professional|enterprise
+       state TEXT NOT NULL DEFAULT 'trial',           -- trial|active|past_due|suspended|canceled
+       cycle_start TEXT,
+       cycle_end TEXT,
+       credits_included INTEGER NOT NULL DEFAULT 0,   -- this cycle's allowance
+       credits_used INTEGER NOT NULL DEFAULT 0,       -- consumed this cycle
+       credits_rollover INTEGER NOT NULL DEFAULT 0,   -- carried from last cycle
+       credits_purchased INTEGER NOT NULL DEFAULT 0,  -- extra bought this cycle
+       overage_used INTEGER NOT NULL DEFAULT 0,       -- delivered beyond allowance (billed later)
+       overage_mode TEXT NOT NULL DEFAULT 'stop',     -- stop|allow_overage|auto_purchase|require_approval
+       unlimited INTEGER NOT NULL DEFAULT 0,          -- enterprise custom (no credit cap)
+       seats_paid INTEGER NOT NULL DEFAULT 0,
+       trial_ends_at TEXT,
+       grace_ends_at TEXT,                            -- past_due dunning deadline → suspend
+       provider TEXT,                                 -- stripe|manual|null (adapter seam)
+       provider_customer_id TEXT,
+       provider_subscription_id TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    // Append-only credit ledger — every grant (+), consume (-1), reset, purchase.
+    // dedupe_key (consume:<tenantId>:lead:<leadId>) makes a lead-delivery consume
+    // EXACTLY once: a retried lead write with the same key is a no-op, so a qualified
+    // opportunity can never be double-charged. balance_after snapshots remaining
+    // credits for audit/ROI.
+    `CREATE TABLE IF NOT EXISTS lead_credit_ledger (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       delta INTEGER NOT NULL,                        -- -1 consume, +N grant/purchase/reset
+       reason TEXT NOT NULL,                          -- lead_delivered|grant|purchase|cycle_reset|adjustment
+       lead_id INTEGER,                               -- the qualified opportunity, when reason=lead_delivered
+       overage INTEGER NOT NULL DEFAULT 0,            -- 1 if this consume went into overage
+       balance_after INTEGER,                         -- credits remaining after this event
+       dedupe_key TEXT,                               -- idempotency (e.g. consume:lead:1234)
+       actor TEXT,
+       at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_credit_ledger_tenant ON lead_credit_ledger(tenant_id, at DESC)`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_ledger_dedupe ON lead_credit_ledger(dedupe_key) WHERE dedupe_key IS NOT NULL`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

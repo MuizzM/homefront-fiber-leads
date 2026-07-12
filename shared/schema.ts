@@ -45,6 +45,49 @@ export const insertTenantSchema = createInsertSchema(tenants).omit({ id: true, c
 export type InsertTenant = z.infer<typeof insertTenantSchema>;
 export type Tenant = typeof tenants.$inferSelect;
 
+// ── Billing: per-tenant lead-credit "banking" state (see shared/billing.ts) ───
+// One row per tenant. Provider-agnostic — the payment provider is an adapter.
+// DARK by default: no row = tenant is never metered or gated (live portal safe).
+export const tenantBilling = sqliteTable("tenant_billing", {
+  tenantId: integer("tenant_id").primaryKey(),
+  planKey: text("plan_key").notNull().default("starter"),       // starter|growth|professional|enterprise
+  state: text("state").notNull().default("trial"),              // trial|active|past_due|suspended|canceled
+  cycleStart: text("cycle_start"),
+  cycleEnd: text("cycle_end"),
+  creditsIncluded: integer("credits_included").notNull().default(0),
+  creditsUsed: integer("credits_used").notNull().default(0),
+  creditsRollover: integer("credits_rollover").notNull().default(0),
+  creditsPurchased: integer("credits_purchased").notNull().default(0),
+  overageUsed: integer("overage_used").notNull().default(0),
+  overageMode: text("overage_mode").notNull().default("stop"),  // stop|allow_overage|auto_purchase|require_approval
+  unlimited: integer("unlimited", { mode: "boolean" }).notNull().default(false),
+  seatsPaid: integer("seats_paid").notNull().default(0),
+  trialEndsAt: text("trial_ends_at"),
+  graceEndsAt: text("grace_ends_at"),
+  provider: text("provider"),                                   // stripe|manual|null
+  providerCustomerId: text("provider_customer_id"),
+  providerSubscriptionId: text("provider_subscription_id"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type TenantBilling = typeof tenantBilling.$inferSelect;
+
+// Append-only credit ledger — one row per grant/consume/reset. dedupeKey makes a
+// lead-delivery consume idempotent (a retried write can't double-charge a lead).
+export const leadCreditLedger = sqliteTable("lead_credit_ledger", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  delta: integer("delta").notNull(),                            // -1 consume, +N grant/purchase/reset
+  reason: text("reason").notNull(),                             // lead_delivered|grant|purchase|cycle_reset|adjustment
+  leadId: integer("lead_id"),
+  overage: integer("overage", { mode: "boolean" }).notNull().default(false),
+  balanceAfter: integer("balance_after"),
+  dedupeKey: text("dedupe_key"),
+  actor: text("actor"),
+  at: text("at").notNull().default(new Date().toISOString()),
+});
+export type LeadCreditLedger = typeof leadCreditLedger.$inferSelect;
+
 
 // ── Users (admin + reps with secure login) ───────────────────────────────────
 export const users = sqliteTable("users", {

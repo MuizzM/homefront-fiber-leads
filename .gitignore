@@ -20,3 +20,4 @@ uploads/
 
 # Local live-verification harnesses (reference proxy creds via shell env — never commit)
 verify-*.ts
+lexington-newbuilds.json

@@ -26,6 +26,7 @@ import {
   Banknote,
   Clock,
   Radio,
+  CreditCard,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -91,6 +92,7 @@ const NAV_ITEMS: NavItem[] = [
   // ── Governance (Phase 2) ──────────────────────────────────────────────────
   { href: "/diagnostics",  label: "Diagnostics",   icon: Activity,     show: r => hasRole(r, "admin", "manager"),      group: "Governance" },
   { href: "/governance",   label: "Permissions",   icon: ShieldCheck,  show: r => hasRole(r, "admin"),                 group: "Governance" },
+  { href: "/billing",      label: "Billing",       icon: CreditCard,   show: r => hasRole(r, "admin"),                 group: "Governance" },
   // ── Admin ─────────────────────────────────────────────────────────────────
   { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r: string, email?: string) => email === "muizzm21@gmail.com", group: "Admin" },
 ];
