@@ -390,6 +390,14 @@ export const comingSoonAddresses = sqliteTable("coming_soon_addresses", {
   dfAddressId: text("df_address_id"),
   householdSegmentType: text("household_segment_type"), // COMING SOON | PROSPECT | EXISTING COPPER | …
   buildStatus: text("build_status"),
+  // ── Lifecycle (recheck → promote or age-out) ────────────────────────────────
+  // status: "active" (still watching) | "promoted" (went live → lead) | "aged_out"
+  //         (watched too long / never materialized — junk) | "removed" (manual).
+  // Archived rows leave the active list but are KEPT as history.
+  status: text("status").notNull().default("active"),
+  checkCount: integer("check_count").notNull().default(0), // times rechecked
+  archivedAt: text("archived_at"),                          // when it left the active list
+  archivedReason: text("archived_reason"),                 // why it was archived
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export const insertComingSoonSchema = createInsertSchema(comingSoonAddresses).omit({

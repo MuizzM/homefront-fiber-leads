@@ -168,6 +168,9 @@ export interface IStorage {
   getAllClockSessions(date?: string, tenantId?: number): ClockSession[];
   // ── Coming Soon Pipeline ───────────────────────────────────────────────────
   getComingSoonAddresses(tenantId?: number): ComingSoonAddress[];
+  getComingSoonHistory(tenantId?: number, limit?: number): ComingSoonAddress[];
+  archiveComingSoon(id: number, reason: string): ComingSoonAddress | undefined;
+  ageOutComingSoon(maxChecks?: number, maxAgeDays?: number): number;
   createComingSoon(addr: InsertComingSoon): ComingSoonAddress;
   updateComingSoon(id: number, updates: Partial<ComingSoonAddress>): ComingSoonAddress | undefined;
   deleteComingSoon(id: number): boolean;
@@ -255,6 +258,11 @@ export function runMigrations() {
     `ALTER TABLE team_members ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE territories ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE coming_soon_addresses ADD COLUMN tenant_id INTEGER`,
+    // Coming-Soon lifecycle: recheck → promote or age-out, with archived history.
+    `ALTER TABLE coming_soon_addresses ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
+    `ALTER TABLE coming_soon_addresses ADD COLUMN check_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE coming_soon_addresses ADD COLUMN archived_at TEXT`,
+    `ALTER TABLE coming_soon_addresses ADD COLUMN archived_reason TEXT`,
     `ALTER TABLE commissions ADD COLUMN tenant_id INTEGER`,
     // users/leads got tenant_id from drizzle-kit push in prod; these ALTERs make
     // a migrations-only DB (tests, fresh installs) match.
@@ -1530,9 +1538,43 @@ export class Storage implements IStorage {
 
   // ── Coming Soon Pipeline ───────────────────────────────────────────────────
   getComingSoonAddresses(tenantId?: number): ComingSoonAddress[] {
-    const q = db.select().from(comingSoonAddresses);
-    const scoped = tenantId != null ? q.where(eq(comingSoonAddresses.tenantId, tenantId)) : q;
-    return scoped.orderBy(desc(comingSoonAddresses.createdAt)).all();
+    // ACTIVE watchlist only — archived (promoted / aged-out / removed) rows are
+    // history, surfaced separately by getComingSoonHistory so the live list stays
+    // clean of junk.
+    return db.select().from(comingSoonAddresses)
+      .where(and(
+        sql`(status = 'active' OR status IS NULL)`,
+        tenantId != null ? eq(comingSoonAddresses.tenantId, tenantId) : undefined,
+      ))
+      .orderBy(desc(comingSoonAddresses.createdAt)).all();
+  }
+  // Archived (non-active) rows — the KEEP-HISTORY side. Newest-archived first.
+  getComingSoonHistory(tenantId?: number, limit = 500): ComingSoonAddress[] {
+    return db.select().from(comingSoonAddresses)
+      .where(and(
+        sql`status IS NOT NULL AND status != 'active'`,
+        tenantId != null ? eq(comingSoonAddresses.tenantId, tenantId) : undefined,
+      ))
+      .orderBy(sql`archived_at DESC`).limit(limit).all();
+  }
+  // Soft-archive: leave the active list but keep the row as history.
+  archiveComingSoon(id: number, reason: string): ComingSoonAddress | undefined {
+    return db.update(comingSoonAddresses)
+      .set({ status: reason === "promoted_to_lead" ? "promoted" : (reason === "manual" ? "removed" : "aged_out"), archivedReason: reason, archivedAt: new Date().toISOString() })
+      .where(eq(comingSoonAddresses.id, id)).returning().get();
+  }
+  // Age-out sweep: archive ACTIVE rows that have been watched too long without
+  // going live (rechecked ≥ maxChecks OR older than maxAgeDays) — the "remove the
+  // junk, keep the history" rule. Returns how many were archived.
+  ageOutComingSoon(maxChecks = 45, maxAgeDays = 120): number {
+    const cutoff = new Date(Date.now() - maxAgeDays * 86400000).toISOString();
+    return db.update(comingSoonAddresses)
+      .set({ status: "aged_out", archivedReason: "aged_out", archivedAt: new Date().toISOString() })
+      .where(and(
+        sql`(status = 'active' OR status IS NULL)`,
+        eq(comingSoonAddresses.fiberAvailable, false),
+        sql`(check_count >= ${maxChecks} OR created_at < ${cutoff})`,
+      )).run().changes;
   }
   createComingSoon(addr: InsertComingSoon): ComingSoonAddress {
     return db.insert(comingSoonAddresses).values({ ...addr, createdAt: new Date().toISOString() }).returning().get();
@@ -1544,13 +1586,16 @@ export class Storage implements IStorage {
     return db.delete(comingSoonAddresses).where(eq(comingSoonAddresses.id, id)).run().changes > 0;
   }
   markComingSoonAvailable(id: number, leadId: number): ComingSoonAddress | undefined {
+    // Went live → promote + archive as history (leaves the active watchlist).
     return db.update(comingSoonAddresses)
-      .set({ fiberAvailable: true, convertedToLeadId: leadId, lastChecked: new Date().toISOString() })
+      .set({ fiberAvailable: true, convertedToLeadId: leadId, lastChecked: new Date().toISOString(),
+             status: "promoted", archivedReason: "promoted_to_lead", archivedAt: new Date().toISOString() })
       .where(eq(comingSoonAddresses.id, id)).returning().get();
   }
   markComingSoonChecked(id: number): ComingSoonAddress | undefined {
+    // Count the recheck so the age-out sweep can retire never-materializing junk.
     return db.update(comingSoonAddresses)
-      .set({ lastChecked: new Date().toISOString() })
+      .set({ lastChecked: new Date().toISOString(), checkCount: sql`check_count + 1` })
       .where(eq(comingSoonAddresses.id, id)).returning().get();
   }
   // Add/refresh a watchlist address keyed by Kinetic's dfAddressId (the exact,
@@ -1579,7 +1624,11 @@ export class Storage implements IStorage {
   // haven't converted to a lead yet — rechecked by exact key, oldest-checked first.
   getComingSoonWithDfId(limit = 100000): ComingSoonAddress[] {
     return db.select().from(comingSoonAddresses)
-      .where(and(isNotNull(comingSoonAddresses.dfAddressId), eq(comingSoonAddresses.fiberAvailable, false)))
+      .where(and(
+        isNotNull(comingSoonAddresses.dfAddressId),
+        eq(comingSoonAddresses.fiberAvailable, false),
+        sql`(status = 'active' OR status IS NULL)`, // don't recheck archived junk
+      ))
       .orderBy(sql`last_checked IS NOT NULL, last_checked ASC`).limit(limit).all();
   }
 

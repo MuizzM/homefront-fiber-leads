@@ -439,6 +439,11 @@ const qstr = (v: unknown): string => Array.isArray(v) ? String(v[0] ?? "") : typ
 const SCAN_BATCH_SIZE   = 200; // Fill all 400 proxy slots per batch
 const SCAN_BATCH_DELAY_MS = 0; // No delay — continuous fire
 const SCAN_ZONE_WORKERS = 4;   // Split address list into N zones processed in parallel
+// A Kinetic 403 is a refilling rolling-window throttle, not a no-service — retry
+// throttled addresses with a WIDE jittered backoff so the window has time to
+// refill between attempts (a short retry just re-hits the depleted window and
+// prolongs the throttle). Bounded so a permanently-blocked address can't hang.
+const SCAN_THROTTLE_RETRIES = Number(process.env.SCAN_THROTTLE_RETRIES ?? 3);
 
 // ── Write queue: batch DB inserts every 500ms instead of one-by-one ─────────
 // SQLite is fast but the upsertLeadByAddress call has overhead.
@@ -519,7 +524,17 @@ async function scanOneBatch(
   await Promise.all(batch.map(async (a) => {
     if (!scanJobs.has(jobId)) return;
     try {
-      const result = await scanAddress(a.address, a.city, a.state, a.zip);
+      // Throttle-aware: Kinetic returns blocked:true on a 403 rolling-window
+      // throttle. Retry with jittered backoff instead of dropping the address —
+      // otherwise a big-city burst 403s a large slice ONCE and never re-checks
+      // them, so those houses (incl. new fiber) are silently never qualified.
+      let result = await scanAddress(a.address, a.city, a.state, a.zip);
+      for (let attempt = 0; attempt < SCAN_THROTTLE_RETRIES && result.apiSource === "failed" && result.blocked; attempt++) {
+        if (!scanJobs.has(jobId)) return;
+        // Wide backoff: [0,2s) → [0,8s) → [0,20s) — lets the rolling window refill.
+        await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 2000, capMs: 20000 })));
+        result = await scanAddress(a.address, a.city, a.state, a.zip);
+      }
       // Attach GIS coords if API didn't return geocoded coordinates
       if (!result.lat && (a as any).lat) result.lat = (a as any).lat;
       if (!result.lng && (a as any).lng) result.lng = (a as any).lng;
@@ -534,7 +549,9 @@ async function scanOneBatch(
       // These are the actual door-knock targets — fiber just ran to the house,
       // resident doesn't know it exists yet.
       const lead = leadInsertFromResult(result, a);
-      if (lead) enqueueLeadWrite(lead); // non-blocking write queue — never blocks the scan loop
+      // Stamp the owning org so a non-default-tenant admin's scan files leads under
+      // THEIR tenant, not the default (enqueueLeadWrite would otherwise default it).
+      if (lead) { (lead as any).tenantId = job.tenantId ?? getDefaultTenantId(); enqueueLeadWrite(lead); }
     } catch {
       job.results.push({ ...a, fiberStatus: "unknown", apiSource: "failed" });
       recordCheck(false, true);
@@ -679,7 +696,7 @@ async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateA
       const isNewFiberResult = result.isNewFiber && result.billingStatus === "N";
       recordCheck(isNewFiberResult, result.apiSource === "failed");
       const lead = leadInsertFromResult(result, a);
-      if (lead) enqueueLeadWrite(lead);
+      if (lead) { (lead as any).tenantId = job.tenantId ?? getDefaultTenantId(); enqueueLeadWrite(lead); }
     } else {
       job.results.push({ ...a, fiberStatus: "unknown", apiSource: "failed" });
       recordCheck(false, true);
@@ -1710,6 +1727,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     const jobId = `city_${city.toLowerCase().replace(/\s+/g, "_")}_${Date.now()}`;
     const job: ScanJob = {
+      // Stamp the org so poll/cancel/list resolve (without it a tenant-scoped
+      // admin 404s on this job and can't see or stop it while Kinetic spends).
+      tenantId: (req as any).user?.tenantId ?? getDefaultTenantId(),
       id: jobId, city: `${city}, ${st}`, zip: "",
       status: "running", total: newAddrs.length, done: 0, results: [],
       startedAt: new Date().toISOString(),
@@ -1982,6 +2002,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const jobId = `rescan_${Date.now()}`;
     const job: ScanJob = {
+      tenantId: (req as any).user?.tenantId ?? getDefaultTenantId(), // poll/cancel/list must resolve
       id: jobId, city: "Address pool re-scan", zip: "",
       status: "running", total: toScan.length, done: 0, results: [],
       startedAt: new Date().toISOString(),
@@ -1995,7 +2016,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/scan/stream/:jobId", requireManager, (req, res) => {
     const jobId = qstr(req.params.jobId);
     const job = scanJobs.get(jobId);
-    if (!job) return res.status(404).json({ error: "Job not found" });
+    // Tenant guard — mirror GET/DELETE :jobId. Without it any manager could stream
+    // another org's live scan results (addresses/coords) by guessing the jobId.
+    const _sseTid = (req as any).user?.tenantId;
+    if (!job || (_sseTid && job.tenantId !== _sseTid)) return res.status(404).json({ error: "Job not found" });
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -3906,14 +3930,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/cns/jobs/:id", requireManager, (req, res) => {
     const job = getCnsJob(qstr(req.params.id));
     const _cnsTid = (req as any).user?.tenantId;
-    if (!job || (_cnsTid && job.tenantId !== _cnsTid)) return res.status(404).json({ error: "Not found" });
+    // Allow null-tenant (super_admin-created) jobs through — matches the list
+    // endpoint, so a listed job is always openable.
+    if (!job || (_cnsTid != null && (job as any).tenantId != null && (job as any).tenantId !== _cnsTid)) return res.status(404).json({ error: "Not found" });
     res.json(job);
   });
 
   // GET /api/cns/jobs/:id/stream — SSE stream for CNS job results
   app.get("/api/cns/jobs/:id/stream", requireManager, (req, res) => {
     const job = getCnsJob(qstr(req.params.id));
-    if (!job) return res.status(404).json({ error: "Job not found" });
+    // Tenant guard — mirror the single-job reader; a CNS stream leaks the found
+    // address rows (dfAddressId/coords/fiber) cross-tenant without it.
+    const _cnsSseTid = (req as any).user?.tenantId;
+    if (!job || (_cnsSseTid && (job as any).tenantId != null && (job as any).tenantId !== _cnsSseTid)) {
+      return res.status(404).json({ error: "Job not found" });
+    }
 
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
@@ -4223,6 +4254,12 @@ export function registerSaasRoutes(app: any) {
     res.json(storage.getComingSoonAddresses((req as any).user?.tenantId));
   });
 
+  // GET /api/coming-soon/history — archived watchlist rows (promoted / aged-out /
+  // removed). The "keep history" side of the lifecycle.
+  app.get("/api/coming-soon/history", requireManager, (req: Request, res: Response) => {
+    res.json(storage.getComingSoonHistory((req as any).user?.tenantId, Number(req.query.limit ?? 500)));
+  });
+
   app.post("/api/coming-soon", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
     const { address, city, state, zip, lat, lng, reason } = req.body;
@@ -4240,10 +4277,11 @@ export function registerSaasRoutes(app: any) {
   app.delete("/api/coming-soon/:id", requireManager, (req: Request, res: Response) => {
     const id = Number(req.params.id);
     const tid = (req as any).user?.tenantId;
-    // Tenant wall: a manager may only delete their own tenant's watchlist rows.
+    // Tenant wall: a manager may only remove their own tenant's watchlist rows.
     const entry = storage.getComingSoonAddresses(tid).find(a => a.id === id);
     if (!entry) return res.status(404).json({ error: "Not found" });
-    storage.deleteComingSoon(id);
+    // Archive (keep history), don't hard-delete — it moves to /api/coming-soon/history.
+    storage.archiveComingSoon(id, "manual");
     res.json({ ok: true });
   });
 

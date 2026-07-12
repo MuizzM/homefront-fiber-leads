@@ -240,6 +240,17 @@ export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Prom
   } else {
     console.log("[cron] Coming Soon check complete — no changes");
   }
+
+  // Age-out sweep — retire watchlist addresses that have been rechecked for
+  // months and never went live (junk), keeping them as archived history so the
+  // active list stays clean. Env-tunable.
+  try {
+    const aged = storage.ageOutComingSoon(
+      Number(process.env.COMING_SOON_MAX_CHECKS ?? 45),
+      Number(process.env.COMING_SOON_MAX_AGE_DAYS ?? 120),
+    );
+    if (aged > 0) console.log(`[cron] Coming Soon aged out ${aged} stale addresses → archived history`);
+  } catch { /* pre-migration DB — skip */ }
 }
 
 // ── Pool re-scan, as a WorkSource ─────────────────────────────────────────────
