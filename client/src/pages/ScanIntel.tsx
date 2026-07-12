@@ -151,6 +151,7 @@ function MarketsView({ isAdmin, onScan, onOpportunity }: { isAdmin: boolean; onS
 
   const totalOpp = markets.reduce((s, m) => s + m.estRemainingOpportunity, 0);
   const unverified = markets.reduce((s, m) => s + (m.poolSize - m.verified), 0);
+  const totalNewFiber = markets.reduce((s, m) => s + (m.verifiedNewFiber || 0), 0);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -159,6 +160,7 @@ function MarketsView({ isAdmin, onScan, onOpportunity }: { isAdmin: boolean; onS
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-5">
           <div className="flex items-stretch rounded-xl border border-border bg-card divide-x divide-border overflow-hidden">
             <MetricCell label="Markets" value={markets.length.toLocaleString()} />
+            <MetricCell label="New fiber" value={totalNewFiber.toLocaleString()} tone="text-emerald-500" />
             <MetricCell label="To verify" value={unverified.toLocaleString()} />
             <MetricCell label="Est. opportunity" value={totalOpp.toLocaleString()} />
           </div>
@@ -205,6 +207,12 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
             <span className={`inline-block w-1.5 h-1.5 rounded-full ${m.confidence === "high" ? "bg-emerald-500" : m.confidence === "medium" ? "bg-amber-500" : "bg-slate-400"}`} />
             {m.confidence} confidence · {freshnessLabel(m.freshnessDays)}
           </div>
+          {/* New-fiber highlight — the whole point of the hunt. */}
+          {(m.verifiedNewFiber > 0 || m.newlyLive > 0) && (
+            <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-500" data-testid={`scan-market-newfiber-${m.city}`}>
+              <Zap className="w-3 h-3" /> {m.verifiedNewFiber.toLocaleString()} new fiber{m.newlyLive > 0 ? ` · ${m.newlyLive} just live` : ""}
+            </div>
+          )}
         </div>
       </div>
 
@@ -455,10 +463,10 @@ function RunRow({ run }: { run: ScanRun }) {
 }
 
 // ── Small building blocks ─────────────────────────────────────────────────────
-function MetricCell({ label, value }: { label: string; value: string }) {
+function MetricCell({ label, value, tone }: { label: string; value: string; tone?: string }) {
   return (
     <div className="px-4 py-2 first:pl-4">
-      <div className="text-[17px] font-bold text-foreground tabular-nums leading-none">{value}</div>
+      <div className={`text-[17px] font-bold tabular-nums leading-none ${tone ?? "text-foreground"}`}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-1 whitespace-nowrap">{label}</div>
     </div>
   );
