@@ -486,6 +486,14 @@ export default function MapView() {
     map.addControl(new (window as any).mapboxgl.NavigationControl(), "top-right");
     // "Locate me" — the core field control: center on the rep's position and
     // track it as they walk the street. Triggered by the big thumb FAB below.
+    // iOS home-screen web apps (standalone display mode) can't reliably get the
+    // DeviceOrientation permission the heading cone needs — and a failed heading
+    // request there can stall the whole control, so the blue dot never appears
+    // ("works in Safari, dead in the installed app"). Disable the cone in
+    // standalone; keep it for normal browser tabs where it works fine.
+    const isStandalone = typeof window !== "undefined" &&
+      (((window as any).matchMedia && (window as any).matchMedia("(display-mode: standalone)").matches) ||
+       (window.navigator as any).standalone === true);
     const geolocate = new (window as any).mapboxgl.GeolocateControl({
       // Fresh fixes only (≤1s cache), 10s timeout, high accuracy — the dot must
       // track the rep in real time, not replay a stale reading.
@@ -494,7 +502,7 @@ export default function MapView() {
       // overview — a rep needs to see individual doors when the fix centers.
       fitBoundsOptions: { maxZoom: STREET_ZOOM },
       trackUserLocation: true,
-      showUserHeading: true,
+      showUserHeading: !isStandalone,
     });
     map.addControl(geolocate, "top-right");
     geolocateRef.current = geolocate;
@@ -509,8 +517,18 @@ export default function MapView() {
         gpsCenteredRef.current = true;
       } catch {}
     });
-    // Permission denied / no signal: nothing to do — the launch effect already
-    // painted last-known/territory view, and the FAB can re-prompt any time.
+    // Surface failures instead of dying silently — a rep who taps "locate me" and
+    // sees nothing needs to know WHY (blocked vs no-signal vs timeout), especially
+    // on iOS where location must be enabled per-app.
+    geolocate.on("error", (err: any) => {
+      const code = err?.code;
+      const description = code === 1
+        ? "Location is turned off for this app. On iPhone: Settings → Privacy & Security → Location Services → turn on, then find Safari/HomeFront and set “While Using.”"
+        : code === 3
+        ? "Getting a GPS fix timed out — step outside or try again."
+        : "Couldn’t get your location. Make sure Location Services is on.";
+      toast({ title: "Location unavailable", description, variant: "destructive" });
+    });
 
     // Toggle a class the stylesheet uses to enable the user-dot glide only
     // while the camera is at rest (see index.css .map-camera-idle rules).
@@ -2394,7 +2412,20 @@ export default function MapView() {
               still wired, so reps keep the thumb target. */}
           {mapReady && isRep && (
             <button
-              onClick={() => { try { geolocateRef.current?.trigger(); } catch {} }}
+              onClick={() => {
+                // Primary path: the GeolocateControl (blue dot + live tracking).
+                try { geolocateRef.current?.trigger(); } catch {}
+                // Fallback for iOS standalone, where the control's state machine
+                // can stall: grab a direct fix in the SAME user gesture (keeps the
+                // permission prompt valid) and recenter so the rep is never stuck.
+                captureFieldFix(8000).then(fix => {
+                  const m = mapRef.current;
+                  if (m && fix.repLat != null && fix.repLng != null) {
+                    writeCachedFix(fix.repLat, fix.repLng, Date.now());
+                    moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 500, essential: true });
+                  }
+                }).catch(() => {});
+              }}
               aria-label="Center on my location"
               data-testid="locate-me"
               style={{ height: 52, width: 52, bottom: "calc(env(safe-area-inset-bottom) + 2rem)", boxShadow: "var(--glass-shadow-1)" }}
