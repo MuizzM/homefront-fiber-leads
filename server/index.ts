@@ -109,9 +109,14 @@ app.use("/api", (_req, res, next) => {
   next();
 });
 
-// ── Permissions-Policy: disable sensors/camera/mic/geolocation ──
+// ── Permissions-Policy: geolocation MUST be allowed for our own origin — the map's
+// "locate me" blue dot (Mapbox GeolocateControl → navigator.geolocation, used in
+// LiveMap/geoFix/mapPins) is core to field reps. geolocation=(self) permits it for
+// THIS site only; empty () blocked it in every browser (iOS Safari most strictly).
+// Camera stays () — lead-photo uses a file-input (capture="environment"), not
+// getUserMedia, so it needs no grant. mic/payment/usb/FLoC stay disabled.
 app.use((_req, res, next) => {
-  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=(self), payment=(), usb=(), interest-cohort=()");
   // Extra hardening headers not covered by Helmet defaults
   res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   res.setHeader("Cross-Origin-Resource-Policy", "same-site");
