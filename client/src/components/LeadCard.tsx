@@ -1,10 +1,11 @@
-// ── LeadCard — the property card shown when you tap a scanned dot or a house ───
-// Mobbin anatomy (Compass / Zillow property card): a status badge up top, the
-// address as the hero, a row of key-fact chips, then the actions. Works for a
-// live scan hit, a reverse-geocoded tap, or an existing lead. Pure UI — the
-// parent owns "add as lead" and "open".
+// ── LeadCard — the field-map property card (tap a scanned dot or a house) ──────
+// In-depth Mobbin anatomy (Realtor.com "Key facts" grid + Zenly/Tabby place
+// sheet): status badge → address hero → a labeled Details grid (fiber, speed,
+// tech, competitor, segment, score) → actions (Add / Open, Directions, Copy).
+// Works for a live scan hit, a reverse-geocoded tap, or an existing lead. Pure
+// UI — the parent owns "add as lead" and "open".
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { MapPin, Zap, Wifi, TrendingUp, Plus, ArrowUpRight, Gauge } from "lucide-react";
+import { MapPin, Zap, Plus, ArrowUpRight, Navigation } from "lucide-react";
 import { CopyAddressButton } from "@/components/CopyAddressButton";
 import { formatFullAddress } from "@/lib/reverseGeocode";
 
@@ -16,6 +17,7 @@ export interface CardProperty {
   fiberStatus?: string | null; isNewFiber?: boolean | null; billingStatus?: string | null;
   speedTier?: string | null; maxDownloadMbps?: number | null;
   competitorName?: string | null; leadTag?: string | null; leadScore?: number | null;
+  techType?: string | null; placement?: string | null; householdSegmentType?: string | null;
   source?: "scan" | "tap" | "lead";
 }
 
@@ -34,6 +36,26 @@ function statusBadge(p: CardProperty): { text: string; cls: string } {
   return { text: p.fiberStatus || "Unknown", cls: "bg-muted text-muted-foreground ring-border" };
 }
 
+// The labeled "Details" rows — only facts that are actually present.
+function buildFacts(p: CardProperty): Array<{ label: string; value: string; tone?: string }> {
+  const f: Array<{ label: string; value: string; tone?: string }> = [];
+  const fiber = p.isNewFiber ? "New fiber available"
+    : p.fiberStatus === "copper" ? "Copper only"
+    : p.fiberStatus === "no_service" ? "No service"
+    : p.fiberStatus ? p.fiberStatus.replace(/_/g, " ") : null;
+  if (fiber) f.push({ label: "Fiber", value: fiber, tone: p.isNewFiber ? "text-emerald-500" : undefined });
+  if (p.billingStatus) f.push({ label: "Occupancy", value: p.billingStatus === "N" ? "No current subscriber" : "Has service", tone: p.billingStatus === "N" ? "text-emerald-500" : undefined });
+  const spd = speedLabel(p.maxDownloadMbps);
+  if (spd) f.push({ label: "Max speed", value: spd, tone: "text-sky-500" });
+  else if (p.speedTier) f.push({ label: "Plan", value: p.speedTier });
+  if (p.techType) f.push({ label: "Technology", value: p.techType });
+  if (p.placement) f.push({ label: "Placement", value: p.placement });
+  if (p.competitorName) f.push({ label: "Competitor", value: p.competitorName, tone: "text-orange-500" });
+  if (p.householdSegmentType) f.push({ label: "Segment", value: p.householdSegmentType });
+  if (typeof p.leadScore === "number" && p.leadScore > 0) f.push({ label: "Lead score", value: String(p.leadScore), tone: "text-emerald-500" });
+  return f;
+}
+
 export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }: {
   property: CardProperty | null;
   onClose: () => void;
@@ -44,12 +66,17 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
   const open = !!property;
   const p = property;
   const badge = p ? statusBadge(p) : { text: "", cls: "" };
-  const spd = speedLabel(p?.maxDownloadMbps);
   const full = p ? formatFullAddress(p) : "";
+  const facts = p ? buildFacts(p) : [];
+  const mapsUrl = p
+    ? (p.lat != null && p.lng != null
+        ? `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
+        : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(full)}`)
+    : "#";
 
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="bottom" className="rounded-t-3xl p-0 border-border max-h-[85vh] overflow-y-auto" data-testid="lead-card">
+      <SheetContent side="bottom" className="rounded-t-3xl p-0 border-border max-h-[88vh] overflow-y-auto" data-testid="lead-card">
         {p && (
           <div className="p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
             <div className="mx-auto mb-4 h-1 w-9 rounded-full bg-border" aria-hidden="true" />
@@ -66,41 +93,47 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
               {[p.city, [p.state, p.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
             </p>
 
-            {/* Key-fact chips */}
-            <div className="mt-4 flex flex-wrap gap-2">
-              {spd && <Fact icon={<Gauge className="w-3.5 h-3.5" />} label={spd} tone="text-sky-500" />}
-              {p.speedTier && !spd && <Fact icon={<Wifi className="w-3.5 h-3.5" />} label={p.speedTier} tone="text-sky-500" />}
-              {p.competitorName && <Fact icon={<TrendingUp className="w-3.5 h-3.5" />} label={p.competitorName} tone="text-orange-500" />}
-              {typeof p.leadScore === "number" && p.leadScore > 0 && <Fact icon={<Zap className="w-3.5 h-3.5" />} label={`Score ${p.leadScore}`} tone="text-emerald-500" />}
-              {p.fiberStatus && !p.isNewFiber && <Fact icon={<Wifi className="w-3.5 h-3.5" />} label={p.fiberStatus} tone="text-muted-foreground" />}
-            </div>
+            {/* Details — the in-depth labeled grid (only present facts). */}
+            {facts.length > 0 && (
+              <div className="mt-4">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 px-0.5">Details</div>
+                <dl className="rounded-2xl border border-border bg-secondary/40 divide-y divide-border overflow-hidden">
+                  {facts.map((row, i) => (
+                    <div key={i} className="flex items-center justify-between gap-4 px-3.5 py-2.5">
+                      <dt className="text-[13px] text-muted-foreground shrink-0">{row.label}</dt>
+                      <dd className={`text-[13.5px] font-semibold text-right ${row.tone ?? "text-foreground"}`}>{row.value}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </div>
+            )}
 
-            {/* Actions */}
-            <div className="mt-5 flex items-center gap-2">
+            {/* Primary action */}
+            <div className="mt-5">
               {p.id ? (
                 <button type="button" onClick={() => onOpen?.(p.id!)} data-testid="lead-card-open"
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 h-12 rounded-2xl bg-primary text-primary-foreground text-[15px] font-semibold active:scale-[0.99] transition">
+                  className="w-full inline-flex items-center justify-center gap-1.5 h-12 rounded-2xl bg-primary text-primary-foreground text-[15px] font-semibold active:scale-[0.99] transition">
                   Open lead <ArrowUpRight className="w-4 h-4" />
                 </button>
               ) : canAdd ? (
                 <button type="button" onClick={() => onAddLead(p)} data-testid="lead-card-add"
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 h-12 rounded-2xl bg-primary text-primary-foreground text-[15px] font-semibold active:scale-[0.99] transition">
+                  className="w-full inline-flex items-center justify-center gap-1.5 h-12 rounded-2xl bg-primary text-primary-foreground text-[15px] font-semibold active:scale-[0.99] transition">
                   <Plus className="w-4 h-4" /> Add as lead
                 </button>
               ) : null}
-              <CopyAddressButton text={full} className={p.id || canAdd ? "h-12 px-4" : "h-12 flex-1"} />
+            </div>
+
+            {/* Secondary actions — Directions + Copy (a rep on the doorstep). */}
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <a href={mapsUrl} target="_blank" rel="noopener noreferrer" data-testid="lead-card-directions"
+                className="inline-flex items-center justify-center gap-1.5 h-11 rounded-xl border border-border bg-secondary/60 text-[13px] font-medium text-foreground active:scale-[0.98] transition">
+                <Navigation className="w-4 h-4 text-sky-500" /> Directions
+              </a>
+              <CopyAddressButton text={full} className="h-11" />
             </div>
           </div>
         )}
       </SheetContent>
     </Sheet>
-  );
-}
-
-function Fact({ icon, label, tone }: { icon: React.ReactNode; label: string; tone: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 rounded-lg bg-secondary/60 border border-border px-2.5 py-1.5 text-[12.5px] font-medium text-foreground">
-      <span className={tone}>{icon}</span>{label}
-    </span>
   );
 }

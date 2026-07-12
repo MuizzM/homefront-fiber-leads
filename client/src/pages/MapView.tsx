@@ -1498,6 +1498,8 @@ export default function MapView() {
         fiberStatus: row.fiberStatus, isNewFiber: row.isNewFiber, billingStatus: row.billingStatus,
         maxDownloadMbps: (row as any).maxDownloadMbps ?? null, speedTier: (row as any).speedTier ?? null,
         competitorName: (row as any).competitorName ?? null,
+        techType: (row as any).techType ?? null, placement: (row as any).placement ?? null,
+        householdSegmentType: (row as any).householdSegmentType ?? null,
         leadTag: row.leadTag ?? null, leadScore: row.leadScore ?? null,
         source: "scan",
       });
