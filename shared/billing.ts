@@ -76,6 +76,10 @@ export function isScanningAllowed(state: BillingState): boolean {
   return state === "trial" || state === "active" || state === "past_due";
 }
 
+/** How long a payment-failed tenant stays in past_due (full access) before the
+ *  dunning cron suspends it. The adapter stamps grace_ends_at = now + this. */
+export const DUNNING_GRACE_DAYS = 7;
+
 /** Portal access: full while paying (+grace); suspended → paywall (read-only);
  *  canceled → blocked. Drives the middleware gate + the paywall screen. */
 export function portalAccess(state: BillingState): "full" | "paywall" | "blocked" {

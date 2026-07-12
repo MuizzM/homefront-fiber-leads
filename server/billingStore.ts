@@ -32,6 +32,7 @@ export interface BillingRow {
   provider: string | null;
   providerCustomerId: string | null;
   providerSubscriptionId: string | null;
+  lastEventAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -57,6 +58,7 @@ function mapRow(r: any): BillingRow | null {
     provider: r.provider,
     providerCustomerId: r.provider_customer_id,
     providerSubscriptionId: r.provider_subscription_id,
+    lastEventAt: r.last_event_at ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -215,6 +217,9 @@ export function meterQualifiedLead(tenantId: number, leadId: number, actor = "sy
 export function setBillingState(tenantId: number, to: BillingState, actor = "system"): { ok: boolean; state: BillingState; reason?: string } {
   const row = getBilling(tenantId);
   if (!row) return { ok: false, state: "canceled", reason: "no billing row" };
+  // A self-transition is a no-op: don't rewrite the row or append a noise ledger
+  // row (repeated same-state webhooks would otherwise spam state_change entries).
+  if (row.state === to) return { ok: true, state: to };
   if (!canTransition(row.state, to)) return { ok: false, state: row.state, reason: `illegal transition ${row.state} → ${to}` };
   rawDb.prepare("UPDATE tenant_billing SET state = ?, updated_at = datetime('now') WHERE tenant_id = ?").run(to, tenantId);
   appendLedger(tenantId, 0, "state_change", { actor: `${actor}:${row.state}->${to}` });
@@ -338,4 +343,130 @@ export function getCreditLedger(tenantId: number, limit = 50): any[] {
   return rawDb.prepare(
     "SELECT id, delta, reason, lead_id AS leadId, overage, balance_after AS balanceAfter, actor, at FROM lead_credit_ledger WHERE tenant_id = ? ORDER BY at DESC, id DESC LIMIT ?"
   ).all(tenantId, limit);
+}
+
+// ── Scan-gate reason ──────────────────────────────────────────────────────────
+export interface ScanBlock { code: string; message: string; state: BillingState }
+
+/**
+ * Why a tenant may NOT start a money-spending scan, or null if it may. Dark
+ * tenants (no billing row) are ALWAYS allowed — the live portal is unaffected.
+ * Blocks: suspended/canceled (state), or credits exhausted under `stop` overage.
+ */
+export function scanBlockReason(tenantId: number): ScanBlock | null {
+  const row = getBilling(tenantId);
+  if (!row) return null; // dark → allowed
+  if (!isScanningAllowed(row.state)) {
+    return { code: `billing_${row.state}`, message: `Billing is ${row.state} — scanning is paused until it's resolved.`, state: row.state };
+  }
+  if (!row.unlimited && row.overageMode === "stop" && creditsRemaining(toCreditState(row)) <= 0) {
+    return { code: "credits_exhausted", message: "Lead credits are exhausted for this cycle — add credits or wait for renewal.", state: row.state };
+  }
+  return null;
+}
+
+// ── Payment-provider webhook idempotency ──────────────────────────────────────
+export function wasEventProcessed(eventId: string): boolean {
+  if (!eventId) return false;
+  return !!rawDb.prepare("SELECT 1 FROM billing_events WHERE event_id = ?").get(eventId);
+}
+export function recordEvent(eventId: string, opts: { provider?: string; type?: string; tenantId?: number | null; intent?: string } = {}): void {
+  if (!eventId) return;
+  rawDb.prepare(
+    "INSERT OR IGNORE INTO billing_events (event_id, provider, type, tenant_id, intent) VALUES (?,?,?,?,?)"
+  ).run(eventId, opts.provider ?? "stripe", opts.type ?? null, opts.tenantId ?? null, opts.intent ?? null);
+}
+
+// ── Provider (Stripe) id lookups + stamping ───────────────────────────────────
+export function getBillingByStripeSubscription(subscriptionId: string): BillingRow | null {
+  return mapRow(rawDb.prepare("SELECT * FROM tenant_billing WHERE provider_subscription_id = ?").get(subscriptionId));
+}
+export function getBillingByStripeCustomer(customerId: string): BillingRow | null {
+  return mapRow(rawDb.prepare("SELECT * FROM tenant_billing WHERE provider_customer_id = ?").get(customerId));
+}
+export function setProvider(tenantId: number, p: { provider?: string; customerId?: string | null; subscriptionId?: string | null }): void {
+  rawDb.prepare(
+    "UPDATE tenant_billing SET provider = COALESCE(?, provider), provider_customer_id = COALESCE(?, provider_customer_id), provider_subscription_id = COALESCE(?, provider_subscription_id), updated_at = datetime('now') WHERE tenant_id = ?"
+  ).run(p.provider ?? "stripe", p.customerId ?? null, p.subscriptionId ?? null, tenantId);
+}
+
+/** Does a real tenant with this id exist? Guards row creation against a stray/
+ *  forged event provisioning an arbitrary id. */
+export function tenantExists(id: number): boolean {
+  return !!rawDb.prepare("SELECT 1 FROM tenants WHERE id = ?").get(id);
+}
+
+/** Resolve the tenant a Stripe intent targets: explicit ref → subscription →
+ *  customer. An explicit tenantId is trusted ONLY if it's an existing billing row
+ *  or a real tenant (so activate can create the first row, but a bogus id → null). */
+export function resolveTenantFromRef(ref: { tenantId?: number; customerId?: string; subscriptionId?: string }): number | null {
+  if (ref.tenantId) {
+    if (getBilling(ref.tenantId)) return ref.tenantId;
+    if (tenantExists(ref.tenantId)) return ref.tenantId; // brand-new activate — row created on apply
+  }
+  if (ref.subscriptionId) { const r = getBillingByStripeSubscription(ref.subscriptionId); if (r) return r.tenantId; }
+  if (ref.customerId) { const r = getBillingByStripeCustomer(ref.customerId); if (r) return r.tenantId; }
+  return null;
+}
+
+// ── Ordering guard (Stripe doesn't guarantee webhook delivery order) ──────────
+/** True if this event predates the last-applied event for the tenant. A brand-new
+ *  tenant (no row / no prior event) is never stale. */
+export function isStaleEvent(tenantId: number, eventCreated?: string | null): boolean {
+  if (!eventCreated) return false;
+  const row = getBilling(tenantId);
+  if (!row?.lastEventAt) return false;
+  return Date.parse(eventCreated) < Date.parse(row.lastEventAt);
+}
+export function bumpLastEvent(tenantId: number, eventCreated?: string | null): void {
+  if (!eventCreated) return;
+  rawDb.prepare(
+    "UPDATE tenant_billing SET last_event_at = ? WHERE tenant_id = ? AND (last_event_at IS NULL OR last_event_at < ?)"
+  ).run(eventCreated, tenantId, eventCreated);
+}
+
+// ── High-level Stripe-apply helpers (used by the adapter) ─────────────────────
+export function activateFromStripe(tenantId: number, p: { planKey?: PlanKey; customerId?: string; subscriptionId?: string }): void {
+  const existing = getBilling(tenantId);
+  if (!existing) ensureBilling(tenantId, { planKey: p.planKey ?? "starter", state: "trial", provider: "stripe" });
+  if (p.planKey) setPlan(tenantId, p.planKey, "stripe");
+  setProvider(tenantId, { provider: "stripe", customerId: p.customerId ?? null, subscriptionId: p.subscriptionId ?? null });
+  setBillingState(tenantId, "active", "stripe:webhook");
+}
+export function renewFromStripe(tenantId: number, p: { planKey?: PlanKey; cycleStart: string; cycleEnd: string; allowRollover?: boolean }): void {
+  const row = getBilling(tenantId);
+  if (!row) return;
+  // A trailing invoice must NOT resurrect a canceled subscription (re-subscribe
+  // arrives via checkout.session.completed → activate instead).
+  if (row.state === "canceled") return;
+  // Period-idempotent: if we already reset for this exact cycle window, do nothing
+  // — guards Stripe re-delivery from double-resetting (wiping used/purchased) credits.
+  if (p.cycleStart && row.cycleStart === p.cycleStart) return;
+  if (p.planKey) setPlan(tenantId, p.planKey, "stripe");
+  setBillingState(tenantId, "active", "stripe:webhook");
+  resetBillingCycle(tenantId, !!p.allowRollover, p.cycleStart, p.cycleEnd, "stripe:webhook");
+}
+export function markPastDueFromStripe(tenantId: number, graceEndsAt: string): { ok: boolean } {
+  const prev = getBilling(tenantId)?.state;
+  const r = setBillingState(tenantId, "past_due", "stripe:webhook");
+  // Stamp the dunning window ONLY on the FIRST entry into past_due, so repeated
+  // payment_failed retries can't slide the grace deadline forward indefinitely.
+  if (r.ok && prev !== "past_due") {
+    rawDb.prepare("UPDATE tenant_billing SET grace_ends_at = ?, updated_at = datetime('now') WHERE tenant_id = ?").run(graceEndsAt, tenantId);
+  }
+  return { ok: r.ok };
+}
+export function cancelFromStripe(tenantId: number): void {
+  setBillingState(tenantId, "canceled", "stripe:webhook");
+}
+export function changePlanFromStripe(tenantId: number, planKey: PlanKey): void {
+  if (getBilling(tenantId)) setPlan(tenantId, planKey, "stripe");
+}
+
+/** Tenants whose past_due grace window has expired — the dunning cron suspends them. */
+export function pastDueGraceExpired(nowIso: string): number[] {
+  const rows = rawDb.prepare(
+    "SELECT tenant_id FROM tenant_billing WHERE state = 'past_due' AND grace_ends_at IS NOT NULL AND grace_ends_at < ?"
+  ).all(nowIso) as Array<{ tenant_id: number }>;
+  return rows.map(r => r.tenant_id);
 }

@@ -741,6 +741,10 @@ export function runMigrations() {
        created_at TEXT NOT NULL DEFAULT (datetime('now')),
        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
      )`,
+    // Ordering guard — ISO of the last-applied provider event.created, so a stale/
+    // out-of-order webhook (Stripe doesn't guarantee delivery order) can't overwrite
+    // newer state (e.g. a delayed payment_failed after the invoice was paid).
+    `ALTER TABLE tenant_billing ADD COLUMN last_event_at TEXT`,
     // Append-only credit ledger — every grant (+), consume (-1), reset, purchase.
     // dedupe_key (consume:<tenantId>:lead:<leadId>) makes a lead-delivery consume
     // EXACTLY once: a retried lead write with the same key is a no-op, so a qualified
@@ -760,6 +764,16 @@ export function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_credit_ledger_tenant ON lead_credit_ledger(tenant_id, at DESC)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_credit_ledger_dedupe ON lead_credit_ledger(dedupe_key) WHERE dedupe_key IS NOT NULL`,
+    // Payment-provider webhook idempotency — Stripe re-delivers events, so every
+    // event id is recorded once and re-deliveries are acked without re-applying.
+    `CREATE TABLE IF NOT EXISTS billing_events (
+       event_id TEXT PRIMARY KEY,
+       provider TEXT NOT NULL DEFAULT 'stripe',
+       type TEXT,
+       tenant_id INTEGER,
+       intent TEXT,
+       processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

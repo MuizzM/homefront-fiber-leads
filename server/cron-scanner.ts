@@ -22,6 +22,7 @@ import {
 } from "@shared/leadQualify";
 import { geocodeCity, tileBbox } from "./overpass";
 import { harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
+import { pastDueGraceExpired, setBillingState } from "./billingStore";
 
 // Address-match guard: only promote if Kinetic's answer is for the SAME address we
 // watched (zip match, or normalized street match) — a re-keyed/recycled dfAddressId
@@ -380,6 +381,17 @@ async function deepSeedPriorityCities(): Promise<void> {
   console.log(`[cron] deep-seed complete — ~${spent} Mapbox calls this run`);
 }
 
+// Dunning: a past_due tenant whose grace window has elapsed is suspended (paywall).
+// Stripe drives past_due via invoice.payment_failed; this is the timeout that
+// escalates it. Idempotent — already-suspended tenants aren't re-touched.
+function runBillingDunning(): void {
+  const expired = pastDueGraceExpired(new Date().toISOString());
+  for (const tid of expired) {
+    const r = setBillingState(tid, "suspended", "cron:dunning");
+    if (r.ok) console.log(`[cron] dunning: tenant ${tid} past_due grace expired → suspended`);
+  }
+}
+
 async function runNightlyBatch(): Promise<void> {
   cronStatus.isRunning = true;
   cronStatus.lastRunAt = new Date().toISOString();
@@ -388,6 +400,9 @@ async function runNightlyBatch(): Promise<void> {
   activeScheduler = scheduler;
   const before = cronStatus.totalNewFiberFound;
   try {
+    // Billing dunning: suspend tenants whose past_due grace window has expired.
+    // No-op when no tenant is on billing (dark) — safe for the live single-tenant org.
+    try { runBillingDunning(); } catch (e: any) { console.warn("[cron] dunning error:", e.message); }
     // Seed the priority towns' new builds into the pool FIRST (Mapbox grid, once
     // per town) so the pool re-scan below qualifies them this same run.
     try { await deepSeedPriorityCities(); } catch (e: any) { console.warn("[cron] deep-seed error:", e.message); }

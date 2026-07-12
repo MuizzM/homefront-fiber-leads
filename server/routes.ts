@@ -7,8 +7,9 @@ import { mailTransport, mailFrom, adminInbox, emailShell, escapeHtml, logoAttach
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage, getDefaultTenantId } from "./storage";
-import { meterQualifiedLead, billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits } from "./billingStore";
+import { meterQualifiedLead, billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
+import { stripeConfigured, webhookConfigured, verifyStripeSignature, createCheckoutSession, createPortalSession, processWebhookEvent } from "./stripeAdapter";
 import Database from "better-sqlite3";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
@@ -211,6 +212,20 @@ function requireManager(req: Request, res: Response, next: NextFunction) {
     if (!allowed.includes(user.role)) return res.status(403).json({ error: "Manager or above required" });
     next();
   });
+}
+
+// Scan-gate: block money-spending scans for a tenant whose billing state (or
+// exhausted credits under `stop`) forbids it. Dark tenants (no billing row) are
+// ALWAYS allowed, so the live portal is unaffected. Module-level so it's usable by
+// every route (scan routes, /api/cron/trigger, /api/check-fiber). Runs after an
+// auth middleware that sets req.user.
+function requireScanningAllowed(req: Request, res: Response, next: NextFunction) {
+  const tid = (req as any).user?.tenantId ?? getDefaultTenantId() ?? 1;
+  const block = scanBlockReason(tid);
+  // NOTE: field is `reasonCode`, not `code` — `code` is stripped by the global
+  // response sanitizer (BLOCKED_FIELDS in index.ts), which would hide it.
+  if (block) return res.status(402).json({ error: block.message, reasonCode: block.code, state: block.state });
+  next();
 }
 
 // Capability gate — the enterprise permission unit. Authorizes against the
@@ -1011,16 +1026,32 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Tenant-scoped: never scans other tenants' knock history.
     const visits = storage.getVisitSummary(tenantId);
     const pins: any[] = [];
+    // COMPACT pins: omit empty (null/false/0/"") fields and round lat/lng to 6dp
+    // (~0.1m). Measured 35% smaller raw JSON (2.04MB → 1.33MB at 5.5k leads) → the
+    // client parses far less on load. Safe: the map + card read every optional field
+    // by truthiness, so an absent key behaves exactly like the old null/false/0.
+    // id/lat/lng/leadStatus are always kept (geometry + dot color depend on them).
     for (const l of all) {
       if (!l.lat || !l.lng) continue;
       const v = visits.get(l.id);
-      pins.push({
-        ...l,
-        visited: !!v,
-        knockCount: v?.count ?? 0,
-        lastOutcome: v?.lastOutcome ?? null,
-        lastKnockedAt: v?.lastAt ?? null,
-      });
+      const pin: any = {
+        id: l.id,
+        lat: Math.round(l.lat * 1e6) / 1e6,
+        lng: Math.round(l.lng * 1e6) / 1e6,
+        leadStatus: l.leadStatus,
+      };
+      for (const k in l) {
+        if (k === "id" || k === "lat" || k === "lng" || k === "leadStatus") continue;
+        const val = (l as any)[k];
+        if (val !== null && val !== false && val !== 0 && val !== "") pin[k] = val;
+      }
+      if (v) {
+        pin.visited = true;
+        if (v.count) pin.knockCount = v.count;
+        if (v.lastOutcome) pin.lastOutcome = v.lastOutcome;
+        if (v.lastAt) pin.lastKnockedAt = v.lastAt;
+      }
+      pins.push(pin);
     }
     if (unscoped) _mapPinCache.set(cacheKey, { ts: Date.now(), pins, ver: dataVer });
     return pins;
@@ -1248,6 +1279,81 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(billingSummary(billingTenantId(req)));
   });
 
+  // ── Access status — ANY authenticated user (drives the paywall banner). Cheap:
+  // dark tenants report full access, so reps/managers are never gated by this. ──
+  app.get("/api/billing/access", requireAuth, (req, res) => {
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId() ?? 1;
+    const s = billingSummary(tid);
+    res.json({
+      enabled: s.enabled, state: s.state, access: s.access,
+      scanningAllowed: s.scanningAllowed, level: s.level,
+      creditsRemaining: s.creditsRemaining, usagePct: s.usagePct,
+      stripe: stripeConfigured(),
+    });
+  });
+
+  // ── Self-serve checkout (tenant admin, own org) — returns a Stripe hosted URL.
+  app.post("/api/billing/checkout", requireAdmin, async (req, res) => {
+    if (!stripeConfigured()) return res.status(503).json({ error: "Payments are not enabled yet." });
+    const planKey = String(req.body?.planKey ?? "");
+    if (!(planKey in BILLING_PLANS) || planKey === "enterprise") return res.status(400).json({ error: "Choose Starter, Growth, or Professional." });
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId() ?? 1;
+    const origin = (req.headers.origin as string) || `https://${req.headers.host}`;
+    const row = getBilling(tid);
+    try {
+      const session = await createCheckoutSession({
+        tenantId: tid, planKey: planKey as any,
+        successUrl: `${origin}/#/billing?checkout=success`,
+        cancelUrl: `${origin}/#/billing?checkout=cancel`,
+        customerId: row?.providerCustomerId ?? null,
+        customerEmail: (req as any).user?.email ?? null,
+      });
+      res.json({ url: session.url });
+    } catch (e: any) {
+      res.status(502).json({ error: e.message || "Could not start checkout" });
+    }
+  });
+
+  // ── Manage subscription — opens the Stripe billing portal for the tenant.
+  app.post("/api/billing/portal", requireAdmin, async (req, res) => {
+    if (!stripeConfigured()) return res.status(503).json({ error: "Payments are not enabled yet." });
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId() ?? 1;
+    const row = getBilling(tid);
+    if (!row?.providerCustomerId) return res.status(409).json({ error: "No Stripe customer on file yet." });
+    const origin = (req.headers.origin as string) || `https://${req.headers.host}`;
+    try {
+      const session = await createPortalSession(row.providerCustomerId, `${origin}/#/billing`);
+      res.json({ url: session.url });
+    } catch (e: any) {
+      res.status(502).json({ error: e.message || "Could not open billing portal" });
+    }
+  });
+
+  // ── Stripe webhook — NO session auth: authenticated by HMAC signature. Verifies
+  // the signature against the raw body, is idempotent per event id (Stripe retries),
+  // and dispatches to billingStore. Inert (503) until STRIPE_WEBHOOK_SECRET is set.
+  app.post("/api/billing/webhook/stripe", (req, res) => {
+    // Gate on BOTH keys — a billing-mutating webhook has no business running before
+    // the account's secret key is set (avoids the write-path going live on the
+    // webhook secret alone during setup).
+    if (!stripeConfigured() || !webhookConfigured()) return res.status(503).json({ error: "billing not configured" });
+    const raw = (req as any).rawBody;
+    const sig = req.headers["stripe-signature"] as string | undefined;
+    if (!raw || !verifyStripeSignature(raw, sig)) return res.status(400).json({ error: "invalid signature" });
+    const event = req.body;
+    if (!event?.id) return res.status(400).json({ error: "missing event id" });
+    try {
+      // Atomic: idempotency check + apply + record in one transaction.
+      const result = processWebhookEvent(event);
+      // Unresolvable (event before the tenant row exists) → 422 so Stripe retries.
+      if (result.retriable) return res.status(422).json({ received: false, reason: "unresolved — will retry" });
+      res.json({ received: true, applied: result.applied, kind: result.kind, duplicate: !!result.duplicate });
+    } catch (e: any) {
+      console.error(`[billing] webhook ${event.type} error: ${e.message}`);
+      res.status(500).json({ error: "handler error" });
+    }
+  });
+
   // Manual token injection — user pastes JWT from their browser
   // Set Kinetic token — admin only
   app.post("/api/set-token", requireAdmin, (req, res) => {
@@ -1277,7 +1383,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // Manager+ can run fiber checks and scans
-  app.post("/api/check-fiber", requireManager, async (req, res) => {
+  app.post("/api/check-fiber", requireManager, requireScanningAllowed, async (req, res) => {
     const { address, city, state = "NC", zip } = req.body;
     if (!address || !city || !zip) return res.status(400).json({ error: "address, city, zip required" });
 
@@ -1341,7 +1447,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
-  app.post("/api/scan/area", requireAdmin, scanLimiter, async (req, res) => {
+  app.post("/api/scan/area", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
     const { city = "", state = "NC", deep = false } = req.body ?? {};
 
     // ── Step 1: validate + normalize the outgoing bbox ───────────────────────
@@ -1504,7 +1610,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   //   • Cancel stops qualification immediately (no more proxy probes).
   const tiledJobs = new Map<string, { job: TileScanJob; tenantId: number; cancelled: boolean }>();
   let tiledJobSeq = 0;
-  app.post("/api/scan/tiled", requireAdmin, scanLimiter, async (req, res) => {
+  app.post("/api/scan/tiled", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
     const v = validateScanBbox(req.body ?? {});
     if (!v.ok) return res.status(400).json({ error: v.message, reason: v.code });
     const region: CoverageBBox = { south: v.bbox.south, north: v.bbox.north, west: v.bbox.west, east: v.bbox.east };
@@ -1590,7 +1696,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // useMapbox:true from an ADMIN — it is never the default.
   // Running a scan hits the Kinetic API through the paid residential proxy, so
   // only ADMIN can trigger scans (managers/team leads can still view + assign).
-  app.post("/api/scan/start", requireAdmin, scanLimiter, async (req, res) => {
+  app.post("/api/scan/start", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
     const { city = "Rockwell", zip = "28138", state = "NC", useMapbox = false } = req.body;
     const jobId = `scan_${Date.now()}`;
     const mapboxToken = process.env.MAPBOX_TOKEN ?? "";
@@ -1770,7 +1876,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // POST /api/scan/start-city — scan with pre-pulled addresses or pull them fresh
-  app.post("/api/scan/start-city", requireAdmin, async (req, res) => {
+  app.post("/api/scan/start-city", requireAdmin, requireScanningAllowed, async (req, res) => {
     const { city, state, addresses: providedAddresses } = req.body;
     if (!city) return res.status(400).json({ error: "city required" });
     const st = state ?? "NC";
@@ -1916,7 +2022,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // Start a budgeted scan — the ONLY money-spending create path. Admin +
   // scanLimiter. Returns immediately; the run is persisted + resumable.
-  app.post("/api/scan/runs", requireAdmin, scanLimiter, (req: any, res) => {
+  app.post("/api/scan/runs", requireAdmin, requireScanningAllowed, scanLimiter, (req: any, res) => {
     const { city, state = "NC", budget, rescan } = req.body ?? {};
     if (!city || budget == null) return res.status(400).json({ error: "city and budget required" });
     try {
@@ -1961,6 +2067,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/scan/runs/:id/:action", requireAdmin, (req: any, res) => {
     const action = qstr(req.params.action);
     if (!["pause", "resume", "cancel"].includes(action)) return res.status(400).json({ error: "bad action" });
+    // RESUME re-dispatches proxy spend, so it's gated like the create route; pause/
+    // cancel stay reachable so a blocked tenant can still stop a run.
+    if (action === "resume") {
+      const block = scanBlockReason((req as any).user?.tenantId ?? getDefaultTenantId() ?? 1);
+      if (block) return res.status(402).json({ error: block.message, reasonCode: block.code, state: block.state });
+    }
     const ok = scanSvc.controlRun(qstr(req.params.id), tid(req), action as any);
     if (!ok) return res.status(404).json({ error: "Run not found" });
     res.json({ ok: true, action });
@@ -2095,7 +2207,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Uses zero geocoding (addresses are already stored), dedups against existing
   // leads, and surfaces newly-lit fiber as fresh leads. This is the cheap,
   // repeatable "detect new fiber" engine (FiberFocus model).
-  app.post("/api/scan/rescan-pool", requireAdmin, scanLimiter, (req, res) => {
+  app.post("/api/scan/rescan-pool", requireAdmin, requireScanningAllowed, scanLimiter, (req, res) => {
     const limit = Math.min(Number(req.body?.limit) || 50000, 100000);
     const targets = storage.getScanTargetsToRescan(limit);
     if (!targets.length) {
@@ -3957,7 +4069,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Body: { env: "MS", startCns: 1, endCns: 50000 }
   // Proxy spend is admin-only + capped everywhere else (discovery, area, harvest);
   // a raw CNS range is up to 100k Kinetic probes, so it must be admin-gated too.
-  app.post("/api/cns/jobs", requireAdmin, scanLimiter, async (req, res) => {
+  app.post("/api/cns/jobs", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
     const { env, startCns, endCns } = req.body;
     if (!env || typeof env !== "string") return res.status(400).json({ error: "env required" });
     const envInfo = KINETIC_ENVS.find(e => e.code === env);
@@ -3996,7 +4108,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // Launch a budgeted, zero-Mapbox discovery run against a city's CNS frontier.
   // Admin-only + rate-limited; proxy spend is capped at `budget` Kinetic checks.
-  app.post("/api/scan/discover-city", requireAdmin, scanLimiter, (req, res) => {
+  app.post("/api/scan/discover-city", requireAdmin, requireScanningAllowed, scanLimiter, (req, res) => {
     const { city, state, budget } = req.body ?? {};
     if (!city || typeof city !== "string") return res.status(400).json({ error: "city required" });
     const st = typeof state === "string" && state.trim() ? state.trim() : "NC";
@@ -4868,7 +4980,7 @@ export function registerSaasRoutes(app: any) {
     res.json(getEngineStatus());
   });
 
-  app.post("/api/cron/trigger", requireAdmin, async (_req: Request, res: Response) => {
+  app.post("/api/cron/trigger", requireAdmin, requireScanningAllowed, async (_req: Request, res: Response) => {
     try {
       await triggerManualScan();
       res.json({ success: true, message: "Nightly scan triggered manually" });

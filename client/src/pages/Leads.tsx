@@ -9,7 +9,7 @@ import {
   DoorOpen, UserCheck, CalendarClock, Zap, Home, PhoneOff,
   BarChart2, Wifi, WifiOff, Building2, DollarSign, Map, Info,
   RefreshCw, ShieldCheck, ShieldX, User, Mail, ChevronLeft, ChevronRight,
-  Target, Star, Calendar
+  Target, Star, Calendar, MapPin, X
 } from "lucide-react";
 import { KpiTile } from "@/components/KpiTile";
 import { Button } from "@/components/ui/button";
@@ -790,6 +790,14 @@ export default function Leads() {
   const handleStateChange = (s: string) => { setFilterState(s); setFilterCity("all"); setPage(0); };
   const handleCityChange = (c: string) => { setFilterCity(c); setPage(0); };
 
+  // Active-filter summary — surfaced as dismissible chips so a rep always sees
+  // (and can one-tap clear) what's narrowing the list. Pure view over existing
+  // filter state; every clear routes through the same setters as the controls.
+  const activeFilters = search.trim() !== "" || filterStatus !== "all" || filterState !== "all" || filterCity !== "all";
+  const clearAllFilters = () => {
+    setSearch(""); setFilterStatus("all"); setFilterState("all"); setFilterCity("all"); setPage(0);
+  };
+
   return (
     <div className="p-4 sm:p-6 space-y-5">
       {/* Header */}
@@ -807,11 +815,14 @@ export default function Leads() {
       </div>
 
       {/* Pipeline KPI strip — the funnel at a glance (matches the Dashboard cards) */}
-      <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="leads-kpi">
-        <KpiTile className="w-[124px]" label="Prospect" value={bs.prospect ?? 0} tone="text-foreground" icon={Target} chip="bg-secondary" accent="bg-muted-foreground/40" />
-        <KpiTile className="w-[124px]" label="Interested" value={bs.interested ?? 0} tone="text-sky-400" icon={Star} chip="bg-sky-500/15" accent="bg-sky-500" />
-        <KpiTile className="w-[124px]" label="Follow-up" value={bs.follow_up ?? 0} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
-        <KpiTile className="w-[124px]" label="Sold" value={bs.sold ?? 0} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
+      <div className="space-y-2">
+        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-0.5">Pipeline</div>
+        <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="leads-kpi">
+          <KpiTile className="w-[124px]" label="Prospect" value={bs.prospect ?? 0} tone="text-foreground" icon={Target} chip="bg-secondary" accent="bg-muted-foreground/40" />
+          <KpiTile className="w-[124px]" label="Interested" value={bs.interested ?? 0} tone="text-sky-400" icon={Star} chip="bg-sky-500/15" accent="bg-sky-500" />
+          <KpiTile className="w-[124px]" label="Follow-up" value={bs.follow_up ?? 0} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
+          <KpiTile className="w-[124px]" label="Sold" value={bs.sold ?? 0} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
+        </div>
       </div>
 
       <div className="flex flex-col lg:flex-row gap-5">
@@ -819,23 +830,29 @@ export default function Leads() {
         <aside className="lg:w-52 lg:flex-shrink-0 space-y-5">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2 px-1">Views</div>
-            <div className="flex flex-wrap lg:flex-col gap-1" data-testid="filter-lead-status">
+            <div className="flex flex-wrap lg:flex-col gap-0.5" data-testid="filter-lead-status">
               {["all", ...LEAD_STATUSES].map(s => {
                 const active = filterStatus === s;
                 const accent = STATUS_ACCENT[s];
+                // Stable pipeline counts (from /api/stats) — the funnel is legible
+                // right in the nav, and doesn't shift as the list is filtered.
+                const count = s === "all" ? (leadStats?.total ?? 0) : (bs[s] ?? 0);
                 return (
-                  <button key={s} onClick={() => handleStatusChange(s)}
-                    className={`flex items-center gap-2 lg:w-full text-left px-2.5 py-1.5 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
+                  <button key={s} onClick={() => handleStatusChange(s)} aria-pressed={active}
+                    className={`group/view flex items-center gap-2 lg:w-full text-left px-2.5 py-1.5 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
                       active
                         ? "bg-primary/10 text-primary"
                         : "text-muted-foreground hover:text-foreground hover:bg-muted"
                     }`}>
-                    <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0"
-                      style={{ background: s === "all" ? (active ? "currentColor" : "#64748b") : accent }} />
-                    <span className="truncate">{s === "all" ? "All leads" : STATUS_LABEL[s]}</span>
-                    {s === "all" && totalLeads > 0 && (
-                      <span className="ml-auto text-[11px] tabular-nums text-muted-foreground">{totalLeads.toLocaleString()}</span>
+                    {s === "all" ? (
+                      <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${active ? "bg-primary" : "bg-muted-foreground/50"}`} />
+                    ) : (
+                      <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: accent }} />
                     )}
+                    <span className="truncate">{s === "all" ? "All leads" : STATUS_LABEL[s]}</span>
+                    <span className={`ml-auto text-[11px] tabular-nums px-1.5 py-px rounded-md transition-colors ${
+                      active ? "bg-primary/15 text-primary" : "bg-muted/60 text-muted-foreground group-hover/view:bg-muted"
+                    }`}>{count.toLocaleString()}</span>
                   </button>
                 );
               })}
@@ -881,6 +898,57 @@ export default function Leads() {
             )}
           </div>
 
+          {/* Active filters — dismissible chips (Navattic / Apollo pattern) */}
+          {activeFilters && (
+            <div className="flex items-center flex-wrap gap-1.5" data-testid="active-filters">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mr-0.5">Filters</span>
+              {search.trim() !== "" && (
+                <span className="inline-flex items-center gap-1 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
+                  <Search className="w-3 h-3 text-muted-foreground shrink-0" />
+                  <span className="max-w-[160px] truncate">{search.trim()}</span>
+                  <button onClick={() => handleSearchChange("")} aria-label="Clear search"
+                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+              {filterStatus !== "all" && (
+                <span className="inline-flex items-center gap-1.5 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: STATUS_ACCENT[filterStatus] }} />
+                  {STATUS_LABEL[filterStatus]}
+                  <button onClick={() => handleStatusChange("all")} aria-label="Clear status filter"
+                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+              {filterState !== "all" && (
+                <span className="inline-flex items-center gap-1 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
+                  <MapPin className="w-3 h-3 text-muted-foreground shrink-0" />
+                  {filterState}
+                  <button onClick={() => handleStateChange("all")} aria-label="Clear state filter"
+                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+              {filterCity !== "all" && (
+                <span className="inline-flex items-center gap-1 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
+                  <MapPin className="w-3 h-3 text-muted-foreground shrink-0" />
+                  {filterCity}
+                  <button onClick={() => handleCityChange("all")} aria-label="Clear city filter"
+                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )}
+              <button onClick={clearAllFilters}
+                className="h-7 px-2 rounded-full text-[12px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+                Clear all
+              </button>
+            </div>
+          )}
+
       {/* Lead list */}
       {isLoading ? (
         <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border">
@@ -896,18 +964,24 @@ export default function Leads() {
           ))}
         </div>
       ) : filtered.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-16 text-center animate-in fade-in duration-300">
+        <div className="rounded-xl border border-border bg-card flex flex-col items-center justify-center py-16 px-6 text-center animate-in fade-in duration-300">
           <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
             <Users className="w-7 h-7 text-primary/70" />
           </div>
           <div className="text-sm font-semibold text-foreground mb-1">
-            {totalLeads === 0 ? "No leads yet" : "No leads match this filter"}
+            {activeFilters ? "No leads match these filters" : "No leads yet"}
           </div>
           <div className="text-xs text-muted-foreground max-w-xs">
-            {totalLeads === 0
-              ? "Run a City Scan or draw a Scan Area on the Field Map to discover new fiber leads."
-              : "Try clearing the search or switching status filters."}
+            {activeFilters
+              ? "Try a broader search, or clear the filters to see the full pipeline."
+              : "Run a City Scan or draw a Scan Area on the Field Map to discover new fiber leads."}
           </div>
+          {activeFilters && (
+            <Button variant="outline" size="sm" onClick={clearAllFilters}
+              className="mt-4 h-8 border-border text-xs" data-testid="btn-clear-filters">
+              <X className="w-3.5 h-3.5 mr-1" /> Clear filters
+            </Button>
+          )}
         </div>
       ) : (
         <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border animate-in fade-in duration-200">
@@ -948,9 +1022,9 @@ export default function Leads() {
                     {/* Meta row — address/phone only; assignment removed for a
                         cleaner list (managers still assign via the row action). */}
                     <div className="flex items-center gap-2.5 mt-0.5 flex-wrap text-[11px] text-muted-foreground">
-                      <span className="tabular-nums">{lead.city}, {lead.state} {lead.zip}</span>
+                      <span className="flex items-center gap-1 tabular-nums"><MapPin className="w-2.5 h-2.5 shrink-0" /> {lead.city}, {lead.state} {lead.zip}</span>
                       {lead.contactPhone && (
-                        <span className="flex items-center gap-1 tabular-nums"><Phone className="w-2.5 h-2.5" /> {lead.contactPhone}</span>
+                        <span className="flex items-center gap-1 tabular-nums"><Phone className="w-2.5 h-2.5 shrink-0" /> {lead.contactPhone}</span>
                       )}
                     </div>
                   </div>

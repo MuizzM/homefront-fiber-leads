@@ -139,6 +139,7 @@ const CSRF_EXEMPT = new Set([
   "/api/auth/logout",
   "/api/onboarding/apply",    // public form
   "/join",
+  "/api/billing/webhook/stripe", // Stripe-signed webhook — authenticated by HMAC signature, not a session
 ]);
 // ── Request ID — one correlation id per request, echoed to the client and used
 // in every server log line so a failure can be traced end to end. Honors an

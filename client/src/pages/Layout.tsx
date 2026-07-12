@@ -32,28 +32,11 @@ import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { BottomTabs } from "@/components/BottomTabs";
+import { PaywallBanner } from "@/components/PaywallBanner";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
 
-// ── Brand mark — the Home Front Solutions house (teal roof, cream walls, orange
-// door + path). Crisp inline SVG so it scales anywhere with no image request.
-function BrandMark({ className = "" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 48 48" className={className} fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Home Front Solutions">
-      {/* roof */}
-      <path d="M24 5 L43 21 H39 L24 9 L9 21 H5 Z" fill="#3EA394" />
-      {/* body */}
-      <path d="M9 20 H39 V42 H9 Z" fill="#F3EEE2" stroke="#3EA394" strokeWidth="1.5" />
-      {/* windows */}
-      <rect x="13.5" y="25" width="4.5" height="7" rx="1" fill="#E0982F" />
-      <rect x="30" y="25" width="4.5" height="7" rx="1" fill="#E0982F" />
-      {/* door */}
-      <path d="M21 42 V27 a3 3 0 0 1 6 0 V42 Z" fill="#E0982F" />
-      {/* path to door */}
-      <path d="M24 42 C22 37 27 34 24 30" stroke="#3EA394" strokeWidth="2" strokeLinecap="round" opacity="0.55" />
-    </svg>
-  );
-}
+// (BrandMark logo removed per owner — brand is now text-only wordmark.)
 
 // ── Role hierarchy helpers ────────────────────────────────────────────────────
 type AppRole = "admin" | "manager" | "team_lead" | "rep";
@@ -171,9 +154,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         "md:relative md:translate-x-0",
         mobileOpen ? "translate-x-0" : "-translate-x-full"
       )}>
-        {/* Logo */}
+        {/* Wordmark — logo mark removed per owner; text-only brand */}
         <div className="flex items-center gap-2.5 px-5 py-4 border-b border-border">
-          <BrandMark className="w-8 h-8 flex-shrink-0" />
           <div className="leading-tight">
             <div className="text-sm font-bold text-foreground">Home Front</div>
             <div className="text-[11px] font-medium tracking-wide text-primary">SOLUTIONS</div>
@@ -298,11 +280,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Menu className="w-5 h-5" aria-hidden="true" />
           </button>
           <div className="flex items-center gap-2">
-            <BrandMark className="w-6 h-6" />
             <span className="text-sm font-bold">{orgName}</span>
           </div>
         </header>
         )}
+
+        {/* Billing status — renders only when a provisioned tenant has a problem
+            (past_due / suspended / low credits); invisible otherwise. */}
+        <PaywallBanner />
 
         {/* pb clears the mobile tab bar (h-14 + safe area); zero on desktop and
             on the full-bleed map (no tabs there) */}

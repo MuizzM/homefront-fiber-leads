@@ -8,11 +8,12 @@
 // page shows an honest "not set up / unlimited internal access" state and still
 // lists the plan catalog, rather than faking numbers.
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CreditCard, Zap, Infinity as InfinityIcon, TrendingUp, AlertTriangle, CheckCircle2, Clock } from "lucide-react";
+import { CreditCard, Zap, Infinity as InfinityIcon, TrendingUp, AlertTriangle, CheckCircle2, Clock, ArrowUpRight, ExternalLink } from "lucide-react";
 
 type PlanKey = "starter" | "growth" | "professional" | "enterprise";
 interface Plan {
@@ -81,6 +82,14 @@ export default function Billing() {
     staleTime: 300_000,
   });
   const enabled = !!summary?.enabled;
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: access } = useQuery<{ stripe: boolean }>({
+    queryKey: ["/api/billing/access"],
+    queryFn: () => apiRequest("GET", "/api/billing/access").then(r => r.json()),
+    staleTime: 60_000,
+  });
+  const stripeOn = !!access?.stripe;
   const { data: ledgerResp } = useQuery<{ events: LedgerEvent[] }>({
     queryKey: ["/api/billing/ledger"],
     queryFn: () => apiRequest("GET", "/api/billing/ledger?limit=25").then(r => r.json()),
@@ -89,6 +98,28 @@ export default function Billing() {
   });
   const plans = plansResp?.plans ?? [];
   const events = ledgerResp?.events ?? [];
+
+  // Redirect the browser to a Stripe-hosted URL (checkout or billing portal).
+  async function goTo(path: string, body: Record<string, unknown>) {
+    try {
+      const r = await apiRequest("POST", path, body);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || "Unavailable");
+      window.location.href = j.url;
+    } catch (e: any) {
+      toast({ title: e.message || "Unavailable", variant: "destructive" });
+    }
+  }
+  const startCheckout = (planKey: string) => goTo("/api/billing/checkout", { planKey });
+  const openPortal = () => goTo("/api/billing/portal", {});
+
+  // Handle the return from Stripe Checkout (#/billing?checkout=success|cancel).
+  useEffect(() => {
+    const q = new URLSearchParams((window.location.hash.split("?")[1]) || "");
+    const c = q.get("checkout");
+    if (c === "success") { toast({ title: "Subscription updated" }); qc.invalidateQueries({ queryKey: ["/api/billing"] }); }
+    if (c) window.history.replaceState(null, "", "#/billing");
+  }, [qc, toast]);
 
   const remainingLabel = useMemo(() => {
     if (!summary) return "—";
@@ -107,10 +138,18 @@ export default function Billing() {
           <h1 className="mt-0.5 text-[22px] font-semibold tracking-tight text-foreground">Lead credits &amp; plan</h1>
         </div>
         {enabled && summary?.state && (
-          <span className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full text-[12px] font-medium ${STATE_META[summary.state].cls}`} data-testid="billing-state">
-            {(() => { const I = STATE_META[summary.state!].Icon; return <I className="w-3.5 h-3.5" />; })()}
-            {STATE_META[summary.state].label}
-          </span>
+          <div className="flex items-center gap-2">
+            {stripeOn && (
+              <button onClick={openPortal} data-testid="manage-billing"
+                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-border text-[12px] font-medium text-foreground hover:bg-secondary">
+                <ExternalLink className="w-3.5 h-3.5" /> Manage billing
+              </button>
+            )}
+            <span className={`inline-flex items-center gap-1.5 h-7 px-3 rounded-full text-[12px] font-medium ${STATE_META[summary.state].cls}`} data-testid="billing-state">
+              {(() => { const I = STATE_META[summary.state!].Icon; return <I className="w-3.5 h-3.5" />; })()}
+              {STATE_META[summary.state].label}
+            </span>
+          </div>
         )}
       </div>
 
@@ -184,7 +223,7 @@ export default function Billing() {
             </div>
           </section>
 
-          <PlanGrid plans={plans} current={summary.planKey} />
+          <PlanGrid plans={plans} current={summary.planKey} stripeOn={stripeOn} onChoose={startCheckout} />
 
           {/* Ledger */}
           <section className="rounded-xl bg-card border border-border overflow-hidden">
@@ -231,7 +270,8 @@ export default function Billing() {
 }
 
 // Plan catalog grid — current plan highlighted, prices show "Custom" until set.
-function PlanGrid({ plans, current }: { plans: Plan[]; current: PlanKey | null }) {
+// When Stripe is enabled, non-current paid plans get a checkout button.
+function PlanGrid({ plans, current, stripeOn, onChoose }: { plans: Plan[]; current: PlanKey | null; stripeOn?: boolean; onChoose?: (planKey: string) => void }) {
   if (plans.length === 0) return null;
   return (
     <section data-testid="billing-plans">
@@ -239,6 +279,8 @@ function PlanGrid({ plans, current }: { plans: Plan[]; current: PlanKey | null }
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         {plans.map(p => {
           const isCurrent = p.key === current;
+          const isEnterprise = p.key === "enterprise";
+          const canCheckout = !!stripeOn && !!onChoose && !isCurrent && !isEnterprise;
           return (
             <div key={p.key}
               className={`rounded-xl border p-4 flex flex-col ${isCurrent ? "border-primary bg-primary/[0.04]" : "border-border bg-card"}`}
@@ -253,7 +295,7 @@ function PlanGrid({ plans, current }: { plans: Plan[]; current: PlanKey | null }
                 {" · "}
                 {p.seats == null ? "Custom seats" : `${p.seats} seats`}
               </div>
-              <ul className="mt-3 space-y-1 text-[12px] text-muted-foreground">
+              <ul className="mt-3 space-y-1 text-[12px] text-muted-foreground flex-1">
                 {p.features.slice(0, 4).map(f => (
                   <li key={f} className="flex items-center gap-1.5">
                     <CheckCircle2 className="w-3.5 h-3.5 text-primary/70 shrink-0" />
@@ -262,6 +304,17 @@ function PlanGrid({ plans, current }: { plans: Plan[]; current: PlanKey | null }
                 ))}
                 {p.features.length > 4 && <li className="text-muted-foreground/70">+{p.features.length - 4} more</li>}
               </ul>
+              {canCheckout ? (
+                <button onClick={() => onChoose!(p.key)} data-testid={`choose-${p.key}`}
+                  className="mt-3 inline-flex items-center justify-center gap-1 h-8 rounded-lg bg-primary text-primary-foreground text-[12.5px] font-medium hover:bg-primary/90">
+                  Choose {p.name} <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
+              ) : isEnterprise ? (
+                <a href="mailto:sales@homefrontsolutionsllc.com?subject=Enterprise%20plan"
+                  className="mt-3 inline-flex items-center justify-center h-8 rounded-lg border border-border text-[12.5px] font-medium text-foreground hover:bg-secondary">
+                  Contact sales
+                </a>
+              ) : null}
             </div>
           );
         })}
