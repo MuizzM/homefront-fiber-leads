@@ -6,8 +6,9 @@ import { useToast } from "@/hooks/use-toast";
 import { usd, usdSigned } from "@/lib/money";
 import {
   Banknote, ChevronLeft, ChevronRight, Lock, CheckCircle2, AlertTriangle,
-  Download, Users, Zap, X, FileText, Plus, ShieldCheck, Layers, DollarSign,
+  Download, Users, Zap, X, FileText, Plus, ShieldCheck, Layers, DollarSign, Printer,
 } from "lucide-react";
+import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -468,9 +469,28 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
     onError: (e: any) => toast({ title: "Decision failed", description: e.message, variant: "destructive" }),
   });
 
+  const [showStmt, setShowStmt] = useState(false);
+
   if (!row) return null;
   const stmt = detail?.statement;
   const adjustments: any[] = detail?.adjustments ?? [];
+
+  // Build the printable statement for THIS rep's week from the drawer's data.
+  const statementModel: StatementModel = {
+    repName: row.repName,
+    weekLabel,
+    status: row.status,
+    qualifiedSaleCount: row.qualifiedSaleCount,
+    rateCents: row.rateCents,
+    grossCents: row.grossCommissionCents,
+    adjustmentCents: row.adjustmentCents,
+    finalCents: row.finalCommissionCents,
+    tierLabel: row.tierLabel,
+    planName: stmt?.plan_snapshot?.name ?? null,
+    sales: (sales ?? []).map((s: any) => ({ date: s.qualified_at ?? s.sold_at, address: s.address ?? s.external_id, city: s.city, status: s.status })),
+    adjustments: (adjustments ?? []).filter((a: any) => a.approved_at || a.status === "APPROVED").map((a: any) => ({ amount_cents: a.amount_cents, reason: a.reason })),
+    statementNo: row.statementId ? `HFS-${String(row.statementId).padStart(5, "0")}` : `HFS-${row.repId}-${weekLabel.replace(/[^0-9]/g, "").slice(0, 6)}`,
+  };
   const saleStatusStyle: Record<string, string> = {
     QUALIFIED: "text-emerald-400", PENDING: "text-amber-400", REVERSED: "text-red-400 line-through", DISQUALIFIED: "text-red-400", CANCELLED: "text-muted-foreground",
   };
@@ -479,10 +499,22 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
     <Dialog open={!!row} onOpenChange={v => !v && onClose()}>
       <DialogContent className="bg-card border-border text-foreground max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-base flex items-center gap-2">
-            <FileText className="w-4 h-4 text-primary" /> {row.repName} — {weekLabel}
-          </DialogTitle>
+          <div className="flex items-center justify-between gap-3 pr-6">
+            <DialogTitle className="text-base flex items-center gap-2 min-w-0">
+              <FileText className="w-4 h-4 text-primary shrink-0" /> <span className="truncate">{row.repName} — {weekLabel}</span>
+            </DialogTitle>
+            <button
+              type="button"
+              onClick={() => setShowStmt(true)}
+              data-testid="print-rep-statement"
+              className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-secondary border border-border text-xs font-semibold text-foreground active:scale-95 transition-transform shrink-0"
+            >
+              <Printer className="w-3.5 h-3.5" /> Statement
+            </button>
+          </div>
         </DialogHeader>
+
+        {showStmt && <CommissionStatement model={statementModel} onClose={() => setShowStmt(false)} />}
 
         {/* The equation: count × rate = gross, + adjustments = final */}
         <div className="rounded-xl bg-secondary/40 border border-border p-3 text-sm" data-testid="statement-equation">
