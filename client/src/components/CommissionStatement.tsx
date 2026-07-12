@@ -77,7 +77,7 @@ export function CommissionStatement({ model, onClose }: { model: StatementModel;
             </div>
             <div className="text-right shrink-0">
               <img
-                src="/hfs-logo-full.png" alt="Home Front Solutions" style={{ height: 46, width: "auto", marginLeft: "auto" }}
+                src="/hfs-logo-full.png" alt="Home Front Solutions" style={{ height: 68, width: "auto", marginLeft: "auto", display: "block" }}
                 onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; const n = e.currentTarget.nextElementSibling as HTMLElement | null; if (n) n.style.display = "block"; }}
               />
               <div style={{ display: "none" }} className="text-[15px] font-bold text-[#0F2A44]">Home Front Solutions</div>
