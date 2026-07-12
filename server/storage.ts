@@ -118,7 +118,7 @@ export interface IStorage {
   getActivityOverrides(knockId: number): ActivityOverride[];
   getVisitSummary(tenantId?: number): Map<number, { count: number; lastOutcome: string; lastAt: string }>;
   // ── Leaderboard ────────────────────────────────────────────────────────────
-  getLeaderboard(): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number; knocksToday: number; salesToday: number }[];
+  getLeaderboard(window?: { since?: string; until?: string }): { rep: TeamMember; knocks: number; contacts: number; callbacks: number; sales: number; knocksToday: number; salesToday: number }[];
   // ── Users ──────────────────────────────────────────────────────────────────
   getUserByEmail(email: string): User | undefined;
   getUserById(id: number): User | undefined;
@@ -1268,15 +1268,22 @@ export class Storage implements IStorage {
   }
 
   // ── Leaderboard ────────────────────────────────────────────────────────────
-  getLeaderboard() {
+  getLeaderboard(window?: { since?: string; until?: string }) {
     const reps = this.getTeamMembers().filter(r => r.active);
     // Local midnight — a 7am knock must count as "today" in the rep's timezone.
     const midnight = new Date();
     midnight.setHours(0, 0, 0, 0);
     const midnightIso = midnight.toISOString();
+    const since = window?.since, until = window?.until;
     return reps.map(rep => {
-      const repKnocks = this.getKnocksByRep(rep.id);
-      const today = repKnocks.filter(k => k.knockedAt >= midnightIso);
+      const all = this.getKnocksByRep(rep.id);
+      // Range-scope the counts when a window is given (past 7/30/365 days or a
+      // custom From–To); no window = all-time. knockedAt is ISO, so string compare
+      // is chronological.
+      const repKnocks = (since || until)
+        ? all.filter(k => (!since || k.knockedAt >= since) && (!until || k.knockedAt <= until))
+        : all;
+      const today = all.filter(k => k.knockedAt >= midnightIso);
       return {
         rep,
         knocks: repKnocks.length,

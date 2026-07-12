@@ -2289,11 +2289,33 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Leaderboard ──────────────────────────────────────────────────────────────
   app.get("/api/leaderboard", requireAuth, (req, res) => {
+    // Date-range filter: ?range=7d|30d|1y|today|all (presets), or a custom window
+    // ?since=YYYY-MM-DD&until=YYYY-MM-DD. Computed server-side so the client only
+    // sends intent; counts below reflect the chosen window (all-time by default).
+    const window = (() => {
+      const range = String(req.query.range ?? "").toLowerCase();
+      const dayMs = 86400000;
+      const now = Date.now();
+      const back = (days: number) => new Date(now - days * dayMs).toISOString();
+      if (range === "today") { const m = new Date(); m.setHours(0, 0, 0, 0); return { since: m.toISOString() }; }
+      if (range === "7d") return { since: back(7) };
+      if (range === "30d") return { since: back(30) };
+      if (range === "1y") return { since: back(365) };
+      if (range === "custom" || req.query.since || req.query.until) {
+        const s = String(req.query.since ?? ""), u = String(req.query.until ?? "");
+        const ok = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+        return {
+          since: ok(s) ? new Date(s + "T00:00:00").toISOString() : undefined,
+          until: ok(u) ? new Date(u + "T23:59:59.999").toISOString() : undefined,
+        };
+      }
+      return undefined; // all-time
+    })();
     // Scope to the caller's tenant and project to non-PII fields ONLY — the
     // leaderboard is visible to reps, so it must never carry email/phone/org
     // structure. Rankings need id/name/role + the counts, nothing more.
     const tid = (req as any).user?.tenantId ?? null;
-    const rows = storage.getLeaderboard()
+    const rows = storage.getLeaderboard(window)
       .filter(r => tid == null || (r.rep as any).tenantId === tid)
       .map(r => ({
         rep: { id: r.rep.id, name: r.rep.name, role: (r.rep as any).role ?? "rep" },
