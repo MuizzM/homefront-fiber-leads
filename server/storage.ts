@@ -774,6 +774,47 @@ export function runMigrations() {
        intent TEXT,
        processed_at TEXT NOT NULL DEFAULT (datetime('now'))
      )`,
+
+    // ═══ REP PAYOUTS — Stripe Connect (see shared/payouts.ts + stripeConnect.ts) ══
+    // One connected-account record per rep (KYC/bank on Stripe's hosted onboarding).
+    `CREATE TABLE IF NOT EXISTS rep_payout_accounts (
+       rep_id INTEGER PRIMARY KEY,                 -- team_members.id
+       tenant_id INTEGER NOT NULL,
+       provider TEXT NOT NULL DEFAULT 'stripe',
+       stripe_account_id TEXT,
+       onboarding_status TEXT NOT NULL DEFAULT 'none', -- none|pending|restricted|enabled
+       payouts_enabled INTEGER NOT NULL DEFAULT 0,
+       charges_enabled INTEGER NOT NULL DEFAULT 0,
+       details_submitted INTEGER NOT NULL DEFAULT 0,
+       disabled_reason TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_payout_acct_stripe ON rep_payout_accounts(stripe_account_id) WHERE stripe_account_id IS NOT NULL`,
+    // Ordering guard — ISO of the last-applied account.updated event.created, so a
+    // stale/out-of-order Connect webhook can't flip payouts_enabled back on.
+    `ALTER TABLE rep_payout_accounts ADD COLUMN last_event_at TEXT`,
+    // One payout row per Transfer. UNIQUE(statement_id) enforces ONE payout per
+    // finalized statement — a double-click of "Pay reps" can never double-pay.
+    `CREATE TABLE IF NOT EXISTS rep_payouts (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       rep_id INTEGER NOT NULL,
+       statement_id INTEGER,                        -- commission_statements.id (null = ad-hoc)
+       amount_cents INTEGER NOT NULL,
+       currency TEXT NOT NULL DEFAULT 'usd',
+       status TEXT NOT NULL DEFAULT 'pending',      -- pending|processing|paid|failed|reversed
+       stripe_transfer_id TEXT,
+       destination_account_id TEXT,
+       failure_reason TEXT,
+       created_by INTEGER,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       paid_at TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_payout_statement ON rep_payouts(statement_id) WHERE statement_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_payout_tenant ON rep_payouts(tenant_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_payout_transfer ON rep_payouts(stripe_transfer_id)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -1344,30 +1385,35 @@ export class Storage implements IStorage {
   }
 
   // ── Leaderboard ────────────────────────────────────────────────────────────
-  getLeaderboard(window?: { since?: string; until?: string }) {
-    const reps = this.getTeamMembers().filter(r => r.active);
-    // Local midnight — a 7am knock must count as "today" in the rep's timezone.
+  // ONE grouped aggregate scoped to the caller's tenant — no per-rep full-history
+  // hydration, no cross-tenant scan (the old version SELECT *'d every knock of every
+  // rep of EVERY tenant then filtered in JS on every poll). Uses idx_knock_log_rep.
+  getLeaderboard(window?: { since?: string; until?: string }, tenantId?: number) {
+    const reps = this.getTeamMembers(tenantId).filter(r => r.active);
+    if (reps.length === 0) return [];
+    // Local midnight — a 7am knock must count as "today".
     const midnight = new Date();
     midnight.setHours(0, 0, 0, 0);
-    const midnightIso = midnight.toISOString();
-    const since = window?.since, until = window?.until;
+    const w = (col = "") => `(@since IS NULL OR k.knocked_at >= @since) AND (@until IS NULL OR k.knocked_at <= @until)${col}`;
+    const rows = rawDb.prepare(
+      `SELECT k.rep_id AS repId,
+         SUM(CASE WHEN ${w()} THEN 1 ELSE 0 END) AS knocks,
+         SUM(CASE WHEN ${w(" AND k.was_home = 1")} THEN 1 ELSE 0 END) AS contacts,
+         SUM(CASE WHEN ${w(" AND k.outcome = 'callback'")} THEN 1 ELSE 0 END) AS callbacks,
+         SUM(CASE WHEN ${w(" AND k.outcome = 'sold'")} THEN 1 ELSE 0 END) AS sales,
+         SUM(CASE WHEN k.knocked_at >= @midnight THEN 1 ELSE 0 END) AS knocksToday,
+         SUM(CASE WHEN k.knocked_at >= @midnight AND k.outcome = 'sold' THEN 1 ELSE 0 END) AS salesToday
+       FROM knock_log k JOIN team_members t ON t.id = k.rep_id
+       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1
+       GROUP BY k.rep_id`
+    ).all({ since: window?.since ?? null, until: window?.until ?? null, midnight: midnight.toISOString(), tenantId: tenantId ?? null }) as any[];
+    const byRep = new Map(rows.map(r => [r.repId, r]));
     return reps.map(rep => {
-      const all = this.getKnocksByRep(rep.id);
-      // Range-scope the counts when a window is given (past 7/30/365 days or a
-      // custom From–To); no window = all-time. knockedAt is ISO, so string compare
-      // is chronological.
-      const repKnocks = (since || until)
-        ? all.filter(k => (!since || k.knockedAt >= since) && (!until || k.knockedAt <= until))
-        : all;
-      const today = all.filter(k => k.knockedAt >= midnightIso);
+      const c: any = byRep.get(rep.id) ?? {};
       return {
         rep,
-        knocks: repKnocks.length,
-        contacts: repKnocks.filter(k => k.wasHome).length,
-        callbacks: repKnocks.filter(k => k.outcome === "callback").length,
-        sales: repKnocks.filter(k => k.outcome === "sold").length,
-        knocksToday: today.length,
-        salesToday: today.filter(k => k.outcome === "sold").length,
+        knocks: c.knocks ?? 0, contacts: c.contacts ?? 0, callbacks: c.callbacks ?? 0,
+        sales: c.sales ?? 0, knocksToday: c.knocksToday ?? 0, salesToday: c.salesToday ?? 0,
       };
     }).sort((a, b) => b.sales - a.sales || b.contacts - a.contacts || b.knocks - a.knocks);
   }

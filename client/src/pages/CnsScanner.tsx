@@ -83,7 +83,8 @@ export default function CnsScanner() {
   // ── Jobs list (from API, polled) ─────────────────────────────────────────────
   const { data: jobs = [], refetch: refetchJobs } = useQuery<CnsJob[]>({
     queryKey: ["/api/cns/jobs"],
-    refetchInterval: 3000,
+    // Poll fast only while a job is actually in flight; idle when nothing runs.
+    refetchInterval: (q) => (Array.isArray(q.state.data) && q.state.data.some((j: any) => j.status === "running" || j.status === "queued")) ? 3000 : 15000,
   });
 
   // ── ENV list ─────────────────────────────────────────────────────────────────

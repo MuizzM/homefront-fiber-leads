@@ -41,7 +41,10 @@ export function OpportunityMap({ focusCity, onBack }: { focusCity?: { city: stri
   const { data, isLoading } = useQuery({
     queryKey: ["/api/scan/clusters", focusCity?.city ?? "all", focusCity?.state ?? ""],
     queryFn: () => scanApi.clusters({ minPoints: 5, city: focusCity?.city, state: focusCity?.state }),
-    refetchInterval: 10000,
+    // Clusters only change when a scan writes opportunities; server-side clustering
+    // is a real compute step, so idle at 60s instead of hammering it every 10s.
+    refetchInterval: 60000,
+    staleTime: 30000,
   });
   const clusters = useMemo(() => data?.clusters ?? [], [data]);
   const selected = clusters.find(c => c.id === selectedId) ?? null;

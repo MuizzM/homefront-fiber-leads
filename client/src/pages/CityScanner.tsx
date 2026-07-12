@@ -127,7 +127,8 @@ export default function CityScanner() {
   const { data: poolStats } = useQuery<{ total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null }>({
     queryKey: ["/api/scan/pool-stats"],
     queryFn: async () => (await apiRequest("GET", "/api/scan/pool-stats")).json(),
-    refetchInterval: 8000,
+    // Pool counters only move during a scan — fast while scanning, slow when idle.
+    refetchInterval: scanning ? 8000 : 60000,
   });
 
   const stopAll = useCallback(() => {

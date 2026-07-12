@@ -77,23 +77,41 @@ export function verifyStripeSignature(
   });
 }
 
-// ── Stripe REST helper ────────────────────────────────────────────────────────
-async function stripePost(path: string, form: Record<string, string | undefined>): Promise<any> {
+// ── Stripe REST helper (shared with the Connect adapter) ──────────────────────
+// Supports an Idempotency-Key (critical for money-moving POSTs like transfers) and
+// a GET mode. Exported so server/stripeConnect.ts reuses one auth/version path.
+export async function stripeRequest(
+  path: string,
+  form?: Record<string, string | undefined>,
+  opts: { method?: "POST" | "GET"; idempotencyKey?: string } = {},
+): Promise<any> {
   if (!stripeConfigured()) throw new Error("Stripe is not configured (STRIPE_SECRET_KEY unset)");
-  const body = new URLSearchParams();
-  for (const [k, v] of Object.entries(form)) if (v != null) body.append(k, v);
-  const res = await fetch(`${STRIPE_API}${path}`, {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${process.env.STRIPE_SECRET_KEY}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Stripe-Version": "2024-06-20",
-    },
-    body: body.toString(),
-  });
+  const method = opts.method ?? "POST";
+  const headers: Record<string, string> = {
+    "Authorization": `Bearer ${process.env.STRIPE_SECRET_KEY}`,
+    "Stripe-Version": "2024-06-20",
+  };
+  if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
+  let url = `${STRIPE_API}${path}`;
+  let body: string | undefined;
+  if (method === "POST") {
+    headers["Content-Type"] = "application/x-www-form-urlencoded";
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(form ?? {})) if (v != null) params.append(k, v);
+    body = params.toString();
+  } else if (form) {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(form)) if (v != null) params.append(k, v);
+    const qs = params.toString();
+    if (qs) url += `?${qs}`;
+  }
+  const res = await fetch(url, { method, headers, body });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`Stripe ${path} ${res.status}: ${json?.error?.message ?? "error"}`);
   return json;
+}
+async function stripePost(path: string, form: Record<string, string | undefined>): Promise<any> {
+  return stripeRequest(path, form);
 }
 
 export interface CheckoutOpts {

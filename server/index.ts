@@ -140,6 +140,7 @@ const CSRF_EXEMPT = new Set([
   "/api/onboarding/apply",    // public form
   "/join",
   "/api/billing/webhook/stripe", // Stripe-signed webhook — authenticated by HMAC signature, not a session
+  "/api/payouts/webhook/stripe", // Stripe Connect webhook — HMAC-signed, not a session
 ]);
 // ── Request ID — one correlation id per request, echoed to the client and used
 // in every server log line so a failure can be traced end to end. Honors an
@@ -263,6 +264,14 @@ declare module "http" {
 }
 
 // ── Body size limits — prevent DoS via oversized payloads ────────────────────
+// Stripe webhooks (billing + Connect payouts) can exceed 64 KB — an invoice or
+// subscription event with many line items. Parse those two paths at a higher limit
+// (still capturing rawBody for HMAC verification) BEFORE the global 64 KB parser,
+// so a large signed event isn't 413'd before its signature is ever checked.
+app.use(
+  ["/api/billing/webhook/stripe", "/api/payouts/webhook/stripe"],
+  express.json({ limit: "1mb", verify: (req, _res, buf) => { req.rawBody = buf; } }),
+);
 app.use(
   express.json({
     limit: "64kb",   // API JSON payloads: 64 KB max

@@ -17,6 +17,8 @@ export type Capability =
   // Commissions
   | "commission.read.self" | "commission.read.team" | "commission.read.all"
   | "commission.structure.manage"
+  // Payouts — moving REAL money to reps. Owner/admin only, never a read/oversight role.
+  | "payouts.pay"
   // Dashboards / analytics read models
   | "dashboard.read.self" | "dashboard.read.team" | "dashboard.read.org"
   // Audit / activity
@@ -46,8 +48,10 @@ const MANAGER: readonly Capability[] = [
   "commission.read.all", "dashboard.read.org", "audit.read.org",
 ];
 
-// Admin (and super_admin) hold the full set including org policy.
-const ADMIN: readonly Capability[] = [...MANAGER, "settings.manage.org"];
+// Admin (and super_admin) hold the full set including org policy + paying reps.
+// payouts.pay is deliberately NOT in MANAGER — a manager is oversight/read; only
+// the org owner (admin) may move real money.
+const ADMIN: readonly Capability[] = [...MANAGER, "settings.manage.org", "payouts.pay"];
 
 export const ROLE_CAPABILITIES: Record<Role, ReadonlySet<Capability>> = {
   rep: new Set(REP),
@@ -88,6 +92,7 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "commission.read.team": "commissions",
   "commission.read.all": "commissions",
   "commission.structure.manage": "commissions",
+  "payouts.pay": "commissions",
   "dashboard.read.self": "dashboard",
   "dashboard.read.team": "dashboard",
   "dashboard.read.org": "dashboard",
@@ -101,7 +106,7 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
 export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   "lead.assign", "lead.reassign",
   "commission.structure.manage", "commission.read.all",
-  "audit.read.org", "settings.manage.org",
+  "audit.read.org", "settings.manage.org", "payouts.pay",
 ]);
 
 export function isHighRisk(cap: Capability): boolean {

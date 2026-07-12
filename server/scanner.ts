@@ -270,19 +270,6 @@ export interface ScanResult {
   leadScore: number;
 }
 
-// REFERENCE ONLY — real published FCC/Kinetic build periods for known ZIPs.
-// These are NOT used to classify availability (that would be fabrication). They
-// can seed a "known active build area" hint in market priority, never a result.
-export const FCC_DEPLOYMENT_PERIODS: Record<string, string> = {
-  "28138": "Q4 2025 — Rowan County CAB (507 locations, $2.1M)",
-  "28072": "Q4 2025 — Rowan County CAB expansion",
-  "28023": "Q4 2025 — Rowan County CAB",
-  "28081": "Q4 2025 — Kannapolis expansion",
-  "28083": "Q4 2025 — Kannapolis expansion",
-  "28025": "Q4 2025 — Concord expansion",
-  "28001": "Q4 2025 — Albemarle expansion",
-};
-
 function kbpsToMbps(kbps: string | number | null | undefined): number | null {
   if (!kbps) return null;
   const n = typeof kbps === "string" ? parseInt(kbps) : kbps;

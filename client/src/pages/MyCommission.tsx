@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -7,6 +7,7 @@ import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
   FileSignature, CheckCircle2, Home, FileText, Printer,
+  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2,
 } from "lucide-react";
 import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
 
@@ -80,6 +81,37 @@ const WEEK_STATE: Record<string, { label: string; cls: string; icon: "lock" | "c
   REVIEW: { label: "Under review", cls: "bg-sky-500/15 text-sky-400", icon: null },
   FINALIZED: { label: "Finalized", cls: "bg-primary/15 text-primary", icon: "lock" },
   PAID: { label: "Paid", cls: "bg-emerald-500/15 text-emerald-400", icon: "check" },
+};
+
+// ── Get paid (Stripe Connect payouts) ────────────────────────────────────────
+// The rep connects a bank via a Stripe-hosted onboarding flow, then sees their
+// payout history here. Feature is DARK until the server reports enabled:true.
+type PayoutStatus = "pending" | "processing" | "paid" | "failed" | "reversed";
+interface PayoutHistoryItem {
+  id: number | string;
+  amountCents: number;
+  status: PayoutStatus;
+  statementId: number | string | null;
+  createdAt: string;
+  paidAt: string | null;
+}
+interface PayoutAccount {
+  hasRepProfile: boolean;
+  enabled: boolean;
+  onboardingStatus: "none" | "pending" | "restricted" | "enabled";
+  payoutsEnabled: boolean;
+  detailsSubmitted: boolean;
+  history: PayoutHistoryItem[];
+}
+// Status pill colors per spec: paid → emerald, pending/processing → amber,
+// failed → red, reversed → muted. Same tint idiom as the rest of the file, and
+// the tinted square also skins the row's leading status-icon tile.
+const PAYOUT_STATUS: Record<PayoutStatus, { label: string; cls: string; Icon: React.ComponentType<{ className?: string }> }> = {
+  paid: { label: "Paid", cls: "bg-emerald-500/15 text-emerald-400", Icon: CheckCircle2 },
+  processing: { label: "Processing", cls: "bg-amber-500/15 text-amber-400", Icon: Clock },
+  pending: { label: "Pending", cls: "bg-amber-500/15 text-amber-400", Icon: Clock },
+  failed: { label: "Failed", cls: "bg-red-500/15 text-red-400", Icon: XCircle },
+  reversed: { label: "Reversed", cls: "bg-muted text-muted-foreground", Icon: RotateCcw },
 };
 
 export default function MyCommission() {
@@ -201,12 +233,17 @@ export default function MyCommission() {
         </section>
       )}
 
+      {/* Get paid — connect a Stripe payout account + see payout history.
+          Self-gating: renders nothing until the server reports payouts enabled. */}
+      {!isLoading && !isError && data && !data.noRepProfile && <GetPaidSection />}
+
       {/* Past weeks — a plain statement list */}
       {history.length > 0 && (
         <section className="rounded-xl bg-card border border-border overflow-hidden">
           <header className="px-4 py-3 border-b border-border flex items-center gap-2">
             <CalendarDays className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-semibold tracking-tight text-foreground">Past weeks</span>
+            <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{history.length}</span>
           </header>
           <div className="divide-y divide-border">
             {history.slice(0, 8).map((s: any) => (
@@ -517,5 +554,172 @@ function EmptyState({ icon, title, body }: { icon: React.ReactNode; title: strin
       <p className="text-sm font-semibold tracking-tight text-foreground">{title}</p>
       <p className="text-xs text-muted-foreground mt-1.5 max-w-sm mx-auto leading-relaxed">{body}</p>
     </div>
+  );
+}
+
+// ── "Get paid" section ────────────────────────────────────────────────────────
+// Grounded in Mobbin: Turo's "You're verified!" success banner (enabled state),
+// the Stripe Dashboard payments list (payout-history rows), and the Contra/Stripe
+// "Add your bank to receive payouts" card + Turo's "Powered by Stripe" trust line
+// (connect state). The whole feature stays dark until the server enables it.
+function GetPaidSection() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+
+  // Return-from-Stripe handshake: if the rep just came back from onboarding
+  // (#onboard=done), refresh the Stripe status, refetch the account, then wipe
+  // the hash so a reload doesn't refire it.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!window.location.hash.includes("onboard=done")) return;
+    apiRequest("POST", "/api/payouts/account/refresh")
+      .catch(() => { /* non-fatal — the refetch below still reconciles state */ })
+      .finally(() => {
+        qc.invalidateQueries({ queryKey: ["/api/payouts/account"] });
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      });
+  }, [qc]);
+
+  const { data: account } = useQuery<PayoutAccount>({
+    queryKey: ["/api/payouts/account"],
+    queryFn: () => apiRequest("GET", "/api/payouts/account").then(r => r.json()),
+  });
+
+  const connect = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/payouts/connect").then(r => r.json()),
+    onSuccess: (res: { url?: string }) => {
+      if (res?.url) { window.location.href = res.url; return; }
+      toast({ title: "Couldn't start setup", description: "No onboarding link came back — try again in a moment.", variant: "destructive" });
+    },
+    onError: (e: any) => toast({ title: "Payouts aren't ready yet", description: e?.message ?? "Please try again shortly.", variant: "destructive" }),
+  });
+
+  // Feature dark until Stripe is configured server-side → render nothing extra.
+  if (!account || !account.enabled) return null;
+
+  const isReady = account.onboardingStatus === "enabled";
+  const connectLabel =
+    account.onboardingStatus === "restricted" ? "Reconnect payout account"
+    : account.onboardingStatus === "pending" ? "Continue setup"
+    : "Connect payout account";
+
+  return (
+    <section className="space-y-3" data-testid="get-paid">
+      <div className="flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <Wallet className="w-3.5 h-3.5" /> Get paid
+      </div>
+
+      {isReady ? (
+        <>
+          {/* Payouts-ready confirmation — Turo "You're verified!" */}
+          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 flex items-center gap-3" data-testid="payouts-ready">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/15 flex items-center justify-center flex-shrink-0">
+              <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold tracking-tight text-foreground">Payouts ready</div>
+              <div className="text-xs text-muted-foreground">Your commission goes straight to your connected bank.</div>
+            </div>
+            <ShieldCheck className="w-4 h-4 text-emerald-400/70 ml-auto flex-shrink-0" aria-hidden="true" />
+          </div>
+
+          {/* Payout history — Stripe Dashboard payments list */}
+          <div className="rounded-xl bg-card border border-border overflow-hidden">
+            <header className="px-4 py-3 border-b border-border flex items-center gap-2">
+              <Landmark className="w-4 h-4 text-muted-foreground" />
+              <span className="text-sm font-semibold tracking-tight text-foreground">Payout history</span>
+              {account.history.length > 0 && (
+                <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">{account.history.length}</span>
+              )}
+            </header>
+            {account.history.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <p className="text-sm font-semibold tracking-tight text-foreground">No payouts yet</p>
+                <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto leading-relaxed">
+                  Your first payout shows up here once a weekly statement is paid out.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-border">
+                {account.history.map(p => <PayoutRow key={p.id} item={p} />)}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        /* Connect card — Contra/Stripe "Add your bank to receive payouts" */
+        <div className="rounded-xl bg-card border border-border p-5" data-testid="get-paid-connect">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center flex-shrink-0">
+              <Landmark className="w-5 h-5 text-primary" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-semibold tracking-tight text-foreground">Set up payouts</div>
+              <p className="text-xs text-muted-foreground mt-0.5">Connect your bank to receive commission payouts.</p>
+            </div>
+          </div>
+
+          {account.onboardingStatus === "pending" && (
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2 text-xs text-amber-400" data-testid="payout-status-note">
+              <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" aria-hidden="true" /> Verifying your details…
+            </div>
+          )}
+          {account.onboardingStatus === "restricted" && (
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-red-500/10 border border-red-500/20 px-3 py-2 text-xs text-red-400" data-testid="payout-status-note">
+              <XCircle className="w-3.5 h-3.5 flex-shrink-0" aria-hidden="true" /> Action needed — reconnect to finish verification.
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => connect.mutate()}
+            disabled={connect.isPending}
+            data-testid="connect-payout"
+            className="mt-4 w-full inline-flex items-center justify-center gap-2 h-11 rounded-xl bg-primary hover:bg-primary/90 text-primary-foreground text-sm font-semibold transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            {connect.isPending
+              ? <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+              : <ArrowRight className="w-4 h-4" aria-hidden="true" />}
+            {connect.isPending ? "Opening secure setup…" : connectLabel}
+          </button>
+
+          <div className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+            <Lock className="w-3 h-3" aria-hidden="true" /> Powered by Stripe · bank details handled securely
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PayoutRow({ item }: { item: PayoutHistoryItem }) {
+  const s = PAYOUT_STATUS[item.status] ?? PAYOUT_STATUS.pending;
+  const when = item.status === "paid" && item.paidAt ? item.paidAt : item.createdAt;
+  const Icon = s.Icon;
+  return (
+    <div className="px-4 py-3 flex items-center gap-3" data-testid="payout-history-row">
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${s.cls}`}>
+        <Icon className="w-4 h-4" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="text-sm font-semibold text-foreground tabular-nums">{usd(item.amountCents)}</div>
+        <div className="text-[11px] text-muted-foreground tabular-nums truncate">
+          {when
+            ? new Date(when).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+            : "—"}
+          {item.statementId != null ? ` · Statement #${item.statementId}` : ""}
+        </div>
+      </div>
+      <PayoutStatusPill status={item.status} />
+    </div>
+  );
+}
+
+function PayoutStatusPill({ status }: { status: PayoutStatus }) {
+  const s = PAYOUT_STATUS[status] ?? PAYOUT_STATUS.pending;
+  return (
+    <span className={`inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${s.cls}`}>
+      <span className="w-1 h-1 rounded-full bg-current" />{s.label}
+    </span>
   );
 }

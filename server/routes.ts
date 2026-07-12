@@ -57,6 +57,7 @@ import {
 } from "@shared/capabilities";
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
 import { registerCommissionRoutes } from "./commissionRoutes";
+import { registerPayoutRoutes } from "./payoutRoutes";
 import * as commissionSvc from "./commissionService";
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
@@ -754,6 +755,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
   registerCommissionRoutes(app, { requireAuth, requireCapability });
+  registerPayoutRoutes(app, { requireAuth, requireCapability });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
@@ -781,13 +783,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/config/map", requireAuth, (_req, res) => {
     // The map basemap/pins use a PUBLIC token (pk.…) that is safe to send to the
     // browser — scope it in Mapbox to URL-restricted "styles:read/tiles:read" only,
-    // NOT geocoding. Keep the secret geocoding token (MAPBOX_TOKEN) server-side so
-    // revoking the geocoding key never blanks the map, and a leaked map token
-    // can't run paid geocoding. Falls back to MAPBOX_TOKEN if no public one is set.
-    const token = process.env.MAPBOX_PUBLIC_TOKEN
-      ?? process.env.VITE_MAPBOX_TOKEN
-      ?? process.env.MAPBOX_TOKEN
-      ?? "";
+    // NOT geocoding. The SECRET geocoding token (MAPBOX_TOKEN) stays server-side and
+    // is NEVER a fallback here: shipping it to the browser would let any user run
+    // unbounded paid geocoding on the owner's account (see the two billing incidents).
+    const token = process.env.MAPBOX_PUBLIC_TOKEN ?? process.env.VITE_MAPBOX_TOKEN ?? "";
     if (!token) return res.status(503).json({ error: "Map not configured" });
     res.json({ token });
   });
@@ -1876,7 +1875,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // POST /api/scan/start-city — scan with pre-pulled addresses or pull them fresh
-  app.post("/api/scan/start-city", requireAdmin, requireScanningAllowed, async (req, res) => {
+  app.post("/api/scan/start-city", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
     const { city, state, addresses: providedAddresses } = req.body;
     if (!city) return res.status(400).json({ error: "city required" });
     const st = state ?? "NC";
@@ -2408,6 +2407,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.patch("/api/team/:id", requireTeamLead, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
     const id = Number(req.params.id);
+    // Scope guard: a team_lead may only edit members on their own team — NOT any
+    // member in the tenant. Without this, a team_lead could PATCH a victim's `email`
+    // (which syncs to their login) and hijack the account via OTP. Managers/admins
+    // keep org-wide edit; the scope helper returns true for them.
+    if (!repInVisibilityScope((req as any).user, id)) {
+      return res.status(403).json({ error: "That member is not on your team", code: "OUT_OF_SCOPE" });
+    }
     // A member cannot report to themselves
     if (req.body?.reportsToId != null && Number(req.body.reportsToId) === id) {
       return res.status(400).json({ error: "A member cannot report to themselves" });
@@ -2928,9 +2934,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Scope to the caller's tenant and project to non-PII fields ONLY — the
     // leaderboard is visible to reps, so it must never carry email/phone/org
     // structure. Rankings need id/name/role + the counts, nothing more.
-    const tid = (req as any).user?.tenantId ?? null;
-    const rows = storage.getLeaderboard(window)
-      .filter(r => tid == null || (r.rep as any).tenantId === tid)
+    const tid = (req as any).user?.tenantId ?? undefined;
+    const rows = storage.getLeaderboard(window, tid)   // tenant-scoped in SQL now
       .map(r => ({
         rep: { id: r.rep.id, name: r.rep.name, role: (r.rep as any).role ?? "rep" },
         knocks: r.knocks, contacts: r.contacts, callbacks: r.callbacks, sales: r.sales,
@@ -3364,10 +3369,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!can(user?.role, "assign_territory")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
     if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // Scope: a team_lead may only manage their own areas + assign to their own reps
+    // (mirrors /assign-area). Prevents cross-team territory hijack + lead vacuuming.
+    if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
     const repId = Number(req.body?.repId);
     if (!repId) return res.status(400).json({ error: "repId required" });
     const rep = storage.getTeamMemberById(repId);
     if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
+    if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
 
     // Max-active-areas guard
     const activeForRep = storage.getTerritoriesByRep(repId).filter((x: any) => x.status === "active" || x.status === "shared").length;
@@ -3409,7 +3418,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t) return res.status(404).json({ error: "not found" });
+    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
     if (((t as any).status ?? "active") === "archived") return res.status(409).json({ error: "cannot complete an archived area" });
     const at = new Date().toISOString();
     // LEARNING LOOP: capture the field outcome and roll it into the market's
@@ -3425,7 +3434,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t) return res.status(404).json({ error: "not found" });
+    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
     const repIds: number[] = Array.isArray(req.body?.repIds) ? req.body.repIds.map(Number) : [];
     const merged = Array.from(new Set([t.repId, ...repIds].filter(Boolean)));
     const at = new Date().toISOString();
@@ -3439,7 +3448,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t) return res.status(404).json({ error: "not found" });
+    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
     const at = new Date().toISOString();
     const outcome = scanSvc.recordTerritoryOutcome(tid ?? getDefaultTenantId(), t.id, (t as any).createdAt ?? null);
     storage.updateTerritory(t.id, { status: "archived", archivedAt: at, updatedAt: at, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, tid);
@@ -3449,6 +3458,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // GET /api/territories/:id/history — full immutable event log
   app.get("/api/territories/:id/history", requireTeamLead, (req, res) => {
+    const tid = (req as any).user?.tenantId ?? undefined;
+    const t = storage.getTerritoryById(Number(req.params.id));
+    // Tenant + scope guard — the event log carries rep ids + outcome numbers; a
+    // team_lead may only read areas they manage (sibling lifecycle routes do the same).
+    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid) || !canManageTerritory((req as any).user, t)) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(storage.getTerritoryEvents(Number(req.params.id)));
   });
 
@@ -4639,7 +4655,12 @@ export function registerSaasRoutes(app: any) {
     const id = Number(req.params.id);
     const existing = storage.getCommissionRates().find(r => r.id === id);
     if (!existing) return res.status(404).json({ error: "Not found" });
-    const patch: Record<string, unknown> = { ...req.body };
+    // Allowlist — never let the body set id/createdAt/isActive/etc. (mass-assignment
+    // of the PK would break structure refs; isActive would drop the row from payout
+    // calc). Mirror the /api/leads + /api/users PATCH pattern.
+    const ALLOWED_RATE_FIELDS = new Set(["name", "role", "repId", "ratePerSale", "calcType", "percentage", "tiers", "effectiveFrom", "effectiveTo"]);
+    const patch: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(req.body ?? {})) if (ALLOWED_RATE_FIELDS.has(k)) patch[k] = v;
     if (Array.isArray(patch.tiers)) patch.tiers = JSON.stringify(patch.tiers);
     patch.version = ((existing as any).version ?? 1) + 1; // publish = new version
     patch.updatedBy = user?.name ?? null;
@@ -4854,9 +4875,18 @@ export function registerSaasRoutes(app: any) {
 
   // PATCH /api/sa/tenants/:id      — update tenant settings
   app.patch("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
-    const updated = storage.updateTenant(Number(req.params.id), req.body);
+    // Allowlist — never let the body set id/createdAt (mass-assignment of the PK
+    // would remap the tenant and orphan every tenant_id FK).
+    const ALLOWED_TENANT_FIELDS = new Set([
+      "companyName", "ownerName", "ownerEmail", "ownerPhone", "brandName", "brandColor", "brandLogo",
+      "tagline", "plan", "status", "revenueSharePct", "monthlyFee", "trialEndsAt", "billingEmail",
+      "maxReps", "allowedMarkets", "notes", "mapboxToken", "scannerSecret", "kfsAuthBasic", "enrichmentApiKey",
+    ]);
+    const safeTenant: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(req.body ?? {})) if (ALLOWED_TENANT_FIELDS.has(k)) safeTenant[k] = v;
+    const updated = storage.updateTenant(Number(req.params.id), safeTenant);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    storage.logActivity((req as any).user.id, "tenant.updated", "tenant", updated.id, { fields: Object.keys(req.body) });
+    storage.logActivity((req as any).user.id, "tenant.updated", "tenant", updated.id, { fields: Object.keys(safeTenant) });
     res.json(updated);
   });
 

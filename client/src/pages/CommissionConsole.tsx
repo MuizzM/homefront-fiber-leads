@@ -7,6 +7,7 @@ import { usd, usdSigned } from "@/lib/money";
 import {
   Banknote, ChevronLeft, ChevronRight, Lock, CheckCircle2, AlertTriangle,
   Download, Users, Zap, X, FileText, Plus, ShieldCheck, Layers, DollarSign, Printer,
+  Send, Loader2, XCircle,
 } from "lucide-react";
 import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
 import { Button } from "@/components/ui/button";
@@ -365,6 +366,9 @@ export default function CommissionConsole() {
               </Button>
             </div>
           )}
+
+          {/* Pay reps — Stripe Connect payout, review-then-confirm (managers/admins) */}
+          {canClose && <PayRepsPanel key={weekRef} weekRef={weekRef} />}
         </>
       )}
 
@@ -623,5 +627,245 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ── Pay reps — Stripe Connect payout with review-then-confirm ──────────────────
+// After a week is finalized, the owner sends each rep their commission to a
+// connected Stripe account. Because this moves REAL money, the flow is a
+// deliberate two-step: review the batch + per-rep eligibility here, then
+// re-confirm the exact total and rep count in a dialog before a single dollar
+// posts. Grounded in Gusto "Review and submit", Deel "Approve payroll?" and
+// Fresha "Review pay run" payroll-run confirmations; status pills follow
+// Stripe/Whop payment-status color coding.
+interface PayoutRow {
+  repId: number; repName: string; statementId: number | null;
+  status: "OPEN" | "REVIEW" | "FINALIZED" | "PAID" | "NO_PLAN";
+  finalCommissionCents: number;
+  onboardingStatus: "none" | "pending" | "restricted" | "enabled";
+  payoutStatus: "pending" | "processing" | "paid" | "failed" | "reversed" | null;
+  eligible: boolean; blockReason: string | null; blockLabel: string | null;
+}
+interface PayoutWeek {
+  stripeEnabled: boolean; week: string; rows: PayoutRow[];
+  payableCount: number; payableCents: number;
+}
+interface PayResult {
+  repId: number; paid?: true; skipped?: true; failed?: true;
+  reason?: string; amountCents?: number; transferId?: string;
+}
+
+// Eligibility/status cell — one glance says pay / paid / blocked, using the same
+// semantic tints as the rest of the console (emerald=go/paid, red=failed,
+// amber=blocked, sky=in-flight). blockLabel is the terse reason ("Rep hasn't
+// connected a payout account", "Already paid").
+function PayStatusCell({ r }: { r: PayoutRow }) {
+  const base = "inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap";
+  if (r.payoutStatus === "paid")
+    return <span className={`${base} bg-emerald-500/15 text-emerald-400`}><CheckCircle2 className="w-3 h-3" /> Paid</span>;
+  if (r.payoutStatus === "processing")
+    return <span className={`${base} bg-sky-500/15 text-sky-400`}><Loader2 className="w-3 h-3 animate-spin" /> Processing</span>;
+  if (r.payoutStatus === "failed")
+    return <span className={`${base} bg-red-500/15 text-red-400`}><XCircle className="w-3 h-3" /> Failed</span>;
+  if (r.payoutStatus === "reversed")
+    return <span className={`${base} bg-amber-500/15 text-amber-400`}><AlertTriangle className="w-3 h-3" /> Reversed</span>;
+  if (r.eligible)
+    return <span className={`${base} bg-emerald-500/10 text-emerald-400`}><CheckCircle2 className="w-3 h-3" /> Ready</span>;
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] text-amber-400" title={r.blockReason ?? undefined}>
+      <AlertTriangle className="w-3 h-3 flex-shrink-0" /> {r.blockLabel ?? "Not eligible"}
+    </span>
+  );
+}
+
+// Keyed by weekRef in the parent, so switching weeks resets confirm + results.
+function PayRepsPanel({ weekRef }: { weekRef: string }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [results, setResults] = useState<PayResult[] | null>(null);
+
+  // Reuse the console's exact week reference — same instant the commission
+  // overview/statement/sales queries use — so this panel always describes the
+  // same week the rest of the screen is showing.
+  const { data, isLoading } = useQuery<PayoutWeek>({
+    queryKey: ["/api/payouts/week", weekRef],
+    queryFn: () => apiRequest("GET", `/api/payouts/week?week=${encodeURIComponent(weekRef)}`).then(r => r.json()),
+  });
+
+  const pay = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/payouts/week/pay", { week: weekRef }).then(r => r.json()),
+    onSuccess: (res: { week: string; results: PayResult[]; paidCount: number }) => {
+      const list = res.results ?? [];
+      setResults(list);
+      setConfirmOpen(false);
+      const paid = res.paidCount ?? list.filter(x => x.paid).length;
+      const failed = list.filter(x => x.failed).length;
+      toast({
+        title: paid > 0 ? `Paid ${paid} rep${paid === 1 ? "" : "s"}` : "No payouts sent",
+        description: failed > 0 ? `${failed} payout${failed === 1 ? "" : "s"} failed — see results below.` : "Paid statements flip to PAID as transfers settle.",
+        variant: failed > 0 ? "destructive" : undefined,
+      });
+      // Refresh both this panel AND the commission overview so paid statements flip to PAID.
+      qc.invalidateQueries({ queryKey: ["/api/payouts/week"] });
+      qc.invalidateQueries({ queryKey: ["/api/commission/week-overview"] });
+    },
+    // 503 (payouts disabled) or any transfer error lands here — never leaves the
+    // dialog open pretending money moved.
+    onError: (e: any) => {
+      setConfirmOpen(false);
+      toast({ title: "Payouts unavailable", description: e.message, variant: "destructive" });
+    },
+  });
+
+  const stripeEnabled = data?.stripeEnabled ?? false;
+  const rows = data?.rows ?? [];
+  const payableCount = data?.payableCount ?? 0;
+  const payableCents = data?.payableCents ?? 0;
+  const nameFor = (id: number) => rows.find(r => r.repId === id)?.repName ?? `Rep #${id}`;
+
+  return (
+    <div className="rounded-2xl bg-card border border-border overflow-hidden" data-testid="pay-reps-panel">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-border flex items-center gap-2.5">
+        <div className="w-7 h-7 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+          <Banknote className="w-4 h-4 text-primary" />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[11px] uppercase tracking-wide text-primary font-semibold">Pay reps</div>
+          <div className="text-sm font-semibold text-foreground">Send commission via Stripe Connect</div>
+        </div>
+        {stripeEnabled && payableCount > 0 && (
+          <span className="ml-auto text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 rounded-full px-2 py-0.5 whitespace-nowrap">
+            {payableCount} ready
+          </span>
+        )}
+      </div>
+
+      {isLoading ? (
+        <div className="p-4"><div className="h-16 rounded-xl bg-secondary/40 animate-pulse" /></div>
+      ) : !stripeEnabled ? (
+        /* Disabled / informational — NO pay path exists in this branch. */
+        <div className="p-5 flex items-start gap-3" data-testid="pay-reps-disabled">
+          <div className="w-9 h-9 rounded-xl bg-secondary border border-border flex items-center justify-center flex-shrink-0">
+            <Lock className="w-4 h-4 text-muted-foreground" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-foreground">Rep payouts aren't enabled yet</p>
+            <p className="text-xs text-muted-foreground mt-1 max-w-md">
+              Connect Stripe payouts to send commission straight to your reps' bank accounts from this console. Until then, export the CSV and pay through your existing process.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <>
+          {rows.length === 0 ? (
+            <div className="p-6 text-center text-sm text-muted-foreground" data-testid="pay-reps-empty">
+              No rep statements to pay this week yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[460px]">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border bg-secondary/30">
+                    <th scope="col" className="text-left font-semibold px-4 py-2.5">Rep</th>
+                    <th scope="col" className="text-right font-semibold px-2 py-2.5">Amount</th>
+                    <th scope="col" className="text-right font-semibold px-4 py-2.5">Payout</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {rows.map(r => (
+                    <tr key={r.repId} data-testid={`payout-row-${r.repId}`}
+                      className={r.eligible || r.payoutStatus === "paid" ? "" : "opacity-90"}>
+                      <td className="px-4 py-2.5">
+                        <div className="font-medium text-foreground">{r.repName}</div>
+                        {!r.eligible && r.payoutStatus !== "paid" && r.blockReason && (
+                          <div className="text-[10px] text-muted-foreground mt-0.5">{r.blockReason}</div>
+                        )}
+                      </td>
+                      <td className="px-2 py-2.5 text-right tabular-nums font-semibold text-foreground">{usd(r.finalCommissionCents)}</td>
+                      <td className="px-4 py-2.5 text-right"><PayStatusCell r={r} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Per-rep results of the latest run (paid / failed / skipped) */}
+          {results && results.length > 0 && (
+            <div className="border-t border-border" data-testid="pay-reps-results">
+              <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold bg-secondary/20">
+                Latest payout run
+              </div>
+              <div className="divide-y divide-border">
+                {results.map(res => (
+                  <div key={res.repId} className="px-4 py-2 flex items-center justify-between gap-3 text-sm">
+                    <span className="font-medium text-foreground min-w-0 truncate">{nameFor(res.repId)}</span>
+                    <span className="flex items-center gap-2 flex-shrink-0">
+                      {res.reason && <span className="text-[11px] text-muted-foreground">{res.reason}</span>}
+                      {res.amountCents != null && <span className="tabular-nums text-muted-foreground">{usd(res.amountCents)}</span>}
+                      {res.paid && <span className="text-[11px] font-semibold text-emerald-400 inline-flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Paid</span>}
+                      {res.failed && <span className="text-[11px] font-semibold text-red-400 inline-flex items-center gap-1"><XCircle className="w-3 h-3" /> Failed</span>}
+                      {res.skipped && <span className="text-[11px] font-semibold text-muted-foreground">Skipped</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Footer: summary + primary action (button disabled when nothing is payable) */}
+          <div className="border-t border-border p-3 flex items-center gap-3 flex-wrap bg-secondary/10">
+            <div className="text-xs text-muted-foreground mr-auto" data-testid="pay-reps-summary">
+              <strong className="text-foreground">{payableCount}</strong> rep{payableCount === 1 ? "" : "s"} · <strong className="text-foreground tabular-nums">{usd(payableCents)}</strong> ready to pay
+            </div>
+            <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
+              disabled={payableCount === 0 || pay.isPending}
+              onClick={() => setConfirmOpen(true)}
+              aria-label={`Pay ${payableCount} reps, ${usd(payableCents)} total`}
+              data-testid="pay-reps-btn">
+              <Send className="w-3.5 h-3.5 mr-1" /> Pay {payableCount} rep{payableCount === 1 ? "" : "s"}
+            </Button>
+          </div>
+        </>
+      )}
+
+      {/* Confirmation — restates the EXACT total + count before any money moves.
+          Reachable only when Stripe is enabled and there is something to pay. */}
+      <Dialog open={confirmOpen} onOpenChange={v => !v && setConfirmOpen(false)}>
+        <DialogContent className="bg-card border-border text-foreground max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <Banknote className="w-4 h-4 text-primary" /> Pay {payableCount} rep{payableCount === 1 ? "" : "s"}?
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-xl bg-secondary/40 border border-border p-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">Reps to pay</span>
+                <span className="font-semibold tabular-nums text-foreground">{payableCount}</span>
+              </div>
+              <div className="flex items-center justify-between mt-2 pt-2 border-t border-border">
+                <span className="font-semibold text-foreground">Total payout</span>
+                <span className="tabular-nums font-bold text-lg text-foreground">{usd(payableCents)}</span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              This sends each eligible rep their commission to their connected Stripe account. It moves real money and can't be undone from here. Only reps marked <span className="text-emerald-400 font-medium">Ready</span> are paid; blocked reps are skipped.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" className="border-border" onClick={() => setConfirmOpen(false)} disabled={pay.isPending}>Cancel</Button>
+            <Button className="bg-primary hover:bg-primary/90 text-white" disabled={pay.isPending || payableCount === 0}
+              onClick={() => pay.mutate()} data-testid="pay-confirm">
+              {pay.isPending
+                ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Paying…</>
+                : <><Send className="w-3.5 h-3.5 mr-1" /> Confirm &amp; pay {usd(payableCents)}</>}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
