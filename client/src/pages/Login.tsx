@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, ArrowRight, Loader2, Mail } from "lucide-react";
@@ -75,14 +75,15 @@ export default function Login() {
     }
   }
 
-  async function handleCodeSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (code.length < 6) return;
+  // Verify a specific code — called by the form submit AND by auto-submit the
+  // moment the 6th digit lands (a passcode UX should never need a second tap).
+  async function verify(codeToUse: string) {
+    if (codeToUse.length < 6 || loading) return;
     setLoading(true);
     try {
       const res = await apiFetch("/api/auth/otp/verify", {
         email: email.trim().toLowerCase(),
-        code: code.trim(),
+        code: codeToUse.trim(),
       });
       const data = await res.json();
       if (res.status === 429) throw new Error(data.error);
@@ -90,10 +91,12 @@ export default function Login() {
       login(data.sessionId, data.user);
     } catch (err: any) {
       toast({ title: err.message || "Invalid code", variant: "destructive" });
+      setCode(""); // wrong code → clear the boxes so they can retype cleanly
     } finally {
       setLoading(false);
     }
   }
+  function handleCodeSubmit(e: React.FormEvent) { e.preventDefault(); verify(code); }
 
   const inputClasses =
     "w-full rounded-lg border border-input bg-background text-foreground " +
@@ -174,24 +177,11 @@ export default function Login() {
               </div>
 
               <div className="space-y-2">
-                <label htmlFor="login-code" className="block text-sm font-medium text-foreground">
+                <label className="block text-sm font-medium text-foreground">
                   Verification code
                 </label>
-                <input
-                  id="login-code"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="one-time-code"
-                  maxLength={6}
-                  value={code}
-                  onChange={e => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                  placeholder="000000"
-                  data-testid="input-code"
-                  autoFocus
-                  required
-                  className={`py-3 text-center text-2xl font-semibold tracking-[0.4em] tabular-nums ${inputClasses}`}
-                />
-                <div className="flex items-center justify-between pt-0.5">
+                <CodeBoxes value={code} onChange={setCode} onComplete={verify} disabled={loading} />
+                <div className="flex items-center justify-between pt-1">
                   <p className="text-xs text-muted-foreground">Expires in 10 minutes.</p>
                   <button
                     type="button"
@@ -232,6 +222,65 @@ export default function Login() {
           © {new Date().getFullYear()} Home Front Solutions
         </p>
       </div>
+    </div>
+  );
+}
+
+// ── Segmented 6-digit passcode input (Slack / 1Password pattern) ──────────────
+// Six boxes with auto-advance, backspace-to-previous, arrow nav, full-code paste,
+// and auto-submit on the last digit. Numeric keyboard + one-time-code autofill.
+function CodeBoxes({ value, onChange, onComplete, disabled }: {
+  value: string; onChange: (v: string) => void; onComplete: (v: string) => void; disabled?: boolean;
+}) {
+  const refs = useRef<Array<HTMLInputElement | null>>([]);
+  const chars = Array.from({ length: 6 }, (_, i) => value[i] ?? "");
+  const focusBox = (i: number) => refs.current[Math.max(0, Math.min(5, i))]?.focus();
+
+  useEffect(() => { focusBox(0); }, []); // land focus on the first box
+
+  function setAt(i: number, digit: string) {
+    const arr = Array.from({ length: 6 }, (_, k) => value[k] ?? "");
+    arr[i] = digit;
+    const next = arr.join("").replace(/\s/g, "");
+    onChange(next);
+    if (digit && i < 5) focusBox(i + 1);
+    if (next.replace(/\D/g, "").length === 6) onComplete(next.slice(0, 6));
+  }
+  function onKey(i: number, e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Backspace") {
+      if (!chars[i] && i > 0) { e.preventDefault(); focusBox(i - 1); setAt(i - 1, ""); }
+      else setAt(i, "");
+    } else if (e.key === "ArrowLeft" && i > 0) focusBox(i - 1);
+    else if (e.key === "ArrowRight" && i < 5) focusBox(i + 1);
+  }
+  function onPaste(e: React.ClipboardEvent) {
+    e.preventDefault();
+    const d = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, 6);
+    if (!d) return;
+    onChange(d);
+    focusBox(Math.min(d.length, 5));
+    if (d.length === 6) onComplete(d);
+  }
+  return (
+    <div className="flex gap-2 justify-between" onPaste={onPaste}>
+      {chars.map((c, i) => (
+        <input
+          key={i}
+          ref={el => { refs.current[i] = el; }}
+          type="text"
+          inputMode="numeric"
+          autoComplete={i === 0 ? "one-time-code" : "off"}
+          maxLength={1}
+          value={c}
+          disabled={disabled}
+          onChange={e => setAt(i, e.target.value.replace(/\D/g, "").slice(-1))}
+          onKeyDown={e => onKey(i, e)}
+          onFocus={e => e.currentTarget.select()}
+          aria-label={`Digit ${i + 1} of 6`}
+          data-testid={`code-box-${i}`}
+          className="h-14 w-full min-w-0 rounded-xl border border-input bg-background text-center text-2xl font-semibold tabular-nums text-foreground transition-colors focus-visible:outline-none focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+        />
+      ))}
     </div>
   );
 }

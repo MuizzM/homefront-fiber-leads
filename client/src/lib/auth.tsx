@@ -29,19 +29,29 @@ const Ctx = createContext<AuthCtx>({
   login: () => {}, logout: async () => {},
 });
 
-// Session persistence: window.name survives page reload on same tab,
-// works in sandboxed iframes where localStorage/sessionStorage are blocked.
+// Session persistence: localStorage is the PRIMARY store — it survives a hard
+// refresh AND a home-screen PWA relaunch (window.name alone does NOT: iOS gives a
+// standalone web app a fresh browsing context on relaunch, wiping window.name, so
+// the user got logged out on every refresh). window.name stays as a fallback for
+// sandboxed-iframe contexts where storage is blocked.
+const SID_KEY = "hfs.sid";
 function readPersistedSession(): string | null {
+  try {
+    const ls = window.localStorage?.getItem(SID_KEY);
+    if (typeof ls === "string" && ls) return ls;
+  } catch { /* storage blocked — fall through */ }
   try {
     const data = JSON.parse(window.name || "{}");
     return typeof data.sid === "string" && data.sid ? data.sid : null;
-  } catch { return null; }
+  } catch { /* ignore */ }
+  return null;
 }
 function writePersistedSession(sid: string | null) {
   try {
-    const data = sid ? { sid } : {};
-    window.name = JSON.stringify(data);
-  } catch {}
+    if (sid) window.localStorage?.setItem(SID_KEY, sid);
+    else window.localStorage?.removeItem(SID_KEY);
+  } catch { /* storage blocked */ }
+  try { window.name = JSON.stringify(sid ? { sid } : {}); } catch { /* ignore */ }
 }
 
 let _memSession: string | null = readPersistedSession();
