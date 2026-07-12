@@ -3,7 +3,9 @@
 // cron alerts all go through here so provider config lives in ONE place.
 //
 // Works with any SMTP provider. For RESEND (the production default):
-//   SMTP_HOST=smtp.resend.com  SMTP_PORT=465  SMTP_USER=resend  SMTP_PASS=<Resend API key>
+//   SMTP_HOST=smtp.resend.com  SMTP_PORT=587  SMTP_USER=resend  SMTP_PASS=<Resend API key>
+//   Use 587 (STARTTLS), NOT 465 — many cloud hosts (incl. Hetzner) block outbound
+//   465, which makes every send hang until timeout. 587 is the safe default.
 //   MAIL_FROM="HomeFront Fiber <noreply@homefrontsolutionsllc.com>"   (a Resend-verified sender)
 // For Gmail/other, SMTP_USER is the address, so MAIL_FROM is optional.
 
@@ -38,7 +40,7 @@ export function smtpSecure(): boolean {
 export function mailTransport(): nodemailer.Transporter {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT ?? 465),
+    port: Number(process.env.SMTP_PORT ?? 587),
     secure: smtpSecure(),
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     connectionTimeout: 8000,
