@@ -33,6 +33,12 @@ COPY --from=build /app/dist ./dist
 COPY deploy ./deploy
 RUN chmod +x deploy/start.sh && mkdir -p /data
 
+# Run as the base image's non-root `node` user (uid 1000). start.sh needs no root
+# (mkdir + exec only), and the /data volume is owned by 1000 — so a container
+# breakout via an app RCE lands as an unprivileged user, not root.
+RUN chown -R node:node /app /data
+USER node
+
 ENV NODE_ENV=production
 ENV DATA_DIR=/data
 EXPOSE 5000
