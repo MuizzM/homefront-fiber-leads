@@ -225,11 +225,10 @@ app.use(rateLimit({
   // 429s the whole app. Only meter API traffic in dev — prod ships a bundle,
   // so the global limit still guards every request there.
   skip: (req) => process.env.NODE_ENV !== "production" && !req.path.startsWith("/api"),
-  // Use forwarded IP for proxied deployments
-  keyGenerator: (req) => {
-    const forwarded = req.headers["x-forwarded-for"] as string | undefined;
-    return forwarded ? forwarded.split(",")[0].trim() : (req.socket.remoteAddress ?? "unknown");
-  },
+  // Key on req.ip — with `trust proxy` set, Express resolves the real client from
+  // the RIGHTMOST trusted hop. The old leftmost X-Forwarded-For parse was
+  // client-spoofable (prepend a fake IP → dodge the limit), so never use raw XFF.
+  keyGenerator: (req) => req.ip ?? req.socket.remoteAddress ?? "unknown",
 }));
 
 // ── Strict auth rate limit: 10 attempts / 15 min per IP ──────────────────────

@@ -234,6 +234,10 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE, password_hash TEXT, role TEXT NOT NULL DEFAULT 'rep', team_member_id INTEGER, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')), expires_at TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS otp_codes (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, code TEXT NOT NULL, expires_at TEXT NOT NULL, used INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    // Per-code brute-force guard: count wrong guesses and burn the code after ~5, so
+    // a 6-digit code can't be ground down within its window even across restarts /
+    // instances (defense in depth beyond the in-memory per-email rate limiter).
+    `ALTER TABLE otp_codes ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0`,
     `CREATE TABLE IF NOT EXISTS territories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, rep_id INTEGER NOT NULL, polygon TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#3b82f6', created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS territory_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, rep_id INTEGER NOT NULL, user_id INTEGER NOT NULL, message TEXT, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS rep_applications (id INTEGER PRIMARY KEY AUTOINCREMENT, full_name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL, city TEXT NOT NULL, zip TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'NC', has_sales_experience INTEGER NOT NULL DEFAULT 0, sales_experience_details TEXT, preferred_carriers TEXT NOT NULL, referral_source TEXT, headshot_path TEXT, license_path TEXT, status TEXT NOT NULL DEFAULT 'pending', reviewed_by INTEGER, review_notes TEXT, user_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
@@ -1354,10 +1358,20 @@ export class Storage implements IStorage {
   }
   verifyOtp(email: string, code: string): boolean {
     const now = new Date().toISOString();
+    const em = email.toLowerCase();
     const otp = db.select().from(otpCodes)
-      .where(and(eq(otpCodes.email, email.toLowerCase()), eq(otpCodes.code, code),
+      .where(and(eq(otpCodes.email, em), eq(otpCodes.code, code),
         eq(otpCodes.used, false), gt(otpCodes.expiresAt, now))).get();
-    if (!otp) return false;
+    if (!otp) {
+      // Wrong/expired guess: count it against the email's live codes and burn them
+      // once too many misses accumulate, so the code can't be brute-forced within
+      // its window (survives restarts / multi-instance, unlike the in-memory limiter).
+      try {
+        rawDb.prepare(`UPDATE otp_codes SET failed_attempts = failed_attempts + 1 WHERE email = ? AND used = 0 AND expires_at > ?`).run(em, now);
+        rawDb.prepare(`UPDATE otp_codes SET used = 1 WHERE email = ? AND used = 0 AND failed_attempts >= 5`).run(em);
+      } catch { /* pre-migration */ }
+      return false;
+    }
     db.update(otpCodes).set({ used: true }).where(eq(otpCodes.id, otp.id)).run();
     return true;
   }

@@ -5,6 +5,10 @@
 #   DEPLOY_SSH_KEY → the PRIVATE half of the github-actions-deploy key
 name: Deploy portal
 
+# Least privilege: this job only SSHes out with its own secrets and never touches
+# the GitHub API, so the auto-provisioned GITHUB_TOKEN needs no scopes at all.
+permissions: {}
+
 on:
   push:
     branches: [rep-knocking-workflow]

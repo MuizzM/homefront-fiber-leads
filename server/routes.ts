@@ -1805,7 +1805,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         return res.status(403).json({ error: `Your role cannot set a member to ${String(req.body.role).replace("_", " ")}` });
       }
     }
-    const updated = storage.updateTeamMember(id, req.body, tid);
+    // Allowlist fields — tenantId is NEVER client-settable (mass-assignment of it
+    // would move a member/login into another tenant = cross-tenant takeover). Match
+    // the /api/leads and /api/users PATCH pattern.
+    const ALLOWED_TEAM_FIELDS = new Set(["name", "phone", "email", "role", "reportsToId", "active"]);
+    const safeUpdate: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(req.body ?? {})) {
+      if (ALLOWED_TEAM_FIELDS.has(k)) safeUpdate[k] = v;
+    }
+    if (Object.keys(safeUpdate).length === 0) {
+      return res.status(400).json({ error: "No valid fields to update" });
+    }
+    const updated = storage.updateTeamMember(id, safeUpdate, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
     syncLoginAccount(updated as any);
     res.json(updated);
@@ -1995,7 +2006,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const _ktid = user?.tenantId;
     const _klead = storage.getLeadById(Number(req.params.id));
     if (!_klead || (_ktid && _klead.tenantId !== _ktid)) return res.status(404).json({ error: "Not found" });
-    if (user?.role === "rep" && !repCanAccessLead(user, _klead)) return res.status(404).json({ error: "Not found" });
+    if (!repCanAccessLead(user, _klead)) return res.status(404).json({ error: "Not found" });
     // History rows carry who made the change — the card renders "Sold · 3:12 PM
     // · M. Muhammad" without a second round-trip per row.
     const rows = storage.getKnocksByLead(Number(req.params.id)).map(k => ({
@@ -2020,7 +2031,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const _ntid = user?.tenantId;
     // Tenant wall for EVERY role — this is a WRITE; a cross-tenant note edit must 404.
     if (!lead || (_ntid && lead.tenantId !== _ntid)) return res.status(404).json({ error: "Not found" });
-    if (user?.role === "rep" && !repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
+    if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     if (notes === (lead.notes ?? "")) return res.json({ id: lead.id, notes, updatedAt: lead.updatedAt }); // no-op: no write, no event
     if (baseUpdatedAt && lead.updatedAt && lead.updatedAt > baseUpdatedAt && (lead.notes ?? "") !== "") {
       return res.status(409).json({ error: "conflict", serverNotes: lead.notes ?? "", updatedAt: lead.updatedAt });
@@ -2043,7 +2054,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const _htid = user?.tenantId;
     // Tenant wall for EVERY role (history leaks rep GPS + outcomes cross-tenant).
     if (!lead || (_htid && lead.tenantId !== _htid)) return res.status(404).json({ error: "Not found" });
-    if (user?.role === "rep" && !repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
+    if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     // One indexed team scan → O(1) name lookups per row (not a query per knock).
     const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
     const statusRows = storage.getKnocksByLead(lead.id).map(k => ({
@@ -2105,7 +2116,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         return res.status(404).json({ error: "Not found" });
       }
       // Reps can only log knocks on leads assigned to them
-      if (_knu?.role === "rep" && !repCanAccessLead(_knu, _knl)) return res.status(404).json({ error: "Not found" });
+      if (!repCanAccessLead(_knu, _knl)) return res.status(404).json({ error: "Not found" });
     }
     // Idempotency: the offline queue retries with the same clientId after a lost
     // response. If we've already logged this knock, return the existing row and
@@ -2123,6 +2134,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // id so a rep can never log a knock (or its commission) for another person.
     // Managers/leads/admins may still credit any rep (bulk logging, ride-alongs).
     const forcedRepId = _knu?.role === "rep" ? _knu.teamMemberId : req.body?.repId;
+    // A non-rep may credit ANOTHER rep (ride-alongs / bulk logging) but only within
+    // their tenant AND visibility scope — a team_lead can't credit another team's
+    // rep, and nobody can credit a rep in another tenant (would forge that rep's
+    // activity + commission).
+    if (_knu?.role !== "rep" && forcedRepId != null &&
+        !(repInCallerTenant(_knu, Number(forcedRepId)) && repInVisibilityScope(_knu, Number(forcedRepId)))) {
+      return res.status(403).json({ error: "You can't log a knock for that rep" });
+    }
     const parsed = insertKnockSchema.safeParse({
       ...req.body,
       leadId: Number(req.params.id),
@@ -2425,7 +2444,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const cleanEmail = email.trim().toLowerCase();
     // IP + email rate limiting
-    const ip = (req.headers["x-forwarded-for"] as string ?? req.socket.remoteAddress ?? "unknown").split(",")[0].trim();
+    const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
     const ipCheck = checkRateLimit(otpRequestLimiter, `ip:${ip}`, OTP_REQUEST_MAX);
     const emailCheck = checkRateLimit(otpRequestLimiter, `email:${cleanEmail}`, OTP_REQUEST_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
@@ -2441,7 +2460,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // flip this back to the constant response.
     const user = storage.getUserByEmail(cleanEmail);
     if (!user || !user.active) {
-      return res.status(404).json({ error: "This email isn't registered. Contact your manager to get access." });
+      // Neutral response — do NOT reveal whether an email is registered/active
+      // (account enumeration). A real user gets a code; anyone else gets the same
+      // "sent" with no email actually dispatched.
+      return res.json({ sent: true });
     }
     const code = storage.createOtp(cleanEmail);
     try {
@@ -2460,7 +2482,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!code || typeof code !== "string" || !/^\d{6}$/.test(code.trim())) return res.status(400).json({ error: "Code must be 6 digits" });
     const cleanEmail = email.trim().toLowerCase();
     // Rate limit verify attempts per email
-    const ip = (req.headers["x-forwarded-for"] as string ?? req.socket.remoteAddress ?? "unknown").split(",")[0].trim();
+    const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
     const ipCheck = checkRateLimit(otpVerifyLimiter, `ip:${ip}`, OTP_VERIFY_MAX);
     const emailCheck = checkRateLimit(otpVerifyLimiter, `email:${cleanEmail}`, OTP_VERIFY_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
@@ -2981,6 +3003,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "A reason (min 3 characters) is required for every override" });
     }
     const user = (req as any).user;
+    // Tenant wall: an admin of tenant A must not override (or read back) tenant B's
+    // knock by guessing an id — the id space is enumerable and the row leaks rep GPS.
+    const _ovKnock = storage.getKnockById(Number(req.params.id));
+    const _ovLead = _ovKnock ? storage.getLeadById(_ovKnock.leadId) : null;
+    if (!_ovLead || (user?.tenantId && _ovLead.tenantId !== user.tenantId)) {
+      return res.status(404).json({ error: "Activity not found" });
+    }
     const updated = storage.overrideKnockVerification(Number(req.params.id), status, reason.trim(), user?.id ?? null, user?.name ?? null);
     if (!updated) return res.status(404).json({ error: "Activity not found" });
     storage.logActivity(user?.id ?? null, "verification.override", "knock", Number(req.params.id), { newStatus: status, reason: reason.trim() }, req.ip);
@@ -2988,6 +3017,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   // Immutable override history for one activity (manager+).
   app.get("/api/knocks/:id/overrides", requireManager, (req, res) => {
+    const user = (req as any).user;
+    const _ohKnock = storage.getKnockById(Number(req.params.id));
+    const _ohLead = _ohKnock ? storage.getLeadById(_ohKnock.leadId) : null;
+    if (!_ohLead || (user?.tenantId && _ohLead.tenantId !== user.tenantId)) {
+      return res.status(404).json({ error: "Not found" });
+    }
     res.json(storage.getActivityOverrides(Number(req.params.id)));
   });
 
