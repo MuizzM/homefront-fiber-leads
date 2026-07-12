@@ -17,3 +17,6 @@ data.db-journal
 
 # Uploaded rep photos/licenses (PII) — never commit
 uploads/
+
+# Local live-verification harnesses (reference proxy creds via shell env — never commit)
+verify-*.ts

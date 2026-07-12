@@ -13,6 +13,8 @@
  * We add a buffer on all sides to catch edge addresses.
  */
 
+import { adaptiveGridStep } from "./bboxScan";
+
 interface AddressResult {
   address: string;
   city: string;
@@ -311,21 +313,32 @@ export async function harvestBboxAddresses(
   state: string,
   mapboxToken: string,
   onProgress?: (done: number, total: number, found: number) => void,
-  step = 0.0012, // ~130m
+  step?: number, // omit → adaptive (dense for a tight box, capped for a big one)
 ): Promise<AddressResult[]> {
+  const HARVEST_CAP = Number(process.env.MAPBOX_HARVEST_CAP ?? 5000);
+
+  // Adaptive spacing: a tight box drawn over one new street used to sample only
+  // 1–2 points at the old fixed 0.0012° step, and the geocoder's nearest hits
+  // landed just outside the box and were filtered out → zero results. Sample the
+  // short side densely; the cap keeps a big box from exploding the call count.
+  const gridStep = step ?? adaptiveGridStep(bbox, { minSamplesPerSide: 6, maxPoints: HARVEST_CAP });
+
   const gridPoints: [number, number][] = [];
-  for (let lat = bbox.south; lat <= bbox.north; lat += step)
-    for (let lng = bbox.west; lng <= bbox.east; lng += step)
+  for (let lat = bbox.south; lat <= bbox.north; lat += gridStep)
+    for (let lng = bbox.west; lng <= bbox.east; lng += gridStep)
       gridPoints.push([+lng.toFixed(5), +lat.toFixed(5)]);
 
-  const HARVEST_CAP = Number(process.env.MAPBOX_HARVEST_CAP ?? 5000);
   if (gridPoints.length > HARVEST_CAP) {
     throw new Error(
       `That box needs ${gridPoints.length.toLocaleString()} Mapbox reverse-geocode calls ` +
       `(cap: ${HARVEST_CAP.toLocaleString()}). Draw a smaller box.`
     );
   }
-  console.log(`[deep-harvest] box grid: ${gridPoints.length} reverse-geocode requests`);
+  // A reverse-geocode returns the nearest house to a grid point, which can sit
+  // just outside a tight box; keep addresses within one grid-step buffer so
+  // edge houses (the whole point of a small subdivision box) aren't dropped.
+  const pad = gridStep;
+  console.log(`[deep-harvest] box grid: ${gridPoints.length} reverse-geocode requests (step ${gridStep.toFixed(5)}°, pad ${pad.toFixed(5)}°)`);
 
   const BATCH = 30;
   const DELAY = 40;
@@ -351,9 +364,10 @@ export async function harvestBboxAddresses(
           const key = normalizeAddress(streetAddress);
           if (!key || seen.has(key)) continue;
           const cityPart = (parts[1] ?? '').replace(/\s+North Carolina.*/i, '').replace(/\s+[A-Z]{2}$/i, '').trim();
-          // keep only addresses actually inside the drawn box
-          if (feat.center[1] < bbox.south || feat.center[1] > bbox.north ||
-              feat.center[0] < bbox.west || feat.center[0] > bbox.east) continue;
+          // keep addresses inside the drawn box + a one-step buffer, so a house
+          // the geocoder pins just past a tight box edge still counts.
+          if (feat.center[1] < bbox.south - pad || feat.center[1] > bbox.north + pad ||
+              feat.center[0] < bbox.west - pad || feat.center[0] > bbox.east + pad) continue;
           seen.set(key, {
             address: streetAddress, city: cityPart || '', state, zip,
             lat: feat.center[1], lng: feat.center[0],

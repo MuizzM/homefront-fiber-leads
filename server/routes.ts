@@ -90,7 +90,7 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi } from "./scanner";
+import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi, type ScanResult } from "./scanner";
 import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
 import { planCityDiscovery, startCityDiscovery, getDiscoveryJob, getDiscoveryJobs, MAX_DISCOVERY_BUDGET } from "./cnsDiscovery";
@@ -98,6 +98,7 @@ import * as scanSvc from "./scanService";
 import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
+import { validateScanBbox, adaptiveGridStep, pooledMap, backoffDelayMs, type BboxLL } from "./bboxScan";
 import { getCronStatus, triggerManualScan, startNightlyCron, getEngineStatus } from "./cron-scanner";
 import { getProxyStatus } from "./proxy-fetch";
 
@@ -469,6 +470,43 @@ function flushWriteQueue() {
   if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache();
 }
 
+// ── One scan result → a lead insert, or null ─────────────────────────────────
+// SAVE ONLY: NEW FIBER + billingStatus "N" (not a current subscriber) + service
+// available — the actual door-knock targets (fiber just reached the house, the
+// resident doesn't know yet). Shared by the city-scan batch loop and the drawn-
+// box qualifier so both paths persist identical lead shapes.
+function leadInsertFromResult(result: ScanResult, a: { lat?: number | null; lng?: number | null }): LeadInsert | null {
+  const isTarget = result.isNewFiber && result.billingStatus === "N" && result.fiberAvailable;
+  if (!isTarget) return null;
+  return {
+    address: result.address, city: result.city, state: result.state, zip: result.zip,
+    lat: result.lat ?? a.lat ?? null, lng: result.lng ?? a.lng ?? null,
+    fiberStatus: result.fiberStatus,
+    householdSegmentType: result.householdSegmentType,
+    billingStatus: result.billingStatus,
+    isNewFiber: result.isNewFiber,
+    isTenured: false,
+    speedTier: result.speedTier,
+    maxDownloadMbps: result.maxDownloadMbps,
+    techType: result.techType,
+    chipSetType: result.chipSetType,
+    placement: result.placement,
+    maxQual: result.maxQual,
+    competitorName: result.competitorName,
+    competitorSpeedMbps: result.competitorSpeedMbps,
+    competitorTech: result.competitorTech,
+    inCompetitorArea: result.inCompetitorArea,
+    dfAddressId: result.dfAddressId,
+    accessId: result.accessId,
+    exchangeId: result.exchangeId,
+    addressCatalogDate: result.addressCatalogDate,
+    leadStatus: "prospect",
+    leadTag: result.leadTag,
+    leadScore: result.leadScore,
+    deploymentNotes: result.notes,
+  } as LeadInsert;
+}
+
 async function scanOneBatch(
   jobId: string,
   batch: ReturnType<typeof generateAddresses>,
@@ -493,37 +531,8 @@ async function scanOneBatch(
       // ── SAVE ONLY: NEW FIBER + billingStatus N (not a current subscriber) ───
       // These are the actual door-knock targets — fiber just ran to the house,
       // resident doesn't know it exists yet.
-      const isTarget = result.isNewFiber && result.billingStatus === "N" && result.fiberAvailable;
-      if (isTarget) {
-        // Non-blocking write queue — does not block the scan loop
-        enqueueLeadWrite({
-          address: result.address, city: result.city, state: result.state, zip: result.zip,
-          lat: result.lat ?? (a as any).lat, lng: result.lng ?? (a as any).lng,
-          fiberStatus: result.fiberStatus,
-          householdSegmentType: result.householdSegmentType,
-          billingStatus: result.billingStatus,
-          isNewFiber: result.isNewFiber,
-          isTenured: false,
-          speedTier: result.speedTier,
-          maxDownloadMbps: result.maxDownloadMbps,
-          techType: result.techType,
-          chipSetType: result.chipSetType,
-          placement: result.placement,
-          maxQual: result.maxQual,
-          competitorName: result.competitorName,
-          competitorSpeedMbps: result.competitorSpeedMbps,
-          competitorTech: result.competitorTech,
-          inCompetitorArea: result.inCompetitorArea,
-          dfAddressId: result.dfAddressId,
-          accessId: result.accessId,
-          exchangeId: result.exchangeId,
-          addressCatalogDate: result.addressCatalogDate,
-          leadStatus: "prospect",
-          leadTag: result.leadTag,
-          leadScore: result.leadScore,
-          deploymentNotes: result.notes,
-        });
-      }
+      const lead = leadInsertFromResult(result, a);
+      if (lead) enqueueLeadWrite(lead); // non-blocking write queue — never blocks the scan loop
     } catch {
       job.results.push({ ...a, fiberStatus: "unknown", apiSource: "failed" });
       recordCheck(false, true);
@@ -585,6 +594,71 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
   _scanWorkerState.checksPerSec = 0;
   _scanWorkerState.concurrency = 0;
   console.log(`[scan] Job ${jobId} complete: ${job.done} checked, ${_scanWorkerState.diagNewFiber} new fiber`);
+}
+
+// ── Drawn-box qualifier: bounded concurrency + backoff ────────────────────────
+// A drawn box is a small, resolved address list (a subdivision, not a whole
+// city), so it doesn't need the 4×200 city-scan fan-out — and MUST NOT open
+// hundreds of simultaneous proxied Kinetic calls (that's how you trip a 429).
+// pooledMap caps in-flight calls; each call retries transient failures with
+// jittered backoff and yields politely when Kinetic pushes back (403).
+const AREA_SCAN_CONCURRENCY = Number(process.env.AREA_SCAN_CONCURRENCY ?? 10);
+const AREA_SCAN_MAX_RETRIES = 2;
+
+async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateAddresses>) {
+  const job = scanJobs.get(jobId);
+  if (!job) return;
+  job.total = addresses.length;
+  job.done = 0;
+  _scanWorkerState.isRunning = true;
+  _scanWorkerState.lastHeartbeat = Date.now();
+  _scanWorkerState.diagNewFiber = 0;
+  _scanWorkerState.diagHttpError = 0;
+  _scanWorkerState.diagSuccess = 0;
+  _scanWorkerState.diagFailed = 0;
+
+  await pooledMap(addresses, AREA_SCAN_CONCURRENCY, async (a: any) => {
+    if (!scanJobs.has(jobId)) return; // cancelled → stop taking work
+    let result: ScanResult | null = null;
+    for (let attempt = 0; attempt <= AREA_SCAN_MAX_RETRIES; attempt++) {
+      try {
+        result = await scanAddress(a.address, a.city, a.state, a.zip);
+      } catch {
+        result = null; // network/timeout throw — treat as transient, retry
+      }
+      // scanAddress returns blocked:true on a 403 throttle (a typed back-pressure
+      // signal, NOT a no-service). Back off and retry so the box still completes.
+      const throttled = !result || (result.apiSource === "failed" && result.blocked);
+      if (!throttled) break;
+      if (attempt < AREA_SCAN_MAX_RETRIES) {
+        await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 400, capMs: 3000 })));
+      }
+    }
+    if (!scanJobs.has(jobId)) return;
+    if (result) {
+      if (!result.lat && a.lat) result.lat = a.lat;
+      if (!result.lng && a.lng) result.lng = a.lng;
+      job.results.push(result);
+      const isNewFiberResult = result.isNewFiber && result.billingStatus === "N";
+      recordCheck(isNewFiberResult, result.apiSource === "failed");
+      const lead = leadInsertFromResult(result, a);
+      if (lead) enqueueLeadWrite(lead);
+    } else {
+      job.results.push({ ...a, fiberStatus: "unknown", apiSource: "failed" });
+      recordCheck(false, true);
+    }
+    job.done = Math.min(job.done + 1, job.total);
+  });
+
+  flushWriteQueue();
+  if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache();
+  if (scanJobs.has(jobId)) {
+    job.status = "done";
+    job.completedAt = new Date().toISOString();
+  }
+  _scanWorkerState.isRunning = false;
+  _scanWorkerState.concurrency = 0;
+  console.log(`[scan] Area job ${jobId} complete: ${job.done}/${job.total} checked, ${_scanWorkerState.diagNewFiber} new fiber`);
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -1034,13 +1108,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Cost preview for a deep (Mapbox-grid) box scan — how many billable
   // reverse-geocode calls + the $ cost, so an admin sees the price before running.
   app.post("/api/scan/area-estimate", requireAdmin, (req, res) => {
-    const { minLat, maxLat, minLng, maxLng } = req.body;
-    if (minLat == null || maxLat == null || minLng == null || maxLng == null) {
-      return res.status(400).json({ error: "bbox required" });
-    }
-    const bbox = { south: Number(minLat), north: Number(maxLat), west: Number(minLng), east: Number(maxLng) };
-    const gridPoints = bboxGridSize(bbox);
+    const v = validateScanBbox(req.body ?? {});
+    if (!v.ok) return res.status(400).json({ error: v.message, reason: v.code });
+    const bbox = v.bbox;
     const cap = Number(process.env.MAPBOX_HARVEST_CAP ?? 5000);
+    // Match the actual harvest: adaptive step (dense for a tight box), so the
+    // quoted cost/overCap gate reflects the grid we'd really run, not a fixed one.
+    const step = adaptiveGridStep(bbox, { minSamplesPerSide: 6, maxPoints: cap });
+    const gridPoints = bboxGridSize(bbox, step);
     // Mapbox: 100k free geocoding/mo, then ~$0.75 per 1,000
     const overFree = Math.max(0, gridPoints - 100_000);
     const estCostUsd = (overFree / 1000) * 0.75;
@@ -1056,39 +1131,79 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   app.post("/api/scan/area", requireAdmin, scanLimiter, async (req, res) => {
-    const { minLat, maxLat, minLng, maxLng, city = "", state = "NC", deep = false } = req.body;
-    if (minLat == null || maxLat == null || minLng == null || maxLng == null) {
-      return res.status(400).json({ error: "minLat, maxLat, minLng, maxLng required" });
-    }
-    const bbox = { south: Number(minLat), north: Number(maxLat), west: Number(minLng), east: Number(maxLng) };
-    let source = deep ? "mapbox-grid" : "overpass";
+    const { city = "", state = "NC", deep = false } = req.body ?? {};
 
+    // ── Step 1: validate + normalize the outgoing bbox ───────────────────────
+    // A malformed / lat-first / zero-area box used to slip through and enumerate
+    // nothing, which then read as "no homes here". Reject it explicitly instead.
+    const v = validateScanBbox(req.body ?? {});
+    if (!v.ok) {
+      console.warn(`[scan/area] rejected bbox (${v.code}):`, JSON.stringify(req.body ?? {}));
+      return res.status(400).json({ error: v.message, reason: v.code });
+    }
+    const bbox: BboxLL = v.bbox;
+    console.log(`[scan/area] bbox=[${bbox.west},${bbox.south},${bbox.east},${bbox.north}] ~${v.approxKm2.toFixed(3)}km² deep=${!!deep}${v.corrected ? " (order-corrected)" : ""}`);
+
+    const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
+    let source = deep ? "mapbox-grid" : "overpass";
     let addresses: any[] = [];
+
+    // ── Step 2: resolve addresses INSIDE the box (enumeration, not forward
+    //    geocoding). Primary = mapped address datasets (OSM / local GIS parcels);
+    //    fallback = a reverse-geocode grid that samples the box and dedupes by
+    //    normalized address — the only thing that finds a brand-new street. ──
     if (deep) {
-      // FULL COVERAGE: Mapbox reverse-geocode grid over the box — finds every
-      // home, not just the ones OpenStreetMap happens to have. Admin-only, capped.
-      const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
-      if (!token) return res.status(400).json({ error: "MAPBOX_TOKEN not set" });
+      // FULL COVERAGE grid — admin-only, capped, adaptive density (dense for a
+      // tight subdivision box). Finds homes OSM doesn't have yet (new builds).
+      if (!token) return res.status(400).json({ error: "Deep scan isn't configured (no Mapbox token).", reason: "no_token" });
       try {
         addresses = await harvestBboxAddresses(bbox, state, token);
       } catch (e: any) {
-        return res.status(400).json({ error: e.message });
+        return res.status(400).json({ error: e.message, reason: "grid_failed" });
       }
     } else {
-      // Free path: real addresses INSIDE the box from OpenStreetMap (0 Mapbox).
+      // Free primary: real addresses inside the box from OpenStreetMap (0 Mapbox).
       try {
         addresses = await pullAddressesFromOverpass(bbox, city || "", state);
       } catch { addresses = []; }
-      // Fallback: local GIS parcels that fall inside the box (Rockwell coverage).
+      // Free fallback: local GIS parcels that fall inside the box (Rockwell).
       if (addresses.length === 0) {
         addresses = generateAddresses("28138", "Rockwell").filter((a: any) =>
           a.lat >= bbox.south && a.lat <= bbox.north && a.lng >= bbox.west && a.lng <= bbox.east);
       }
+      // Auto grid fallback: the free sources have nothing (classic new-construction
+      // gap). If — and only if — the box is small enough that the grid is a handful
+      // of FREE-tier reverse-geocode calls, run it automatically so the operator
+      // isn't stuck. Big boxes are NOT auto-escalated (cost guardrail): they get a
+      // clear "run Deep scan" message instead of silent Mapbox spend.
+      if (addresses.length === 0 && token) {
+        const step = adaptiveGridStep(bbox, { minSamplesPerSide: 6, maxPoints: 5000 });
+        const AUTO_GRID_MAX_POINTS = Number(process.env.AREA_AUTO_GRID_POINTS ?? 900);
+        const gridPoints = bboxGridSize(bbox, step);
+        if (gridPoints <= AUTO_GRID_MAX_POINTS) {
+          console.log(`[scan/area] free sources empty — auto grid fallback (${gridPoints} pts, within free tier)`);
+          try {
+            addresses = await harvestBboxAddresses(bbox, state, token);
+            if (addresses.length > 0) source = "mapbox-grid-auto";
+          } catch (e: any) {
+            console.warn(`[scan/area] auto grid fallback failed: ${e.message}`);
+          }
+        }
+      }
     }
+
+    // ── Step 3: distinguish the two empty states ─────────────────────────────
+    // "0 addresses" is a DATA GAP (map hasn't caught up to a new street) — never
+    // claim there are no homes. Separate from "addresses found but none qualified
+    // by Kinetic", which is a completed scan that finishes with 0 leads (below).
     if (addresses.length === 0) {
-      return res.status(400).json({ error: deep
-        ? "No addresses found in that box even with deep scan. Try a spot with homes."
-        : "No addresses found in that area. Try Deep scan (full coverage) or a bigger box." });
+      return res.status(400).json({
+        reason: "no_addresses",
+        deep: !!deep,
+        error: deep
+          ? "No addresses are mapped inside this box yet — the street may be too new for the address data. The pre-imported pins here still work; try a slightly larger box."
+          : "No mapped addresses here yet — this often means new construction. Run Deep scan to sweep the box for brand-new streets.",
+      });
     }
 
     // Persist to the pool (geocoded once → re-scannable for free later)
@@ -1103,15 +1218,41 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
     const newAddrs = addresses.filter((a: any) => !existingSet.has(normalizeAddrForDedup(a.address || "")));
 
+    // Homes ARE here, but every one is already in leads — a real, non-error state.
+    // Return it explicitly (no empty scan job) so the UI can say so honestly.
+    if (newAddrs.length === 0) {
+      return res.json({
+        jobId: null,
+        total: 0,
+        harvested: addresses.length,
+        alreadyKnown: addresses.length,
+        source,
+        reason: "all_known",
+        bbox: { minLat: bbox.south, maxLat: bbox.north, minLng: bbox.west, maxLng: bbox.east },
+      });
+    }
+
     const jobId = `scan_${Date.now()}`;
     scanJobs.set(jobId, {
+      // Stamp the job's org so the poll (GET) and Cancel (DELETE) tenant checks
+      // resolve — without it a tenant-scoped admin 404s on cancel and the
+      // qualifier keeps hitting Kinetic after "Cancel scan".
+      tenantId: (req as any).user?.tenantId ?? getDefaultTenantId(),
       id: jobId, city: city || "Drawn area", zip: "", status: "running",
       total: newAddrs.length, done: 0, results: [],
       startedAt: new Date().toISOString(),
-      bbox: { minLat: Number(minLat), maxLat: Number(maxLat), minLng: Number(minLng), maxLng: Number(maxLng) },
+      bbox: { minLat: bbox.south, maxLat: bbox.north, minLng: bbox.west, maxLng: bbox.east },
     });
-    runCityScan(jobId, newAddrs);
-    res.json({ jobId, total: newAddrs.length, harvested: addresses.length, source, bbox: { minLat, maxLat, minLng, maxLng } });
+    // Bounded-concurrency qualifier (keeps outbound Kinetic under a ceiling).
+    runAreaScan(jobId, newAddrs);
+    res.json({
+      jobId,
+      total: newAddrs.length,
+      harvested: addresses.length,   // addresses resolved inside the box
+      alreadyKnown: addresses.length - newAddrs.length, // dedup'd against existing leads
+      source,
+      bbox: { minLat: bbox.south, maxLat: bbox.north, minLng: bbox.west, maxLng: bbox.east },
+    });
   });
 
   // City scan — start. Free sources by default (pool → GIS → Overpass);
@@ -1132,6 +1273,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Start job immediately with estimated total, harvest addresses in background
       const estimatedTotal = getRockwellGridSize() * 3; // ~3 addresses per grid point
       scanJobs.set(jobId, {
+        // Stamp the job's org so the poll (GET) and Cancel (DELETE) tenant checks
+        // resolve — without it a tenant-scoped admin 404s on poll/cancel and the
+        // qualifier keeps hitting Kinetic after "Cancel scan".
+        tenantId: (req as any).user?.tenantId ?? getDefaultTenantId(),
         id: jobId, city, zip, status: "running",
         total: estimatedTotal, done: 0, results: [],
         startedAt: new Date().toISOString(),
@@ -1183,6 +1328,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         }
       }
       scanJobs.set(jobId, {
+        // Stamp the job's org so the poll (GET) and Cancel (DELETE) tenant checks
+        // resolve — without it a tenant-scoped admin 404s on poll/cancel and the
+        // qualifier keeps hitting Kinetic after "Cancel scan".
+        tenantId: (req as any).user?.tenantId ?? getDefaultTenantId(),
         id: jobId, city, zip, status: "running",
         total: addresses.length, done: 0, results: [],
         startedAt: new Date().toISOString(),
@@ -1221,6 +1370,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const mbToken = process.env.MAPBOX_TOKEN ?? "";
     const wantMapbox = req.query.source === "mapbox";
 
+    // Cache a pulled set to the address pool, keyed on the SEARCHED city/state so
+    // the follow-up scan (/api/scan/start-city) re-reads the identical set from the
+    // pool instantly — the client never has to POST the (huge) array back, which is
+    // what tripped the "request too large" (413) body limit on a whole-city pull.
+    const cacheToPool = (addrs: any[], src: string) => {
+      try {
+        storage.upsertScanTargets(addrs.map((a: any) => ({
+          address: a.address, city: city.trim(), state: st.trim(),
+          zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: src,
+        })));
+      } catch { /* pool cache is best-effort — never block the pull */ }
+    };
+
     try {
       // 1) Pool — free, instant
       const pooled = storage.getScanTargetsByCity(city.trim(), st.trim());
@@ -1240,6 +1402,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const addrs = isRockwell
           ? await harvestRockwellAddresses(mbToken)
           : (await harvestCityAddresses(city.trim(), st.trim(), mbToken)).addresses;
+        cacheToPool(addrs, "mapbox");
         return res.json({ count: addrs.length, cityName: `${city.trim()}, ${st}`, source: "mapbox", center: null, bbox: null, addresses: addrs });
       }
 
@@ -1247,6 +1410,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       let result: { addresses: any[]; cityName: string; center: any; bbox: any } | null = null;
       try { result = await getCityAddresses(city.trim(), st.trim()); } catch { result = null; }
       if (result && result.addresses.length > 0) {
+        cacheToPool(result.addresses, "overpass");
         return res.json({
           count: result.addresses.length, cityName: result.cityName, source: "overpass",
           center: result.center, bbox: result.bbox, addresses: result.addresses,
@@ -1257,6 +1421,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (isRockwell) {
         const gis = loadGisAddresses();
         if (gis.length > 0) {
+          cacheToPool(gis, "gis");
           return res.json({ count: gis.length, cityName: "Rockwell, NC", source: "gis", center: null, bbox: null, addresses: gis });
         }
       }

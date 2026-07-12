@@ -82,6 +82,18 @@ function inBBox(lat: number, lng: number, b: BBox) {
   return lat >= b.minLat && lat <= b.maxLat && lng >= b.minLng && lng <= b.maxLng;
 }
 
+// apiRequest throws `Error("400: <body>")`; <body> is usually our JSON envelope
+// `{ error, reason }`. Turn that into a friendly line + typed reason so the scan
+// panel never shows a raw "400: {…}" blob to a field rep.
+function parseScanError(raw: string): { reason?: string; message: string } {
+  const stripped = raw.replace(/^\s*\d{3}:\s*/, ""); // drop the leading status code
+  try {
+    const j = JSON.parse(stripped);
+    if (j && typeof j === "object") return { reason: j.reason, message: j.error || stripped };
+  } catch { /* not JSON — fall through */ }
+  return { message: stripped || "Something went wrong. Try again." };
+}
+
 interface ScanRow {
   address: string; city: string; state: string; zip: string;
   fiberStatus: string; isNewFiber: boolean; billingStatus: string | null;
@@ -138,9 +150,12 @@ export default function MapView() {
   // absence of a spinner. `scanOutcome` drives the control's success / empty /
   // error / cancelled / stale states and the same-scope rescan guard.
   const [scanOutcome, setScanOutcome] = useState<{
-    kind: "success" | "empty" | "error" | "cancelled";
+    kind: "success" | "empty" | "error" | "cancelled" | "known";
     found: number; at: number;                 // epoch ms when the scan ended
     boxKey: string | null;                     // scope identity for dedupe/stale
+    checked?: number;                          // addresses resolved + qualified (honest empty copy)
+    detail?: string;                           // friendly error/empty explanation
+    canDeep?: boolean;                          // recovery: offer Deep scan (new-construction gap)
   } | null>(null);
   const foundTotalRef = useRef(0);             // authoritative found-count across polls
   const boxKeyOf = (b: BBox | null) => b
@@ -1491,32 +1506,50 @@ export default function MapView() {
 
       if (status.status === "done") {
         stopPolling(); setScanning(false);
-        setScanOutcome({ kind: foundTotalRef.current > 0 ? "success" : "empty", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null) });
+        setScanOutcome({
+          kind: foundTotalRef.current > 0 ? "success" : "empty",
+          found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null),
+          checked: status.total ?? status.done, // homes WERE checked — empty ≠ "no homes"
+        });
         qc.invalidateQueries({ queryKey: ["/api/leads"] }); qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       } else if (status.status === "error") {
         // Previously unhandled: an errored job kept polling forever with the
         // control stuck on "scanning". Now it lands as an explicit error state.
         stopPolling(); setScanning(false);
-        setScanOutcome({ kind: "error", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null) });
+        setScanOutcome({ kind: "error", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null), detail: "The scan hit an error partway through. Try again." });
       }
     } catch { /* transient fetch hiccup — keep polling */ }
   }, [addScanDot, stopPolling, qc]);
 
   const startScan = useCallback(async (endpoint: string, body: object) => {
     if (!mapReady) return;
+    const wasDeep = (body as any)?.deep === true;
     scanMarkersRef.current.forEach(m => m.remove());
     scanMarkersRef.current = []; lastRenderedCount.current = 0; pollTickRef.current = 0;
     foundTotalRef.current = 0;
-    setNewFound(0); setDone(0); setError(null); setScanOutcome(null);
+    setNewFound(0); setDone(0); setTotal(0); setError(null); setScanOutcome(null);
     stopPolling(); setScanning(true);
     try {
       const res = await apiRequest("POST", endpoint, body);
-      const { jobId: id, total: t } = await res.json();
-      setJobId(id); setTotal(t);
-      pollRef.current = setInterval(() => pollJob(id, drawnBBox ?? undefined), POLL_MS);
+      const data = await res.json();
+      // Homes ARE here, but every address is already a known lead — a real,
+      // non-error state (server returns jobId:null, reason:"all_known").
+      if (data?.reason === "all_known" || !data?.jobId) {
+        setScanning(false);
+        setScanOutcome({ kind: "known", found: 0, checked: data?.harvested ?? 0, at: Date.now(), boxKey: boxKeyOf(drawnBBox) });
+        return;
+      }
+      setJobId(data.jobId); setTotal(data.total ?? 0);
+      pollRef.current = setInterval(() => pollJob(data.jobId, drawnBBox ?? undefined), POLL_MS);
     } catch (e: any) {
-      setScanning(false); setError(e.message);
-      setScanOutcome({ kind: "error", found: 0, at: Date.now(), boxKey: boxKeyOf(drawnBBox) });
+      // Never surface a raw "400: {…}" blob — parse it into a friendly line and,
+      // when the free scan found no MAPPED addresses, offer Deep scan as recovery.
+      const { reason, message } = parseScanError(e?.message ?? String(e));
+      setScanning(false); setError(null);
+      setScanOutcome({
+        kind: "error", found: 0, at: Date.now(), boxKey: boxKeyOf(drawnBBox),
+        detail: message, canDeep: reason === "no_addresses" && !wasDeep,
+      });
     }
   }, [mapReady, stopPolling, pollJob, drawnBBox]);
 
@@ -1897,8 +1930,9 @@ export default function MapView() {
       <div className="sr-only" role="status" aria-live="polite" data-testid="scan-sr">
         {scanning ? "Scanning the selected area." : scanOutcome && !scanStale ? (
           scanOutcome.kind === "success" ? `Scan complete. ${scanOutcome.found} new-fiber lead${scanOutcome.found === 1 ? "" : "s"} found.`
-          : scanOutcome.kind === "empty" ? "Scan complete. No new fiber found in this area."
-          : scanOutcome.kind === "error" ? "Scan failed."
+          : scanOutcome.kind === "empty" ? `Scan complete. No new fiber found${scanOutcome.checked ? ` across ${scanOutcome.checked} homes` : ""}.`
+          : scanOutcome.kind === "known" ? "Every home in this box is already in your leads."
+          : scanOutcome.kind === "error" ? (scanOutcome.detail || "Scan failed.")
           : scanOutcome.kind === "cancelled" ? `Scan stopped. ${scanOutcome.found} found so far.` : ""
         ) : ""}
       </div>
@@ -1914,53 +1948,118 @@ export default function MapView() {
              the expensive scan. ── */}
       {(drawMode || drawnBBox || scanning || (scanOutcome && !scanStale)) && isAdmin && (() => {
         const freshSameBox = !!scanOutcome && !scanStale && scanOutcome.boxKey === boxKeyOf(drawnBBox);
-        return (
-        <div className={`glass-surface px-3 py-2 flex flex-wrap items-center gap-2 ${
-          scanOutcome?.kind === "error" ? "border-red-500/50" : scanOutcome?.kind === "success" ? "border-emerald-500/40" : "border-orange-500/40"
-        }`} data-testid="scan-panel">
-          <span className="text-[11px] flex items-center gap-1.5 text-white/80">
-            {scanning ? <><Loader2 className="w-3 h-3 animate-spin" /> Scanning {total ? `${done}/${total}` : ""} · {newFound} new fiber</>
-              : freshSameBox && scanOutcome?.kind === "success" ? <><CheckCircle2 className="w-3 h-3 text-emerald-400" /> Found {scanOutcome.found} new-fiber lead{scanOutcome.found === 1 ? "" : "s"} in this area</>
-              : freshSameBox && scanOutcome?.kind === "empty" ? <>No new fiber in this area right now</>
-              : freshSameBox && scanOutcome?.kind === "error" ? <><AlertCircle className="w-3 h-3 text-red-400" /> Scan failed — try again</>
-              : freshSameBox && scanOutcome?.kind === "cancelled" ? <>Scan stopped · {scanOutcome.found} found so far</>
-              : scanStale ? <>Area changed — rescan for current results</>
-              : drawnBBox ? "Box drawn — pick a scan (green dots = new fiber)"
-              : "Drag a box over the homes to scan"}
-          </span>
-          {drawnBBox && !scanning && !freshSameBox && (
-            <>
-              <Button size="sm" variant="outline"
-                className="border-orange-500/40 text-orange-400 hover:bg-orange-500/10 h-11 text-[12px] px-3 rounded-xl"
-                onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
-                <Radar className="w-3 h-3 mr-1" /> Quick scan · free
-              </Button>
-              <Button size="sm"
-                disabled={!areaEstimate || areaEstimate.overCap}
-                className="bg-orange-500 hover:bg-orange-600 text-white h-11 text-[12px] px-3 rounded-xl disabled:opacity-50"
-                title={areaEstimate?.overCap ? "Box too big — draw a smaller box" : "Finds every address via Mapbox grid"}
-                onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true })}>
-                <Radar className="w-3 h-3 mr-1" />
-                {areaEstimate ? `Deep · ~${areaEstimate.estAddresses.toLocaleString()} · ${areaEstimate.withinFreeTier ? "free" : "$" + areaEstimate.estCostUsd}` : "Deep scan…"}
-              </Button>
-              {areaEstimate?.overCap && <span className="text-[10px] text-orange-400/60">box too big — draw smaller</span>}
-            </>
-          )}
-          {/* Fresh result for THIS box → deliberate Rescan only (no silent repeat) */}
-          {freshSameBox && drawnBBox && (
-            <Button size="sm" variant="outline" className="border-white/20 text-white/80 hover:bg-white/10 h-11 text-[12px] px-3 rounded-xl"
-              data-testid="scan-rescan"
-              onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
-              <RefreshCw className="w-3 h-3 mr-1" /> Rescan
-            </Button>
-          )}
-          {scanning && (
-            <Button size="sm" variant="ghost" className="text-red-400 h-11 text-[12px] rounded-xl" onClick={() => stopScan()}>Stop</Button>
-          )}
-          <Button size="sm" variant="ghost" className="text-white/70 hover:text-white h-11 w-11 rounded-xl ml-auto" aria-label="Close scan"
+        const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
+        const borderClass = scanning ? "border-orange-500/40"
+          : freshSameBox && scanOutcome?.kind === "success" ? "border-emerald-500/40"
+          : freshSameBox && scanOutcome?.kind === "error" ? "border-red-500/50"
+          : freshSameBox && scanOutcome?.kind === "known" ? "border-sky-500/40"
+          : "border-white/12";
+        const closeBtn = (
+          <button type="button" aria-label="Close scan"
+            className="shrink-0 w-8 h-8 -mr-1 -mt-0.5 grid place-items-center rounded-lg text-white/55 hover:text-white hover:bg-white/10 transition-colors"
             onClick={() => { setDrawMode(false); setDrawnBBox(null); setScanOutcome(null); if (scanning) stopScan(); }}>
-            <X className="w-3.5 h-3.5" />
-          </Button>
+            <X className="w-4 h-4" />
+          </button>
+        );
+        return (
+        <div className={`glass-surface px-3.5 py-3 flex flex-col gap-2.5 ${borderClass}`} data-testid="scan-panel">
+          {/* ── Status row (icon + primary line) ─────────────────────────── */}
+          <div className="flex items-start gap-2">
+            <span className="flex-1 min-w-0 text-[12.5px] leading-snug flex items-start gap-1.5 text-white/85">
+              {scanning ? (
+                <><Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400 mt-px shrink-0" />
+                  <span>Scanning… <span className="tabular-nums font-semibold text-white">{done}{total ? ` of ${total}` : ""}</span> address{total === 1 ? "" : "es"}{newFound > 0 && <> · <span className="text-emerald-400 font-semibold">{newFound} new fiber</span></>}</span></>
+              ) : freshSameBox && scanOutcome?.kind === "success" ? (
+                <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-px shrink-0" />
+                  <span><span className="font-semibold text-white">{scanOutcome.found}</span> new-fiber lead{scanOutcome.found === 1 ? "" : "s"} found{scanOutcome.checked ? <span className="text-white/45"> · {scanOutcome.checked} checked</span> : null}</span></>
+              ) : freshSameBox && scanOutcome?.kind === "empty" ? (
+                <><Radar className="w-3.5 h-3.5 text-white/40 mt-px shrink-0" />
+                  <span>No new fiber yet{scanOutcome.checked ? <> — checked <span className="tabular-nums">{scanOutcome.checked}</span> home{scanOutcome.checked === 1 ? "" : "s"}</> : ""}. Every home here still reads as existing service — worth another pass later.</span></>
+              ) : freshSameBox && scanOutcome?.kind === "known" ? (
+                <><CheckCircle2 className="w-3.5 h-3.5 text-sky-400 mt-px shrink-0" />
+                  <span>All {scanOutcome.checked ? <span className="tabular-nums">{scanOutcome.checked}</span> : ""} home{scanOutcome.checked === 1 ? "" : "s"} here are already in your leads.</span></>
+              ) : freshSameBox && scanOutcome?.kind === "error" ? (
+                <><AlertCircle className="w-3.5 h-3.5 text-red-400 mt-px shrink-0" />
+                  <span>{scanOutcome.detail || "Scan failed — try again."}</span></>
+              ) : freshSameBox && scanOutcome?.kind === "cancelled" ? (
+                <span>Scan stopped · <span className="tabular-nums">{scanOutcome.found}</span> found so far</span>
+              ) : scanStale ? (
+                <><RefreshCw className="w-3.5 h-3.5 text-white/40 mt-px shrink-0" /><span>Area changed — rescan for current results.</span></>
+              ) : drawnBBox ? (
+                <><Radar className="w-3.5 h-3.5 text-orange-400 mt-px shrink-0" /><span>Box drawn — choose a scan below.</span></>
+              ) : (
+                <span>Drag a box over the homes, then scan for new fiber.</span>
+              )}
+            </span>
+            {closeBtn}
+          </div>
+
+          {/* ── Progress bar (scanning) ──────────────────────────────────── */}
+          {scanning && (
+            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden"
+              role="progressbar" aria-label="Scan progress" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+              <div className={`h-full bg-orange-500 rounded-full transition-[width] duration-300 ${total ? "" : "animate-pulse"}`}
+                style={{ width: total ? `${Math.max(4, pct)}%` : "35%" }} />
+            </div>
+          )}
+
+          {/* ── Legend — what the dots mean (green = knock this) ──────────── */}
+          {(scanning || (freshSameBox && scanOutcome?.kind === "success" && scanOutcome.found > 0)) && (
+            <div className="flex items-center gap-1.5 text-[10.5px] text-white/55">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_5px_rgba(34,197,94,0.9)] shrink-0" aria-hidden="true" />
+              Green dot = new-fiber lead — knock these first
+            </div>
+          )}
+
+          {/* ── Action row ───────────────────────────────────────────────── */}
+          {(( drawnBBox && !scanning && !freshSameBox ) || (freshSameBox && drawnBBox) || scanning) && (
+          <div className="flex flex-wrap items-center gap-2">
+            {drawnBBox && !scanning && !freshSameBox && (
+              <>
+                <Button size="sm" variant="outline"
+                  className="border-orange-500/40 text-orange-300 hover:bg-orange-500/10 h-11 text-[12px] px-3 rounded-xl"
+                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
+                  <Radar className="w-3.5 h-3.5 mr-1.5" /> Quick scan · free
+                </Button>
+                <Button size="sm"
+                  disabled={!areaEstimate || areaEstimate.overCap}
+                  className="bg-orange-500 hover:bg-orange-600 text-white h-11 text-[12px] px-3 rounded-xl disabled:opacity-50"
+                  title={areaEstimate?.overCap ? "Box too big — draw a smaller box" : "Full coverage — sweeps the box for brand-new streets"}
+                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true })}>
+                  <Radar className="w-3.5 h-3.5 mr-1.5" />
+                  {areaEstimate ? `Deep · ~${areaEstimate.estAddresses.toLocaleString()} · ${areaEstimate.withinFreeTier ? "free" : "$" + areaEstimate.estCostUsd}` : "Deep scan…"}
+                </Button>
+                {areaEstimate?.overCap && <span className="text-[10px] text-orange-400/70">box too big — draw smaller</span>}
+              </>
+            )}
+            {/* Error recovery: new-construction gap → Deep scan; otherwise Retry */}
+            {freshSameBox && drawnBBox && scanOutcome?.kind === "error" && (
+              scanOutcome.canDeep ? (
+                <Button size="sm" className="bg-orange-500 hover:bg-orange-600 text-white h-11 text-[12px] px-3 rounded-xl"
+                  data-testid="scan-deep-recover"
+                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true })}>
+                  <Radar className="w-3.5 h-3.5 mr-1.5" /> Deep scan
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" className="border-white/20 text-white/80 hover:bg-white/10 h-11 text-[12px] px-3 rounded-xl"
+                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Try again
+                </Button>
+              )
+            )}
+            {/* Fresh non-error result for THIS box → deliberate Rescan only */}
+            {freshSameBox && drawnBBox && scanOutcome?.kind !== "error" && (
+              <Button size="sm" variant="outline" className="border-white/20 text-white/80 hover:bg-white/10 h-11 text-[12px] px-3 rounded-xl"
+                data-testid="scan-rescan"
+                onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
+                <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rescan
+              </Button>
+            )}
+            {scanning && (
+              <Button size="sm" variant="ghost" className="text-red-300 hover:text-red-200 hover:bg-red-500/10 h-11 text-[12px] px-3 rounded-xl ml-auto" onClick={() => stopScan()}>Cancel scan</Button>
+            )}
+          </div>
+          )}
         </div>
         );
       })()}

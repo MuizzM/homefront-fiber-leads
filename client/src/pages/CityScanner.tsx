@@ -283,9 +283,12 @@ export default function CityScanner() {
     setJobId(null);
 
     try {
-      // Use pre-pulled addresses if available, otherwise let backend pull
+      // Send ONLY the city — never the full address array. A whole city is
+      // thousands of addresses (>>64 KB), which the API body limit rejects as
+      // "request too large" (413). The Pull step already cached them to the
+      // address pool, so the server re-reads the identical set instantly and
+      // streams it to Kinetic. (OSM in → pool → Kinetic, exactly as intended.)
       const body: any = { city: cityInput.trim(), state: stateInput.trim() };
-      if (overpassResult?.addresses) body.addresses = overpassResult.addresses;
 
       const { jobId: newJobId, total, city: cityLabel } = await (await apiRequest("POST", "/api/scan/start-city", body)).json();
       setJobId(newJobId);
@@ -300,7 +303,7 @@ export default function CityScanner() {
       setScanning(false);
       toast({ title: "Failed to start scan", description: e.message, variant: "destructive" });
     }
-  }, [stopAll, connectSseStream, toast, cityInput, stateInput, overpassResult]);
+  }, [stopAll, connectSseStream, toast, cityInput, stateInput]);
 
   const stopScan = useCallback(async () => {
     stopAll();
