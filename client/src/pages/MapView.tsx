@@ -25,7 +25,7 @@ import { captureFieldFix } from "@/lib/geoFix";
 import { OUTCOME_TO_STATUS, pinDisplayState, STATE_COLORS, STATE_LABELS, nearestUnworkedLead, type KnockOutcome, type RoutablePin } from "@shared/knock";
 import { saveLeadNote, flushPendingNotes, type NotePoster, type NoteSaveResult } from "@/lib/leadNotes";
 import {
-  UNCLUSTERED_PAINT, UNCLUSTERED_GLOW_PAINT, SELECTED_RING_SPEC,
+  UNCLUSTERED_PAINT, SELECTED_RING_SPEC,
   SELECTED_RING_FILTER, sheetPeekPaddingPx, moveCamera,
   STREET_ZOOM, pickRepStartCamera, readCachedFix, writeCachedFix,
   ensureHousenumLayer,
@@ -779,19 +779,9 @@ export default function MapView() {
 
       // Worked-vs-unworked is color-only: knocked doors render in their status
       // hue (terminal states pre-dimmed) with a thicker white stroke — no glyph
-      // badges on pins, per the field design language.
-
-      // Glow ring for unclustered pins — inserted BENEATH the pin layer so the
-      // 0.18-alpha halo never washes over the pin (matches the style-reload
-      // block's order).
-      map.addLayer({
-        id: "lead-unclustered-glow",
-        type: "circle",
-        source: "leads-cluster",
-        filter: ["!", ["has", "point_count"]],
-        minzoom: 12,
-        paint: UNCLUSTERED_GLOW_PAINT,
-      }, "lead-unclustered");
+      // badges on pins, per the field design language. (The per-pin glow layer
+      // was removed — a 2nd fill draw under every pin; the zoom-scaled radius +
+      // white stroke give enough pop at half the unclustered draw cost.)
 
       // Selected-pin ring — driven by setFilter (style-thread only, no setData).
       // Added last so it can never be occluded by pins/glow.
@@ -1235,11 +1225,7 @@ export default function MapView() {
           paint: { "text-color": "#ffffff" },
         });
         // Unclustered individual pins — same shared paint consts as init, so the
-        // two blocks can never drift again.
-        map.addLayer({ id: "lead-unclustered-glow", type: "circle", source: "leads-cluster",
-          filter: ["!", ["has", "point_count"]], minzoom: 12,
-          paint: UNCLUSTERED_GLOW_PAINT,
-        });
+        // two blocks can never drift again. (Glow layer removed — see init block.)
         map.addLayer({ id: "lead-unclustered", type: "circle", source: "leads-cluster",
           filter: ["!", ["has", "point_count"]], minzoom: 12,
           paint: UNCLUSTERED_PAINT,

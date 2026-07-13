@@ -24,18 +24,21 @@ export const PIN_DS_OPACITY: any = [
 
 export const UNCLUSTERED_PAINT: any = {
   "circle-color": PIN_DS_COLOR,
-  "circle-radius": 8,
+  // Zoom-scaled radius: small when zoomed out (less overdraw, and no blobby merge
+  // in the pin-overlap band) → a real thumb target up close where a rep works
+  // individual doors. Replaces the old flat r=8.
+  "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 4.5, 15, 6.5, 17, 8, 20, 11],
+  // Visited doors keep the bolder ring. NB: a "zoom" expression may only appear at
+  // the TOP LEVEL of a paint property (not nested in a case), so the stroke width
+  // stays zoom-independent — only the radius is zoom-scaled.
   "circle-stroke-width": ["case", ["==", ["get", "visited"], 1], 3, 2],
   "circle-stroke-color": "rgba(255,255,255,0.95)",
   "circle-opacity": PIN_DS_OPACITY,
 };
 
-export const UNCLUSTERED_GLOW_PAINT: any = {
-  "circle-color": PIN_DS_COLOR,
-  "circle-radius": 14,
-  "circle-opacity": 0.18,
-  "circle-stroke-width": 0,
-};
+// (The per-pin glow layer was removed — it was a 2nd fill draw under EVERY pin,
+// doubling the unclustered draw cost at 5.5k+ leads for a barely-visible halo.
+// The zoom-scaled radius + white stroke give enough pop at a fraction of the cost.)
 
 // ── Selected-pin ring ─────────────────────────────────────────────────────────
 // A dedicated layer driven by setFilter — NOT feature-state: on a cluster:true
