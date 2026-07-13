@@ -127,17 +127,20 @@ interface FieldIconMap {
 
 // Build + register every status bitmap. Each addImage is guarded independently:
 // a failure just skips that image so the icon-image match falls back to the
-// neutral disc. A total canvas failure registers nothing (layer shows no icon).
-function registerStatusIcons(map: FieldIconMap): void {
+// neutral disc. RETURNS how many status images are actually available on the map
+// afterward — the caller uses this to decide whether it's safe to hide the circle
+// pins (0 → keep circles so leads are NEVER blank).
+function registerStatusIcons(map: FieldIconMap): number {
   let sprites: ReturnType<typeof spriteImages>;
   try {
     const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0
       ? window.devicePixelRatio : 1;
     sprites = spriteImages(dpr);
-  } catch { return; }
+  } catch { return 0; }
+  let available = 0;
   for (const sprite of Object.values(sprites)) {
     try {
-      if (map.hasImage(sprite.key)) continue;
+      if (map.hasImage(sprite.key)) { available++; continue; }
       // Mapbox addImage does NOT accept an HTMLCanvasElement — it takes ImageData /
       // ImageBitmap / {width,height,data}. Pull the pixels as ImageData (which it
       // DOES accept). Without this EVERY addImage throws, 0 icons register, and
@@ -147,35 +150,59 @@ function registerStatusIcons(map: FieldIconMap): void {
       if (!ctx) continue;
       const data = ctx.getImageData(0, 0, sprite.canvas.width, sprite.canvas.height);
       map.addImage(sprite.key, data, { pixelRatio: sprite.pixelRatio });
+      if (map.hasImage(sprite.key)) available++;
     } catch { /* skip → match falls back to hf-icon-neutral */ }
   }
+  return available;
 }
 
 // Add the `lead-status-icons` symbol layer (idempotent) and hide the circle
 // layer. Called from BOTH layer-setup blocks; a no-op unless the flag is on, so
 // flag-off keeps today's behavior exactly. Added as the TOP operational layer.
 function addStatusIconLayer(map: FieldIconMap): void {
-  if (!newFieldMap()) return;
-  if (!map.getLayer(STATUS_ICON_LAYER)) {
-    registerStatusIcons(map);
-    map.addLayer({
-      id: STATUS_ICON_LAYER,
-      type: "symbol",
-      source: "leads-cluster",
-      filter: ["!", ["has", "point_count"]],
-      minzoom: 12,
-      layout: {
-        "icon-image": iconImageMatchExpression(),
-        // Top-level interpolate on zoom — the ONLY place a zoom expression may
-        // appear here (the icon-image match must never nest zoom).
-        "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 17, 0.9, 20, 1.2],
-        "icon-allow-overlap": true,
-        "icon-ignore-placement": true,
-      },
-    });
+  // Flag OFF → make sure the circle pins are the ones showing (revert any prior
+  // hide), then bail. This is also the instant kill-switch path.
+  if (!newFieldMap()) {
+    try { map.setLayoutProperty("lead-unclustered", "visibility", "visible"); } catch { /* not ready */ }
+    return;
   }
-  // Icons replace the circle pins while the flag is on.
-  try { map.setLayoutProperty("lead-unclustered", "visibility", "none"); } catch {}
+  if (!map.getLayer(STATUS_ICON_LAYER)) {
+    // FAIL-SAFE: register the glyph bitmaps FIRST and only build the icon layer +
+    // hide the circles if the icons are actually available. If registration
+    // returns 0 (canvas blocked, addImage rejected, etc.), we do NOT hide the
+    // circle pins — so a rep ALWAYS sees their leads, as circles, never a blank
+    // map. This is why enabling glyphs for everyone is safe.
+    const available = registerStatusIcons(map);
+    if (available <= 0) {
+      try { map.setLayoutProperty("lead-unclustered", "visibility", "visible"); } catch { /* not ready */ }
+      return;
+    }
+    try {
+      map.addLayer({
+        id: STATUS_ICON_LAYER,
+        type: "symbol",
+        source: "leads-cluster",
+        filter: ["!", ["has", "point_count"]],
+        minzoom: 12,
+        layout: {
+          "icon-image": iconImageMatchExpression(),
+          // Top-level interpolate on zoom — the ONLY place a zoom expression may
+          // appear here (the icon-image match must never nest zoom).
+          "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 17, 0.9, 20, 1.2],
+          "icon-allow-overlap": true,
+          "icon-ignore-placement": true,
+        },
+      });
+    } catch {
+      // Icon layer failed to add → keep the circle pins visible (never blank).
+      try { map.setLayoutProperty("lead-unclustered", "visibility", "visible"); } catch { /* not ready */ }
+      return;
+    }
+  }
+  // Icons are present → they replace the circle pins while the flag is on.
+  if (map.getLayer(STATUS_ICON_LAYER)) {
+    try { map.setLayoutProperty("lead-unclustered", "visibility", "none"); } catch { /* not ready */ }
+  }
 }
 
 

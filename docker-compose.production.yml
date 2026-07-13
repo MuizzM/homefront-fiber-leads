@@ -46,6 +46,11 @@ services:
       # incidents). Deep-seed is idempotent per town, so the TOTAL Mapbox spend is
       # fixed (sum of all town grid sizes); the cap only paces how fast it front-loads.
       NIGHTLY_DEEP_SEED_MAX_MAPBOX: "30000"
+      # Status-marker glyph pins (arrow ▲/▼, $, star…) for EVERYONE, not just admins.
+      # Safe because the client fail-safe keeps the circle pins visible if the glyph
+      # bitmaps ever fail to register on a device — leads are never blank. Set to
+      # "off" as an instant kill-switch (reverts all users to circle pins) if needed.
+      STATUS_MARKER_GLYPHS: "all"
       # FREE OSM sweep window per night (Overpass is $0). Widened 25min → 45min so more
       # towns' full address sets land per night at no Mapbox cost.
       NIGHTLY_OSM_SWEEP_MAX_MS: "2700000"
