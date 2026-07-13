@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   OUTCOMES,
+  FIELD_OUTCOMES,
   OUTCOME_TO_STATUS,
   OUTCOME_META,
   isKnockOutcome,
@@ -24,7 +25,8 @@ import {
  * ────────────────────────────────────────────────────────────────────────────
  * CONTRACT (shared/knock.ts — pure, framework-free door-knocking domain).
  * These tests pin the invariants BOTH server/routes.ts and the client rely on:
- *   - OUTCOMES is total: exactly 7 defs, unique keys, every leadStatus is one
+ *   - OUTCOMES remains total for backward compatibility; FIELD_OUTCOMES is the
+ *     smaller set offered for new work.
  *     of the 6 canonical statuses (no 7th status may ever be invented here).
  *   - wasHome is derived (false only for not_home) — never client-supplied.
  *   - pinDisplayState projects {leadStatus, visited, lastOutcome} onto the 7
@@ -48,6 +50,12 @@ describe("OUTCOMES — totality", () => {
   it("defines exactly 8 outcomes with unique keys (7 rep statuses + needs_verification)", () => {
     expect(OUTCOMES).toHaveLength(8);
     expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(8);
+  });
+
+  it("does not offer Callback or Needs Verification for new field entries", () => {
+    expect(FIELD_OUTCOMES.map((outcome) => outcome.key)).toEqual([
+      "not_home", "interested", "sold", "not_interested", "follow_up", "prospect",
+    ]);
   });
 
   it("maps every outcome to one of the 6 canonical lead statuses", () => {

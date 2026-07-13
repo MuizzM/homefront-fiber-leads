@@ -30,7 +30,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
-import { OUTCOMES, makeClientId } from "@shared/knock";
+import { FIELD_OUTCOMES, makeClientId } from "@shared/knock";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
@@ -87,7 +87,7 @@ const OUTCOME_COLORS: Record<string, string> = {
 
 // The manager's quick-log uses the SAME one-tap outcome model as the rep's
 // OutcomeSheet (needs_verification excluded — it's a system verdict, not a tap).
-const KNOCK_GRID = OUTCOMES.filter(o => o.key !== "needs_verification");
+const KNOCK_GRID = FIELD_OUTCOMES;
 
 // ── Lead Form ─────────────────────────────────────────────────────────────────
 function LeadForm({ initial, onSave, onCancel, saving }: {
@@ -191,9 +191,6 @@ function KnockLogger({ lead, team }: {
   // manager opens the dialog and logs in ONE tap. (Was: empty picker + wasHome
   // toggle + outcome + submit = 4 interactions.)
   const [repId, setRepId] = useState(lead.assignedRepId ? String(lead.assignedRepId) : "");
-  const [cbOpen, setCbOpen] = useState(false);
-  const [callbackDate, setCallbackDate] = useState("");
-  const [callbackTime, setCallbackTime] = useState("");
   const [notes, setNotes] = useState("");
   // One idempotency key per dialog-open: a double-tap or retry after a lost
   // response replays as the SAME knock server-side, never a duplicate.
@@ -219,7 +216,7 @@ function KnockLogger({ lead, team }: {
       qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
       qc.invalidateQueries({ queryKey: ["/api/followups"] });
       // Reset for the next log; fresh idempotency key for a genuinely new knock.
-      setNotes(""); setCallbackDate(""); setCallbackTime(""); setCbOpen(false);
+      setNotes("");
       setClientId(makeClientId());
     },
     // On error every field is preserved (only onSuccess clears) — the manager
@@ -231,13 +228,10 @@ function KnockLogger({ lead, team }: {
   // flow, so no separate Home/Not-home toggle is needed.
   const fire = (o: (typeof KNOCK_GRID)[number]) => {
     if (!repId) { toast({ title: "Pick who gets credit first", variant: "destructive" }); return; }
-    if (o.key === "callback" && !cbOpen) { setCbOpen(true); return; } // reveal the schedule first
     knockMutation.mutate({
       clientId,
       repId: Number(repId),
       outcome: o.key,
-      callbackDate: o.key === "callback" && callbackDate ? callbackDate : undefined,
-      callbackTime: o.key === "callback" && callbackTime ? callbackTime : undefined,
       notes: notes || undefined,
     });
   };
@@ -267,15 +261,12 @@ function KnockLogger({ lead, team }: {
           </Select>
         </div>
 
-        {/* One-tap outcomes — the SAME 7-outcome model + colors as the rep's
-            OutcomeSheet, so logging reads identically everywhere. Tapping logs
-            immediately (callback first reveals its schedule). */}
+        {/* One-tap outcomes use the same shared model as the rep sheet. */}
         <div>
           <Label className="text-xs text-muted-foreground">Outcome — tap to log</Label>
           <div className="grid grid-cols-2 gap-2 mt-1">
             {KNOCK_GRID.map(o => {
               const win = o.key === "sold";
-              const armed = o.key === "callback" && cbOpen;
               return (
                 <button
                   key={o.key} onClick={() => fire(o)} disabled={knockMutation.isPending}
@@ -283,7 +274,7 @@ function KnockLogger({ lead, team }: {
                   className="h-11 rounded-lg font-semibold text-[13px] flex items-center justify-center gap-2 active:scale-95 transition-transform border-2 disabled:opacity-60"
                   style={win
                     ? { background: o.color, color: "#04120d", borderColor: o.color }
-                    : { background: `${o.color}${armed ? "33" : "1f"}`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}${armed ? "dd" : "99"}` }}
+                    : { background: `${o.color}1f`, color: "hsl(var(--card-foreground))", borderColor: `${o.color}99` }}
                 >
                   {!win && <span className="w-2 h-2 rounded-full shrink-0" style={{ background: o.color }} />}
                   {o.label}
@@ -292,18 +283,6 @@ function KnockLogger({ lead, team }: {
             })}
           </div>
         </div>
-
-        {cbOpen && (
-          <div className="rounded-lg border border-cyan-500/30 bg-cyan-500/[0.06] p-3" data-testid="knock-callback-schedule">
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-cyan-400 mb-2">Schedule the callback, then tap Callback again</div>
-            <div className="grid grid-cols-2 gap-3">
-              <Input type="date" aria-label="Callback date" value={callbackDate} onChange={e => setCallbackDate(e.target.value)}
-                className="bg-secondary border-input text-sm" data-testid="knock-callback-date" />
-              <Input type="time" aria-label="Callback time" value={callbackTime} onChange={e => setCallbackTime(e.target.value)}
-                className="bg-secondary border-input text-sm" data-testid="knock-callback-time" />
-            </div>
-          </div>
-        )}
 
         <div>
           <Label className="text-xs text-muted-foreground">Notes</Label>

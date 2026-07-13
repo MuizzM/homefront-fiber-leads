@@ -26,7 +26,7 @@ import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
 import { VerificationBadge, formatDistance, type VStatus } from "@/components/verification";
 import {
-  OUTCOMES, OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
+  FIELD_OUTCOMES, OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
   type KnockOutcome, type PinDisplayState,
 } from "@shared/knock";
 import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
@@ -77,10 +77,9 @@ const MUTED = "#8A94A6";
 // Slightly brighter than MUTED for note/preview body copy.
 const BODY_TEXT = "#B9C2D0";
 
-// The rep card offers exactly the 7 spec statuses, in FIXED spec order (OUTCOMES
-// order minus needs_verification, which is server/history back-compat only).
+// Field actions are fixed and shared across every disposition surface.
 // Order is stable per spec — pills never reshuffle under the finger.
-const GRID_OUTCOMES = OUTCOMES.filter(o => o.key !== "needs_verification");
+const GRID_OUTCOMES = FIELD_OUTCOMES;
 
 // The active pill mirrors the lead's CURRENT display state.
 const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {

@@ -45,6 +45,13 @@ export const OUTCOMES: OutcomeDef[] = [
   { key: "needs_verification", label: "Needs Verification", color: "#64748b", leadStatus: "contacted",      worked: true,  icon: "HelpCircle" },
 ];
 
+// Actions offered for new field dispositions. Callback remains in OUTCOMES so
+// historical records and old offline queues can still be read/synced, but it is
+// intentionally unavailable for new entries on every current UI surface.
+export const FIELD_OUTCOMES: OutcomeDef[] = OUTCOMES.filter(
+  (outcome) => outcome.key !== "callback" && outcome.key !== "needs_verification",
+);
+
 export const OUTCOME_TO_STATUS: Record<KnockOutcome, LeadStatus> =
   Object.fromEntries(OUTCOMES.map(o => [o.key, o.leadStatus])) as Record<KnockOutcome, LeadStatus>;
 

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LeadKnockSheet } from "@/components/LeadKnockSheet";
-import { OUTCOMES } from "@shared/knock";
+import { FIELD_OUTCOMES } from "@shared/knock";
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -11,15 +11,15 @@ import { OUTCOMES } from "@shared/knock";
  * Props: { lead, onKnock, onSaveNote, onClose, onPeekHeight? }
  * The card is PHASE-FREE: status-dot header (address hero + copy + ✕ close) →
  * status line (label · relative time) → compact action pills (Directions /
- * Call / Copy) → a FLEX-WRAP grid of the 7 status pills in FIXED order (no
+ * Call / Copy) → a FLEX-WRAP grid of current status pills in FIXED order (no
  * horizontal scroll, no reshuffle) → recent-activity line → collapsible Notes
  * composer → History timeline.
  * Requirements exercised here (testids are the API):
  *   - [knock-sheet] with the address; one [knock-outcome-{key}] per rep status
- *     (7 pills, needs_verification excluded), each ≥44px tall
- *   - the 7 pills render in FIXED OUTCOMES order and NEVER reshuffle — the
+ *     (Callback and needs_verification excluded), each ≥44px tall
+ *   - pills render in FIXED FIELD_OUTCOMES order and NEVER reshuffle — the
  *     active pill is filled/aria-pressed in place, not promoted to the front
- *   - tapping ANY pill — callback and prospect included — calls onKnock(key)
+ *   - tapping any current pill calls onKnock(key)
  *     immediately: one tap, no confirm, no sub-screen; the row never unmounts
  *   - the pill matching the lead's current display state is aria-pressed
  *   - a [knock-status-line] shows the current STATE_LABELS status + relative
@@ -59,7 +59,7 @@ beforeAll(() => {
   }
 });
 
-const GRID_KEYS = OUTCOMES.filter(o => o.key !== "needs_verification").map(o => o.key);
+const GRID_KEYS = FIELD_OUTCOMES.map(o => o.key);
 
 // Unified timeline: status changes, assignments ("assigned by"), note events.
 const HISTORY = [
@@ -118,16 +118,17 @@ describe("<LeadKnockSheet /> — status row", () => {
     [...screen.getByTestId("knock-status-row").querySelectorAll("[data-testid^='knock-outcome-']")]
       .map(b => (b as HTMLElement).dataset.testid!.replace("knock-outcome-", ""));
 
-  it("renders the address and exactly the 7 one-tap pills in FIXED order", () => {
+  it("renders the address and current one-tap pills in FIXED order", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
     // Fixed OUTCOMES order (minus needs_verification) — pills NEVER reshuffle.
     expect(pillOrder()).toEqual([
-      "not_home", "interested", "sold", "not_interested", "follow_up", "callback", "prospect",
+      "not_home", "interested", "sold", "not_interested", "follow_up", "prospect",
     ]);
     expect(pillOrder()).toEqual(GRID_KEYS);
     expect(pillOrder()).toHaveLength(GRID_KEYS.length);
     expect(screen.queryByTestId("knock-outcome-needs_verification")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("knock-outcome-callback")).not.toBeInTheDocument();
   });
 
   it("a sold door: the Sold pill is filled/pressed IN PLACE (order never changes)", () => {
@@ -149,8 +150,8 @@ describe("<LeadKnockSheet /> — status row", () => {
     }
   });
 
-  it("tapping any pill — callback and prospect included — fires onKnock immediately, no sub-screen", async () => {
-    for (const key of ["callback", "prospect", "sold"] as const) {
+  it("tapping current pills fires onKnock immediately with no sub-screen", async () => {
+    for (const key of ["follow_up", "prospect", "sold"] as const) {
       const { props, unmount } = renderSheet();
       await userEvent.click(screen.getByTestId(`knock-outcome-${key}`));
       expect(props.onKnock).toHaveBeenCalledTimes(1);
@@ -184,7 +185,7 @@ describe("<LeadKnockSheet /> — status row", () => {
     expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Prospect");
   });
 
-  it("a callback door: the Callback pill is aria-pressed in its FIXED slot (no reshuffle)", () => {
+  it("keeps legacy callback history readable without offering a new Callback action", () => {
     renderSheet({
       lead: baseLead({
         leadStatus: "follow_up", visited: true, lastOutcome: "callback",
@@ -192,7 +193,7 @@ describe("<LeadKnockSheet /> — status row", () => {
       }),
     });
     expect(pillOrder()).toEqual(GRID_KEYS); // order is invariant of the active status
-    expect(screen.getByTestId("knock-outcome-callback")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("knock-outcome-callback")).not.toBeInTheDocument();
     expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Callback");
   });
 });
