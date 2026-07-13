@@ -446,6 +446,10 @@ export default function MapView() {
   const didInitZoomRef = useRef(false);      // the one-time zoom-to-street on the first fix has happened
   const geoAutoStartedRef = useRef(false);   // auto-trigger fired once for this rep session
   const recentIdsRef = useRef<number[]>([]);   // ring buffer (10) — just-knocked doors exempt from the "unvisited" lens
+  // One-shot "confirm pop" for the selected pin's ring, set on knock and consumed
+  // by the selected-ring rAF below — the map twin of the card pill's tap-flash so
+  // both surfaces confirm a disposition the same way. { at, color } or null.
+  const ringFlashRef = useRef<{ at: number; color: string } | null>(null);
 
   // Territory requests (admin/manager)
   const { data: territoryRequests = [] } = useQuery<{
@@ -2160,6 +2164,14 @@ export default function MapView() {
         : p) };
     });
     recentIdsRef.current = [...recentIdsRef.current.slice(-9), lead.id];
+    // Fire the pin's confirm-flash in the SAME color the card pill flashes (both
+    // derive from the shared palette), so tapping an outcome pops the map marker
+    // and the card in lockstep. Visual only — the card's onKnock path already did
+    // the haptic. The selected-ring rAF reads this ref on its next frame.
+    try {
+      const ds = pinDisplayState({ leadStatus: OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus, visited: true, lastOutcome: outcome });
+      ringFlashRef.current = { at: performance.now(), color: STATE_COLORS[ds] };
+    } catch { /* palette lookup is best-effort — no flash, pin still recolors */ }
     // Capture WHERE the rep is standing at the tap so the server can verify the
     // work. Non-blocking: the pin already recolored above; we attach the fix and
     // enqueue when it resolves (a recent cached fix returns almost instantly, a
@@ -2245,8 +2257,12 @@ export default function MapView() {
   // they stand; the blue dot is always on and moves with the device.
 
   // Selected-pin pulse: a slow breathing halo on the ring layer so the active
-  // door is findable at a glance. Pure style-thread paint updates (no setData,
-  // no React state per frame); disabled under prefers-reduced-motion.
+  // door is findable at a glance — PLUS a one-shot "confirm pop" on knock that
+  // mirrors the card pill's tap-flash (ring bursts outward in the new status
+  // color, then eases back to breathing). ONE rAF is the sole writer of the ring
+  // paint so the two never fight. Pure style-thread paint updates (no setData,
+  // no React state per frame); disabled under prefers-reduced-motion — same as
+  // the card, whose flash is also a no-op there.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || selectedLeadId == null) return;
@@ -2255,20 +2271,37 @@ export default function MapView() {
     if (reduce) return;
     let raf = 0;
     const start = performance.now();
+    const FLASH_MS = 380;                    // confirm-pop window (card flash is ~150ms; the ring reads best a touch longer)
+    const DEFAULT_STROKE = "#ffffff";
+    let strokeIsStatus = false;              // avoid redundant per-frame stroke-color writes
+    const setStroke = (c: string) => { map.setPaintProperty("lead-selected-ring", "circle-stroke-color", c); };
     const tick = (now: number) => {
-      const phase = (Math.sin((now - start) / 450) + 1) / 2; // 0..1, ~2.8s cycle
+      const flash = ringFlashRef.current;
+      const fe = flash ? (now - flash.at) / FLASH_MS : 1; // 0..1 through the pop
       try {
-        map.setPaintProperty("lead-selected-ring", "circle-radius", 14 + phase * 6);
-        map.setPaintProperty("lead-selected-ring", "circle-stroke-opacity", 0.95 - phase * 0.45);
+        if (flash && fe < 1) {
+          const pop = Math.sin(fe * Math.PI);            // 0→1→0 ease
+          map.setPaintProperty("lead-selected-ring", "circle-radius", 14 + pop * 12);
+          map.setPaintProperty("lead-selected-ring", "circle-stroke-opacity", 1);
+          if (!strokeIsStatus) { setStroke(flash.color); strokeIsStatus = true; }
+        } else {
+          if (flash) ringFlashRef.current = null;        // pop finished
+          if (strokeIsStatus) { setStroke(DEFAULT_STROKE); strokeIsStatus = false; }
+          const phase = (Math.sin((now - start) / 450) + 1) / 2; // 0..1, ~2.8s cycle
+          map.setPaintProperty("lead-selected-ring", "circle-radius", 14 + phase * 6);
+          map.setPaintProperty("lead-selected-ring", "circle-stroke-opacity", 0.95 - phase * 0.45);
+        }
       } catch { /* layer mid-reload */ }
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
     return () => {
       cancelAnimationFrame(raf);
+      ringFlashRef.current = null;           // don't carry a pending pop onto the next selected pin
       try {
         map.setPaintProperty("lead-selected-ring", "circle-radius", 14);
         map.setPaintProperty("lead-selected-ring", "circle-stroke-opacity", 0.95);
+        map.setPaintProperty("lead-selected-ring", "circle-stroke-color", DEFAULT_STROKE);
       } catch { /* map torn down */ }
     };
   }, [selectedLeadId, mapReady, styleEpoch]);
