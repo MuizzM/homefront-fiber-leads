@@ -26,7 +26,7 @@ export interface OutcomeDef {
 // status vocabulary is unchanged) but renders as its own cyan display state.
 // needs_verification maps to "contacted" — server/history back-compat only.
 export const OUTCOMES: OutcomeDef[] = [
-  { key: "not_home",           label: "Not Home",           color: "#3b82f6", leadStatus: "prospect",       worked: false },
+  { key: "not_home",           label: "Not Home",           color: "#ec4899", leadStatus: "prospect",       worked: false },
   { key: "interested",         label: "Interested",         color: "#8b5cf6", leadStatus: "interested",     worked: true  },
   { key: "sold",               label: "Sold",               color: "#10b981", leadStatus: "sold",           worked: true  },
   { key: "not_interested",     label: "Not Interested",     color: "#ef4444", leadStatus: "not_interested", worked: true  },
@@ -62,12 +62,14 @@ export type PinDisplayState =
   | "follow_up" | "callback" | "sold" | "not_interested";
 
 // Spec color system — every status visually distinct at 8px in sunlight:
-// Prospect orange (explicitly NOT green/purple), Not Home blue, Callback cyan,
+// Prospect orange (explicitly NOT green/purple), Not Home PINK, Callback cyan,
 // Follow-up yellow (shifted off amber so it can't read as prospect orange),
-// legacy contacted drops to slate now that blue belongs to Not Home.
+// contacted slate. Not Home moved OFF blue → blue is reserved for the "you are
+// here" location dot (Apple/Google convention) so a rep never confuses their own
+// position with a not-home door.
 export const STATE_COLORS: Record<PinDisplayState, string> = {
   unworked:       "#f97316",
-  not_home:       "#3b82f6",
+  not_home:       "#ec4899",
   contacted:      "#64748b",
   interested:     "#8b5cf6",
   follow_up:      "#eab308",

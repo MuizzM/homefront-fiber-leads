@@ -543,6 +543,10 @@ export default function MapView() {
     });
     map.addControl(geolocate, "top-right");
     geolocateRef.current = geolocate;
+    // True only while the control is actively locked onto the rep (between
+    // trackuserlocationstart / trackuserlocationend) — drives the smooth
+    // follow-camera below so it never fights a rep who has panned away.
+    let cameraFollowing = false;
     // Persist the fix (throttled) so the NEXT launch opens on last-known
     // location instantly, before live GPS warms up. A ~1/s tick in follow mode
     // must cause zero React renders — refs and storage only, never state.
@@ -552,6 +556,22 @@ export default function MapView() {
         // First live fix has centered the camera (trigger + trackUserLocation) —
         // the startup fallback effect must never yank the view after this.
         gpsCenteredRef.current = true;
+        // ── Smooth follow (Apple/Google-Maps feel) ──────────────────────────────
+        // The GeolocateControl recenters with a short, snappy easeTo on every fix,
+        // which reads as a "jump" when a rep is driving. While locked on, supersede
+        // it with a continuous LINEAR ease (~1s, matched to the ~1 Hz GPS cadence)
+        // so the camera flows between fixes instead of hopping. Zoom is left
+        // untouched (respect the rep's pinch level). The {geolocateSource:true} tag
+        // is ESSENTIAL: it tells the control this move is its own, so it stays in
+        // ACTIVE_LOCK instead of treating our easeTo as a user pan and dropping to
+        // BACKGROUND — which would silently break following. This runs AFTER the
+        // control's own _updateCamera (which fires 'geolocate'), so ours supersedes.
+        if (cameraFollowing) {
+          map.easeTo(
+            { center: [e.coords.longitude, e.coords.latitude], duration: 1000, easing: (t: number) => t, essential: true },
+            { geolocateSource: true },
+          );
+        }
       } catch {}
     });
     // Surface failures instead of dying silently — a rep who taps "locate me" and
@@ -572,6 +592,10 @@ export default function MapView() {
     el.classList.add("map-camera-idle");
     map.on("movestart", () => el.classList.remove("map-camera-idle"));
     map.on("moveend", () => el.classList.add("map-camera-idle"));
+    // Track follow-lock so the geolocate handler above knows when to run the smooth
+    // follow-camera: start = entered ACTIVE_LOCK, end = rep panned away (BACKGROUND).
+    geolocate.on("trackuserlocationstart", () => { cameraFollowing = true; });
+    geolocate.on("trackuserlocationend", () => { cameraFollowing = false; });
 
     const setupMapLayers = () => {
       // Draw bbox layers
@@ -2616,17 +2640,27 @@ export default function MapView() {
           {mapReady && (
             <button
               onClick={() => {
-                // Primary path: the GeolocateControl (blue dot + live tracking).
+                // Primary path: the GeolocateControl enters ACTIVE_LOCK (blue dot +
+                // live follow); each fix then drives the smooth follow-camera in the
+                // geolocate handler, so the map tracks the rep like Apple/Google Maps.
                 try { geolocateRef.current?.trigger(); } catch {}
-                // Fallback for iOS standalone, where the control's state machine
-                // can stall: grab a direct fix in the SAME user gesture (keeps the
-                // permission prompt valid) and recenter so the rep is never stuck.
+                // Fallback for iOS standalone, where the control's state machine can
+                // stall (the dot never appears): grab a direct fix in the SAME user
+                // gesture — that keeps the permission prompt valid — but DEFER the
+                // recenter and only do it if the control failed to engage.
+                // CRITICAL: a live dot means the control is in ACTIVE_LOCK; an
+                // untagged moveCamera here would fire a user-style movestart that
+                // knocks the control straight to BACKGROUND and kills follow (the
+                // "it doesn't track, it just jumps once and drifts off" bug). So we
+                // recenter ourselves ONLY when there is no dot (control stalled).
                 captureFieldFix(8000).then(fix => {
-                  const m = mapRef.current;
-                  if (m && fix.repLat != null && fix.repLng != null) {
-                    writeCachedFix(fix.repLat, fix.repLng, Date.now());
-                    moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 500, essential: true });
-                  }
+                  if (fix.repLat == null || fix.repLng == null) return;
+                  writeCachedFix(fix.repLat, fix.repLng, Date.now());
+                  setTimeout(() => {
+                    const m = mapRef.current;
+                    if (!m || document.querySelector(".mapboxgl-user-location-dot")) return;
+                    moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 900, essential: true });
+                  }, 1200);
                 }).catch(() => {});
               }}
               aria-label="Center on my location"

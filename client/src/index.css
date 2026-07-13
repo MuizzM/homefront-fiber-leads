@@ -345,15 +345,32 @@
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 
-/* Live-location dot glide: GPS fixes arrive ~1/s and would snap the dot from
-   point to point. While the CAMERA is at rest (MapView toggles .map-camera-idle
-   on movestart/moveend) a linear transform transition interpolates the dot,
-   its accuracy halo, and the heading cone between fixes — Google-Maps-style
-   gliding, compositor-only. During pan/zoom Mapbox repositions markers every
-   frame, so the transition is dropped to keep the dot glued to the ground. */
+/* ── "You are here" dot — Apple/Google/Grab-grade, unmistakably distinct from the
+   (now PINK) not-home pins. Vivid blue core + bold white ring + soft glow so a rep
+   never confuses their own position with a door. ──────────────────────────────── */
+/* !important: mapbox-gl.css loads AFTER our stylesheet and sets the dot's blue +
+   size at equal specificity, so it would win without this. */
+.mapboxgl-user-location-dot {
+  width: 20px !important; height: 20px !important;
+  background-color: #2f7bff !important;
+  box-shadow: 0 0 0 3px #ffffff, 0 2px 10px 2px rgba(47, 123, 255, 0.55);
+}
+.mapboxgl-user-location-dot::before { background-color: #2f7bff !important; }   /* pulsing ring hue */
+.mapboxgl-user-location-accuracy-circle { background-color: rgba(47, 123, 255, 0.14) !important; }
+
+/* Live-location dot glide: sparse GPS fixes (~1/s) would SNAP the dot from point to
+   point. A ~0.9s linear transform transition interpolates the dot + accuracy halo +
+   heading cone between fixes — compositor-only, Google-Maps-style gliding. Gated on
+   .map-camera-idle so it runs ONLY while the camera is at REST: during ANY camera
+   motion (a manual pan/zoom, OR the smooth follow-glide) Mapbox already repositions
+   the dot every frame, and layering a 0.9s transition on top of that would make the
+   dot rubber-band ~0.9s BEHIND its true position. The DRIVING/following case is
+   smoothed at the CAMERA instead — see the geolocate handler in MapView (continuous
+   linear easeTo), which keeps the dot glued to screen-centre as the world flows. */
 .map-camera-idle .mapboxgl-user-location-dot,
-.map-camera-idle .mapboxgl-user-location-accuracy-circle {
-  transition: transform 0.45s linear, width 0.45s ease, height 0.45s ease;
+.map-camera-idle .mapboxgl-user-location-accuracy-circle,
+.map-camera-idle .mapboxgl-user-location-heading {
+  transition: transform 0.9s linear, width 0.3s ease, height 0.3s ease;
 }
 
 /* Login page — soft brand glow behind the centered card, built from theme

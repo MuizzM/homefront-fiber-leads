@@ -146,9 +146,9 @@ describe("pinDisplayState — truth table", () => {
     }
   });
 
-  it("spec color anchors: prospect orange, not-home blue, callback cyan, follow-up yellow", () => {
+  it("spec color anchors: prospect orange, not-home pink, callback cyan, follow-up yellow", () => {
     expect(STATE_COLORS.unworked).toBe("#f97316");        // orange — never green/purple
-    expect(STATE_COLORS.not_home).toBe("#3b82f6");        // blue
+    expect(STATE_COLORS.not_home).toBe("#ec4899");        // PINK — blue is reserved for the "you are here" dot
     expect(STATE_COLORS.callback).toBe("#06b6d4");        // cyan
     expect(STATE_COLORS.follow_up).toBe("#eab308");       // yellow, distinct from orange
     // Every rep-facing state color is unique — no two statuses share a hue.
