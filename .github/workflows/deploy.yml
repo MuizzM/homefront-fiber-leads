@@ -38,11 +38,26 @@ jobs:
             cd /srv/homefront
             git pull --ff-only
             export APP_IMAGE_TAG=$(git rev-parse --short HEAD)
-            docker compose -f docker-compose.production.yml up -d --build
+            # BuildKit layers accumulate quickly on this small host. When the root
+            # disk crosses 85%, remove ONLY unused build cache/images before the
+            # build. Never prune volumes: app-data contains the production DB.
+            disk_used=$(df -P / | awk 'NR==2 { gsub("%", "", $5); print $5 }')
+            if [ "$disk_used" -ge 85 ]; then
+              echo "disk ${disk_used}% full — pruning unused Docker build data"
+              docker builder prune -af
+              docker image prune -af
+            fi
+            if ! docker compose -f docker-compose.production.yml up -d --build; then
+              docker compose -f docker-compose.production.yml logs --tail 120 app
+              exit 1
+            fi
             # wait for health, else fail the job so you get a red X + email
             for i in $(seq 1 30); do
               if docker inspect --format '{{.State.Health.Status}}' homefront-app-1 | grep -q healthy; then
-                echo "deployed $APP_IMAGE_TAG — healthy"; exit 0
+                echo "deployed $APP_IMAGE_TAG — healthy"
+                docker builder prune -af --filter 'until=24h' >/dev/null 2>&1 || true
+                docker image prune -af --filter 'until=24h' >/dev/null 2>&1 || true
+                exit 0
               fi
               sleep 3
             done
