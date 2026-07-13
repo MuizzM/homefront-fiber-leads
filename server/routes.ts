@@ -454,14 +454,10 @@ const qstr = (v: unknown): string => Array.isArray(v) ? String(v[0] ?? "") : typ
 // Proxy pool: 200 connections × 2 pipeline = 400 slots.
 // Kinetic API: ~100-200ms avg response → theoretical ceiling ~2,000 checks/sec.
 // In practice with residential proxy overhead: ~300-800 checks/sec sustained.
-const SCAN_BATCH_SIZE   = 200; // Fill all 400 proxy slots per batch
-const SCAN_BATCH_DELAY_MS = 0; // No delay — continuous fire
-const SCAN_ZONE_WORKERS = 4;   // Split address list into N zones processed in parallel
-// A Kinetic 403 is a refilling rolling-window throttle, not a no-service — retry
-// throttled addresses with a WIDE jittered backoff so the window has time to
-// refill between attempts (a short retry just re-hits the depleted window and
-// prolongs the throttle). Bounded so a permanently-blocked address can't hang.
-const SCAN_THROTTLE_RETRIES = Number(process.env.SCAN_THROTTLE_RETRIES ?? 3);
+// NB: the old "fill all 400 proxy slots, continuous fire, 4 parallel zones"
+// city-scan path was REMOVED — it blew past Kinetic's refilling rolling-window and
+// self-throttled to ~90% 403s / 0 leads. The city scan now runs through the same
+// bounded, backoff-aware qualifyAddressesViaKinetic() the tiled/box scans use.
 
 // ── Write queue: batch DB inserts every 500ms instead of one-by-one ─────────
 // SQLite is fast but the upsertLeadByAddress call has overhead.
@@ -548,70 +544,9 @@ function leadInsertFromResult(result: ScanResult, a: { lat?: number | null; lng?
   } as LeadInsert;
 }
 
-async function scanOneBatch(
-  jobId: string,
-  batch: ReturnType<typeof generateAddresses>,
-  job: ScanJob
-) {
-  if (!scanJobs.has(jobId)) return;
-
-  await Promise.all(batch.map(async (a) => {
-    if (!scanJobs.has(jobId)) return;
-    try {
-      // Throttle-aware: Kinetic returns blocked:true on a 403 rolling-window
-      // throttle. Retry with jittered backoff instead of dropping the address —
-      // otherwise a big-city burst 403s a large slice ONCE and never re-checks
-      // them, so those houses (incl. new fiber) are silently never qualified.
-      let result = await scanAddress(a.address, a.city, a.state, a.zip);
-      for (let attempt = 0; attempt < SCAN_THROTTLE_RETRIES && result.apiSource === "failed" && result.blocked; attempt++) {
-        if (!scanJobs.has(jobId)) return;
-        // Wide backoff: [0,2s) → [0,8s) → [0,20s) — lets the rolling window refill.
-        await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 2000, capMs: 20000 })));
-        result = await scanAddress(a.address, a.city, a.state, a.zip);
-      }
-      // Attach GIS coords if API didn't return geocoded coordinates
-      if (!result.lat && (a as any).lat) result.lat = (a as any).lat;
-      if (!result.lng && (a as any).lng) result.lng = (a as any).lng;
-      job.results.push(result);
-
-      // ── Record live worker metrics (FiberFocus-style) ─────────────────────
-      const isNewFiberResult = result.isNewFiber && result.billingStatus === "N";
-      recordCheck(isNewFiberResult, result.apiSource === "failed");
-      _scanWorkerState.concurrency = Math.min(_scanWorkerState.concurrency + 1, SCAN_BATCH_SIZE);
-
-      // ── SAVE ONLY: NEW FIBER + billingStatus N (not a current subscriber) ───
-      // These are the actual door-knock targets — fiber just ran to the house,
-      // resident doesn't know it exists yet.
-      const lead = leadInsertFromResult(result, a);
-      // Stamp the owning org so a non-default-tenant admin's scan files leads under
-      // THEIR tenant, not the default (enqueueLeadWrite would otherwise default it).
-      if (lead) { (lead as any).tenantId = job.tenantId ?? getDefaultTenantId(); enqueueLeadWrite(lead); }
-    } catch {
-      job.results.push({ ...a, fiberStatus: "unknown", apiSource: "failed" });
-      recordCheck(false, true);
-    }
-    job.done = Math.min(job.done + 1, job.total);
-  }));
-  // Update concurrency after batch completes
-  _scanWorkerState.concurrency = 0;
-}
-
-// ── Zone worker: scans one slice of addresses ─────────────────────────────────
-async function runZoneWorker(
-  jobId: string,
-  zone: ReturnType<typeof generateAddresses>,
-  job: ScanJob
-) {
-  for (let i = 0; i < zone.length; i += SCAN_BATCH_SIZE) {
-    if (!scanJobs.has(jobId)) return;
-    const batch = zone.slice(i, i + SCAN_BATCH_SIZE);
-    await scanOneBatch(jobId, batch, job);
-    // 0ms delay — proxy pool handles backpressure natively
-    if (SCAN_BATCH_DELAY_MS > 0 && i + SCAN_BATCH_SIZE < zone.length) {
-      await new Promise(r => setTimeout(r, SCAN_BATCH_DELAY_MS));
-    }
-  }
-}
+// (scanOneBatch + runZoneWorker removed — the continuous-fire city-scan path they
+//  implemented self-throttled against Kinetic. runCityScan now uses the bounded,
+//  backoff-aware qualifyAddressesViaKinetic() below.)
 
 async function runCityScan(jobId: string, addresses: ReturnType<typeof generateAddresses>) {
   const job = scanJobs.get(jobId)!;
@@ -625,18 +560,28 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
   _scanWorkerState.diagSuccess = 0;
   _scanWorkerState.diagFailed = 0;
 
-  // ── Split into SCAN_ZONE_WORKERS zones and run all in parallel ─────────────
-  // Zone 0: addresses[0], [N], [2N] ...   (every Nth address starting at 0)
-  // Zone 1: addresses[1], [N+1], [2N+1] ... (interleaved, not contiguous)
-  // Interleaving ensures geographic diversity across zones — avoids all zones
-  // hitting the same street block simultaneously.
-  const N = SCAN_ZONE_WORKERS;
-  const zones: ReturnType<typeof generateAddresses>[] = Array.from({ length: N }, (_, zi) =>
-    addresses.filter((_, idx) => idx % N === zi)
-  );
-
-  // Fire all zone workers in parallel — they share the same proxy pool
-  await Promise.all(zones.map(zone => runZoneWorker(jobId, zone, job)));
+  // ── PACED qualification — bounded concurrency + 403 backoff ───────────────
+  // The old zone-worker fan-out fired ~400 Kinetic calls in flight with ZERO
+  // delay (SCAN_BATCH_SIZE 200 × zones), which blows straight past Kinetic's
+  // refilling rolling-window → a wall of 403s → ~0 real checks and 0 leads
+  // (verified live: a 5,843-address Lexington run got 4,600 HTTP errors, 470
+  // successes, 0 fiber). Route through the SAME bounded qualifier the tiled/box
+  // scans use (pooledMap cap + jittered backoff on throttle) so we stay inside
+  // the window and actually harvest fiber. tenantId comes off the job stamp.
+  await qualifyAddressesViaKinetic(addresses as any, job.tenantId ?? 1, {
+    concurrency: Number(process.env.CITY_SCAN_CONCURRENCY ?? 8),
+    shouldStop: () => job.status !== "running",
+    onScanned: (result, scanned, leads) => {
+      job.done = scanned;
+      (job as any).newFiber = leads;
+      _scanWorkerState.lastHeartbeat = Date.now();
+      if (result) {
+        if (result.apiSource === "failed") _scanWorkerState.diagHttpError++;
+        else _scanWorkerState.diagSuccess++;
+        if (result.isNewFiber && result.billingStatus === "N") _scanWorkerState.diagNewFiber++;
+      }
+    },
+  });
 
   // Flush any remaining queued writes before marking done
   flushWriteQueue();
@@ -656,7 +601,7 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
 async function qualifyAddressesViaKinetic(
   addresses: RawAddress[],
   tenantId: number,
-  opts: { concurrency?: number; shouldStop?: () => boolean } = {},
+  opts: { concurrency?: number; shouldStop?: () => boolean; onScanned?: (result: ScanResult | null, scanned: number, leads: number) => void } = {},
 ): Promise<{ leads: number; scanned: number }> {
   const concurrency = opts.concurrency ?? Number(process.env.AREA_SCAN_CONCURRENCY ?? 10);
   let leads = 0, scanned = 0;
@@ -678,6 +623,7 @@ async function qualifyAddressesViaKinetic(
       const lead = leadInsertFromResult(result, a);
       if (lead) { (lead as any).tenantId = tenantId; enqueueLeadWrite(lead); leads++; }
     }
+    opts.onScanned?.(result, scanned, leads); // caller-owned progress (city scan drives job.done + diag)
     return result;
   });
   flushWriteQueue();
