@@ -20,7 +20,7 @@ import {
   buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
   type ExclusionReason,
 } from "@shared/leadQualify";
-import { geocodeCity, tileBbox } from "./overpass";
+import { geocodeCity, tileBbox, getCityAddresses } from "./overpass";
 import { harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { pastDueGraceExpired, setBillingState } from "./billingStore";
 
@@ -381,6 +381,43 @@ async function deepSeedPriorityCities(): Promise<void> {
   console.log(`[cron] deep-seed complete — ~${spent} Mapbox calls this run`);
 }
 
+// FREE OSM sweep: enumerate every configured town's addresses via Overpass ($0 —
+// getCityAddresses is pool-first + OSM, with only one cheap Mapbox bbox lookup per
+// town) and upsert them into the scan-target pool. The nightly pool re-scan below
+// then qualifies them through Kinetic via Decodo, so fiber/coming-soon leads land
+// for the user's whole SC + NC town list without the paid Mapbox address grid.
+// Idempotent (upsertScanTargets dedupes on normalized address); safe to re-run.
+async function osmSweepCities(): Promise<void> {
+  const list = (process.env.NIGHTLY_OSM_SWEEP_CITIES ?? "").split(";").map((s) => s.trim()).filter(Boolean);
+  if (!list.length) return;
+  // Time-boxed so a big town's Overpass tiling can't devour the night and starve the
+  // paced qualification below. Whatever isn't swept resumes next night (idempotent
+  // upsert). Rotate the start each night so towns near the end aren't perpetually
+  // skipped: offset by the day-of-year so coverage is fair over a week.
+  const budgetMs = Number(process.env.NIGHTLY_OSM_SWEEP_MAX_MS ?? 25 * 60_000);
+  const started = Date.now();
+  const offset = Math.floor(started / 86_400_000) % list.length;
+  const rotated = list.slice(offset).concat(list.slice(0, offset));
+  let total = 0, towns = 0;
+  for (const entry of rotated) {
+    if (Date.now() - started > budgetMs) { console.log(`[cron] osm-sweep time budget reached — remaining towns resume next night`); break; }
+    const [cityRaw, stateRaw] = entry.split(",").map((s) => s.trim());
+    const city = cityRaw, state = (stateRaw || "NC").toUpperCase();
+    if (!city) continue;
+    try {
+      const { addresses } = await getCityAddresses(city, state);
+      if (addresses.length) {
+        storage.upsertScanTargets(addresses.map((a) => ({
+          address: a.address, city, state, zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: "osm-sweep",
+        })));
+        total += addresses.length; towns++;
+      }
+      console.log(`[cron] osm-sweep ${city}, ${state}: +${addresses.length} OSM addresses to pool (free)`);
+    } catch (e: any) { console.warn(`[cron] osm-sweep ${city}, ${state} failed: ${e.message}`); } // skip → retry next night
+  }
+  console.log(`[cron] osm-sweep complete — ${total} OSM addresses across ${towns} towns pooled (free), qualified by the pool re-scan`);
+}
+
 // Dunning: a past_due tenant whose grace window has elapsed is suspended (paywall).
 // Stripe drives past_due via invoice.payment_failed; this is the timeout that
 // escalates it. Idempotent — already-suspended tenants aren't re-touched.
@@ -406,6 +443,9 @@ async function runNightlyBatch(): Promise<void> {
     // Seed the priority towns' new builds into the pool FIRST (Mapbox grid, once
     // per town) so the pool re-scan below qualifies them this same run.
     try { await deepSeedPriorityCities(); } catch (e: any) { console.warn("[cron] deep-seed error:", e.message); }
+    // FREE OSM sweep of the full SC + NC town list into the pool (Overpass, $0),
+    // so the pool re-scan below qualifies them through Kinetic/Decodo this same run.
+    try { await osmSweepCities(); } catch (e: any) { console.warn("[cron] osm-sweep error:", e.message); }
     const cns = buildCnsFrontierSource();
     const pool = buildPoolRescanSource();
     const promoted: string[] = [];

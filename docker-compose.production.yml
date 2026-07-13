@@ -30,6 +30,11 @@ services:
       #    capped, so Mapbox is a bounded one-time cost that spreads across nights.
       ENABLE_NIGHTLY_SCAN: "true"
       NIGHTLY_DEEP_SEED_CITIES: "Lexington,NC;Albemarle,NC;Concord,NC;Kannapolis,NC;Indian Trail,NC;Wingate,NC;Broadway,NC;Pine Bluff,NC;Tryon,NC;Morven,NC"
+      # FREE OSM sweep (Overpass, $0 — one cheap Mapbox bbox lookup per town only):
+      # enumerate every Kinetic-served SC + NC town into the pool; the existing
+      # Decodo-paced pool re-scan then qualifies them (fiber vs copper) into leads.
+      # This is the "use OpenStreetMap → Kinetic via Decodo" path — no Mapbox grid.
+      NIGHTLY_OSM_SWEEP_CITIES: "Aberdeen,NC;Mint Hill,NC;Albemarle,NC;Monroe,NC;Badin,NC;Mooresville,NC;Broadway,NC;Morven,NC;Cameron,NC;Mount Pleasant,NC;Charlotte,NC;China Grove,NC;New London,NC;Columbus,NC;Norwood,NC;Concord,NC;Oakboro,NC;Cornelius,NC;Peachland,NC;Davidson,NC;Pfafftown,NC;Denton,NC;Pinebluff,NC;Gold Hill,NC;Polkton,NC;Granite Quarry,NC;Richfield,NC;Harrisburg,NC;Rockwell,NC;Huntersville,NC;Rural Hall,NC;Indian Trail,NC;Salisbury,NC;Kannapolis,NC;Sanford,NC;King,NC;Stallings,NC;Landis,NC;Stanfield,NC;Thomasville,NC;Lewisville,NC;Tryon,NC;Lexington,NC;Wadesboro,NC;Linwood,NC;Waxhaw,NC;Marshville,NC;Weddington,NC;Marvin,NC;Wingate,NC;Matthews,NC;Winston-Salem,NC;Midland,NC;Cameron,SC;Lexington,SC;Campobello,SC;Saint Matthews,SC;Inman,SC;Spartanburg,SC;Kershaw,SC;West Columbia,SC;Landrum,SC"
       NIGHTLY_DEEP_SEED_MAX_MAPBOX: "12000"
     volumes:
       - app-data:/data         # DB + uploads — the ONLY stateful mount
