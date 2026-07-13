@@ -11,6 +11,9 @@ import { meterQualifiedLead, billingSummary, getCreditLedger, isBillingEnabled, 
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
 import { stripeConfigured, webhookConfigured, verifyStripeSignature, createCheckoutSession, createPortalSession, processWebhookEvent } from "./stripeAdapter";
 import Database from "better-sqlite3";
+import { z } from "zod";
+import { packMapPins, type PackedMapPins } from "@shared/mapPinsWire";
+import { structuredLog } from "./structuredLog";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
 try {
@@ -956,7 +959,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // real user has a tenant since bootstrap — so it never hit in production).
   // Only the unscoped org-wide view per tenant is cached; scoped team_lead/rep
   // views are always computed fresh so role visibility can never leak via cache.
-  const _mapPinCache = new Map<string, { ts: number; pins: any[]; ver?: string }>();
+  interface MapPinCacheEntry {
+    ts: number;
+    pins: any[];
+    ver?: string;
+    dbMs: number;
+    buildMs: number;
+    packed?: PackedMapPins;
+  }
+  const _mapPinCache = new Map<string, MapPinCacheEntry>();
   const MAP_CACHE_TTL = 8_000; // 8s — fast enough for real-time feel
   // Monotonic data version — powers the /api/leads/map ETag so a steady-state
   // poll returns 304 for the cost of a string compare, not a query + 50k-row
@@ -969,7 +980,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   let _leadsEpoch = 0;
   const _leadsBustByTenant = new Map<number, number>();
 
-  function getMapPins(tenantId?: number, repFilter?: number | number[], dataVer?: string) {
+  function getMapPins(tenantId?: number, repFilter?: number | number[], dataVer?: string): {
+    entry: MapPinCacheEntry;
+    cacheHit: boolean;
+    scopeKey: string;
+  } {
     const now = Date.now();
     // Cache EVERY scope, not just unscoped manager/admin views. A rep's scoped view
     // is the COMMON case and used to recompute both queries on every load + 60s poll
@@ -981,15 +996,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const hit = _mapPinCache.get(cacheKey);
     // Reuse only within TTL AND if the DB hasn't changed (a scan in another
     // process bumps dataVer) — never serve stale pins after new leads land.
-    if (hit && now - hit.ts < MAP_CACHE_TTL && (dataVer == null || hit.ver === dataVer)) return hit.pins;
-    // Narrow 16-column projection, no ORDER BY — scoped reads come straight
-    // off idx_leads_tenant_rep with no temp B-tree (measured 31ms → sub-ms
-    // plan at 3.4k rows; the gap widens at 50k).
+    if (hit && now - hit.ts < MAP_CACHE_TTL && (dataVer == null || hit.ver === dataVer)) {
+      return { entry: hit, cacheHit: true, scopeKey };
+    }
+    const dbStarted = performance.now();
+    // Narrow projection + latest-visit metadata in one scoped SQL query.
     const all = storage.getLeadsForMap(tenantId, repFilter);
-    // Per-lead visit summary so a rep can SEE which doors they've already hit —
-    // even a "Not Home" (which keeps status=prospect) shows a visited check.
-    // Tenant-scoped: never scans other tenants' knock history.
-    const visits = storage.getVisitSummary(tenantId);
+    const dbMs = performance.now() - dbStarted;
+    const buildStarted = performance.now();
     const pins: any[] = [];
     // COMPACT pins: omit empty (null/false/0/"") fields and round lat/lng to 6dp
     // (~0.1m). Measured 35% smaller raw JSON (2.04MB → 1.33MB at 5.5k leads) → the
@@ -998,7 +1012,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // id/lat/lng/leadStatus are always kept (geometry + dot color depend on them).
     for (const l of all) {
       if (!l.lat || !l.lng) continue;
-      const v = visits.get(l.id);
       const pin: any = {
         id: l.id,
         lat: Math.round(l.lat * 1e6) / 1e6,
@@ -1006,21 +1019,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         leadStatus: l.leadStatus,
       };
       for (const k in l) {
-        if (k === "id" || k === "lat" || k === "lng" || k === "leadStatus") continue;
+        if (k === "id" || k === "lat" || k === "lng" || k === "leadStatus" ||
+            k === "knockCount" || k === "lastOutcome" || k === "lastKnockedAt") continue;
         const val = (l as any)[k];
         if (val !== null && val !== false && val !== 0 && val !== "") pin[k] = val;
       }
-      if (v) {
+      if (l.knockCount) {
         pin.visited = true;
-        if (v.count) pin.knockCount = v.count;
-        if (v.lastOutcome) pin.lastOutcome = v.lastOutcome;
-        if (v.lastAt) pin.lastKnockedAt = v.lastAt;
+        pin.knockCount = l.knockCount;
+        if (l.lastOutcome) pin.lastOutcome = l.lastOutcome;
+        if (l.lastKnockedAt) pin.lastKnockedAt = l.lastKnockedAt;
       }
       pins.push(pin);
     }
+    const entry: MapPinCacheEntry = {
+      ts: Date.now(), pins, ver: dataVer, dbMs,
+      buildMs: performance.now() - buildStarted,
+    };
     if (_mapPinCache.size > 500) _mapPinCache.clear(); // soft cap — bound stale-scope accumulation
-    _mapPinCache.set(cacheKey, { ts: Date.now(), pins, ver: dataVer });
-    return pins;
+    _mapPinCache.set(cacheKey, entry);
+    return { entry, cacheHit: false, scopeKey };
   }
 
   // Distinct city/state pairs for the Leads filter dropdowns — a two-column
@@ -1035,6 +1053,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   app.get("/api/leads/map", requireAuth, (req: any, res: any) => {
+    const parsedQuery = z.object({ format: z.enum(["object", "packed"]).default("object") })
+      .safeParse(req.query);
+    if (!parsedQuery.success) return res.status(400).json({ error: "format must be object or packed" });
+    const format = parsedQuery.data.format;
     const user = req.user;
     const tid = user?.tenantId ?? undefined;
     const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
@@ -1048,17 +1070,38 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // new leads. The in-memory epoch stays for instant same-process busts.
     const dbVer = storage.getLeadsDataVersion(tid);
     const ver = `${_leadsEpoch}.${_leadsBustByTenant.get(tid ?? 0) ?? 0}.${dbVer}`;
-    const etag = `W/"pins-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${ver}"`;
-    // NB: the global API middleware (server/index.ts) forces `no-store` on every
-    // /api response to keep lead PII off disk, which overrides any Cache-Control we
-    // set here — so no browser HTTP caching / stale-while-revalidate is possible by
-    // design. Network cost is cut instead via fewer refetches (client staleTime +
-    // no focus-refetch for reps), the scoped server cache above, and the ETag 304.
+    const etag = `W/"pins-${format}-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${ver}"`;
+    // This endpoint overrides the global no-store policy with private no-cache:
+    // browsers may retain it only for conditional revalidation, never reuse it
+    // without the ETag check. That turns unchanged polls into a zero-body 304.
     res.set("Cache-Control", "private, no-cache");
     res.set("ETag", etag);
     if (req.headers["if-none-match"] === etag) return res.status(304).end();
-    const pins = getMapPins(tid, repFilter, dbVer);
-    res.json({ pins, total: pins.length });
+    const result = getMapPins(tid, repFilter, dbVer);
+    const packStarted = performance.now();
+    const payload = format === "packed"
+      ? (result.entry.packed ??= packMapPins(result.entry.pins))
+      : { pins: result.entry.pins, total: result.entry.pins.length };
+    const packMs = format === "packed" ? performance.now() - packStarted : 0;
+    res.set("X-Map-Cache", result.cacheHit ? "hit" : "miss");
+    res.set("Server-Timing", [
+      `leads_db;dur=${result.cacheHit ? 0 : result.entry.dbMs.toFixed(2)}`,
+      `leads_build;dur=${result.cacheHit ? 0 : result.entry.buildMs.toFixed(2)}`,
+      `leads_pack;dur=${packMs.toFixed(2)}`,
+    ].join(", "));
+    structuredLog("perf.leads_map", {
+      requestId: String(req.id ?? "").slice(0, 8),
+      tenantId: tid ?? 0,
+      scope: result.scopeKey === "all" ? "all" : "scoped",
+      format,
+      cache: result.cacheHit ? "hit" : "miss",
+      rows: result.entry.pins.length,
+      dbMs: Number((result.cacheHit ? 0 : result.entry.dbMs).toFixed(2)),
+      buildMs: Number((result.cacheHit ? 0 : result.entry.buildMs).toFixed(2)),
+      packMs: Number(packMs.toFixed(2)),
+      complexity: "O(L + K_scope)",
+    });
+    res.json(payload);
   });
 
   // GET /api/leads/fresh — the "fresh leads" feed: leads DISCOVERED within the last

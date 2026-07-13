@@ -1,0 +1,10 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-80.2534, 35.8240] }, "properties": { "id": 1, "address": "101 W Center St", "status": "prospect" } },
+    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-80.2518, 35.8231] }, "properties": { "id": 2, "address": "118 S Main St", "status": "not_home" } },
+    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-80.2551, 35.8252] }, "properties": { "id": 3, "address": "204 W 2nd Ave", "status": "interested" } },
+    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-80.2499, 35.8219] }, "properties": { "id": 4, "address": "315 S Salisbury St", "status": "sold" } },
+    { "type": "Feature", "geometry": { "type": "Point", "coordinates": [-80.2570, 35.8224] }, "properties": { "id": 5, "address": "412 W 5th Ave", "status": "follow_up" } }
+  ]
+}

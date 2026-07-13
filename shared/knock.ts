@@ -4,6 +4,8 @@
 // next-door routing math. Imported by BOTH server/routes.ts and the client, so
 // the outcome list and status mapping can never drift between the two.
 
+import { STATUS_CONFIG } from "./statusConfig";
+
 export type KnockOutcome =
   | "not_home" | "not_interested" | "interested" | "follow_up"
   | "callback" | "sold" | "prospect" | "needs_verification";
@@ -22,24 +24,24 @@ export interface OutcomeDef {
 
 // Button order = this array order (the rep card renders it verbatim).
 // "prospect" is the reset disposition — one tap returns a door to the pool
-// (status prospect, pin back to prospect orange), logged in history like any
-// other change. "callback" folds to follow_up at the DB level (the manager
-// status vocabulary is unchanged) but renders as its own cyan display state.
+// (status prospect, pin back to the green down-arrow), logged in history like
+// any other change. "callback" folds to follow_up at the DB and presentation
+// layers, so it uses the same orange clock status while remaining a card action.
 // needs_verification maps to "contacted" — server/history back-compat only.
 // `icon` is a lucide-react icon NAME (string) — pins and the card share the
 // palette, and the card renders these via a name→component map (ICON_MAP).
-// `color` MUST equal STATE_COLORS[the display state this outcome produces] — the
-// card pill, the pin, and the pin's confirm-flash all read the same hue. (Sales
-// Rabbit-aligned palette: lead RED, Not Home YELLOW, Callback BLUE, Follow-up
-// ORANGE, Interested PURPLE, Sold GREEN, Not Interested BLACK, Contacted slate.)
+// `color` MUST equal the canonical map status color — the card pill, map pin,
+// legend, and confirm-flash all read the same presentation contract.
 export const OUTCOMES: OutcomeDef[] = [
-  { key: "not_home",           label: "Not Home",           color: "#eab308", leadStatus: "prospect",       worked: false, icon: "DoorClosed" },
-  { key: "interested",         label: "Interested",         color: "#8b5cf6", leadStatus: "interested",     worked: true,  icon: "Star"       },
-  { key: "sold",               label: "Sold",               color: "#10b981", leadStatus: "sold",           worked: true,  icon: "DollarSign" },
-  { key: "not_interested",     label: "Not Interested",     color: "#1f2937", leadStatus: "not_interested", worked: true,  icon: "ThumbsDown" },
-  { key: "follow_up",          label: "Follow-up",          color: "#f97316", leadStatus: "follow_up",      worked: true,  icon: "Clock"      },
-  { key: "callback",           label: "Callback",           color: "#2563eb", leadStatus: "follow_up",      worked: true,  icon: "Phone"      },
-  { key: "prospect",           label: "Prospect",           color: "#ef4444", leadStatus: "prospect",       worked: false, icon: "RotateCcw"  },
+  { key: "not_home",           label: STATUS_CONFIG.not_home.label,       color: STATUS_CONFIG.not_home.color,       leadStatus: "prospect",       worked: false, icon: STATUS_CONFIG.not_home.cardIcon },
+  { key: "interested",         label: STATUS_CONFIG.interested.label,     color: STATUS_CONFIG.interested.color,     leadStatus: "interested",     worked: true,  icon: STATUS_CONFIG.interested.cardIcon },
+  { key: "sold",               label: STATUS_CONFIG.sold.label,           color: STATUS_CONFIG.sold.color,           leadStatus: "sold",           worked: true,  icon: STATUS_CONFIG.sold.cardIcon },
+  { key: "not_interested",     label: STATUS_CONFIG.not_interested.label, color: STATUS_CONFIG.not_interested.color, leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.not_interested.cardIcon },
+  { key: "follow_up",          label: STATUS_CONFIG.follow_up.label,      color: STATUS_CONFIG.follow_up.color,      leadStatus: "follow_up",      worked: true,  icon: STATUS_CONFIG.follow_up.cardIcon },
+  // Callback is an action, not a seventh map status. It persists as follow_up
+  // and shares the orange clock pin while retaining a phone affordance on-card.
+  { key: "callback",           label: "Callback",                         color: STATUS_CONFIG.follow_up.color,      leadStatus: "follow_up",      worked: true,  icon: "Phone" },
+  { key: "prospect",           label: STATUS_CONFIG.prospect.label,       color: STATUS_CONFIG.prospect.color,       leadStatus: "prospect",       worked: false, icon: STATUS_CONFIG.prospect.cardIcon },
   { key: "needs_verification", label: "Needs Verification", color: "#64748b", leadStatus: "contacted",      worked: true,  icon: "HelpCircle" },
 ];
 
@@ -81,31 +83,25 @@ export type PinDisplayState =
   | "unworked" | "not_home" | "contacted" | "interested"
   | "follow_up" | "callback" | "sold" | "not_interested";
 
-// SALES RABBIT-ALIGNED color system (the D2D industry convention reps expect):
-// fresh leads RED (hot — go knock), Not Home YELLOW (come back — SR default),
-// Callback BLUE (scheduled return), Follow-up ORANGE (warm), Interested PURPLE
-// (presentation), Sold GREEN (won), Not Interested BLACK/charcoal (dead),
-// Contacted slate. Every status stays visually distinct at 8px in sunlight.
-// NOTE: Callback blue (#2563eb) is a deeper blue than the "you are here" location
-// puck (#2f7bff) and always carries the phone glyph + white ring, so a scheduled
-// door never reads as the rep's own position.
+// Canonical six-status field-map palette. Callback aliases Follow-up, while the
+// legacy Contacted state stays slate until it receives a current disposition.
 export const STATE_COLORS: Record<PinDisplayState, string> = {
-  unworked:       "#ef4444", // RED — fresh lead, go knock
-  not_home:       "#eab308", // YELLOW — no answer, come back (Sales Rabbit default)
+  unworked:       STATUS_CONFIG.prospect.color,
+  not_home:       STATUS_CONFIG.not_home.color,
   contacted:      "#64748b", // SLATE — touched
-  interested:     "#8b5cf6", // PURPLE — presentation
-  follow_up:      "#f97316", // ORANGE — warm, circle back
-  callback:       "#2563eb", // BLUE — scheduled callback
-  sold:           "#10b981", // GREEN — won
-  not_interested: "#1f2937", // BLACK/charcoal — dead
+  interested:     STATUS_CONFIG.interested.color,
+  follow_up:      STATUS_CONFIG.follow_up.color,
+  callback:       STATUS_CONFIG.follow_up.color,
+  sold:           STATUS_CONFIG.sold.color,
+  not_interested: STATUS_CONFIG.not_interested.color,
 };
 
 // Human labels for the display states — lives HERE beside STATE_COLORS so the
 // vocabulary is defined once (search rows, leads panel, any future consumer).
 export const STATE_LABELS: Record<PinDisplayState, string> = {
-  unworked: "Prospect", not_home: "Not Home", contacted: "Contacted",
-  interested: "Interested", follow_up: "Follow-up", callback: "Callback",
-  sold: "SOLD", not_interested: "Not Interested",
+  unworked: STATUS_CONFIG.prospect.label, not_home: STATUS_CONFIG.not_home.label, contacted: "Contacted",
+  interested: STATUS_CONFIG.interested.label, follow_up: STATUS_CONFIG.follow_up.label, callback: "Callback",
+  sold: STATUS_CONFIG.sold.label, not_interested: STATUS_CONFIG.not_interested.label,
 };
 
 export function pinDisplayState(p: {

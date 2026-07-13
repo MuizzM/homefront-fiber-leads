@@ -23,6 +23,7 @@ import { LeadsInViewPanel } from "@/components/LeadsInViewPanel";
 import { getKnockQueue, type KnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
 import { captureFieldFix } from "@/lib/geoFix";
 import { OUTCOME_TO_STATUS, OUTCOME_META, pinDisplayState, STATE_COLORS, STATE_LABELS, nearestUnworkedLead, summarizeByDisplayState, BULK_STATUS_OUTCOMES, type KnockOutcome, type RoutablePin, type PinDisplayState } from "@shared/knock";
+import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
 import { saveLeadNote, flushPendingNotes, type NotePoster, type NoteSaveResult } from "@/lib/leadNotes";
 import {
   UNCLUSTERED_PAINT, SELECTED_RING_SPEC,
@@ -32,7 +33,9 @@ import {
 } from "@/lib/mapPins";
 import { createFollowState, ingestFix, stepFrame, filteredLngLat } from "@/lib/followCamera";
 import { selectPointsInPolygon, pointInRing, bboxOfRing, type BBox2 } from "@/lib/mapGeo";
-import { spriteImages, iconImageMatchExpression, spriteDataUrl, type StatusIconKey } from "@/lib/statusIcons";
+import { registerPinImages, iconImageConcatExpression, spriteDataUrl, type StatusIconKey } from "@/lib/statusIcons";
+import { reconcileLeadFeatures, type LeadFeatureCache } from "@/lib/leadGeoJson";
+import { unpackMapPins } from "@shared/mapPinsWire";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -45,11 +48,8 @@ interface MapPin {
   lng: number;
   leadStatus: string;
   fiberStatus: string;
-  isNewFiber: boolean;
   assignedRepId: number | null;
   leadScore: number;
-  contactName: string | null;
-  contactPhone: string | null;
   visited?: boolean;
   knockCount?: number;
   lastOutcome?: string | null;
@@ -60,24 +60,20 @@ interface MapPin {
 
 const ROCKWELL_CENTER: [number, number] = [-80.41, 35.545];
 
-// ── Sales Rabbit pin colors by lead status ────────────────────────────────────
-// Manager legend/search dots — same hues as the shared STATE_COLORS pin system
-// (prospect orange, follow-up yellow, contacted slate) so the legend can never
-// disagree with what the map paints.
-// Sales Rabbit-aligned hues — MUST mirror STATE_COLORS (@shared/knock).
+// Manager legend/search dots read the same canonical config as map pins/cards.
 const PIN_COLORS: Record<string, { bg: string; border: string; label: string }> = {
-  prospect:       { bg: "#ef4444", border: "#fca5a5", label: "Prospect" },       // RED — fresh lead
+  prospect:       { bg: STATUS_CONFIG.prospect.color, border: "#86efac", label: STATUS_CONFIG.prospect.label },
   contacted:      { bg: "#64748b", border: "#cbd5e1", label: "Contacted" },      // slate
-  interested:     { bg: "#8b5cf6", border: "#c4b5fd", label: "Interested" },     // purple
-  follow_up:      { bg: "#f97316", border: "#fdba74", label: "Follow-up" },      // orange
-  sold:           { bg: "#10b981", border: "#6ee7b7", label: "SOLD" },           // green
-  not_interested: { bg: "#1f2937", border: "#94a3b8", label: "Not Interested" }, // black — dead
+  interested:     { bg: STATUS_CONFIG.interested.color, border: "#c4b5fd", label: STATUS_CONFIG.interested.label },
+  follow_up:      { bg: STATUS_CONFIG.follow_up.color, border: "#fdba74", label: STATUS_CONFIG.follow_up.label },
+  sold:           { bg: STATUS_CONFIG.sold.color, border: "#86efac", label: STATUS_CONFIG.sold.label },
+  not_interested: { bg: STATUS_CONFIG.not_interested.color, border: "#fca5a5", label: STATUS_CONFIG.not_interested.label },
 };
 
 // Search rows and the leads panel label pins by the TRUE display state
 // (pinDisplayState → STATE_COLORS/STATE_LABELS from @shared/knock) — the
 // PIN_COLORS map above keys on raw leadStatus (6 states) and can't represent
-// callback (cyan) or not-home (blue).
+// callback/follow-up aliases and the last-knock-only Not Home state.
 
 // The status-filter legend keys on raw leadStatus (PIN_COLORS); the glyph sprites
 // key on PinDisplayState. Only "prospect"→"unworked" differs — the rest are 1:1.
@@ -89,30 +85,15 @@ const LEGEND_STATUS_TO_ICON: Record<string, StatusIconKey> = {
 };
 
 
-// ── NEW_FIELD_MAP: status-driven ICON pin layer (flag-gated, OFF by default) ──
-// A GPU symbol layer that paints each door as its status glyph instead of a flat
-// circle. Strictly ADDITIVE: when the flag is OFF nothing here runs and the map
-// renders exactly as today (circle `lead-unclustered`). When ON, the icon layer
-// shows and `lead-unclustered` is hidden; clusters are untouched in both modes.
+// One GPU symbol layer paints every door from the canonical six-status SVG set.
 const STATUS_ICON_LAYER = "lead-status-icons";
 
-// Server-controlled rollout flag, hydrated from GET /api/config/map's
-// `flags.statusMarkerGlyphs` before the map's layers are built (the token — and
-// thus this response — must arrive before init). The server stages the rollout
-// (admins/owners first, then STATUS_MARKER_GLYPHS=all → everyone).
-let serverStatusGlyphs = false;
-export function setServerStatusGlyphs(on: boolean): void { serverStatusGlyphs = !!on; }
-
-// Is the status-glyph pin layer active? A per-device localStorage override wins
-// (NEW_FIELD_MAP="1" force-on, "0" force-off) so a tester can flip either way on
-// their own device; otherwise follow the server rollout flag.
+// Native symbol pins are the production default. NEW_FIELD_MAP=0 remains an
+// emergency device-level fallback to the old GPU circle layer.
 function newFieldMap(): boolean {
   try {
-    const ls = localStorage.getItem("NEW_FIELD_MAP");
-    if (ls === "1") return true;
-    if (ls === "0") return false;
-  } catch { /* localStorage unavailable → fall through to server flag */ }
-  return serverStatusGlyphs;
+    return localStorage.getItem("NEW_FIELD_MAP") !== "0";
+  } catch { return true; }
 }
 
 // Minimal structural view of the Mapbox map — just the methods the icon layer
@@ -120,61 +101,22 @@ function newFieldMap(): boolean {
 // typed without pulling the CDN mapbox types.)
 interface FieldIconMap {
   hasImage(id: string): boolean;
-  addImage(id: string, image: ImageData, options: { pixelRatio: number }): void;
+  addImage(id: string, image: HTMLImageElement | ImageBitmap | ImageData, options?: { pixelRatio?: number }): void;
+  loadImage(url: string, callback: (error?: Error | null, image?: HTMLImageElement | ImageBitmap | ImageData) => void): void;
   getLayer(id: string): unknown;
   addLayer(layer: unknown): void;
   setLayoutProperty(layer: string, name: string, value: unknown): void;
 }
 
-// Build + register every status bitmap. Each addImage is guarded independently:
-// a failure just skips that image so the icon-image match falls back to the
-// neutral disc. RETURNS how many status images are actually available on the map
-// afterward — the caller uses this to decide whether it's safe to hide the circle
-// pins (0 → keep circles so leads are NEVER blank).
-function registerStatusIcons(map: FieldIconMap): number {
-  let sprites: ReturnType<typeof spriteImages>;
-  try {
-    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0
-      ? window.devicePixelRatio : 1;
-    sprites = spriteImages(dpr);
-  } catch { return 0; }
-  let available = 0;
-  for (const sprite of Object.values(sprites)) {
-    try {
-      if (map.hasImage(sprite.key)) { available++; continue; }
-      // Mapbox addImage does NOT accept an HTMLCanvasElement — it takes ImageData /
-      // ImageBitmap / {width,height,data}. Pull the pixels as ImageData (which it
-      // DOES accept). Without this EVERY addImage throws, 0 icons register, and
-      // flag-on pins render blank (verified live). pixelRatio matches the DPR the
-      // sprite was drawn at, so it scales to the right on-screen size.
-      const ctx = sprite.canvas.getContext("2d");
-      if (!ctx) continue;
-      const data = ctx.getImageData(0, 0, sprite.canvas.width, sprite.canvas.height);
-      map.addImage(sprite.key, data, { pixelRatio: sprite.pixelRatio });
-      if (map.hasImage(sprite.key)) available++;
-    } catch { /* skip → match falls back to hf-icon-neutral */ }
-  }
-  return available;
-}
-
-// Add the `lead-status-icons` symbol layer (idempotent) and hide the circle
-// layer. Called from BOTH layer-setup blocks; a no-op unless the flag is on, so
-// flag-off keeps today's behavior exactly. Added as the TOP operational layer.
-function addStatusIconLayer(map: FieldIconMap): void {
-  // Flag OFF → make sure the circle pins are the ones showing (revert any prior
-  // hide), then bail. This is also the instant kill-switch path.
+async function addStatusIconLayer(map: FieldIconMap): Promise<void> {
   if (!newFieldMap()) {
     try { map.setLayoutProperty("lead-unclustered", "visibility", "visible"); } catch { /* not ready */ }
     return;
   }
   if (!map.getLayer(STATUS_ICON_LAYER)) {
-    // FAIL-SAFE: register the glyph bitmaps FIRST and only build the icon layer +
-    // hide the circles if the icons are actually available. If registration
-    // returns 0 (canvas blocked, addImage rejected, etc.), we do NOT hide the
-    // circle pins — so a rep ALWAYS sees their leads, as circles, never a blank
-    // map. This is why enabling glyphs for everyone is safe.
-    const available = registerStatusIcons(map);
-    if (available <= 0) {
+    try {
+      await registerPinImages(map);
+    } catch {
       try { map.setLayoutProperty("lead-unclustered", "visibility", "visible"); } catch { /* not ready */ }
       return;
     }
@@ -186,10 +128,9 @@ function addStatusIconLayer(map: FieldIconMap): void {
         filter: ["!", ["has", "point_count"]],
         minzoom: 12,
         layout: {
-          "icon-image": iconImageMatchExpression(),
-          // Top-level interpolate on zoom — the ONLY place a zoom expression may
-          // appear here (the icon-image match must never nest zoom).
+          "icon-image": iconImageConcatExpression(),
           "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 17, 0.9, 20, 1.2],
+          "icon-anchor": "bottom",
           "icon-allow-overlap": true,
           "icon-ignore-placement": true,
         },
@@ -200,7 +141,6 @@ function addStatusIconLayer(map: FieldIconMap): void {
       return;
     }
   }
-  // Icons are present → they replace the circle pins while the flag is on.
   if (map.getLayer(STATUS_ICON_LAYER)) {
     try { map.setLayoutProperty("lead-unclustered", "visibility", "none"); } catch { /* not ready */ }
   }
@@ -667,8 +607,8 @@ export default function MapView() {
     {
       queryKey: ["/api/leads/map"],
       queryFn: async () => {
-        const res = await apiRequest("GET", "/api/leads/map");
-        return res.json();
+        const res = await apiRequest("GET", "/api/leads/map?format=packed");
+        return unpackMapPins<MapPin>(await res.json());
       },
       enabled: !!user,
       staleTime: 45_000, // toward the 60s poll — fewer redundant revalidations
@@ -751,11 +691,8 @@ export default function MapView() {
       if (cancelled) return;
       apiRequest("GET", "/api/config/map")
         .then(r => r.json())
-        .then((d: { token: string; flags?: { statusMarkerGlyphs?: boolean } }) => {
+        .then((d: { token: string }) => {
           if (cancelled) return;
-          // Hydrate the glyph rollout flag BEFORE the token triggers map init, so
-          // the layer-setup block (addStatusIconLayer) sees the right value.
-          setServerStatusGlyphs(!!d?.flags?.statusMarkerGlyphs);
           if (d?.token) {
             (window as any).mapboxgl.accessToken = d.token;
             setMapboxToken(d.token);
@@ -933,7 +870,7 @@ export default function MapView() {
       mmRM.addEventListener("change", onRM);
     } catch {}
 
-    const setupMapLayers = () => {
+    const setupMapLayers = async () => {
       // Draw bbox layers
       map.addSource("draw-bbox", {
         type: "geojson",
@@ -1057,9 +994,8 @@ export default function MapView() {
       // Provider-native house numbers — fade in at z≥17.2, below our layers.
       ensureHousenumLayer(map, mapStyleMode);
 
-      // NEW_FIELD_MAP status-icon layer — top operational layer, flag-gated. A
-      // no-op when the flag is off (map renders exactly as today).
-      addStatusIconLayer(map);
+      // Canonical status-icon layer; NEW_FIELD_MAP=0 is the emergency fallback.
+      await addStatusIconLayer(map);
 
       // Click unclustered pin → show popup. Bound to BOTH the circle layer and
       // the NEW_FIELD_MAP icon layer so a tap opens the same card in either mode
@@ -1134,8 +1070,8 @@ export default function MapView() {
     // event (which waits for a complete tile render and can stall in some
     // environments, leaving the map stuck on "Loading map…"). Adding sources/
     // layers only requires the style, so this is both correct and more robust.
-    if (map.isStyleLoaded()) setupMapLayers();
-    else map.once("style.load", setupMapLayers);
+    if (map.isStyleLoaded()) void setupMapLayers();
+    else map.once("style.load", () => { void setupMapLayers(); });
 
     // ResizeObserver — whenever the container changes size, tell Mapbox to redraw
     let ro: ResizeObserver | null = null;
@@ -1205,8 +1141,11 @@ export default function MapView() {
   // Expose the visible set to the (ref-based) lasso handler.
   useEffect(() => { (window as any).__visibleLeads = visibleLeads; }, [visibleLeads]);
 
-  // GeoJSON Feature cache keyed on pin object identity (see the setData effect).
-  const featureCacheRef = useRef(new WeakMap<MapPin, any>());
+  // ID + content-signature cache survives API refetches, which necessarily
+  // create new pin objects. A steady-state poll reuses all feature allocations.
+  const featureCacheRef = useRef<LeadFeatureCache>(new Map());
+  const geoJsonDataRef = useRef<any>({ type: "FeatureCollection", features: [] });
+  const featureByIdRef = useRef(new Map<number, any>());
 
   // ── Leads panel: viewport bounds lifecycle ────────────────────────────────
   // Attach once per map instance ([mapReady, styleEpoch] — handlers survive
@@ -1269,30 +1208,13 @@ export default function MapView() {
     const src = map.getSource("leads-cluster") as any;
     if (!src) return;
 
-    // GPU-rendered circle layer — no DOM markers, handles 100k+ points.
-    // `ds` = precomputed display state so circle-color stays a flat GPU match.
-    // Single pass, and Feature objects are cached per pin IDENTITY: a knock's
-    // optimistic update replaces exactly one pin object, so the other 49,999
-    // reuse their features instead of re-allocating ~150k objects per knock.
-    // (Pin objects are immutable per identity — updates swap the object — so
-    // the cache can never serve a stale feature; a refetch replaces every pin
-    // identity and the WeakMap self-collects the orphaned generation.)
-    const cache = featureCacheRef.current;
-    const features: any[] = [];
-    for (const l of visibleLeads) {
-      if (!l.lat || !l.lng) continue;
-      let f = cache.get(l);
-      if (!f) {
-        f = {
-          type: "Feature",
-          geometry: { type: "Point", coordinates: [l.lng, l.lat] },
-          properties: { id: l.id, status: l.leadStatus, address: l.address, visited: l.visited ? 1 : 0, ds: pinDisplayState(l) },
-        };
-        cache.set(l, f);
-      }
-      features.push(f);
-    }
-    src.setData({ type: "FeatureCollection", features });
+    // O(n) reconciliation. Stable rows reuse the same Feature + geometry;
+    // changing one disposition allocates one replacement, then setData hands
+    // the compact collection to Mapbox's worker for native GPU clustering.
+    const reconciled = reconcileLeadFeatures(visibleLeads, featureCacheRef.current);
+    geoJsonDataRef.current = reconciled.data;
+    featureByIdRef.current = reconciled.byId;
+    src.setData(reconciled.data);
     // NOTE: this dep array must NEVER gain selection/sheet state — a pin tap must
     // rebuild zero GeoJSON. Selection is a setFilter on its own effect below.
     // It must also stay free of poll-churned identities (team, territories, user):
@@ -1486,7 +1408,7 @@ export default function MapView() {
       ? "mapbox://styles/mapbox/streets-v12"             // street
       : "mapbox://styles/mapbox/dark-v11";              // dark
     // setStyle wipes all layers — re-add cluster source + layers after style loads
-    map.once("style.load", () => {
+    map.once("style.load", async () => {
       // Re-add cluster source + layers after style swap
       if (!map.getSource("leads-cluster")) {
         map.addSource("leads-cluster", {
@@ -1549,7 +1471,7 @@ export default function MapView() {
       // NEW_FIELD_MAP status-icon layer — re-add on the fresh style (setStyle
       // wiped its images + layer). Flag-gated + idempotent, so this stays in sync
       // with the init block and is a no-op when the flag is off.
-      addStatusIconLayer(map);
+      await addStatusIconLayer(map);
       // Re-trigger the lead-pin setData + territory render effects — the new
       // style starts with an empty source, so without this the pins vanish.
       setStyleEpoch(e => e + 1);
@@ -2176,10 +2098,10 @@ export default function MapView() {
   }, [territoryClippedLeads]);
 
   // On-map search — lowercase haystack built ONCE per data load (O(n)), so a
-  // keystroke never re-lowercases 50k addresses. " " separates the two
+  // keystroke never re-lowercases 50k addresses. A NUL separates the two
   // fields so a query can't falsely match across the address/city boundary.
   const searchIndex = useMemo(
-    () => leads.map(l => ({ l, hay: (l.address + " " + (l.city ?? "")).toLowerCase() })),
+    () => leads.map(l => ({ l, hay: (l.address + "\u0000" + (l.city ?? "")).toLowerCase() })),
     [leads],
   );
   // Deferred query: typing stays responsive; the scan lags a frame at worst.
@@ -2240,10 +2162,25 @@ export default function MapView() {
     const credit = isRep ? user?.teamMemberId : (lead.assignedRepId ?? user?.teamMemberId);
     if (!credit) { toast({ title: "Assign a rep to this lead first, then log the knock", variant: "destructive" }); return; }
     const at = new Date().toISOString();
+    const nextLeadStatus = OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus;
+    const nextDisplayState = pinDisplayState({ leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome });
+
+    // Mutate exactly one GeoJSON feature and hand the same collection back to
+    // Mapbox. The symbol icon swaps immediately; React does not rebuild 5,000
+    // lead components because the pins are not components or HTML markers.
+    const feature = featureByIdRef.current.get(lead.id);
+    if (feature) {
+      feature.properties.status = toLeadMapStatus(nextDisplayState);
+      feature.properties.ds = nextDisplayState;
+      feature.properties.visited = 1;
+      try {
+        (mapRef.current?.getSource("leads-cluster") as any)?.setData(geoJsonDataRef.current);
+      } catch { /* source can disappear during a style switch; query cache still updates below */ }
+    }
     qc.setQueryData(["/api/leads/map"], (old: any) => {
       if (!old?.pins) return old;
       return { ...old, pins: old.pins.map((p: MapPin) => p.id === lead.id
-        ? { ...p, leadStatus: OUTCOME_TO_STATUS[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: at }
+        ? { ...p, leadStatus: nextLeadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: at }
         : p) };
     });
     recentIdsRef.current = [...recentIdsRef.current.slice(-9), lead.id];
@@ -2252,8 +2189,7 @@ export default function MapView() {
     // and the card in lockstep. Visual only — the card's onKnock path already did
     // the haptic. The selected-ring rAF reads this ref on its next frame.
     try {
-      const ds = pinDisplayState({ leadStatus: OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus, visited: true, lastOutcome: outcome });
-      ringFlashRef.current = { at: performance.now(), color: STATE_COLORS[ds] };
+      ringFlashRef.current = { at: performance.now(), color: STATE_COLORS[nextDisplayState] };
     } catch { /* palette lookup is best-effort — no flash, pin still recolors */ }
     // Capture WHERE the rep is standing at the tap so the server can verify the
     // work. Non-blocking: the pin already recolored above; we attach the fix and

@@ -1,0 +1,51 @@
+/**
+ * Versioned, positional wire format for the high-volume map endpoint.
+ *
+ * Repeating 15 descriptive JSON keys for every lead is expensive to parse and
+ * allocate. The packed response sends the schema once in shared code and rows
+ * as arrays. The object response remains available for backward compatibility.
+ */
+export const MAP_PINS_WIRE_VERSION = 1 as const;
+
+export const MAP_PIN_WIRE_FIELDS = [
+  "id", "lat", "lng", "leadStatus", "address", "city", "state", "zip",
+  "fiberStatus", "assignedRepId", "leadScore", "visited", "knockCount",
+  "lastOutcome", "lastKnockedAt",
+] as const;
+
+export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];
+export type WirePin = Record<MapPinWireField, unknown>;
+
+export interface PackedMapPins {
+  v: typeof MAP_PINS_WIRE_VERSION;
+  total: number;
+  rows: unknown[][];
+}
+
+export function packMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(pins: readonly T[]): PackedMapPins {
+  return {
+    v: MAP_PINS_WIRE_VERSION,
+    total: pins.length,
+    rows: pins.map((pin) => MAP_PIN_WIRE_FIELDS.map((field) => pin[field] ?? null)),
+  };
+}
+
+export function unpackMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(payload: unknown): { pins: T[]; total: number } {
+  if (!payload || typeof payload !== "object") throw new Error("Invalid packed map payload");
+  const packed = payload as Partial<PackedMapPins>;
+  if (packed.v !== MAP_PINS_WIRE_VERSION || !Array.isArray(packed.rows)) {
+    throw new Error(`Unsupported map payload version: ${String(packed.v)}`);
+  }
+  const pins = packed.rows.map((row, rowIndex) => {
+    if (!Array.isArray(row) || row.length !== MAP_PIN_WIRE_FIELDS.length) {
+      throw new Error(`Invalid map row ${rowIndex}`);
+    }
+    const pin: Record<string, unknown> = {};
+    for (let i = 0; i < MAP_PIN_WIRE_FIELDS.length; i++) {
+      const value = row[i];
+      if (value !== null) pin[MAP_PIN_WIRE_FIELDS[i]] = value;
+    }
+    return pin as T;
+  });
+  return { pins, total: typeof packed.total === "number" ? packed.total : pins.length };
+}

@@ -58,16 +58,26 @@ export type KnockVerdict = {
   reviewReason: string | null;
 };
 
-// The 16 lead columns the map pin/popup actually uses — the narrow projection
-// getLeadsForMap selects instead of all 53 columns.
-// Only fields any map-pin consumer reads (render + search + list + lasso + card).
-// maxDownloadMbps/competitorName were selected but consumed by NOTHING on the map
-// path (the scan popup reads its own row) — dropped to shrink the payload. contact*
-// stay (usually null → already omitted; contactPhone powers the card's Call action).
-export type MapPinRow = Pick<Lead,
-  "id" | "address" | "city" | "state" | "zip" | "lat" | "lng" | "leadStatus" |
-  "fiberStatus" | "isNewFiber" | "assignedRepId" |
-  "leadScore" | "contactName" | "contactPhone">;
+// The map projection intentionally excludes homeowner/contact PII. The card
+// fetches that data lazily from /api/leads/:id only after a user opens a lead.
+// Visit metadata is joined in this same scoped query so loading the map never
+// performs a second tenant-wide knock-log scan.
+export interface MapPinRow {
+  id: number;
+  address: string;
+  city: string;
+  state: string | null;
+  zip: string | null;
+  lat: number | null;
+  lng: number | null;
+  leadStatus: string;
+  fiberStatus: string | null;
+  assignedRepId: number | null;
+  leadScore: number | null;
+  knockCount: number | null;
+  lastOutcome: string | null;
+  lastKnockedAt: string | null;
+}
 
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
@@ -990,28 +1000,52 @@ export class Storage implements IStorage {
     ).all(...params) as Array<{ city: string; state: string }>;
   }
 
-  // Map-pin projection: ONLY the 16 fields a pin/popup uses (leads has 53
-  // columns) and NO ORDER BY — the map doesn't care about order, and dropping
-  // it lets SQLite serve scoped reads straight off idx_leads_tenant_rep with
-  // no temp B-tree. ~70% less row hydration than getLeads() at 50k.
+  // One scoped query returns map fields plus the latest visit/count. The
+  // materialized scoped CTE limits the window to visible leads, making the
+  // work O(L + K_scope), where L is visible leads and K_scope their knocks.
   getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[] {
-    const conditions = [];
-    if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
-    if (Array.isArray(assignedRep)) {
-      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
-    } else if (assignedRep != null) {
-      conditions.push(eq(leads.assignedRepId, assignedRep));
+    const clauses: string[] = [];
+    const params: number[] = [];
+    if (tenantId != null) {
+      clauses.push("l.tenant_id = ?");
+      params.push(tenantId);
     }
-    const q = db.select({
-      id: leads.id, address: leads.address, city: leads.city, state: leads.state,
-      zip: leads.zip, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
-      fiberStatus: leads.fiberStatus, isNewFiber: leads.isNewFiber,
-      assignedRepId: leads.assignedRepId, leadScore: leads.leadScore,
-      contactName: leads.contactName, contactPhone: leads.contactPhone,
-    }).from(leads);
-    return (conditions.length > 0
-      ? q.where(conditions.length === 1 ? conditions[0] : and(...conditions))
-      : q).all();
+    if (Array.isArray(assignedRep)) {
+      if (!assignedRep.length) return [];
+      clauses.push(`l.assigned_rep_id IN (${assignedRep.map(() => "?").join(",")})`);
+      params.push(...assignedRep);
+    } else if (assignedRep != null) {
+      clauses.push("l.assigned_rep_id = ?");
+      params.push(assignedRep);
+    }
+    const where = clauses.length ? clauses.join(" AND ") : "1 = 1";
+    return rawDb.prepare(`
+      WITH scoped AS MATERIALIZED (
+        SELECT
+          l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
+          l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
+          l.assigned_rep_id AS assignedRepId, l.lead_score AS leadScore
+        FROM leads l
+        WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+      ), ranked_visits AS (
+        SELECT
+          k.lead_id AS leadId,
+          k.outcome AS lastOutcome,
+          k.knocked_at AS lastKnockedAt,
+          COUNT(*) OVER (PARTITION BY k.lead_id) AS knockCount,
+          ROW_NUMBER() OVER (
+            PARTITION BY k.lead_id ORDER BY k.knocked_at DESC, k.id DESC
+          ) AS rowNumber
+        FROM knock_log k
+        INNER JOIN scoped s ON s.id = k.lead_id
+      )
+      SELECT
+        s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
+        s.leadStatus, s.fiberStatus, s.assignedRepId, s.leadScore,
+        rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
+      FROM scoped s
+      LEFT JOIN ranked_visits rv ON rv.leadId = s.id AND rv.rowNumber = 1
+    `).all(...params) as MapPinRow[];
   }
 
   // Recently-discovered leads for the "fresh leads" feed: created within the last

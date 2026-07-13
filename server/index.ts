@@ -7,10 +7,11 @@ import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import { runMigrations } from "./storage";
 import { rawDb } from "./db";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import helmet from "helmet";
 import cors from "cors";
 import compression from "compression";
+import { structuredLog } from "./structuredLog";
 
 // Node <20.12 compat: Vite 7's dep optimizer calls crypto.hash(), which was
 // only added in Node 20.12/21. Polyfill it so dev works on older runtimes;
@@ -207,6 +208,9 @@ function sanitizeVal(v: any): any {
 // "[redacted]", handing the map an invalid token and crashing MapView.
 const SANITIZE_EXEMPT_PATHS = new Set([
   "/api/config/map",
+  // Fixed server-owned projection with no secret fields. Skipping the generic
+  // recursive sanitizer avoids cloning up to 5,000+ rows before serialization.
+  "/api/leads/map",
 ]);
 app.use((req, res, next) => {
   if (SANITIZE_EXEMPT_PATHS.has(req.path)) return next();
@@ -230,7 +234,10 @@ app.use(rateLimit({
   // Key on req.ip — with `trust proxy` set, Express resolves the real client from
   // the RIGHTMOST trusted hop. The old leftmost X-Forwarded-For parse was
   // client-spoofable (prepend a fake IP → dodge the limit), so never use raw XFF.
-  keyGenerator: (req) => req.ip ?? req.socket.remoteAddress ?? "unknown",
+  keyGenerator: (req) => {
+    const ip = req.ip ?? req.socket.remoteAddress;
+    return ip ? ipKeyGenerator(ip) : "unknown";
+  },
 }));
 
 // ── Strict auth rate limit: 10 attempts / 15 min per IP ──────────────────────
@@ -297,12 +304,18 @@ export function log(message: string, source = "express") {
 // ── Request logger — method + path + status + duration ONLY, never response body ──
 // Response bodies may contain sessionIds, tokens, or PII — never log them.
 app.use((req, res, next) => {
-  const start = Date.now();
+  const start = performance.now();
   const reqPath = req.path;
   res.on("finish", () => {
     if (reqPath.startsWith("/api")) {
       const rid = ((req as any).id as string | undefined)?.slice(0, 8) ?? "--------";
-      log(`[${rid}] ${req.method} ${reqPath} ${res.statusCode} in ${Date.now() - start}ms`);
+      structuredLog("http.request", {
+        requestId: rid,
+        method: req.method,
+        path: reqPath,
+        status: res.statusCode,
+        durationMs: Number((performance.now() - start).toFixed(2)),
+      });
     }
   });
   next();

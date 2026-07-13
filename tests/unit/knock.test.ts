@@ -149,16 +149,18 @@ describe("pinDisplayState — truth table", () => {
     }
   });
 
-  it("Sales Rabbit color anchors: lead RED, not-home YELLOW, callback BLUE, follow-up ORANGE, not-interested BLACK", () => {
-    expect(STATE_COLORS.unworked).toBe("#ef4444");        // RED — fresh lead
-    expect(STATE_COLORS.not_home).toBe("#eab308");        // YELLOW — come back (SR default)
-    expect(STATE_COLORS.callback).toBe("#2563eb");        // BLUE — scheduled callback
-    expect(STATE_COLORS.follow_up).toBe("#f97316");       // ORANGE — warm
-    expect(STATE_COLORS.sold).toBe("#10b981");            // GREEN — won
-    expect(STATE_COLORS.not_interested).toBe("#1f2937");  // BLACK/charcoal — dead
-    // Every rep-facing state color is unique — no two statuses share a hue.
-    const repStates = ALL_PIN_STATES.filter(s => s !== "contacted");
-    expect(new Set(repStates.map(s => STATE_COLORS[s])).size).toBe(repStates.length);
+  it("uses canonical field-map colors and aliases callback to Follow-up", () => {
+    expect(STATE_COLORS.unworked).toBe("#16A34A");
+    expect(STATE_COLORS.not_home).toBe("#EAB308");
+    expect(STATE_COLORS.interested).toBe("#8B5CF6");
+    expect(STATE_COLORS.callback).toBe("#F97316");
+    expect(STATE_COLORS.follow_up).toBe("#F97316");
+    expect(STATE_COLORS.sold).toBe("#22C55E");
+    expect(STATE_COLORS.not_interested).toBe("#EF4444");
+    const canonicalStates: PinDisplayState[] = [
+      "unworked", "not_home", "interested", "follow_up", "sold", "not_interested",
+    ];
+    expect(new Set(canonicalStates.map(s => STATE_COLORS[s])).size).toBe(6);
   });
 });
 

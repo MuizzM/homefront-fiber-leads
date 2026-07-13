@@ -17,7 +17,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Navigation, Phone, Copy, Check, Plus, X,
-  DoorClosed, Star, DollarSign, ThumbsDown, Clock, RotateCcw, HelpCircle,
+  DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle,
   type LucideIcon,
 } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx } from "@/lib/mapPins";
@@ -26,9 +26,10 @@ import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
 import { VerificationBadge, formatDistance, type VStatus } from "@/components/verification";
 import {
-  OUTCOMES, OUTCOME_META, STATE_COLORS, STATE_LABELS, pinDisplayState, isKnockOutcome,
+  OUTCOMES, OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
   type KnockOutcome, type PinDisplayState,
 } from "@shared/knock";
+import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
 
 export type SheetSnap = "peek" | "expanded";
 
@@ -61,7 +62,7 @@ export interface LeadKnockSheetProps {
 // lucide icon NAME (from OutcomeDef.icon) → component. Pins and card share one
 // palette; this is the one place a name string becomes a rendered glyph.
 const ICON_MAP: Record<string, LucideIcon> = {
-  DoorClosed, Star, DollarSign, ThumbsDown, Clock, Phone, RotateCcw, HelpCircle,
+  DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle,
 };
 
 // Tap-vs-drag threshold: header taps must still land.
@@ -166,7 +167,12 @@ interface HistoryRow {
   gpsAccuracyM?: number | null;
   reviewReason?: string | null;
 }
-interface LeadDetail { id: number; notes?: string | null; updatedAt?: string | null }
+interface LeadDetail {
+  id: number;
+  notes?: string | null;
+  updatedAt?: string | null;
+  contactPhone?: string | null;
+}
 
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0, onPeekHeight } = props;
@@ -449,12 +455,18 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   };
 
   if (!renderedLead) return null;
+  const callPhone = detailQuery.data?.contactPhone ?? renderedLead.contactPhone;
 
   // ── Derived display values ───────────────────────────────────────────────────
   const ds = pinDisplayState(renderedLead);
+  const canonicalStatus = toLeadMapStatus(ds);
   const activeOutcome = DS_TO_OUTCOME[ds] ?? null;
-  const statusColor = STATE_COLORS[ds];
-  const statusLabel = STATE_LABELS[ds];
+  const statusColor = STATUS_CONFIG[canonicalStatus].color;
+  const statusLabel = ds === "sold"
+    ? "SOLD"
+    : ds === "callback" || ds === "contacted"
+    ? STATE_LABELS[ds]
+    : STATUS_CONFIG[canonicalStatus].label;
   const lastKnockRel = relativeTime(renderedLead.lastKnockedAt);
 
   // Recent-activity line: newest history event, or the lead's own last knock
@@ -631,10 +643,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               <Navigation className="w-4 h-4 opacity-80" />
               Directions
             </a>
-            {renderedLead.contactPhone && (
+            {callPhone && (
               <a
                 data-testid="action-call"
-                href={`tel:${renderedLead.contactPhone}`}
+                href={`tel:${callPhone}`}
                 className={`${ghostPill} flex-1 min-w-0`}
               >
                 <Phone className="w-4 h-4 opacity-80" />
