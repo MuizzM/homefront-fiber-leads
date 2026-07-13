@@ -1044,6 +1044,31 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ pins, total: pins.length });
   });
 
+  // GET /api/leads/fresh — the "fresh leads" feed: leads DISCOVERED within the last
+  // ?days (default 30, clamped 1..365), as slim GeoJSON for map pins. Row-level
+  // scoped exactly like /api/leads/map (reps see only their own). ?city & ?state
+  // narrow it (e.g. Lexington, NC). Properties are intentionally minimal:
+  // {id, status, competitor_flag} — the detail comes from GET /api/leads/:id on tap.
+  app.get("/api/leads/fresh", requireAuth, (req: any, res: any) => {
+    const user = req.user;
+    const tid = user?.tenantId ?? undefined;
+    const repFilter = leadVisibilityScope(user);
+    const q = req.query ?? {};
+    const city = typeof q.city === "string" && q.city.trim() ? String(q.city).trim().slice(0, 60) : undefined;
+    const state = typeof q.state === "string" && q.state.trim() ? String(q.state).trim().slice(0, 20) : undefined;
+    const daysN = Number(q.days);
+    const days = Number.isFinite(daysN) && daysN > 0 ? Math.min(Math.floor(daysN), 365) : 30;
+    const rows = storage.getFreshLeads(tid, repFilter, { city, state, days });
+    const features = rows
+      .filter((r) => r.lat != null && r.lng != null)
+      .map((r) => ({
+        type: "Feature" as const,
+        geometry: { type: "Point" as const, coordinates: [r.lng, r.lat] },
+        properties: { id: r.id, status: r.leadStatus, competitor_flag: r.competitorName ? 1 : 0 },
+      }));
+    res.json({ type: "FeatureCollection", features, count: features.length, days, city: city ?? null, state: state ?? null });
+  });
+
   // Raw provider fabric identifiers (Kinetic's internal address/access/exchange
   // ids) are ops-internal — FIELD roles (rep, team_lead) must never see them.
   // Managers/admins keep them for provider reference. Strip on the way out.

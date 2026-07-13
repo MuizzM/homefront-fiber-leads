@@ -75,6 +75,7 @@ export interface IStorage {
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }>;
   getLeadsDataVersion(tenantId?: number): string;
   getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[];
+  getFreshLeads(tenantId: number | undefined, assignedRep: number | number[] | undefined, opts: { city?: string; state?: string; days: number }): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }>;
   getLeadsPage(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
@@ -1011,6 +1012,37 @@ export class Storage implements IStorage {
     return (conditions.length > 0
       ? q.where(conditions.length === 1 ? conditions[0] : and(...conditions))
       : q).all();
+  }
+
+  // Recently-discovered leads for the "fresh leads" feed: created within the last
+  // `days`, tenant + rep-scope filtered, optionally narrowed to a city/state.
+  // Newest first, capped. Slim projection — the map only needs point + status +
+  // competitor. Same scoping model as getLeadsForMap (fail-closed for reps).
+  getFreshLeads(
+    tenantId: number | undefined,
+    assignedRep: number | number[] | undefined,
+    opts: { city?: string; state?: string; days: number },
+  ): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }> {
+    const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(Math.floor(opts.days), 365) : 30;
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
+    const conditions: any[] = [sql`${leads.createdAt} >= ${cutoff}`];
+    if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
+    if (Array.isArray(assignedRep)) {
+      conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
+    } else if (assignedRep != null) {
+      conditions.push(eq(leads.assignedRepId, assignedRep));
+    }
+    if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
+    if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
+    return db.select({
+      id: leads.id, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
+      competitorName: leads.competitorName, address: leads.address, city: leads.city,
+      state: leads.state, createdAt: leads.createdAt,
+    }).from(leads)
+      .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+      .orderBy(sql`${leads.createdAt} DESC`)
+      .limit(2000)
+      .all();
   }
 
   // Paged list query for /api/leads — filters + ORDER BY + LIMIT/OFFSET pushed
