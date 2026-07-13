@@ -5,7 +5,8 @@ import { useAuth } from "@/lib/auth";
 import {
   CheckCircle2, XCircle, Clock, User, Mail, Phone, MapPin,
   Briefcase, FileText, Image, ExternalLink, ChevronDown, ChevronUp,
-  AlertTriangle, RefreshCw, Layers, DollarSign, TrendingUp, Link2, Copy, Check
+  AlertTriangle, RefreshCw, Layers, DollarSign, TrendingUp, Link2, Copy, Check,
+  Send, UserPlus, Loader2
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -28,6 +29,15 @@ interface Application {
   userId: number | null;
   createdAt: string;
   updatedAt: string;
+}
+
+interface RecruitingInvitation {
+  id: number;
+  candidateName: string;
+  candidateEmail: string;
+  status: "creating" | "sent" | "failed";
+  sentAt: string | null;
+  createdAt: string;
 }
 
 const STATUS_TABS = ["pending", "approved", "rejected", "all"] as const;
@@ -65,6 +75,8 @@ export default function Applications() {
   // Per-application commission structure chosen at approval time.
   const [structure, setStructure] = useState<Record<number, Structure>>({});
   const [flatRate, setFlatRate] = useState<Record<number, string>>({});
+  const [inviteName, setInviteName] = useState("");
+  const [inviteEmail, setInviteEmail] = useState("");
 
   const canReview = user?.role === "admin" || user?.role === "manager";
 
@@ -98,6 +110,34 @@ export default function Applications() {
     }
   };
 
+  const { data: recruitingData } = useQuery<{ configured: boolean; invitations: RecruitingInvitation[] }>({
+    queryKey: ["/api/onboarding/invitations"],
+    queryFn: () => apiRequest("GET", "/api/onboarding/invitations").then(r => r.json()),
+    enabled: canReview,
+    staleTime: 30_000,
+  });
+
+  const inviteMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/onboarding/invitations", {
+      name: inviteName.trim(),
+      email: inviteEmail.trim(),
+    }).then(r => r.json()),
+    onSuccess: (data: { invitation: RecruitingInvitation }) => {
+      setInviteName("");
+      setInviteEmail("");
+      queryClient.invalidateQueries({ queryKey: ["/api/onboarding/invitations"] });
+      toast({
+        title: "Onboarding invitation sent",
+        description: `${data.invitation.candidateName} received the application link by email.`,
+      });
+    },
+    onError: (error: any) => toast({
+      title: "Invitation not sent",
+      description: error.message,
+      variant: "destructive",
+    }),
+  });
+
   const reviewMutation = useMutation({
     mutationFn: ({ id, status, notes, commission }: { id: number; status: string; notes?: string; commission?: any }) =>
       apiRequest("PATCH", `/api/onboarding/applications/${id}`, { status, reviewNotes: notes || null, commission }).then(r => r.json()),
@@ -120,10 +160,20 @@ export default function Applications() {
         toast({
           title: "Application approved",
           description: structLabel
-            ? `Rep account created on the ${structLabel} plan. They'll receive login credentials by email.`
-            : "Rep account created. They'll receive login credentials by email.",
+            ? `Account created on the ${structLabel} plan. Login code and signing documents were emailed.`
+            : "Account created. Login code and signing documents were emailed.",
         });
       }
+      if (data?.onboardingWarning) toast({
+        title: "Documents need attention",
+        description: data.onboardingWarning,
+        variant: "destructive",
+      });
+      if (data?.welcomeWarning) toast({
+        title: "Login email needs attention",
+        description: data.welcomeWarning,
+        variant: "destructive",
+      });
     },
     onError: (e: any) => {
       toast({ title: "Error", description: e.message, variant: "destructive" });
@@ -177,34 +227,89 @@ export default function Applications() {
         </button>
       </div>
 
-      {/* Recruiting link — the per-org join URL to share with candidates */}
+      {/* Candidate invite + per-org recruiting URL */}
       {joinLink?.url && (
-        <div className="rounded-xl border border-border bg-card p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Link2 className="w-4 h-4 text-primary" />
-            <p className="text-sm font-medium text-foreground">Your recruiting link</p>
-            {joinLink.companyName && (
-              <span className="text-[11px] text-muted-foreground">· routes applicants to {joinLink.companyName}</span>
+        <div className="rounded-xl border border-border bg-card overflow-hidden" data-testid="candidate-invite-panel">
+          <div className="p-4 border-b border-border bg-primary/[0.035]">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                <UserPlus className="w-4 h-4" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-foreground">Invite a potential rep</p>
+                <p className="text-xs text-muted-foreground mt-0.5">They receive your application link. Approval automatically sends a login code and all required agreements.</p>
+              </div>
+            </div>
+            <form
+              className="grid sm:grid-cols-[1fr_1.25fr_auto] gap-2 mt-4"
+              onSubmit={event => {
+                event.preventDefault();
+                if (!inviteName.trim() || !inviteEmail.trim() || inviteMutation.isPending) return;
+                inviteMutation.mutate();
+              }}
+            >
+              <label className="sr-only" htmlFor="candidate-name">Candidate full name</label>
+              <input
+                id="candidate-name"
+                value={inviteName}
+                onChange={event => setInviteName(event.target.value)}
+                placeholder="Candidate full name"
+                autoComplete="name"
+                maxLength={120}
+                required
+                className="h-10 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                data-testid="input-candidate-name"
+              />
+              <label className="sr-only" htmlFor="candidate-email">Candidate email</label>
+              <input
+                id="candidate-email"
+                type="email"
+                value={inviteEmail}
+                onChange={event => setInviteEmail(event.target.value)}
+                placeholder="candidate@email.com"
+                autoComplete="email"
+                maxLength={254}
+                required
+                className="h-10 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+                data-testid="input-candidate-email"
+              />
+              <button
+                type="submit"
+                disabled={inviteMutation.isPending || !recruitingData?.configured || !inviteName.trim() || !inviteEmail.trim()}
+                className="h-10 inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                data-testid="send-candidate-invite"
+              >
+                {inviteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                Send invite
+              </button>
+            </form>
+            {recruitingData && !recruitingData.configured && (
+              <p className="text-xs text-amber-400 mt-2">Connect Resend before sending candidate invitations.</p>
             )}
           </div>
-          <div className="flex items-center gap-2">
-            <code className="flex-1 min-w-0 truncate rounded-lg bg-secondary border border-border px-3 py-2 text-[13px] text-foreground font-mono" data-testid="join-link-url">
-              {joinLink.url}
-            </code>
-            <button
-              onClick={copyJoinLink}
-              data-testid="copy-join-link"
-              className="shrink-0 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg bg-primary text-primary-foreground text-[13px] font-semibold active:scale-95 transition-transform focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            >
-              {copied ? <><Check className="w-4 h-4" />Copied</> : <><Copy className="w-4 h-4" />Copy</>}
-            </button>
-            <a
-              href={joinLink.url} target="_blank" rel="noreferrer"
-              aria-label="Open join form"
-              className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            >
-              <ExternalLink className="w-4 h-4" />
-            </a>
+          <div className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Link2 className="w-4 h-4 text-primary" />
+              <p className="text-xs font-medium text-foreground">Or share your recruiting link</p>
+              {joinLink.companyName && <span className="text-[11px] text-muted-foreground">· {joinLink.companyName}</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 min-w-0 truncate rounded-lg bg-secondary border border-border px-3 py-2 text-[13px] text-foreground font-mono" data-testid="join-link-url">{joinLink.url}</code>
+              <button onClick={copyJoinLink} type="button" data-testid="copy-join-link" className="shrink-0 inline-flex items-center gap-1.5 h-9 px-3 rounded-lg border border-border text-foreground text-[13px] font-semibold hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+                {copied ? <><Check className="w-4 h-4" />Copied</> : <><Copy className="w-4 h-4" />Copy</>}
+              </button>
+              <a href={joinLink.url} target="_blank" rel="noreferrer" aria-label="Open join form" className="shrink-0 inline-flex items-center justify-center w-9 h-9 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"><ExternalLink className="w-4 h-4" /></a>
+            </div>
+            {recruitingData?.invitations?.length ? (
+              <div className="mt-3 pt-3 border-t border-border flex flex-wrap gap-x-4 gap-y-1" aria-label="Recent invitations">
+                {recruitingData.invitations.slice(0, 3).map(invitation => (
+                  <span key={invitation.id} className="text-[11px] text-muted-foreground">
+                    <span className={invitation.status === "sent" ? "text-emerald-400" : invitation.status === "failed" ? "text-rose-400" : "text-amber-400"}>●</span>{" "}
+                    {invitation.candidateName} · {invitation.status}
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
       )}
@@ -445,7 +550,7 @@ export default function Applications() {
                         className="flex items-center gap-1.5 bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold px-3 py-2.5 rounded-lg transition-colors flex-1 justify-center disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-card"
                         data-testid={`button-approve-${app.id}`}
                       >
-                        <CheckCircle2 className="w-3.5 h-3.5" /> Approve & Create Account
+                        <CheckCircle2 className="w-3.5 h-3.5" /> Approve & Start Onboarding
                       </button>
                       <button
                         onClick={() => reviewMutation.mutate({ id: app.id, status: "rejected", notes: reviewNotes[app.id] })}

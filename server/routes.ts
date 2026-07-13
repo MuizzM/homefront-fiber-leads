@@ -61,7 +61,12 @@ import {
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
 import { registerCommissionRoutes } from "./commissionRoutes";
 import { registerPayoutRoutes } from "./payoutRoutes";
-import { registerOnboardingDocumentRoutes } from "./onboardingDocumentRoutes";
+import {
+  issueOnboardingDocuments,
+  onboardingAppOrigin,
+  registerOnboardingDocumentRoutes,
+  sendOnboardingWelcome,
+} from "./onboardingDocumentRoutes";
 import * as commissionSvc from "./commissionService";
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
@@ -4125,8 +4130,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // GET /api/onboarding/applications — admin/manager only, tenant-scoped
   // (super_admin sees all orgs' inbound; a tenant admin sees only their own).
-  // NOTE: the public /join form does not yet route applicants to a tenant, so
-  // cross-tenant recruiting needs a per-tenant join link — tracked as follow-up.
   app.get("/api/onboarding/applications", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
     const status = req.query.status as string | undefined;
@@ -4141,7 +4144,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tenantId = user?.tenantId ?? getDefaultTenantId();
     const tenant = tenantId != null ? storage.getTenantById(tenantId) : undefined;
     const slug = tenant?.slug ?? "";
-    const origin = `${req.protocol}://${req.get("host")}`;
+    const origin = onboardingAppOrigin(req);
     res.json({
       slug,
       companyName: tenant?.companyName ?? null,
@@ -4340,17 +4343,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     const application = storage.getRepApplicationById(id);
     if (!application) return res.status(404).json({ error: "Application not found" });
+    if (application.status !== "pending") return res.status(409).json({ error: "This application has already been reviewed" });
 
     const sessionId = req.headers["x-session-id"] as string;
     const sessionObj = storage.getSession(sessionId);
-    const reviewer = sessionObj ? storage.getUserById(sessionObj.userId) : null;
+    const reviewer = (req as any).user ?? (sessionObj ? storage.getUserById(sessionObj.userId) : null);
     // Reviewer's org, falling back to the default org so approvals are never
     // tenant-less (commission assignment requires a tenant).
     const tenantId = (reviewer as any)?.tenantId ?? getDefaultTenantId();
+    if (application.tenantId != null && tenantId != null && application.tenantId !== tenantId) {
+      return res.status(404).json({ error: "Application not found" });
+    }
 
     let userId: number | undefined;
+    let teamMemberId: number | null = null;
     let commissionResult: any = null;
     let commissionWarning: string | null = null;
+    let onboardingDocuments: any = null;
+    let onboardingWarning: string | null = null;
+    let welcomeEmailId: string | null = null;
+    let welcomeWarning: string | null = null;
 
     if (status === "approved") {
       // Create user account — OTP-only, no passwords stored or emailed
@@ -4379,7 +4391,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Best-effort: a commission hiccup must never block account creation.
       try {
         const linkedUser = userId != null ? storage.getUserById(userId) : null;
-        let teamMemberId = (linkedUser as any)?.teamMemberId ?? null;
+        teamMemberId = (linkedUser as any)?.teamMemberId ?? null;
         if (!teamMemberId) {
           // Reuse an existing team member with this email in the tenant if present.
           const roster = storage.getTeamMembers(tenantId ?? undefined);
@@ -4418,28 +4430,52 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         console.error("Onboarding commission assignment failed:", e?.message);
       }
 
-      // Email rep their welcome + first OTP so they can log in immediately
-      if (process.env.SMTP_USER) {
-        const transporter = mailTransport();
-        // Generate an OTP so they can log in right away
+      // Account + team profile now exist, so issue the complete agreement pack
+      // immediately. The candidate receives a Home Front Sign link without the
+      // manager having to find the rep again on Team and send documents by hand.
+      if (tenantId != null && teamMemberId != null) {
+        try {
+          onboardingDocuments = await issueOnboardingDocuments({
+            tenantId,
+            repId: teamMemberId,
+            sentBy: reviewer?.id ?? null,
+            actorIp: String(req.ip || req.socket.remoteAddress || "unknown").slice(0, 100),
+            actorUserAgent: String(req.headers["user-agent"] ?? "unknown").slice(0, 500),
+            origin: onboardingAppOrigin(req),
+          });
+          const failedCount = onboardingDocuments.results.filter((result: any) => result.failed).length;
+          if (failedCount) onboardingWarning = `Account created, but ${failedCount} onboarding document${failedCount === 1 ? "" : "s"} could not be emailed.`;
+        } catch (e: any) {
+          onboardingWarning = e?.message || "Account created, but onboarding documents could not be issued.";
+          console.error("Automatic onboarding document issuance failed:", e?.message);
+        }
+      } else {
+        onboardingWarning = "Account created, but the rep profile was not linked, so onboarding documents were not issued.";
+      }
+
+      // Send the first login code through the same Resend HTTP path as the
+      // document invitation and await acceptance before reporting success.
+      try {
         const otp = storage.createOtp(application.email);
-        const wName = escapeHtml(application.fullName);
-        const wLogo = logoAttachment();
-        transporter.sendMail({
-          from: mailFrom(),
-          to: application.email,
-          subject: "Welcome to Home Front Solutions — your first sign-in code",
-          text: `Welcome to the team, ${application.fullName}! Your application is approved. Your first sign-in code is ${otp} (expires in 10 minutes). Request a new one anytime from the login screen.`,
-          html: emailShell({
-            preheader: `You're approved — your first sign-in code is ${otp}`,
-            heading: `Welcome to the team, ${wName}!`,
-            bodyHtml:
-              emailParagraph("Your application has been approved. Use this one-time code to sign in:") +
-              emailCodeBox(otp) +
-              emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. After signing in, you can request a new code anytime from the login screen.`),
-          }),
-          attachments: wLogo ? [wLogo] : [],
-        }).catch((e: any) => console.error("Email error:", e));
+        const welcome = await sendOnboardingWelcome({
+          email: application.email,
+          name: application.fullName,
+          otp,
+          origin: onboardingAppOrigin(req),
+        });
+        welcomeEmailId = welcome.id;
+        storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.sent", "rep_application", application.id, {
+          candidateEmail: application.email.toLowerCase(),
+          emailProvider: "resend",
+          emailId: welcome.id,
+        }, req.ip);
+      } catch (e: any) {
+        welcomeWarning = e?.message || "Account created, but the first sign-in code could not be emailed.";
+        storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.failed", "rep_application", application.id, {
+          candidateEmail: application.email.toLowerCase(),
+          emailProvider: "resend",
+          reason: welcomeWarning,
+        }, req.ip);
       }
     }
 
@@ -4450,7 +4486,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       userId: userId ?? null,
     });
 
-    res.json({ ...updated, commission: commissionResult, commissionWarning });
+    res.json({
+      ...updated,
+      commission: commissionResult,
+      commissionWarning,
+      onboardingDocuments,
+      onboardingWarning,
+      welcomeEmailId,
+      welcomeWarning,
+    });
   });
 }
 

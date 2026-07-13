@@ -31,13 +31,16 @@ Resend must show the sender domain as verified. SPF and DKIM should pass, and DM
 
 ## Signing workflow
 
-1. A manager opens **Team → Onboarding** for a rep and sends the required agreements.
-2. The server freezes the exact agreement content and records its SHA-256 digest.
-3. Resend emails one authenticated portal link. No bearer signing token appears in email.
-4. The rep signs in, opens **My Documents**, and reviews the complete record.
-5. The rep reaches the end, accepts the electronic-record disclosure, acknowledges review, confirms intent, and types the exact legal name on the rep profile.
-6. The server creates the evidence digest and signed PDF, commits both atomically, and records a hash-chained signing event.
-7. Resend emails the completed PDF. The same PDF remains available to the rep and authorized managers.
+1. A manager opens **Applications**, enters a candidate’s name and email, and selects **Send invite**. The candidate receives the organization-specific application link through Resend.
+2. The candidate completes the public application. The submission appears in **Applications → Pending** for that organization.
+3. The manager selects the commission structure and chooses **Approve & Start Onboarding**.
+4. The server creates and links the rep account and team profile, assigns the commission structure, creates a one-time login code, and freezes all four required agreement snapshots.
+5. The rep receives a welcome/login-code email and a Home Front Sign email linking to **My Documents**. No bearer signing token appears in email.
+6. The rep signs in, reviews each complete record, accepts the electronic-record disclosure, acknowledges review, confirms intent, and types the exact legal name on the rep profile.
+7. The server creates the evidence digest and signed PDF, commits both atomically, and records a hash-chained signing event.
+8. Resend emails each completed PDF. The same PDFs remain available to the rep and authorized managers.
+
+Managers can still open **Team → Onboarding** to resend a failed document or issue a later version. Active agreements are idempotent: approving or retrying cannot create a second active copy of the same document type.
 
 ## Production verification
 

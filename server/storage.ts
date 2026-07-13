@@ -898,6 +898,29 @@ export function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_signature_events_document
        ON onboarding_signature_events(document_id, id)`,
+    // Recruiting invitations are sent before a candidate has an account. Keep
+    // a tenant-scoped delivery record so managers can see what was sent and the
+    // audit trail does not depend on transient Resend logs.
+    `CREATE TABLE IF NOT EXISTS onboarding_recruiting_invites (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       record_id TEXT NOT NULL UNIQUE,
+       tenant_id INTEGER NOT NULL,
+       candidate_name TEXT NOT NULL,
+       candidate_email TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'creating',
+       invited_by INTEGER,
+       email_id TEXT,
+       sent_at TEXT,
+       failure_reason TEXT,
+       created_at TEXT NOT NULL,
+       updated_at TEXT NOT NULL,
+       FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+       FOREIGN KEY (invited_by) REFERENCES users(id) ON DELETE SET NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_recruiting_invites_tenant
+       ON onboarding_recruiting_invites(tenant_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_recruiting_invites_email
+       ON onboarding_recruiting_invites(tenant_id, candidate_email, created_at DESC)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

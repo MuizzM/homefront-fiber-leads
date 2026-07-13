@@ -29,6 +29,13 @@ import {
 } from "./onboardingDocumentStore";
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import { escapeHtml } from "./mail";
+import { recruitingInviteLimiter } from "./limiters";
+import {
+  createRecruitingInvite,
+  listRecruitingInvites,
+  markRecruitingInviteFailed,
+  markRecruitingInviteSent,
+} from "./onboardingRecruitingStore";
 
 interface Deps {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void;
@@ -39,6 +46,10 @@ const repIdSchema = z.coerce.number().int().positive();
 const documentIdSchema = z.coerce.number().int().positive();
 const sendSchema = z.object({
   documentTypes: z.array(z.enum(ONBOARDING_DOCUMENT_TYPES)).min(1).max(ONBOARDING_DOCUMENT_TYPES.length),
+}).strict();
+const recruitingInviteSchema = z.object({
+  name: z.string().trim().min(2).max(120),
+  email: z.string().trim().email().max(254).transform(value => value.toLowerCase()),
 }).strict();
 const signSchema = z.object({
   typedName: z.string().trim().min(2).max(120),
@@ -53,7 +64,7 @@ function sha256(value: string | Buffer): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
-function appOrigin(req: Request): string {
+export function onboardingAppOrigin(req: Request): string {
   const configured = process.env.APP_ORIGIN?.trim().replace(/\/$/, "");
   if (configured) {
     const url = new URL(configured);
@@ -113,6 +124,115 @@ async function sendInvitation(input: { email: string; name: string; count: numbe
   });
 }
 
+export async function sendOnboardingWelcome(input: {
+  email: string;
+  name: string;
+  otp: string;
+  origin: string;
+}) {
+  const link = `${input.origin}/#/my-documents`;
+  return sendResendEmail({
+    to: input.email,
+    subject: "Welcome to Home Front Solutions — your sign-in code",
+    idempotencyKey: `onboarding-welcome-${sha256(`${input.email.toLowerCase()}|${input.otp}`).slice(0, 48)}`,
+    tags: [{ name: "category", value: "onboarding_welcome" }],
+    text: `Welcome to the team, ${input.name}. Your one-time sign-in code is ${input.otp}. It expires in 10 minutes. Sign in and review your documents: ${link}`,
+    html: emailShell("Welcome to the team", `
+      <p style="margin:0 0 16px">Hi ${escapeHtml(input.name)}, your application has been approved.</p>
+      <p style="margin:0 0 8px">Use this one-time code to sign in:</p>
+      <div style="margin:0 0 18px;padding:16px;border-radius:12px;background:#eef8f6;text-align:center;font-size:32px;font-weight:800;letter-spacing:8px;color:#12314c">${escapeHtml(input.otp)}</div>
+      <p style="margin:0 0 20px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Sign in and review documents</a></p>
+      <p style="margin:0;font-size:12px;color:#8a97a4">The code expires in 10 minutes. You can request a new code from the sign-in screen at any time.</p>`),
+  });
+}
+
+export interface IssueOnboardingDocumentsResult {
+  results: Array<{ documentType: string; sent?: true; skipped?: true; failed?: true; reason?: string; envelopeId?: number }>;
+  emailId: string | null;
+  createdCount: number;
+}
+
+export async function issueOnboardingDocuments(input: {
+  tenantId: number;
+  repId: number;
+  documentTypes?: readonly OnboardingDocumentType[];
+  sentBy: number | null;
+  actorIp: string;
+  actorUserAgent: string;
+  origin: string;
+}): Promise<IssueOnboardingDocumentsResult> {
+  if (!resendConfigured()) throw new Error("Resend email is not configured yet");
+  const rep = storage.getTeamMemberById(input.repId);
+  if (!rep || rep.tenantId !== input.tenantId) throw new Error("Rep not found");
+  if (!rep.email) throw new Error("The rep needs an email address before documents can be sent");
+
+  const tenant = storage.getTenantById(input.tenantId);
+  const companyName = tenant?.companyName || "Home Front Solutions LLC";
+  const issuedAt = new Date().toISOString();
+  const results: IssueOnboardingDocumentsResult["results"] = [];
+  const created: Array<{ id: number; recordId: string; documentType: OnboardingDocumentType }> = [];
+  const requestedTypes = [...new Set(input.documentTypes ?? ONBOARDING_DOCUMENT_TYPES)];
+
+  for (const documentType of requestedTypes) {
+    const snapshot = buildAgreementSnapshot({ documentType, companyName, signerName: rep.name, signerEmail: rep.email, issuedAt });
+    const reservation = reserveSigningDocument({
+      tenantId: input.tenantId,
+      repId: rep.id,
+      documentType,
+      snapshot,
+      signerName: rep.name,
+      signerEmail: rep.email,
+      sentBy: input.sentBy,
+      actorIp: input.actorIp,
+      actorUserAgent: input.actorUserAgent,
+    });
+    if (!reservation.created) {
+      results.push({ documentType, skipped: true, reason: "An active agreement already exists", envelopeId: reservation.row.id });
+    } else {
+      created.push({ id: reservation.row.id, recordId: reservation.row.recordId, documentType });
+    }
+  }
+
+  let emailId: string | null = null;
+  if (created.length) {
+    try {
+      const email = await sendInvitation({
+        email: rep.email,
+        name: rep.name,
+        count: created.length,
+        origin: input.origin,
+        recordIds: created.map(item => item.recordId),
+      });
+      emailId = email.id;
+      markDocumentsSent(created.map(item => item.id), email.id, input.sentBy);
+      for (const item of created) {
+        results.push({ documentType: item.documentType, sent: true, envelopeId: item.id });
+        storage.logActivity(input.sentBy, "onboarding.document.sent", "onboarding_document", item.id, {
+          repId: rep.id,
+          documentType: item.documentType,
+          signingProvider: "homefront_sign",
+          emailProvider: "resend",
+          emailId: email.id,
+        }, input.actorIp);
+      }
+    } catch (error: any) {
+      const reason = error?.message || "Resend invitation failed";
+      markDocumentsFailed(created.map(item => item.id), reason, input.sentBy);
+      for (const item of created) {
+        results.push({ documentType: item.documentType, failed: true, reason, envelopeId: item.id });
+        storage.logActivity(input.sentBy, "onboarding.document.send_failed", "onboarding_document", item.id, {
+          repId: rep.id,
+          documentType: item.documentType,
+          emailProvider: "resend",
+          reason,
+        }, input.actorIp);
+      }
+    }
+  }
+
+  return { results, emailId, createdCount: created.length };
+}
+
 async function sendCompletionReceipt(input: { recordId: string; email: string; name: string; title: string; pdf: Buffer }) {
   return sendResendEmail({
     to: input.email,
@@ -138,6 +258,60 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     res.json({ configured: resendConfigured(), provider: "homefront_sign", emailProvider: "resend", documents: publicCatalog() });
   });
 
+  app.get("/api/onboarding/invitations", requireAuth, requireCapability("onboarding.documents.manage"), (req, res) => {
+    res.json({ configured: resendConfigured(), invitations: listRecruitingInvites(tenantId(req)) });
+  });
+
+  app.post("/api/onboarding/invitations", requireAuth, requireCapability("onboarding.documents.manage"), recruitingInviteLimiter, async (req, res) => {
+    const parsed = recruitingInviteSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Enter the candidate's full name and a valid email address" });
+    if (!resendConfigured()) return res.status(503).json({ error: "Resend email is not configured yet" });
+
+    const tid = tenantId(req);
+    const actorId = userId(req);
+    const tenant = storage.getTenantById(tid);
+    if (!tenant) return res.status(404).json({ error: "Organization not found" });
+    const origin = onboardingAppOrigin(req);
+    const joinLink = `${origin}/join/${encodeURIComponent(tenant.slug)}`;
+    const invitation = createRecruitingInvite({
+      tenantId: tid,
+      candidateName: parsed.data.name,
+      candidateEmail: parsed.data.email,
+      invitedBy: actorId,
+    });
+
+    try {
+      const delivery = await sendResendEmail({
+        to: parsed.data.email,
+        subject: "Apply to join Home Front Solutions",
+        idempotencyKey: `recruiting-invite-${invitation.recordId}`,
+        tags: [{ name: "category", value: "recruiting_invite" }],
+        text: `Hi ${parsed.data.name}, you have been invited to apply to join ${tenant.companyName}. Complete your application here: ${joinLink}`,
+        html: emailShell("You’re invited to join our team", `
+          <p style="margin:0 0 18px">Hi ${escapeHtml(parsed.data.name)}, Home Front Solutions invited you to apply for a field-sales position.</p>
+          <p style="margin:0 0 20px"><a href="${escapeHtml(joinLink)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Start your application</a></p>
+          <p style="margin:0;font-size:12px;color:#8a97a4">After approval, you’ll receive a secure sign-in code and your onboarding agreements through Home Front Sign.</p>`),
+      });
+      const sent = markRecruitingInviteSent(invitation.id, delivery.id);
+      storage.logActivity(actorId, "onboarding.recruiting_invite.sent", "onboarding_invitation", sent.id, {
+        candidateEmail: sent.candidateEmail,
+        emailProvider: "resend",
+        emailId: delivery.id,
+        joinPath: `/join/${tenant.slug}`,
+      }, req.ip);
+      return res.status(201).json({ invitation: sent, joinLink });
+    } catch (error: any) {
+      const reason = error?.message || "Invitation delivery failed";
+      const failed = markRecruitingInviteFailed(invitation.id, reason);
+      storage.logActivity(actorId, "onboarding.recruiting_invite.failed", "onboarding_invitation", failed.id, {
+        candidateEmail: failed.candidateEmail,
+        emailProvider: "resend",
+        reason,
+      }, req.ip);
+      return res.status(502).json({ error: "The invitation could not be delivered. Try again.", invitation: failed });
+    }
+  });
+
   app.get("/api/onboarding/documents/me", requireAuth, requireCapability("onboarding.documents.read.self"), (req, res) => {
     const repId = myRepId(req);
     if (!repId) return res.json({ configured: resendConfigured(), provider: "homefront_sign", documents: [], history: [], progress: { completed: 0, total: 0 }, noRepProfile: true });
@@ -156,57 +330,24 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     const parsedRepId = repIdSchema.safeParse(req.params.repId);
     const parsedBody = sendSchema.safeParse(req.body);
     if (!parsedRepId.success || !parsedBody.success) return res.status(400).json({ error: "Choose one or more valid onboarding documents" });
-    if (!resendConfigured()) return res.status(503).json({ error: "Resend email is not configured yet" });
     const tid = tenantId(req);
     const rep = storage.getTeamMemberById(parsedRepId.data);
     if (!rep || rep.tenantId !== tid) return res.status(404).json({ error: "Rep not found" });
-    if (!rep.email) return res.status(409).json({ error: "The rep needs an email address before documents can be sent" });
-    const tenant = storage.getTenantById(tid);
-    const companyName = tenant?.companyName || "Home Front Solutions LLC";
-    const issuedAt = new Date().toISOString();
-    const results: Array<{ documentType: string; sent?: true; skipped?: true; failed?: true; reason?: string; envelopeId?: number }> = [];
-    const created: Array<{ id: number; recordId: string; documentType: OnboardingDocumentType }> = [];
-
-    for (const documentType of [...new Set(parsedBody.data.documentTypes)]) {
-      const snapshot = buildAgreementSnapshot({ documentType, companyName, signerName: rep.name, signerEmail: rep.email, issuedAt });
-      const reservation = reserveSigningDocument({
+    try {
+      const issued = await issueOnboardingDocuments({
         tenantId: tid,
         repId: rep.id,
-        documentType,
-        snapshot,
-        signerName: rep.name,
-        signerEmail: rep.email,
+        documentTypes: parsedBody.data.documentTypes,
         sentBy: userId(req),
         actorIp: ip(req),
         actorUserAgent: userAgent(req),
+        origin: onboardingAppOrigin(req),
       });
-      if (!reservation.created) {
-        results.push({ documentType, skipped: true, reason: "An active agreement already exists", envelopeId: reservation.row.id });
-      } else {
-        created.push({ id: reservation.row.id, recordId: reservation.row.recordId, documentType });
-      }
+      res.json({ ...issued, ...listPayload(tid, rep.id) });
+    } catch (error: any) {
+      const status = /configured/.test(error?.message ?? "") ? 503 : /email address/.test(error?.message ?? "") ? 409 : 500;
+      res.status(status).json({ error: error?.message || "Could not issue onboarding documents" });
     }
-
-    if (created.length) {
-      try {
-        const email = await sendInvitation({ email: rep.email, name: rep.name, count: created.length, origin: appOrigin(req), recordIds: created.map(item => item.recordId) });
-        markDocumentsSent(created.map(item => item.id), email.id, userId(req));
-        for (const item of created) {
-          results.push({ documentType: item.documentType, sent: true, envelopeId: item.id });
-          storage.logActivity(userId(req), "onboarding.document.sent", "onboarding_document", item.id,
-            { repId: rep.id, documentType: item.documentType, signingProvider: "homefront_sign", emailProvider: "resend", emailId: email.id }, req.ip);
-        }
-      } catch (error: any) {
-        const reason = error?.message || "Resend invitation failed";
-        markDocumentsFailed(created.map(item => item.id), reason, userId(req));
-        for (const item of created) {
-          results.push({ documentType: item.documentType, failed: true, reason, envelopeId: item.id });
-          storage.logActivity(userId(req), "onboarding.document.send_failed", "onboarding_document", item.id,
-            { repId: rep.id, documentType: item.documentType, emailProvider: "resend", reason }, req.ip);
-        }
-      }
-    }
-    res.json({ results, ...listPayload(tid, rep.id) });
   });
 
   app.get("/api/onboarding/documents/:id/content", requireAuth, requireCapability("onboarding.documents.read.self"), (req, res) => {

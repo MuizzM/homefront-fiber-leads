@@ -32,3 +32,13 @@ export const onboardingLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many applications from this network. Please try again in an hour." },
 });
+
+// Authenticated recruiting email: high enough for ordinary hiring, bounded so
+// a compromised manager session cannot turn the portal into a bulk mailer.
+export const recruitingInviteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Recruiting invitation limit reached. Try again in an hour." },
+});
