@@ -993,7 +993,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // real user has a tenant since bootstrap — so it never hit in production).
   // Only the unscoped org-wide view per tenant is cached; scoped team_lead/rep
   // views are always computed fresh so role visibility can never leak via cache.
-  const _mapPinCache = new Map<number, { ts: number; pins: any[]; ver?: string }>();
+  const _mapPinCache = new Map<string, { ts: number; pins: any[]; ver?: string }>();
   const MAP_CACHE_TTL = 8_000; // 8s — fast enough for real-time feel
   // Monotonic data version — powers the /api/leads/map ETag so a steady-state
   // poll returns 304 for the cost of a string compare, not a query + 50k-row
@@ -1008,14 +1008,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   function getMapPins(tenantId?: number, repFilter?: number | number[], dataVer?: string) {
     const now = Date.now();
-    const unscoped = repFilter == null || (Array.isArray(repFilter) && repFilter.length === 0);
-    const cacheKey = tenantId ?? 0;
-    if (unscoped) {
-      const hit = _mapPinCache.get(cacheKey);
-      // Reuse only within TTL AND if the DB hasn't changed (a scan in another
-      // process bumps dataVer) — never serve stale pins after new leads land.
-      if (hit && now - hit.ts < MAP_CACHE_TTL && (dataVer == null || hit.ver === dataVer)) return hit.pins;
-    }
+    // Cache EVERY scope, not just unscoped manager/admin views. A rep's scoped view
+    // is the COMMON case and used to recompute both queries on every load + 60s poll
+    // (the cache never fired for them). Key by tenant+scope so a rep can never read
+    // another scope's pins; the dataVer guard busts it on any lead write (8s TTL
+    // otherwise). Scopes are bounded (few reps/tenant); a soft cap bounds growth.
+    const scopeKey = repFilter == null ? "all" : [repFilter].flat().sort((a, b) => a - b).join(",");
+    const cacheKey = `${tenantId ?? 0}|${scopeKey}`;
+    const hit = _mapPinCache.get(cacheKey);
+    // Reuse only within TTL AND if the DB hasn't changed (a scan in another
+    // process bumps dataVer) — never serve stale pins after new leads land.
+    if (hit && now - hit.ts < MAP_CACHE_TTL && (dataVer == null || hit.ver === dataVer)) return hit.pins;
     // Narrow 16-column projection, no ORDER BY — scoped reads come straight
     // off idx_leads_tenant_rep with no temp B-tree (measured 31ms → sub-ms
     // plan at 3.4k rows; the gap widens at 50k).
@@ -1052,7 +1055,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
       pins.push(pin);
     }
-    if (unscoped) _mapPinCache.set(cacheKey, { ts: Date.now(), pins, ver: dataVer });
+    if (_mapPinCache.size > 500) _mapPinCache.clear(); // soft cap — bound stale-scope accumulation
+    _mapPinCache.set(cacheKey, { ts: Date.now(), pins, ver: dataVer });
     return pins;
   }
 
@@ -1082,6 +1086,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const dbVer = storage.getLeadsDataVersion(tid);
     const ver = `${_leadsEpoch}.${_leadsBustByTenant.get(tid ?? 0) ?? 0}.${dbVer}`;
     const etag = `W/"pins-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${ver}"`;
+    // NB: the global API middleware (server/index.ts) forces `no-store` on every
+    // /api response to keep lead PII off disk, which overrides any Cache-Control we
+    // set here — so no browser HTTP caching / stale-while-revalidate is possible by
+    // design. Network cost is cut instead via fewer refetches (client staleTime +
+    // no focus-refetch for reps), the scoped server cache above, and the ETag 304.
     res.set("Cache-Control", "private, no-cache");
     res.set("ETag", etag);
     if (req.headers["if-none-match"] === etag) return res.status(304).end();
@@ -1147,7 +1156,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Helper to bust map pin cache after any lead mutation
   function bustMapCache(tenantId?: number) {
     if (tenantId != null) {
-      _mapPinCache.delete(tenantId);
+      // Keys are now `${tenantId}|${scope}` — drop EVERY scope for this tenant.
+      const prefix = `${tenantId}|`;
+      for (const k of _mapPinCache.keys()) if (k.startsWith(prefix)) _mapPinCache.delete(k);
       _leadsBustByTenant.set(tenantId, (_leadsBustByTenant.get(tenantId) ?? 0) + 1);
     } else {
       // Unknown tenancy → invalidate everyone (never risk a stale 304).

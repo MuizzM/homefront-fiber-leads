@@ -38,12 +38,38 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// In-flight GET de-dupe: when several callers (multiple queries/components, or a
+// burst of invalidations settling in the same tick) request the SAME url at once,
+// they share ONE network request instead of hammering the server N times (we saw
+// ~15 concurrent /api/leads/map hits on mount). Each caller gets its own clone()
+// so their independent .json()/.text() reads never collide. Only GETs with no body
+// are shared; mutations always run their own request.
+const _inflightGets = new Map<string, Promise<Response>>();
+
 export async function apiRequest(
   method: string,
   url: string,
   data?: unknown | undefined,
 ): Promise<Response> {
-  const isMutation = !["GET", "HEAD"].includes(method.toUpperCase());
+  const m = method.toUpperCase();
+  const isMutation = !["GET", "HEAD"].includes(m);
+
+  if (!isMutation && data == null) {
+    const key = `${m} ${url}`;
+    let shared = _inflightGets.get(key);
+    if (!shared) {
+      shared = fetch(`${API_BASE}${url}`, { headers: authHeaders() }).then(async (res) => {
+        notifyIfSessionExpired(res.status);
+        await throwIfResNotOk(res);
+        return res; // body left UNREAD → every caller reads its own clone
+      });
+      _inflightGets.set(key, shared);
+      // Free the slot once settled so a later, genuinely-new request re-fetches.
+      shared.finally(() => { if (_inflightGets.get(key) === shared) _inflightGets.delete(key); });
+    }
+    return (await shared).clone();
+  }
+
   const res = await fetch(`${API_BASE}${url}`, {
     method,
     headers: authHeaders(

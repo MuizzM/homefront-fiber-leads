@@ -46,8 +46,6 @@ interface MapPin {
   fiberStatus: string;
   isNewFiber: boolean;
   assignedRepId: number | null;
-  maxDownloadMbps: number | null;
-  competitorName: string | null;
   leadScore: number;
   contactName: string | null;
   contactPhone: string | null;
@@ -407,7 +405,7 @@ export default function MapView() {
         return res.json();
       },
       enabled: !!user,
-      staleTime: 30_000,
+      staleTime: 45_000, // toward the 60s poll — fewer redundant revalidations
       retry: 2,
       // Auto-refresh so leads added out-of-band (a scan, the nightly cron,
       // another rep) appear on the map without a manual reload. The server's
@@ -416,7 +414,10 @@ export default function MapView() {
       // and a return to the tab pulls fresh immediately.
       refetchInterval: 60_000,
       refetchIntervalInBackground: false,
-      refetchOnWindowFocus: true,
+      // Reps flip between the app and the dialer/camera constantly while knocking —
+      // a refetch on every return is wasteful; the 60s poll keeps them fresh enough.
+      // Managers keep focus-refetch for near-real-time monitoring.
+      refetchOnWindowFocus: !isRep,
     }
   );
   const leads: MapPin[] = mapPinData?.pins ?? [];

@@ -60,10 +60,14 @@ export type KnockVerdict = {
 
 // The 16 lead columns the map pin/popup actually uses — the narrow projection
 // getLeadsForMap selects instead of all 53 columns.
+// Only fields any map-pin consumer reads (render + search + list + lasso + card).
+// maxDownloadMbps/competitorName were selected but consumed by NOTHING on the map
+// path (the scan popup reads its own row) — dropped to shrink the payload. contact*
+// stay (usually null → already omitted; contactPhone powers the card's Call action).
 export type MapPinRow = Pick<Lead,
   "id" | "address" | "city" | "state" | "zip" | "lat" | "lng" | "leadStatus" |
-  "fiberStatus" | "isNewFiber" | "assignedRepId" | "maxDownloadMbps" |
-  "competitorName" | "leadScore" | "contactName" | "contactPhone">;
+  "fiberStatus" | "isNewFiber" | "assignedRepId" |
+  "leadScore" | "contactName" | "contactPhone">;
 
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
@@ -1001,8 +1005,7 @@ export class Storage implements IStorage {
       id: leads.id, address: leads.address, city: leads.city, state: leads.state,
       zip: leads.zip, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
       fiberStatus: leads.fiberStatus, isNewFiber: leads.isNewFiber,
-      assignedRepId: leads.assignedRepId, maxDownloadMbps: leads.maxDownloadMbps,
-      competitorName: leads.competitorName, leadScore: leads.leadScore,
+      assignedRepId: leads.assignedRepId, leadScore: leads.leadScore,
       contactName: leads.contactName, contactPhone: leads.contactPhone,
     }).from(leads);
     return (conditions.length > 0
