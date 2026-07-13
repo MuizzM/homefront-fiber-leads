@@ -1021,7 +1021,7 @@ export class Storage implements IStorage {
   getFreshLeads(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { city?: string; state?: string; days: number },
+    opts: { city?: string; state?: string; days: number; status?: "available" | "coming_soon" },
   ): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }> {
     const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(Math.floor(opts.days), 365) : 30;
     const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
@@ -1034,6 +1034,9 @@ export class Storage implements IStorage {
     }
     if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
     if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
+    // status filter: coming_soon = pre-launch fiber (leadTag), available = serviceable now.
+    if (opts.status === "coming_soon") conditions.push(eq(leads.leadTag, "coming_soon"));
+    else if (opts.status === "available") conditions.push(sql`(${leads.leadTag} IS NULL OR ${leads.leadTag} <> 'coming_soon')`);
     return db.select({
       id: leads.id, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
       competitorName: leads.competitorName, address: leads.address, city: leads.city,

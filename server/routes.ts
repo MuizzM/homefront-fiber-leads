@@ -1058,7 +1058,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const state = typeof q.state === "string" && q.state.trim() ? String(q.state).trim().slice(0, 20) : undefined;
     const daysN = Number(q.days);
     const days = Number.isFinite(daysN) && daysN > 0 ? Math.min(Math.floor(daysN), 365) : 30;
-    const rows = storage.getFreshLeads(tid, repFilter, { city, state, days });
+    const status = q.status === "available" || q.status === "coming_soon" ? q.status : undefined;
+    const rows = storage.getFreshLeads(tid, repFilter, { city, state, days, status });
     const features = rows
       .filter((r) => r.lat != null && r.lng != null)
       .map((r) => ({
@@ -1066,7 +1067,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         geometry: { type: "Point" as const, coordinates: [r.lng, r.lat] },
         properties: { id: r.id, status: r.leadStatus, competitor_flag: r.competitorName ? 1 : 0 },
       }));
-    res.json({ type: "FeatureCollection", features, count: features.length, days, city: city ?? null, state: state ?? null });
+    res.json({ type: "FeatureCollection", features, count: features.length, days, city: city ?? null, state: state ?? null, status: status ?? null });
   });
 
   // Raw provider fabric identifiers (Kinetic's internal address/access/exchange
