@@ -6,6 +6,9 @@ import {
   isKnockOutcome,
   deriveWasHome,
   pinDisplayState,
+  summarizeByDisplayState,
+  BULK_STATUS_OUTCOMES,
+  isBulkStatusOutcome,
   STATE_COLORS,
   haversineMeters,
   nearestUnworkedLead,
@@ -156,6 +159,51 @@ describe("pinDisplayState — truth table", () => {
     // Every rep-facing state color is unique — no two statuses share a hue.
     const repStates = ALL_PIN_STATES.filter(s => s !== "contacted");
     expect(new Set(repStates.map(s => STATE_COLORS[s])).size).toBe(repStates.length);
+  });
+});
+
+describe("summarizeByDisplayState (lasso breakdown)", () => {
+  it("counts by display state in palette order, only present states", () => {
+    const items = [
+      { leadStatus: "prospect" },                                  // unworked
+      { leadStatus: "prospect", lastOutcome: "not_home" },         // not_home
+      { leadStatus: "prospect", lastOutcome: "not_home" },         // not_home
+      { leadStatus: "sold" },                                      // sold
+      { leadStatus: "follow_up", lastOutcome: "callback" },        // callback
+    ];
+    const out = summarizeByDisplayState(items);
+    const asMap = Object.fromEntries(out.map(x => [x.ds, x.count]));
+    expect(asMap).toEqual({ unworked: 1, not_home: 2, callback: 1, sold: 1 });
+    // total equals input length
+    expect(out.reduce((a, x) => a + x.count, 0)).toBe(items.length);
+    // ordering follows STATE_COLORS key order (unworked before not_home before …)
+    const order = Object.keys(STATE_COLORS);
+    const idxs = out.map(x => order.indexOf(x.ds));
+    expect(idxs).toEqual([...idxs].sort((a, b) => a - b));
+  });
+
+  it("is empty for no items", () => {
+    expect(summarizeByDisplayState([])).toEqual([]);
+  });
+});
+
+describe("BULK_STATUS_OUTCOMES (lasso Modify Status)", () => {
+  it("only leadStatus-pure, non-commission dispositions — never sold/not_home/callback", () => {
+    expect(BULK_STATUS_OUTCOMES).toContain("prospect");
+    expect(BULK_STATUS_OUTCOMES).toContain("interested");
+    expect(BULK_STATUS_OUTCOMES).toContain("follow_up");
+    expect(BULK_STATUS_OUTCOMES).toContain("not_interested");
+    for (const bad of ["sold", "not_home", "callback", "needs_verification"]) {
+      expect(BULK_STATUS_OUTCOMES).not.toContain(bad);
+      expect(isBulkStatusOutcome(bad)).toBe(false);
+    }
+  });
+  it("every allowed bulk outcome is a real knock outcome with a leadStatus", () => {
+    for (const o of BULK_STATUS_OUTCOMES) {
+      expect(isKnockOutcome(o)).toBe(true);
+      expect(OUTCOME_TO_STATUS[o]).toBeTruthy();
+      expect(isBulkStatusOutcome(o)).toBe(true);
+    }
   });
 });
 

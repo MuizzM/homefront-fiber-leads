@@ -22,7 +22,7 @@ import { LeadKnockSheet } from "@/components/LeadKnockSheet";
 import { LeadsInViewPanel } from "@/components/LeadsInViewPanel";
 import { getKnockQueue, type KnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
 import { captureFieldFix } from "@/lib/geoFix";
-import { OUTCOME_TO_STATUS, pinDisplayState, STATE_COLORS, STATE_LABELS, nearestUnworkedLead, type KnockOutcome, type RoutablePin } from "@shared/knock";
+import { OUTCOME_TO_STATUS, OUTCOME_META, pinDisplayState, STATE_COLORS, STATE_LABELS, nearestUnworkedLead, summarizeByDisplayState, BULK_STATUS_OUTCOMES, type KnockOutcome, type RoutablePin, type PinDisplayState } from "@shared/knock";
 import { saveLeadNote, flushPendingNotes, type NotePoster, type NoteSaveResult } from "@/lib/leadNotes";
 import {
   UNCLUSTERED_PAINT, SELECTED_RING_SPEC,
@@ -423,6 +423,12 @@ export default function MapView() {
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
   const [lassoRepId, setLassoRepId] = useState("");
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
+  // Sales Rabbit-style refine + action state. `lassoDisabled` = display states the
+  // user toggled OUT of the action set (default empty = everything selected).
+  // `lassoAction` = which bulk action the panel is showing.
+  const [lassoDisabled, setLassoDisabled] = useState<Set<PinDisplayState>>(new Set());
+  const [lassoAction, setLassoAction] = useState<"assign" | "status" | "area">("assign");
+  const [lassoStatusOutcome, setLassoStatusOutcome] = useState<KnockOutcome>(BULK_STATUS_OUTCOMES[0]);
   const lassoLayerRef = useRef<boolean>(false);
 
   // Sidebar filters
@@ -522,6 +528,49 @@ export default function MapView() {
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  // Lasso "Change Ownership" — reassign the REFINED selection (exact lead ids, so
+  // status-refinement is honored) to a rep, without creating a saved territory.
+  const bulkAssignMutation = useMutation({
+    mutationFn: async ({ leadIds, repId }: { leadIds: number[]; repId: number }) => {
+      const res = await apiRequest("POST", "/api/leads/bulk-assign", { leadIds, repId });
+      return res.json();
+    },
+    onSuccess: (data: { updated: number; skipped: number }) => {
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      const repName = team.find((m: TeamMember) => m.id === Number(lassoRepId))?.name ?? "rep";
+      toast({ title: `✓ ${data.updated} reassigned to ${repName}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}` });
+      exitLasso();
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  // Lasso "Modify Status" — set the refined selection to one disposition at once
+  // (a manager pipeline edit; no knock, no commission — see /api/leads/bulk-status).
+  const bulkStatusMutation = useMutation({
+    mutationFn: async ({ leadIds, outcome }: { leadIds: number[]; outcome: KnockOutcome }) => {
+      const res = await apiRequest("POST", "/api/leads/bulk-status", { leadIds, outcome });
+      return res.json();
+    },
+    onSuccess: (data: { updated: number; skipped: number; outcome: KnockOutcome }) => {
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      const label = OUTCOME_META[data.outcome]?.label ?? "status";
+      toast({ title: `✓ ${data.updated} set to ${label}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}` });
+      exitLasso();
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  // Lasso derived: the per-status breakdown (chips) and the REFINED active set
+  // (what every bulk action operates on once statuses are toggled off).
+  const lassoSummary = useMemo(() => summarizeByDisplayState(lassoSelected), [lassoSelected]);
+  const lassoActive = useMemo(
+    () => lassoSelected.filter(l => !lassoDisabled.has(pinDisplayState(l))),
+    [lassoSelected, lassoDisabled],
+  );
+  const lassoActiveIds = useMemo(() => lassoActive.map(l => l.id), [lassoActive]);
+
   // Rename an area — the friendly name reps see on their map. Server keeps an
   // audit trail (territory "renamed" event) and custom names survive reassign.
   const renameTerritoryMutation = useMutation({
@@ -598,6 +647,9 @@ export default function MapView() {
     setLassoSelected([]);
     setLassoRepId("");
     setLassoName("");
+    setLassoDisabled(new Set());
+    setLassoAction("assign");
+    setLassoStatusOutcome(BULK_STATUS_OUTCOMES[0]);
     const map = mapRef.current;
     if (map) {
       try {
@@ -1573,8 +1625,11 @@ export default function MapView() {
       drawing = true;
       stroke = [[lngLat.lng, lngLat.lat]];
       lastPx = { x: point.x, y: point.y };
-      // A new stroke replaces the previous selection
-      setLassoSelected([]); setLassoPoints([]);
+      // A new stroke replaces the previous selection — also drop the prior loop's
+      // status refinement so a fresh loop always starts with EVERY status included
+      // (else re-drawing without Exit silently excludes the old loop's toggled-off
+      // statuses from the new one — e.g. Prospect off in loop A drops all of B's).
+      setLassoSelected([]); setLassoPoints([]); setLassoDisabled(new Set());
       clearPreview();
     };
 
@@ -2770,48 +2825,99 @@ export default function MapView() {
                   ><X className="w-4 h-4" /></button>
                 </div>
               ) : (
-                /* Drawn → name it (optional) · pick rep · Assign (creates colored territory) */
-                <div className="glass-surface flex flex-col gap-2 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(440px,calc(100vw-24px))]">
-                  <input
-                    type="text"
-                    value={lassoName}
-                    onChange={e => setLassoName(e.target.value)}
-                    maxLength={60}
-                    data-testid="lasso-area-name"
-                    placeholder={lassoRepId
-                      ? `Area name — leave blank for "${team.find(m => m.id === Number(lassoRepId))?.name ?? "Rep"}'s area"`
-                      : "Area name (optional)"}
-                    className="h-11 w-full rounded-xl bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/55 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
-                  />
-                  <div className="flex items-center gap-2.5">
-                    <span className="flex items-center gap-1.5 text-[14px] font-bold text-white whitespace-nowrap" aria-live="polite">
-                      <span
-                        className="w-2.5 h-2.5 rounded-full transition-colors"
-                        style={{ background: colorForRep(lassoRepId ? Number(lassoRepId) : null), boxShadow: lassoRepId ? `0 0 8px ${colorForRep(Number(lassoRepId))}` : "none" }}
-                      />
-                      {lassoSelected.length}<span className="font-medium text-white/60 hidden sm:inline"> leads</span>
-                      {(() => { const already = lassoSelected.filter(l => l.assignedRepId).length; return already > 0
-                        ? <span className="font-normal text-[11px] text-amber-300/90 ml-0.5">({already} already assigned)</span> : null; })()}
+                /* Drawn → Sales Rabbit-style: status breakdown (tap chips to
+                   refine), then an action on the refined set — Assign owner, Set
+                   status, or Save as area. */
+                <div className="glass-surface flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))]">
+                  {/* Count + per-status breakdown; tap a chip to include/exclude it */}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[14px] font-bold text-white whitespace-nowrap mr-0.5" aria-live="polite">
+                      {lassoActive.length}<span className="text-white/55 font-medium">/{lassoSelected.length}</span>
                     </span>
-                    <select
-                      value={lassoRepId}
-                      onChange={e => setLassoRepId(e.target.value)}
-                      data-testid="lasso-rep-select"
-                      className="h-11 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60 max-w-[160px]"
-                    >
-                      <option value="" className="text-slate-900">Assign to rep…</option>
-                      {team.filter(m => m.active).map((m: TeamMember) => (
-                        <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
-                      ))}
-                    </select>
-                    <Button
-                      disabled={!lassoRepId || assignAreaMutation.isPending}
-                      onClick={() => assignAreaMutation.mutate({ polygon: lassoPoints, repId: Number(lassoRepId), name: lassoName })}
-                      data-testid="lasso-assign"
-                      className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
-                    >
-                      {assignAreaMutation.isPending ? "Assigning…" : `Assign ${lassoSelected.length}`}
-                    </Button>
+                    {lassoSummary.map(({ ds, count }) => {
+                      const on = !lassoDisabled.has(ds);
+                      return (
+                        <button
+                          key={ds}
+                          type="button"
+                          aria-pressed={on}
+                          onClick={() => setLassoDisabled(prev => { const n = new Set(prev); if (n.has(ds)) n.delete(ds); else n.add(ds); return n; })}
+                          data-testid={`lasso-chip-${ds}`}
+                          className="h-7 inline-flex items-center gap-1.5 rounded-full pl-1.5 pr-2.5 text-[11px] font-semibold border transition"
+                          style={on
+                            ? { background: `${STATE_COLORS[ds]}22`, borderColor: `${STATE_COLORS[ds]}88`, color: "#fff" }
+                            : { background: "transparent", borderColor: "rgba(255,255,255,0.12)", color: "rgba(255,255,255,0.4)" }}
+                        >
+                          <span className="w-2 h-2 rounded-full" style={{ background: STATE_COLORS[ds], opacity: on ? 1 : 0.4 }} />
+                          {STATE_LABELS[ds]} {count}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Action switcher */}
+                  <div className="flex items-center gap-1 rounded-full bg-white/10 p-0.5">
+                    {([["assign", "Assign"], ["status", "Status"], ["area", "Area"]] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setLassoAction(key)}
+                        data-testid={`lasso-action-${key}`}
+                        aria-pressed={lassoAction === key}
+                        className={`flex-1 h-8 rounded-full text-[12px] font-semibold transition ${lassoAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
+                      >{label}</button>
+                    ))}
+                  </div>
+
+                  {/* Mode control + Apply + Exit */}
+                  <div className="flex items-center gap-2">
+                    {lassoAction === "assign" && (
+                      <>
+                        <select value={lassoRepId} onChange={e => setLassoRepId(e.target.value)} data-testid="lasso-rep-select"
+                          className="h-11 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60">
+                          <option value="" className="text-slate-900">Assign to rep…</option>
+                          {team.filter(m => m.active).map((m: TeamMember) => (<option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>))}
+                        </select>
+                        <Button disabled={!lassoRepId || !lassoActiveIds.length || bulkAssignMutation.isPending}
+                          onClick={() => bulkAssignMutation.mutate({ leadIds: lassoActiveIds, repId: Number(lassoRepId) })}
+                          data-testid="lasso-assign"
+                          className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40">
+                          {bulkAssignMutation.isPending ? "…" : `Assign ${lassoActiveIds.length}`}
+                        </Button>
+                      </>
+                    )}
+                    {lassoAction === "status" && (
+                      <>
+                        <select value={lassoStatusOutcome} onChange={e => setLassoStatusOutcome(e.target.value as KnockOutcome)} data-testid="lasso-status-select"
+                          className="h-11 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60">
+                          {BULK_STATUS_OUTCOMES.map(o => (<option key={o} value={o} className="text-slate-900">{OUTCOME_META[o].label}</option>))}
+                        </select>
+                        <Button disabled={!lassoActiveIds.length || bulkStatusMutation.isPending}
+                          onClick={() => bulkStatusMutation.mutate({ leadIds: lassoActiveIds, outcome: lassoStatusOutcome })}
+                          data-testid="lasso-set-status"
+                          className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40">
+                          {bulkStatusMutation.isPending ? "…" : `Set ${lassoActiveIds.length}`}
+                        </Button>
+                      </>
+                    )}
+                    {lassoAction === "area" && (
+                      <>
+                        <input type="text" value={lassoName} onChange={e => setLassoName(e.target.value)} maxLength={60} data-testid="lasso-area-name"
+                          placeholder={lassoRepId ? `"${team.find(m => m.id === Number(lassoRepId))?.name ?? "Rep"}'s area"` : "Area name…"}
+                          className="h-11 w-[116px] rounded-full bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/55 focus:outline-none focus:ring-2 focus:ring-teal-400/60" />
+                        <select value={lassoRepId} onChange={e => setLassoRepId(e.target.value)} data-testid="lasso-area-rep-select"
+                          className="h-11 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60">
+                          <option value="" className="text-slate-900">Rep…</option>
+                          {team.filter(m => m.active).map((m: TeamMember) => (<option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>))}
+                        </select>
+                        <Button disabled={!lassoRepId || assignAreaMutation.isPending}
+                          onClick={() => assignAreaMutation.mutate({ polygon: lassoPoints, repId: Number(lassoRepId), name: lassoName })}
+                          data-testid="lasso-assign"
+                          className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40">
+                          {assignAreaMutation.isPending ? "…" : "Save"}
+                        </Button>
+                      </>
+                    )}
                     <button
                       onClick={exitLasso}
                       className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
@@ -2819,6 +2925,10 @@ export default function MapView() {
                       data-testid="lasso-exit"
                     ><X className="w-4 h-4" /></button>
                   </div>
+
+                  {lassoAction === "area" && (
+                    <span className="text-[10.5px] text-white/45 leading-tight">Area assigns every house in the loop + saves a colored territory. The refine chips apply to Assign &amp; Status.</span>
+                  )}
                 </div>
               )}
             </div>

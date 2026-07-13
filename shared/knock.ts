@@ -53,6 +53,19 @@ export function isKnockOutcome(v: unknown): v is KnockOutcome {
   return typeof v === "string" && OUTCOMES.some(o => o.key === v);
 }
 
+// Outcomes valid for a BULK status edit (Sales Rabbit "Modify Status"). Only the
+// dispositions whose pin display is determined by `leadStatus` ALONE, so a bulk
+// edit — which writes just leadStatus, with no knock, no GPS, and no commission —
+// always renders correctly on the map. Deliberately EXCLUDES: `sold` (a real
+// field sale that must mint a commission, never a bulk toggle) and `not_home` /
+// `callback` (their pin display needs a real knock's lastOutcome, which a bulk
+// edit doesn't create). Used by BOTH the lasso UI (the offered options) and the
+// server endpoint (validation) so they can't drift.
+export const BULK_STATUS_OUTCOMES: KnockOutcome[] = ["prospect", "interested", "follow_up", "not_interested"];
+export function isBulkStatusOutcome(v: unknown): v is KnockOutcome {
+  return typeof v === "string" && (BULK_STATUS_OUTCOMES as string[]).includes(v);
+}
+
 // wasHome is DERIVED, never client-supplied — the server overwrites any value in
 // the request body with this, so it can never contradict the outcome.
 export function deriveWasHome(outcome: KnockOutcome): boolean {
@@ -113,6 +126,26 @@ export function pinDisplayState(p: {
       // Knocked but status unchanged (defensive) still reads as worked.
       return p.visited ? "contacted" : "unworked";
   }
+}
+
+// ── Lasso selection summary (Sales Rabbit-style) ──────────────────────────────
+// PURE. Given a set of selected pins, return the per-display-state counts in the
+// canonical palette order (only states actually present). Powers the lasso panel's
+// "breakdown by status" chips and the refine-by-status filter. One place so the
+// map, the count, and the bulk-action target set can never disagree.
+export interface DisplayStateCount { ds: PinDisplayState; count: number }
+
+export function summarizeByDisplayState(
+  items: Array<{ leadStatus: string; visited?: boolean | number | null; lastOutcome?: string | null }>,
+): DisplayStateCount[] {
+  const counts = {} as Record<PinDisplayState, number>;
+  for (const it of items) {
+    const ds = pinDisplayState(it);
+    counts[ds] = (counts[ds] ?? 0) + 1;
+  }
+  return (Object.keys(STATE_COLORS) as PinDisplayState[])
+    .filter((ds) => (counts[ds] ?? 0) > 0)
+    .map((ds) => ({ ds, count: counts[ds] }));
 }
 
 // ── Geometry / next-door routing ──────────────────────────────────────────────

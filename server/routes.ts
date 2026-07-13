@@ -44,7 +44,7 @@ import { pointInPolygon } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
-import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, type KnockOutcome } from "@shared/knock";
+import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
   calcCommission, pickActiveStructure, describeStructure,
@@ -2504,6 +2504,36 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
     }
     res.json({ updated, skipped, repId });
+  });
+
+  // POST /api/leads/bulk-status  { leadIds: number[], outcome: KnockOutcome }
+  // Sales Rabbit "Modify Status" for a lassoed selection: set many leads to one
+  // disposition at once. This is a MANAGER pipeline edit — a plain leadStatus
+  // write, tenant + per-lead access scoped like bulk-assign. It deliberately does
+  // NOT create a knock (no GPS/history), does NOT create or reverse commissions,
+  // and only accepts leadStatus-pure outcomes (see BULK_STATUS_OUTCOMES) so the
+  // map always reflects the change.
+  app.post("/api/leads/bulk-status", requireCapability("lead.disposition.update"), (req, res) => {
+    const { leadIds, outcome } = req.body as { leadIds: number[]; outcome: string };
+    if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
+    if (!isBulkStatusOutcome(outcome)) return res.status(400).json({ error: "outcome not allowed for bulk edit" });
+    const newStatus = OUTCOME_TO_STATUS[outcome as KnockOutcome];
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    let updated = 0, skipped = 0;
+    for (const raw of leadIds) {
+      const id = Number(raw);
+      const lead = storage.getLeadById(id);
+      // Silently skip cross-tenant or out-of-scope leads (don't leak, don't act) —
+      // count them so the UI can be honest about what changed.
+      if (!lead || (tid != null && lead.tenantId !== tid) || !repCanAccessLead(user, lead)) { skipped++; continue; }
+      if (storage.updateLead(id, { leadStatus: newStatus }, tid)) updated++;
+    }
+    if (updated > 0) {
+      bustMapCache(tid);
+      storage.logActivity(user?.id ?? null, "lead.bulk_status", "lead", undefined, { outcome, leadStatus: newStatus, updated, skipped }, req.ip);
+    }
+    res.json({ updated, skipped, outcome, leadStatus: newStatus });
   });
 
   // ── Lead Enrichment ──────────────────────────────────────────────────────────
