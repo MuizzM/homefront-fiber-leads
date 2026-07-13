@@ -17,9 +17,12 @@ import { STATE_COLORS, type PinDisplayState } from "@shared/knock";
 export type StatusIconKey = PinDisplayState | "neutral";
 
 // Legible-at-20px shapes. Kept as a closed union so drawGlyph() is exhaustive
-// and adding a status without a glyph is a compile error.
+// and adding a status without a glyph is a compile error. `arrow` + `dollar`
+// were added for the status-marker spec: Prospect and Follow-up share the ONE
+// `arrow` shape (Follow-up drawn rotated 180°), and Sold shows `dollar` ("$").
 export type GlyphShape =
-  | "home" | "door" | "star" | "clock" | "phone" | "check" | "x" | "dot";
+  | "home" | "door" | "star" | "clock" | "phone" | "check" | "x" | "dot"
+  | "arrow" | "dollar";
 
 export interface StatusIcon {
   /** Mapbox image id registered via map.addImage(), e.g. "hf-icon-sold". */
@@ -28,26 +31,43 @@ export interface StatusIcon {
   glyph: GlyphShape;
   /** Which STATE_COLORS hue tints the disc — always a real palette key. */
   tint: PinDisplayState;
+  /**
+   * Degrees to rotate the GLYPH (not the disc) when drawing. This is how the
+   * spec's "Prospect & Follow-up share one arrow, Follow-up rotated 180°" is
+   * realized: both use glyph `arrow`, Follow-up sets rotate 180 so it points
+   * down. Rotation is baked into the per-state tinted sprite rather than a
+   * Mapbox `icon-rotate` match, because these sprites are full-color (tinted
+   * disc + white ring + shadow for sunlight legibility), not recolorable SDF —
+   * so a single shared, recolored/rotated asset doesn't apply. Same visual
+   * result, one image per state. Defaults to 0 when omitted.
+   */
+  rotate?: number;
 }
 
 // Stable id prefix — the `icon-image` match and map.addImage() must agree.
 export const ICON_PREFIX = "hf-icon-";
 
-// Icon meanings (spec): unworked→home, not_home→door, interested→star,
-// follow_up→clock, callback→phone, sold→check, not_interested→x,
-// contacted→dot. neutral is the slate fallback disc.
+// Icon meanings (status-marker spec): Prospect(unworked)→arrow ▲, Follow-up→
+// SAME arrow rotated 180° ▼, Sold→"$", Interested→star ★, Not Interested→✕,
+// Callback→phone, Not Home→door (kept — a closed door reads as "knocked, no
+// answer" more clearly than a generic house, and the spec's own AC only pins
+// the arrow-pair + "$"; the shared arrow already frees the house shape). The
+// `arrow` pairing is deliberate: Prospect and Follow-up are the two "active,
+// needs-action" states, visually linked by one shape and split by direction +
+// color (orange up = to-do, yellow down = come-back). contacted(legacy)→dot;
+// neutral is the slate fallback disc.
 export const STATUS_ICON: Record<StatusIconKey, StatusIcon> = {
-  unworked:       { key: `${ICON_PREFIX}unworked`,       glyph: "home",  tint: "unworked" },
-  not_home:       { key: `${ICON_PREFIX}not_home`,       glyph: "door",  tint: "not_home" },
-  contacted:      { key: `${ICON_PREFIX}contacted`,      glyph: "dot",   tint: "contacted" },
-  interested:     { key: `${ICON_PREFIX}interested`,     glyph: "star",  tint: "interested" },
-  follow_up:      { key: `${ICON_PREFIX}follow_up`,      glyph: "clock", tint: "follow_up" },
-  callback:       { key: `${ICON_PREFIX}callback`,       glyph: "phone", tint: "callback" },
-  sold:           { key: `${ICON_PREFIX}sold`,           glyph: "check", tint: "sold" },
-  not_interested: { key: `${ICON_PREFIX}not_interested`, glyph: "x",     tint: "not_interested" },
+  unworked:       { key: `${ICON_PREFIX}unworked`,       glyph: "arrow",  tint: "unworked",     rotate: 0   },
+  not_home:       { key: `${ICON_PREFIX}not_home`,       glyph: "door",   tint: "not_home"                  },
+  contacted:      { key: `${ICON_PREFIX}contacted`,      glyph: "dot",    tint: "contacted"                 },
+  interested:     { key: `${ICON_PREFIX}interested`,     glyph: "star",   tint: "interested"                },
+  follow_up:      { key: `${ICON_PREFIX}follow_up`,      glyph: "arrow",  tint: "follow_up",    rotate: 180 },
+  callback:       { key: `${ICON_PREFIX}callback`,       glyph: "phone",  tint: "callback"                  },
+  sold:           { key: `${ICON_PREFIX}sold`,           glyph: "dollar", tint: "sold"                      },
+  not_interested: { key: `${ICON_PREFIX}not_interested`, glyph: "x",      tint: "not_interested"            },
   // Fallback disc — slate (the design's "unknown/neutral" hue). tint is a real
   // STATE_COLORS key so no new hex is introduced.
-  neutral:        { key: `${ICON_PREFIX}neutral`,        glyph: "dot",   tint: "contacted" },
+  neutral:        { key: `${ICON_PREFIX}neutral`,        glyph: "dot",    tint: "contacted"                 },
 };
 
 // The ordered PinDisplayState keys, sourced from STATE_COLORS so the icon set
@@ -92,14 +112,30 @@ export function spriteImages(dpr = 1): Record<StatusIconKey, StatusSprite> {
     const spec = STATUS_ICON[k];
     out[k] = {
       key: spec.key,
-      canvas: drawSprite(spec.glyph, STATE_COLORS[spec.tint], ratio),
+      canvas: drawSprite(spec.glyph, STATE_COLORS[spec.tint], ratio, spec.rotate ?? 0),
       pixelRatio: ratio,
     };
   }
   return out;
 }
 
-function drawSprite(glyph: GlyphShape, color: string, ratio: number): HTMLCanvasElement {
+// Legend helper: a PNG data URL of a single status glyph, drawn via the SAME
+// drawSprite path the map uses — so the legend <img>-renders the EXACT glyph a
+// rep sees on the map (a11y: glyph→meaning, never color alone), with zero shape
+// duplication. Browser-only (needs a 2d canvas); returns "" if unavailable.
+// Callers should memoize (drawing is cheap but not free).
+export function spriteDataUrl(key: StatusIconKey, dpr = 1): string {
+  const ratio = Number.isFinite(dpr) && dpr > 0 ? dpr : 1;
+  const spec = STATUS_ICON[key];
+  try {
+    return drawSprite(spec.glyph, STATE_COLORS[spec.tint], ratio, spec.rotate ?? 0)
+      .toDataURL("image/png");
+  } catch {
+    return "";
+  }
+}
+
+function drawSprite(glyph: GlyphShape, color: string, ratio: number, rotate = 0): HTMLCanvasElement {
   const size = Math.max(1, Math.round(BASE_PX * ratio));
   const canvas = document.createElement("canvas");
   canvas.width = size;
@@ -131,13 +167,22 @@ function drawSprite(glyph: GlyphShape, color: string, ratio: number): HTMLCanvas
   ctx.strokeStyle = "#ffffff";
   ctx.stroke();
 
-  // Glyph in white.
+  // Glyph in white. Rotation (spec: Follow-up = arrow rotated 180°) is applied
+  // around the sprite center so only the glyph turns — the disc + ring are
+  // circular and rotation-invariant, so they're unaffected.
+  ctx.save();
+  if (rotate) {
+    ctx.translate(c, c);
+    ctx.rotate((rotate * Math.PI) / 180);
+    ctx.translate(-c, -c);
+  }
   ctx.fillStyle = "#ffffff";
   ctx.strokeStyle = "#ffffff";
   ctx.lineWidth = Math.max(1, size * 0.07);
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   drawGlyph(ctx, glyph, size);
+  ctx.restore();
 
   return canvas;
 }
@@ -250,6 +295,33 @@ function drawGlyph(ctx: CanvasRenderingContext2D, glyph: GlyphShape, size: numbe
       ctx.beginPath();
       ctx.arc(px(0.5), py(0.5), g * 0.28, 0, Math.PI * 2);
       ctx.fill();
+      return;
+    }
+    case "arrow": {
+      // Solid up-arrow (▲ with a shaft). Prospect draws it as-is; Follow-up
+      // draws the SAME shape rotated 180° (→ ▼) via drawSprite's transform.
+      ctx.beginPath();
+      ctx.moveTo(px(0.5),  py(0.0));   // peak
+      ctx.lineTo(px(0.95), py(0.5));   // right shoulder
+      ctx.lineTo(px(0.64), py(0.5));   // right notch
+      ctx.lineTo(px(0.64), py(1.0));   // right tail
+      ctx.lineTo(px(0.36), py(1.0));   // left tail
+      ctx.lineTo(px(0.36), py(0.5));   // left notch
+      ctx.lineTo(px(0.05), py(0.5));   // left shoulder
+      ctx.closePath();
+      ctx.fill();
+      return;
+    }
+    case "dollar": {
+      // "$" glyph for Sold — money reads instantly. Rendered as bold text so it
+      // stays crisp at ~20px; centered on the sprite (px(0.5)/py(0.5) = center).
+      ctx.save();
+      ctx.font = `700 ${Math.round(size * 0.58)}px -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      // Nudge down a hair — the "$" cap sits high with middle baseline.
+      ctx.fillText("$", px(0.5), py(0.52));
+      ctx.restore();
       return;
     }
   }

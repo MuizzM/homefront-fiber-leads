@@ -32,7 +32,7 @@ import {
 } from "@/lib/mapPins";
 import { createFollowState, ingestFix, stepFrame, filteredLngLat } from "@/lib/followCamera";
 import { selectPointsInPolygon, pointInRing, bboxOfRing, type BBox2 } from "@/lib/mapGeo";
-import { spriteImages, iconImageMatchExpression } from "@/lib/statusIcons";
+import { spriteImages, iconImageMatchExpression, spriteDataUrl, type StatusIconKey } from "@/lib/statusIcons";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -78,6 +78,15 @@ const PIN_COLORS: Record<string, { bg: string; border: string; label: string }> 
 // PIN_COLORS map above keys on raw leadStatus (6 states) and can't represent
 // callback (cyan) or not-home (blue).
 
+// The status-filter legend keys on raw leadStatus (PIN_COLORS); the glyph sprites
+// key on PinDisplayState. Only "prospect"→"unworked" differs — the rest are 1:1.
+// Used to draw the ACTUAL map glyph beside each legend row when glyph mode is on
+// (a11y: glyph→meaning, not color alone).
+const LEGEND_STATUS_TO_ICON: Record<string, StatusIconKey> = {
+  prospect: "unworked", contacted: "contacted", interested: "interested",
+  follow_up: "follow_up", sold: "sold", not_interested: "not_interested",
+};
+
 
 // ── NEW_FIELD_MAP: status-driven ICON pin layer (flag-gated, OFF by default) ──
 // A GPU symbol layer that paints each door as its status glyph instead of a flat
@@ -86,9 +95,23 @@ const PIN_COLORS: Record<string, { bg: string; border: string; label: string }> 
 // shows and `lead-unclustered` is hidden; clusters are untouched in both modes.
 const STATUS_ICON_LAYER = "lead-status-icons";
 
-// One-liner flag read — localStorage.getItem("NEW_FIELD_MAP") === "1".
+// Server-controlled rollout flag, hydrated from GET /api/config/map's
+// `flags.statusMarkerGlyphs` before the map's layers are built (the token — and
+// thus this response — must arrive before init). The server stages the rollout
+// (admins/owners first, then STATUS_MARKER_GLYPHS=all → everyone).
+let serverStatusGlyphs = false;
+export function setServerStatusGlyphs(on: boolean): void { serverStatusGlyphs = !!on; }
+
+// Is the status-glyph pin layer active? A per-device localStorage override wins
+// (NEW_FIELD_MAP="1" force-on, "0" force-off) so a tester can flip either way on
+// their own device; otherwise follow the server rollout flag.
 function newFieldMap(): boolean {
-  try { return localStorage.getItem("NEW_FIELD_MAP") === "1"; } catch { return false; }
+  try {
+    const ls = localStorage.getItem("NEW_FIELD_MAP");
+    if (ls === "1") return true;
+    if (ls === "0") return false;
+  } catch { /* localStorage unavailable → fall through to server flag */ }
+  return serverStatusGlyphs;
 }
 
 // Minimal structural view of the Mapbox map — just the methods the icon layer
@@ -155,6 +178,84 @@ function addStatusIconLayer(map: FieldIconMap): void {
   try { map.setLayoutProperty("lead-unclustered", "visibility", "none"); } catch {}
 }
 
+
+// ── Optional map perf instrument (opt-in, prod-safe) ─────────────────────────
+// The status-marker spec asks to observe map FPS / first-paint / frame p95.
+// This stack has NO external metrics sink, so rather than fabricate one we expose
+// a lightweight, OPT-IN sampler: turn it on with ?perf=1 or localStorage
+// MAP_PERF="1". OFF = a no-op (zero overhead in normal use). ON = samples frame
+// times via rAF (read-only — never writes the map, so it can't fight the
+// follow-camera loop), records first paint (map 'idle'), and console.warns when
+// the rolling p95 frame time blows the 20ms budget. Read live numbers from
+// window.__mapPerf. Self-cleans on the map's 'remove' event.
+interface MapPerf {
+  firstPaintMs: number | null;
+  frames: number;
+  fps(): number;
+  p95(): number;
+  samples(): number[];
+}
+function startMapPerf(map: any): void {
+  let enabled = false;
+  try {
+    enabled = new URLSearchParams(window.location.search).get("perf") === "1"
+      || localStorage.getItem("MAP_PERF") === "1";
+  } catch { enabled = false; }
+  if (!enabled || typeof requestAnimationFrame !== "function" || typeof performance === "undefined") return;
+
+  const start = performance.now();
+  const N = 600;                 // ~10s of frames at 60fps
+  const buf: number[] = [];
+  let last = start;
+  let raf = 0;
+  let stopped = false;
+  let firstPaintMs: number | null = null;
+  let lastWarn = 0;
+
+  const onIdle = () => { if (firstPaintMs == null) firstPaintMs = performance.now() - start; };
+  try { map.on("idle", onIdle); } catch { /* ignore */ }
+
+  const p95 = (): number => {
+    if (!buf.length) return 0;
+    const s = [...buf].sort((a, b) => a - b);
+    return s[Math.min(s.length - 1, Math.floor(s.length * 0.95))];
+  };
+  const tick = () => {
+    if (stopped) return;
+    const now = performance.now();
+    const dt = now - last; last = now;
+    // Skip the huge gap after a tab-hidden/background pause (not a real frame).
+    if (dt > 0 && dt < 1000) { buf.push(dt); if (buf.length > N) buf.shift(); }
+    if (buf.length >= 60 && now - lastWarn > 5000) {
+      const worst = p95();
+      if (worst > 20) {
+        lastWarn = now;
+        const avg = buf.reduce((a, b) => a + b, 0) / buf.length;
+        console.warn(`[mapPerf] p95 frame ${worst.toFixed(1)}ms > 20ms budget (fps≈${(avg > 0 ? 1000 / avg : 0).toFixed(0)}, n=${buf.length})`);
+      }
+    }
+    raf = requestAnimationFrame(tick);
+  };
+  raf = requestAnimationFrame(tick);
+
+  const api: MapPerf = {
+    get firstPaintMs() { return firstPaintMs; },
+    get frames() { return buf.length; },
+    fps() { if (!buf.length) return 0; const avg = buf.reduce((a, b) => a + b, 0) / buf.length; return avg > 0 ? 1000 / avg : 0; },
+    p95,
+    samples() { return [...buf]; },
+  };
+  (window as any).__mapPerf = api;
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    cancelAnimationFrame(raf);
+    try { map.off?.("idle", onIdle); } catch { /* ignore */ }
+    if ((window as any).__mapPerf === api) { try { delete (window as any).__mapPerf; } catch { /* ignore */ } }
+  };
+  try { map.on("remove", stop); } catch { /* ignore */ }
+}
 
 // ── Bbox type ─────────────────────────────────────────────────────────────────
 interface BBox { minLng: number; minLat: number; maxLng: number; maxLat: number }
@@ -566,8 +667,11 @@ export default function MapView() {
       if (cancelled) return;
       apiRequest("GET", "/api/config/map")
         .then(r => r.json())
-        .then((d: { token: string }) => {
+        .then((d: { token: string; flags?: { statusMarkerGlyphs?: boolean } }) => {
           if (cancelled) return;
+          // Hydrate the glyph rollout flag BEFORE the token triggers map init, so
+          // the layer-setup block (addStatusIconLayer) sees the right value.
+          setServerStatusGlyphs(!!d?.flags?.statusMarkerGlyphs);
           if (d?.token) {
             (window as any).mapboxgl.accessToken = d.token;
             setMapboxToken(d.token);
@@ -600,6 +704,7 @@ export default function MapView() {
     if (import.meta.env.DEV) {
       (window as any).__map = map; // debug handle (dev only)
     }
+    startMapPerf(map); // opt-in FPS/first-paint sampler (?perf=1); no-op otherwise
 
     // Force resize once container is definitely painted
     setTimeout(() => map.resize(), 100);
@@ -1840,6 +1945,22 @@ export default function MapView() {
   }, [drawnBBox, isAdmin]);
 
   // ── Legend items ──────────────────────────────────────────────────────────
+  // When glyph mode is on, draw the EXACT map glyph beside each legend row (built
+  // once via the shared spriteDataUrl → zero shape duplication). Empty when the
+  // circle map is showing, so the legend keeps its color dots. Depends on mapReady
+  // because the server rollout flag is hydrated before the map becomes ready.
+  const legendGlyphs = useMemo<Record<string, string>>(() => {
+    if (!newFieldMap()) return {};
+    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1;
+    const out: Record<string, string> = {};
+    for (const [status, icon] of Object.entries(LEGEND_STATUS_TO_ICON)) {
+      const url = spriteDataUrl(icon, dpr);
+      if (url) out[status] = url;
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapReady]);
+
   // ── Fly to lead on map ────────────────────────────────────────────────────
   // Geocode an arbitrary street the user typed (admin only) and jump the map
   // there so they can draw a cut-out box + scan. Costs 1 Mapbox geocode call.
@@ -2951,7 +3072,9 @@ export default function MapView() {
                     className="w-full flex items-center gap-2 mb-0.5 cursor-pointer rounded-lg px-1.5 min-h-[44px] transition-all text-left focus-visible:ring-2 focus-visible:ring-teal-400 focus-visible:ring-inset focus:outline-none"
                     style={{ background: isActive ? pin.bg + "22" : "transparent" }}
                   >
-                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg, boxShadow: isActive ? `0 0 6px ${pin.bg}` : "none" }} />
+                    {legendGlyphs[status]
+                      ? <img src={legendGlyphs[status]} alt="" aria-hidden="true" className="w-[18px] h-[18px] flex-shrink-0 -my-0.5" style={{ filter: isActive ? `drop-shadow(0 0 4px ${pin.bg})` : "none" }} />
+                      : <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: pin.bg, boxShadow: isActive ? `0 0 6px ${pin.bg}` : "none" }} />}
                     <span className="text-[11px] flex-1" style={{ color: isActive ? pin.bg : "#94a3b8", fontWeight: isActive ? 700 : 400 }}>{pin.label}</span>
                     <span className="text-[10px] tabular-nums" style={{ color: count > 0 ? "#e2e8f0" : "#475569" }}>{count}</span>
                   </button>

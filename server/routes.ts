@@ -724,9 +724,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
   });
 
+  // Staged rollout of the status-marker glyph layer (see the flag in /config/map).
+  // Default (env unset) enables it for admins/owners only — the spec's "internal/
+  // admin tenant" canary — so a deploy ships it live for the owner to verify
+  // without changing every rep's map. STATUS_MARKER_GLYPHS=all widens to 100% in
+  // one env change; =off is an instant server-side kill-switch (no redeploy of code).
+  function statusMarkerGlyphsEnabled(role: string | null | undefined): boolean {
+    const env = String(process.env.STATUS_MARKER_GLYPHS ?? "").toLowerCase().trim();
+    if (env === "off" || env === "0" || env === "false") return false;
+    if (env === "all" || env === "on" || env === "1" || env === "true") return true;
+    return role === "admin" || role === "super_admin";
+  }
+
   // ── Map config — returns Mapbox token only to authenticated users ───────────
   // Token is NOT in the frontend bundle; fetched at runtime from the server.
-  app.get("/api/config/map", requireAuth, (_req, res) => {
+  app.get("/api/config/map", requireAuth, (req: any, res) => {
     // The map basemap/pins use a PUBLIC token (pk.…) that is safe to send to the
     // browser — scope it in Mapbox to URL-restricted "styles:read/tiles:read" only,
     // NOT geocoding. The SECRET geocoding token (MAPBOX_TOKEN) stays server-side and
@@ -734,7 +746,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // unbounded paid geocoding on the owner's account (see the two billing incidents).
     const token = process.env.MAPBOX_PUBLIC_TOKEN ?? process.env.VITE_MAPBOX_TOKEN ?? "";
     if (!token) return res.status(503).json({ error: "Map not configured" });
-    res.json({ token });
+    // Server-controlled feature flags. `statusMarkerGlyphs` gates the status-icon
+    // pin layer (arrow/$/star/… glyphs vs plain circles) and rolls out in stages:
+    // env unset → admins/owners only (canary); STATUS_MARKER_GLYPHS=all → everyone;
+    // STATUS_MARKER_GLYPHS=off → hard kill-switch. The client can still force it on
+    // or off per-device (localStorage NEW_FIELD_MAP) for its own testing.
+    res.json({ token, flags: { statusMarkerGlyphs: statusMarkerGlyphsEnabled(req.user?.role) } });
   });
 
   // ── Geocode a single street/address → map coordinates (admin) ──────────────

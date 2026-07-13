@@ -51,14 +51,44 @@ describe("STATUS_ICON config", () => {
   });
 
   it("keeps the spec glyph meanings", () => {
-    expect(STATUS_ICON.unworked.glyph).toBe("home");
+    // Status-marker spec table: Prospect ▲ / Follow-up ▼ share the arrow,
+    // Sold = "$", the rest keep their meaning-bearing shapes.
+    expect(STATUS_ICON.unworked.glyph).toBe("arrow");
     expect(STATUS_ICON.not_home.glyph).toBe("door");
     expect(STATUS_ICON.interested.glyph).toBe("star");
-    expect(STATUS_ICON.follow_up.glyph).toBe("clock");
+    expect(STATUS_ICON.follow_up.glyph).toBe("arrow");
     expect(STATUS_ICON.callback.glyph).toBe("phone");
-    expect(STATUS_ICON.sold.glyph).toBe("check");
+    expect(STATUS_ICON.sold.glyph).toBe("dollar");
     expect(STATUS_ICON.not_interested.glyph).toBe("x");
     expect(STATUS_ICON.contacted.glyph).toBe("dot");
+  });
+
+  it("shares ONE arrow between Prospect and Follow-up, Follow-up rotated 180°", () => {
+    // AC#1: "Prospect & Follow-up share one arrow, Follow-up rotated 180°".
+    expect(STATUS_ICON.unworked.glyph).toBe(STATUS_ICON.follow_up.glyph);
+    expect(STATUS_ICON.unworked.glyph).toBe("arrow");
+    // Prospect points up (0°), Follow-up is the same shape turned to point down.
+    expect(STATUS_ICON.unworked.rotate ?? 0).toBe(0);
+    expect(STATUS_ICON.follow_up.rotate).toBe(180);
+    // They stay visually distinct by color (different tints → different hues).
+    expect(STATUS_ICON.unworked.tint).not.toBe(STATUS_ICON.follow_up.tint);
+  });
+
+  it("Sold shows the '$' glyph, distinct from everything else", () => {
+    // AC#1: "Sold shows '$'".
+    expect(STATUS_ICON.sold.glyph).toBe("dollar");
+    const others = (Object.keys(STATUS_ICON) as StatusIconKey[])
+      .filter((k) => k !== "sold")
+      .map((k) => STATUS_ICON[k].glyph);
+    expect(others).not.toContain("dollar");
+  });
+
+  it("only Follow-up carries a non-zero rotation (others are upright)", () => {
+    for (const key of Object.keys(STATUS_ICON) as StatusIconKey[]) {
+      const rot = STATUS_ICON[key].rotate ?? 0;
+      if (key === "follow_up") expect(rot).toBe(180);
+      else expect(rot).toBe(0);
+    }
   });
 });
 
