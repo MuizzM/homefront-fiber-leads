@@ -31,6 +31,7 @@ const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
 const Applications = lazy(() => import("@/pages/Applications"));
 const MyCommission = lazy(() => import("@/pages/MyCommission"));
 const CommissionConsole = lazy(() => import("@/pages/CommissionConsole"));
+const MyDocuments = lazy(() => import("@/pages/MyDocuments"));
 const LiveMap = lazy(() => import("@/pages/LiveMap"));
 const ComingSoon = lazy(() => import("@/pages/ComingSoon"));
 const ClockIn = lazy(() => import("@/pages/ClockIn"));
@@ -132,6 +133,7 @@ function AppRoutes() {
             {role === "rep" ? <Redirect to="/my-commission" /> : <Redirect to="/commission-console" />}
           </Route>
           <Route path="/my-commission" component={MyCommission} />
+          <Route path="/my-documents" component={MyDocuments} />
           <Route path="/commission-console">
             <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
               <CommissionConsole />

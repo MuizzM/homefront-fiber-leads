@@ -2,7 +2,8 @@
 // Identity + session controls, mobile-first. Deliberately small: who am I,
 // which role, light/dark, sign out. Everything else lives in its own tab.
 
-import { LogOut, Moon, Sun } from "lucide-react";
+import { ChevronRight, FileSignature, LogOut, Moon, Sun } from "lucide-react";
+import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
 
@@ -48,6 +49,30 @@ export default function Profile() {
               </div>
               <div className="text-[13px] text-muted-foreground mt-1 truncate">{user.email}</div>
             </div>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-1">
+            Onboarding
+          </h2>
+          <div className="rounded-xl bg-card border border-border overflow-hidden">
+            <Link
+              href="/my-documents"
+              data-testid="profile-my-documents"
+              className="w-full px-5 py-4 flex items-center justify-between gap-4 text-left active:bg-secondary/60 focus-visible:bg-secondary/60 focus-visible:outline-none transition-colors"
+            >
+              <span className="flex items-center gap-3">
+                <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+                  <FileSignature className="w-4 h-4" />
+                </span>
+                <span>
+                  <span className="block text-[14px] font-medium text-foreground">My Documents</span>
+                  <span className="block text-[12px] text-muted-foreground mt-0.5">Review and sign rep agreements</span>
+                </span>
+              </span>
+              <ChevronRight className="w-4 h-4 text-muted-foreground" />
+            </Link>
           </div>
         </section>
 

@@ -26,6 +26,7 @@ import {
   Clock,
   Radio,
   CreditCard,
+  FileSignature,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -62,6 +63,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: () => true,                               group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: () => true,                               group: "Field" },
   { href: "/my-commission",label: "My Commission", icon: Wallet,       show: () => true,                               group: "Field" },
+  { href: "/my-documents", label: "My Documents",  icon: FileSignature,show: () => true,                               group: "Field" },
   // ── Scan — market intelligence (manager+ read/deploy); Scanner=admin tools ─
   { href: "/markets",      label: "Markets",       icon: TrendingUp,   show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
   { href: "/scanner",      label: "Scan Tools",    icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },

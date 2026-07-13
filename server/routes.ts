@@ -61,6 +61,7 @@ import {
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
 import { registerCommissionRoutes } from "./commissionRoutes";
 import { registerPayoutRoutes } from "./payoutRoutes";
+import { registerOnboardingDocumentRoutes } from "./onboardingDocumentRoutes";
 import * as commissionSvc from "./commissionService";
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
@@ -705,6 +706,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // middleware so authorization matches the rest of the app. ────────────────────
   registerCommissionRoutes(app, { requireAuth, requireCapability });
   registerPayoutRoutes(app, { requireAuth, requireCapability });
+  registerOnboardingDocumentRoutes(app, { requireAuth, requireCapability });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle

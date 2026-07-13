@@ -17,6 +17,8 @@ export type Capability =
   // Commissions
   | "commission.read.self" | "commission.read.team" | "commission.read.all"
   | "commission.structure.manage"
+  // Onboarding agreements
+  | "onboarding.documents.read.self" | "onboarding.documents.manage"
   // Payouts — moving REAL money to reps. Owner/admin only, never a read/oversight role.
   | "payouts.pay"
   // Dashboards / analytics read models
@@ -31,6 +33,7 @@ export type Capability =
 const REP: readonly Capability[] = [
   "lead.read.assigned", "lead.disposition.update", "lead.note.write",
   "commission.read.self", "dashboard.read.self",
+  "onboarding.documents.read.self",
 ];
 
 // A team lead assigns/reassigns within scope, sees the team's leads + activity,
@@ -46,6 +49,7 @@ const TEAM_LEAD: readonly Capability[] = [
 const MANAGER: readonly Capability[] = [
   ...TEAM_LEAD,
   "commission.read.all", "dashboard.read.org", "audit.read.org",
+  "onboarding.documents.manage",
 ];
 
 // Admin (and super_admin) hold the full set including org policy + paying reps.
@@ -79,7 +83,7 @@ export function capabilitiesFor(role: Role | string | undefined | null): Capabil
 // answers "who can do this?" — all from this one source, never a role if/else.
 
 export type CapabilityDomain =
-  | "leads" | "assignments" | "commissions" | "dashboard" | "audit" | "settings";
+  | "leads" | "assignments" | "commissions" | "onboarding" | "dashboard" | "audit" | "settings";
 
 export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "lead.read.assigned": "leads",
@@ -93,6 +97,8 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "commission.read.all": "commissions",
   "commission.structure.manage": "commissions",
   "payouts.pay": "commissions",
+  "onboarding.documents.read.self": "onboarding",
+  "onboarding.documents.manage": "onboarding",
   "dashboard.read.self": "dashboard",
   "dashboard.read.team": "dashboard",
   "dashboard.read.org": "dashboard",
@@ -106,6 +112,7 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
 export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   "lead.assign", "lead.reassign",
   "commission.structure.manage", "commission.read.all",
+  "onboarding.documents.manage",
   "audit.read.org", "settings.manage.org", "payouts.pay",
 ]);
 
@@ -115,7 +122,7 @@ export function isHighRisk(cap: Capability): boolean {
 
 // Every capability, grouped by domain, in a stable domain order — the matrix
 // and the "grouped capabilities" governance view render straight from this.
-const DOMAIN_ORDER: CapabilityDomain[] = ["leads", "assignments", "commissions", "dashboard", "audit", "settings"];
+const DOMAIN_ORDER: CapabilityDomain[] = ["leads", "assignments", "commissions", "onboarding", "dashboard", "audit", "settings"];
 export function groupedCapabilities(): { domain: CapabilityDomain; capabilities: Capability[] }[] {
   const all = Object.keys(CAPABILITY_DOMAIN) as Capability[];
   return DOMAIN_ORDER.map(domain => ({

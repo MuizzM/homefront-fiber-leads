@@ -7,9 +7,11 @@ import {
   UserPlus, Edit2, Trash2, Phone, Mail,
   User, CheckCircle2, Users, Crown, Star, ChevronUp,
   Wallet, Layers, DollarSign,
-  DoorOpen, Handshake, PhoneCall, TrendingUp
+  DoorOpen, Handshake, PhoneCall, TrendingUp,
+  AlertTriangle, Download, FileSignature, FileText, Loader2, Send, ShieldCheck
 } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
+import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +24,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 } from "@/components/ui/select";
 import type { TeamMember, InsertTeamMember } from "@shared/schema";
+import type { OnboardingDocumentStatus, OnboardingDocumentType } from "@shared/onboardingDocuments";
 
 // ── Role definitions ──────────────────────────────────────────────────────────
 export const ROLES = [
@@ -286,10 +289,12 @@ export default function Team() {
   const [addForm, setAddForm] = useState<MemberForm>(emptyForm());
   const [editForm, setEditForm] = useState<MemberForm>(emptyForm());
   const [commissionMember, setCommissionMember] = useState<TeamMember | null>(null);
+  const [documentsMember, setDocumentsMember] = useState<TeamMember | null>(null);
 
   const { toast } = useToast();
   const qc = useQueryClient();
   const canManageCommission = useCan("commission.structure.manage");
+  const canManageDocuments = useCan("onboarding.documents.manage");
 
   const { data: team = [], isLoading } = useQuery<TeamMember[]>({
     queryKey: ["/api/team"],
@@ -375,7 +380,7 @@ export default function Team() {
 
   // Whether any per-member action is available to this viewer (reserves the
   // actions column so the metric columns stay aligned across every row).
-  const showActions = Boolean(canAddMembers || canDeleteMembers || canManageCommission);
+  const showActions = Boolean(canAddMembers || canDeleteMembers || canManageCommission || canManageDocuments);
   const metricCols = ["Knocks", "Contacts", "Callbacks", "Sales"];
 
   const RoleSection = ({ title, members, role }: { title: string; members: TeamMember[]; role: string }) => {
@@ -405,7 +410,7 @@ export default function Team() {
               ))}
             </div>
             {showActions && (
-              <div className="w-[92px] flex-shrink-0 text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Actions</div>
+              <div className="w-[124px] flex-shrink-0 text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Actions</div>
             )}
           </div>
 
@@ -486,7 +491,15 @@ export default function Team() {
 
                   {/* Row actions */}
                   {showActions && (
-                    <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[92px]">
+                    <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[124px]">
+                      {canManageDocuments && member.role === "rep" && (
+                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                          onClick={() => setDocumentsMember(member)} data-testid={`btn-documents-rep-${member.id}`}
+                          aria-label={`Manage onboarding documents for ${member.name}`}
+                          title="Onboarding documents">
+                          <FileSignature className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
                       {canManageCommission && member.role !== "manager" && (
                         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                           onClick={() => setCommissionMember(member)} data-testid={`btn-commission-rep-${member.id}`}
@@ -730,7 +743,172 @@ export default function Team() {
 
       {/* Commission structure */}
       <CommissionDialog member={commissionMember} onClose={() => setCommissionMember(null)} />
+      <RepDocumentsDialog member={documentsMember} onClose={() => setDocumentsMember(null)} />
     </div>
+  );
+}
+
+type RepDocumentEnvelope = {
+  id: number;
+  documentType: OnboardingDocumentType;
+  status: OnboardingDocumentStatus;
+  sentAt: string | null;
+  completedAt: string | null;
+  failureReason: string | null;
+};
+
+type RepDocumentItem = {
+  type: OnboardingDocumentType;
+  label: string;
+  description: string;
+  required: boolean;
+  envelope: RepDocumentEnvelope | null;
+};
+
+type RepDocumentsResponse = {
+  configured: boolean;
+  documents: RepDocumentItem[];
+  progress: { completed: number; total: number };
+};
+
+const DOCUMENT_STATUS: Record<OnboardingDocumentStatus, { label: string; className: string }> = {
+  creating: { label: "Preparing", className: "bg-sky-500/15 text-sky-400" },
+  sent: { label: "Sent", className: "bg-amber-500/15 text-amber-400" },
+  delivered: { label: "Opened", className: "bg-purple-500/15 text-purple-400" },
+  completed: { label: "Signed", className: "bg-emerald-500/15 text-emerald-400" },
+  declined: { label: "Declined", className: "bg-red-500/15 text-red-400" },
+  voided: { label: "Voided", className: "bg-muted text-muted-foreground" },
+  failed: { label: "Failed", className: "bg-red-500/15 text-red-400" },
+};
+
+function RepDocumentsDialog({ member, onClose }: { member: TeamMember | null; onClose: () => void }) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const queryKey = ["/api/onboarding/documents/reps", member?.id] as const;
+  const query = useQuery<RepDocumentsResponse>({
+    queryKey,
+    queryFn: () => apiRequest("GET", `/api/onboarding/documents/reps/${member!.id}`).then(response => response.json()),
+    enabled: !!member,
+    refetchInterval: query => query.state.data?.documents.some(document =>
+      ["creating", "sent", "delivered"].includes(document.envelope?.status ?? ""),
+    ) ? 15_000 : false,
+  });
+
+  const sendDocuments = useMutation({
+    mutationFn: async (documentTypes: OnboardingDocumentType[]) => {
+      const response = await apiRequest("POST", `/api/onboarding/documents/reps/${member!.id}/send`, { documentTypes });
+      return response.json();
+    },
+    onSuccess: (response: any) => {
+      const sent = response.results?.filter((result: any) => result.sent).length ?? 0;
+      const skipped = response.results?.filter((result: any) => result.skipped).length ?? 0;
+      toast({
+        title: sent ? `${sent} document${sent === 1 ? "" : "s"} sent` : "No duplicate documents sent",
+        description: skipped ? `${skipped} active envelope${skipped === 1 ? " was" : "s were"} already in progress.` : `DocuSign emailed ${member?.name}.`,
+      });
+      qc.setQueryData(queryKey, response);
+      qc.invalidateQueries({ queryKey });
+    },
+    onError: (error: any) => toast({ title: "Could not send documents", description: error.message, variant: "destructive" }),
+  });
+
+  const data = query.data;
+  const retryable = data?.documents.filter(document =>
+    !document.envelope || ["declined", "voided", "failed"].includes(document.envelope.status),
+  ).map(document => document.type) ?? [];
+
+  const download = async (document: RepDocumentItem) => {
+    if (!document.envelope) return;
+    try {
+      await downloadOnboardingDocument(document.envelope.id, `${member?.name ?? "rep"}-${document.type.replace(/_/g, "-")}.pdf`);
+    } catch (error: any) {
+      toast({ title: "Download failed", description: error.message, variant: "destructive" });
+    }
+  };
+
+  return (
+    <Dialog open={!!member} onOpenChange={open => !open && onClose()}>
+      <DialogContent className="bg-card border-border text-foreground max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-base flex items-center gap-2">
+            <span className="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center">
+              <FileSignature className="w-4 h-4" />
+            </span>
+            Onboarding — {member?.name}
+          </DialogTitle>
+        </DialogHeader>
+
+        {query.isLoading && <div className="h-52 rounded-xl bg-secondary/40 animate-pulse" />}
+        {query.isError && (
+          <div className="rounded-xl border border-red-500/30 p-4 text-center">
+            <AlertTriangle className="w-5 h-5 text-red-400 mx-auto" />
+            <p className="text-sm font-medium mt-2">Couldn’t load onboarding documents</p>
+            <Button variant="outline" size="sm" className="mt-3" onClick={() => query.refetch()}>Try again</Button>
+          </div>
+        )}
+
+        {data && (
+          <>
+            <div className="rounded-xl bg-secondary/35 border border-border px-4 py-3 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Required agreements</div>
+                <div className="text-sm font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div>
+              </div>
+              {data.progress.completed === data.progress.total && data.progress.total > 0
+                ? <CheckCircle2 className="w-6 h-6 text-emerald-400" />
+                : <ShieldCheck className="w-6 h-6 text-primary" />}
+            </div>
+
+            {!data.configured && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                <div><p className="text-xs font-semibold">DocuSign setup required</p><p className="text-[11px] text-muted-foreground mt-0.5">Add the integration credentials and all four template IDs before sending agreements.</p></div>
+              </div>
+            )}
+
+            <div className="rounded-xl border border-border divide-y divide-border overflow-hidden">
+              {data.documents.map(document => {
+                const envelope = document.envelope;
+                const status = envelope ? DOCUMENT_STATUS[envelope.status] : null;
+                return (
+                  <div key={document.type} className="p-3.5 flex items-start gap-3" data-testid={`manager-document-${document.type}`}>
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${envelope?.status === "completed" ? "bg-emerald-500/10" : "bg-secondary"}`}>
+                      {envelope?.status === "completed" ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : <FileText className="w-4 h-4 text-muted-foreground" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-semibold">{document.label}</span>
+                        {status && <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${status.className}`}>{status.label}</span>}
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">{document.description}</p>
+                      {envelope?.failureReason && <p className="text-[10px] text-red-400 mt-1">{envelope.failureReason}</p>}
+                    </div>
+                    {envelope?.status === "completed" && (
+                      <Button variant="ghost" size="sm" className="h-8 px-2 text-muted-foreground" onClick={() => download(document)}>
+                        <Download className="w-3.5 h-3.5 mr-1" /> PDF
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={onClose} className="h-9 border-border">Close</Button>
+              <Button
+                onClick={() => sendDocuments.mutate(retryable)}
+                disabled={!data.configured || retryable.length === 0 || sendDocuments.isPending || !member?.email}
+                className="h-9 bg-primary hover:bg-primary/90 text-primary-foreground"
+                data-testid="btn-send-onboarding-documents"
+              >
+                {sendDocuments.isPending ? <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> : <Send className="w-4 h-4 mr-1.5" />}
+                {retryable.length ? `Send ${retryable.length} document${retryable.length === 1 ? "" : "s"}` : "All documents in progress"}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 

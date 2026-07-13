@@ -220,7 +220,7 @@ export interface IStorage {
   createCommissionRate(r: InsertCommissionRate): CommissionRate;
   updateCommissionRate(id: number, updates: Partial<CommissionRate>): CommissionRate | undefined;
   // ── Activity Log ───────────────────────────────────────────────────────────
-  logActivity(userId: number | null, action: string, entityType?: string, entityId?: number, details?: object, ip?: string): void;
+  logActivity(userId: number | null, action: string, entityType?: string, entityId?: number, details?: object, ip?: string, tenantIdOverride?: number | null): void;
   getActivityLog(limit?: number, tenantId?: number): ActivityLogEntry[];
   // ── Tenants (SaaS) ────────────────────────────────────────────────────────
   getTenants(): Tenant[];
@@ -830,6 +830,51 @@ export function runMigrations() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_payout_statement ON rep_payouts(statement_id) WHERE statement_id IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_payout_tenant ON rep_payouts(tenant_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_payout_transfer ON rep_payouts(stripe_transfer_id)`,
+    // ── DocuSign onboarding agreements ─────────────────────────────────────
+    // One durable row per envelope attempt. The partial unique index reserves
+    // an active document before calling DocuSign, preventing double sends when
+    // two managers click at once. Terminal rows remain as immutable history.
+    `CREATE TABLE IF NOT EXISTS onboarding_document_envelopes (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       rep_id INTEGER NOT NULL,
+       document_type TEXT NOT NULL,
+       template_id TEXT NOT NULL,
+       envelope_id TEXT UNIQUE,
+       status TEXT NOT NULL DEFAULT 'creating',
+       signer_name TEXT NOT NULL,
+       signer_email TEXT NOT NULL,
+       client_user_id TEXT NOT NULL,
+       sent_by INTEGER,
+       sent_at TEXT,
+       delivered_at TEXT,
+       completed_at TEXT,
+       declined_at TEXT,
+       voided_at TEXT,
+       status_changed_at TEXT,
+       failure_reason TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
+       FOREIGN KEY (rep_id) REFERENCES team_members(id) ON DELETE CASCADE,
+       FOREIGN KEY (sent_by) REFERENCES users(id) ON DELETE SET NULL
+     )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_doc_active
+       ON onboarding_document_envelopes(tenant_id, rep_id, document_type)
+       WHERE status IN ('creating','sent','delivered')`,
+    `CREATE INDEX IF NOT EXISTS idx_onboarding_doc_rep
+       ON onboarding_document_envelopes(tenant_id, rep_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_onboarding_doc_envelope
+       ON onboarding_document_envelopes(envelope_id)`,
+    `CREATE TABLE IF NOT EXISTS docusign_webhook_events (
+       event_id TEXT PRIMARY KEY,
+       envelope_id TEXT,
+       event_type TEXT,
+       payload_sha256 TEXT NOT NULL,
+       received_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_docusign_events_envelope
+       ON docusign_webhook_events(envelope_id, received_at DESC)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -2104,11 +2149,13 @@ export class Storage implements IStorage {
   }
 
   // ── Activity Log ───────────────────────────────────────────────────────────
-  logActivity(userId: number | null, action: string, entityType?: string, entityId?: number, details?: object, ip?: string): void {
+  logActivity(userId: number | null, action: string, entityType?: string, entityId?: number, details?: object, ip?: string, tenantIdOverride?: number | null): void {
     // Stamp the acting user's tenant so the audit stream can be read back
     // tenant-scoped (a manager only sees their own org's activity). System
     // actions (userId null) stay tenant-less (visible only to super_admin).
-    const tenantId = userId != null ? (this.getUserById(userId)?.tenantId ?? null) : null;
+    const tenantId = tenantIdOverride !== undefined
+      ? tenantIdOverride
+      : (userId != null ? (this.getUserById(userId)?.tenantId ?? null) : null);
     db.insert(activityLog).values({
       userId: userId ?? null,
       tenantId,

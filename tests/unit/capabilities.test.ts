@@ -41,6 +41,9 @@ describe("capability matrix — hard permission rules", () => {
     expect(can("manager", "commission.read.all")).toBe(true);
     expect(can("manager", "dashboard.read.org")).toBe(true);
     expect(can("manager", "settings.manage.org")).toBe(false);
+    expect(can("manager", "onboarding.documents.manage")).toBe(true);
+    expect(can("team_lead", "onboarding.documents.manage")).toBe(false);
+    expect(can("rep", "onboarding.documents.read.self")).toBe(true);
     expect(can("admin", "settings.manage.org")).toBe(true);
   });
 
