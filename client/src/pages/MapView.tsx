@@ -30,6 +30,7 @@ import {
   STREET_ZOOM, pickRepStartCamera, readCachedFix, writeCachedFix,
   ensureHousenumLayer,
 } from "@/lib/mapPins";
+import { createFollowState, ingestFix, stepFrame, filteredLngLat } from "@/lib/followCamera";
 import { selectPointsInPolygon, pointInRing, bboxOfRing, type BBox2 } from "@/lib/mapGeo";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
@@ -261,6 +262,8 @@ export default function MapView() {
   // inside the card itself.
   const useSheet = true;
   const gpsCenteredRef = useRef(false);      // a live fix has positioned the camera — startup fallbacks stand down
+  const firstFixSeenRef = useRef(false);     // a real GPS fix has arrived (the follow control engaged) — gates the FAB fallback
+  const didInitZoomRef = useRef(false);      // the one-time zoom-to-street on the first fix has happened
   const geoAutoStartedRef = useRef(false);   // auto-trigger fired once for this rep session
   const recentIdsRef = useRef<number[]>([]);   // ring buffer (10) — just-knocked doors exempt from the "unvisited" lens
 
@@ -521,63 +524,105 @@ export default function MapView() {
     setTimeout(() => map.resize(), 400);
 
     map.addControl(new (window as any).mapboxgl.NavigationControl(), "top-right");
-    // "Locate me" — the core field control: center on the rep's position and
-    // track it as they walk the street. Triggered by the big thumb FAB below.
-    // iOS home-screen web apps (standalone display mode) can't reliably get the
-    // DeviceOrientation permission the heading cone needs — and a failed heading
-    // request there can stall the whole control, so the blue dot never appears
-    // ("works in Safari, dead in the installed app"). Disable the cone in
-    // standalone; keep it for normal browser tabs where it works fine.
-    const isStandalone = typeof window !== "undefined" &&
-      (((window as any).matchMedia && (window as any).matchMedia("(display-mode: standalone)").matches) ||
-       (window.navigator as any).standalone === true);
+    // ── "Locate me" + shake-free follow camera ───────────────────────────────
+    // The GeolocateControl keeps its BRAIN (permission, watchPosition, and the
+    // ACTIVE_LOCK↔BACKGROUND state machine) but we take over BOTH the camera and the
+    // dot, so ONE smoothed point (see client/src/lib/followCamera) drives them
+    // together — no raw-fix jitter reaching the map, no per-fix animation restart.
     const geolocate = new (window as any).mapboxgl.GeolocateControl({
-      // Fresh fixes only (≤1s cache), 10s timeout, high accuracy — the dot must
-      // track the rep in real time, not replay a stale reading.
-      positionOptions: { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 },
-      // Street-level landing: the control's default maxZoom (15) is a block
-      // overview — a rep needs to see individual doors when the fix centers.
-      fitBoundsOptions: { maxZoom: STREET_ZOOM },
+      positionOptions: { enableHighAccuracy: true, maximumAge: 500, timeout: 10000 }, // freshest fixes for a moving car
+      fitBoundsOptions: { maxZoom: STREET_ZOOM },  // used ONLY for the one-time first-fix zoom
       trackUserLocation: true,
-      showUserHeading: !isStandalone,
+      showUserLocation: false,   // WE draw the puck → a single position source (no raw-vs-smoothed drift)
+      showUserHeading: false,    // heading rides on our puck arrow
     });
     map.addControl(geolocate, "top-right");
     geolocateRef.current = geolocate;
-    // True only while the control is actively locked onto the rep (between
-    // trackuserlocationstart / trackuserlocationend) — drives the smooth
-    // follow-camera below so it never fights a rep who has panned away.
-    let cameraFollowing = false;
-    // Persist the fix (throttled) so the NEXT launch opens on last-known
-    // location instantly, before live GPS warms up. A ~1/s tick in follow mode
-    // must cause zero React renders — refs and storage only, never state.
+
+    // SINGLE WRITER: neutralise the control's own accuracy-fitBounds recenter. Without
+    // this it fights our follow loop AND "breathes" the zoom on every fix. Guarded so a
+    // future mapbox rename degrades to a no-op (the dev zoom-variance check catches it).
+    if (typeof (geolocate as any)._updateCamera === "function") (geolocate as any)._updateCamera = () => {};
+    else if (import.meta.env.DEV) console.warn("[follow] GeolocateControl._updateCamera missing — single-writer guard inert");
+
+    // Our navigation puck: one GPU-composited Marker (vivid blue core + white ring +
+    // glow + heading arrow). NO CSS transition on its transform — the rAF loop is the
+    // sole smoother; a transition would rubber-band it behind the camera.
+    const puckEl = document.createElement("div");
+    puckEl.className = "hf-nav-puck";
+    const puckArrow = document.createElement("div");
+    puckArrow.className = "hf-nav-puck-arrow";
+    puckEl.appendChild(puckArrow);
+    const puck = new (window as any).mapboxgl.Marker({ element: puckEl });
+    let puckOn = false;
+    const placePuck = (ll: [number, number]) => {
+      puck.setLngLat(ll);
+      if (!puckOn) { puck.addTo(map); puckOn = true; }
+    };
+
+    // Follow state + lifecycle (all imperative — zero React renders per frame).
+    const M = createFollowState();
+    let following = false, interacting = false, sawPan = false, rafId = 0;
+    let reduced = false;
+    try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch {}
+    if (import.meta.env.DEV) {
+      (window as any).__follow = M;
+      (window as any).__geo = geolocate; // dev: drive follow via fire('geolocate', …) even where the browser blocks GPS
+      (window as any).__followTick = (tms: number) => frame(tms); // dev: pump one frame where headless rAF is throttled
+      (window as any).__followFeed = (fix: any) => ingestFix(M, fix); // dev: feed a synthetic fix with explicit tSec (clean-clock verification)
+      (window as any).__followDbg = () => ({ following, interacting, rafId, watch: (geolocate as any)._watchState, spd: M.spd, moving: M.moving });
+    }
+
+    // The ONE render loop — the sole camera writer. jumpTo(center) and the puck get
+    // the SAME smoothed point every frame, so the puck stays pinned to screen-centre.
+    const frame = (tms: number) => {
+      rafId = 0;
+      if (!following || reduced) return;
+      const out = stepFrame(M, tms / 1000);
+      if (!out) return;
+      if (!interacting) map.jumpTo({ center: out.center }, { geolocateSource: true }); // centre-only, tagged
+      placePuck(out.center);
+      if (out.headingDeg != null) puckArrow.style.transform = `rotate(${out.headingDeg}deg)`;
+      if (out.parked) return;                       // converged → stop the loop (0 CPU); next fix re-wakes it
+      rafId = requestAnimationFrame(frame);
+    };
+    const ensureLoop = () => { if (following && !reduced && !rafId) { M.lastFrame = 0; rafId = requestAnimationFrame(frame); } };
+    const stopLoop = () => { if (rafId) { cancelAnimationFrame(rafId); rafId = 0; } };
+
+    // Each fix mutates the estimator ONLY; the loop integrates. Persist the fix
+    // (throttled) so the NEXT launch opens on last-known location instantly.
     geolocate.on("geolocate", (e: any) => {
       try {
+        const { firstFix } = ingestFix(M, {
+          lat: e.coords.latitude, lon: e.coords.longitude,
+          speed: typeof e.coords.speed === "number" ? e.coords.speed : null,
+          heading: typeof e.coords.heading === "number" ? e.coords.heading : null,
+          // perf clock, adjusted for GPS latency + maximumAge staleness
+          tSec: performance.now() / 1000 - Math.max(0, (Date.now() - (e.timestamp || Date.now())) / 1000),
+        });
         writeCachedFix(e.coords.latitude, e.coords.longitude, Date.now());
-        // First live fix has centered the camera (trigger + trackUserLocation) —
-        // the startup fallback effect must never yank the view after this.
-        gpsCenteredRef.current = true;
-        // ── Smooth follow (Apple/Google-Maps feel) ──────────────────────────────
-        // The GeolocateControl recenters with a short, snappy easeTo on every fix,
-        // which reads as a "jump" when a rep is driving. While locked on, supersede
-        // it with a continuous LINEAR ease (~1s, matched to the ~1 Hz GPS cadence)
-        // so the camera flows between fixes instead of hopping. Zoom is left
-        // untouched (respect the rep's pinch level). The {geolocateSource:true} tag
-        // is ESSENTIAL: it tells the control this move is its own, so it stays in
-        // ACTIVE_LOCK instead of treating our easeTo as a user pan and dropping to
-        // BACKGROUND — which would silently break following. This runs AFTER the
-        // control's own _updateCamera (which fires 'geolocate'), so ours supersedes.
-        if (cameraFollowing) {
-          map.easeTo(
-            { center: [e.coords.longitude, e.coords.latitude], duration: 1000, easing: (t: number) => t, essential: true },
-            { geolocateSource: true },
-          );
+        gpsCenteredRef.current = true;      // startup fallbacks stand down
+        firstFixSeenRef.current = true;     // the control engaged → FAB fallback stays off
+        puckEl.classList.remove("hf-nav-puck-stale");
+        const ll = filteredLngLat(M);
+        if (firstFix && !didInitZoomRef.current && ll) {
+          map.jumpTo({ center: ll, zoom: STREET_ZOOM }, { geolocateSource: true }); // one-time zoom-to-street
+          didInitZoomRef.current = true;
+        }
+        if (reduced) {
+          // No rAF under reduced-motion: hop the (filtered) position discretely.
+          if (ll) { if (following && !interacting) map.jumpTo({ center: ll }, { geolocateSource: true }); placePuck(ll); }
+        } else if (!following) {
+          if (ll) placePuck(ll);            // exploring (BACKGROUND) — keep the puck on the rep
+        } else {
+          ensureLoop();                     // re-wake a parked loop
         }
       } catch {}
     });
-    // Surface failures instead of dying silently — a rep who taps "locate me" and
-    // sees nothing needs to know WHY (blocked vs no-signal vs timeout), especially
-    // on iOS where location must be enabled per-app.
+
+    // Surface failures instead of dying silently; a frozen puck reads as "searching".
     geolocate.on("error", (err: any) => {
+      try { puckEl.classList.add("hf-nav-puck-stale"); } catch {}
       const code = err?.code;
       const description = code === 1
         ? "Location is turned off for this app. On iPhone: Settings → Privacy & Security → Location Services → turn on, then find Safari/HomeFront and set “While Using.”"
@@ -587,15 +632,35 @@ export default function MapView() {
       toast({ title: "Location unavailable", description, variant: "destructive" });
     });
 
-    // Toggle a class the stylesheet uses to enable the user-dot glide only
-    // while the camera is at rest (see index.css .map-camera-idle rules).
-    el.classList.add("map-camera-idle");
-    map.on("movestart", () => el.classList.remove("map-camera-idle"));
-    map.on("moveend", () => el.classList.add("map-camera-idle"));
-    // Track follow-lock so the geolocate handler above knows when to run the smooth
-    // follow-camera: start = entered ACTIVE_LOCK, end = rep panned away (BACKGROUND).
-    geolocate.on("trackuserlocationstart", () => { cameraFollowing = true; });
-    geolocate.on("trackuserlocationend", () => { cameraFollowing = false; });
+    // ── Interaction: lean on the control's native ACTIVE_LOCK/BACKGROUND machine. ──
+    // A real PAN = "I'm looking around" → follow stays off until the FAB is re-tapped
+    // (SalesRabbit behaviour). A pinch/rotate/pitch is a keep-following gesture →
+    // re-engage jump-free via trigger() (safe now that _updateCamera is neutralised).
+    const onFollowStart = () => { following = true; sawPan = false; ensureLoop(); };
+    const onFollowEnd = () => { following = false; stopLoop(); };
+    geolocate.on("trackuserlocationstart", onFollowStart);
+    geolocate.on("trackuserlocationend", onFollowEnd);
+    const onDragStart = (ev: any) => { if (!ev?.geolocateSource) { sawPan = true; interacting = true; } };
+    const onGestureStart = (ev: any) => { if (!ev?.geolocateSource) interacting = true; };
+    const onGestureEnd = (ev: any) => {
+      if (ev?.geolocateSource) return;
+      interacting = false;
+      if (!sawPan && firstFixSeenRef.current) { try { geolocate.trigger(); } catch {} }
+    };
+    map.on("dragstart", onDragStart);
+    const gestureStarts = ["zoomstart", "rotatestart", "pitchstart"];
+    const gestureEnds = ["dragend", "zoomend", "rotateend", "pitchend"];
+    for (const evn of gestureStarts) map.on(evn, onGestureStart);
+    for (const evn of gestureEnds) map.on(evn, onGestureEnd);
+
+    // Honour prefers-reduced-motion live (never run the rAF; discrete filtered hops).
+    let mmRM: MediaQueryList | null = null;
+    let onRM: ((ev: MediaQueryListEvent) => void) | null = null;
+    try {
+      mmRM = window.matchMedia("(prefers-reduced-motion: reduce)");
+      onRM = (ev: MediaQueryListEvent) => { reduced = ev.matches; if (reduced) stopLoop(); else ensureLoop(); };
+      mmRM.addEventListener("change", onRM);
+    } catch {}
 
     const setupMapLayers = () => {
       // Draw bbox layers
@@ -802,7 +867,12 @@ export default function MapView() {
       ro.observe(el);
     }
 
-    return () => { ro?.disconnect(); map.remove(); mapRef.current = null; };
+    return () => {
+      stopLoop();                                                    // cancel the follow rAF
+      try { if (mmRM && onRM) mmRM.removeEventListener("change", onRM); } catch {} // window-level, survives map.remove
+      try { puck.remove(); } catch {}
+      ro?.disconnect(); map.remove(); mapRef.current = null;         // map.remove() tears down its own listeners + control
+    };
   }, [mapboxToken]); // re-run when the token arrives
 
   // ── Update cluster GeoJSON source when leads change ─────────────────────────
@@ -2658,7 +2728,10 @@ export default function MapView() {
                   writeCachedFix(fix.repLat, fix.repLng, Date.now());
                   setTimeout(() => {
                     const m = mapRef.current;
-                    if (!m || document.querySelector(".mapboxgl-user-location-dot")) return;
+                    // A real fix means the control engaged (we draw our own puck now, so
+                    // there is no ".mapboxgl-user-location-dot" to probe). Only recenter
+                    // ourselves when it truly stalled — never yank an engaged follow.
+                    if (!m || firstFixSeenRef.current) return;
                     moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 900, essential: true });
                   }, 1200);
                 }).catch(() => {});

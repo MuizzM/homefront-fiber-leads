@@ -345,33 +345,37 @@
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
 
-/* ── "You are here" dot — Apple/Google/Grab-grade, unmistakably distinct from the
-   (now PINK) not-home pins. Vivid blue core + bold white ring + soft glow so a rep
-   never confuses their own position with a door. ──────────────────────────────── */
-/* !important: mapbox-gl.css loads AFTER our stylesheet and sets the dot's blue +
-   size at equal specificity, so it would win without this. */
-.mapboxgl-user-location-dot {
-  width: 20px !important; height: 20px !important;
-  background-color: #2f7bff !important;
+/* ── Navigation puck — OUR OWN "you are here" marker. The GeolocateControl draws no
+   dot (showUserLocation:false); instead ONE smoothed point from the rAF follow loop
+   (see client/src/lib/followCamera + MapView) drives BOTH the camera and this puck, so
+   it stays pinned to screen-centre while the world glides underneath — Google/Apple
+   car-nav feel. Vivid blue core + bold white ring + soft glow, unmistakably distinct
+   from the (pink) not-home pins. NO transform transition: the JS loop is the sole
+   smoother; a CSS transition here would rubber-band the puck behind the camera. */
+/* pointer-events !important: mapbox Marker sets pointer-events:auto INLINE on the
+   element; without !important the puck would swallow a tap on the house under the rep. */
+.hf-nav-puck { position: relative; width: 20px; height: 20px; pointer-events: none !important; }
+.hf-nav-puck::after {
+  content: ""; position: absolute; inset: 0; border-radius: 50%;
+  background-color: #2f7bff;
   box-shadow: 0 0 0 3px #ffffff, 0 2px 10px 2px rgba(47, 123, 255, 0.55);
 }
-.mapboxgl-user-location-dot::before { background-color: #2f7bff !important; }   /* pulsing ring hue */
-.mapboxgl-user-location-accuracy-circle { background-color: rgba(47, 123, 255, 0.14) !important; }
-
-/* Live-location dot glide: sparse GPS fixes (~1/s) would SNAP the dot from point to
-   point. A ~0.9s linear transform transition interpolates the dot + accuracy halo +
-   heading cone between fixes — compositor-only, Google-Maps-style gliding. Gated on
-   .map-camera-idle so it runs ONLY while the camera is at REST: during ANY camera
-   motion (a manual pan/zoom, OR the smooth follow-glide) Mapbox already repositions
-   the dot every frame, and layering a 0.9s transition on top of that would make the
-   dot rubber-band ~0.9s BEHIND its true position. The DRIVING/following case is
-   smoothed at the CAMERA instead — see the geolocate handler in MapView (continuous
-   linear easeTo), which keeps the dot glued to screen-centre as the world flows. */
-.map-camera-idle .mapboxgl-user-location-dot,
-.map-camera-idle .mapboxgl-user-location-accuracy-circle,
-.map-camera-idle .mapboxgl-user-location-heading {
-  transition: transform 0.9s linear, width 0.3s ease, height 0.3s ease;
+/* Heading beam — a triangle orbiting the puck centre; MapView sets rotate() from the
+   smoothed heading. The element origin sits at the puck centre (left/top 50%,
+   transform-origin 0 0) so rotate() spins the ::before triangle around the dot. */
+.hf-nav-puck-arrow { position: absolute; left: 50%; top: 50%; width: 0; height: 0; transform-origin: 0 0; }
+.hf-nav-puck-arrow::before {
+  content: ""; position: absolute; left: -6px; top: -23px;
+  border-left: 6px solid transparent; border-right: 6px solid transparent;
+  border-bottom: 11px solid rgba(47, 123, 255, 0.95);
 }
+/* GPS lost — desaturate + pulse so a frozen puck reads as "searching", not live. */
+.hf-nav-puck-stale::after {
+  background-color: #94a3b8;
+  box-shadow: 0 0 0 3px #ffffff, 0 2px 8px 2px rgba(148, 163, 184, 0.5);
+  animation: hf-puck-pulse 1.4s ease-in-out infinite;
+}
+@keyframes hf-puck-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
 /* Login page — soft brand glow behind the centered card, built from theme
    tokens so it tracks light/dark instead of hard-coded hex. */
