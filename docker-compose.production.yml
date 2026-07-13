@@ -29,7 +29,13 @@ services:
       #    OSM-missed addresses, ~87% fiber). Deep-seed is idempotent per town and
       #    capped, so Mapbox is a bounded one-time cost that spreads across nights.
       ENABLE_NIGHTLY_SCAN: "true"
-      NIGHTLY_DEEP_SEED_CITIES: "Lexington,NC;Albemarle,NC;Concord,NC;Kannapolis,NC;Indian Trail,NC;Wingate,NC;Broadway,NC;Pine Bluff,NC;Tryon,NC;Morven,NC"
+      # BOTH paths on the full SC+NC list ("use both"): the Mapbox address grid finds
+      # the new-build streets OSM lacks (Lexington had ~7,900 OSM-missed, ~87% fiber),
+      # while the OSM sweep below covers the rest for free. Deep-seed is idempotent per
+      # town + hard-capped at NIGHTLY_DEEP_SEED_MAX_MAPBOX/night, so cost is bounded per
+      # night and spreads across nights (big towns like Charlotte finish last). This
+      # per-night cap is the guardrail against the historical uncapped-Mapbox incidents.
+      NIGHTLY_DEEP_SEED_CITIES: "Lexington,NC;Albemarle,NC;Concord,NC;Kannapolis,NC;Indian Trail,NC;Wingate,NC;Broadway,NC;Pine Bluff,NC;Tryon,NC;Morven,NC;Aberdeen,NC;Mint Hill,NC;Monroe,NC;Badin,NC;Mooresville,NC;Cameron,NC;Mount Pleasant,NC;Charlotte,NC;China Grove,NC;New London,NC;Columbus,NC;Norwood,NC;Oakboro,NC;Cornelius,NC;Peachland,NC;Davidson,NC;Pfafftown,NC;Denton,NC;Gold Hill,NC;Polkton,NC;Granite Quarry,NC;Richfield,NC;Harrisburg,NC;Rockwell,NC;Huntersville,NC;Rural Hall,NC;Salisbury,NC;Sanford,NC;King,NC;Stallings,NC;Landis,NC;Stanfield,NC;Thomasville,NC;Lewisville,NC;Wadesboro,NC;Linwood,NC;Waxhaw,NC;Marshville,NC;Weddington,NC;Marvin,NC;Matthews,NC;Winston-Salem,NC;Midland,NC;Cameron,SC;Lexington,SC;Campobello,SC;Saint Matthews,SC;Inman,SC;Spartanburg,SC;Kershaw,SC;West Columbia,SC;Landrum,SC"
       # FREE OSM sweep (Overpass, $0 — one cheap Mapbox bbox lookup per town only):
       # enumerate every Kinetic-served SC + NC town into the pool; the existing
       # Decodo-paced pool re-scan then qualifies them (fiber vs copper) into leads.
