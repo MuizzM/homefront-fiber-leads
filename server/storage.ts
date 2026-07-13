@@ -830,28 +830,43 @@ export function runMigrations() {
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_payout_statement ON rep_payouts(statement_id) WHERE statement_id IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_payout_tenant ON rep_payouts(tenant_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_payout_transfer ON rep_payouts(stripe_transfer_id)`,
-    // ── DocuSign onboarding agreements ─────────────────────────────────────
-    // One durable row per envelope attempt. The partial unique index reserves
-    // an active document before calling DocuSign, preventing double sends when
-    // two managers click at once. Terminal rows remain as immutable history.
-    `CREATE TABLE IF NOT EXISTS onboarding_document_envelopes (
+    // ── First-party electronic onboarding agreements ───────────────────────
+    // Each row stores the exact agreement snapshot, its SHA-256 digest, the
+    // authenticated signing evidence, and the completed PDF. A partial unique
+    // index prevents two managers from issuing the same active agreement.
+    `CREATE TABLE IF NOT EXISTS onboarding_signing_documents (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
+       record_id TEXT NOT NULL UNIQUE,
        tenant_id INTEGER NOT NULL,
        rep_id INTEGER NOT NULL,
        document_type TEXT NOT NULL,
-       template_id TEXT NOT NULL,
-       envelope_id TEXT UNIQUE,
+       document_version TEXT NOT NULL,
+       document_title TEXT NOT NULL,
+       document_snapshot_json TEXT NOT NULL,
+       content_sha256 TEXT NOT NULL,
        status TEXT NOT NULL DEFAULT 'creating',
        signer_name TEXT NOT NULL,
        signer_email TEXT NOT NULL,
-       client_user_id TEXT NOT NULL,
        sent_by INTEGER,
+       invite_email_id TEXT,
        sent_at TEXT,
        delivered_at TEXT,
        completed_at TEXT,
        declined_at TEXT,
        voided_at TEXT,
        status_changed_at TEXT,
+       signature_name TEXT,
+       signature_sha256 TEXT,
+       electronic_consent_version TEXT,
+       electronic_consent_at TEXT,
+       signed_user_id INTEGER,
+       signed_ip TEXT,
+       signed_user_agent TEXT,
+       evidence_json TEXT,
+       completed_pdf BLOB,
+       completed_pdf_sha256 TEXT,
+       completion_email_id TEXT,
+       retention_until TEXT,
        failure_reason TEXT,
        created_at TEXT NOT NULL DEFAULT (datetime('now')),
        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -859,22 +874,30 @@ export function runMigrations() {
        FOREIGN KEY (rep_id) REFERENCES team_members(id) ON DELETE CASCADE,
        FOREIGN KEY (sent_by) REFERENCES users(id) ON DELETE SET NULL
      )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_onboarding_doc_active
-       ON onboarding_document_envelopes(tenant_id, rep_id, document_type)
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_signing_doc_active
+       ON onboarding_signing_documents(tenant_id, rep_id, document_type)
        WHERE status IN ('creating','sent','delivered')`,
-    `CREATE INDEX IF NOT EXISTS idx_onboarding_doc_rep
-       ON onboarding_document_envelopes(tenant_id, rep_id, created_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_onboarding_doc_envelope
-       ON onboarding_document_envelopes(envelope_id)`,
-    `CREATE TABLE IF NOT EXISTS docusign_webhook_events (
-       event_id TEXT PRIMARY KEY,
-       envelope_id TEXT,
-       event_type TEXT,
+    `CREATE INDEX IF NOT EXISTS idx_signing_doc_rep
+       ON onboarding_signing_documents(tenant_id, rep_id, created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_signing_doc_record
+       ON onboarding_signing_documents(record_id)`,
+    `CREATE TABLE IF NOT EXISTS onboarding_signature_events (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       document_id INTEGER NOT NULL,
+       event_type TEXT NOT NULL,
+       actor_user_id INTEGER,
+       ip_address TEXT,
+       user_agent TEXT,
+       payload_json TEXT NOT NULL,
        payload_sha256 TEXT NOT NULL,
-       received_at TEXT NOT NULL DEFAULT (datetime('now'))
+       previous_event_sha256 TEXT,
+       event_sha256 TEXT NOT NULL UNIQUE,
+       created_at TEXT NOT NULL,
+       FOREIGN KEY (document_id) REFERENCES onboarding_signing_documents(id) ON DELETE RESTRICT,
+       FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
      )`,
-    `CREATE INDEX IF NOT EXISTS idx_docusign_events_envelope
-       ON docusign_webhook_events(envelope_id, received_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_signature_events_document
+       ON onboarding_signature_events(document_id, id)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

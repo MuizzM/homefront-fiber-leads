@@ -804,7 +804,7 @@ function RepDocumentsDialog({ member, onClose }: { member: TeamMember | null; on
       const skipped = response.results?.filter((result: any) => result.skipped).length ?? 0;
       toast({
         title: sent ? `${sent} document${sent === 1 ? "" : "s"} sent` : "No duplicate documents sent",
-        description: skipped ? `${skipped} active envelope${skipped === 1 ? " was" : "s were"} already in progress.` : `DocuSign emailed ${member?.name}.`,
+        description: skipped ? `${skipped} active agreement${skipped === 1 ? " was" : "s were"} already in progress.` : `Resend emailed ${member?.name}.`,
       });
       qc.setQueryData(queryKey, response);
       qc.invalidateQueries({ queryKey });
@@ -862,7 +862,7 @@ function RepDocumentsDialog({ member, onClose }: { member: TeamMember | null; on
             {!data.configured && (
               <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3 flex items-start gap-2">
                 <AlertTriangle className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
-                <div><p className="text-xs font-semibold">DocuSign setup required</p><p className="text-[11px] text-muted-foreground mt-0.5">Add the integration credentials and all four template IDs before sending agreements.</p></div>
+                <div><p className="text-xs font-semibold">Resend setup required</p><p className="text-[11px] text-muted-foreground mt-0.5">Add a Resend API key and verified sender before emailing agreements.</p></div>
               </div>
             )}
 

@@ -43,60 +43,44 @@ export const ACTIVE_DOCUMENT_STATUSES = new Set<OnboardingDocumentStatus>([
   "creating", "sent", "delivered",
 ]);
 
-export function normalizeDocusignStatus(value: unknown): OnboardingDocumentStatus | null {
-  const status = String(value ?? "").trim().toLowerCase();
-  if (status === "created" || status === "sent") return "sent";
-  if (status === "delivered") return "delivered";
-  if (status === "completed" || status === "signed") return "completed";
-  if (status === "declined") return "declined";
-  if (status === "voided") return "voided";
-  return null;
-}
-
-const STATUS_RANK: Record<OnboardingDocumentStatus, number> = {
-  creating: 0,
-  sent: 1,
-  delivered: 2,
-  completed: 4,
-  declined: 4,
-  voided: 4,
-  failed: 4,
-};
-
-export function shouldApplyDocumentStatus(
-  current: OnboardingDocumentStatus,
-  incoming: OnboardingDocumentStatus,
-): boolean {
-  if (current === incoming) return false;
-  if (["completed", "declined", "voided"].includes(current)) return false;
-  return STATUS_RANK[incoming] >= STATUS_RANK[current];
-}
-
 export function canOpenSigning(status: OnboardingDocumentStatus): boolean {
   return status === "sent" || status === "delivered";
 }
 
-export interface DocusignConnectIntent {
-  envelopeId: string;
-  status: OnboardingDocumentStatus;
-  eventType: string;
-  occurredAt: string | null;
+export interface AgreementSection {
+  heading: string;
+  paragraphs: string[];
+  bullets?: string[];
 }
 
-export function parseDocusignConnectEvent(payload: any): DocusignConnectIntent | null {
-  const summary = payload?.data?.envelopeSummary ?? payload?.envelopeSummary ?? payload?.data ?? payload;
-  const envelopeId = String(payload?.data?.envelopeId ?? summary?.envelopeId ?? "").trim();
-  const eventType = String(payload?.event ?? summary?.status ?? "").trim();
-  const eventStatus = eventType.toLowerCase().startsWith("envelope-")
-    ? eventType.slice("envelope-".length)
-    : eventType;
-  const status = normalizeDocusignStatus(summary?.status ?? eventStatus);
-  if (!envelopeId || !status) return null;
-  const occurred = payload?.generatedDateTime ?? summary?.statusChangedDateTime ?? null;
-  return {
-    envelopeId,
-    status,
-    eventType: eventType || `envelope-${status}`,
-    occurredAt: occurred ? String(occurred) : null,
-  };
+export interface AgreementSnapshot {
+  schemaVersion: 1;
+  documentType: OnboardingDocumentType;
+  documentVersion: string;
+  title: string;
+  companyName: string;
+  signerName: string;
+  signerEmail: string;
+  issuedAt: string;
+  sections: AgreementSection[];
+}
+
+export const ELECTRONIC_CONSENT_VERSION = "esign-disclosure-2026-07-v1";
+
+export const ELECTRONIC_CONSENT_DISCLOSURE = {
+  title: "Consent to electronic records and signatures",
+  paragraphs: [
+    "You may receive, review, sign, and keep these onboarding records electronically. Your electronic signature has the same intended effect as signing a paper copy.",
+    "You may decline electronic signing or withdraw consent before signing by contacting your manager. You may request a paper copy at no charge. Withdrawing consent before signature does not create a signature and does not change any record you already signed.",
+    "To use electronic records you need an internet-connected device, a current web browser, an email account, and software capable of opening PDF files. You can download the completed PDF from My Documents.",
+    "This consent applies only to Home Front Solutions onboarding agreements presented in this signing session. Opening the agreement and completing the ceremony demonstrates that you can access the electronic record.",
+  ],
+} as const;
+
+export function normalizedSignerName(value: string): string {
+  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase("en-US");
+}
+
+export function signerNameMatches(expected: string, supplied: string): boolean {
+  return normalizedSignerName(expected) === normalizedSignerName(supplied);
 }

@@ -142,7 +142,6 @@ const CSRF_EXEMPT = new Set([
   "/join",
   "/api/billing/webhook/stripe", // Stripe-signed webhook — authenticated by HMAC signature, not a session
   "/api/payouts/webhook/stripe", // Stripe Connect webhook — HMAC-signed, not a session
-  "/api/onboarding/documents/webhook/docusign", // DocuSign Connect — HMAC-signed, not a session
 ]);
 // ── Request ID — one correlation id per request, echoed to the client and used
 // in every server log line so a failure can be traced end to end. Honors an
@@ -174,7 +173,7 @@ const BLOCKED_FIELDS = new Set([
   "passwordHash", "password_hash", "password", "tempPassword",
   "stack", "trace", "errno", "syscall", "code",
   "KFS_AUTH_BASIC", "SCANNER_SUBMIT_SECRET", "SMTP_PASS",
-  "DOCUSIGN_PRIVATE_KEY", "DOCUSIGN_PRIVATE_KEY_BASE64", "DOCUSIGN_CONNECT_HMAC_SECRET",
+  "RESEND_API_KEY",
   "kfsAuthBasic", "scannerSecret", "mapboxToken", "enrichmentApiKey",
 ]);
 const REDACT_PATTERNS: RegExp[] = [
@@ -278,7 +277,7 @@ declare module "http" {
 // (still capturing rawBody for HMAC verification) BEFORE the global 64 KB parser,
 // so a large signed event isn't 413'd before its signature is ever checked.
 app.use(
-  ["/api/billing/webhook/stripe", "/api/payouts/webhook/stripe", "/api/onboarding/documents/webhook/docusign"],
+  ["/api/billing/webhook/stripe", "/api/payouts/webhook/stripe"],
   express.json({ limit: "1mb", verify: (req, _res, buf) => { req.rawBody = buf; } }),
 );
 app.use(

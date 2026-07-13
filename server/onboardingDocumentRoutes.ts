@@ -4,30 +4,31 @@ import { z } from "zod";
 import type { Capability } from "../shared/capabilities";
 import { can } from "../shared/capabilities";
 import {
+  ELECTRONIC_CONSENT_DISCLOSURE,
+  ELECTRONIC_CONSENT_VERSION,
+  ONBOARDING_DOCUMENT_META,
   ONBOARDING_DOCUMENT_TYPES,
   canOpenSigning,
-  parseDocusignConnectEvent,
+  signerNameMatches,
+  type OnboardingDocumentType,
 } from "../shared/onboardingDocuments";
 import { storage } from "./storage";
+import { AGREEMENT_VERSION, buildAgreementSnapshot } from "./onboardingAgreementTemplates";
+import { renderSignedAgreementPdf } from "./onboardingPdf";
 import {
-  configuredDocumentCatalog,
-  createOnboardingEnvelope,
-  createSigningView,
-  docusignConfigured,
-  docusignWebhookConfigured,
-  downloadCompletedEnvelope,
-  publicDocumentCatalog,
-  verifyDocusignHmac,
-} from "./docusignAdapter";
-import {
-  getEnvelope,
-  listRepEnvelopes,
-  markEnvelopeFailed,
-  markEnvelopeSent,
-  processConnectEvent,
-  reserveEnvelope,
+  completeSigning,
+  declineSigning,
+  getCompletedPdf,
+  getSigningDocument,
+  listRepDocuments,
+  markCompletionEmail,
+  markDocumentViewed,
+  markDocumentsFailed,
+  markDocumentsSent,
+  reserveSigningDocument,
 } from "./onboardingDocumentStore";
-import { emailNote, emailParagraph, emailShell, escapeHtml, logoAttachment, mailFrom, mailTransport } from "./mail";
+import { resendConfigured, sendResendEmail } from "./resendMail";
+import { escapeHtml } from "./mail";
 
 interface Deps {
   requireAuth: (req: Request, res: Response, next: NextFunction) => void;
@@ -35,62 +36,94 @@ interface Deps {
 }
 
 const repIdSchema = z.coerce.number().int().positive();
-const envelopeIdSchema = z.coerce.number().int().positive();
+const documentIdSchema = z.coerce.number().int().positive();
 const sendSchema = z.object({
   documentTypes: z.array(z.enum(ONBOARDING_DOCUMENT_TYPES)).min(1).max(ONBOARDING_DOCUMENT_TYPES.length),
 }).strict();
+const signSchema = z.object({
+  typedName: z.string().trim().min(2).max(120),
+  documentSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  consentToElectronicRecords: z.literal(true),
+  acknowledgeRead: z.literal(true),
+  intentToSign: z.literal(true),
+}).strict();
+const declineSchema = z.object({ reason: z.string().trim().min(2).max(500) }).strict();
+
+function sha256(value: string | Buffer): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
 
 function appOrigin(req: Request): string {
   const configured = process.env.APP_ORIGIN?.trim().replace(/\/$/, "");
   if (configured) {
     const url = new URL(configured);
-    if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
-      throw new Error("APP_ORIGIN must use HTTPS");
-    }
+    if (url.protocol !== "https:" && !["localhost", "127.0.0.1"].includes(url.hostname)) throw new Error("APP_ORIGIN must use HTTPS");
     return url.origin;
   }
   const origin = typeof req.headers.origin === "string" ? req.headers.origin.replace(/\/$/, "") : "";
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
+  if (process.env.NODE_ENV !== "production" && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return origin;
   const host = req.get("host") ?? "";
   if (process.env.NODE_ENV !== "production" && /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host)) return `http://${host}`;
-  throw new Error("APP_ORIGIN must be configured before sending DocuSign documents");
+  throw new Error("APP_ORIGIN must be configured before sending onboarding documents");
+}
+
+function publicCatalog() {
+  return ONBOARDING_DOCUMENT_TYPES.map(type => ({ type, ...ONBOARDING_DOCUMENT_META[type], version: AGREEMENT_VERSION }));
 }
 
 function listPayload(tenantId: number, repId: number) {
-  const catalog = publicDocumentCatalog();
-  const envelopes = listRepEnvelopes(tenantId, repId);
-  const latestByType = new Map<string, typeof envelopes[number]>();
-  for (const envelope of envelopes) if (!latestByType.has(envelope.documentType)) latestByType.set(envelope.documentType, envelope);
-  const documents = catalog.map(document => ({
-    ...document,
-    envelope: latestByType.get(document.type) ?? null,
-  }));
+  const records = listRepDocuments(tenantId, repId);
+  const latestByType = new Map<string, typeof records[number]>();
+  for (const record of records) if (!latestByType.has(record.documentType)) latestByType.set(record.documentType, record);
+  const documents = publicCatalog().map(document => ({ ...document, envelope: latestByType.get(document.type) ?? null }));
   const completed = documents.filter(document => document.envelope?.status === "completed").length;
   return {
-    configured: docusignConfigured(),
+    configured: resendConfigured(),
+    provider: "homefront_sign",
+    emailProvider: "resend",
     documents,
-    history: envelopes,
+    history: records,
     progress: { completed, total: documents.filter(document => document.required).length },
   };
 }
 
-async function sendDocumentNotice(input: { email: string; name: string; documentCount: number; origin: string }) {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) return;
-  const logo = logoAttachment();
-  await mailTransport().sendMail({
-    from: mailFrom(),
+function emailShell(heading: string, body: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+  <body style="margin:0;background:#eef1f4;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#12314c">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 12px"><tr><td align="center">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#fff;border:1px solid #e3e8ee;border-radius:16px;overflow:hidden">
+  <tr><td style="padding:28px 34px 12px;text-align:center"><div style="font-size:14px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;color:#3EA394">Home Front Solutions</div><h1 style="font-size:22px;line-height:1.3;margin:14px 0 0">${heading}</h1></td></tr>
+  <tr><td style="padding:12px 34px 34px;font-size:15px;line-height:1.65;color:#4a5a68">${body}</td></tr>
+  </table></td></tr></table></body></html>`;
+}
+
+async function sendInvitation(input: { email: string; name: string; count: number; origin: string; recordIds: string[] }) {
+  const link = `${input.origin}/#/my-documents`;
+  const key = `onboarding-invite-${sha256(input.recordIds.sort().join(",")).slice(0, 40)}`;
+  return sendResendEmail({
     to: input.email,
     subject: "Your Home Front onboarding documents are ready",
-    text: `Hi ${input.name}, ${input.documentCount} onboarding document${input.documentCount === 1 ? " is" : "s are"} ready for your signature. Sign in at ${input.origin}/#/my-documents to review and sign securely through DocuSign.`,
-    html: emailShell({
-      preheader: "Your onboarding agreements are ready to review and sign.",
-      heading: "Your onboarding documents are ready",
-      bodyHtml:
-        emailParagraph(`Hi ${escapeHtml(input.name)}, ${input.documentCount} agreement${input.documentCount === 1 ? " is" : "s are"} ready for your review and signature.`) +
-        emailParagraph(`<a href="${escapeHtml(input.origin)}/#/my-documents" style="display:inline-block;padding:12px 18px;background:#3EA394;color:#fff;text-decoration:none;border-radius:10px;font-weight:600;">Review and sign documents</a>`) +
-        emailNote("Signing happens securely through DocuSign. Home Front does not store your signature credentials."),
-    }),
-    attachments: logo ? [logo] : [],
+    idempotencyKey: key,
+    tags: [{ name: "category", value: "onboarding_invite" }],
+    text: `Hi ${input.name}, ${input.count} onboarding agreement${input.count === 1 ? " is" : "s are"} ready. Sign in to review and sign: ${link}`,
+    html: emailShell("Your onboarding documents are ready", `
+      <p style="margin:0 0 18px">Hi ${escapeHtml(input.name)}, ${input.count} agreement${input.count === 1 ? " is" : "s are"} ready for your review and signature.</p>
+      <p style="margin:0 0 20px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Review and sign documents</a></p>
+      <p style="margin:0;font-size:12px;color:#8a97a4">For your protection, sign in with your Home Front account. The portal records your consent and preserves the exact document you sign.</p>`),
+  });
+}
+
+async function sendCompletionReceipt(input: { recordId: string; email: string; name: string; title: string; pdf: Buffer }) {
+  return sendResendEmail({
+    to: input.email,
+    subject: `Signed copy: ${input.title}`,
+    idempotencyKey: `onboarding-complete-${input.recordId}`,
+    tags: [{ name: "category", value: "onboarding_complete" }],
+    text: `Hi ${input.name}, your ${input.title} has been signed. A completed PDF is attached and remains available in My Documents.`,
+    html: emailShell("Your signed agreement is complete", `
+      <p style="margin:0 0 18px">Hi ${escapeHtml(input.name)}, your <strong>${escapeHtml(input.title)}</strong> has been signed successfully.</p>
+      <p style="margin:0;font-size:13px;color:#617081">The completed agreement and electronic-signature certificate are attached. You can also download the same tamper-evident PDF from My Documents.</p>`),
+    attachments: [{ filename: `${input.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "")}.pdf`, content: input.pdf }],
   });
 }
 
@@ -98,171 +131,200 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
   const tenantId = (req: Request) => Number((req as any).user?.tenantId ?? 0);
   const userId = (req: Request) => Number((req as any).user?.id ?? 0) || null;
   const myRepId = (req: Request) => Number((req as any).user?.teamMemberId ?? 0) || null;
+  const userAgent = (req: Request) => String(req.headers["user-agent"] ?? "unknown").slice(0, 500);
+  const ip = (req: Request) => String(req.ip || req.socket.remoteAddress || "unknown").slice(0, 100);
 
-  app.get(
-    "/api/onboarding/documents/config",
-    requireAuth,
-    requireCapability("onboarding.documents.manage"),
-    (_req, res) => res.json({ configured: docusignConfigured(), documents: publicDocumentCatalog() }),
-  );
+  app.get("/api/onboarding/documents/config", requireAuth, requireCapability("onboarding.documents.manage"), (_req, res) => {
+    res.json({ configured: resendConfigured(), provider: "homefront_sign", emailProvider: "resend", documents: publicCatalog() });
+  });
 
-  app.get(
-    "/api/onboarding/documents/me",
-    requireAuth,
-    requireCapability("onboarding.documents.read.self"),
-    (req, res) => {
-      const repId = myRepId(req);
-      if (!repId) return res.json({ configured: docusignConfigured(), documents: [], history: [], progress: { completed: 0, total: 0 }, noRepProfile: true });
-      res.json(listPayload(tenantId(req), repId));
-    },
-  );
+  app.get("/api/onboarding/documents/me", requireAuth, requireCapability("onboarding.documents.read.self"), (req, res) => {
+    const repId = myRepId(req);
+    if (!repId) return res.json({ configured: resendConfigured(), provider: "homefront_sign", documents: [], history: [], progress: { completed: 0, total: 0 }, noRepProfile: true });
+    res.json(listPayload(tenantId(req), repId));
+  });
 
-  app.get(
-    "/api/onboarding/documents/reps/:repId",
-    requireAuth,
-    requireCapability("onboarding.documents.manage"),
-    (req, res) => {
-      const parsed = repIdSchema.safeParse(req.params.repId);
-      if (!parsed.success) return res.status(400).json({ error: "Invalid rep ID" });
-      const rep = storage.getTeamMemberById(parsed.data);
-      if (!rep || rep.tenantId !== tenantId(req)) return res.status(404).json({ error: "Rep not found" });
-      res.json({ rep: { id: rep.id, name: rep.name, email: rep.email }, ...listPayload(tenantId(req), rep.id) });
-    },
-  );
+  app.get("/api/onboarding/documents/reps/:repId", requireAuth, requireCapability("onboarding.documents.manage"), (req, res) => {
+    const parsed = repIdSchema.safeParse(req.params.repId);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid rep ID" });
+    const rep = storage.getTeamMemberById(parsed.data);
+    if (!rep || rep.tenantId !== tenantId(req)) return res.status(404).json({ error: "Rep not found" });
+    res.json({ rep: { id: rep.id, name: rep.name, email: rep.email }, ...listPayload(tenantId(req), rep.id) });
+  });
 
-  app.post(
-    "/api/onboarding/documents/reps/:repId/send",
-    requireAuth,
-    requireCapability("onboarding.documents.manage"),
-    async (req, res) => {
-      const parsedRepId = repIdSchema.safeParse(req.params.repId);
-      const parsedBody = sendSchema.safeParse(req.body);
-      if (!parsedRepId.success || !parsedBody.success) return res.status(400).json({ error: "Choose one or more valid onboarding documents" });
-      if (!docusignConfigured()) return res.status(503).json({ error: "DocuSign is not configured yet" });
-      const tid = tenantId(req);
-      const rep = storage.getTeamMemberById(parsedRepId.data);
-      if (!rep || rep.tenantId !== tid) return res.status(404).json({ error: "Rep not found" });
-      if (!rep.email) return res.status(409).json({ error: "The rep needs an email address before documents can be sent" });
+  app.post("/api/onboarding/documents/reps/:repId/send", requireAuth, requireCapability("onboarding.documents.manage"), async (req, res) => {
+    const parsedRepId = repIdSchema.safeParse(req.params.repId);
+    const parsedBody = sendSchema.safeParse(req.body);
+    if (!parsedRepId.success || !parsedBody.success) return res.status(400).json({ error: "Choose one or more valid onboarding documents" });
+    if (!resendConfigured()) return res.status(503).json({ error: "Resend email is not configured yet" });
+    const tid = tenantId(req);
+    const rep = storage.getTeamMemberById(parsedRepId.data);
+    if (!rep || rep.tenantId !== tid) return res.status(404).json({ error: "Rep not found" });
+    if (!rep.email) return res.status(409).json({ error: "The rep needs an email address before documents can be sent" });
+    const tenant = storage.getTenantById(tid);
+    const companyName = tenant?.companyName || "Home Front Solutions LLC";
+    const issuedAt = new Date().toISOString();
+    const results: Array<{ documentType: string; sent?: true; skipped?: true; failed?: true; reason?: string; envelopeId?: number }> = [];
+    const created: Array<{ id: number; recordId: string; documentType: OnboardingDocumentType }> = [];
 
-      const catalog = new Map(configuredDocumentCatalog().map(document => [document.type, document]));
-      const origin = appOrigin(req);
-      const webhookUrl = process.env.DOCUSIGN_CONNECT_WEBHOOK_URL?.trim() || `${origin}/api/onboarding/documents/webhook/docusign`;
-      const results: Array<{ documentType: string; sent?: true; skipped?: true; failed?: true; reason?: string; envelopeId?: number }> = [];
-
-      for (const documentType of [...new Set(parsedBody.data.documentTypes)]) {
-        const document = catalog.get(documentType);
-        if (!document) {
-          results.push({ documentType, failed: true, reason: "Template is not configured" });
-          continue;
-        }
-        const clientUserId = `homefront-${tid}-${rep.id}`;
-        const reservation = reserveEnvelope({
-          tenantId: tid,
-          repId: rep.id,
-          documentType,
-          templateId: document.templateId,
-          signerName: rep.name,
-          signerEmail: rep.email,
-          clientUserId,
-          sentBy: userId(req),
-        });
-        if (!reservation.created) {
-          results.push({ documentType, skipped: true, reason: "An active envelope already exists", envelopeId: reservation.row.id });
-          continue;
-        }
-        try {
-          const created = await createOnboardingEnvelope({
-            document,
-            signerName: rep.name,
-            signerEmail: rep.email,
-            clientUserId,
-            tenantId: tid,
-            repId: rep.id,
-            reservationId: reservation.row.id,
-            webhookUrl,
-          });
-          markEnvelopeSent(reservation.row.id, created.envelopeId);
-          storage.logActivity(userId(req), "onboarding.document.sent", "onboarding_document", reservation.row.id,
-            { repId: rep.id, documentType, provider: "docusign" }, req.ip);
-          results.push({ documentType, sent: true, envelopeId: reservation.row.id });
-        } catch (error: any) {
-          markEnvelopeFailed(reservation.row.id, error?.message || "DocuSign send failed");
-          storage.logActivity(userId(req), "onboarding.document.send_failed", "onboarding_document", reservation.row.id,
-            { repId: rep.id, documentType }, req.ip);
-          results.push({ documentType, failed: true, reason: error?.message || "DocuSign send failed", envelopeId: reservation.row.id });
-        }
+    for (const documentType of [...new Set(parsedBody.data.documentTypes)]) {
+      const snapshot = buildAgreementSnapshot({ documentType, companyName, signerName: rep.name, signerEmail: rep.email, issuedAt });
+      const reservation = reserveSigningDocument({
+        tenantId: tid,
+        repId: rep.id,
+        documentType,
+        snapshot,
+        signerName: rep.name,
+        signerEmail: rep.email,
+        sentBy: userId(req),
+        actorIp: ip(req),
+        actorUserAgent: userAgent(req),
+      });
+      if (!reservation.created) {
+        results.push({ documentType, skipped: true, reason: "An active agreement already exists", envelopeId: reservation.row.id });
+      } else {
+        created.push({ id: reservation.row.id, recordId: reservation.row.recordId, documentType });
       }
+    }
 
-      const sentCount = results.filter(result => result.sent).length;
-      if (sentCount > 0) {
-        sendDocumentNotice({ email: rep.email, name: rep.name, documentCount: sentCount, origin })
-          .catch(error => console.warn(`[docusign] onboarding email failed: ${error?.message ?? error}`));
-      }
-      res.json({ results, ...listPayload(tid, rep.id) });
-    },
-  );
-
-  app.post(
-    "/api/onboarding/documents/:id/sign",
-    requireAuth,
-    requireCapability("onboarding.documents.read.self"),
-    async (req, res) => {
-      const parsed = envelopeIdSchema.safeParse(req.params.id);
-      if (!parsed.success) return res.status(400).json({ error: "Invalid document ID" });
-      const row = getEnvelope(parsed.data);
-      if (!row || row.tenantId !== tenantId(req) || row.repId !== myRepId(req)) return res.status(404).json({ error: "Document not found" });
-      if (!row.envelopeId || !canOpenSigning(row.status)) return res.status(409).json({ error: "This document is not available for signing" });
+    if (created.length) {
       try {
-        const url = await createSigningView({
-          envelopeId: row.envelopeId,
-          signerName: row.signerName,
-          signerEmail: row.signerEmail,
-          clientUserId: row.clientUserId,
-          returnUrl: `${appOrigin(req)}/#/my-documents?signing=returned`,
-        });
-        storage.logActivity(userId(req), "onboarding.document.signing_opened", "onboarding_document", row.id,
-          { documentType: row.documentType, provider: "docusign" }, req.ip);
-        res.json({ url });
+        const email = await sendInvitation({ email: rep.email, name: rep.name, count: created.length, origin: appOrigin(req), recordIds: created.map(item => item.recordId) });
+        markDocumentsSent(created.map(item => item.id), email.id, userId(req));
+        for (const item of created) {
+          results.push({ documentType: item.documentType, sent: true, envelopeId: item.id });
+          storage.logActivity(userId(req), "onboarding.document.sent", "onboarding_document", item.id,
+            { repId: rep.id, documentType: item.documentType, signingProvider: "homefront_sign", emailProvider: "resend", emailId: email.id }, req.ip);
+        }
       } catch (error: any) {
-        res.status(502).json({ error: error?.message || "Could not open DocuSign" });
+        const reason = error?.message || "Resend invitation failed";
+        markDocumentsFailed(created.map(item => item.id), reason, userId(req));
+        for (const item of created) {
+          results.push({ documentType: item.documentType, failed: true, reason, envelopeId: item.id });
+          storage.logActivity(userId(req), "onboarding.document.send_failed", "onboarding_document", item.id,
+            { repId: rep.id, documentType: item.documentType, emailProvider: "resend", reason }, req.ip);
+        }
       }
-    },
-  );
+    }
+    res.json({ results, ...listPayload(tid, rep.id) });
+  });
 
-  app.get("/api/onboarding/documents/:id/download", requireAuth, async (req, res) => {
-    const parsed = envelopeIdSchema.safeParse(req.params.id);
+  app.get("/api/onboarding/documents/:id/content", requireAuth, requireCapability("onboarding.documents.read.self"), (req, res) => {
+    const parsed = documentIdSchema.safeParse(req.params.id);
     if (!parsed.success) return res.status(400).json({ error: "Invalid document ID" });
-    const row = getEnvelope(parsed.data);
-    if (!row || row.tenantId !== tenantId(req)) return res.status(404).json({ error: "Document not found" });
-    const role = (req as any).user?.role;
-    const ownsDocument = row.repId === myRepId(req);
-    if (!ownsDocument && !can(role, "onboarding.documents.manage")) return res.status(403).json({ error: "Forbidden" });
-    if (row.status !== "completed" || !row.envelopeId) return res.status(409).json({ error: "The signed document is not available yet" });
+    const record = getSigningDocument(parsed.data);
+    if (!record || record.tenantId !== tenantId(req) || record.repId !== myRepId(req)) return res.status(404).json({ error: "Document not found" });
+    if (!canOpenSigning(record.status)) return res.status(409).json({ error: "This document is not available for signing" });
+    const viewed = markDocumentViewed(record.id, userId(req)!, ip(req), userAgent(req))!;
+    storage.logActivity(userId(req), "onboarding.document.viewed", "onboarding_document", record.id,
+      { documentType: record.documentType, contentSha256: record.contentSha256, provider: "homefront_sign" }, req.ip);
+    res.json({
+      id: viewed.id,
+      recordId: viewed.recordId,
+      status: viewed.status,
+      contentSha256: viewed.contentSha256,
+      snapshot: viewed.snapshot,
+      disclosure: ELECTRONIC_CONSENT_DISCLOSURE,
+      consentVersion: ELECTRONIC_CONSENT_VERSION,
+    });
+  });
+
+  app.post("/api/onboarding/documents/:id/sign", requireAuth, requireCapability("onboarding.documents.read.self"), async (req, res) => {
+    const parsedId = documentIdSchema.safeParse(req.params.id);
+    const parsedBody = signSchema.safeParse(req.body);
+    if (!parsedId.success || !parsedBody.success) return res.status(400).json({ error: "Complete every acknowledgment and enter your full legal name" });
+    const record = getSigningDocument(parsedId.data);
+    const uid = userId(req);
+    if (!record || record.tenantId !== tenantId(req) || record.repId !== myRepId(req) || !uid) return res.status(404).json({ error: "Document not found" });
+    if (!canOpenSigning(record.status)) return res.status(409).json({ error: "This document is not available for signing" });
+    if (!signerNameMatches(record.signerName, parsedBody.data.typedName)) return res.status(400).json({ error: `Type your full name exactly as ${record.signerName}` });
+    if (record.contentSha256 !== parsedBody.data.documentSha256) return res.status(409).json({ error: "The agreement changed; reopen it before signing" });
+
     try {
-      const pdf = await downloadCompletedEnvelope(row.envelopeId);
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Content-Disposition", `attachment; filename="homefront-${row.documentType.replace(/_/g, "-")}.pdf"`);
-      res.setHeader("Content-Length", String(pdf.length));
-      res.send(pdf);
+      const signedAt = new Date().toISOString();
+      const evidence = {
+        recordId: record.recordId,
+        signerName: record.signerName,
+        signerEmail: record.signerEmail,
+        signedAt,
+        authenticatedUserId: uid,
+        authenticatedSession: true,
+        ipAddress: ip(req),
+        userAgent: userAgent(req),
+        contentSha256: record.contentSha256,
+        consentVersion: ELECTRONIC_CONSENT_VERSION,
+        consentToElectronicRecords: true,
+        acknowledgeRead: true,
+        intentToSign: true,
+      };
+      const signatureSha256 = sha256(JSON.stringify(evidence));
+      const pdfEvidence = { ...evidence, signatureSha256 };
+      const pdf = await renderSignedAgreementPdf(record.snapshot, pdfEvidence);
+      const pdfSha256 = sha256(pdf);
+      const completed = completeSigning({
+        id: record.id,
+        expectedContentSha256: record.contentSha256,
+        signatureName: record.signerName,
+        signatureSha256,
+        consentVersion: ELECTRONIC_CONSENT_VERSION,
+        signedAt,
+        signedUserId: uid,
+        ipAddress: ip(req),
+        userAgent: userAgent(req),
+        evidence,
+        pdf,
+        pdfSha256,
+      });
+      storage.logActivity(uid, "onboarding.document.signed", "onboarding_document", record.id,
+        { documentType: record.documentType, recordId: record.recordId, contentSha256: record.contentSha256, signatureSha256, pdfSha256, provider: "homefront_sign" }, req.ip);
+
+      let receiptSent = false;
+      try {
+        const receipt = await sendCompletionReceipt({ recordId: completed.recordId, email: completed.signerEmail, name: completed.signerName, title: completed.documentTitle, pdf });
+        markCompletionEmail(completed.id, receipt.id);
+        receiptSent = true;
+      } catch (emailError: any) {
+        storage.logActivity(uid, "onboarding.document.receipt_failed", "onboarding_document", record.id,
+          { emailProvider: "resend", reason: emailError?.message || "Completion receipt failed" }, req.ip);
+      }
+      res.json({ signed: true, receiptSent, document: { id: completed.id, status: completed.status, completedAt: completed.completedAt } });
     } catch (error: any) {
-      res.status(502).json({ error: error?.message || "Could not download signed document" });
+      const status = /already processed|not available|changed/.test(error?.message ?? "") ? 409 : 500;
+      res.status(status).json({ error: error?.message || "Could not complete signature" });
     }
   });
 
-  app.post("/api/onboarding/documents/webhook/docusign", (req, res) => {
-    if (!docusignWebhookConfigured()) return res.status(503).json({ error: "DocuSign webhook is not configured" });
-    const raw = (req as any).rawBody as Buffer | undefined;
-    const header = req.headers["x-docusign-signature-1"];
-    const signature = Array.isArray(header) ? header[0] : header;
-    if (!raw || !verifyDocusignHmac(raw, signature)) return res.status(400).json({ error: "Invalid DocuSign signature" });
-    const intent = parseDocusignConnectEvent(req.body);
-    if (!intent) return res.status(202).json({ received: true, applied: false, reason: "Unsupported event" });
-    const payloadSha256 = crypto.createHash("sha256").update(raw).digest("hex");
-    const result = processConnectEvent({ eventId: payloadSha256, payloadSha256, intent });
-    if (result.row && result.applied) {
-      storage.logActivity(null, "onboarding.document.status_changed", "onboarding_document", result.row.id,
-        { repId: result.row.repId, documentType: result.row.documentType, status: intent.status, provider: "docusign" }, req.ip, result.row.tenantId);
+  app.post("/api/onboarding/documents/:id/decline", requireAuth, requireCapability("onboarding.documents.read.self"), (req, res) => {
+    const parsedId = documentIdSchema.safeParse(req.params.id);
+    const parsedBody = declineSchema.safeParse(req.body);
+    if (!parsedId.success || !parsedBody.success) return res.status(400).json({ error: "Provide a brief reason for declining" });
+    const record = getSigningDocument(parsedId.data);
+    const uid = userId(req);
+    if (!record || record.tenantId !== tenantId(req) || record.repId !== myRepId(req) || !uid) return res.status(404).json({ error: "Document not found" });
+    try {
+      const declined = declineSigning({ id: record.id, actorUserId: uid, ipAddress: ip(req), userAgent: userAgent(req), reason: parsedBody.data.reason });
+      storage.logActivity(uid, "onboarding.document.declined", "onboarding_document", record.id,
+        { documentType: record.documentType, reason: parsedBody.data.reason, provider: "homefront_sign" }, req.ip);
+      res.json({ declined: true, document: declined });
+    } catch (error: any) {
+      res.status(409).json({ error: error?.message || "Could not decline document" });
     }
-    res.json({ received: true, applied: result.applied, duplicate: result.duplicate });
+  });
+
+  app.get("/api/onboarding/documents/:id/download", requireAuth, (req, res) => {
+    const parsed = documentIdSchema.safeParse(req.params.id);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid document ID" });
+    const record = getSigningDocument(parsed.data);
+    if (!record || record.tenantId !== tenantId(req)) return res.status(404).json({ error: "Document not found" });
+    const ownsDocument = record.repId === myRepId(req);
+    if (!ownsDocument && !can((req as any).user?.role, "onboarding.documents.manage")) return res.status(403).json({ error: "Forbidden" });
+    if (record.status !== "completed") return res.status(409).json({ error: "The signed document is not available yet" });
+    const pdf = getCompletedPdf(record.id);
+    if (!pdf) return res.status(500).json({ error: "The signed PDF could not be found" });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="homefront-${record.documentType.replace(/_/g, "-")}.pdf"`);
+    res.setHeader("Content-Length", String(pdf.length));
+    res.setHeader("X-Document-SHA256", record.completedPdfSha256 || sha256(pdf));
+    res.send(pdf);
   });
 }
