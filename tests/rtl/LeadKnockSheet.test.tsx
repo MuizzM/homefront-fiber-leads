@@ -7,29 +7,33 @@ import { OUTCOMES } from "@shared/knock";
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * CONTRACT (v2 lead card, client/src/components/LeadKnockSheet.tsx).
- * Props: { lead, onKnock, onSaveNote, onClose }
- * The card is PHASE-FREE: address → status chip + relative timestamp → one
- * horizontally-scrollable row of the 7 status pills → Directions → inline
- * always-editable Notes → History (colored dot · label · time · rep).
+ * CONTRACT (v3 lead card, client/src/components/LeadKnockSheet.tsx).
+ * Props: { lead, onKnock, onSaveNote, onClose, onPeekHeight? }
+ * The card is PHASE-FREE: status-dot header (address hero + copy + ✕ close) →
+ * status line (label · relative time) → compact action pills (Directions /
+ * Call / Copy) → a FLEX-WRAP grid of the 7 status pills in FIXED order (no
+ * horizontal scroll, no reshuffle) → recent-activity line → collapsible Notes
+ * composer → History timeline.
  * Requirements exercised here (testids are the API):
  *   - [knock-sheet] with the address; one [knock-outcome-{key}] per rep status
  *     (7 pills, needs_verification excluded), each ≥44px tall
+ *   - the 7 pills render in FIXED OUTCOMES order and NEVER reshuffle — the
+ *     active pill is filled/aria-pressed in place, not promoted to the front
  *   - tapping ANY pill — callback and prospect included — calls onKnock(key)
  *     immediately: one tap, no confirm, no sub-screen; the row never unmounts
  *   - the pill matching the lead's current display state is aria-pressed
- *   - NO status chip / clock row: the ACTIVE pill leads the status row (a
- *     just-tapped status is promoted to the front); History has every
- *     timestamped change
+ *   - a [knock-status-line] shows the current STATE_LABELS status + relative
+ *     time in the status color; a [knock-sheet-close] ✕ fires onClose
  *   - [action-directions] links to Google Maps turn-by-turn (NEVER mapbox —
- *     geocoding billing guardrail); it is the ONLY action button
- *   - [knock-note-input] is a COMPOSER: starts empty (saved notes live in
- *     History), commits on blur or the Add button, and CLEARS after commit
- *   - [knock-history-list] renders every change: outcome label, timestamp,
+ *     geocoding billing guardrail); [action-call] renders ONLY with a phone
+ *   - Notes default to a [note-add-chip] that expands to a [knock-note-input]
+ *     COMPOSER: starts empty (saved notes live in History), commits on blur or
+ *     the Add button, and CLEARS after commit
+ *   - [knock-history-list] renders every change: actor+verb, relative time,
  *     shortened rep name ("M. Muhammad")
- *   - REMOVED chrome must not render: X close, Skip, Next Door, call, text
+ *   - REMOVED chrome must not render: Skip, Next Door, text
  *   - Escape fires onClose; lead null renders nothing
- * Drag physics are framer-motion's problem, not jsdom's — NOT tested here.
+ * Drag physics are pointer-math the jsdom stubs don't exercise — NOT tested here.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
@@ -114,25 +118,27 @@ describe("<LeadKnockSheet /> — status row", () => {
     [...screen.getByTestId("knock-status-row").querySelectorAll("[data-testid^='knock-outcome-']")]
       .map(b => (b as HTMLElement).dataset.testid!.replace("knock-outcome-", ""));
 
-  it("renders the address and exactly the 7 one-tap pills — ACTIVE status leads the row", () => {
-    renderSheet(); // fresh prospect → prospect pill is the current status, so it leads
+  it("renders the address and exactly the 7 one-tap pills in FIXED order", () => {
+    renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
+    // Fixed OUTCOMES order (minus needs_verification) — pills NEVER reshuffle.
     expect(pillOrder()).toEqual([
-      "prospect", "not_home", "interested", "sold", "not_interested", "follow_up", "callback",
+      "not_home", "interested", "sold", "not_interested", "follow_up", "callback", "prospect",
     ]);
+    expect(pillOrder()).toEqual(GRID_KEYS);
     expect(pillOrder()).toHaveLength(GRID_KEYS.length);
     expect(screen.queryByTestId("knock-outcome-needs_verification")).not.toBeInTheDocument();
   });
 
-  it("a sold door opens with the big Sold pill FIRST and filled", () => {
+  it("a sold door: the Sold pill is filled/pressed IN PLACE (order never changes)", () => {
     renderSheet({
       lead: baseLead({ leadStatus: "sold", visited: true, lastOutcome: "sold", lastKnockedAt: new Date().toISOString() }),
     });
-    expect(pillOrder()[0]).toBe("sold");
+    // Sold stays at its fixed index, just aria-pressed — no promotion to front.
+    expect(pillOrder()).toEqual(GRID_KEYS);
     expect(screen.getByTestId("knock-outcome-sold")).toHaveAttribute("aria-pressed", "true");
-    // No chip/clock row — the leading pill IS the status readout.
-    expect(screen.queryByTestId("knock-status-chip")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("knock-status-time")).not.toBeInTheDocument();
+    // The status LINE (not a floating chip) is the always-visible status readout.
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("SOLD");
   });
 
   it("every pill is a one-handed tap target (≥44px)", () => {
@@ -170,40 +176,60 @@ describe("<LeadKnockSheet /> — status row", () => {
     expect(screen.getByTestId("knock-outcome-prospect")).toHaveAttribute("aria-pressed", "true");
   });
 
-  it("header block: street on line 1, city/state/ZIP on line 2", () => {
+  it("header block: street on line 1, city/state/ZIP on line 2, status line in the status color", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
     expect(screen.getByTestId("knock-address-locality")).toHaveTextContent("Rockwell, NC 28138");
+    // A fresh prospect reads "Prospect" on the status line (no last-knock time yet).
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Prospect");
   });
 
-  it("tapping a status promotes it to the front once the lead data reflects it", () => {
-    // The row order derives from the lead's display state (optimistic upstream),
-    // so simulate the post-tap lead: callback just logged → callback leads.
+  it("a callback door: the Callback pill is aria-pressed in its FIXED slot (no reshuffle)", () => {
     renderSheet({
       lead: baseLead({
         leadStatus: "follow_up", visited: true, lastOutcome: "callback",
         lastKnockedAt: new Date().toISOString(),
       }),
     });
-    expect(pillOrder()[0]).toBe("callback");
+    expect(pillOrder()).toEqual(GRID_KEYS); // order is invariant of the active status
     expect(screen.getByTestId("knock-outcome-callback")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Callback");
   });
 });
 
 describe("<LeadKnockSheet /> — actions, notes, history", () => {
-  it("Directions is the ONLY action: Google Maps turn-by-turn to the coords, never mapbox", () => {
+  it("Directions: Google Maps turn-by-turn to the coords, never mapbox; Copy present", () => {
     renderSheet();
     const a = screen.getByTestId("action-directions");
     expect(a).toHaveAttribute("href", expect.stringContaining("google.com/maps/dir"));
     expect(a.getAttribute("href")).toContain("34.9,-79.9");
     expect(a.getAttribute("href")).not.toMatch(/mapbox/i);
-    expect(screen.queryByTestId("action-call")).not.toBeInTheDocument();
+    // Copy is always in the action row; there is never a "text" action.
+    expect(screen.getByTestId("action-copy")).toBeInTheDocument();
     expect(screen.queryByTestId("action-text")).not.toBeInTheDocument();
   });
 
-  it("notes composer: starts EMPTY (saved notes live in History), commit clears the draft", async () => {
+  it("Call renders ONLY when the lead has a contactPhone (tel: deep link)", () => {
+    const { unmount } = renderSheet(); // no phone on baseLead
+    expect(screen.queryByTestId("action-call")).not.toBeInTheDocument();
+    unmount();
+
+    renderSheet({ lead: baseLead({ contactPhone: "+1 555 867 5309" }) });
+    const call = screen.getByTestId("action-call");
+    expect(call).toHaveAttribute("href", "tel:+1 555 867 5309");
+  });
+
+  // Notes default to a slim "+ Add note" chip; the textarea appears on focus.
+  async function openComposer(): Promise<HTMLTextAreaElement> {
+    await userEvent.click(screen.getByTestId("note-add-chip"));
+    return (await screen.findByTestId("knock-note-input")) as HTMLTextAreaElement;
+  }
+
+  it("notes composer: collapsed by default, starts EMPTY, commit clears the draft", async () => {
     const { props } = renderSheet();
-    const input = screen.getByTestId("knock-note-input") as HTMLTextAreaElement;
+    // Collapsed: the textarea is not mounted until the chip is tapped.
+    expect(screen.queryByTestId("knock-note-input")).not.toBeInTheDocument();
+    const input = await openComposer();
     // Never seeded from the lead — the box is for writing, History is for reading.
     expect(input).toHaveValue("");
     expect(screen.queryByTestId("note-add-btn")).not.toBeInTheDocument(); // Add hides while empty
@@ -217,13 +243,14 @@ describe("<LeadKnockSheet /> — actions, notes, history", () => {
       expect(props.onSaveNote).toHaveBeenCalledWith(7, "dog in yard", "2026-07-08T19:00:00.000Z"),
     );
     expect(props.onSaveNote).toHaveBeenCalledTimes(1); // one commit = one history event
-    await waitFor(() => expect(input).toHaveValue(""));  // draft CLEARED after save
     await waitFor(() => expect(screen.getByTestId("note-save-state")).toHaveTextContent("Saved to history"));
+    // The committed note is pinned as the "latest note" so it never feels lost.
+    await waitFor(() => expect(screen.getByTestId("note-latest")).toHaveTextContent("dog in yard"));
   });
 
   it("the Add button commits without waiting for blur", async () => {
     const { props } = renderSheet();
-    const input = screen.getByTestId("knock-note-input") as HTMLTextAreaElement;
+    const input = await openComposer();
     await userEvent.type(input, "gate code 4412");
     await userEvent.pointer({ keys: "[MouseLeft]", target: screen.getByTestId("note-add-btn") });
     await waitFor(() => expect(props.onSaveNote).toHaveBeenCalledTimes(1));
@@ -236,7 +263,7 @@ describe("<LeadKnockSheet /> — actions, notes, history", () => {
       .mockResolvedValueOnce({ status: "conflict", serverNotes: "Server wrote this", updatedAt: "2026-07-08T19:30:00.000Z" })
       .mockResolvedValueOnce({ status: "saved", updatedAt: "2026-07-08T19:31:00.000Z" });
     renderSheet({ onSaveNote });
-    const input = screen.getByTestId("knock-note-input") as HTMLTextAreaElement;
+    const input = await openComposer();
     await userEvent.type(input, "extra detail");
     input.blur();
     await waitFor(() => expect(onSaveNote).toHaveBeenCalledTimes(2));
@@ -245,26 +272,39 @@ describe("<LeadKnockSheet /> — actions, notes, history", () => {
     expect(onSaveNote.mock.calls[1][1]).toContain("Server wrote this");
     expect(onSaveNote.mock.calls[1][1]).toContain("extra detail");
     expect(onSaveNote.mock.calls[1][2]).toBe("2026-07-08T19:30:00.000Z");
-    await waitFor(() => expect(input).toHaveValue("")); // cleared once settled
+    // Draft cleared once settled: the blur-commit collapses the composer back to
+    // the "+ Add note" chip and pins the committed note.
+    await waitFor(() => expect(screen.getByTestId("note-add-chip")).toBeInTheDocument());
+    expect(screen.getByTestId("note-latest")).toHaveTextContent("extra detail");
   });
 
-  it("history is ONE timeline: status changes, assignments (assigned by), and note events", async () => {
-    renderSheet();
-    const rows = await screen.findAllByTestId(/knock-history-item-/);
-    expect(rows).toHaveLength(4);
-    // status_change: label · time · actor
-    expect(rows[0]).toHaveTextContent("Sold");
-    expect(rows[0]).toHaveTextContent("Jul 8");
-    expect(rows[0]).toHaveTextContent("M. Muhammad");
-    // note event: title line + author/time meta line + wrapped preview text
-    expect(rows[1]).toHaveTextContent("Note");
-    expect(rows[1]).toHaveTextContent("Z. Muhammad");
-    expect(rows[1]).toHaveTextContent("Gate code 4412, come back after 6pm");
-    // assignment: to whom AND by whom
-    expect(rows[2]).toHaveTextContent("Assigned to Z. Muhammad");
-    expect(rows[2]).toHaveTextContent("by M. Muhammad");
-    // status_change with no actor → no dangling separator
-    expect(rows[3]).toHaveTextContent("Not Home");
+  it("history is ONE timeline: actor+verb + right-aligned RELATIVE time, three kinds", async () => {
+    // Deterministic "now" so relative times are stable (event fixtures are dated
+    // 2026-07-06..08). Spy Date.now only — new Date(iso) parsing stays real.
+    const NOW = new Date("2026-07-08T20:00:00.000Z").getTime();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(NOW);
+    try {
+      renderSheet();
+      const rows = await screen.findAllByTestId(/knock-history-item-/);
+      expect(rows).toHaveLength(4);
+      // status_change: bold actor + "marked {label}" + relative time
+      expect(rows[0]).toHaveTextContent("M. Muhammad");
+      expect(rows[0]).toHaveTextContent("marked Sold");
+      expect(rows[0]).toHaveTextContent("48m ago");
+      // note event: actor + "added a note" + the wrapped preview text
+      expect(rows[1]).toHaveTextContent("Z. Muhammad");
+      expect(rows[1]).toHaveTextContent("added a note");
+      expect(rows[1]).toHaveTextContent("Gate code 4412, come back after 6pm");
+      // assignment: assigned-by actor + "assigned to {assignee}"
+      expect(rows[2]).toHaveTextContent("M. Muhammad");
+      expect(rows[2]).toHaveTextContent("assigned to Z. Muhammad");
+      expect(rows[2]).toHaveTextContent("6h ago");
+      // status_change with no actor → just the bold label, then relative time
+      expect(rows[3]).toHaveTextContent("Not Home");
+      expect(rows[3]).toHaveTextContent("2d ago");
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 
@@ -275,15 +315,21 @@ describe("<LeadKnockSheet /> — chrome and lifecycle", () => {
     expect(screen.queryByTestId("card-assign-select")).not.toBeInTheDocument();
   });
 
-  it("renders none of the removed chrome: no close, skip, next-door, or save-state chip", () => {
+  it("renders none of the removed chrome: no skip, next-door, or legacy save-state chip", () => {
     renderSheet();
     for (const gone of [
-      "knock-sheet-close", "knock-skip", "next-door-btn", "knock-save-state",
+      "knock-skip", "next-door-btn", "knock-save-state",
       "knock-change-outcome", "knock-hot-chip",
     ]) {
       expect(screen.queryByTestId(gone)).not.toBeInTheDocument();
     }
-    expect(screen.getByTestId("knock-sheet").textContent).not.toMatch(/[✓✔🔥🎉]/u);
+    expect(screen.getByTestId("knock-sheet").textContent).not.toMatch(/[🔥🎉]/u);
+  });
+
+  it("the ✕ close button fires onClose (essential in docked mode with no drag)", async () => {
+    const { props } = renderSheet();
+    await userEvent.click(screen.getByTestId("knock-sheet-close"));
+    expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 
   it("Escape fires onClose (map tap and overdrag close upstream)", async () => {

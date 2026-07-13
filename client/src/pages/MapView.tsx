@@ -192,6 +192,9 @@ export default function MapView() {
 
   // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
+  // Live peek height the open lead card measures + publishes — re-pads the map
+  // camera when the sheet's real content height lands (varies per lead).
+  const [sheetPeekPx, setSheetPeekPx] = useState<number | null>(null);
   const [legendOpen, setLegendOpen] = useState(false); // manager legend: collapsed dot-strip by default
   const [geocoding, setGeocoding] = useState(false); // street "go to" lookup in flight
   const [sidebarSearch, setSidebarSearch] = useState("");
@@ -2005,6 +2008,8 @@ export default function MapView() {
     if (!map || !mapReady) return;
     // ≥1024px the card docks right (380px panel) — pad that edge instead of
     // the bottom so the selected pin still sits in the visible map area.
+    // Bottom pad reads sheetPeekPaddingPx(), which now tracks the card's LIVE
+    // measured peek height (sheetPeekPx below is the effect trigger for it).
     let dockedPanel = false;
     try { dockedPanel = window.matchMedia("(min-width: 1024px)").matches; } catch { /* jsdom */ }
     const openPad = dockedPanel
@@ -2021,7 +2026,7 @@ export default function MapView() {
       moveCamera(map, { padding: { top: 0, left: 0, right: 0, bottom: 0 }, duration: 250 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLeadId, mapReady, useSheet]);
+  }, [selectedLeadId, mapReady, useSheet, sheetPeekPx]);
 
   // No resume system — live GPS is the anchor. The rep opens the app where
   // they stand; the blue dot is always on and moves with the device.
@@ -2942,6 +2947,7 @@ export default function MapView() {
               onSaveNote={handleSaveNote}
               onClose={closeSheet}
               dockOffsetPx={leadsOpen ? 340 : 0}
+              onPeekHeight={setSheetPeekPx}
             />
           )}
         </div>

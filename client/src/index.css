@@ -317,17 +317,17 @@
   }
 }
 
-/* Lead-card body spring — plays on mount, so a keyed remount (lead swap)
-   restarts it. Pure compositor work (transform+opacity); the global
-   reduced-motion block above collapses it to instant. Replaces framer-motion:
-   the card was that library's only consumer. */
+/* Lead-card peek-block crossfade — plays on mount, so a keyed remount (lead
+   swap) restarts it. Opacity ONLY (no translate/overshoot) so a swap reads as a
+   quick content crossfade, never a jump; kept OFF the History block so it
+   doesn't flash while refetching. Pure compositor work; the global
+   reduced-motion block above collapses it to instant. */
 @keyframes card-swap-in {
-  from { opacity: 0; transform: translateY(24px); }
-  60%  { opacity: 1; transform: translateY(-3px); } /* slight overshoot = spring feel */
-  to   { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .card-swap-in {
-  animation: card-swap-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: card-swap-in 0.12s ease-out both;
 }
 
 /* Rep field mode: hide the Mapbox control stack (zoom/compass/geolocate buttons)
@@ -338,8 +338,10 @@
   display: none;
 }
 
-/* Status-pill row: soft fade at the right edge hints "more pills this way"
-   without a scrollbar — the fade sits on the container so pills slide under it. */
+/* Horizontal-scroll fade at the right edge hints "more this way" without a
+   scrollbar — the fade sits on the container so items slide under it. NOTE: the
+   lead card's status pills no longer scroll (they flex-wrap), so this is now
+   used only by Dashboard's horizontally-scrolling stat row. */
 .pill-row-fade {
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);

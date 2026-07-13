@@ -105,15 +105,30 @@ export function writeCachedFix(lat: number, lng: number, at: number): void {
 
 // Single source for the sheet's peek height — LeadKnockSheet imports this so
 // the camera padding can never drift from the actual sheet lip again.
-// Peek: handle + two-line address + pill row + Directions + the full Notes
-// composer (never a half-clipped form control above the fold). The status
-// chip row is gone — the active pill leads the row instead.
-export const SHEET_PEEK_BASE_PX = 292;
+//
+// The v3 peek layout VARIES per lead (status line, recent-activity line, the
+// collapsible "+ Add note" chip), so a single hardcoded number would always be
+// wrong for someone. The mounted LeadKnockSheet therefore MEASURES its real
+// peek block (drag header + peek body) via a ResizeObserver and publishes it
+// through setMeasuredPeekPx(); sheetPeekPaddingPx() consumes that live value so
+// the map camera's bottom padding tracks the actual content. The constant below
+// is only the pre-measure / no-sheet fallback.
+let measuredPeekPx: number | null = null;
+export function setMeasuredPeekPx(px: number | null): void {
+  measuredPeekPx = px != null && Number.isFinite(px) && px > 0 ? px : null;
+}
 
-// Camera bottom padding = peek height + a small margin so the selected pin sits
-// just above the sheet lip; capped at 35vh for short/landscape viewports.
+// Fallback ONLY (before the first measure, or when no sheet is mounted). Sized
+// to the new peek layout: status-dot header + hero address + status line +
+// action-pill row + wrapped 7-pill grid + recent line + the "+ Add note" chip.
+// Real height comes from setMeasuredPeekPx at runtime.
+export const SHEET_PEEK_BASE_PX = 320;
+
+// Camera bottom padding = live peek height (or fallback) + a small margin so the
+// selected pin sits just above the sheet lip; capped at 35vh for short/landscape
+// viewports.
 export const sheetPeekPaddingPx = (): number =>
-  Math.min(SHEET_PEEK_BASE_PX + 24, Math.round((typeof window !== "undefined" ? window.innerHeight : 800) * 0.35));
+  Math.min((measuredPeekPx ?? SHEET_PEEK_BASE_PX) + 24, Math.round((typeof window !== "undefined" ? window.innerHeight : 800) * 0.35));
 
 // All programmatic camera moves in the rep flow go through this — jumpTo under
 // prefers-reduced-motion and in headless/jsdom (no easeTo) so the camera never

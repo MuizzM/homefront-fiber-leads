@@ -3,23 +3,30 @@
 // no portal, no backdrop, no body scroll-lock — the map above must stay 100%
 // interactive while the card is open. Snapping is pure transform (translateY)
 // so the map never reflows, and dragging is confined to the handle/header
-// region so the status row and body scroll are never hijacked.
+// region so the status grid and body scroll are never hijacked.
 //
-// The card is phase-free: address → status chip + timestamp → one row of
-// one-tap status pills → Directions → inline Notes → History. Tapping a status
-// saves immediately (no confirm, no done-screen); the chip, timestamp, active
-// pill, and map pin all update from the same optimistic lead data.
+// v3 layout (Mobbin-grounded): status-dot header (address hero + copy + close)
+// → status line (label · relative time, in the status color) → compact action
+// pills (Directions / Call / Copy) → a FLEX-WRAP grid of all 7 status pills, no
+// horizontal scroll, fixed order so a pill never moves under the finger →
+// recent-activity line → collapsible Notes composer → History timeline.
+// Tapping a status saves immediately (one tap, no confirm); the dot, status
+// line, active pill, and map pin all update from the same optimistic lead data.
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Navigation } from "lucide-react";
-import { SHEET_PEEK_BASE_PX } from "@/lib/mapPins";
+import {
+  Navigation, Phone, Copy, Check, Plus, X,
+  DoorClosed, Star, DollarSign, ThumbsDown, Clock, RotateCcw, HelpCircle,
+  type LucideIcon,
+} from "lucide-react";
+import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
 import { VerificationBadge, formatDistance, type VStatus } from "@/components/verification";
 import {
-  OUTCOMES, OUTCOME_META, pinDisplayState, isKnockOutcome,
+  OUTCOMES, OUTCOME_META, STATE_COLORS, STATE_LABELS, pinDisplayState, isKnockOutcome,
   type KnockOutcome, type PinDisplayState,
 } from "@shared/knock";
 
@@ -29,6 +36,7 @@ export interface SheetLead {
   id: number; lat?: number | null; lng?: number | null;
   address: string; city?: string | null; state?: string | null; zip?: string | null;
   leadStatus: string;
+  contactPhone?: string | null;   // drives the Call action (tel: link) when present
   assignedRepId?: number | null;  // shown/edited only for lead.assign holders
   visited?: boolean; lastOutcome?: string | null; lastKnockedAt?: string | null;
 }
@@ -40,17 +48,22 @@ export interface LeadKnockSheetProps {
   // for the OUTGOING lead can flush during a card swap; returns the save
   // result so the card can render Saving/Saved and merge 409 conflicts.
   onSaveNote: (leadId: number, note: string, baseUpdatedAt: string | null) => Promise<NoteSaveResult>;
-  onClose: () => void;                    // escape key / overdrag (map tap closes upstream)
+  onClose: () => void;                    // ✕ button / escape / overdrag (map tap closes upstream)
   // Docked mode only: shift the card left by this many px so it never covers
   // a right-side rail (the leads panel) — a rail-row tap must keep the list
   // visible beside the card, or list-driven triage dies (review finding).
   dockOffsetPx?: number;
+  // Published MEASURED peek height (drag header + peek body) so MapView's camera
+  // bottom-padding tracks the real content instead of a hardcoded constant.
+  onPeekHeight?: (px: number) => void;
 }
 
-// Peek height: everything a rep needs on a porch — address, chip, status row,
-// Directions, and the Notes field, nothing half-clipped below the fold.
-// Imported from mapPins so the map's camera padding tracks the sheet lip.
-const PEEK_BASE_PX = SHEET_PEEK_BASE_PX;
+// lucide icon NAME (from OutcomeDef.icon) → component. Pins and card share one
+// palette; this is the one place a name string becomes a rendered glyph.
+const ICON_MAP: Record<string, LucideIcon> = {
+  DoorClosed, Star, DollarSign, ThumbsDown, Clock, Phone, RotateCcw, HelpCircle,
+};
+
 // Tap-vs-drag threshold: header taps must still land.
 const TAP_SLOP_PX = 6;
 // Dragging further than this below the peek position dismisses the sheet.
@@ -60,9 +73,12 @@ const FLICK_VELOCITY = 0.5; // px/ms
 
 // Muted secondary text per the card spec.
 const MUTED = "#8A94A6";
+// Slightly brighter than MUTED for note/preview body copy.
+const BODY_TEXT = "#B9C2D0";
 
-// The rep card offers exactly the 7 spec statuses, in spec order (OUTCOMES
+// The rep card offers exactly the 7 spec statuses, in FIXED spec order (OUTCOMES
 // order minus needs_verification, which is server/history back-compat only).
+// Order is stable per spec — pills never reshuffle under the finger.
 const GRID_OUTCOMES = OUTCOMES.filter(o => o.key !== "needs_verification");
 
 // The active pill mirrors the lead's CURRENT display state.
@@ -72,11 +88,28 @@ const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {
   not_interested: "not_interested",
 };
 
-// "Jul 8, 3:12 PM" — history rows carry the absolute time of each change.
-function historyTime(iso: string): string {
-  const t = new Date(iso);
-  if (!Number.isFinite(t.getTime())) return "";
-  return t.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+// "5m ago" / "2h ago" / "3d ago" / "Jul 8" — one compact relative-time helper
+// for the header status line, recent-activity line, and History rows.
+function relativeTime(iso?: string | null): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const diff = Date.now() - t;
+  if (diff < 60_000) return "just now";
+  const min = Math.floor(diff / 60_000);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.floor(hr / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function prefersReducedMotion(): boolean {
+  try {
+    return typeof window !== "undefined" && typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  } catch { return false; }
 }
 
 // "Muizz Muhammad" → "M. Muhammad" (single names pass through).
@@ -136,7 +169,7 @@ interface HistoryRow {
 interface LeadDetail { id: number; notes?: string | null; updatedAt?: string | null }
 
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
-  const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0 } = props;
+  const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0, onPeekHeight } = props;
 
   // Keep the last lead rendered while `lead: null` animates the sheet out.
   const [renderedLead, setRenderedLead] = useState<SheetLead | null>(lead);
@@ -150,30 +183,70 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const docked = useDocked();
   const [snap, setSnap] = useState<SheetSnap>("peek");
   const [note, setNote] = useState("");                // composer DRAFT — clears once committed
+  const [noteOpen, setNoteOpen] = useState(false);     // collapsed "+ Add note" chip → textarea on focus
   const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued">("idle");
+  const [lastCommittedNote, setLastCommittedNote] = useState<string | null>(null); // pinned "latest note"
+  const [flashKey, setFlashKey] = useState<KnockOutcome | null>(null); // brief tap-confirm flash
+  const [copiedAddr, setCopiedAddr] = useState(false);                 // copy-glyph → check feedback
   const noteBaseRef = useRef<string | null>(null);     // lead.updatedAt we loaded — conflict base
   const liveNoteRef = useRef<{ leadId: number; value: string } | null>(null); // for outgoing-lead flush
   const committingRef = useRef(false);                 // one in-flight commit at a time
+  const noteInputRef = useRef<HTMLTextAreaElement>(null);
 
   const sheetRef = useRef<HTMLDivElement>(null);
-  const statusRowRef = useRef<HTMLDivElement>(null);
+  const dragRegionRef = useRef<HTMLDivElement>(null);  // handle + header (measured for peek height)
+  const peekBodyRef = useRef<HTMLDivElement>(null);    // above-the-fold body (measured for peek height)
 
-  // ── Geometry: measure sheet height + safe area so snaps are numeric ─────────
+  // ── Geometry: measure sheet + safe area + peek content so snaps are numeric
+  // AND the map camera padding tracks the real peek height (never a constant) ──
   const [sheetH, setSheetH] = useState(0);
   const [safeBottom, setSafeBottom] = useState(0);
+  const [peekContentPx, setPeekContentPx] = useState<number | null>(null);
+  const lastPublishedPeek = useRef<number | null>(null);
   const mounted = renderedLead != null;
   useLayoutEffect(() => {
-    if (!mounted) return;
+    if (!mounted) {
+      setMeasuredPeekPx(null);          // no sheet → camera padding falls back
+      lastPublishedPeek.current = null;
+      return;
+    }
+    lastPublishedPeek.current = null;   // new lead/layout → force a fresh publish
+    // Peek height = drag header + the above-the-fold body block. offsetHeight is
+    // a pure layout read (transform- and scroll-independent), so this stays
+    // correct in every snap/drag state.
+    const publish = () => {
+      const dr = dragRegionRef.current, pb = peekBodyRef.current;
+      if (!dr || !pb) return;
+      const px = Math.round(dr.offsetHeight + pb.offsetHeight);
+      if (px <= 0) return;
+      if (lastPublishedPeek.current != null && Math.abs(lastPublishedPeek.current - px) < 2) return;
+      lastPublishedPeek.current = px;
+      setPeekContentPx(px);
+      setMeasuredPeekPx(px);            // → sheetPeekPaddingPx() (mapPins)
+      onPeekHeight?.(px);              // → MapView re-pads the camera
+    };
     const measure = () => {
       if (sheetRef.current) setSheetH(sheetRef.current.offsetHeight);
       setSafeBottom(readSafeAreaBottom());
+      publish();
     };
     measure();
+    let ro: ResizeObserver | null = null;
+    try {
+      ro = new ResizeObserver(publish);        // catches note expand / pill wrap
+      if (dragRegionRef.current) ro.observe(dragRegionRef.current);
+      if (peekBodyRef.current) ro.observe(peekBodyRef.current);
+    } catch { /* jsdom: no ResizeObserver */ }
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [mounted]);
+    return () => {
+      window.removeEventListener("resize", measure);
+      try { ro?.disconnect(); } catch { /* noop */ }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, renderedLead?.id, docked]);
 
-  const peekY = Math.max(0, sheetH - (PEEK_BASE_PX + safeBottom));
+  const peekBasePx = peekContentPx ?? SHEET_PEEK_BASE_PX;
+  const peekY = Math.max(0, sheetH - (peekBasePx + safeBottom));
 
   // ── Drag (handle + header only) ──────────────────────────────────────────────
   const [dragging, setDragging] = useState(false);
@@ -250,7 +323,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (id == null) return;
     setSnap("peek");
     setNote("");
+    setNoteOpen(false);
     setNoteState("idle");
+    setLastCommittedNote(null);
+    setFlashKey(null);
+    setCopiedAddr(false);
     noteBaseRef.current = null;
     liveNoteRef.current = null;
     setDragging(false);
@@ -312,13 +389,6 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   });
   const history = historyQuery.data ?? [];
 
-  // Promoted pill must be visible: snap the row's scroll back to the start
-  // whenever the leader changes (new selection or a fresh tap).
-  const dsForScroll = pinDisplayState(renderedLead ?? { leadStatus: "prospect" });
-  useEffect(() => {
-    if (statusRowRef.current) statusRowRef.current.scrollLeft = 0; // plain write — no smooth-scroll API needed
-  }, [dsForScroll, renderedLead?.id]);
-
   // ── One-tap disposition ──────────────────────────────────────────────────────
   const tapGuard = useRef(0); // absorbs accidental double-fires of the same tap
   const handleStatusTap = (key: KnockOutcome) => {
@@ -326,14 +396,20 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (now - tapGuard.current < 350) return;
     tapGuard.current = now;
     try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
-    onKnock(key); // optimistic upstream: chip, timestamp, pill, and pin recolor together
+    // Brief filled + check flash confirms the tap even before the optimistic
+    // lead data round-trips. No-op under reduced motion.
+    if (!prefersReducedMotion()) {
+      setFlashKey(key);
+      window.setTimeout(() => setFlashKey(k => (k === key ? null : k)), 150);
+    }
+    onKnock(key); // optimistic upstream: dot, status line, pill, and pin recolor together
   };
 
   // ── Notes: composer model ────────────────────────────────────────────────────
   // Typing is pure local state (never touches the network). Committing — blur,
   // the Add button, or a card swap — sends ONE write, logs ONE history event,
-  // and CLEARS the draft; the note is then read from History. Offline commits
-  // stash durably and clear too (they flush when connectivity returns).
+  // and CLEARS the draft; the note is then read from History (and pinned as the
+  // "latest note"). Offline commits stash durably and clear too.
   const commitNote = (value: string) => {
     const id = renderedLead?.id;
     const text = value.trim();
@@ -343,6 +419,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     const finish = (state: "saved" | "queued") => {
       committingRef.current = false;
       setNoteState(state);
+      setLastCommittedNote(text); // pin the just-committed note so it never feels lost
       // Clear ONLY what was committed — keep anything typed since.
       setNote(cur => {
         const rest = cur.startsWith(value) ? cur.slice(value.length) : cur === value ? "" : cur;
@@ -376,12 +453,41 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   // ── Derived display values ───────────────────────────────────────────────────
   const ds = pinDisplayState(renderedLead);
   const activeOutcome = DS_TO_OUTCOME[ds] ?? null;
-  // The current status pill LEADS the row — opening the card answers "where
-  // does this door stand?" with the first, filled pill. Tapping a different
-  // status promotes it to the front. O(n) over 7 items, no sort.
-  const orderedOutcomes = activeOutcome
-    ? [OUTCOME_META[activeOutcome], ...GRID_OUTCOMES.filter(o => o.key !== activeOutcome)]
-    : GRID_OUTCOMES;
+  const statusColor = STATE_COLORS[ds];
+  const statusLabel = STATE_LABELS[ds];
+  const lastKnockRel = relativeTime(renderedLead.lastKnockedAt);
+
+  // Recent-activity line: newest history event, or the lead's own last knock
+  // before history loads. Hidden for a fresh, never-touched door.
+  const recent: { label: string; who: string | null; time: string } | null = (() => {
+    const h0 = history[0];
+    if (h0) {
+      const label = h0.type === "status_change" && isKnockOutcome(h0.status) ? OUTCOME_META[h0.status].label
+        : h0.type === "assignment" ? "Assigned"
+        : h0.type === "note" ? "Note" : (h0.status ?? "Update");
+      return { label, who: h0.actor ? shortRepName(h0.actor) : null, time: relativeTime(h0.changedAt) };
+    }
+    if (renderedLead.lastOutcome || renderedLead.lastKnockedAt) {
+      const label = isKnockOutcome(renderedLead.lastOutcome ?? "")
+        ? OUTCOME_META[renderedLead.lastOutcome as KnockOutcome].label : "Knocked";
+      return { label, who: null, time: relativeTime(renderedLead.lastKnockedAt) };
+    }
+    return null;
+  })();
+
+  // Pinned "latest note": this session's committed note, else the most recent
+  // note from history — so the last note is always visible without expanding.
+  const latestNote = lastCommittedNote ?? history.find(h => h.type === "note")?.notePreview ?? null;
+
+  const fullAddress = [
+    renderedLead.address,
+    [renderedLead.city, [renderedLead.state, renderedLead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", "),
+  ].filter(Boolean).join(", ");
+  const copyAddress = () => {
+    try { navigator.clipboard?.writeText(fullAddress); } catch { /* clipboard blocked */ }
+    setCopiedAddr(true);
+    window.setTimeout(() => setCopiedAddr(false), 1200);
+  };
 
   const destination = renderedLead.lat != null && renderedLead.lng != null
     ? `${renderedLead.lat},${renderedLead.lng}`
@@ -402,6 +508,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
           ? "translateY(0px)"
           : `translateY(${peekY}px)`;
 
+  const ghostPill = "h-11 rounded-full bg-white/[0.05] border border-white/[0.08] flex items-center justify-center gap-1.5 text-[13px] font-semibold text-white active:scale-[0.97] transition";
+
   return (
     <div
       ref={sheetRef}
@@ -411,7 +519,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       className={[
         // glass-sheet: the liquid-glass bottom-sheet surface (18px blur budget,
         // ink fill, specular top hairline, token shadow) — see index.css.
-        "glass-sheet fixed z-40 will-change-transform",
+        "glass-sheet fixed z-40 flex flex-col will-change-transform",
         docked
           ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
           : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[24px] border-t border-white/10",
@@ -419,11 +527,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       ].join(" ")}
       style={{ transform, ...(docked && dockOffsetPx ? { right: dockOffsetPx } : null) }}
     >
-      {/* Drag region: handle + header + chip row. touchAction none so the
-          browser never steals the gesture for page scroll. */}
+      {/* Drag region: handle + header only. touchAction none so the browser
+          never steals the gesture for page scroll. Also the measured "header"
+          half of the peek height. */}
       <div
+        ref={dragRegionRef}
         data-drag-region
-        className="cursor-grab select-none"
+        className="cursor-grab select-none shrink-0"
         style={{ touchAction: "none" }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -447,184 +557,283 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
           <div className="pt-4" />
         )}
 
-        <div className="px-4 pb-3">
-          {/* Header block: street + city/state/ZIP, nothing else. No status
-              chip or clock — the ACTIVE pill leads the status row below, and
-              History carries every timestamped change. */}
-          <h2 className="min-w-0 text-[17px] font-bold text-white truncate">{renderedLead.address}</h2>
-          {(renderedLead.city || renderedLead.state || renderedLead.zip) && (
-            <div data-testid="knock-address-locality" className="text-[12px] truncate mt-0.5" style={{ color: MUTED }}>
-              {[renderedLead.city, [renderedLead.state, renderedLead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
+        {/* Header: status dot + address hero (with copy glyph) + ✕ close, then
+            the locality sub-line and a status line (label · relative time) in
+            the status color — a rep sees where the door stands at a glance. */}
+        <div className="px-4 pb-3 pt-0.5">
+          <div className="flex items-start gap-2.5">
+            <span
+              data-testid="knock-status-dot"
+              aria-hidden
+              className="w-2.5 h-2.5 rounded-full shrink-0 mt-[9px]"
+              style={{ background: statusColor }}
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start gap-1 min-w-0">
+                <h2 className="min-w-0 flex-1 text-[21px] leading-[1.15] font-semibold text-white truncate">
+                  {renderedLead.address}
+                </h2>
+                <button
+                  type="button"
+                  data-testid="knock-copy-address"
+                  aria-label="Copy address"
+                  onClick={copyAddress}
+                  className="shrink-0 mt-[2px] h-7 w-7 flex items-center justify-center rounded-md text-white/45 hover:text-white active:scale-90 transition"
+                >
+                  {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-[15px] h-[15px]" />}
+                </button>
+              </div>
+              {(renderedLead.city || renderedLead.state || renderedLead.zip) && (
+                <div data-testid="knock-address-locality" className="text-[12px] truncate mt-0.5" style={{ color: MUTED }}>
+                  {[renderedLead.city, [renderedLead.state, renderedLead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
+                </div>
+              )}
+              <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1" style={{ color: statusColor }}>
+                {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
+              </div>
             </div>
-          )}
+            <button
+              type="button"
+              data-testid="knock-sheet-close"
+              aria-label="Close"
+              onClick={onClose}
+              className="shrink-0 -mr-1 -mt-0.5 h-8 w-8 flex items-center justify-center rounded-full text-white/50 hover:text-white hover:bg-white/10 active:scale-90 transition"
+            >
+              <X className="w-[18px] h-[18px]" />
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Body — springs in when the card swaps to a different lead. Pure CSS
-          (keyed remount restarts the animation): framer-motion was this file's
-          only consumer, so dropping it cuts the whole library from the bundle. */}
+      {/* Body — scrolls in expanded/docked, clipped in peek. NOT keyed on lead
+          id: only the peek block below crossfades, so History never remounts
+          (and never flashes) on a card swap. */}
       <div
-        key={renderedLead.id}
         className={[
-          "card-swap-in px-4 h-[calc(100%-88px)] pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
+          "flex-1 min-h-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
           docked || snap === "expanded" ? "overflow-y-auto overscroll-contain" : "overflow-hidden",
         ].join(" ")}
       >
-        {/* One-tap status row — single horizontally scrollable line of pills.
-            Active = filled in its status color; the rest are outlined. */}
-        <div
-          data-testid="knock-status-row"
-          ref={statusRowRef}
-          className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pill-row-fade"
-        >
-          {orderedOutcomes.map(o => {
-            const active = activeOutcome === o.key;
-            return (
-              <button
-                key={o.key}
-                type="button"
-                data-testid={`knock-outcome-${o.key}`}
-                aria-pressed={active}
-                onClick={() => handleStatusTap(o.key)}
-                className="h-11 px-4 shrink-0 rounded-full border text-[13px] font-semibold whitespace-nowrap active:scale-95 transition"
-                style={active
-                  ? { background: o.color, borderColor: o.color, color: "#ffffff", boxShadow: `0 2px 12px ${o.color}55` }
-                  : { background: `${o.color}14`, borderColor: `${o.color}55`, color: o.color }}
-              >
-                {o.label}
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Action row: Directions only. */}
-        <a
-          data-testid="action-directions"
-          href={directionsHref}
-          target="_blank"
-          rel="noopener"
-          className="mt-4 h-12 w-full rounded-2xl bg-white/[0.05] border border-white/[0.08] flex items-center justify-center gap-2 text-[14px] font-semibold text-white active:scale-[0.98] transition"
-        >
-          <Navigation className="w-4 h-4 opacity-80" />
-          Directions
-        </a>
-
-        {/* Assignment — the ONE role difference on the shared card. Rendered
-            only for lead.assign holders (team lead+); reps never see it. The
-            same server capability gate enforces it, so this is display parity,
-            not security. */}
-        {canAssignLead && (
-          <div className="mt-3 flex items-center gap-2.5" data-testid="card-assign-row">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em] shrink-0" style={{ color: MUTED }}>
-              Assigned to
-            </span>
-            <select
-              value={renderedLead.assignedRepId ?? ""}
-              onChange={e => assignLead(e.target.value ? Number(e.target.value) : null)}
-              data-testid="card-assign-select"
-              className="flex-1 h-9 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60"
+        {/* Peek block — everything above the fold. Keyed on lead id so it
+            crossfades (opacity only) when the card swaps to another door. Also
+            the measured half of the peek height. */}
+        <div key={renderedLead.id} ref={peekBodyRef} className="card-swap-in">
+          {/* Action row: compact ghost pills. Directions keeps the Google Maps
+              static deep link; Call is a tel: link only when a phone exists. */}
+          <div data-testid="knock-action-row" className="flex items-center gap-2 pt-1">
+            <a
+              data-testid="action-directions"
+              href={directionsHref}
+              target="_blank"
+              rel="noopener"
+              className={`${ghostPill} flex-1 min-w-0`}
             >
-              <option value="" className="text-slate-900">Unassigned</option>
-              {(teamQuery.data ?? []).filter(m => m.active).map(m => (
-                <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* Notes — a quick composer. Committing (Add / tap away / card swap)
-            saves once, logs the history event, and CLEARS the draft: History
-            is where saved notes are read, the box is only for writing. */}
-        <div className="mt-4">
-          <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
-              Notes
-            </span>
-            {noteState !== "idle" && (
-              <span data-testid="note-save-state" data-state={noteState} className="text-[10px] font-medium"
-                style={{ color: noteState === "saved" ? "#34d399" : MUTED }}>
-                {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : "Saved to history"}
-              </span>
+              <Navigation className="w-4 h-4 opacity-80" />
+              Directions
+            </a>
+            {renderedLead.contactPhone && (
+              <a
+                data-testid="action-call"
+                href={`tel:${renderedLead.contactPhone}`}
+                className={`${ghostPill} flex-1 min-w-0`}
+              >
+                <Phone className="w-4 h-4 opacity-80" />
+                Call
+              </a>
             )}
+            <button
+              type="button"
+              data-testid="action-copy"
+              onClick={copyAddress}
+              className={`${ghostPill} px-4 shrink-0`}
+            >
+              {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 opacity-80" />}
+              Copy
+            </button>
           </div>
-          <div className="relative">
-            <textarea
-              data-testid="knock-note-input"
-              placeholder="Add a note…"
-              value={note}
-              onChange={handleNoteChange}
-              onBlur={() => commitNote(note)}
-              rows={2}
-              className="w-full min-h-[60px] text-[15px] leading-snug bg-white/[0.04] border border-white/[0.08] rounded-2xl pl-3.5 pr-16 py-2.5 text-white placeholder:text-white/25 resize-none focus:outline-none focus:border-primary/60"
-            />
-            {note.trim() && (
+
+          {/* Primary interaction: all 7 status pills, flex-wrap so every one is
+              visible at once (no horizontal scroll, no fade mask), FIXED order so
+              a pill never moves under the finger. Active = filled in its color; a
+              tap briefly flashes filled + a check. */}
+          <div data-testid="knock-status-row" className="mt-3 flex flex-wrap gap-2">
+            {GRID_OUTCOMES.map(o => {
+              const active = activeOutcome === o.key;
+              const flashing = flashKey === o.key;
+              const filled = active || flashing;
+              const Icon = ICON_MAP[o.icon];
+              return (
+                <button
+                  key={o.key}
+                  type="button"
+                  data-testid={`knock-outcome-${o.key}`}
+                  aria-pressed={active}
+                  onClick={() => handleStatusTap(o.key)}
+                  className="h-11 px-3.5 rounded-full border text-[13px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition"
+                  style={filled
+                    ? { background: o.color, borderColor: o.color, color: "#ffffff", boxShadow: `0 2px 12px ${o.color}55` }
+                    : { background: `${o.color}14`, borderColor: `${o.color}55`, color: o.color }}
+                >
+                  {flashing ? <Check className="w-4 h-4" /> : Icon ? <Icon className="w-4 h-4" /> : null}
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Recent-activity line: the last thing that happened at this door. */}
+          {recent && (
+            <div data-testid="knock-recent" className="mt-3 text-[12px] truncate" style={{ color: MUTED }}>
+              <span className="font-semibold" style={{ color: BODY_TEXT }}>Last:</span>{" "}
+              {[recent.label, recent.who, recent.time].filter(Boolean).join(" · ")}
+            </div>
+          )}
+
+          {/* Notes — a distinct inset card. Default is a slim "+ Add note" chip
+              (reclaims peek height); it expands to the textarea on focus. The
+              commit model is unchanged (Add / blur / card swap = one write, one
+              history event); the just-committed note is pinned as "latest note". */}
+          <div className="mt-4 rounded-2xl bg-white/[0.03] border border-white/[0.07] p-3">
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
+                Notes
+              </span>
+              {noteState !== "idle" && (
+                <span data-testid="note-save-state" data-state={noteState} className="text-[10px] font-medium"
+                  style={{ color: noteState === "saved" ? "#34d399" : MUTED }}>
+                  {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : "Saved to history"}
+                </span>
+              )}
+            </div>
+            {latestNote && (
+              <div data-testid="note-latest" className="text-[12.5px] leading-snug mb-2 line-clamp-2" style={{ color: BODY_TEXT }}>
+                “{latestNote}”
+              </div>
+            )}
+            {!noteOpen && !note.trim() ? (
               <button
                 type="button"
-                data-testid="note-add-btn"
-                // Fires before blur (pointerdown) so this never double-commits.
-                onPointerDown={(e) => { e.preventDefault(); commitNote(note); }}
-                className="absolute right-2 bottom-2.5 h-9 px-3.5 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
+                data-testid="note-add-chip"
+                onClick={() => { setNoteOpen(true); requestAnimationFrame(() => noteInputRef.current?.focus()); }}
+                className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
               >
-                Add
+                <Plus className="w-4 h-4" /> Add note
               </button>
+            ) : (
+              <div className="relative">
+                <textarea
+                  ref={noteInputRef}
+                  data-testid="knock-note-input"
+                  placeholder="Add a note…"
+                  value={note}
+                  onChange={handleNoteChange}
+                  onBlur={() => { commitNote(note); setNoteOpen(false); }}
+                  rows={2}
+                  className="w-full min-h-[60px] text-[15px] leading-snug bg-white/[0.05] border border-white/[0.08] rounded-xl pl-3.5 pr-16 py-2.5 text-white placeholder:text-white/25 resize-none focus:outline-none focus:border-primary/60"
+                />
+                {note.trim() && (
+                  <button
+                    type="button"
+                    data-testid="note-add-btn"
+                    // Fires before blur (pointerdown) so this never double-commits.
+                    onPointerDown={(e) => { e.preventDefault(); commitNote(note); }}
+                    className="absolute right-2 bottom-2.5 h-9 px-3.5 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
+                  >
+                    Add
+                  </button>
+                )}
+              </div>
             )}
           </div>
+
+          {/* Assignment — the ONE role difference on the shared card. Rendered
+              only for lead.assign holders (team lead+); reps never see it. The
+              same server capability gate enforces it, so this is display parity,
+              not security. */}
+          {canAssignLead && (
+            <div className="mt-3 flex items-center gap-2.5" data-testid="card-assign-row">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] shrink-0" style={{ color: MUTED }}>
+                Assigned to
+              </span>
+              <select
+                value={renderedLead.assignedRepId ?? ""}
+                onChange={e => assignLead(e.target.value ? Number(e.target.value) : null)}
+                data-testid="card-assign-select"
+                className="flex-1 h-9 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60"
+              >
+                <option value="" className="text-slate-900">Unassigned</option>
+                {(teamQuery.data ?? []).filter(m => m.active).map(m => (
+                  <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
 
-        {/* History — every past change, newest first, scrolling independently
-            so the status row above stays reachable. */}
-        <div className="mt-4">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] mb-2" style={{ color: MUTED }}>
+        {/* History — below the fold, newest first. Left-rail dot + bold
+            actor+verb + right-aligned relative time; three event kinds keep
+            VerificationBadge/distance. NOT keyed on lead id → no remount flash
+            while a swap refetches. */}
+        <div className="mt-5">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] mb-2.5" style={{ color: MUTED }}>
             History
           </div>
-          <div data-testid="knock-history-list" className={`${docked ? "max-h-[42vh]" : "max-h-56"} overflow-y-auto overscroll-contain space-y-3 pr-1 pb-2`}>
+          <div data-testid="knock-history-list" className={`${docked ? "max-h-[42vh]" : "max-h-56"} overflow-y-auto overscroll-contain pr-1 pb-2`}>
             {historyQuery.isLoading ? (
-              <>
+              <div className="space-y-3">
                 <div className="h-4 rounded bg-white/[0.06] animate-pulse" />
                 <div className="h-4 rounded bg-white/[0.06] animate-pulse w-2/3" />
-              </>
+              </div>
             ) : history.length === 0 ? (
               <div className="text-xs italic" style={{ color: MUTED }}>No changes yet</div>
             ) : (
-              // One unified timeline, three event kinds. Colored dot = the
-              // event: status hue for dispositions, teal for assignments,
-              // slate for notes. React escapes all text — note previews render
-              // as plain text, never markup.
+              // One unified timeline, three event kinds. Left-rail dot colored by
+              // the event (status hue, teal for assignments, slate for notes); a
+              // hairline connects rows. React escapes all text — note previews
+              // render as plain text, never markup.
               history.map((h, i) => {
                 const meta = h.type === "status_change" && isKnockOutcome(h.status) ? OUTCOME_META[h.status] : null;
                 const dot = h.type === "status_change" ? (meta?.color ?? "#64748b")
                   : h.type === "assignment" ? "#3EA394" : "#94a3b8";
-                const title = h.type === "status_change" ? (meta?.label ?? h.status)
-                  : h.type === "assignment" ? `Assigned to ${h.assignedTo ? shortRepName(h.assignedTo) : "—"}`
-                  : "Note";
-                const metaLine = [
-                  h.type === "assignment" && h.assignedBy ? `by ${shortRepName(h.assignedBy)}` : null,
-                  h.type !== "assignment" && h.actor ? shortRepName(h.actor) : null,
-                  historyTime(h.changedAt),
-                ].filter(Boolean).join(" · ");
+                const who = h.type === "assignment"
+                  ? (h.assignedBy ? shortRepName(h.assignedBy) : null)
+                  : (h.actor ? shortRepName(h.actor) : null);
+                const verb = h.type === "status_change" ? `marked ${meta?.label ?? h.status}`
+                  : h.type === "assignment" ? `assigned to ${h.assignedTo ? shortRepName(h.assignedTo) : "—"}`
+                  : "added a note";
+                const isLast = i === history.length - 1;
                 return (
                   <div
                     key={h.id}
                     data-testid={`knock-history-item-${i}`}
                     data-type={h.type}
-                    className="flex gap-2.5 min-w-0"
+                    className="flex gap-3 min-w-0"
                   >
-                    {/* Dot aligned to the title line; a hairline ties multi-line rows together */}
-                    <span className="w-2 h-2 rounded-full shrink-0 mt-[5px]" style={{ background: dot }} />
-                    <div className="min-w-0 flex-1 leading-tight">
+                    {/* Left rail: dot aligned to the title line + a hairline down
+                        to the next event (dropped on the last row). */}
+                    <div className="relative flex flex-col items-center shrink-0">
+                      <span className="w-2.5 h-2.5 rounded-full mt-[3px]" style={{ background: dot }} />
+                      {!isLast && <span className="w-px flex-1 mt-1 -mb-3 bg-white/10" />}
+                    </div>
+                    <div className="min-w-0 flex-1 leading-tight pb-3">
                       <div className="flex items-baseline justify-between gap-2">
-                        <span className="text-[13px] font-medium text-white truncate">{title}</span>
-                        <span className="text-[11px] shrink-0" style={{ color: MUTED }}>{metaLine}</span>
+                        <span className="text-[13px] truncate">
+                          {who && <span className="font-semibold text-white">{who} </span>}
+                          <span className={who ? "text-white/65" : "font-semibold text-white"}>
+                            {who ? verb : (meta?.label ?? verb)}
+                          </span>
+                        </span>
+                        <span className="text-[11px] shrink-0" style={{ color: MUTED }}>{relativeTime(h.changedAt)}</span>
                       </div>
                       {h.type === "note" && h.notePreview && (
-                        <div className="text-[12px] mt-0.5 line-clamp-2" style={{ color: "#B9C2D0" }}>
+                        <div className="text-[12px] mt-0.5 line-clamp-2" style={{ color: BODY_TEXT }}>
                           “{h.notePreview}”
                         </div>
                       )}
                       {/* Location verification — distance the rep was from the lead
                           WHEN MARKED (never recomputed against a current position). */}
                       {h.type === "status_change" && h.verification != null && (
-                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]" style={{ color: "#B9C2D0" }}>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]" style={{ color: BODY_TEXT }}>
                           <VerificationBadge status={h.verification} />
                           <span data-testid="history-distance">{formatDistance(h.distanceM)}</span>
                           {h.gpsAccuracyM != null && <span>· GPS ±{Math.round(h.gpsAccuracyM)} m</span>}

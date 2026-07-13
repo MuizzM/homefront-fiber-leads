@@ -17,6 +17,7 @@ export interface OutcomeDef {
   color: string;          // hex — button tint AND the pin color the tap produces
   leadStatus: LeadStatus; // canonical status the knock sets
   worked: boolean;        // true = door is done for this pass
+  icon: string;           // lucide-react icon NAME — the card maps name → component
 }
 
 // Button order = this array order (the rep card renders it verbatim).
@@ -25,15 +26,17 @@ export interface OutcomeDef {
 // other change. "callback" folds to follow_up at the DB level (the manager
 // status vocabulary is unchanged) but renders as its own cyan display state.
 // needs_verification maps to "contacted" — server/history back-compat only.
+// `icon` is a lucide-react icon NAME (string) — pins and the card share the
+// palette, and the card renders these via a name→component map (ICON_MAP).
 export const OUTCOMES: OutcomeDef[] = [
-  { key: "not_home",           label: "Not Home",           color: "#ec4899", leadStatus: "prospect",       worked: false },
-  { key: "interested",         label: "Interested",         color: "#8b5cf6", leadStatus: "interested",     worked: true  },
-  { key: "sold",               label: "Sold",               color: "#10b981", leadStatus: "sold",           worked: true  },
-  { key: "not_interested",     label: "Not Interested",     color: "#ef4444", leadStatus: "not_interested", worked: true  },
-  { key: "follow_up",          label: "Follow-up",          color: "#eab308", leadStatus: "follow_up",      worked: true  },
-  { key: "callback",           label: "Callback",           color: "#06b6d4", leadStatus: "follow_up",      worked: true  },
-  { key: "prospect",           label: "Prospect",           color: "#f97316", leadStatus: "prospect",       worked: false },
-  { key: "needs_verification", label: "Needs Verification", color: "#64748b", leadStatus: "contacted",      worked: true  },
+  { key: "not_home",           label: "Not Home",           color: "#ec4899", leadStatus: "prospect",       worked: false, icon: "DoorClosed" },
+  { key: "interested",         label: "Interested",         color: "#8b5cf6", leadStatus: "interested",     worked: true,  icon: "Star"       },
+  { key: "sold",               label: "Sold",               color: "#10b981", leadStatus: "sold",           worked: true,  icon: "DollarSign" },
+  { key: "not_interested",     label: "Not Interested",     color: "#ef4444", leadStatus: "not_interested", worked: true,  icon: "ThumbsDown" },
+  { key: "follow_up",          label: "Follow-up",          color: "#eab308", leadStatus: "follow_up",      worked: true,  icon: "Clock"      },
+  { key: "callback",           label: "Callback",           color: "#06b6d4", leadStatus: "follow_up",      worked: true,  icon: "Phone"      },
+  { key: "prospect",           label: "Prospect",           color: "#f97316", leadStatus: "prospect",       worked: false, icon: "RotateCcw"  },
+  { key: "needs_verification", label: "Needs Verification", color: "#64748b", leadStatus: "contacted",      worked: true,  icon: "HelpCircle" },
 ];
 
 export const OUTCOME_TO_STATUS: Record<KnockOutcome, LeadStatus> =
