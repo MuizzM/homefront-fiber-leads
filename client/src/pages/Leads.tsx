@@ -44,26 +44,29 @@ const STATUS_LABEL: Record<string, string> = {
   follow_up: "Follow Up",
 };
 
-// ONE status color language, matched to the map's PIN_COLORS (MapView.tsx) so a
-// status looks identical on the list and on the map. (interested=purple,
-// follow_up=amber — these were previously swapped between the two pages.)
+// ONE status color language — the SALES RABBIT palette, matched to the map's
+// STATE_COLORS / PIN_COLORS so a status looks identical on the list and the map:
+// Prospect RED, Contacted slate, Interested purple, Sold green, Not Interested
+// black/charcoal (dead), Follow-up orange.
 const STATUS_COLOR: Record<string, string> = {
-  prospect:      "bg-emerald-500/15 text-emerald-400",
-  contacted:     "bg-blue-500/15 text-blue-400",
+  prospect:      "bg-red-500/15 text-red-400",
+  contacted:     "bg-slate-500/15 text-slate-300",
   interested:    "bg-violet-500/15 text-violet-400",
-  sold:          "bg-green-500/15 text-green-400",
-  not_interested:"bg-red-500/15 text-red-400",
-  follow_up:     "bg-amber-500/15 text-amber-400",
+  sold:          "bg-emerald-500/15 text-emerald-400",
+  not_interested:"bg-slate-700/40 text-slate-300",
+  follow_up:     "bg-orange-500/15 text-orange-400",
 };
 
 // Solid accent (left bar / dot) so a rep reads status at a glance without text.
+// Mirrors STATE_COLORS; not_interested uses a visible dark slate (the map's true
+// #1f2937 would vanish on the dark list — same "dead" read, kept legible).
 const STATUS_ACCENT: Record<string, string> = {
-  prospect:      "#22c55e",
-  contacted:     "#3b82f6",
+  prospect:      "#ef4444",
+  contacted:     "#64748b",
   interested:    "#8b5cf6",
   sold:          "#10b981",
-  not_interested:"#ef4444",
-  follow_up:     "#f59e0b",
+  not_interested:"#334155",
+  follow_up:     "#f97316",
 };
 
 const OUTCOME_ICONS: Record<string, React.ElementType> = {
@@ -818,9 +821,9 @@ export default function Leads() {
       <div className="space-y-2">
         <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-0.5">Pipeline</div>
         <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="leads-kpi">
-          <KpiTile className="w-[124px]" label="Prospect" value={bs.prospect ?? 0} tone="text-foreground" icon={Target} chip="bg-secondary" accent="bg-muted-foreground/40" />
-          <KpiTile className="w-[124px]" label="Interested" value={bs.interested ?? 0} tone="text-sky-400" icon={Star} chip="bg-sky-500/15" accent="bg-sky-500" />
-          <KpiTile className="w-[124px]" label="Follow-up" value={bs.follow_up ?? 0} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
+          <KpiTile className="w-[124px]" label="Prospect" value={bs.prospect ?? 0} tone="text-red-400" icon={Target} chip="bg-red-500/15" accent="bg-red-500" />
+          <KpiTile className="w-[124px]" label="Interested" value={bs.interested ?? 0} tone="text-violet-400" icon={Star} chip="bg-violet-500/15" accent="bg-violet-500" />
+          <KpiTile className="w-[124px]" label="Follow-up" value={bs.follow_up ?? 0} tone="text-orange-400" icon={Calendar} chip="bg-orange-500/15" accent="bg-orange-500" />
           <KpiTile className="w-[124px]" label="Sold" value={bs.sold ?? 0} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
         </div>
       </div>

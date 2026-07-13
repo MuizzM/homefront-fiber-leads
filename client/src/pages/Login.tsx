@@ -113,19 +113,20 @@ export default function Login() {
     <div className="login-backdrop min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
 
-        {/* Card */}
-        <div className="rounded-2xl border border-border bg-card p-8 shadow-2xl">
+        {/* Card — refined layered elevation + a hairline ring so it reads as a
+            crisp raised surface on both the dark ink and light grounds. */}
+        <div className="rounded-2xl border border-border bg-card p-8 shadow-xl shadow-black/25 ring-1 ring-border/50">
           {/* Brand */}
           <div className="mb-8 text-center">
             <img
               src="/hfs-logo-full.png"
               alt="Home Front Solutions"
-              className="mx-auto mb-4 h-20 w-auto object-contain"
+              className="mx-auto mb-5 h-20 w-auto object-contain"
               width={80}
               height={80}
             />
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">Home Front Solutions</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Field Sales Intelligence</p>
+            <h1 className="text-[1.35rem] font-semibold tracking-tight text-foreground">Home Front Solutions</h1>
+            <p className="mt-1.5 text-sm text-muted-foreground">Field Sales Intelligence</p>
           </div>
 
           {/* Step: email entry */}
