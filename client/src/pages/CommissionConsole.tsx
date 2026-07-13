@@ -4,10 +4,11 @@ import { apiRequest } from "@/lib/queryClient";
 import { useCan } from "@/lib/capabilities";
 import { useToast } from "@/hooks/use-toast";
 import { usd, usdSigned } from "@/lib/money";
+import { estimateStripeConnectCost } from "@shared/payoutCosts";
 import {
   Banknote, ChevronLeft, ChevronRight, Lock, CheckCircle2, AlertTriangle,
   Download, Users, Zap, X, FileText, Plus, ShieldCheck, Layers, DollarSign, Printer,
-  Send, Loader2, XCircle,
+  Send, Loader2, XCircle, Landmark, History, ExternalLink, Info,
 } from "lucide-react";
 import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
 import { Button } from "@/components/ui/button";
@@ -70,7 +71,9 @@ function StatusChip({ status }: { status: string }) {
 export default function CommissionConsole() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const canClose = useCan("commission.read.all");        // manager/admin: finalize, pay, export, adjust
+  const canClose = useCan("commission.read.all");        // manager/admin: finalize, export, adjust
+  const canPay = useCan("payouts.pay");                  // admin only: moves real money
+  const [section, setSection] = useState<"overview" | "pay">("overview");
   const [weekOffset, setWeekOffset] = useState(0);       // 0 = current, -1 = last week…
   const [drillRep, setDrillRep] = useState<OverviewRow | null>(null);
   const [confirmAction, setConfirmAction] = useState<"FINALIZE" | "MARK_PAID" | null>(null);
@@ -114,10 +117,10 @@ export default function CommissionConsole() {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold tracking-tight flex items-center gap-2">
-            <Banknote className="w-5 h-5 text-primary" /> Commission Console
+            <Banknote className="w-5 h-5 text-primary" /> Commissions &amp; Pay
           </h1>
           <p className="text-[11px] uppercase tracking-wide text-muted-foreground font-medium mt-1">
-            Weekly closeout · projected payroll · Sunday finalize
+            Review earnings · finalize the week · pay reps through Stripe
           </p>
         </div>
         <div className="flex items-center gap-1.5" data-testid="week-nav">
@@ -142,6 +145,29 @@ export default function CommissionConsole() {
         </div>
       </div>
 
+      <div className="inline-flex w-full sm:w-auto rounded-xl border border-border bg-card p-1" role="tablist" aria-label="Commission workspace">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={section === "overview"}
+          onClick={() => setSection("overview")}
+          className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors ${section === "overview" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+          data-testid="commission-tab-overview"
+        >
+          Overview
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={section === "pay"}
+          onClick={() => setSection("pay")}
+          className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "pay" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+          data-testid="commission-tab-pay"
+        >
+          <Landmark className="w-3.5 h-3.5" /> Pay reps
+        </button>
+      </div>
+
       {isError && (
         <div className="rounded-xl bg-card border border-rose-500/30 p-6 text-center text-sm text-muted-foreground">
           Couldn't load the week. Retry in a moment.
@@ -149,7 +175,7 @@ export default function CommissionConsole() {
       )}
       {isLoading && <div className="h-48 rounded-2xl bg-card border border-border animate-pulse" />}
 
-      {ov && (
+      {ov && section === "overview" && (
         <>
           {/* Payroll totals — a hairline-divided metric strip. The ONE total
               dominates; Projected / Finalized / Paid are its unambiguous
@@ -367,9 +393,11 @@ export default function CommissionConsole() {
             </div>
           )}
 
-          {/* Pay reps — Stripe Connect payout, review-then-confirm (managers/admins) */}
-          {canClose && <PayRepsPanel key={weekRef} weekRef={weekRef} />}
         </>
+      )}
+
+      {section === "pay" && canClose && (
+        <PayWorkspace key={weekRef} weekRef={weekRef} canPay={canPay} />
       )}
 
       {/* Confirm closeout */}
@@ -655,6 +683,127 @@ interface PayResult {
   reason?: string; amountCents?: number; transferId?: string;
 }
 
+interface StripeBalance {
+  configured: boolean;
+  availableCents: number;
+  pendingCents: number;
+  currency: "usd";
+}
+
+interface PayoutHistoryRow {
+  id: number;
+  repId: number;
+  repName: string;
+  statementId: number | null;
+  amountCents: number;
+  status: "pending" | "processing" | "paid" | "failed" | "reversed";
+  failureReason: string | null;
+  createdAt: string;
+  paidAt: string | null;
+}
+
+function PayWorkspace({ weekRef, canPay }: { weekRef: string; canPay: boolean }) {
+  const balance = useQuery<StripeBalance>({
+    queryKey: ["/api/payouts/balance"],
+    queryFn: () => apiRequest("GET", "/api/payouts/balance").then(r => r.json()),
+    staleTime: 30_000,
+    retry: 1,
+  });
+
+  return (
+    <div className="space-y-5" role="tabpanel" aria-label="Pay reps">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="rounded-2xl bg-card border border-border p-4">
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+            <Landmark className="w-3.5 h-3.5" /> Stripe platform balance
+          </div>
+          {balance.isLoading ? (
+            <div className="h-9 w-32 mt-2 rounded-lg bg-secondary animate-pulse" />
+          ) : balance.data?.configured ? (
+            <>
+              <div className="mt-1.5 text-2xl font-semibold tabular-nums text-foreground">{usd(balance.data.availableCents)}</div>
+              <div className="text-[11px] text-muted-foreground mt-1">{usd(balance.data.pendingCents)} pending</div>
+            </>
+          ) : (
+            <div className="mt-2 text-sm font-semibold text-amber-400">Stripe Connect not configured</div>
+          )}
+        </div>
+        <div className="rounded-2xl bg-card border border-border p-4">
+          <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">
+            <ShieldCheck className="w-3.5 h-3.5" /> Payment authority
+          </div>
+          <div className="mt-1.5 text-sm font-semibold text-foreground">{canPay ? "Admin approval enabled" : "Review-only access"}</div>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            {canPay ? "You can review and submit real payouts." : "You can prepare and review the batch. An admin must submit it."}
+          </p>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-sky-500/25 bg-sky-500/[0.06] px-4 py-3 flex items-start gap-2.5 text-xs text-muted-foreground">
+        <Info className="w-4 h-4 text-sky-400 mt-px flex-shrink-0" />
+        <div>
+          <strong className="text-foreground">Fund Stripe before submitting.</strong> Connect transfers use the available Stripe platform balance, not a same-day pull from your bank.
+          {canPay && (
+            <> <a href="https://dashboard.stripe.com/balance" target="_blank" rel="noreferrer" className="text-primary hover:underline inline-flex items-center gap-0.5">Open Stripe balance <ExternalLink className="w-3 h-3" /></a></>
+          )}
+        </div>
+      </div>
+
+      <PayRepsPanel
+        weekRef={weekRef}
+        canPay={canPay}
+        availableCents={balance.data?.configured ? balance.data.availableCents : null}
+      />
+      <PayoutHistory />
+    </div>
+  );
+}
+
+function PayoutHistory() {
+  const { data, isLoading, isError } = useQuery<{ payouts: PayoutHistoryRow[] }>({
+    queryKey: ["/api/payouts"],
+    queryFn: () => apiRequest("GET", "/api/payouts").then(r => r.json()),
+  });
+  const rows = data?.payouts ?? [];
+  return (
+    <section className="rounded-2xl bg-card border border-border overflow-hidden" data-testid="payout-history">
+      <header className="px-4 py-3 border-b border-border flex items-center gap-2">
+        <History className="w-4 h-4 text-muted-foreground" />
+        <span className="text-sm font-semibold text-foreground">Payout history</span>
+        <span className="ml-auto text-[11px] text-muted-foreground">Audited Stripe transfers</span>
+      </header>
+      {isLoading ? (
+        <div className="p-4"><div className="h-14 rounded-xl bg-secondary/40 animate-pulse" /></div>
+      ) : isError ? (
+        <div className="p-5 text-sm text-muted-foreground">Payout history is temporarily unavailable.</div>
+      ) : rows.length === 0 ? (
+        <div className="p-6 text-center text-sm text-muted-foreground">No Stripe payouts have been sent yet.</div>
+      ) : (
+        <div className="divide-y divide-border">
+          {rows.slice(0, 25).map(row => (
+            <div key={row.id} className="px-4 py-3 flex items-center gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${row.status === "paid" ? "bg-emerald-500/10" : row.status === "failed" ? "bg-red-500/10" : "bg-amber-500/10"}`}>
+                {row.status === "paid" ? <CheckCircle2 className="w-4 h-4 text-emerald-400" /> : row.status === "failed" ? <XCircle className="w-4 h-4 text-red-400" /> : <Loader2 className={`w-4 h-4 text-amber-400 ${row.status === "processing" ? "animate-spin" : ""}`} />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium text-foreground truncate">{row.repName}</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {new Date(row.paidAt ?? row.createdAt).toLocaleString()} · statement #{row.statementId ?? "—"}
+                </div>
+                {row.failureReason && <div className="text-[11px] text-red-400 mt-0.5 truncate">{row.failureReason}</div>}
+              </div>
+              <div className="text-right flex-shrink-0">
+                <div className="text-sm font-semibold tabular-nums text-foreground">{usd(row.amountCents)}</div>
+                <div className={`text-[10px] font-semibold uppercase ${row.status === "paid" ? "text-emerald-400" : row.status === "failed" ? "text-red-400" : "text-amber-400"}`}>{row.status}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 // Eligibility/status cell — one glance says pay / paid / blocked, using the same
 // semantic tints as the rest of the console (emerald=go/paid, red=failed,
 // amber=blocked, sky=in-flight). blockLabel is the terse reason ("Rep hasn't
@@ -679,7 +828,7 @@ function PayStatusCell({ r }: { r: PayoutRow }) {
 }
 
 // Keyed by weekRef in the parent, so switching weeks resets confirm + results.
-function PayRepsPanel({ weekRef }: { weekRef: string }) {
+function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; canPay: boolean; availableCents: number | null }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -722,6 +871,8 @@ function PayRepsPanel({ weekRef }: { weekRef: string }) {
   const rows = data?.rows ?? [];
   const payableCount = data?.payableCount ?? 0;
   const payableCents = data?.payableCents ?? 0;
+  const estimatedCost = estimateStripeConnectCost(payableCents, payableCount);
+  const insufficientBalance = availableCents != null && payableCents > availableCents;
   const nameFor = (id: number) => rows.find(r => r.repId === id)?.repName ?? `Rep #${id}`;
 
   return (
@@ -792,6 +943,18 @@ function PayRepsPanel({ weekRef }: { weekRef: string }) {
             </div>
           )}
 
+          {!canPay && (
+            <div className="border-t border-border px-4 py-3 flex items-start gap-2 text-xs text-muted-foreground bg-secondary/20" data-testid="payout-review-only">
+              <Lock className="w-3.5 h-3.5 mt-px flex-shrink-0" /> This batch is read-only for your role. An admin must approve and submit the payout.
+            </div>
+          )}
+
+          {canPay && insufficientBalance && (
+            <div className="border-t border-red-500/25 px-4 py-3 flex items-start gap-2 text-xs text-red-400 bg-red-500/[0.06]" data-testid="payout-insufficient-balance">
+              <AlertTriangle className="w-3.5 h-3.5 mt-px flex-shrink-0" /> Add {usd(payableCents - (availableCents ?? 0))} to your available Stripe balance before paying this batch.
+            </div>
+          )}
+
           {/* Per-rep results of the latest run (paid / failed / skipped) */}
           {results && results.length > 0 && (
             <div className="border-t border-border" data-testid="pay-reps-results">
@@ -819,14 +982,17 @@ function PayRepsPanel({ weekRef }: { weekRef: string }) {
           <div className="border-t border-border p-3 flex items-center gap-3 flex-wrap bg-secondary/10">
             <div className="text-xs text-muted-foreground mr-auto" data-testid="pay-reps-summary">
               <strong className="text-foreground">{payableCount}</strong> rep{payableCount === 1 ? "" : "s"} · <strong className="text-foreground tabular-nums">{usd(payableCents)}</strong> ready to pay
+              {payableCount > 0 && <div className="text-[10px] mt-0.5">Estimated Stripe fee for this run: {usd(estimatedCost.payoutRunFeeCents)}*</div>}
             </div>
-            <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
-              disabled={payableCount === 0 || pay.isPending}
-              onClick={() => setConfirmOpen(true)}
-              aria-label={`Pay ${payableCount} reps, ${usd(payableCents)} total`}
-              data-testid="pay-reps-btn">
-              <Send className="w-3.5 h-3.5 mr-1" /> Pay {payableCount} rep{payableCount === 1 ? "" : "s"}
-            </Button>
+            {canPay && (
+              <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
+                disabled={payableCount === 0 || pay.isPending || insufficientBalance}
+                onClick={() => setConfirmOpen(true)}
+                aria-label={`Pay ${payableCount} reps, ${usd(payableCents)} total`}
+                data-testid="pay-reps-btn">
+                <Send className="w-3.5 h-3.5 mr-1" /> Pay {payableCount} rep{payableCount === 1 ? "" : "s"}
+              </Button>
+            )}
           </div>
         </>
       )}
@@ -850,14 +1016,19 @@ function PayRepsPanel({ weekRef }: { weekRef: string }) {
                 <span className="font-semibold text-foreground">Total payout</span>
                 <span className="tabular-nums font-bold text-lg text-foreground">{usd(payableCents)}</span>
               </div>
+              <div className="flex items-center justify-between mt-2 text-xs">
+                <span className="text-muted-foreground">Estimated Stripe payout fee*</span>
+                <span className="tabular-nums text-foreground">{usd(estimatedCost.payoutRunFeeCents)}</span>
+              </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              This sends each eligible rep their commission to their connected Stripe account. It moves real money and can't be undone from here. Only reps marked <span className="text-emerald-400 font-medium">Ready</span> are paid; blocked reps are skipped.
+              This sends each eligible rep their commission to their connected Stripe account for bank payout. It moves real money and can't be undone from here. Only reps marked <span className="text-emerald-400 font-medium">Ready</span> are paid; blocked reps are skipped.
             </p>
+            <p className="text-[10px] text-muted-foreground">*Estimate uses Stripe's published standard US Connect rate: 0.25% + 25¢ per payout. Active accounts may add $2 per paid rep each month; confirm your account's contracted pricing.</p>
           </div>
           <DialogFooter>
             <Button variant="outline" className="border-border" onClick={() => setConfirmOpen(false)} disabled={pay.isPending}>Cancel</Button>
-            <Button className="bg-primary hover:bg-primary/90 text-white" disabled={pay.isPending || payableCount === 0}
+            <Button className="bg-primary hover:bg-primary/90 text-white" disabled={pay.isPending || payableCount === 0 || insufficientBalance || !canPay}
               onClick={() => pay.mutate()} data-testid="pay-confirm">
               {pay.isPending
                 ? <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Paying…</>

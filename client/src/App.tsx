@@ -29,7 +29,6 @@ const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
 const Applications = lazy(() => import("@/pages/Applications"));
-const Commissions = lazy(() => import("@/pages/Commissions"));
 const MyCommission = lazy(() => import("@/pages/MyCommission"));
 const CommissionConsole = lazy(() => import("@/pages/CommissionConsole"));
 const LiveMap = lazy(() => import("@/pages/LiveMap"));
@@ -127,7 +126,11 @@ function AppRoutes() {
             <Redirect to="/map" />
           </Route>
           <Route path="/clock" component={ClockIn} />
-          <Route path="/commissions" component={Commissions} />
+          {/* Legacy commission bookmarks now land in the role-appropriate,
+              authoritative commission workspace. */}
+          <Route path="/commissions">
+            {role === "rep" ? <Redirect to="/my-commission" /> : <Redirect to="/commission-console" />}
+          </Route>
           <Route path="/my-commission" component={MyCommission} />
           <Route path="/commission-console">
             <Guard role={role} allowed={["admin", "manager", "team_lead"]}>

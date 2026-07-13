@@ -13,7 +13,7 @@ import * as commissionSvc from "./commissionService";
 import * as payoutStore from "./payoutStore";
 import {
   connectConfigured, connectWebhookConfigured, createConnectedAccount, createAccountLink,
-  fetchAccount, createTransfer, findTransferByGroup, verifyConnectSignature, processConnectWebhook,
+  fetchAccount, fetchPlatformBalance, ensureAutomaticPayoutSchedule, createTransfer, findTransferByGroup, verifyConnectSignature, processConnectWebhook,
 } from "./stripeConnect";
 import { onboardingStatusFrom, payoutEligibility, BLOCK_LABEL, type PayoutStatus } from "../shared/payouts";
 import type { Capability } from "@shared/capabilities";
@@ -75,6 +75,7 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
     const acct = payoutStore.getPayoutAccount(repId);
     if (!acct?.stripeAccountId) return res.status(409).json({ error: "No payout account yet." });
     try {
+      await ensureAutomaticPayoutSchedule(acct.stripeAccountId);
       const facts = await fetchAccount(acct.stripeAccountId);
       payoutStore.updateAccountFromStripe(acct.stripeAccountId, { ...facts, onboardingStatus: onboardingStatusFrom(facts) });
       const fresh = payoutStore.getPayoutAccount(repId);
@@ -118,6 +119,18 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
       payableCount: rows.filter(r => r.eligible).length,
       payableCents,
     });
+  });
+
+  // Read-only payment readiness. Managers may review it; only payouts.pay can
+  // execute a transfer. Never expose Stripe account identifiers or secrets.
+  app.get("/api/payouts/balance", requireAuth, requireCapability("commission.read.all"), async (_req: Request, res: Response) => {
+    if (!connectConfigured()) return res.json({ configured: false, availableCents: 0, pendingCents: 0, currency: "usd" });
+    try {
+      const balance = await fetchPlatformBalance();
+      res.json({ configured: true, ...balance });
+    } catch (e: any) {
+      res.status(502).json({ error: e.message || "Could not read Stripe balance" });
+    }
   });
 
   // ── Admin: PAY REPS (the money button) — EXPLICIT, OWNER-only, inert w/o keys ──
@@ -179,6 +192,16 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
       });
       if (!elig.eligible) { if (elig.reason) results.push({ repId: r.repId, skipped: true, reason: elig.reason }); continue; }
 
+      // A transfer must result in a bank payout, including for accounts created
+      // before automatic schedules were enabled. Fail before moving money if
+      // Stripe will not accept the schedule update.
+      try {
+        await ensureAutomaticPayoutSchedule(acct!.stripeAccountId!);
+      } catch (e: any) {
+        results.push({ repId: r.repId, failed: true, reason: e.message || "Could not enable bank payouts" });
+        continue;
+      }
+
       // Belt-and-suspenders vs the 24h idempotency-key window: has a transfer already
       // been made for this statement (from a prior run whose row was wiped)?
       const prior = await findTransferByGroup(group).catch(() => null);
@@ -227,7 +250,13 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
 
   // Payout history (admin: all; rep would use /account). Tenant-scoped.
   app.get("/api/payouts", requireAuth, requireCapability("commission.read.all"), (req: Request, res: Response) => {
-    res.json({ payouts: payoutStore.listPayouts(tid(req), { limit: 200 }) });
+    const tenantId = tid(req);
+    const names = new Map(storage.getTeamMembers(tenantId).map((m: any) => [m.id, m.name]));
+    const payouts = payoutStore.listPayouts(tenantId, { limit: 200 }).map(p => ({
+      ...p,
+      repName: names.get(p.repId) ?? `Rep #${p.repId}`,
+    }));
+    res.json({ payouts });
   });
 
   // ── Connect webhook (account.updated, transfer.reversed, payout.*) ────────────

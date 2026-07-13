@@ -138,3 +138,46 @@ existing data is modified.**
   the adjustment approval flow, immutability locking, tenant isolation, and capability scope.
 
 Run: `npx vitest run tests/unit/commission-statement.test.ts tests/integration/commission-service.test.ts`
+
+## Stripe Connect rep payouts
+
+The admin workspace at `/#/commission-console` combines weekly commission review,
+finalization, payout readiness, and payout history. Reps connect their own bank
+account from `/#/my-commission`; bank details stay on Stripe's hosted Express
+onboarding and are never stored by HomeFront.
+
+Required environment variables:
+
+```dotenv
+STRIPE_SECRET_KEY=sk_test_...
+STRIPE_CONNECT_WEBHOOK_SECRET=whsec_...
+```
+
+Configure a Stripe Connect webhook for:
+
+```text
+https://portal.homefrontsolutionsllc.com/api/payouts/webhook/stripe
+```
+
+Subscribe it to `account.updated`, `transfer.reversed`, `payout.paid`, and
+`payout.failed`. Test mode and live mode use different keys, connected accounts,
+balances, and webhook signing secrets.
+
+Payment sequence:
+
+1. The rep opens **My Commission → Set up payouts** and completes Stripe-hosted KYC and bank setup.
+2. An authorized manager reviews the week and resolves every exception.
+3. An admin finalizes the week, funds the available Stripe platform balance, and opens **Pay reps**.
+4. The app shows per-rep eligibility, exact payout total, estimated fees, and the available Stripe balance.
+5. The admin confirms once. Each statement gets one idempotent Stripe Transfer; a unique DB constraint and transfer-group reconciliation prevent duplicates across retries or crashes.
+6. Connected accounts use an automatic daily bank-payout schedule. The app enforces that schedule before moving new money, including for accounts created by older releases.
+
+The transfer step uses the Stripe platform balance; it does not pull the money
+from the business bank account at button-click time. Top up/fund Stripe early
+enough for the balance to become available. A transfer that Stripe rejects is
+recorded as failed and the statement remains unpaid.
+
+Only the `payouts.pay` capability (admin/owner) can call the money-moving route.
+Managers and team leads can review the same batch and payment readiness but never
+receive a functional Pay button. `rep_payouts.statement_id` is unique and all
+payout actions are tenant-scoped and written to the activity/audit log.

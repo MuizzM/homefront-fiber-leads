@@ -33,7 +33,9 @@ export async function createConnectedAccount(p: { email?: string | null; repId: 
     "capabilities[transfers][requested]": "true",
     "metadata[repId]": String(p.repId),
     "metadata[tenantId]": String(p.tenantId),
-    "settings[payouts][schedule][interval]": "manual", // owner controls when Stripe pays the rep's bank
+    // The admin controls when commission is transferred; once transferred,
+    // Stripe sends the connected balance to the rep's bank on its daily schedule.
+    "settings[payouts][schedule][interval]": "daily",
   });
   return acct.id;
 }
@@ -57,6 +59,29 @@ export async function fetchAccount(accountId: string): Promise<{ payoutsEnabled:
     chargesEnabled: !!a.charges_enabled,
     detailsSubmitted: !!a.details_submitted,
     disabledReason: a.requirements?.disabled_reason ?? null,
+  };
+}
+
+/** Migrate pre-existing connected accounts away from a manual bank-payout
+ * schedule. Idempotent; called before every money-moving transfer so an older
+ * rep account cannot leave commission stranded in its Stripe balance. */
+export async function ensureAutomaticPayoutSchedule(accountId: string): Promise<void> {
+  await stripeRequest(`/v1/accounts/${accountId}`, {
+    "settings[payouts][schedule][interval]": "daily",
+  });
+}
+
+/** Platform balance available for Connect transfers. A transfer is funded from
+ * this balance; it is not an ACH pull from the business bank account. */
+export async function fetchPlatformBalance(): Promise<{ availableCents: number; pendingCents: number; currency: "usd" }> {
+  const balance = await stripeRequest("/v1/balance", undefined, { method: "GET" });
+  const amountFor = (rows: any): number => Array.isArray(rows)
+    ? rows.filter((r: any) => r?.currency === "usd").reduce((sum: number, r: any) => sum + Number(r.amount || 0), 0)
+    : 0;
+  return {
+    availableCents: amountFor(balance.available),
+    pendingCents: amountFor(balance.pending),
+    currency: "usd",
   };
 }
 
