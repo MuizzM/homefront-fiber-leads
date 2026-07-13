@@ -146,11 +146,13 @@ describe("pinDisplayState — truth table", () => {
     }
   });
 
-  it("spec color anchors: prospect orange, not-home pink, callback cyan, follow-up yellow", () => {
-    expect(STATE_COLORS.unworked).toBe("#f97316");        // orange — never green/purple
-    expect(STATE_COLORS.not_home).toBe("#ec4899");        // PINK — blue is reserved for the "you are here" dot
-    expect(STATE_COLORS.callback).toBe("#06b6d4");        // cyan
-    expect(STATE_COLORS.follow_up).toBe("#eab308");       // yellow, distinct from orange
+  it("Sales Rabbit color anchors: lead RED, not-home YELLOW, callback BLUE, follow-up ORANGE, not-interested BLACK", () => {
+    expect(STATE_COLORS.unworked).toBe("#ef4444");        // RED — fresh lead
+    expect(STATE_COLORS.not_home).toBe("#eab308");        // YELLOW — come back (SR default)
+    expect(STATE_COLORS.callback).toBe("#2563eb");        // BLUE — scheduled callback
+    expect(STATE_COLORS.follow_up).toBe("#f97316");       // ORANGE — warm
+    expect(STATE_COLORS.sold).toBe("#10b981");            // GREEN — won
+    expect(STATE_COLORS.not_interested).toBe("#1f2937");  // BLACK/charcoal — dead
     // Every rep-facing state color is unique — no two statuses share a hue.
     const repStates = ALL_PIN_STATES.filter(s => s !== "contacted");
     expect(new Set(repStates.map(s => STATE_COLORS[s])).size).toBe(repStates.length);

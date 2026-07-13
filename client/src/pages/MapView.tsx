@@ -64,13 +64,14 @@ const ROCKWELL_CENTER: [number, number] = [-80.41, 35.545];
 // Manager legend/search dots — same hues as the shared STATE_COLORS pin system
 // (prospect orange, follow-up yellow, contacted slate) so the legend can never
 // disagree with what the map paints.
+// Sales Rabbit-aligned hues — MUST mirror STATE_COLORS (@shared/knock).
 const PIN_COLORS: Record<string, { bg: string; border: string; label: string }> = {
-  prospect:       { bg: "#f97316", border: "#fdba74", label: "Prospect" },       // orange — unworked pool
+  prospect:       { bg: "#ef4444", border: "#fca5a5", label: "Prospect" },       // RED — fresh lead
   contacted:      { bg: "#64748b", border: "#cbd5e1", label: "Contacted" },      // slate
   interested:     { bg: "#8b5cf6", border: "#c4b5fd", label: "Interested" },     // purple
-  follow_up:      { bg: "#eab308", border: "#fde047", label: "Follow-up" },      // yellow
-  sold:           { bg: "#10b981", border: "#6ee7b7", label: "SOLD" },           // emerald
-  not_interested: { bg: "#ef4444", border: "#fca5a5", label: "Not Interested" }, // red
+  follow_up:      { bg: "#f97316", border: "#fdba74", label: "Follow-up" },      // orange
+  sold:           { bg: "#10b981", border: "#6ee7b7", label: "SOLD" },           // green
+  not_interested: { bg: "#1f2937", border: "#94a3b8", label: "Not Interested" }, // black — dead
 };
 
 // Search rows and the leads panel label pins by the TRUE display state

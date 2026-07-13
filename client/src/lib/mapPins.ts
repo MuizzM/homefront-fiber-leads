@@ -7,9 +7,9 @@ import { STATE_COLORS } from "@shared/knock";
 
 // Flat GPU match on the precomputed `ds` feature prop — no nested case logic.
 // Pin hue = STATE_COLORS verbatim: one color per status, identical on the map,
-// the card chip, and the status buttons. (The old sold/not_interested map-dim
-// overrides existed because unworked was green and clashed with sold — unworked
-// is prospect ORANGE now, so every state is distinct at full saturation.)
+// the card chip, and the status buttons. Sales Rabbit-aligned palette — fresh
+// leads RED, Not Home YELLOW, Callback BLUE, Follow-up ORANGE, Sold GREEN, Not
+// Interested BLACK — every state distinct at full saturation.
 export const PIN_DS_COLOR: any = [
   "match", ["get", "ds"],
   ...Object.entries(STATE_COLORS).flatMap(([k, v]) => [k, v]),
