@@ -32,6 +32,7 @@ import {
 } from "@/lib/mapPins";
 import { createFollowState, ingestFix, stepFrame, filteredLngLat } from "@/lib/followCamera";
 import { selectPointsInPolygon, pointInRing, bboxOfRing, type BBox2 } from "@/lib/mapGeo";
+import { spriteImages, iconImageMatchExpression } from "@/lib/statusIcons";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -76,6 +77,83 @@ const PIN_COLORS: Record<string, { bg: string; border: string; label: string }> 
 // (pinDisplayState → STATE_COLORS/STATE_LABELS from @shared/knock) — the
 // PIN_COLORS map above keys on raw leadStatus (6 states) and can't represent
 // callback (cyan) or not-home (blue).
+
+
+// ── NEW_FIELD_MAP: status-driven ICON pin layer (flag-gated, OFF by default) ──
+// A GPU symbol layer that paints each door as its status glyph instead of a flat
+// circle. Strictly ADDITIVE: when the flag is OFF nothing here runs and the map
+// renders exactly as today (circle `lead-unclustered`). When ON, the icon layer
+// shows and `lead-unclustered` is hidden; clusters are untouched in both modes.
+const STATUS_ICON_LAYER = "lead-status-icons";
+
+// One-liner flag read — localStorage.getItem("NEW_FIELD_MAP") === "1".
+function newFieldMap(): boolean {
+  try { return localStorage.getItem("NEW_FIELD_MAP") === "1"; } catch { return false; }
+}
+
+// Minimal structural view of the Mapbox map — just the methods the icon layer
+// touches. (map is `any` at the call sites, so this only keeps these helpers
+// typed without pulling the CDN mapbox types.)
+interface FieldIconMap {
+  hasImage(id: string): boolean;
+  addImage(id: string, image: ImageData, options: { pixelRatio: number }): void;
+  getLayer(id: string): unknown;
+  addLayer(layer: unknown): void;
+  setLayoutProperty(layer: string, name: string, value: unknown): void;
+}
+
+// Build + register every status bitmap. Each addImage is guarded independently:
+// a failure just skips that image so the icon-image match falls back to the
+// neutral disc. A total canvas failure registers nothing (layer shows no icon).
+function registerStatusIcons(map: FieldIconMap): void {
+  let sprites: ReturnType<typeof spriteImages>;
+  try {
+    const dpr = typeof window !== "undefined" && window.devicePixelRatio > 0
+      ? window.devicePixelRatio : 1;
+    sprites = spriteImages(dpr);
+  } catch { return; }
+  for (const sprite of Object.values(sprites)) {
+    try {
+      if (map.hasImage(sprite.key)) continue;
+      // Mapbox addImage does NOT accept an HTMLCanvasElement — it takes ImageData /
+      // ImageBitmap / {width,height,data}. Pull the pixels as ImageData (which it
+      // DOES accept). Without this EVERY addImage throws, 0 icons register, and
+      // flag-on pins render blank (verified live). pixelRatio matches the DPR the
+      // sprite was drawn at, so it scales to the right on-screen size.
+      const ctx = sprite.canvas.getContext("2d");
+      if (!ctx) continue;
+      const data = ctx.getImageData(0, 0, sprite.canvas.width, sprite.canvas.height);
+      map.addImage(sprite.key, data, { pixelRatio: sprite.pixelRatio });
+    } catch { /* skip → match falls back to hf-icon-neutral */ }
+  }
+}
+
+// Add the `lead-status-icons` symbol layer (idempotent) and hide the circle
+// layer. Called from BOTH layer-setup blocks; a no-op unless the flag is on, so
+// flag-off keeps today's behavior exactly. Added as the TOP operational layer.
+function addStatusIconLayer(map: FieldIconMap): void {
+  if (!newFieldMap()) return;
+  if (!map.getLayer(STATUS_ICON_LAYER)) {
+    registerStatusIcons(map);
+    map.addLayer({
+      id: STATUS_ICON_LAYER,
+      type: "symbol",
+      source: "leads-cluster",
+      filter: ["!", ["has", "point_count"]],
+      minzoom: 12,
+      layout: {
+        "icon-image": iconImageMatchExpression(),
+        // Top-level interpolate on zoom — the ONLY place a zoom expression may
+        // appear here (the icon-image match must never nest zoom).
+        "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.5, 17, 0.9, 20, 1.2],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
+      },
+    });
+  }
+  // Icons replace the circle pins while the flag is on.
+  try { map.setLayoutProperty("lead-unclustered", "visibility", "none"); } catch {}
+}
 
 
 // ── Bbox type ─────────────────────────────────────────────────────────────────
@@ -790,8 +868,15 @@ export default function MapView() {
       // Provider-native house numbers — fade in at z≥17.2, below our layers.
       ensureHousenumLayer(map, mapStyleMode);
 
-      // Click unclustered pin → show popup
-      map.on("click", "lead-unclustered", (e: any) => {
+      // NEW_FIELD_MAP status-icon layer — top operational layer, flag-gated. A
+      // no-op when the flag is off (map renders exactly as today).
+      addStatusIconLayer(map);
+
+      // Click unclustered pin → show popup. Bound to BOTH the circle layer and
+      // the NEW_FIELD_MAP icon layer so a tap opens the same card in either mode
+      // (only one of the two is visible at a time). The icon-layer binding is
+      // harmless when the layer is absent — it simply never fires.
+      const onPinClick = (e: any) => {
         // No popups while a draw tool is active — a lasso stroke over a pin
         // must not open a card mid-draw.
         if ((window as any).__lassoActive || (window as any).__territoryDrawActive || (window as any).__drawModeActive) return;
@@ -803,9 +888,13 @@ export default function MapView() {
         // Every role opens the same card. Checked at call time so role/
         // viewport changes never need a rebind.
         (window as any).__openLeadSheet?.(props.id);
-      });
+      };
+      map.on("click", "lead-unclustered", onPinClick);
+      map.on("click", STATUS_ICON_LAYER, onPinClick);
       map.on("mouseenter", "lead-unclustered", () => hoverCursor("pointer"));
       map.on("mouseleave", "lead-unclustered", () => hoverCursor(""));
+      map.on("mouseenter", STATUS_ICON_LAYER, () => hoverCursor("pointer"));
+      map.on("mouseleave", STATUS_ICON_LAYER, () => hoverCursor(""));
 
       // Tap a territory region → open its detail panel. Lead pins win over the
       // region beneath them; draw tools suppress it entirely.
@@ -817,16 +906,21 @@ export default function MapView() {
         }
         if (drawToolActive()) return;
         const feats = map.queryRenderedFeatures(e.point);
-        if (feats.some((f: any) => f.layer?.id === "lead-unclustered" || f.layer?.id === "lead-clusters")) return;
+        if (feats.some((f: any) => f.layer?.id === "lead-unclustered" || f.layer?.id === STATUS_ICON_LAYER || f.layer?.id === "lead-clusters")) return;
         // Fat-finger forgiveness: pins are 16px dots — before treating this as an
         // empty-map tap, look for a pin within a ±12px box. A near-miss opens the
         // door the rep aimed at instead of dismissing their sheet mid-flow.
         const openSheet = (window as any).__openLeadSheet;
         if (openSheet) {
           try {
+            // Query whichever pin layer is live (icon layer only when it exists;
+            // a hidden layer returns nothing, a missing one would throw).
+            const pinLayers = map.getLayer(STATUS_ICON_LAYER)
+              ? ["lead-unclustered", STATUS_ICON_LAYER]
+              : ["lead-unclustered"];
             const near = map.queryRenderedFeatures(
               [[e.point.x - 12, e.point.y - 12], [e.point.x + 12, e.point.y + 12]],
-              { layers: ["lead-unclustered"] },
+              { layers: pinLayers },
             );
             if (near.length) { openSheet(near[0].properties.id); return; }
           } catch { /* layer not ready */ }
@@ -1176,8 +1270,16 @@ export default function MapView() {
     const map = mapRef.current;
     if (!map || !mapReady) return;
     const vis = showLeads ? "visible" : "none";
-    for (const id of ["lead-clusters", "lead-clusters-glow", "lead-cluster-count", "lead-unclustered", "lead-unclustered-glow", "lead-visited-check"]) {
-      try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis); } catch {}
+    const fieldMap = newFieldMap();
+    for (const id of ["lead-clusters", "lead-clusters-glow", "lead-cluster-count", "lead-unclustered", "lead-unclustered-glow", "lead-visited-check", STATUS_ICON_LAYER]) {
+      if (!map.getLayer(id)) continue;
+      // NEW_FIELD_MAP swaps circle pins for status icons: the circle layer stays
+      // hidden and the icon layer follows the show-leads toggle. Flag off → the
+      // icon layer doesn't exist (skipped above) and this behaves exactly as today.
+      let v = vis;
+      if (fieldMap && id === "lead-unclustered") v = "none";
+      else if (!fieldMap && id === STATUS_ICON_LAYER) v = "none";
+      try { map.setLayoutProperty(id, "visibility", v); } catch {}
     }
   }, [showLeads, mapReady, styleEpoch]);
 
@@ -1255,6 +1357,10 @@ export default function MapView() {
       // House numbers are style layers too — re-enable on the fresh style with
       // the palette that suits it (white-on-imagery vs ink-on-streets).
       ensureHousenumLayer(map, mapStyleMode);
+      // NEW_FIELD_MAP status-icon layer — re-add on the fresh style (setStyle
+      // wiped its images + layer). Flag-gated + idempotent, so this stays in sync
+      // with the init block and is a no-op when the flag is off.
+      addStatusIconLayer(map);
       // Re-trigger the lead-pin setData + territory render effects — the new
       // style starts with an empty source, so without this the pins vanish.
       setStyleEpoch(e => e + 1);
