@@ -41,7 +41,14 @@ services:
       # Decodo-paced pool re-scan then qualifies them (fiber vs copper) into leads.
       # This is the "use OpenStreetMap → Kinetic via Decodo" path — no Mapbox grid.
       NIGHTLY_OSM_SWEEP_CITIES: "Aberdeen,NC;Mint Hill,NC;Albemarle,NC;Monroe,NC;Badin,NC;Mooresville,NC;Broadway,NC;Morven,NC;Cameron,NC;Mount Pleasant,NC;Charlotte,NC;China Grove,NC;New London,NC;Columbus,NC;Norwood,NC;Concord,NC;Oakboro,NC;Cornelius,NC;Peachland,NC;Davidson,NC;Pfafftown,NC;Denton,NC;Pinebluff,NC;Gold Hill,NC;Polkton,NC;Granite Quarry,NC;Richfield,NC;Harrisburg,NC;Rockwell,NC;Huntersville,NC;Rural Hall,NC;Indian Trail,NC;Salisbury,NC;Kannapolis,NC;Sanford,NC;King,NC;Stallings,NC;Landis,NC;Stanfield,NC;Thomasville,NC;Lewisville,NC;Tryon,NC;Lexington,NC;Wadesboro,NC;Linwood,NC;Waxhaw,NC;Marshville,NC;Weddington,NC;Marvin,NC;Wingate,NC;Matthews,NC;Winston-Salem,NC;Midland,NC;Cameron,SC;Lexington,SC;Campobello,SC;Saint Matthews,SC;Inman,SC;Spartanburg,SC;Kershaw,SC;West Columbia,SC;Landrum,SC"
-      NIGHTLY_DEEP_SEED_MAX_MAPBOX: "12000"
+      # RAISED 12000 → 30000: complete the full 62-town SC+NC grid in days, not weeks.
+      # Still hard-capped (never uncapped — the guardrail vs the historical Mapbox
+      # incidents). Deep-seed is idempotent per town, so the TOTAL Mapbox spend is
+      # fixed (sum of all town grid sizes); the cap only paces how fast it front-loads.
+      NIGHTLY_DEEP_SEED_MAX_MAPBOX: "30000"
+      # FREE OSM sweep window per night (Overpass is $0). Widened 25min → 45min so more
+      # towns' full address sets land per night at no Mapbox cost.
+      NIGHTLY_OSM_SWEEP_MAX_MS: "2700000"
     volumes:
       - app-data:/data         # DB + uploads — the ONLY stateful mount
     expose:
