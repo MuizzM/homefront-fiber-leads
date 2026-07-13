@@ -1,8 +1,24 @@
 import { describe, it, expect } from "vitest";
 import {
-  classifyAvailabilityTransition, isHotFiber, snapshotFromTarget,
+  classifyAvailabilityTransition, isHotFiber, snapshotFromTarget, isKineticFiber,
   type ScanResult,
 } from "../../shared/fiberDetect";
+
+describe("isKineticFiber — fiber is a technology, never a speed", () => {
+  it("REJECTS 300–500 Mbps bonded COPPER as fiber (the bug: VDSL2/FTTN ≥300 was called fiber)", () => {
+    expect(isKineticFiber({ chipSetType: "VDSL2", techType: "COPPER", maxQualTechnologyType: "COPPER" })).toBe(false);
+    expect(isKineticFiber({ chipSetType: "FTTN", techType: null, maxQualTechnologyType: null })).toBe(false);
+    // A 500 Mbps plan with no fiber tech signal is still NOT fiber.
+    expect(isKineticFiber({ chipSetType: "GFAST", techType: "DSL" })).toBe(false);
+    expect(isKineticFiber({})).toBe(false);
+  });
+  it("ACCEPTS real fiber signals: FTTP chipset OR a FIBER tech tag (case/space-insensitive)", () => {
+    expect(isKineticFiber({ chipSetType: "FTTP" })).toBe(true);
+    expect(isKineticFiber({ chipSetType: " fttp " })).toBe(true);
+    expect(isKineticFiber({ techType: "FIBER" })).toBe(true);
+    expect(isKineticFiber({ maxQualTechnologyType: "fiber" })).toBe(true);
+  });
+});
 
 /**
  * CONTRACT (shared/fiberDetect.ts): the core detection event. A provable

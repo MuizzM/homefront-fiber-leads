@@ -48,6 +48,21 @@ export function isHotFiber(r: ScanResult): boolean {
   return !r.checkFailed && r.isNewFiber && r.billingStatus === "N" && r.fiberAvailable;
 }
 
+// ── Is Kinetic's answer REAL fiber? ───────────────────────────────────────────
+// Fiber is a TECHNOLOGY, never a speed. Kinetic sells VDSL2 / FTTN / G.fast bonded
+// COPPER plans that reach 300–500 Mbps — so a "maxDownloadMbps >= 300 ⇒ fiber"
+// heuristic mislabels copper as fiber and manufactures bogus "fiber leads". Real
+// fiber is signalled explicitly: an FTTP chipset, or a FIBER technology tag. Speed
+// is deliberately NOT a fiber signal here. Pure → unit-tested without the client.
+export function isKineticFiber(sig: {
+  techType?: string | null;
+  maxQualTechnologyType?: string | null;
+  chipSetType?: string | null;
+}): boolean {
+  const is = (v: string | null | undefined, t: string) => (v ?? "").trim().toUpperCase() === t;
+  return is(sig.techType, "FIBER") || is(sig.maxQualTechnologyType, "FIBER") || is(sig.chipSetType, "FTTP");
+}
+
 // Classify prev-snapshot × fresh-result → availability transition. This is the
 // heart of detecting new fiber as early as HomeFront can observe it.
 export function classifyAvailabilityTransition(prev: ScanSnapshot, result: ScanResult): TransitionOutcome {

@@ -4,6 +4,7 @@
 import { proxyFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
+import { isKineticFiber } from "@shared/fiberDetect";
 
 // ─── KEY RESPONSE FIELDS FROM API ────────────────────────────────────────────
 // address.householdSegmentType  → "NEW FIBER" | "TENURED" | "PROSPECT"
@@ -453,10 +454,14 @@ export async function scanAddress(
     const segment = data.address?.householdSegmentType ?? "";
     base.householdSegmentType = segment;
 
-    const isFiber =
-      data.techType === "FIBER" ||
-      data.address?.maxQualTechnologyType === "FIBER" ||
-      (base.maxDownloadMbps !== null && base.maxDownloadMbps >= 300);
+    // Fiber is a technology, not a speed: Kinetic's VDSL2/FTTN/G.fast bonded copper
+    // reaches 300–500 Mbps, so the old `maxDownloadMbps >= 300` clause mislabelled
+    // copper as fiber (bogus fiber leads). Gate on the real fiber signals only.
+    const isFiber = isKineticFiber({
+      techType: data.techType,
+      maxQualTechnologyType: data.address?.maxQualTechnologyType,
+      chipSetType: base.chipSetType,
+    });
 
     base.fiberAvailable = isFiber;
 
