@@ -1,42 +1,62 @@
-# Kinetic Scanner operations
+# Kinetic evidence scanner
 
-The Kinetic Scanner uses only authorized provider endpoints. It does not bypass authentication, bot controls, account controls, or provider authorization. If the configured provider is unavailable, the scanner records the failure and fails closed instead of manufacturing an availability result.
+No private Kinetic API, Sequential ID enumeration rule, address-ID rule, token, or undocumented response contract is assumed. The production-safe default is `offline`. Decodo is not an evidence source and is never used for identity rotation, CAPTCHA avoidance, authorization bypass, or continued access after denial.
 
-## Provider contract
+## Evidence modes
 
-Configure `KINETIC_SEQUENTIAL_ENDPOINT` and `KINETIC_ADDRESS_ENDPOINT` for qualification by Sequential ID and Kinetic Address ID. Configure `KINETIC_SEARCH_ENDPOINT` only when the authorized provider contract exposes address search. All credentials remain server-side. `KINETIC_RESPONSE_MAPPING_JSON` maps documented provider fields into the normalized record while the immutable observation ledger retains the raw response and SHA-256 hash.
+- `approved_api`: available only when a reviewed adapter for an approved contract is registered server-side.
+- `authorized_public_lookup`: additionally requires an administrator to confirm the exact automated use is permitted.
+- `authorized_import`: ingests strict CSV or JSON records from an approved source.
+- `manual_verification`: records a signed-in reviewer’s evidence and note.
+- `offline`: performs no live requests while preserving the dashboard, imports, evidence history, map, transitions, exports, and lead workflow.
 
-The adapter exposes four operations: health check, address search, address qualification, and the backward-compatible lookup operation used by scan workers. Responses are normalized only from explicitly configured fields.
+Changing the configured mode does not create a live adapter. The configured mode and registered runtime adapter must match before qualification or recheck calls are allowed.
+
+## Live-source safety boundary
+
+Future approved/public adapters implement `KineticEvidenceSourceAdapter`. One gateway provides:
+
+- one stable server-side source identity;
+- maximum concurrency of one;
+- in-flight request deduplication;
+- successful-result caching;
+- configurable minimum delay;
+- immediate circuit opening on 401/403 denial or CAPTCHA/challenge;
+- circuit opening after three rate-limit responses;
+- no state mutation for denial, challenge, rate limit, transport failure, or inconclusive evidence.
+
+The repository intentionally contains no hypothetical Kinetic endpoint, credentials, request field names, parser mapping, or proxy-based live adapter.
+
+## Approved imports
+
+`POST /api/kinetic-scanner/imports` accepts either:
+
+- JSON: `{ "format":"json", "sourceName":"…", "records":[…] }`
+- CSV: `{ "format":"csv", "sourceName":"…", "content":"…" }`
+
+Required evidence fields are `address`, `city`, `state`, `zip`, `observedAt`, `technologyType`, `isLive`, and `sourceName` (the envelope supplies `sourceName`). Optional fields are `unit`, `evidenceId`, `sourceReference`, `latitude`, `longitude`, `maximumQualification`, `isComingSoon`, and `isCopperUpgradeCandidate`. Unknown fields are rejected. Each record stores its evidence mode, source, source evidence ID, observation time, parser version, SHA-256 response hash, and raw approved payload.
+
+CSV headers use snake case: `address`, `city`, `state`, `zip`, `observed_at`, `technology_type`, `is_live`, plus the optional equivalents documented in the UI. Boolean values are limited to true/false, 1/0, yes/no, or blank for inconclusive.
+
+The authenticated webhook-import route uses the same strict JSON records and audit ledger. It is not an unauthenticated public webhook and therefore does not invent a secret-delivery contract.
+
+## Manual verification
+
+`POST /api/kinetic-scanner/manual-verifications` requires an authenticated manager/admin, a complete postal address, observation time, explicit or inconclusive availability, technology when known, and a reviewer note. The actor ID is included in the source provenance.
 
 ## Fresh-fiber truth
 
-“Fresh” is a transition claim, not a synonym for currently live:
+“Fresh” remains a transition claim:
 
-1. The first conclusive fiber-live observation becomes `BASELINE_FIBER` and is never labeled fresh.
-2. A conclusive non-fiber observation establishes the prior state.
-3. A later explicit fiber-live result opens `CANDIDATE_FRESH` with an interval-censored detection window.
-4. A repeated positive check promotes the episode to `VERIFIED_FRESH`. The required count defaults to two and is configured with `KINETIC_VERIFICATION_CONFIRMATIONS`.
-5. Unknown technology, missing live status, errors, and schema drift never mutate serviceability truth.
+1. First conclusive fiber-live evidence is `BASELINE_FIBER`, never fresh.
+2. Earlier conclusive non-fiber evidence establishes a baseline.
+3. Later explicit fiber-live evidence opens `CANDIDATE_FRESH` with an interval-censored detection window.
+4. A separate later positive record promotes it to `VERIFIED_FRESH` (default two confirmations).
+5. Inconclusive, denied, challenged, throttled, future-dated, malformed, or replayed evidence does not advance truth.
 6. A later conclusive non-fiber result marks the episode `REGRESSED`.
 
-The UI intentionally distinguishes live baselines, candidates, verified transitions, and regressions. Only verified transitions should be used as the high-confidence fresh-lead signal. “First observed by HomeFront” is the supported provenance claim; the system does not claim market-first detection.
+## Map and operations
 
-## Worker durability
+The map continues to consume one slim clustered GeoJSON source and calls `setData()` as imported/manual/approved evidence arrives. Durable import batches, evidence records, observations, transition episodes, provider health, job items, audit events, contacts, exports, and lead conversion remain tenant-scoped.
 
-Sequential scans checkpoint the current Sequential ID and create durable job-item records with lease, attempt, completion, and dead-letter state. On restart, active jobs resume from their checkpoint. Rechecks prioritize fresh candidates first, then regressions and known non-fiber addresses. Provider calls use bounded retries with exponential backoff and the configured request rate.
-
-## Map delivery
-
-`GET /api/kinetic-scanner/addresses/map` returns one slim clustered GeoJSON feed. The Mapbox client mounts once and calls `source.setData()` every time the polling query receives new data, so geocoded results appear during a running scan without rebuilding the map or resetting the rep’s viewport.
-
-## Operational endpoints
-
-- `GET /api/kinetic-scanner/ping` and `/provider-health`
-- `POST /api/kinetic-scanner/search-addresses`
-- `POST /api/kinetic-scanner/start-scan`, `/pause-scan`, `/resume-scan`, `/stop-scan`
-- `POST /api/kinetic-scanner/start-recheck`, `/stop-recheck`
-- `GET /api/kinetic-scanner/addresses`, `/addresses/map`, `/addresses/:id`
-- `GET /api/kinetic-scanner/transitions`
-- `GET /api/kinetic-scanner/jobs/:id/items`
-
-All routes use the existing authenticated capability guards and tenant-scoped parameterized queries.
+Sequential range scanning is disabled because no permitted enumeration contract currently exists. Sequential ID and Kinetic Address ID remain nullable passive fields that may be displayed only if a future approved source explicitly supplies them.

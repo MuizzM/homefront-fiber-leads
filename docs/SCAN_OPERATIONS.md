@@ -33,9 +33,9 @@ strategy:
 2. For an ordinary neighborhood-sized box, concurrently sample Mapbox at no
    more than `0.0012°` spacing (about 130 m, with up to five nearby addresses per
    sample) so new streets missing from OSM are still found.
-3. Union and normalize all candidates before checking availability, then run
-   the shared provider queue, retry/backoff, cache, evidence recorder, and
-   cross-verification projector.
+3. Union and normalize all candidates before checking availability through the
+   registered, approved evidence adapter. Without one, retain every rooftop as
+   `verification_required`; never manufacture a fresh/no-service answer.
 
 The automatic Mapbox augmentation is enabled only when its dense plan is at or
 below `AREA_AUTO_GRID_POINTS` (default 900) and `MAPBOX_TOKEN` is configured.
@@ -43,6 +43,18 @@ Larger boxes invisibly use mapped sources rather than coarsening the grid into a
 less trustworthy sweep or creating unbounded geocoding spend. This makes a
 tight subdivision box as thorough as the former Deep path while avoiding a mode
 prompt and keeping large-area work bounded.
+
+The field-map discovery worker uses this augmentation directly; it does not
+depend on the legacy `/api/scan/area` path. Mapbox requests use conservative
+bounded concurrency, a minimum source interval, discovery-cache deduplication,
+and immediate stop behavior on access denial or rate limiting.
+
+Address discovery and provider qualification are separate trust boundaries.
+Mapbox, OSM, GIS, and approved uploads locate rooftops but do not prove Kinetic
+availability, freshness, or customer billing state. Qualification uses only a
+registered `KineticEvidenceSourceAdapter`. Decodo may be stable transport inside
+a reviewed adapter for a permitted contract; it is not evidence and is never
+used to bypass authentication, challenges, or rate controls.
 
 The client polls incrementally and appends qualifying rows to one clustered
 GeoJSON source. It reports checked addresses, fresh matches, and leads dropped.
@@ -102,9 +114,11 @@ for automated availability checks. Kinetic's online terms incorporate its
 Acceptable Use Policy and other click-through/product terms, and those terms can
 change. Review the agreement attached to the credentials in use:
 
-Set `KFS_AUTOMATION_AUTHORIZED=true` only after that authorization is documented.
-The default is fail-closed. `KFS_USER_AGENT` is stable and descriptive, and
-`KFS_DEVICE_ID` is omitted unless the authorized provider issued one.
+The repository does not ship a consumer-form adapter or assume a Kinetic URL,
+token, device identifier, request schema, response schema, or enumerable ID.
+Register a reviewed `KineticEvidenceSourceAdapter` only after the exact contract
+and authorization are documented. Until then the runtime remains offline and
+field scans return rooftop inventory marked for verification.
 
 - https://www.gokinetic.com/about/legal/terms-and-conditions
 - https://www.gokinetic.com/about/legal/kinetic-online-terms
