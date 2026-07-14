@@ -9,22 +9,16 @@ import {
   job,
   upsertKineticAddress,
 } from "./kineticScannerStore";
+import { pooledMap } from "./bboxScan";
+import { persistKineticObservation } from "./kineticObservation";
 
 interface Runtime {
   stopped: boolean;
   controller: AbortController;
 }
 const runtimes = new Map<string, Runtime>();
-const delay = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
-const minDelay = () =>
-  Math.max(
-    500,
-    Math.min(
-      60_000,
-      Number(process.env.KINETIC_EVIDENCE_MIN_DELAY_MS) || 1_000,
-    ),
-  );
+const recheckConcurrency = () => Math.max(1, Math.min(100,
+  Number(process.env.KINETIC_RECHECK_CONCURRENCY) || 50));
 
 function heartbeat(id: string, updates: Record<string, unknown> = {}): void {
   const keys = Object.keys(updates),
@@ -71,13 +65,14 @@ async function runRecheck(id: string): Promise<void> {
     .prepare(
       `SELECT a.id,a.address,a.city,a.state,a.zip FROM kinetic_addresses a LEFT JOIN kinetic_address_state s ON s.address_id=a.id
     WHERE a.tenant_id=? AND a.address IS NOT NULL AND a.city IS NOT NULL AND a.state IS NOT NULL AND a.zip IS NOT NULL
-    ORDER BY CASE s.discovery_state WHEN 'CANDIDATE_FRESH' THEN 0 WHEN 'REGRESSED' THEN 1 WHEN 'NON_FIBER' THEN 2 WHEN 'BASELINE_FIBER' THEN 3 ELSE 4 END,a.last_checked_at ASC`,
+    ORDER BY CASE WHEN a.is_coming_soon=1 THEN 0 ELSE 1 END,
+      CASE s.discovery_state WHEN 'CANDIDATE_FRESH' THEN 0 WHEN 'REGRESSED' THEN 1 WHEN 'NON_FIBER' THEN 2 WHEN 'BASELINE_FIBER' THEN 3 ELSE 4 END,
+      a.last_checked_at ASC`,
     )
     .all(record.tenant_id) as any[];
   try {
-    for (const row of rows) {
-      if (runtime.stopped) break;
-      const tick = Date.now();
+    await pooledMap(rows, recheckConcurrency(), async (row) => {
+      if (runtime.stopped) return;
       let live = 0,
         errors = 0;
       const itemKey = `address:${row.id}`;
@@ -98,8 +93,31 @@ async function runRecheck(id: string): Promise<void> {
           },
           runtime.controller.signal,
         );
-        if (response.outcome === "ok" && response.record) {
+        if ((response.outcome === "ok" || response.outcome === "not_found") && response.record) {
           upsertKineticAddress(record.tenant_id, id, response.record);
+          persistKineticObservation({
+            tenantId: record.tenant_id,
+            source: "kinetic-command-recheck",
+            observation: {
+              address: response.record.address ?? row.address,
+              city: response.record.city ?? row.city,
+              state: response.record.state ?? row.state,
+              zip: response.record.zip ?? row.zip,
+              lat: response.record.latitude,
+              lng: response.record.longitude,
+              fiberAvailable: response.record.isLive,
+              fiberStatus: response.record.fiberStatus ?? (response.record.isLive === true ? "existing_fiber" : response.record.isLive === false ? "no_service" : "unknown"),
+              isNewFiber: response.record.isNewFiber,
+              billingStatus: response.record.billingStatus,
+              householdSegmentType: response.record.householdSegmentType,
+              maxDownloadMbps: response.record.maximumQualification,
+              techType: response.record.technologyType,
+              dfAddressId: response.record.kineticAddressId,
+              apiSource: response.record.evidenceSource,
+              discoveredAt: response.record.observedAt,
+              rawResponse: response.record.rawResponse,
+            },
+          });
           live = response.record.isLive === true ? 1 : 0;
         }
         rawDb
@@ -108,7 +126,7 @@ async function runRecheck(id: string): Promise<void> {
           )
           .run(id, itemKey);
       } catch (error) {
-        if (runtime.stopped) break;
+        if (runtime.stopped) return;
         errors = 1;
         const message = error instanceof Error ? error.message : String(error);
         rawDb
@@ -141,9 +159,7 @@ async function runRecheck(id: string): Promise<void> {
           `UPDATE kinetic_scan_jobs SET checked=checked+1,live=live+?,errors=errors+?,last_heartbeat=datetime('now'),updated_at=datetime('now') WHERE id=?`,
         )
         .run(live, errors, id);
-      const remaining = minDelay() - (Date.now() - tick);
-      if (remaining > 0) await delay(remaining);
-    }
+    });
     const status = runtime.stopped ? "stopped" : "completed";
     rawDb
       .prepare(

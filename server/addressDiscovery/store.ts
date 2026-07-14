@@ -1121,37 +1121,21 @@ export function markQualificationDispatchComplete(jobId: string): void {
 
 const MAP_EVENT_BATCH_SIZE = 200;
 
-/**
- * Publish each observed rooftop once when it enters qualification. These are
- * transient scan markers, not leads: the client renders them as "checking" and
- * the fresh-fiber projector remains the only path that can create a green lead.
- * The timestamp makes replay/resume idempotent across deploys and worker crashes.
- */
+/** Mark qualification candidates as processed without sending rooftop inventory
+ * to field clients. Only `lead.published` is rep-visible; candidate locations and
+ * provider outcomes remain in the authenticated admin data model. */
 export function publishQualificationMapCandidates(
   job: DiscoveryJobRow,
 ): number {
   const rows = rawDb
     .prepare(
-      `SELECT q.id AS checkId,q.canonical_address_id AS canonicalAddressId,
-    c.full_address AS address,c.city,c.state,c.postal_code AS zip,c.lat,c.lng
+      `SELECT q.id AS checkId
     FROM qualification_checks q JOIN canonical_addresses c ON c.id=q.canonical_address_id
     WHERE q.job_id=? AND q.map_announced_at IS NULL AND c.lat IS NOT NULL AND c.lng IS NOT NULL
     ORDER BY q.canonical_address_id LIMIT ?`,
     )
     .all(job.id, MAP_EVENT_BATCH_SIZE) as any[];
   if (!rows.length) return 0;
-  appendDiscoveryEvent(job.tenantId, job.id, "map.candidates", {
-    points: rows.map((row) => ({
-      canonicalAddressId: Number(row.canonicalAddressId),
-      address: row.address,
-      city: row.city,
-      state: row.state,
-      zip: row.zip,
-      lat: Number(row.lat),
-      lng: Number(row.lng),
-      scanStatus: "checking",
-    })),
-  });
   const placeholders = rows.map(() => "?").join(",");
   rawDb
     .prepare(
@@ -1161,26 +1145,15 @@ export function publishQualificationMapCandidates(
   return rows.length;
 }
 
-/**
- * Stream conclusive and failed check outcomes to the map exactly once. A
- * provider-positive `new_fiber` result is deliberately labelled
- * `fresh_candidate` until independent evidence promotes it through
- * `lead.published`; the UI never presents provisional evidence as a lead.
- */
+/** Mark resolved checks as reported without streaming positive candidates,
+ * negatives or diagnostics to reps. The cross-verified `lead.published` event
+ * below is the sole field-map publication path. */
 export function publishQualificationMapResults(job: DiscoveryJobRow): number {
   const rows = rawDb
     .prepare(
-      `SELECT q.id AS checkId,q.canonical_address_id AS canonicalAddressId,q.state,q.result,
-    c.full_address AS address,c.city,c.state AS addressState,c.postal_code AS zip,c.lat,c.lng,
-    s.last_fiber_status AS fiberStatus,s.last_billing_status AS billingStatus,
-    latest.max_download_mbps AS maxDownloadMbps,latest.household_segment_type AS householdSegmentType,
-    latest.api_source AS apiSource
+      `SELECT q.id AS checkId
     FROM qualification_checks q
     JOIN canonical_addresses c ON c.id=q.canonical_address_id
-    LEFT JOIN scan_targets s ON s.id=q.scan_target_id AND s.tenant_id=q.tenant_id
-    LEFT JOIN availability_snapshots latest ON latest.id=(
-      SELECT a.id FROM availability_snapshots a WHERE a.tenant_id=q.tenant_id AND a.scan_target_id=q.scan_target_id
-      ORDER BY a.checked_at DESC,a.id DESC LIMIT 1)
     WHERE q.job_id=? AND q.map_result_reported_at IS NULL
       AND q.state IN ('verified','cached','failed','collision','skipped')
       AND c.lat IS NOT NULL AND c.lng IS NOT NULL
@@ -1188,33 +1161,6 @@ export function publishQualificationMapResults(job: DiscoveryJobRow): number {
     )
     .all(job.id, MAP_EVENT_BATCH_SIZE) as any[];
   if (!rows.length) return 0;
-  appendDiscoveryEvent(job.tenantId, job.id, "map.results", {
-    points: rows.map((row) => ({
-      canonicalAddressId: Number(row.canonicalAddressId),
-      address: row.address,
-      city: row.city,
-      state: row.addressState,
-      zip: row.zip,
-      lat: Number(row.lat),
-      lng: Number(row.lng),
-      scanStatus:
-        row.state === "failed" || row.state === "collision"
-          ? "unverified"
-          : row.state === "skipped"
-            ? "unsupported"
-            : row.result === "new_fiber"
-              ? "fresh_candidate"
-              : row.result === "no_service"
-                ? "no_service"
-                : "not_fresh",
-      result: row.result ?? null,
-      fiberStatus: row.fiberStatus ?? null,
-      billingStatus: row.billingStatus ?? null,
-      maxDownloadMbps: row.maxDownloadMbps ?? null,
-      householdSegmentType: row.householdSegmentType ?? null,
-      apiSource: row.apiSource ?? null,
-    })),
-  });
   const placeholders = rows.map(() => "?").join(",");
   rawDb
     .prepare(

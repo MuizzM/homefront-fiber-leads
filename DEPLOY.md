@@ -30,7 +30,7 @@ Copy values from your local `.env` (`.env.example` documents each one):
 | `MAPBOX_TOKEN` | sk.… geocoding token (server-only; optional if you don't run Mapbox harvests) |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASS` | email for login codes — Resend SMTP works: host `smtp.resend.com`, user `resend`, pass = API key |
 | `SUPER_ADMIN_EMAILS` | your admin email(s), comma-separated |
-| `KFS_AUTH_URL` / `KFS_AUTH_BASIC` | Kinetic scan auth (from local .env) |
+| `KFS_AUTOMATION_AUTHORIZED` | Enables the confirmed Kinetic token/search contract; defaults to disabled |
 | `SCANNER_SUBMIT_SECRET` / `PROXY_URL` | scanner + Decodo proxy (from local .env) |
 | `ENABLE_NIGHTLY_SCAN` | leave **unset** (nightly scan stays OFF — proxy costs money) |
 | `LITESTREAM_BUCKET` / `LITESTREAM_ENDPOINT` / `LITESTREAM_ACCESS_KEY_ID` / `LITESTREAM_SECRET_ACCESS_KEY` | backups — see §5 |

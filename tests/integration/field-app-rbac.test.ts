@@ -13,6 +13,7 @@ let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: import("better-sqlite3").Database;
 
 let fieldRepSession: string;
+let fieldUserId: number;
 let fieldRepId: number;
 let otherRepId: number;
 let ownKnockId: number;
@@ -56,6 +57,7 @@ beforeAll(async () => {
     tenantId: 1,
     teamMemberId: fieldRep.id,
   } as any);
+  fieldUserId = fieldUser.id;
   fieldRepSession = storage.createSession(fieldUser.id).id;
 
   for (const role of ["calling_rep", "calling_manager", "compliance_admin", "auditor"] as const) {
@@ -204,6 +206,26 @@ describe.each(["calling_rep", "calling_manager", "compliance_admin", "auditor"] 
 );
 
 describe("field rep scope", () => {
+  it("receives scan progress without provider diagnostics or negative-result counts", async () => {
+    const discoveryStore = await import("../../server/addressDiscovery/store");
+    const { job } = discoveryStore.createDiscoveryJob({
+      tenantId: 1,
+      idempotencyKey: "rep-diagnostic-redaction",
+      requestHash: "rep-diagnostic-redaction-hash",
+      geometry: { type: "Polygon", coordinates: [[[-80.26, 35.81], [-80.25, 35.81], [-80.25, 35.82], [-80.26, 35.82], [-80.26, 35.81]]] },
+      state: "NC",
+      createdBy: fieldUserId,
+    });
+    rawDb.prepare(`UPDATE discovery_jobs SET status='partial',phase='qualification',qualification_checked=4,
+      qualification_failed=2,failed_tiles=1,no_service_found=3,error_summary='provider timeout 401 token detail' WHERE id=?`).run(job.id);
+
+    const response = await request(`/api/discovery/jobs/${job.id}`, fieldRepSession);
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(body.job).toMatchObject({ checkedCount: 7, failedCount: 0, noServiceCount: 0, sourceWarnings: [], error: null });
+    expect(JSON.stringify(body)).not.toMatch(/provider timeout|401|token detail/i);
+  });
+
   it("can read the safe roster projection, without roster PII", async () => {
     const response = await request("/api/team", fieldRepSession);
     expect(response.status).toBe(200);

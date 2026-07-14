@@ -63,6 +63,11 @@ export interface NormalizedKineticAddress {
   isLive: boolean | null;
   isComingSoon: boolean | null;
   isCopperUpgradeCandidate: boolean | null;
+  /** Known provider fields used by the fresh-lead eligibility gate. */
+  billingStatus?: string | null;
+  householdSegmentType?: string | null;
+  fiberStatus?: string | null;
+  isNewFiber?: boolean | null;
   evidenceMode: KineticEvidenceMode;
   evidenceSource: string;
   evidenceId: string;
@@ -141,6 +146,10 @@ export function normalizeImportedKineticEvidence(
     isLive: value.isLive,
     isComingSoon: value.isComingSoon ?? null,
     isCopperUpgradeCandidate: value.isCopperUpgradeCandidate ?? null,
+    billingStatus: null,
+    householdSegmentType: null,
+    fiberStatus: null,
+    isNewFiber: null,
     evidenceMode: mode,
     evidenceSource: value.sourceName,
     evidenceId: value.evidenceId ?? responseHash,
@@ -163,7 +172,6 @@ class KineticEvidenceGateway {
     rateLimitCount: 0,
     reason: null,
   };
-  private active = false;
   private readonly inflight = new Map<
     string,
     Promise<KineticEvidenceResponse>
@@ -201,7 +209,7 @@ class KineticEvidenceGateway {
       circuitReopensAt: this.circuit.openedUntil
         ? new Date(this.circuit.openedUntil).toISOString()
         : null,
-      concurrency: 1,
+      concurrency: Math.max(1, Math.min(50, Number(process.env.SCAN_GLOBAL_CONCURRENCY) || 50)),
     };
   }
   async healthCheck(signal?: AbortSignal) {
@@ -246,12 +254,9 @@ class KineticEvidenceGateway {
     address: KineticPostalAddress,
     signal?: AbortSignal,
   ): Promise<KineticEvidenceResponse> {
-    while (this.active) await new Promise((resolve) => setTimeout(resolve, 25));
-    this.active = true;
-    try {
-      const result = await this.adapter!.qualifyAddress(address, signal);
+    const result = await this.adapter!.qualifyAddress(address, signal);
       if (result.outcome === "denied") {
-        this.trip("access denied (401/403)", 60 * 60_000);
+        this.trip("access denied (403)", 60 * 60_000);
         throw new KineticEvidenceUnavailableError(
           "ACCESS_DENIED",
           "Evidence source denied automated access; scanning stopped.",
@@ -288,9 +293,6 @@ class KineticEvidenceGateway {
           value: result,
         });
       return result;
-    } finally {
-      this.active = false;
-    }
   }
   private trip(reason: string, durationMs: number) {
     this.circuit = {
@@ -303,7 +305,6 @@ class KineticEvidenceGateway {
     this.circuit = { openedUntil: 0, rateLimitCount: 0, reason: null };
     this.inflight.clear();
     this.cache.clear();
-    this.active = false;
   }
 }
 

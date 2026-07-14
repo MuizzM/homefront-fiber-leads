@@ -7,7 +7,9 @@ let _undiciFetch: any = null;
 let _proxyLoaded = false;
 let _sharedDispatcher: any = null;
 
-const POOL_SIZE = boundedInt(process.env.PROXY_POOL_CONNECTIONS, 16, 1, 64);
+// Sized to support the globally selected 40–50 search window. The distributed
+// coordinator, not this socket pool, remains the authoritative system ceiling.
+const POOL_SIZE = boundedInt(process.env.PROXY_POOL_CONNECTIONS, 50, 1, 100);
 const PIPELINE = boundedInt(process.env.PROXY_PIPELINING, 1, 1, 2);
 const CONN_TIMEOUT = 5_000;     // 5s connect timeout — fail fast
 const KEEP_ALIVE  = 60_000;     // 60s keepalive — fewer reconnects under load
@@ -48,7 +50,7 @@ function buildAgent(proxyUrl: string) {
     connect: {
       timeout: CONN_TIMEOUT,
       // TLS verification is ON by default so a MITM on the proxy egress can't
-      // capture the Kinetic bearer token / KFS_AUTH_BASIC. Only an explicit
+      // capture the Kinetic bearer token. Only an explicit
       // PROXY_INSECURE_TLS=true opt-in disables it (some proxies need it).
       rejectUnauthorized: process.env.PROXY_INSECURE_TLS !== "true",
     },

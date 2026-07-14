@@ -14,8 +14,9 @@ export interface DiscoveryMapPoint {
   apiSource?: string | null;
 }
 
-/** Mutates the session-scoped feature index, preserving stable IDs so a
- * `checking` rooftop becomes a result in place instead of flashing twice. */
+/** Mutates the session-scoped feature index with rep-visible results only.
+ * Candidates, negatives, active-service addresses and inconclusive checks are
+ * deliberately ignored; the durable lead projector is the publication gate. */
 export function applyDiscoveryMapPointBatch(
   features: Map<string, any>,
   jobId: string,
@@ -24,6 +25,9 @@ export function applyDiscoveryMapPointBatch(
 ): number {
   let changed = 0;
   for (const point of points) {
+    const scanStatus = String(point.scanStatus ?? "").toLowerCase();
+    const billingStatus = String(point.billingStatus ?? "").toUpperCase();
+    if (scanStatus !== "fresh_confirmed" || billingStatus === "Y") continue;
     const lat = Number(point.lat);
     const lng = Number(point.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
@@ -31,7 +35,6 @@ export function applyDiscoveryMapPointBatch(
       ?? `${String(point.address ?? "address").toLowerCase()}|${lat.toFixed(6)}|${lng.toFixed(6)}`;
     const key = `${jobId}:${canonicalId}`;
     const previous = features.get(key);
-    const scanStatus = String(point.scanStatus ?? previous?.properties?.scanStatus ?? "checking");
     features.set(key, {
       type: "Feature",
       id: key,
@@ -47,7 +50,7 @@ export function applyDiscoveryMapPointBatch(
         zip: String(point.zip ?? previous?.properties?.zip ?? ""),
         scanStatus,
         fiberStatus: point.fiberStatus ?? previous?.properties?.fiberStatus ?? null,
-        isNewFiber: scanStatus === "fresh_candidate" || scanStatus === "fresh_confirmed",
+        isNewFiber: true,
         billingStatus: point.billingStatus ?? previous?.properties?.billingStatus ?? null,
         maxDownloadMbps: point.maxDownloadMbps ?? previous?.properties?.maxDownloadMbps ?? null,
         householdSegmentType: point.householdSegmentType ?? previous?.properties?.householdSegmentType ?? null,

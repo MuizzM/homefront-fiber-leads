@@ -1,6 +1,12 @@
 # Kinetic evidence scanner
 
-No private Kinetic API, Sequential ID enumeration rule, address-ID rule, token, or undocumented response contract is assumed. The production-safe default is `offline`. Decodo is not an evidence source and is never used for identity rotation, CAPTCHA avoidance, authorization bypass, or continued access after denial.
+The field-map scanner includes the confirmed Kinetic token and address-search
+contract in `server/scanner.ts`, guarded by `KFS_AUTOMATION_AUTHORIZED`. Tokens
+remain in server memory and refresh from their returned expiry. The separate
+evidence command center still defaults to `offline` until its configured mode
+and runtime adapter match. Decodo is transport rather than evidence and is not
+used for CAPTCHA avoidance, authorization bypass, or continued access after
+denial.
 
 ## Evidence modes
 
@@ -25,7 +31,8 @@ Future approved/public adapters implement `KineticEvidenceSourceAdapter`. One ga
 - circuit opening after three rate-limit responses;
 - no state mutation for denial, challenge, rate limit, transport failure, or inconclusive evidence.
 
-The repository intentionally contains no hypothetical Kinetic endpoint, credentials, request field names, parser mapping, or proxy-based live adapter.
+The command-center gateway does not invent additional endpoints or identifiers;
+the confirmed field-scanner contract is isolated in `server/scanner.ts`.
 
 ## Approved imports
 
