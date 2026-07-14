@@ -16,7 +16,7 @@ vi.mock("../../server/distributedProviderCoordinator", () => {
     halt() { this.halted = true; }
     resume() { this.halted = false; }
     snapshot() {
-      return { active: 0, queued: 0, startsLastSecond: 0, maxConcurrency: 45, maxRequestsPerSecond: 40,
+      return { active: 0, queued: 0, startsLastMinute: 0, maxConcurrency: 45, maxRequestsPerMinute: 100,
         pausedUntil: null, halted: this.halted, haltReason: this.halted ? "halted" : null, instanceId: "test" };
     }
   }
@@ -70,6 +70,7 @@ describe("Kinetic scanner transport hardening", () => {
         refreshes++;
         return json(200, { access_token: `refreshed-token-${refreshes}`, expires_in: 2_100 });
       }
+      expect(url).toBe("https://buy.gokinetic.com/api/v1/address/search");
       searches++;
       expect(new Headers(init.headers).get("authorization")).toMatch(/^Bearer /);
       return searches <= 3 ? json(401, {}) : json(200, noService);

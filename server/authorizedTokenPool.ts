@@ -31,6 +31,7 @@ export interface AuthorizedTokenPoolSnapshot {
   total: number;
   ready: number;
   activeLeases: number;
+  activeRefreshes: number;
   states: Record<AuthorizedTokenState, number>;
   nextExpiryAt: number | null;
   disabled: boolean;
@@ -43,6 +44,7 @@ export interface AuthorizedTokenPoolOptions {
   cooldownBaseMs?: number;
   maintenanceIntervalMs?: number;
   maxLeasesPerToken?: number;
+  maxConcurrentRefreshes?: number;
   mint: (slotId: number) => Promise<MintedAuthorizedToken>;
   now?: () => number;
 }
@@ -59,12 +61,15 @@ export class AuthorizedTokenPool {
   private readonly cooldownBaseMs: number;
   private readonly maintenanceIntervalMs: number;
   private readonly maxLeasesPerToken: number;
+  private readonly maxConcurrentRefreshes: number;
   private readonly mint: AuthorizedTokenPoolOptions["mint"];
   private readonly now: () => number;
   private readonly slots: TokenSlot[] = [];
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   private warmInFlight: Promise<void> | null = null;
   private leaseSequence = 0;
+  private activeRefreshes = 0;
+  private readonly refreshWaiters: Array<() => void> = [];
   private disabled = false;
 
   constructor(options: AuthorizedTokenPoolOptions) {
@@ -74,6 +79,7 @@ export class AuthorizedTokenPool {
     this.cooldownBaseMs = Math.max(250, Math.floor(options.cooldownBaseMs ?? 2_000));
     this.maintenanceIntervalMs = Math.max(1_000, Math.floor(options.maintenanceIntervalMs ?? 15_000));
     this.maxLeasesPerToken = boundedInt(options.maxLeasesPerToken ?? 10, 1, 1_000, 10);
+    this.maxConcurrentRefreshes = boundedInt(options.maxConcurrentRefreshes ?? 2, 1, 20, 2);
     this.mint = options.mint;
     this.now = options.now ?? Date.now;
   }
@@ -153,7 +159,10 @@ export class AuthorizedTokenPool {
     slot.state = "REFRESHING";
     slot.refreshInFlight = (async () => {
       try {
-        const minted = await this.mint(slot.id);
+        // Per-slot refreshes are single-flight above; this second, pool-wide
+        // permit prevents many independently expiring slots from stampeding the
+        // token endpoint at the same instant.
+        const minted = await this.withRefreshPermit(() => this.mint(slot.id));
         if (!minted.token || minted.expiresAt <= this.now() + this.refreshMarginMs) throw new Error("AUTHORIZED_TOKEN_EXPIRES_TOO_SOON");
         slot.token = minted.token;
         slot.expiresAt = minted.expiresAt;
@@ -221,6 +230,7 @@ export class AuthorizedTokenPool {
       total: this.slots.length,
       ready: states.READY,
       activeLeases: this.slots.reduce((sum, slot) => sum + slot.leases, 0),
+      activeRefreshes: this.activeRefreshes,
       states,
       nextExpiryAt: expiries.length ? Math.min(...expiries) : null,
       disabled: this.disabled,
@@ -287,6 +297,19 @@ export class AuthorizedTokenPool {
     };
     this.slots.push(slot);
     return slot;
+  }
+
+  private async withRefreshPermit<T>(task: () => Promise<T>): Promise<T> {
+    if (this.activeRefreshes >= this.maxConcurrentRefreshes) {
+      await new Promise<void>(resolve => this.refreshWaiters.push(resolve));
+    }
+    this.activeRefreshes++;
+    try {
+      return await task();
+    } finally {
+      this.activeRefreshes = Math.max(0, this.activeRefreshes - 1);
+      this.refreshWaiters.shift()?.();
+    }
   }
 }
 

@@ -32,6 +32,30 @@ describe("AuthorizedTokenPool", () => {
     lease.release(); pool.stop();
   });
 
+  it("caps refresh concurrency across different slots to prevent token storms", async () => {
+    let activeMints = 0, peakMints = 0, calls = 0;
+    const pool = new AuthorizedTokenPool({
+      maxSize: 6,
+      warmMinimum: 6,
+      refreshMarginMs: 1_000,
+      maxConcurrentRefreshes: 2,
+      mint: async slotId => {
+        calls++;
+        activeMints++;
+        peakMints = Math.max(peakMints, activeMints);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        activeMints--;
+        return { token: `token-${slotId}`, expiresAt: Date.now() + 60_000 };
+      },
+    });
+    const leases = await Promise.all(Array.from({ length: 6 }, () => pool.lease()));
+    expect(calls).toBe(6);
+    expect(peakMints).toBe(2);
+    expect(pool.snapshot()).toMatchObject({ ready: 6, activeLeases: 6, activeRefreshes: 0 });
+    leases.forEach(lease => lease.release());
+    pool.stop();
+  });
+
   it("expands lazily under lease pressure without minting the configured maximum", async () => {
     let calls = 0;
     const pool = new AuthorizedTokenPool({

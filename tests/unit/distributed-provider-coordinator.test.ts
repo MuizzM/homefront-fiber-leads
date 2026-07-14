@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { rawDb } from "../../server/db";
-import { DistributedProviderCoordinator } from "../../server/distributedProviderCoordinator";
+import {
+  DistributedProviderCoordinator,
+  ensureSchema,
+} from "../../server/distributedProviderCoordinator";
 
 const codec = {
   cacheable: () => true,
@@ -9,15 +12,18 @@ const codec = {
 };
 
 beforeEach(() => {
+  // CI starts with a pristine database, unlike a developer database that may
+  // already contain the coordinator tables.
+  ensureSchema();
   rawDb.exec(`DELETE FROM provider_rate_events; DELETE FROM provider_admission_queue;
     DELETE FROM provider_address_locks; DELETE FROM provider_shared_result_cache;
-    UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL WHERE id=1;`);
+    UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL,next_start_at=0 WHERE id=1;`);
 });
 
 describe("DistributedProviderCoordinator", () => {
   it("enforces one concurrency semaphore across coordinator instances", async () => {
-    const a = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 3, maxRequestsPerSecond: 100, resultCacheTtlMs: 1_000 });
-    const b = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 3, maxRequestsPerSecond: 100, resultCacheTtlMs: 1_000 });
+    const a = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 3, maxRequestsPerMinute: 100, resultCacheTtlMs: 1_000, rateWindowMs: 100 });
+    const b = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 3, maxRequestsPerMinute: 100, resultCacheTtlMs: 1_000, rateWindowMs: 100 });
     let active = 0, peak = 0;
     const work = Array.from({ length: 12 }, (_, index) => (index % 2 ? a : b).execute(`key-${index}`, "city", async () => {
       active++; peak = Math.max(peak, active);
@@ -26,13 +32,14 @@ describe("DistributedProviderCoordinator", () => {
       return { value: index };
     }, codec));
     await Promise.all(work);
-    expect(peak).toBe(3);
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThanOrEqual(3);
     expect(a.snapshot()).toMatchObject({ active: 0, queued: 0, maxConcurrency: 3 });
   });
 
   it("coalesces an identical address across instances through the shared lock and cache", async () => {
-    const a = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerSecond: 100, resultCacheTtlMs: 5_000 });
-    const b = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerSecond: 100, resultCacheTtlMs: 5_000 });
+    const a = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerMinute: 100, resultCacheTtlMs: 5_000, rateWindowMs: 100 });
+    const b = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 2, maxRequestsPerMinute: 100, resultCacheTtlMs: 5_000, rateWindowMs: 100 });
     const provider = vi.fn(async () => { await new Promise(resolve => setTimeout(resolve, 20)); return { value: 42 }; });
     const [first, second] = await Promise.all([
       a.execute("same-hash", "manual", provider, codec),
@@ -43,7 +50,7 @@ describe("DistributedProviderCoordinator", () => {
   });
 
   it("honors global priority and halt state", async () => {
-    const coordinator = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 1, maxRequestsPerSecond: 100, resultCacheTtlMs: 0 });
+    const coordinator = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 1, maxRequestsPerMinute: 100, resultCacheTtlMs: 0, rateWindowMs: 100 });
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const order: string[] = [];
@@ -58,5 +65,38 @@ describe("DistributedProviderCoordinator", () => {
     await expect(coordinator.execute("future", "manual", async () => ({ value: 3 }), codec)).rejects.toThrow("403 denied");
     expect(coordinator.snapshot()).toMatchObject({ halted: true, haltReason: "403 denied" });
     coordinator.resume();
+  });
+
+  it("enforces one aggregate rolling-minute budget without losing queued jobs", async () => {
+    const rateWindowMs = 200;
+    const a = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 10,
+      maxRequestsPerMinute: 3,
+      resultCacheTtlMs: 0,
+      rateWindowMs,
+      pollMs: 10,
+    });
+    const b = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 10,
+      maxRequestsPerMinute: 3,
+      resultCacheTtlMs: 0,
+      rateWindowMs,
+      pollMs: 10,
+    });
+    const starts: number[] = [];
+    const startedAt = Date.now();
+    const results = await Promise.all(Array.from({ length: 6 }, (_, index) =>
+      (index % 2 ? a : b).execute(`rpm-${index}`, index === 1 ? "lasso" : "city", async () => {
+        starts.push(Date.now());
+        return { value: index };
+      }, codec),
+    ));
+    expect(results).toHaveLength(6);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(rateWindowMs - 20);
+    for (const windowStart of starts) {
+      expect(starts.filter(value => value >= windowStart && value < windowStart + rateWindowMs).length)
+        .toBeLessThanOrEqual(3);
+    }
+    expect(a.snapshot()).toMatchObject({ maxRequestsPerMinute: 3, active: 0, queued: 0 });
   });
 });

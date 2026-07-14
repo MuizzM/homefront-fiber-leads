@@ -21,7 +21,7 @@ const PARSER_VERSION = "authorized-address-search-v1";
 export class KineticAuthorizedSearchAdapter implements KineticEvidenceSourceAdapter {
   readonly id = "kinetic_authorized_address_search";
   readonly mode = "approved_api" as const;
-  readonly contractVersion = "token-get+address-search-v2";
+  readonly contractVersion = "token-get+address-search-v1";
 
   async healthCheck(): Promise<{ ok: boolean; latencyMs: number; message: string }> {
     const started = Date.now();

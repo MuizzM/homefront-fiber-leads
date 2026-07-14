@@ -4,6 +4,7 @@ import {
   kineticTokenUrl,
   parseKineticTokenPayload,
 } from "../../server/scanner";
+import { KFS_SCAN_URL } from "../../server/kfs-config";
 
 function unsignedJwt(payload: Record<string, unknown>): string {
   const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -11,6 +12,10 @@ function unsignedJwt(payload: Record<string, unknown>): string {
 }
 
 describe("Kinetic browser-equivalent token contract", () => {
+  it("uses the permissioned v1 address-search endpoint", () => {
+    expect(KFS_SCAN_URL).toBe("https://buy.gokinetic.com/api/v1/address/search");
+  });
+
   it("defaults to the confirmed internal token URL and permits an explicit override", () => {
     expect(kineticTokenUrl({} as NodeJS.ProcessEnv)).toBe(
       "https://buy.gokinetic.com/_internal/precisely/token",

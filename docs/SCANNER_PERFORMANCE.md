@@ -1,52 +1,55 @@
 # Kinetic scanner performance profile
 
-Measured July 14, 2026 on the local development machine. This benchmark isolates
-application scheduler capacity; it does not call Kinetic and is not an upstream
-quota or production-throughput claim.
+Measured July 14, 2026 with `npm run scanner:load-test`. The harness creates an
+isolated temporary SQLite database and never calls Kinetic, Decodo, a bearer
+token endpoint, or a resident address.
 
-Workload: 1,000 unique synthetic address checks, each with 10 ms simulated
-provider latency and no result-cache hits.
+## Production admission policy
 
-| Scheduler | Concurrency | Elapsed | Scheduler throughput |
-| --- | ---: | ---: | ---: |
-| Previous FIFO default | 8 | 1,412 ms | 708 checks/s |
-| Priority queue ceiling | 100 | 113 ms | 8,858 checks/s |
+- `SCAN_PROVIDER_REQUESTS_PER_MINUTE=100` is one aggregate rolling-minute
+  ceiling across every application instance, token, scan type, and proxy
+  connection.
+- A distributed cadence smooths starts while the rolling-window ledger remains
+  authoritative. A 3% boundary guard absorbs scheduler-to-fetch timing jitter,
+  keeping observed outbound starts at or below 100.
+- `SCAN_GLOBAL_CONCURRENCY` independently caps simultaneous searches at 50.
+- Priority is manual, lasso, Coming Soon, recheck/market, then city.
+- Identical normalized addresses share a distributed lock and cached result.
+- Token refresh is single-flight per slot and capped at two simultaneous
+  refreshes across the entire in-process pool.
 
-The isolated scheduler speedup was 12.51x. Production request starts are still
-bounded by `SCAN_PROVIDER_RPS` (default 40), so sustainable live throughput is:
+## Synthetic two-minute load result
 
-`min(SCAN_PROVIDER_RPS, SCAN_GLOBAL_CONCURRENCY / average_provider_latency_seconds)`
+The test compresses one minute to six seconds, submits 200 unique addresses plus
+50 simultaneous duplicate callers, and forces token slots through an early
+refresh boundary.
 
-The strict rolling-window test verifies that all priorities combined stay below
-the configured RPS ceiling. Manual and lasso work can move ahead of queued city,
-market, and recheck work, but priority never bypasses the aggregate limit.
+| Metric | Result |
+| --- | ---: |
+| Configured aggregate quota | 100/minute |
+| Unique provider checks | 200 |
+| Total callers | 250 |
+| Duplicate provider requests | 0 |
+| Lost jobs | 0 |
+| Maximum starts in a rolling minute | 98 |
+| Equivalent steady throughput | 97.4/minute |
+| Maximum concurrent token refreshes | 2 |
+| Quota violations | 0 |
 
-Verification coverage:
+The small difference between the configured ceiling and measured throughput is
+intentional safety margin, not an application scan cap. Users may continuously
+enqueue work; the shared queue preserves it and drains at the permissioned
+aggregate rate. Live throughput can be lower when provider latency, `Retry-After`,
+transport capacity, or a provider denial requires backoff.
 
-- 50 simultaneous distributed provider slots across app instances.
-- One aggregate rolling RPS ceiling.
-- Manual > lasso > Coming Soon/recheck > market > city priority.
-- In-flight address coalescing and queued-priority upgrades.
-- Conclusive-result cache with defensive clones.
-- Three token refreshes on repeated 401 responses.
-- Global queue pause and work preservation on 429 `Retry-After`.
-- Global stop and alert state on 403.
-- Existing cross-verification and one-lead idempotency gate.
+## Verification coverage
 
-## Distributed coordinator load profile
-
-The current database queue, global semaphore, address lock, and result-cache
-code was exercised with 200 unique checks per level and 60 ms simulated provider
-latency. This test makes no external provider calls and uses no bearer tokens.
-
-| Concurrency | Elapsed | Checks/s | End-to-end p95 | Failures | 429 rate | Proxy capacity |
-| ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| 10 | 2,530 ms | 79.1 | 2,343 ms | 0 | 0% | within |
-| 25 | 1,934 ms | 103.4 | 1,819 ms | 0 | 0% | within |
-| 40 | 2,193 ms | 91.2 | 1,925 ms | 0 | 0% | within |
-| 50 | 2,047 ms | 97.7 | 1,845 ms | 0 | 0% | within |
-
-With a 50-connection proxy pool and the acceptance threshold of p95 below two
-seconds, no failures, and no more than 1% 429s, concurrency 50 was selected.
-Live provider throughput remains bounded by `SCAN_PROVIDER_RPS` (default 40)
-until a contract-authorized live profile is run in the deployment environment.
+- Actual token expiry parsing and refresh 60 seconds early.
+- READY, REFRESHING, COOLDOWN, EXPIRED, DISABLED, and EMPTY lifecycle states.
+- Least-loaded round-robin token leasing.
+- Per-slot single-flight and pool-wide refresh-storm protection.
+- Cross-instance concurrency and rolling-minute enforcement.
+- Manual/lasso priority over Coming Soon and city work.
+- Cross-instance address coalescing and conclusive-result caching.
+- Three refresh attempts on 401, preserved work on 429, and global halt on 403.
+- Clean-database schema initialization in CI.

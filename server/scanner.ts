@@ -117,6 +117,7 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   refreshMarginMs: TOKEN_REFRESH_MARGIN_MS,
   maintenanceIntervalMs: Number(process.env.KFS_TOKEN_MAINTENANCE_MS ?? 15_000),
   maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 10),
+  maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 2),
   mint: () => mintAuthorizedToken(),
 });
 
@@ -294,7 +295,7 @@ export interface ScanResult {
 
 const configuredProviderConcurrency = Number(process.env.SCAN_PROVIDER_CONCURRENCY ?? 50);
 const configuredGlobalConcurrency = Number(process.env.SCAN_GLOBAL_CONCURRENCY ?? 50);
-const configuredProviderRps = Number(process.env.SCAN_PROVIDER_RPS ?? 40);
+const configuredProviderRpm = Number(process.env.SCAN_PROVIDER_REQUESTS_PER_MINUTE ?? 100);
 const configuredCacheTtlMs = Number(process.env.SCAN_RESULT_CACHE_MS ?? 5 * 60_000);
 
 const addressTokenAliases: Record<string, string> = {
@@ -333,9 +334,9 @@ function logQueueEvent(event: QueueEvent): void {
 
 const providerQueue = new ProviderRequestQueue<ScanResult>({
   maxConcurrency: Number.isFinite(configuredProviderConcurrency) ? configuredProviderConcurrency : 50,
-  // The DB-backed coordinator is authoritative across instances. This local
-  // limit prevents one process from creating an unbounded number of DB waiters.
-  maxRequestsPerSecond: Number.isFinite(configuredProviderRps) ? configuredProviderRps : 40,
+  // The DB-backed coordinator below is the sole aggregate rate authority. This
+  // process-local queue only bounds waiters, prioritizes work and coalesces
+  // duplicate calls before they reach the shared database queue.
   cacheTtlMs: Number.isFinite(configuredCacheTtlMs) ? configuredCacheTtlMs : 5 * 60_000,
   maxCacheEntries: Number(process.env.SCAN_RESULT_CACHE_MAX ?? 20_000),
   // Only conclusive provider answers are cached. A timeout, throttle, auth error,
@@ -349,11 +350,15 @@ const providerQueue = new ProviderRequestQueue<ScanResult>({
 
 const distributedProviderCoordinator = new DistributedProviderCoordinator<ScanResult>({
   maxConcurrency: Number.isFinite(configuredGlobalConcurrency) ? configuredGlobalConcurrency : 50,
-  maxRequestsPerSecond: Number.isFinite(configuredProviderRps) ? configuredProviderRps : 40,
+  maxRequestsPerMinute: Number.isFinite(configuredProviderRpm) ? configuredProviderRpm : 100,
   resultCacheTtlMs: Number.isFinite(configuredCacheTtlMs) ? configuredCacheTtlMs : 5 * 60_000,
 });
 
-export function getAddressScanQueueStatus(): ProviderQueueSnapshot & { distributed: DistributedProviderSnapshot } {
+export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {
+  maxRequestsPerMinute: number;
+  startsLastMinute: number;
+  distributed: DistributedProviderSnapshot;
+} {
   const local = providerQueue.snapshot();
   const distributed = distributedProviderCoordinator.snapshot();
   return {
@@ -361,8 +366,10 @@ export function getAddressScanQueueStatus(): ProviderQueueSnapshot & { distribut
     active: distributed.active,
     queued: Math.max(distributed.queued, local.queued),
     maxConcurrency: distributed.maxConcurrency,
-    maxRequestsPerSecond: distributed.maxRequestsPerSecond,
-    startsLastSecond: distributed.startsLastSecond,
+    maxRequestsPerSecond: null,
+    startsLastSecond: 0,
+    maxRequestsPerMinute: distributed.maxRequestsPerMinute,
+    startsLastMinute: distributed.startsLastMinute,
     pausedUntil: distributed.pausedUntil,
     halted: distributed.halted || local.halted,
     haltReason: distributed.haltReason ?? local.haltReason,
