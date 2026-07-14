@@ -29,6 +29,9 @@ if grep -q 'homefront-fiber-full_app-data' scripts/deploy.sh; then
   fail "deploy still contains the stale hard-coded volume name"
 fi
 grep -q 'Destination "/data"' scripts/deploy.sh || fail "deploy does not inspect the running /data mount"
+if grep -Fq '{{printf "%s|%s\n" .Type .Name}}' scripts/deploy.sh; then
+  fail "Docker mount template emits a duplicate record separator"
+fi
 grep -q 'BACKUP_VOLUME="$DATA_MOUNT_NAME"' scripts/deploy.sh || fail "deploy does not back up the named production volume"
 grep -q -- '--network none' scripts/backup.sh || fail "backup helper is not network-isolated"
 grep -q -- '--read-only' scripts/backup.sh || fail "backup helper root filesystem is writable"

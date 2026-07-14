@@ -52,7 +52,9 @@ if [ -n "$RECORDED_TAG" ] && [ "$RECORDED_TAG" != "$PREV_TAG" ]; then
   exit 1
 fi
 
-mapfile -t DATA_MOUNTS < <(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{printf "%s|%s\n" .Type .Name}}{{end}}{{end}}' "$APP_CONTAINER")
+# docker inspect --format appends its own newline. Do not emit a second one in
+# the template or mapfile will see a phantom empty mount record.
+mapfile -t DATA_MOUNTS < <(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{printf "%s|%s" .Type .Name}}{{end}}{{end}}' "$APP_CONTAINER")
 if [ "${#DATA_MOUNTS[@]}" -ne 1 ]; then
   echo "[deploy] refusing: running app does not have exactly one /data mount" >&2
   exit 1
