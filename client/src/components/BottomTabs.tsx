@@ -1,21 +1,16 @@
-// ── Bottom tab bar — mobile primary navigation ────────────────────────────────
-// Four thumb-reachable destinations: Map · Dashboard · Commission · Profile.
-// Mobile-only (the desktop sidebar covers navigation there); ≥44px targets;
-// safe-area padded for home-bar phones. The knock sheet (z-40) intentionally
-// covers it while a lead is open — the card is the whole screen's job then.
+// Mobile field navigation follows the five-destination pattern used by shipped
+// workforce and map apps: work queue, leads, one prominent map action, pay, and
+// a More gateway. Every target is thumb-reachable and safe-area aware.
 
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { Navigation, Map, DollarSign, User as UserIcon } from "lucide-react";
+import { Home, Map, DollarSign, MapPin, Menu } from "lucide-react";
 
 const TABS = [
-  // Today is the rep-first home: next best door + one-tap logging.
-  { href: "/today", label: "Today", icon: Navigation },
-  { href: "/map", label: "Map", icon: Map },
-  // The authoritative weekly-commission rep view (the legacy /commissions page
-  // remains in the sidebar for its per-sale records).
-  { href: "/my-commission", label: "Commission", icon: DollarSign },
-  { href: "/profile", label: "Profile", icon: UserIcon },
+  { href: "/today", label: "Today", icon: Home },
+  { href: "/leads", label: "Leads", icon: MapPin },
+  { href: "/map", label: "Map", icon: Map, primary: true },
+  { href: "/my-commission", label: "Pay", icon: DollarSign },
 ] as const;
 
 export function BottomTabs() {
@@ -23,25 +18,44 @@ export function BottomTabs() {
   return (
     <nav
       data-testid="bottom-tabs"
-      className="md:hidden fixed inset-x-0 bottom-0 z-30 bg-card/95 backdrop-blur-md border-t border-border flex"
-      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+      aria-label="Primary navigation"
+      className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/80 bg-card/95 backdrop-blur-xl shadow-[0_-8px_24px_rgba(0,0,0,0.18)]"
+      style={{ paddingBottom: "max(env(safe-area-inset-bottom), 6px)" }}
     >
-      {TABS.map(({ href, label, icon: Icon }) => {
+      <div className="grid grid-cols-5 h-[58px] px-1">
+      {TABS.map(({ href, label, icon: Icon, ...tab }) => {
         const active = location === href;
+        const primary = "primary" in tab && tab.primary;
         return (
           <Link
             key={href}
             href={href}
             data-testid={`tab-${label.toLowerCase()}`}
-            className="flex-1 h-14 flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform"
+            aria-current={active ? "page" : undefined}
+            className={`relative flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform ${primary ? "-mt-3" : ""}`}
           >
-            <Icon className={`w-5 h-5 ${active ? "text-primary" : "text-muted-foreground"}`} />
+            <span className={primary
+              ? `grid h-11 w-11 place-items-center rounded-full border-4 border-card shadow-lg ${active ? "bg-primary text-primary-foreground" : "bg-foreground text-background"}`
+              : `grid h-7 w-9 place-items-center rounded-lg ${active ? "bg-primary/[0.12] text-primary" : "text-muted-foreground"}`}>
+              <Icon className={primary ? "w-5 h-5" : "w-[19px] h-[19px]"} strokeWidth={active ? 2.4 : 2} />
+            </span>
             <span className={`text-[10px] font-semibold ${active ? "text-primary" : "text-muted-foreground"}`}>
               {label}
             </span>
           </Link>
         );
       })}
+      <button
+        type="button"
+        data-testid="tab-more"
+        aria-label="Open more navigation"
+        onClick={() => window.dispatchEvent(new CustomEvent("hfs:open-menu"))}
+        className="flex flex-col items-center justify-center gap-0.5 active:scale-95"
+      >
+        <span className="grid h-7 w-9 place-items-center rounded-lg text-muted-foreground"><Menu className="w-[19px] h-[19px]" /></span>
+        <span className="text-[10px] font-semibold text-muted-foreground">More</span>
+      </button>
+      </div>
     </nav>
   );
 }

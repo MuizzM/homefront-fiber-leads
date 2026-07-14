@@ -1161,7 +1161,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   }
 
   app.get("/api/leads", requireAuth, (req, res) => {
-    const { search, limit, offset, status, zip, city, state } = req.query;
+    const { search, limit, offset, status, zip, city, state, assignedRepId, fiberStatus } = req.query;
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     // Reps only see leads assigned to them; managers/admins see all
@@ -1179,6 +1179,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       zip: zip ? String(zip) : undefined,
       city: city && city !== "all" ? String(city) : undefined,
       state: state && state !== "all" ? String(state) : undefined,
+      assignedRepId: assignedRepId === "unassigned"
+        ? "unassigned" as const
+        : (assignedRepId && Number.isInteger(Number(assignedRepId)) && Number(assignedRepId) > 0 ? Number(assignedRepId) : undefined),
+      fiberStatus: fiberStatus && fiberStatus !== "all" ? String(fiberStatus) : undefined,
       limit: lim, offset: off,
     };
 
@@ -3093,13 +3097,37 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/stats", requireAuth, (req, res) => {
     const _su = (req as any).user;
     const all = storage.getLeads(_su?.tenantId ?? undefined, leadVisibilityScope(_su));
-    const stats: any = { total: all.length, byStatus: {}, byFiberStatus: {}, newFiber: 0, tenured: 0, sold: 0 };
+    const stats: any = {
+      total: all.length,
+      assigned: 0,
+      unassigned: 0,
+      qualified: 0,
+      stale: 0,
+      byStatus: {},
+      byFiberStatus: {},
+      byRep: {},
+      byTerritory: {},
+      newFiber: 0,
+      tenured: 0,
+      sold: 0,
+    };
+    const staleBefore = Date.now() - 14 * 86_400_000;
     for (const l of all) {
       stats.byStatus[l.leadStatus] = (stats.byStatus[l.leadStatus] || 0) + 1;
       stats.byFiberStatus[l.fiberStatus] = (stats.byFiberStatus[l.fiberStatus] || 0) + 1;
       if (l.isNewFiber) stats.newFiber++;
       if (l.isTenured) stats.tenured++;
       if (l.leadStatus === "sold") stats.sold++;
+      if (l.assignedRepId == null) stats.unassigned++;
+      else {
+        stats.assigned++;
+        stats.byRep[String(l.assignedRepId)] = (stats.byRep[String(l.assignedRepId)] || 0) + 1;
+      }
+      if (l.leadStatus === "interested" || l.leadStatus === "sold") stats.qualified++;
+      const activityAt = Date.parse(l.updatedAt || l.createdAt || "");
+      if (Number.isFinite(activityAt) && activityAt < staleBefore && !["sold", "not_interested"].includes(l.leadStatus)) stats.stale++;
+      const territory = [l.city, l.state].filter(Boolean).join(", ");
+      if (territory) stats.byTerritory[territory] = (stats.byTerritory[territory] || 0) + 1;
     }
     res.json(stats);
   });

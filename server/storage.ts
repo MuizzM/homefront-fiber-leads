@@ -89,7 +89,7 @@ export interface IStorage {
   getLeadsPage(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
   ): { rows: Lead[]; total: number };
   getLeadById(id: number): Lead | undefined;
   createLead(lead: InsertLead): Lead;
@@ -101,7 +101,7 @@ export interface IStorage {
     query: string,
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
   ): { rows: Lead[]; total: number };
   // ── Fiber checks ───────────────────────────────────────────────────────────
   getFiberChecks(): FiberCheck[];
@@ -1200,7 +1200,7 @@ export class Storage implements IStorage {
   getLeadsPage(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
   ): { rows: Lead[]; total: number } {
     const conditions = [];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
@@ -1210,6 +1210,9 @@ export class Storage implements IStorage {
       conditions.push(eq(leads.assignedRepId, assignedRep));
     }
     if (opts.status) conditions.push(eq(leads.leadStatus, opts.status));
+    if (opts.assignedRepId === "unassigned") conditions.push(isNull(leads.assignedRepId));
+    else if (typeof opts.assignedRepId === "number") conditions.push(eq(leads.assignedRepId, opts.assignedRepId));
+    if (opts.fiberStatus) conditions.push(eq(leads.fiberStatus, opts.fiberStatus));
     if (opts.zip) conditions.push(eq(leads.zip, opts.zip));
     if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
     if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
@@ -1349,7 +1352,7 @@ export class Storage implements IStorage {
     query: string,
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { status?: string; zip?: string; city?: string; state?: string; limit: number; offset: number },
+    opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
   ): { rows: Lead[]; total: number } {
     // Escape LIKE wildcards in user input — a bare "%" must not match the table.
     const safe = query.replace(/[\\%_]/g, m => "\\" + m);
@@ -1363,6 +1366,9 @@ export class Storage implements IStorage {
       conditions.push(eq(leads.assignedRepId, assignedRep));
     }
     if (opts.status) conditions.push(eq(leads.leadStatus, opts.status));
+    if (opts.assignedRepId === "unassigned") conditions.push(isNull(leads.assignedRepId));
+    else if (typeof opts.assignedRepId === "number") conditions.push(eq(leads.assignedRepId, opts.assignedRepId));
+    if (opts.fiberStatus) conditions.push(eq(leads.fiberStatus, opts.fiberStatus));
     if (opts.zip) conditions.push(eq(leads.zip, opts.zip));
     // ASCII lower() matches the JS toLowerCase for the A-Z names in this data;
     // if non-ASCII city names ever land, store a folded column instead.

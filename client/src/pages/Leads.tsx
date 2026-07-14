@@ -7,11 +7,11 @@ import { useToast } from "@/hooks/use-toast";
 import {
   Users, Search, Plus, Edit2, Trash2, Phone,
   DoorOpen, UserCheck, CalendarClock, Zap, Home, PhoneOff,
-  BarChart2, Wifi, WifiOff, Building2, DollarSign, Map, Info,
+  Wifi, WifiOff, Building2, DollarSign, Map as MapIcon, Info,
   RefreshCw, ShieldCheck, ShieldX, User, Mail, ChevronLeft, ChevronRight,
-  Target, Star, Calendar, MapPin, X
+  X, AlertTriangle, CheckCircle2, MapPin,
+  Clock3, ArrowUpRight, Navigation, SlidersHorizontal, CircleDot
 } from "lucide-react";
-import { KpiTile } from "@/components/KpiTile";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -55,18 +55,6 @@ const STATUS_COLOR: Record<string, string> = {
   sold:          "bg-emerald-500/15 text-emerald-400",
   not_interested:"bg-slate-700/40 text-slate-300",
   follow_up:     "bg-orange-500/15 text-orange-400",
-};
-
-// Solid accent (left bar / dot) so a rep reads status at a glance without text.
-// Mirrors STATE_COLORS; not_interested uses a visible dark slate (the map's true
-// #1f2937 would vanish on the dark list — same "dead" read, kept legible).
-const STATUS_ACCENT: Record<string, string> = {
-  prospect:      "#ef4444",
-  contacted:     "#64748b",
-  interested:    "#8b5cf6",
-  sold:          "#10b981",
-  not_interested:"#334155",
-  follow_up:     "#f97316",
 };
 
 const OUTCOME_ICONS: Record<string, React.ElementType> = {
@@ -448,17 +436,66 @@ type EnrichmentData = {
   techType: string | null;
 };
 
-function IntelligencePanel({ lead, open, onClose, canEdit }: {
+type LeadHistoryItem = {
+  id: string;
+  type: "status_change" | "assignment" | "note";
+  actor: string | null;
+  changedAt: string;
+  status?: string;
+  assignedTo?: string;
+  assignedBy?: string;
+  notePreview?: string;
+};
+
+const ONBOARDING_STAGE_LABEL: Record<string, string> = {
+  invited: "Invited",
+  under_review: "Needs review",
+  approved: "Approved",
+  login_code_sent: "Login sent",
+  agreements_issued: "Awaiting signatures",
+  partially_signed: "Partially signed",
+  fully_signed: "Fully signed",
+  active: "Active",
+  rejected: "Rejected",
+  failed: "Delivery failed",
+};
+
+function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign = false, onboardingStage, onAssign, onEdit, onQualify }: {
   lead: Lead;
   open: boolean;
   onClose: () => void;
   canEdit: boolean;
+  team?: TeamMember[];
+  canAssign?: boolean;
+  onboardingStage?: string | null;
+  onAssign?: () => void;
+  onEdit?: () => void;
+  onQualify?: () => void;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [editContact, setEditContact] = useState(false);
   const [ownerPhone, setOwnerPhone] = useState(lead.ownerPhone ?? "");
   const [ownerEmail, setOwnerEmail] = useState(lead.ownerEmail ?? "");
+
+  const { data: detail } = useQuery<Lead>({
+    queryKey: [`/api/leads/${lead.id}`],
+    queryFn: async () => (await apiRequest("GET", `/api/leads/${lead.id}`)).json(),
+    enabled: open,
+    staleTime: 30_000,
+  });
+
+  const { data: history = [], isLoading: historyLoading } = useQuery<LeadHistoryItem[]>({
+    queryKey: [`/api/leads/${lead.id}/history`],
+    queryFn: async () => (await apiRequest("GET", `/api/leads/${lead.id}/history`)).json(),
+    enabled: open,
+    staleTime: 15_000,
+  });
+  const current = detail ?? lead;
+  const assignedRep = team.find(member => member.id === current.assignedRepId);
+  const directions = current.lat != null && current.lng != null
+    ? `https://www.google.com/maps/dir/?api=1&destination=${current.lat},${current.lng}`
+    : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${current.address}, ${current.city}, ${current.state} ${current.zip}`)}`;
 
   const { data: enrich, isLoading, refetch, isFetching } = useQuery<EnrichmentData>({
     queryKey: ["/api/leads", lead.id, "enrichment"],
@@ -507,14 +544,50 @@ function IntelligencePanel({ lead, open, onClose, canEdit }: {
 
   return (
     <Sheet open={open} onOpenChange={v => !v && onClose()}>
-      <SheetContent className="bg-card border-border text-foreground w-full sm:max-w-md overflow-y-auto">
-        <SheetHeader className="mb-4">
-          <SheetTitle className="text-base flex items-center gap-2">
-            <BarChart2 className="w-4 h-4 text-primary" />
-            Lead Intelligence
-          </SheetTitle>
-          <p className="text-xs text-muted-foreground">{lead.address}, {lead.city} {lead.zip}</p>
+      <SheetContent className="bg-card border-border text-foreground w-full sm:max-w-xl overflow-y-auto p-0">
+        <SheetHeader className="sticky top-0 z-10 bg-card/95 backdrop-blur border-b border-border px-5 py-4 text-left">
+          <button type="button" onClick={onClose} aria-label="Close lead details" className="absolute right-4 top-4 z-20 w-8 h-8 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
+            <X className="w-4 h-4" />
+          </button>
+          <div className="flex items-center gap-2 pr-8">
+            <Badge className={`text-[10px] px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
+              {STATUS_LABEL[current.leadStatus] ?? current.leadStatus}
+            </Badge>
+            {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-orange-500/10 text-orange-400 text-[10px]">High priority</Badge>}
+          </div>
+          <SheetTitle className="text-lg font-semibold tracking-tight mt-2">{current.address}</SheetTitle>
+          <p className="text-xs text-muted-foreground">{current.city}, {current.state} {current.zip}</p>
         </SheetHeader>
+
+        <div className="px-5 py-4 border-b border-border grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {current.contactPhone ? (
+            <a href={`tel:${current.contactPhone}`} className="h-9 rounded-md bg-primary text-primary-foreground text-xs font-semibold flex items-center justify-center gap-1.5">
+              <Phone className="w-3.5 h-3.5" /> Contact
+            </a>
+          ) : (
+            <button disabled className="h-9 rounded-md bg-secondary text-muted-foreground text-xs font-semibold flex items-center justify-center gap-1.5 opacity-60">
+              <Phone className="w-3.5 h-3.5" /> No phone
+            </button>
+          )}
+          <a href={directions} target="_blank" rel="noreferrer" className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">
+            <Navigation className="w-3.5 h-3.5" /> Navigate
+          </a>
+          {canAssign && <button onClick={onAssign} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted"><UserCheck className="w-3.5 h-3.5" />{current.assignedRepId ? "Reassign" : "Assign"}</button>}
+          {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-9 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500/15"><CheckCircle2 className="w-3.5 h-3.5" /> Qualify</button>}
+        </div>
+
+        <div className="px-5 py-5">
+          <div className="grid grid-cols-2 gap-3 mb-5">
+            <div className="rounded-lg border border-border bg-background px-3 py-2.5">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Assigned rep</div>
+              <div className="text-sm font-medium mt-1">{assignedRep?.name ?? (current.assignedRepId ? `Rep #${current.assignedRepId}` : "Unassigned")}</div>
+              {onboardingStage && <div className="text-[10px] text-primary mt-1">Onboarding · {ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage.replace(/_/g, " ")}</div>}
+            </div>
+            <div className="rounded-lg border border-border bg-background px-3 py-2.5">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Territory</div>
+              <div className="text-sm font-medium mt-1">{current.city}, {current.state}</div>
+            </div>
+          </div>
 
         {/* Fiber Status Section */}
         <div className="mb-4">
@@ -581,7 +654,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit }: {
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-            <Map className="w-3 h-3" /> Source: US Census ACS 5-Year Estimates (ZIP-level, free)
+            <MapIcon className="w-3 h-3" /> Source: US Census ACS 5-Year Estimates (ZIP-level, free)
           </p>
         </div>
 
@@ -628,20 +701,44 @@ function IntelligencePanel({ lead, open, onClose, canEdit }: {
             </div>
           )}
           <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-            <Map className="w-3 h-3" /> Owner name: public GIS records
+            <MapIcon className="w-3 h-3" /> Owner name: public GIS records
           </p>
           {/* Tracerfy deep lookup — pay per hit */}
           <OwnerLookupButton leadId={lead.id} onDone={() => refetch()} />
         </div>
 
-        <Separator className="my-3 bg-border/50" />
-        <div className="flex items-center gap-2">
-          <Badge className={`text-xs px-2 py-0.5 rounded-full border-0 ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
-            {STATUS_LABEL[lead.leadStatus]}
-          </Badge>
-          <span className="text-xs text-muted-foreground">
-            {lead.assignedRepId ? `Assigned to Rep #${lead.assignedRepId}` : "Unassigned"}
-          </span>
+        <Separator className="my-4 bg-border/50" />
+
+        <div className="mb-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Clock3 className="w-3.5 h-3.5 text-primary" />
+            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Activity history</span>
+          </div>
+          {historyLoading ? (
+            <div className="space-y-3"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
+          ) : history.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-border px-4 py-5 text-center text-xs text-muted-foreground">No operational activity has been logged yet.</div>
+          ) : (
+            <div className="relative ml-1 space-y-0 before:absolute before:left-[6px] before:top-2 before:bottom-2 before:w-px before:bg-border">
+              {history.slice(0, 12).map(item => (
+                <div key={item.id} className="relative pl-6 py-2.5">
+                  <span className="absolute left-0 top-[15px] w-[13px] h-[13px] rounded-full border-2 border-card bg-primary" />
+                  <div className="text-xs font-medium text-foreground">
+                    {item.type === "status_change" ? `Status changed to ${(item.status ?? "updated").replace(/_/g, " ")}` : item.type === "assignment" ? `Assigned to ${item.assignedTo ?? "team"}` : "Note added"}
+                  </div>
+                  {item.notePreview && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.notePreview}</div>}
+                  <div className="text-[10px] text-muted-foreground mt-1">{item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {canEdit && (
+          <button onClick={onEdit} className="w-full h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted">
+            <Edit2 className="w-3.5 h-3.5" /> Edit full lead record
+          </button>
+        )}
         </div>
       </SheetContent>
     </Sheet>
@@ -649,11 +746,56 @@ function IntelligencePanel({ lead, open, onClose, canEdit }: {
 }
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
+const formatActivity = (value: string | null | undefined) => {
+  if (!value) return "No activity";
+  const ms = Date.now() - Date.parse(value);
+  if (!Number.isFinite(ms)) return "Unknown";
+  const days = Math.floor(ms / 86_400_000);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 30) return `${days} days ago`;
+  return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+};
+
+const leadSource = (lead: Lead) => lead.dfAddressId ? "Fiber scan" : lead.assignmentSource === "territory-sync" ? "Territory sync" : "Direct intake";
+
+const nextAction = (lead: Lead) => {
+  if (!lead.assignedRepId) return { label: "Assign owner", tone: "text-amber-400" };
+  if (lead.leadStatus === "prospect") return { label: "First contact", tone: "text-primary" };
+  if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-orange-400" };
+  if (lead.leadStatus === "interested") return { label: "Close sale", tone: "text-emerald-400" };
+  if (lead.leadStatus === "sold") return { label: "Complete", tone: "text-muted-foreground" };
+  return { label: "Review", tone: "text-muted-foreground" };
+};
+
+function EnterpriseKpi({ label, value, helper, icon: Icon, tone = "text-primary", warning = false }: {
+  label: string;
+  value: number;
+  helper: string;
+  icon: React.ElementType;
+  tone?: string;
+  warning?: boolean;
+}) {
+  return (
+    <div className={`min-w-[160px] flex-1 rounded-lg border bg-card px-4 py-3.5 ${warning ? "border-amber-500/30" : "border-border"}`}>
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
+        <Icon className={`w-4 h-4 ${tone}`} />
+      </div>
+      <div className="text-2xl font-semibold tracking-tight tabular-nums mt-2">{value.toLocaleString()}</div>
+      <div className="text-[11px] text-muted-foreground mt-1">{helper}</div>
+    </div>
+  );
+}
+
 export default function Leads() {
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterCity, setFilterCity] = useState("all");
   const [filterState, setFilterState] = useState("all");
+  const [filterRep, setFilterRep] = useState("all");
+  const [filterFiber, setFilterFiber] = useState("all");
+  const [mobileFiltersOpen, setMobileFiltersOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
@@ -671,6 +813,7 @@ export default function Leads() {
   const canEdit     = ["admin", "manager"].includes(user?.role ?? "");
   const canDelete   = ["admin", "manager"].includes(user?.role ?? "");
   const canAddLead  = ["admin", "manager", "team_lead"].includes(user?.role ?? "");
+  const isRep = user?.role === "rep";
 
   const [page, setPage] = useState(0);
   const PAGE_SIZE = 100;
@@ -678,14 +821,16 @@ export default function Leads() {
   // Debounce search so a query fires once typing pauses, not on every keystroke.
   const debouncedSearch = useDebounce(search, 300);
 
-  const { data: leadsResp, isLoading, isFetching } = useQuery<{ leads: Lead[]; total: number; limit: number; offset: number }>({
-    queryKey: ["/api/leads", debouncedSearch, filterStatus, filterCity, filterState, page],
+  const { data: leadsResp, isLoading, isFetching, isError, refetch: refetchLeads } = useQuery<{ leads: Lead[]; total: number; limit: number; offset: number }>({
+    queryKey: ["/api/leads", debouncedSearch, filterStatus, filterCity, filterState, filterRep, filterFiber, page],
     queryFn: async () => {
       const params = new URLSearchParams();
       if (debouncedSearch) params.set("search", debouncedSearch);
       if (filterStatus !== "all") params.set("status", filterStatus);
       if (filterCity !== "all") params.set("city", filterCity);
       if (filterState !== "all") params.set("state", filterState);
+      if (filterRep !== "all") params.set("assignedRepId", filterRep);
+      if (filterFiber !== "all") params.set("fiberStatus", filterFiber);
       params.set("limit", String(PAGE_SIZE));
       params.set("offset", String(page * PAGE_SIZE));
       const res = await apiRequest("GET", `/api/leads?${params}`);
@@ -709,7 +854,17 @@ export default function Leads() {
   const facets = facetsData?.facets ?? [];
 
   // Pipeline breakdown for the KPI strip (tenant/role-scoped server-side).
-  const { data: leadStats } = useQuery<{ total: number; byStatus: Record<string, number> }>({
+  const { data: leadStats } = useQuery<{
+    total: number;
+    assigned: number;
+    unassigned: number;
+    qualified: number;
+    stale: number;
+    byStatus: Record<string, number>;
+    byFiberStatus: Record<string, number>;
+    byRep: Record<string, number>;
+    byTerritory: Record<string, number>;
+  }>({
     queryKey: ["/api/stats"],
     queryFn: async () => (await apiRequest("GET", "/api/stats")).json(),
     staleTime: 30_000,
@@ -723,6 +878,18 @@ export default function Leads() {
   )).sort();
 
   const { data: team = [] } = useQuery<TeamMember[]>({ queryKey: ["/api/team"] });
+  const { data: onboardingPipeline } = useQuery<{
+    records: Array<{ stage: string; account: null | { repId: number | null } }>;
+  }>({
+    queryKey: ["/api/onboarding/pipeline"],
+    queryFn: async () => (await apiRequest("GET", "/api/onboarding/pipeline")).json(),
+    enabled: canEdit,
+    staleTime: 30_000,
+  });
+  const onboardingByRep = new Map<number, string>();
+  for (const record of onboardingPipeline?.records ?? []) {
+    if (record.account?.repId != null) onboardingByRep.set(record.account.repId, record.stage);
+  }
 
   const createMutation = useMutation({
     mutationFn: async (data: Partial<InsertLead>) => {
@@ -771,321 +938,161 @@ export default function Leads() {
   const searching = search !== debouncedSearch; // typing, query not yet fired
   const handleStateChange = (s: string) => { setFilterState(s); setFilterCity("all"); setPage(0); };
   const handleCityChange = (c: string) => { setFilterCity(c); setPage(0); };
+  const handleRepChange = (r: string) => { setFilterRep(r); setPage(0); };
+  const handleFiberChange = (f: string) => { setFilterFiber(f); setPage(0); };
 
   // Active-filter summary — surfaced as dismissible chips so a rep always sees
   // (and can one-tap clear) what's narrowing the list. Pure view over existing
   // filter state; every clear routes through the same setters as the controls.
-  const activeFilters = search.trim() !== "" || filterStatus !== "all" || filterState !== "all" || filterCity !== "all";
+  const activeFilters = search.trim() !== "" || filterStatus !== "all" || filterState !== "all" || filterCity !== "all" || filterRep !== "all" || filterFiber !== "all";
   const clearAllFilters = () => {
-    setSearch(""); setFilterStatus("all"); setFilterState("all"); setFilterCity("all"); setPage(0);
+    setSearch(""); setFilterStatus("all"); setFilterState("all"); setFilterCity("all"); setFilterRep("all"); setFilterFiber("all"); setPage(0);
+    setMobileFiltersOpen(false);
   };
 
+  const assignmentName = (lead: Lead) => team.find(member => member.id === lead.assignedRepId)?.name ?? (lead.assignedRepId ? `Rep #${lead.assignedRepId}` : "Unassigned");
+  const fiberStatuses = Object.keys(leadStats?.byFiberStatus ?? {}).sort();
+
   return (
-    <div className="p-4 sm:p-6 space-y-5">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+    <div className="min-h-full bg-background p-4 sm:p-6 lg:p-7 space-y-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-xl font-bold tracking-tight">Lead Management</h1>
-          <p className="text-sm text-muted-foreground mt-0.5 tabular-nums">{totalLeads.toLocaleString()} lead{totalLeads !== 1 ? "s" : ""}</p>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-primary mb-1.5">{isRep ? "Field pipeline" : "Sales operations"}</div>
+          <h1 className="text-2xl font-semibold tracking-tight">{isRep ? "My leads" : "Leads command center"}</h1>
+          <p className="text-sm text-muted-foreground mt-1">{isRep ? "Work your assigned doors and keep every follow-up moving." : "Qualify, assign, and move every fiber opportunity forward."}</p>
         </div>
-        {canAddLead && (
-          <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-white text-sm h-9"
-            data-testid="btn-add-lead-manual">
-            <Plus className="w-4 h-4 mr-1" /> Add Lead
-          </Button>
-        )}
-      </div>
-
-      {/* Pipeline KPI strip — the funnel at a glance (matches the Dashboard cards) */}
-      <div className="space-y-2">
-        <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-0.5">Pipeline</div>
-        <div className="-mx-4 sm:mx-0 px-4 sm:px-0 flex gap-2.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-testid="leads-kpi">
-          <KpiTile className="w-[124px]" label="Prospect" value={bs.prospect ?? 0} tone="text-red-400" icon={Target} chip="bg-red-500/15" accent="bg-red-500" />
-          <KpiTile className="w-[124px]" label="Interested" value={bs.interested ?? 0} tone="text-violet-400" icon={Star} chip="bg-violet-500/15" accent="bg-violet-500" />
-          <KpiTile className="w-[124px]" label="Follow-up" value={bs.follow_up ?? 0} tone="text-orange-400" icon={Calendar} chip="bg-orange-500/15" accent="bg-orange-500" />
-          <KpiTile className="w-[124px]" label="Sold" value={bs.sold ?? 0} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => navigate("/map")} className="h-9 border-border text-sm"><MapIcon className="w-4 h-4 mr-1.5" />Field map</Button>
+          {canAddLead && <Button onClick={() => setAddOpen(true)} className="bg-primary hover:bg-primary/90 text-primary-foreground text-sm h-9" data-testid="btn-add-lead-manual"><Plus className="w-4 h-4 mr-1.5" />Add lead</Button>}
         </div>
       </div>
 
-      <div className="flex flex-col lg:flex-row gap-5">
-        {/* Filter rail — saved views (status) + location */}
-        <aside className="lg:w-52 lg:flex-shrink-0 space-y-5">
+      {isRep && (
+        <div className="grid grid-cols-3 gap-2 md:hidden" data-testid="rep-leads-summary">
+          <div className="rounded-xl border border-border bg-card p-3"><div className="text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Assigned</div></div>
+          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-orange-400">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
+          <div className="rounded-xl border border-violet-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-violet-400">{bs.interested ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Interested</div></div>
+        </div>
+      )}
+      <div className={`${isRep ? "hidden md:flex" : "flex"} gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`} data-testid="leads-kpi">
+        <EnterpriseKpi label="Total leads" value={leadStats?.total ?? 0} helper="All active records" icon={Users} />
+        <EnterpriseKpi label="Qualified" value={leadStats?.qualified ?? 0} helper="Interested or sold" icon={CheckCircle2} tone="text-emerald-400" />
+        <EnterpriseKpi label="Assigned" value={leadStats?.assigned ?? 0} helper="Owned by a field rep" icon={UserCheck} tone="text-violet-400" />
+        <EnterpriseKpi label="Unassigned" value={leadStats?.unassigned ?? 0} helper="Requires an owner" icon={CircleDot} tone="text-amber-400" warning={(leadStats?.unassigned ?? 0) > 0} />
+        <EnterpriseKpi label="Stale" value={leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-rose-400" warning={(leadStats?.stale ?? 0) > 0} />
+      </div>
+
+      <section className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
+        <div className="px-4 py-3.5 border-b border-border flex items-center justify-between gap-3">
           <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2 px-1">Views</div>
-            <div className="flex flex-wrap lg:flex-col gap-0.5" data-testid="filter-lead-status">
-              {["all", ...LEAD_STATUSES].map(s => {
-                const active = filterStatus === s;
-                const accent = STATUS_ACCENT[s];
-                // Stable pipeline counts (from /api/stats) — the funnel is legible
-                // right in the nav, and doesn't shift as the list is filtered.
-                const count = s === "all" ? (leadStats?.total ?? 0) : (bs[s] ?? 0);
+            <h2 className="text-sm font-semibold">Lead pipeline</h2>
+            <p className="text-[11px] text-muted-foreground mt-0.5 tabular-nums">{totalLeads.toLocaleString()} records in this view</p>
+          </div>
+          <div className="hidden sm:flex items-center gap-1 text-[11px] text-muted-foreground"><SlidersHorizontal className="w-3.5 h-3.5" />Filters update the table instantly</div>
+        </div>
+
+        <div className="px-4 py-3 border-b border-border bg-background/40 space-y-3">
+          <div className="flex flex-col xl:flex-row gap-2.5">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-9" data-testid="input-search-leads" />
+              {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
+            </div>
+            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="xl:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" />Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-[10px] text-primary">On</span>}</button>
+            <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 xl:flex gap-2`}>
+              {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
+              <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
+              <Select value={filterCity} onValueChange={handleCityChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[145px]" data-testid="filter-city"><SelectValue placeholder="Territory" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="all">All territories</SelectItem>{cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+              <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber states</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-1 overflow-x-auto pb-0.5" data-testid="filter-lead-status">
+            {["all", ...LEAD_STATUSES].map(status => {
+              const active = filterStatus === status;
+              const count = status === "all" ? (leadStats?.total ?? 0) : (bs[status] ?? 0);
+              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-7 px-2.5 rounded-md text-[11px] font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
+            })}
+            {activeFilters && <button onClick={clearAllFilters} className="h-7 px-2 ml-auto text-[11px] font-semibold text-muted-foreground hover:text-foreground whitespace-nowrap">Clear filters</button>}
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="divide-y divide-border">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-6 px-4 py-4"><Skeleton className="h-8" /><Skeleton className="h-8" /><Skeleton className="h-8" /><Skeleton className="h-8" /></div>)}</div>
+        ) : isError ? (
+          <div className="py-16 px-6 text-center"><AlertTriangle className="w-7 h-7 text-rose-400 mx-auto" /><div className="text-sm font-semibold mt-3">Lead data could not be loaded</div><div className="text-xs text-muted-foreground mt-1">Your filters are preserved. Retry when the connection is restored.</div><Button variant="outline" size="sm" onClick={() => refetchLeads()} className="mt-4 h-8"><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry</Button></div>
+        ) : filtered.length === 0 ? (
+          <div className="py-16 px-6 text-center"><div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center mx-auto"><Users className="w-5 h-5 text-primary" /></div><div className="text-sm font-semibold mt-3">{activeFilters ? "No leads match this operational view" : "No leads have been added"}</div><div className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{activeFilters ? "Clear one or more filters to broaden the pipeline." : "Add a lead or run a market scan to start building the pipeline."}</div>{activeFilters && <Button variant="outline" size="sm" onClick={clearAllFilters} className="mt-4 h-8"><X className="w-3.5 h-3.5 mr-1" />Clear filters</Button>}</div>
+        ) : (
+          <>
+            <div className="hidden lg:block overflow-x-auto">
+              <table className="w-full min-w-[1050px] border-collapse text-left">
+                <thead><tr className="border-b border-border bg-muted/20 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
+                <tbody className="divide-y divide-border">
+                  {filtered.map(lead => {
+                    const next = nextAction(lead);
+                    const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
+                    return (
+                      <tr key={lead.id} data-testid={`card-lead-${lead.id}`} className="group hover:bg-muted/35 transition-colors">
+                        <td className="px-4 py-3"><button onClick={() => setIntelLead(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate">{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+                        <td className="px-3 py-3"><Badge className={`border-0 text-[10px] font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus}</Badge></td>
+                        <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-[10px] text-muted-foreground">{lead.state} {lead.zip}</div></td>
+                        <td className="px-3 py-3"><button onClick={() => canAssign && setAssignLead(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-amber-400"}`}>{assignmentName(lead)}</button><div className="text-[10px] text-muted-foreground mt-0.5">{lead.assignedRepId && onboardingByRep.get(lead.assignedRepId) ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingByRep.get(lead.assignedRepId)!] ?? onboardingByRep.get(lead.assignedRepId)}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
+                        <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-emerald-400" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-[10px] text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
+                        <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-[10px] text-muted-foreground mt-0.5">Record updated</div></td>
+                        <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center justify-end gap-0.5">
+                            {lead.contactPhone && <a href={`tel:${lead.contactPhone}`} title="Call" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><Phone className="w-3.5 h-3.5" /></a>}
+                            {canAssign && <button onClick={() => setAssignLead(lead)} title="Assign" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" /></button>}
+                            <button onClick={() => setIntelLead(lead)} title="Open details" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" /></button>
+                            {canEdit && <button onClick={() => setEditLead(lead)} title="Edit" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>}
+                            {canDelete && <button onClick={() => setDeleteId(lead.id)} title="Delete" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="lg:hidden divide-y divide-border">
+              {filtered.map(lead => {
+                const directions = lead.lat != null && lead.lng != null
+                  ? `https://www.google.com/maps/dir/?api=1&destination=${lead.lat},${lead.lng}`
+                  : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`)}`;
+                const next = nextAction(lead);
                 return (
-                  <button key={s} onClick={() => handleStatusChange(s)} aria-pressed={active}
-                    className={`group/view flex items-center gap-2 lg:w-full text-left px-2.5 py-1.5 rounded-lg text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${
-                      active
-                        ? "bg-primary/10 text-primary"
-                        : "text-muted-foreground hover:text-foreground hover:bg-muted"
-                    }`}>
-                    {s === "all" ? (
-                      <span className={`inline-block w-1.5 h-1.5 rounded-full flex-shrink-0 ${active ? "bg-primary" : "bg-muted-foreground/50"}`} />
-                    ) : (
-                      <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: accent }} />
-                    )}
-                    <span className="truncate">{s === "all" ? "All leads" : STATUS_LABEL[s]}</span>
-                    <span className={`ml-auto text-[11px] tabular-nums px-1.5 py-px rounded-md transition-colors ${
-                      active ? "bg-primary/15 text-primary" : "bg-muted/60 text-muted-foreground group-hover/view:bg-muted"
-                    }`}>{count.toLocaleString()}</span>
-                  </button>
+                  <article key={lead.id} className="px-4 py-4" data-testid={`mobile-lead-${lead.id}`}>
+                    <button onClick={() => setIntelLead(lead)} className="w-full text-left">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
+                          <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground"><MapPin className="h-3.5 w-3.5 shrink-0" />{lead.city}, {lead.state} {lead.zip}</div>
+                        </div>
+                        <Badge className={`shrink-0 border-0 text-[10px] ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 rounded-lg border border-border bg-background/45">
+                        <div className="px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
+                        <div className="border-x border-border px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
+                        <div className="px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
+                      </div>
+                    </button>
+                    <div className="mt-3 grid grid-cols-3 gap-2">
+                      <button onClick={() => setIntelLead(lead)} className="h-11 rounded-lg bg-primary text-[12px] font-semibold text-primary-foreground inline-flex items-center justify-center gap-1.5"><ArrowUpRight className="h-4 w-4" />Open</button>
+                      {lead.contactPhone ? <a href={`tel:${lead.contactPhone}`} className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4 text-primary" />Call</a> : <span className="h-11 rounded-lg border border-border bg-muted/40 text-[12px] font-semibold text-muted-foreground inline-flex items-center justify-center gap-1.5"><Phone className="h-4 w-4" />No phone</span>}
+                      <a href={directions} target="_blank" rel="noreferrer" className="h-11 rounded-lg border border-border bg-background text-[12px] font-semibold inline-flex items-center justify-center gap-1.5"><Navigation className="h-4 w-4 text-primary" />Route</a>
+                    </div>
+                  </article>
                 );
               })}
             </div>
-          </div>
+          </>
+        )}
 
-          <div>
-            <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2 px-1">Location</div>
-            <div className="grid grid-cols-2 lg:grid-cols-1 gap-2">
-              <Select value={filterState} onValueChange={handleStateChange}>
-                <SelectTrigger className="bg-secondary border-input text-sm h-9" data-testid="filter-state">
-                  <SelectValue placeholder="State" />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border">
-                  <SelectItem value="all">All states</SelectItem>
-                  {states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Select value={filterCity} onValueChange={handleCityChange}>
-                <SelectTrigger className="bg-secondary border-input text-sm h-9" data-testid="filter-city">
-                  <SelectValue placeholder="City" />
-                </SelectTrigger>
-                <SelectContent className="bg-card border-border max-h-64">
-                  <SelectItem value="all">All cities</SelectItem>
-                  {cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </aside>
-
-        {/* Content column */}
-        <div className="flex-1 min-w-0 space-y-4">
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-            <Input value={search} onChange={e => handleSearchChange(e.target.value)}
-              placeholder="Search address, city, contact…"
-              className="pl-9 pr-9 bg-secondary border-input text-sm h-9 focus-visible:ring-primary/40"
-              data-testid="input-search-leads" />
-            {(searching || (isFetching && !isLoading)) && (
-              <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />
-            )}
-          </div>
-
-          {/* Active filters — dismissible chips (Navattic / Apollo pattern) */}
-          {activeFilters && (
-            <div className="flex items-center flex-wrap gap-1.5" data-testid="active-filters">
-              <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground mr-0.5">Filters</span>
-              {search.trim() !== "" && (
-                <span className="inline-flex items-center gap-1 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
-                  <Search className="w-3 h-3 text-muted-foreground shrink-0" />
-                  <span className="max-w-[160px] truncate">{search.trim()}</span>
-                  <button onClick={() => handleSearchChange("")} aria-label="Clear search"
-                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
-              )}
-              {filterStatus !== "all" && (
-                <span className="inline-flex items-center gap-1.5 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
-                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: STATUS_ACCENT[filterStatus] }} />
-                  {STATUS_LABEL[filterStatus]}
-                  <button onClick={() => handleStatusChange("all")} aria-label="Clear status filter"
-                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
-              )}
-              {filterState !== "all" && (
-                <span className="inline-flex items-center gap-1 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
-                  <MapPin className="w-3 h-3 text-muted-foreground shrink-0" />
-                  {filterState}
-                  <button onClick={() => handleStateChange("all")} aria-label="Clear state filter"
-                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
-              )}
-              {filterCity !== "all" && (
-                <span className="inline-flex items-center gap-1 h-7 pl-2 pr-1 rounded-full bg-secondary border border-border text-[12px] text-foreground">
-                  <MapPin className="w-3 h-3 text-muted-foreground shrink-0" />
-                  {filterCity}
-                  <button onClick={() => handleCityChange("all")} aria-label="Clear city filter"
-                    className="rounded-full p-0.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
-                    <X className="w-3 h-3" />
-                  </button>
-                </span>
-              )}
-              <button onClick={clearAllFilters}
-                className="h-7 px-2 rounded-full text-[12px] font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40">
-                Clear all
-              </button>
-            </div>
-          )}
-
-      {/* Lead list */}
-      {isLoading ? (
-        <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border">
-          {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-3">
-              <Skeleton className="w-9 h-9 rounded-lg" />
-              <div className="flex-1 space-y-2">
-                <Skeleton className="h-3.5 w-1/3" />
-                <Skeleton className="h-3 w-1/2" />
-              </div>
-              <Skeleton className="h-7 w-24 rounded-md" />
-            </div>
-          ))}
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="rounded-xl border border-border bg-card flex flex-col items-center justify-center py-16 px-6 text-center animate-in fade-in duration-300">
-          <div className="w-14 h-14 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
-            <Users className="w-7 h-7 text-primary/70" />
-          </div>
-          <div className="text-sm font-semibold text-foreground mb-1">
-            {activeFilters ? "No leads match these filters" : "No leads yet"}
-          </div>
-          <div className="text-xs text-muted-foreground max-w-xs">
-            {activeFilters
-              ? "Try a broader search, or clear the filters to see the full pipeline."
-              : "Run a City Scan or draw a Scan Area on the Field Map to discover new fiber leads."}
-          </div>
-          {activeFilters && (
-            <Button variant="outline" size="sm" onClick={clearAllFilters}
-              className="mt-4 h-8 border-border text-xs" data-testid="btn-clear-filters">
-              <X className="w-3.5 h-3.5 mr-1" /> Clear filters
-            </Button>
-          )}
-        </div>
-      ) : (
-        <div className="rounded-xl border border-border bg-card overflow-hidden divide-y divide-border animate-in fade-in duration-200">
-          {filtered.map((lead) => {
-            const statusCls = STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground";
-            const accent = STATUS_ACCENT[lead.leadStatus] ?? "#64748b";
-            const hot = (lead.leadScore ?? 0) >= 80;
-            const speed = lead.maxDownloadMbps ? (lead.maxDownloadMbps >= 1000 ? `${lead.maxDownloadMbps / 1000}G` : `${lead.maxDownloadMbps}M`) : null;
-            const initial = ((lead.contactName?.trim()?.[0]) ?? (lead.address?.trim()?.[0]) ?? "?").toUpperCase();
-
-            return (
-              <div
-                key={lead.id}
-                data-testid={`card-lead-${lead.id}`}
-                className="group flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2.5 hover:bg-muted/50 transition-colors"
-              >
-                {/* Identity — first-letter avatar tinted by status + address.
-                    Tapping opens the property record (Attio/Mailchimp row→detail
-                    pattern) so the list is never a dead end for a rep. */}
-                <button
-                  onClick={() => navigate(`/lead/${lead.id}`)}
-                  data-testid={`open-lead-${lead.id}`}
-                  aria-label={`Open ${lead.address}`}
-                  className="flex items-center gap-3 flex-1 min-w-0 text-left rounded-lg -m-1 p-1 hover:bg-transparent active:scale-[.99] transition-transform"
-                >
-                  <div className="w-9 h-9 rounded-lg flex items-center justify-center text-[13px] font-bold flex-shrink-0"
-                    style={{ background: `${accent}22`, color: accent }} aria-hidden="true">
-                    {initial}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    {/* Address + badges (fiber status omitted — every lead is new
-                        fiber, so the badge was noise on every row). */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-[13px] text-foreground truncate">{lead.address}</span>
-                      {speed && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-semibold bg-sky-500/15 text-sky-400 tabular-nums">{speed}</span>}
-                      {hot && <span className="px-1.5 py-[1px] rounded-full text-[10px] font-bold bg-orange-500/15 text-orange-400">HOT</span>}
-                    </div>
-                    {/* Meta row — address/phone only; assignment removed for a
-                        cleaner list (managers still assign via the row action). */}
-                    <div className="flex items-center gap-2.5 mt-0.5 flex-wrap text-[11px] text-muted-foreground">
-                      <span className="flex items-center gap-1 tabular-nums"><MapPin className="w-2.5 h-2.5 shrink-0" /> {lead.city}, {lead.state} {lead.zip}</span>
-                      {lead.contactPhone && (
-                        <span className="flex items-center gap-1 tabular-nums"><Phone className="w-2.5 h-2.5 shrink-0" /> {lead.contactPhone}</span>
-                      )}
-                    </div>
-                  </div>
-                  <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0 sm:hidden" aria-hidden="true" />
-                </button>
-
-                {/* Status + actions — own row on mobile (justify-between), inline on desktop */}
-                <div className="flex items-center justify-between sm:justify-end gap-1 flex-shrink-0 pl-12 sm:pl-0">
-                  {/* Status pill (always visible) */}
-                  <Badge className={`text-[10px] px-2 py-0.5 rounded-full border-0 font-semibold flex-shrink-0 ${statusCls}`}>
-                    {STATUS_LABEL[lead.leadStatus]}
-                  </Badge>
-
-                  {/* Actions — always tappable on touch; edit/delete reveal on hover on desktop.
-                      Reps get a clean read-only list here (they knock via the Field
-                      Map, which credits them automatically); logging a knock for a
-                      chosen rep is a lead/manager tool. */}
-                  <div className="flex items-center gap-0.5 flex-shrink-0">
-                    {canAssign && (
-                      <Button variant="ghost" size="sm"
-                        className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-400 hover:bg-amber-400/10"
-                        onClick={() => setKnockLead(lead)} title="Log a door knock"
-                        data-testid={`btn-knock-${lead.id}`}>
-                        <DoorOpen className="w-4 h-4" />
-                      </Button>
-                    )}
-                    <Button variant="ghost" size="sm"
-                      className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                      onClick={() => setIntelLead(lead)} title="Lead intelligence"
-                      data-testid={`btn-intel-${lead.id}`}>
-                      <BarChart2 className="w-4 h-4" />
-                    </Button>
-                    {canAssign && (
-                      <Button variant="ghost" size="sm"
-                        className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
-                        onClick={() => setAssignLead(lead)} title="Assign rep"
-                        data-testid={`btn-assign-${lead.id}`}>
-                        <UserCheck className="w-4 h-4" />
-                      </Button>
-                    )}
-                    {canEdit && (
-                      <Button variant="ghost" size="sm"
-                        className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground md:opacity-0 md:group-hover:opacity-100 transition-opacity"
-                        onClick={() => setEditLead(lead)} title="Edit"
-                        data-testid={`btn-edit-${lead.id}`}>
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </Button>
-                    )}
-                    {canDelete && (
-                      <Button variant="ghost" size="sm"
-                        className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 hover:bg-red-400/10 md:opacity-0 md:group-hover:opacity-100 transition-opacity"
-                        onClick={() => setDeleteId(lead.id)} title="Delete"
-                        data-testid={`btn-delete-${lead.id}`}>
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between pt-2">
-          <span className="text-xs text-muted-foreground">
-            Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}
-          </span>
-          <div className="flex items-center gap-1">
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-0.5" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" /> Prev</Button>
-            <span className="text-xs text-muted-foreground px-2">{page + 1} / {totalPages}</span>
-            <Button size="sm" variant="outline" className="h-7 px-2 text-xs gap-0.5" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next <ChevronRight className="w-3.5 h-3.5" /></Button>
-          </div>
-        </div>
-      )}
-        </div>
-      </div>
+        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
+      </section>
 
       {/* Dialogs */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
@@ -1137,6 +1144,12 @@ export default function Leads() {
           open={!!intelLead}
           onClose={() => setIntelLead(null)}
           canEdit={canEdit}
+          canAssign={canAssign}
+          team={team}
+          onboardingStage={intelLead.assignedRepId ? onboardingByRep.get(intelLead.assignedRepId) ?? null : null}
+          onAssign={() => { setAssignLead(intelLead); setIntelLead(null); }}
+          onEdit={() => { setEditLead(intelLead); setIntelLead(null); }}
+          onQualify={() => updateMutation.mutate({ id: intelLead.id, data: { leadStatus: "interested" } })}
         />
       )}
     </div>
