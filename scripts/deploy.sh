@@ -103,10 +103,12 @@ fi
 # 4) Health gate.
 echo "[deploy] health check…"
 ok=0
-for i in $(seq 1 20); do
+attempts_left=20
+while [ "$attempts_left" -gt 0 ]; do
   if APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" exec -T app node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
     ok=1; break
   fi
+  attempts_left=$((attempts_left - 1))
   sleep 3
 done
 

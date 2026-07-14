@@ -22,11 +22,13 @@ echo "[rollback] rolling to $TAG…"
 APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" up -d app
 
 echo "[rollback] health check…"
-for i in $(seq 1 20); do
+attempts_left=20
+while [ "$attempts_left" -gt 0 ]; do
   if APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" exec -T app node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
     echo "$TAG" > .deployed-tag
     echo "[rollback] HEALTHY — $TAG is live"; exit 0
   fi
+  attempts_left=$((attempts_left - 1))
   sleep 3
 done
 echo "[rollback] $TAG did not become healthy — escalate (docs/INCIDENT_RUNBOOK.md)" >&2

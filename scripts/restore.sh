@@ -35,18 +35,22 @@ DB_REPLACED=0
 RESTORE_COMMITTED=0
 
 health_check() {
-  local attempt
-  for attempt in $(seq 1 20); do
+  local attempts_left=20
+  while [ "$attempts_left" -gt 0 ]; do
     if APP_IMAGE_TAG="$RUNNING_TAG" "${COMPOSE[@]}" exec -T app \
       node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" \
       2>/dev/null; then
       return 0
     fi
+    attempts_left=$((attempts_left - 1))
     sleep 3
   done
   return 1
 }
 
+# Invoked indirectly by the EXIT trap below. ShellCheck cannot infer that the
+# string-form trap is a real call, but the string is required to preserve `$?`.
+# shellcheck disable=SC2317
 cleanup() {
   local status="$1"
   trap - EXIT
@@ -139,7 +143,10 @@ if [ -z "$DATA_MOUNT_SOURCE" ] || [[ "$DATA_MOUNT_SOURCE" == *$'\n'* ]] || [ ! -
 fi
 PRODUCTION_DB="$DATA_MOUNT_SOURCE/data.db"
 [ -f "$PRODUCTION_DB" ] || { echo "[restore] production database is missing" >&2; exit 1; }
-[ -r "$PRODUCTION_DB" ] && [ -w "$PRODUCTION_DB" ] || { echo "[restore] production database is not readable/writable" >&2; exit 1; }
+if [ ! -r "$PRODUCTION_DB" ] || [ ! -w "$PRODUCTION_DB" ]; then
+  echo "[restore] production database is not readable/writable" >&2
+  exit 1
+fi
 
 # 4) Stop Compose, preserve the exact current DB, swap, and health-gate.
 APP_STOPPED=1
