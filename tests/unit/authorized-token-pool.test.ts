@@ -5,12 +5,12 @@ describe("AuthorizedTokenPool", () => {
   it("keeps only the configured warm minimum and leases least-loaded round-robin", async () => {
     let now = 1_000;
     const mint = vi.fn(async (slotId: number) => ({ token: `token-${slotId}`, expiresAt: now + 120_000 }));
-    const pool = new AuthorizedTokenPool({ maxSize: 300, warmMinimum: 2, refreshMarginMs: 10_000, mint, now: () => now });
+    const pool = new AuthorizedTokenPool({ maxSize: 100, warmMinimum: 2, refreshMarginMs: 10_000, mint, now: () => now });
     const first = await pool.lease();
     const second = await pool.lease();
     expect(first.slotId).not.toBe(second.slotId);
     expect(mint).toHaveBeenCalledTimes(2);
-    expect(pool.snapshot()).toMatchObject({ maxSize: 300, warmMinimum: 2, total: 2, ready: 2, activeLeases: 2 });
+    expect(pool.snapshot()).toMatchObject({ maxSize: 100, warmMinimum: 2, total: 2, ready: 2, activeLeases: 2 });
     first.release(); second.release();
     const third = await pool.lease();
     expect(mint).toHaveBeenCalledTimes(2);
@@ -59,11 +59,11 @@ describe("AuthorizedTokenPool", () => {
   it("expands lazily under lease pressure without minting the configured maximum", async () => {
     let calls = 0;
     const pool = new AuthorizedTokenPool({
-      maxSize: 300, warmMinimum: 1, maxLeasesPerToken: 1, refreshMarginMs: 1_000,
+      maxSize: 100, warmMinimum: 1, maxLeasesPerToken: 1, refreshMarginMs: 1_000,
       mint: async () => ({ token: `token-${++calls}`, expiresAt: Date.now() + 60_000 }),
     });
     const leases = [await pool.lease(), await pool.lease(), await pool.lease()];
-    expect(pool.snapshot()).toMatchObject({ total: 3, ready: 3, activeLeases: 3, maxSize: 300 });
+    expect(pool.snapshot()).toMatchObject({ total: 3, ready: 3, activeLeases: 3, maxSize: 100 });
     expect(calls).toBe(3);
     leases.forEach(lease => lease.release());
     pool.stop();
@@ -91,5 +91,34 @@ describe("AuthorizedTokenPool", () => {
     pool.disable();
     expect(pool.snapshot()).toMatchObject({ disabled: true, states: { DISABLED: 1 } });
     await expect(pool.lease()).rejects.toThrow("AUTHORIZED_TOKEN_POOL_DISABLED");
+  });
+
+  it("distributes unique addresses evenly and enforces per-token batch capacity", async () => {
+    const pool = new AuthorizedTokenPool({
+      maxSize: 3,
+      warmMinimum: 3,
+      maxChecksPerToken: 100,
+      maxLeasesPerToken: 1_000,
+      refreshMarginMs: 1_000,
+      mint: async slotId => ({ token: `token-${slotId}`, expiresAt: Date.now() + 60_000 }),
+    });
+    for (let index = 0; index < 300; index++) {
+      const lease = await pool.lease(`address-${index}`);
+      lease.release();
+    }
+    const snapshot = pool.snapshot();
+    expect(snapshot).toMatchObject({
+      maxChecksPerToken: 100,
+      maxBatchCapacity: 300,
+      checksUsed: 300,
+      checksRemaining: 0,
+      healthy: 3,
+    });
+    expect(snapshot.slots.map(slot => slot.checksUsed)).toEqual([100, 100, 100]);
+    const repeat = await pool.lease("address-0");
+    repeat.release();
+    expect(pool.snapshot().checksUsed).toBe(300);
+    await expect(pool.lease("address-301")).rejects.toThrow("AUTHORIZED_TOKEN_BATCH_CAPACITY_EXHAUSTED");
+    pool.stop();
   });
 });

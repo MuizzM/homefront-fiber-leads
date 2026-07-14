@@ -112,6 +112,7 @@ function providerPriorityForRun(kind: string): ProviderRequestPriority {
   if (value.includes("lasso") || value.includes("bbox") || value.includes("area")) return "lasso";
   if (value.includes("city")) return "city";
   if (value.includes("recheck") || value.includes("rescan")) return "recheck";
+  if (value.includes("nightly") || value.includes("scheduled")) return "nightly";
   return "market";
 }
 

@@ -27,9 +27,12 @@ response, or unknown status remains `RECHECK` and can never become a cached No.
 
 `SCAN_PROVIDER_REQUESTS_PER_MINUTE` is the database-backed aggregate rolling
 minute request-start ceiling and defaults to 100. `KFS_TOKEN_POOL_MAX` enables
-up to 300 server-memory token slots;
+up to 100 server-memory token slots, and `KFS_TOKEN_MAX_CHECKS` defaults to 100
+different normalized address hashes per token lifecycle (10,000 maximum cohort
+capacity);
 `KFS_TOKEN_POOL_WARM_MIN` defaults to two, so the server does not mint hundreds
-of unused tokens. READY tokens are leased least-loaded round-robin and refreshed
+of unused tokens. READY tokens are leased by lowest checks-used, then lowest
+in-flight count and round-robin sequence, and refreshed
 60 seconds before expiry with per-slot single-flight locks. A pool-wide refresh
 semaphore (default two) also prevents simultaneous slot expirations from
 stampeding the token endpoint. Manual checks have the highest priority, followed

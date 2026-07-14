@@ -1,4 +1,5 @@
 export type AuthorizedTokenState = "EMPTY" | "READY" | "REFRESHING" | "COOLDOWN" | "EXPIRED" | "DISABLED";
+export type AuthorizedTokenHealth = "HEALTHY" | "DEGRADED" | "UNHEALTHY";
 
 export interface MintedAuthorizedToken {
   token: string;
@@ -12,6 +13,8 @@ interface TokenSlot {
   expiresAt: number;
   cooldownUntil: number;
   leases: number;
+  addressKeys: Set<string>;
+  health: AuthorizedTokenHealth;
   lastLeaseSequence: number;
   refreshInFlight: Promise<void> | null;
   failures: number;
@@ -22,7 +25,19 @@ export interface AuthorizedTokenLease {
   slotId: number;
   token: string;
   expiresAt: number;
+  addressKey: string | null;
+  checksUsed: number;
   release(): void;
+}
+
+export interface AuthorizedTokenSlotSnapshot {
+  slotId: number;
+  state: AuthorizedTokenState;
+  health: AuthorizedTokenHealth;
+  inFlight: number;
+  checksUsed: number;
+  checksRemaining: number;
+  expiresAt: number | null;
 }
 
 export interface AuthorizedTokenPoolSnapshot {
@@ -32,9 +47,17 @@ export interface AuthorizedTokenPoolSnapshot {
   ready: number;
   activeLeases: number;
   activeRefreshes: number;
+  maxChecksPerToken: number;
+  maxBatchCapacity: number;
+  checksUsed: number;
+  checksRemaining: number;
+  healthy: number;
+  degraded: number;
+  unhealthy: number;
   states: Record<AuthorizedTokenState, number>;
   nextExpiryAt: number | null;
   disabled: boolean;
+  slots: AuthorizedTokenSlotSnapshot[];
 }
 
 export interface AuthorizedTokenPoolOptions {
@@ -45,6 +68,7 @@ export interface AuthorizedTokenPoolOptions {
   maintenanceIntervalMs?: number;
   maxLeasesPerToken?: number;
   maxConcurrentRefreshes?: number;
+  maxChecksPerToken?: number;
   mint: (slotId: number) => Promise<MintedAuthorizedToken>;
   now?: () => number;
 }
@@ -62,6 +86,7 @@ export class AuthorizedTokenPool {
   private readonly maintenanceIntervalMs: number;
   private readonly maxLeasesPerToken: number;
   private readonly maxConcurrentRefreshes: number;
+  private readonly maxChecksPerToken: number;
   private readonly mint: AuthorizedTokenPoolOptions["mint"];
   private readonly now: () => number;
   private readonly slots: TokenSlot[] = [];
@@ -73,13 +98,14 @@ export class AuthorizedTokenPool {
   private disabled = false;
 
   constructor(options: AuthorizedTokenPoolOptions) {
-    this.maxSize = boundedInt(options.maxSize, 1, 300, 1);
+    this.maxSize = boundedInt(options.maxSize, 1, 100, 1);
     this.warmMinimum = boundedInt(options.warmMinimum, 1, this.maxSize, 1);
     this.refreshMarginMs = Math.max(1_000, Math.floor(options.refreshMarginMs));
     this.cooldownBaseMs = Math.max(250, Math.floor(options.cooldownBaseMs ?? 2_000));
     this.maintenanceIntervalMs = Math.max(1_000, Math.floor(options.maintenanceIntervalMs ?? 15_000));
     this.maxLeasesPerToken = boundedInt(options.maxLeasesPerToken ?? 10, 1, 1_000, 10);
     this.maxConcurrentRefreshes = boundedInt(options.maxConcurrentRefreshes ?? 2, 1, 20, 2);
+    this.maxChecksPerToken = boundedInt(options.maxChecksPerToken ?? 100, 1, 100, 100);
     this.mint = options.mint;
     this.now = options.now ?? Date.now;
   }
@@ -97,8 +123,10 @@ export class AuthorizedTokenPool {
     this.disabled = true;
     for (const slot of this.slots) {
       slot.state = "DISABLED";
+      slot.health = "UNHEALTHY";
       slot.token = null;
       slot.expiresAt = 0;
+      slot.addressKeys.clear();
     }
   }
 
@@ -108,27 +136,39 @@ export class AuthorizedTokenPool {
     this.start();
   }
 
-  async lease(): Promise<AuthorizedTokenLease> {
+  async lease(addressKey?: string): Promise<AuthorizedTokenLease> {
     if (this.disabled) throw new Error("AUTHORIZED_TOKEN_POOL_DISABLED");
     await this.ensureWarm();
     await this.refreshDueSlots();
-    let slot = this.pickReady();
+    const normalizedAddressKey = addressKey?.trim() || null;
+    let slot = this.pickReady(normalizedAddressKey);
     if (slot && slot.leases >= this.maxLeasesPerToken && this.slots.length < this.maxSize) {
       const expanded = this.createSlot();
       await this.refreshSlot(expanded.id, true);
-      slot = this.pickReady();
+      slot = this.pickReady(normalizedAddressKey);
     }
     if (!slot && this.slots.length < this.maxSize) {
       slot = this.createSlot();
       await this.refreshSlot(slot.id, true);
-      slot = this.pickReady();
+      slot = this.pickReady(normalizedAddressKey);
     }
     if (!slot) {
       const refreshing = this.slots.map(item => item.refreshInFlight).filter(Boolean) as Promise<void>[];
       if (refreshing.length) await Promise.race(refreshing.map(task => task.catch(() => {})));
-      slot = this.pickReady();
+      slot = this.pickReady(normalizedAddressKey);
     }
-    if (!slot?.token) throw new Error("AUTHORIZED_TOKEN_POOL_EMPTY");
+    if (!slot?.token) {
+      const atCapacity = this.slots.length >= this.maxSize
+        && this.slots.every(item => item.addressKeys.size >= this.maxChecksPerToken);
+      throw new Error(atCapacity
+        ? "AUTHORIZED_TOKEN_BATCH_CAPACITY_EXHAUSTED"
+        : "AUTHORIZED_TOKEN_POOL_EMPTY");
+    }
+    if (normalizedAddressKey && !slot.addressKeys.has(normalizedAddressKey)) {
+      if (slot.addressKeys.size >= this.maxChecksPerToken)
+        throw new Error("AUTHORIZED_TOKEN_SLOT_CAPACITY_EXHAUSTED");
+      slot.addressKeys.add(normalizedAddressKey);
+    }
     slot.leases++;
     slot.lastLeaseSequence = ++this.leaseSequence;
     let released = false;
@@ -136,6 +176,8 @@ export class AuthorizedTokenPool {
       slotId: slot.id,
       token: slot.token,
       expiresAt: slot.expiresAt,
+      addressKey: normalizedAddressKey,
+      checksUsed: slot.addressKeys.size,
       release: () => {
         if (released) return;
         released = true;
@@ -167,6 +209,8 @@ export class AuthorizedTokenPool {
         slot.token = minted.token;
         slot.expiresAt = minted.expiresAt;
         slot.state = "READY";
+        slot.health = "HEALTHY";
+        slot.addressKeys.clear();
         slot.failures = 0;
         slot.cooldownUntil = 0;
         slot.lastError = null;
@@ -174,6 +218,7 @@ export class AuthorizedTokenPool {
         slot.token = null;
         slot.expiresAt = 0;
         slot.failures++;
+        slot.health = slot.failures >= 3 ? "UNHEALTHY" : "DEGRADED";
         slot.lastError = String((error as any)?.message ?? error).slice(0, 180);
         slot.cooldownUntil = this.now() + Math.min(60_000, this.cooldownBaseMs * 2 ** Math.min(5, slot.failures - 1));
         slot.state = "COOLDOWN";
@@ -187,7 +232,10 @@ export class AuthorizedTokenPool {
   }
 
   async refreshLease(lease: AuthorizedTokenLease): Promise<string> {
-    return this.refreshSlot(lease.slotId, true);
+    const token = await this.refreshSlot(lease.slotId, true);
+    const slot = this.slots[lease.slotId];
+    if (lease.addressKey) slot.addressKeys.add(lease.addressKey);
+    return token;
   }
 
   install(token: string, expiresAt: number): void {
@@ -196,6 +244,8 @@ export class AuthorizedTokenPool {
     slot.token = token;
     slot.expiresAt = expiresAt;
     slot.state = "READY";
+    slot.health = "HEALTHY";
+    slot.addressKeys.clear();
     slot.failures = 0;
     slot.cooldownUntil = 0;
     slot.lastError = null;
@@ -208,14 +258,18 @@ export class AuthorizedTokenPool {
     slot.token = null;
     slot.expiresAt = 0;
     slot.state = "EXPIRED";
+    slot.health = "UNHEALTHY";
+    slot.addressKeys.clear();
   }
 
   disable(): void {
     this.disabled = true;
     for (const slot of this.slots) {
       slot.state = "DISABLED";
+      slot.health = "UNHEALTHY";
       slot.token = null;
       slot.expiresAt = 0;
+      slot.addressKeys.clear();
     }
   }
 
@@ -224,6 +278,16 @@ export class AuthorizedTokenPool {
     const states: Record<AuthorizedTokenState, number> = { EMPTY: 0, READY: 0, REFRESHING: 0, COOLDOWN: 0, EXPIRED: 0, DISABLED: 0 };
     for (const slot of this.slots) states[slot.state]++;
     const expiries = this.slots.filter(slot => slot.state === "READY" && slot.expiresAt > 0).map(slot => slot.expiresAt);
+    const slotSnapshots: AuthorizedTokenSlotSnapshot[] = this.slots.map(slot => ({
+      slotId: slot.id,
+      state: slot.state,
+      health: slot.health,
+      inFlight: slot.leases,
+      checksUsed: slot.addressKeys.size,
+      checksRemaining: Math.max(0, this.maxChecksPerToken - slot.addressKeys.size),
+      expiresAt: slot.expiresAt > 0 ? slot.expiresAt : null,
+    }));
+    const checksUsed = slotSnapshots.reduce((sum, slot) => sum + slot.checksUsed, 0);
     return {
       maxSize: this.maxSize,
       warmMinimum: this.warmMinimum,
@@ -231,9 +295,17 @@ export class AuthorizedTokenPool {
       ready: states.READY,
       activeLeases: this.slots.reduce((sum, slot) => sum + slot.leases, 0),
       activeRefreshes: this.activeRefreshes,
+      maxChecksPerToken: this.maxChecksPerToken,
+      maxBatchCapacity: this.maxSize * this.maxChecksPerToken,
+      checksUsed,
+      checksRemaining: Math.max(0, this.maxSize * this.maxChecksPerToken - checksUsed),
+      healthy: slotSnapshots.filter(slot => slot.health === "HEALTHY").length,
+      degraded: slotSnapshots.filter(slot => slot.health === "DEGRADED").length,
+      unhealthy: slotSnapshots.filter(slot => slot.health === "UNHEALTHY").length,
       states,
       nextExpiryAt: expiries.length ? Math.min(...expiries) : null,
       disabled: this.disabled,
+      slots: slotSnapshots,
     };
   }
 
@@ -277,14 +349,30 @@ export class AuthorizedTokenPool {
       else if (slot.state === "READY" && slot.expiresAt <= now) {
         slot.token = null;
         slot.state = "EXPIRED";
+        slot.health = "UNHEALTHY";
+        slot.addressKeys.clear();
       }
     }
   }
 
-  private pickReady(): TokenSlot | null {
+  private pickReady(addressKey: string | null = null): TokenSlot | null {
     const now = this.now();
-    const candidates = this.slots.filter(slot => slot.state === "READY" && !!slot.token && slot.expiresAt > now + this.refreshMarginMs);
-    candidates.sort((a, b) => a.leases - b.leases || a.lastLeaseSequence - b.lastLeaseSequence || a.id - b.id);
+    const candidates = this.slots.filter(slot =>
+      slot.state === "READY"
+      && slot.health === "HEALTHY"
+      && !!slot.token
+      && slot.expiresAt > now + this.refreshMarginMs
+      && (!addressKey || slot.addressKeys.has(addressKey) || slot.addressKeys.size < this.maxChecksPerToken));
+    candidates.sort((a, b) => {
+      if (addressKey) {
+        const existingDelta = Number(!a.addressKeys.has(addressKey)) - Number(!b.addressKeys.has(addressKey));
+        if (existingDelta) return existingDelta;
+      }
+      return a.addressKeys.size - b.addressKeys.size
+        || a.leases - b.leases
+        || a.lastLeaseSequence - b.lastLeaseSequence
+        || a.id - b.id;
+    });
     return candidates[0] ?? null;
   }
 
@@ -294,6 +382,7 @@ export class AuthorizedTokenPool {
       id: this.slots.length, state: "EMPTY", token: null, expiresAt: 0,
       cooldownUntil: 0, leases: 0, lastLeaseSequence: 0,
       refreshInFlight: null, failures: 0, lastError: null,
+      addressKeys: new Set<string>(), health: "UNHEALTHY",
     };
     this.slots.push(slot);
     return slot;

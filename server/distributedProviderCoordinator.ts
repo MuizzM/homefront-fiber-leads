@@ -7,7 +7,8 @@ const priorityValue: Record<ProviderRequestPriority, number> = {
   lasso: 400,
   coming_soon: 350,
   recheck: 300,
-  market: 300,
+  market: 275,
+  nightly: 250,
   city: 200,
 };
 
