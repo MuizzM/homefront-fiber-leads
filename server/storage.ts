@@ -353,6 +353,19 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN last_inconclusive_at TEXT`,
     // Partial-ish index for the re-probe selection (never-scanned, not-yet-exhausted).
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`,
+    // Cross-instance Kinetic provider admission. No bearer/proxy credentials are
+    // stored: only hashed address keys, queue leases, rate timestamps, and a
+    // short server-side normalized-result cache.
+    `CREATE TABLE IF NOT EXISTS provider_admission_queue (id TEXT PRIMARY KEY,dedupe_key TEXT NOT NULL,source TEXT NOT NULL,priority INTEGER NOT NULL,instance_id TEXT NOT NULL,state TEXT NOT NULL,enqueued_at INTEGER NOT NULL,started_at INTEGER,lease_expires_at INTEGER,completed_at INTEGER,last_error TEXT,updated_at INTEGER NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS idx_provider_admission_order ON provider_admission_queue(state,priority DESC,enqueued_at,id)`,
+    `CREATE INDEX IF NOT EXISTS idx_provider_admission_lease ON provider_admission_queue(state,lease_expires_at)`,
+    `CREATE TABLE IF NOT EXISTS provider_rate_events (id INTEGER PRIMARY KEY AUTOINCREMENT,work_id TEXT NOT NULL,started_at INTEGER NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS idx_provider_rate_started ON provider_rate_events(started_at)`,
+    `CREATE TABLE IF NOT EXISTS provider_address_locks (dedupe_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS provider_shared_result_cache (dedupe_key TEXT PRIMARY KEY,payload TEXT NOT NULL,expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`,
+    `CREATE INDEX IF NOT EXISTS idx_provider_shared_cache_expiry ON provider_shared_result_cache(expires_at)`,
+    `CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),halted INTEGER NOT NULL DEFAULT 0,halt_reason TEXT,paused_until INTEGER,updated_at INTEGER NOT NULL)`,
+    `INSERT OR IGNORE INTO provider_global_control (id,updated_at) VALUES (1,0)`,
     // Speed up knock lookups (leaderboard, territory progress, knock history)
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead ON knock_log(lead_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_rep ON knock_log(rep_id)`,

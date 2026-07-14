@@ -140,7 +140,10 @@ function coverageStatus(job: DiscoveryJobRow): string {
   return "still_processing";
 }
 
-function publicJob(job: DiscoveryJobRow): Record<string, unknown> {
+function publicJob(
+  job: DiscoveryJobRow,
+  includeDiagnostics = false,
+): Record<string, unknown> {
   const activeStatus =
     job.status === "running"
       ? job.phase === "boundary"
@@ -170,24 +173,33 @@ function publicJob(job: DiscoveryJobRow): Record<string, unknown> {
     discoveredCount: job.addressesObserved + job.addressesInferred,
     uniqueCandidateCount: job.addressesObserved,
     validatedCount: job.addressesQualified,
-    checkedCount: job.qualificationChecked,
+    checkedCount: includeDiagnostics
+      ? job.qualificationChecked
+      : job.qualificationChecked + job.qualificationFailed + job.failedTiles,
     qualifiedCount: job.freshFound,
-    failedCount: job.qualificationFailed + job.failedTiles,
+    failedCount: includeDiagnostics ? job.qualificationFailed + job.failedTiles : 0,
     cachedCount: job.cacheHits,
-    noServiceCount: job.noServiceFound,
+    noServiceCount: includeDiagnostics ? job.noServiceFound : 0,
     totalTiles: job.totalTiles,
     completedTiles: job.completedTiles,
     partialTiles: job.partialTiles,
     failedTiles: job.failedTiles,
     handoffCollisions: job.handoffCollisions,
     coverageStatus: coverageStatus(job),
-    sourceWarnings: warnings,
+    sourceWarnings: includeDiagnostics ? warnings : [],
     createdAt: job.createdAt,
     startedAt: job.startedAt,
     completedAt: job.completedAt,
     cancelledAt: job.status === "cancelled" ? job.completedAt : null,
-    error: job.errorSummary,
+    error: includeDiagnostics ? job.errorSummary : null,
   };
+}
+
+function repEventPayload(eventType: string, payload: Record<string, any>): Record<string, unknown> {
+  if (eventType !== "lead.published") return {};
+  const lead = payload.lead && typeof payload.lead === "object" ? payload.lead : undefined;
+  const feature = payload.feature?.type === "Feature" ? payload.feature : undefined;
+  return { ...(lead ? { lead } : {}), ...(feature ? { feature } : {}) };
 }
 
 function parseAfter(req: Request, tid: number, createdBy?: number): number {
@@ -349,7 +361,7 @@ export function registerAddressDiscoveryRoutes(
         wakeDiscoveryWorkers();
         res
           .status(202)
-          .json({ job: publicJob(job), replayed: result.replayed });
+          .json({ job: publicJob(job, canManage(req)), replayed: result.replayed });
       } catch (error: any) {
         const message = String(error?.message ?? error).slice(0, 300);
         res
@@ -374,7 +386,7 @@ export function registerAddressDiscoveryRoutes(
         activeOnly: active,
         limit: Number(req.query.limit) || 50,
       });
-      res.json({ jobs: jobs.map(publicJob) });
+      res.json({ jobs: jobs.map((job) => publicJob(job, canManage(req))) });
     },
   );
 
@@ -390,7 +402,7 @@ export function registerAddressDiscoveryRoutes(
       const job = getDiscoveryJob(tid, param(req, "id"));
       if (!job || !allowedJob(req, job))
         return res.status(404).json({ error: "Not found" });
-      res.json({ job: publicJob(job) });
+      res.json({ job: publicJob(job, canManage(req)) });
     },
   );
 
@@ -421,7 +433,7 @@ export function registerAddressDiscoveryRoutes(
         req.ip,
         tid,
       );
-      res.json({ job: publicJob(getDiscoveryJob(tid, job.id)!) });
+      res.json({ job: publicJob(getDiscoveryJob(tid, job.id)!, canManage(req)) });
     },
   );
 
@@ -444,7 +456,7 @@ export function registerAddressDiscoveryRoutes(
       wakeDiscoveryWorkers();
       res.json({
         retried: changed,
-        job: publicJob(getDiscoveryJob(tid, jobId)!),
+        job: publicJob(getDiscoveryJob(tid, jobId)!, true),
       });
     },
   );
@@ -736,7 +748,14 @@ export function registerAddressDiscoveryRoutes(
         after = event.sequence;
         const job = getDiscoveryJob(tid, event.jobId);
         if (!job) continue;
-        const payload = { ...(event.payload ?? {}), job: publicJob(job) };
+        const diagnostics = canManage(req);
+        const eventPayload = diagnostics
+          ? (event.payload ?? {})
+          : repEventPayload(event.eventType, event.payload ?? {});
+        const payload = {
+          ...eventPayload,
+          job: publicJob(job, diagnostics),
+        };
         res.write(
           `id: ${event.sequence}\nevent: ${event.eventType}\ndata: ${JSON.stringify(
             {

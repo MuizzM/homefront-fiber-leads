@@ -5,9 +5,16 @@ import { proxyFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
 import { isKineticFiber } from "@shared/fiberDetect";
-import { ProviderRequestQueue, type ProviderQueueSnapshot, type QueueEvent } from "./providerRequestQueue";
+import {
+  ProviderRequestQueue,
+  type ProviderQueueSnapshot,
+  type ProviderRequestPriority,
+  type QueueEvent,
+} from "./providerRequestQueue";
 import { structuredLog } from "./structuredLog";
 import crypto from "node:crypto";
+import { AuthorizedTokenPool, type AuthorizedTokenLease } from "./authorizedTokenPool";
+import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from "./distributedProviderCoordinator";
 
 // ─── KEY RESPONSE FIELDS FROM API ────────────────────────────────────────────
 // address.householdSegmentType  → "NEW FIBER" | "TENURED" | "PROSPECT"
@@ -22,13 +29,8 @@ import crypto from "node:crypto";
 // uqualProvisioningResult.finalPlacement → "BUR" (buried) | "AER" (aerial)
 // ─────────────────────────────────────────────────────────────────────────────
 
-let cachedToken: string | null = null;
-let tokenExpiry: number = 0;
-let manualToken: string | null = null; // set via POST /api/set-token
-let autoRefreshTimer: ReturnType<typeof setInterval> | null = null;
-let lastRefreshAttempt: number = 0;
-let refreshFailCount: number = 0;
-let refreshInFlight: Promise<string> | null = null; // mutex: coalesce concurrent refreshes
+const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 300);
+const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 2);
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 
@@ -50,112 +52,99 @@ export function providerHeaders(extra: Record<string, string> = {}): Record<stri
   return headers;
 }
 
-// Decode a JWT's `exp` claim → ms epoch (minus a 60s safety margin), so token life
-// is DERIVED, not a hard-coded 28min guess. Returns null if unparseable.
+const TOKEN_REFRESH_MARGIN_MS = 60_000;
+
+// Decode a JWT's `exp` claim → ms epoch so token life is derived rather than
+// guessed. The caller applies the refresh margin separately.
 function jwtExpiryMs(token: string): number | null {
   try {
     const payload = token.split(".")[1];
     if (!payload) return null;
     const json = JSON.parse(Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"));
-    return typeof json.exp === "number" ? json.exp * 1000 - 60_000 : null;
+    return typeof json.exp === "number" ? json.exp * 1000 : null;
   } catch { return null; }
 }
 
-/** Called from routes.ts when user pastes a JWT from their browser */
-export function setManualToken(token: string) {
-  manualToken = token;
-  cachedToken = token;
-  tokenExpiry = jwtExpiryMs(token) ?? Date.now() + 28 * 60 * 1000; // real exp, else 28min fallback
-  refreshFailCount = 0;
-  // Start auto-refresh keepalive whenever a manual token is set
-  startTokenKeepalive();
+export function kineticTokenUrl(env: NodeJS.ProcessEnv = process.env): string {
+  return env.KFS_AUTH_URL?.trim() || `${KFS_ORIGIN}/_internal/precisely/token`;
 }
 
-/**
- * Token keepalive — refreshes automatically every 25 minutes.
- * Kinetic tokens last ~30 min. We refresh at 25 min to stay ahead of expiry.
- * Uses the KFS_AUTH_BASIC credential. Falls back gracefully if blocked.
- */
-function startTokenKeepalive() {
-  if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-  autoRefreshTimer = setInterval(async () => {
-    const now = Date.now();
-    // Don't try if we just attempted in the last 5 min
-    if (now - lastRefreshAttempt < 5 * 60 * 1000) return;
-    // Don't refresh if token still has 10+ min left and we have a manual token
-    if (manualToken && now < tokenExpiry - 10 * 60 * 1000) return;
+export function kineticTokenRequestInit(signal?: AbortSignal): RequestInit {
+  return {
+    method: "GET",
+    headers: providerHeaders({
+      "Accept": "*/*",
+      "Origin": KFS_ORIGIN,
+      "Referer": KFS_REFERER,
+    }),
+    signal,
+  };
+}
 
-    lastRefreshAttempt = now;
-    try {
-      await refreshTokenFromApi();
-      refreshFailCount = 0;
-      console.log(`[token-keepalive] Token refreshed OK at ${new Date().toISOString()}`);
-    } catch (err: any) {
-      refreshFailCount++;
-      console.warn(`[token-keepalive] Refresh failed (attempt ${refreshFailCount}): ${err.message}`);
-      // After 3 consecutive failures, stop trying until a manual token is pasted
-      if (refreshFailCount >= 3) {
-        console.warn("[token-keepalive] Auto-refresh disabled after 3 failures. Paste a new token.");
-        if (autoRefreshTimer) clearInterval(autoRefreshTimer);
-        autoRefreshTimer = null;
-      }
-    }
-  }, 25 * 60 * 1000); // every 25 minutes
+export function parseKineticTokenPayload(
+  payload: unknown,
+  now = Date.now(),
+): { token: string; expiresAt: number } {
+  if (!payload || typeof payload !== "object")
+    throw new Error("Invalid token response");
+  const data = payload as Record<string, unknown>;
+  const token = typeof data.access_token === "string" ? data.access_token.trim() : "";
+  const expiresIn = Number(data.expires_in);
+  if (!token) throw new Error("No access_token in response");
+  if (!Number.isFinite(expiresIn) || expiresIn <= 0)
+    throw new Error("Invalid expires_in in token response");
+  const responseExpiry = now + Math.floor(expiresIn * 1000);
+  const jwtExpiry = jwtExpiryMs(token);
+  const expiresAt = jwtExpiry ? Math.min(jwtExpiry, responseExpiry) : responseExpiry;
+  if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS)
+    throw new Error("Token response expires too soon");
+  return { token, expiresAt };
+}
+
+async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
+  assertAutomationAuthorized();
+  const response = await proxyFetch(
+    kineticTokenUrl(),
+    kineticTokenRequestInit(AbortSignal.timeout(5_000)),
+  );
+  if (!response.ok) throw new Error(`Auto-auth blocked (${response.status})`);
+  return parseKineticTokenPayload(await response.json());
+}
+
+const authorizedTokenPool = new AuthorizedTokenPool({
+  maxSize: Number.isFinite(configuredTokenPoolSize) ? configuredTokenPoolSize : 300,
+  warmMinimum: Number.isFinite(configuredWarmTokens) ? configuredWarmTokens : 2,
+  refreshMarginMs: TOKEN_REFRESH_MARGIN_MS,
+  maintenanceIntervalMs: Number(process.env.KFS_TOKEN_MAINTENANCE_MS ?? 15_000),
+  maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 10),
+  mint: () => mintAuthorizedToken(),
+});
+
+/** Called from routes.ts when user pastes a JWT from their browser */
+export function setManualToken(token: string) {
+  authorizedTokenPool.install(token, jwtExpiryMs(token) ?? Date.now() + 28 * 60 * 1000);
+  providerQueue.resume();
 }
 
 export async function refreshTokenFromApi(): Promise<string> {
-  // MUTEX: a mid-batch keepalive tick, a 401-retry, a manual paste, and the
-  // scheduler's block-driven refresh can all fire at once. Without coalescing they
-  // race and clobber cachedToken; share ONE in-flight refresh so callers all await it.
-  if (refreshInFlight) return refreshInFlight;
-  refreshInFlight = (async () => {
-    assertAutomationAuthorized();
-    const kfsUrl = process.env.KFS_AUTH_URL ?? "";
-    const kfsBasic = process.env.KFS_AUTH_BASIC ?? "";
-    if (!kfsUrl || !kfsBasic) throw new Error("KFS_AUTH_URL or KFS_AUTH_BASIC not configured");
-
-    const res = await proxyFetch(kfsUrl, {
-      method: "POST",
-      headers: providerHeaders({
-        "Content-Type": "application/json",
-        "Authorization": kfsBasic,
-        "Accept": "application/json",
-      }),
-      body: JSON.stringify({ brazeDeviceId: "" }),
-      signal: AbortSignal.timeout(5000), // 5s — faster slot recycling
-    });
-
-    if (!res.ok) throw new Error(`Auto-auth blocked (${res.status})`);
-    const data = await res.json();
-    if (!data.token) throw new Error("No token in response");
-
-    cachedToken = data.token;
-    manualToken = data.token;                                  // manual token refreshed
-    tokenExpiry = jwtExpiryMs(data.token) ?? Date.now() + 28 * 60 * 1000; // real exp, else fallback
-    return cachedToken!;
-  })();
-  try { return await refreshInFlight; }
-  finally { refreshInFlight = null; }
+  const beforeRefresh = authorizedTokenPool.snapshot();
+  if (beforeRefresh.disabled) authorizedTokenPool.resume();
+  const lease = await authorizedTokenPool.lease();
+  try {
+    // lease() already minted a fresh token when the pool was empty or disabled.
+    // Avoid immediately replacing that token during explicit administrator recovery.
+    if (beforeRefresh.disabled || beforeRefresh.ready === 0) return lease.token;
+    return await authorizedTokenPool.refreshLease(lease);
+  }
+  finally { lease.release(); }
 }
 
 /** Shared token accessor for authorized server-side scanner routes. */
 export async function getAuthToken(): Promise<string> {
   assertAutomationAuthorized();
-  const now = Date.now();
-  // Use cached token if still valid (5 min buffer)
-  if (cachedToken && now < tokenExpiry - 5 * 60 * 1000) return cachedToken;
-
-  // Try auto-refresh via API
-  try {
-    return await refreshTokenFromApi();
-  } catch {
-    // Auto-refresh failed
-  }
-
-  // If we still have a token that's close to expiry, use it as last resort
-  if (cachedToken && now < tokenExpiry) return cachedToken;
-
-  throw new Error("TOKEN_EXPIRED: Session expired. Paste a new token from buy.gokinetic.com in Token Setup.");
+  const lease = await authorizedTokenPool.lease();
+  try { return lease.token; }
+  finally { lease.release(); }
 }
 
 export function getTokenStatus(): {
@@ -165,29 +154,34 @@ export function getTokenStatus(): {
   source: string;
   keepaliveActive: boolean;
   refreshFailCount: number;
+  configuredSessions: number;
+  readySessions: number;
+  pool: ReturnType<AuthorizedTokenPool["snapshot"]>;
 } {
   const automationAuthorized = process.env.KFS_AUTOMATION_AUTHORIZED === "true";
-  if (!cachedToken) return { automationAuthorized, hasToken: false, expiresIn: null, source: "none", keepaliveActive: false, refreshFailCount };
-  const remaining = Math.round((tokenExpiry - Date.now()) / 1000);
+  const pool = authorizedTokenPool.snapshot();
+  if (pool.ready === 0) return {
+    automationAuthorized, hasToken: false, expiresIn: null, source: "none",
+    keepaliveActive: automationAuthorized && !pool.disabled, refreshFailCount: pool.states.COOLDOWN,
+    configuredSessions: pool.maxSize, readySessions: pool.ready, pool,
+  };
+  const remaining = pool.nextExpiryAt == null ? null : Math.max(0, Math.round((pool.nextExpiryAt - Date.now()) / 1000));
   return {
     automationAuthorized,
     hasToken: true,
-    expiresIn: remaining > 0 ? remaining : 0,
-    source: manualToken ? "manual+keepalive" : "auto",
-    keepaliveActive: autoRefreshTimer !== null,
-    refreshFailCount,
+    expiresIn: remaining == null ? null : remaining > 0 ? remaining : 0,
+    source: "authorized_pool",
+    keepaliveActive: automationAuthorized && !pool.disabled,
+    refreshFailCount: pool.states.COOLDOWN,
+    configuredSessions: pool.maxSize,
+    readySessions: pool.ready,
+    pool,
   };
 }
 
 // Start keepalive on boot if credentials are present
-if (process.env.KFS_AUTOMATION_AUTHORIZED === "true" && process.env.KFS_AUTH_URL && process.env.KFS_AUTH_BASIC) {
-  // Initial token fetch on startup
-  refreshTokenFromApi()
-    .then(() => {
-      console.log("[scanner] Initial token acquired on startup");
-      startTokenKeepalive();
-    })
-    .catch(err => console.warn("[scanner] Startup token fetch failed — will retry on first scan:", err.message));
+if (process.env.KFS_AUTOMATION_AUTHORIZED === "true") {
+  authorizedTokenPool.start();
 }
 
 export interface KineticAddressResponse {
@@ -298,11 +292,27 @@ export interface ScanResult {
   leadScore: number;
 }
 
-const configuredProviderConcurrency = Number(process.env.SCAN_PROVIDER_CONCURRENCY ?? 8);
+const configuredProviderConcurrency = Number(process.env.SCAN_PROVIDER_CONCURRENCY ?? 50);
+const configuredGlobalConcurrency = Number(process.env.SCAN_GLOBAL_CONCURRENCY ?? 50);
+const configuredProviderRps = Number(process.env.SCAN_PROVIDER_RPS ?? 40);
 const configuredCacheTtlMs = Number(process.env.SCAN_RESULT_CACHE_MS ?? 5 * 60_000);
 
-function scanKey(address: string, city: string, state: string, zip: string): string {
-  return `${address}|${city}|${state}|${zip}`.trim().toLowerCase().replace(/\s+/g, " ");
+const addressTokenAliases: Record<string, string> = {
+  STREET: "ST", ST: "ST", ROAD: "RD", RD: "RD", AVENUE: "AVE", AVE: "AVE",
+  DRIVE: "DR", DR: "DR", COURT: "CT", CT: "CT", LANE: "LN", LN: "LN",
+  BOULEVARD: "BLVD", BLVD: "BLVD", HIGHWAY: "HWY", HWY: "HWY",
+  NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W",
+};
+
+function canonicalAddressPart(value: string): string {
+  return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9#]+/g, " ").trim().split(/\s+/)
+    .filter(Boolean).map(token => addressTokenAliases[token] ?? token).join(" ");
+}
+
+export function normalizeKineticAddressKey(address: string, city: string, state: string, zip: string): string {
+  return [canonicalAddressPart(address), canonicalAddressPart(city), canonicalAddressPart(state), String(zip).match(/\d{5}/)?.[0] ?? ""]
+    .join("|");
 }
 
 function logQueueEvent(event: QueueEvent): void {
@@ -316,11 +326,16 @@ function logQueueEvent(event: QueueEvent): void {
     queued: event.queued,
     waitMs: "waitMs" in event ? event.waitMs : undefined,
     durationMs: "durationMs" in event ? event.durationMs : undefined,
+    source: event.source,
+    retryAt: "retryAt" in event ? event.retryAt : undefined,
   }, event.type === "failed" ? "warn" : event.type === "queued" ? "debug" : "info");
 }
 
 const providerQueue = new ProviderRequestQueue<ScanResult>({
-  maxConcurrency: Number.isFinite(configuredProviderConcurrency) ? configuredProviderConcurrency : 8,
+  maxConcurrency: Number.isFinite(configuredProviderConcurrency) ? configuredProviderConcurrency : 50,
+  // The DB-backed coordinator is authoritative across instances. This local
+  // limit prevents one process from creating an unbounded number of DB waiters.
+  maxRequestsPerSecond: Number.isFinite(configuredProviderRps) ? configuredProviderRps : 40,
   cacheTtlMs: Number.isFinite(configuredCacheTtlMs) ? configuredCacheTtlMs : 5 * 60_000,
   maxCacheEntries: Number(process.env.SCAN_RESULT_CACHE_MAX ?? 20_000),
   // Only conclusive provider answers are cached. A timeout, throttle, auth error,
@@ -332,9 +347,60 @@ const providerQueue = new ProviderRequestQueue<ScanResult>({
   onEvent: logQueueEvent,
 });
 
-export function getAddressScanQueueStatus(): ProviderQueueSnapshot {
-  return providerQueue.snapshot();
+const distributedProviderCoordinator = new DistributedProviderCoordinator<ScanResult>({
+  maxConcurrency: Number.isFinite(configuredGlobalConcurrency) ? configuredGlobalConcurrency : 50,
+  maxRequestsPerSecond: Number.isFinite(configuredProviderRps) ? configuredProviderRps : 40,
+  resultCacheTtlMs: Number.isFinite(configuredCacheTtlMs) ? configuredCacheTtlMs : 5 * 60_000,
+});
+
+export function getAddressScanQueueStatus(): ProviderQueueSnapshot & { distributed: DistributedProviderSnapshot } {
+  const local = providerQueue.snapshot();
+  const distributed = distributedProviderCoordinator.snapshot();
+  return {
+    ...local,
+    active: distributed.active,
+    queued: Math.max(distributed.queued, local.queued),
+    maxConcurrency: distributed.maxConcurrency,
+    maxRequestsPerSecond: distributed.maxRequestsPerSecond,
+    startsLastSecond: distributed.startsLastSecond,
+    pausedUntil: distributed.pausedUntil,
+    halted: distributed.halted || local.halted,
+    haltReason: distributed.haltReason ?? local.haltReason,
+    distributed,
+  };
 }
+
+/** Explicit operator recovery after investigating an upstream 403. */
+export function resumeAddressScanQueue(): void {
+  authorizedTokenPool.resume();
+  providerQueue.resume();
+  distributedProviderCoordinator.resume();
+}
+
+export class ProviderAccessDeniedError extends Error {
+  readonly code = "KINETIC_ACCESS_DENIED";
+  constructor(message = "Kinetic address search returned 403; all provider work has been stopped.") {
+    super(message);
+    this.name = "ProviderAccessDeniedError";
+  }
+}
+
+export interface AddressScanOptions {
+  source?: ProviderRequestPriority;
+}
+
+function retryAfterMs(response: Response, attempt: number): number {
+  const value = response.headers.get("retry-after")?.trim();
+  if (value) {
+    const seconds = Number(value);
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(15 * 60_000, Math.max(0, Math.ceil(seconds * 1_000)));
+    const date = Date.parse(value);
+    if (Number.isFinite(date)) return Math.min(15 * 60_000, Math.max(0, date - Date.now()));
+  }
+  return Math.min(30_000, 1_000 * Math.pow(2, Math.min(attempt, 5)));
+}
+
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)));
 
 function kbpsToMbps(kbps: string | number | null | undefined): number | null {
   if (!kbps) return null;
@@ -358,9 +424,21 @@ export async function scanAddress(
   city: string,
   state: string,
   zip: string,
+  options: AddressScanOptions = {},
 ): Promise<ScanResult> {
-  return providerQueue.request(scanKey(address, city, state, zip), () =>
-    scanAddressDirect(address, city, state, zip, false));
+  const source = options.source ?? "market";
+  const normalizedKey = normalizeKineticAddressKey(address, city, state, zip);
+  const distributedKey = crypto.createHash("sha256").update(normalizedKey).digest("hex");
+  return providerQueue.request(normalizedKey, () => distributedProviderCoordinator.execute(
+    distributedKey,
+    source,
+    () => scanAddressDirect(address, city, state, zip, source),
+    {
+      cacheable: value => value.apiSource !== "failed" && !value.blocked && value.fiberStatus !== "unknown",
+      serialize: value => JSON.stringify(value),
+      deserialize: value => JSON.parse(value) as ScanResult,
+    },
+  ), { source });
 }
 
 async function scanAddressDirect(
@@ -368,7 +446,7 @@ async function scanAddressDirect(
   city: string,
   state: string,
   zip: string,
-  _retriedAfterAuth: boolean,
+  source: ProviderRequestPriority,
 ): Promise<ScanResult> {
   const base: ScanResult = {
     address, city, state, zip,
@@ -383,59 +461,62 @@ async function scanAddressDirect(
     leadTag: null, leadScore: 0,
   };
 
+  let tokenLease: AuthorizedTokenLease | null = null;
   try {
-    const token = await getAuthToken();
+    tokenLease = await authorizedTokenPool.lease();
+    let authRefreshes = 0;
+    let rateLimitAttempts = 0;
+    let res: Response;
+    for (;;) {
+      const token = tokenLease.token;
+      res = await proxyFetch(KFS_SCAN_URL, {
+        method: "POST",
+        headers: providerHeaders({
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "Authorization": `Bearer ${token}`,
+          "Referer": KFS_REFERER,
+          "Origin": KFS_ORIGIN,
+        }),
+        body: JSON.stringify({ addressLine1: address, addressLine2: "", city, state, postalCode: zip }),
+        signal: AbortSignal.timeout(5_000),
+      });
 
-    const res = await proxyFetch(KFS_SCAN_URL, {
-      method: "POST",
-      headers: providerHeaders({
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Authorization": `Bearer ${token}`,
-        "Referer": KFS_REFERER,
-        "Origin": KFS_ORIGIN,
-      }),
-      body: JSON.stringify({
-        addressLine1: address,
-        addressLine2: "",
-        city,
-        state,
-        postalCode: zip,
-      }),
-      signal: AbortSignal.timeout(5000), // 7s per address — frees slot quickly on slow/blocked requests
-    });
-
-    // 403 = Kinetic's refilling token-bucket pushing back (VERIFIED live: NOT a
-    // WAF/geo IP block). It is a typed back-pressure signal, never a no-service.
-    // We do NOT rotate the IP (same account from many IPs = permanent token ban) and
-    // do NOT blindly refresh here; the scheduler's congestion controller owns the
-    // response — shrink the window, and refresh the session only when at the floor.
-    if (!res.ok && res.status === 403) {
-      base.notes = "Kinetic throttle (403) — rate-limited";
-      base.apiSource = "failed";
-      base.blocked = true;
-      return base;
-    }
-    // On 401 — token expired mid-scan. Force refresh and retry EXACTLY once.
-    // The _retriedAfterAuth guard caps this at a single refresh+retry: without it,
-    // a revoked credential would recurse without bound, and each level makes two
-    // proxy (Decodo) requests — unbounded spend.
-    if (!res.ok && res.status === 401) {
-      if (_retriedAfterAuth) {
-        base.notes = `Auth still failing (401) after one token refresh`;
-        base.apiSource = "failed";
-        return base;
+      if (res.status === 401) {
+        if (authRefreshes >= 3) {
+          base.notes = "Auth still failing (401) after three token refreshes";
+          return base;
+        }
+        authRefreshes++;
+        try {
+          const refreshed = await authorizedTokenPool.refreshLease(tokenLease);
+          tokenLease = { ...tokenLease, token: refreshed };
+        }
+        catch { base.notes = `Token refresh ${authRefreshes}/3 failed after 401`; return base; }
+        continue;
       }
-      try {
-        await refreshTokenFromApi();
-        // Stay inside the queue slot. Calling the public queued wrapper here
-        // would wait on this address's own in-flight promise and deadlock.
-        return await scanAddressDirect(address, city, state, zip, true);
-      } catch {
-        base.notes = `Token refresh failed after 401`;
-        base.apiSource = "failed";
-        return base;
+      if (res.status === 403) {
+        const denied = new ProviderAccessDeniedError();
+        structuredLog("scan.provider.access_denied", {
+          status: 403, source, active: providerQueue.snapshot().active,
+          queued: providerQueue.snapshot().queued,
+        }, "error");
+        providerQueue.halt(denied, source);
+        distributedProviderCoordinator.halt(denied.message);
+        authorizedTokenPool.disable();
+        const alertHook = (globalThis as any).__alertProviderAccessDenied;
+        if (typeof alertHook === "function") void Promise.resolve(alertHook({ provider: "kinetic", status: 403 })).catch(() => {});
+        throw denied;
       }
+      if (res.status === 429) {
+        const waitMs = retryAfterMs(res, rateLimitAttempts++);
+        providerQueue.pauseFor(waitMs, source);
+        distributedProviderCoordinator.pauseFor(waitMs);
+        structuredLog("scan.provider.rate_limited", { source, waitMs, attempt: rateLimitAttempts }, "warn");
+        await delay(waitMs);
+        continue;
+      }
+      break;
     }
     if (!res.ok) {
       base.notes = `API returned ${res.status}`;
@@ -584,6 +665,7 @@ async function scanAddressDirect(
     base.leadScore = score.leadScore;
 
   } catch (err: any) {
+    if (err instanceof ProviderAccessDeniedError) throw err;
     // PRODUCT LAW: a failed check (timeout/error/no-token) carries NO
     // availability signal. We do NOT fabricate a result — the previous code
     // invented `new_fiber` for any address in a hardcoded ZIP set, which turned
@@ -594,6 +676,8 @@ async function scanAddressDirect(
     base.fiberStatus = "unknown";
     base.confidence = "LOW";
     base.notes = `Check failed — no signal: ${err.message}`;
+  } finally {
+    tokenLease?.release();
   }
 
   return base;

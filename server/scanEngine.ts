@@ -11,6 +11,7 @@
 // recorded responses, with zero proxy bandwidth spent. Rep-facing leads are
 // projected later, only after independent fiber evidence.
 import {
+  ProviderAccessDeniedError,
   refreshTokenFromApi,
   scanAddress,
   type ScanResult,
@@ -45,6 +46,9 @@ import {
 import { projectConfirmedFreshLeads } from "./freshFiberProjector";
 import { structuredLog } from "./structuredLog";
 import { calculateFiberFreshness } from "@shared/fiberFreshness";
+import type { ProviderRequestPriority } from "./providerRequestQueue";
+import { ensureKineticScannerSchema, upsertKineticAddress } from "./kineticScannerStore";
+import { hashKineticEvidence } from "./kineticProviderAdapter";
 import {
   appendFiberEvent,
   beginFiberWorker,
@@ -66,13 +70,14 @@ export type Checker = (a: {
   city: string;
   state: string;
   zip: string;
+  source?: ProviderRequestPriority;
 }) => Promise<CheckResult>;
 
 // Default checker — the existing authorized Kinetic path through the stable
 // Decodo transport. scanner.ts owns authentication, request dedupe/caching,
 // upstream-denial handling, and the provider concurrency ceiling.
 const liveChecker: Checker = async (a) => {
-  const result = await scanAddress(a.address, a.city, a.state, a.zip);
+  const result = await scanAddress(a.address, a.city, a.state, a.zip, { source: a.source ?? "market" });
   const checkFailed = result.apiSource === "failed";
   // Estimate bytes from the serialized raw response when present (the proxy bills
   // request + response); fall back to the flat estimate. Under-counting cost is
@@ -89,9 +94,25 @@ const liveChecker: Checker = async (a) => {
 // In-process guard so a run is never dispatched by two workers at once (e.g. a
 // resume racing a still-live worker). Cleared when the worker exits.
 const activeRuns = new Set<string>();
+let kineticMonitoringSchemaReady = false;
+
+function ensureKineticMonitoringSchema(): void {
+  if (kineticMonitoringSchemaReady) return;
+  ensureKineticScannerSchema();
+  kineticMonitoringSchemaReady = true;
+}
 
 export function isRunActive(runId: string): boolean {
   return activeRuns.has(runId);
+}
+
+function providerPriorityForRun(kind: string): ProviderRequestPriority {
+  const value = String(kind ?? "").toLowerCase();
+  if (value.includes("manual") || value === "target_ids") return "manual";
+  if (value.includes("lasso") || value.includes("bbox") || value.includes("area")) return "lasso";
+  if (value.includes("city")) return "city";
+  if (value.includes("recheck") || value.includes("rescan")) return "recheck";
+  return "market";
 }
 
 // Run the worker loop for an already-created, already-enqueued run. Fire-and-
@@ -168,6 +189,7 @@ export async function runScanWorker(
               city: t.city,
               state: t.state,
               zip: t.zip,
+              source: providerPriorityForRun(run.kind),
             });
             applyCheck(
               runId,
@@ -182,6 +204,7 @@ export async function runScanWorker(
             else if (checkFailed) neutral++;
             else ok++;
           } catch (err: any) {
+            if (err instanceof ProviderAccessDeniedError) throw err;
             // An unexpected throw is still a FAILED check — never a negative.
             finalizeRunTarget(runId, t.targetId, "failed", "failed", {
               failed: 1,
@@ -390,6 +413,55 @@ function applyCheck(
     customerSignals: customer.signals,
   });
   recordProviderOutcome(tenantId, true);
+
+  // Keep known NEW FIBER addresses in the existing Kinetic monitoring inventory.
+  // Active-service rows are silent Coming Soon watches; the nightly recheck worker
+  // consumes the same shared queue and promotes nothing until billingStatus=N and
+  // the independent fresh-fiber projector confirms the transition.
+  if (result.isNewFiber && ["N", "Y"].includes(String(result.billingStatus))) {
+    try {
+      ensureKineticMonitoringSchema();
+      const rawEvidence = result.rawResponse ?? result;
+      const responseHash = hashKineticEvidence(rawEvidence);
+      // Discovery scan IDs belong to scan_runs, not kinetic_scan_jobs; keep the
+      // evidence address-linked without writing a cross-table foreign key.
+      upsertKineticAddress(tenantId, null, {
+        kineticAddressId: result.dfAddressId,
+        sequentialId: null,
+        address: result.address || t.address,
+        city: result.city || t.city,
+        state: result.state || t.state,
+        zip: result.zip || t.zip,
+        latitude: result.lat ?? t.lat,
+        longitude: result.lng ?? t.lng,
+        exchangeId: result.exchangeId,
+        technologyType: result.techType,
+        maximumQualification: result.maxDownloadMbps,
+        estimatedCompletionDate: null,
+        isLive: result.fiberAvailable,
+        isComingSoon: result.billingStatus === "Y",
+        isCopperUpgradeCandidate: null,
+        billingStatus: result.billingStatus,
+        householdSegmentType: result.householdSegmentType,
+        fiberStatus: result.fiberStatus,
+        isNewFiber: result.isNewFiber,
+        evidenceMode: "approved_api",
+        evidenceSource: "field-map-authorized-search",
+        evidenceId: responseHash,
+        observedAt: new Date().toISOString(),
+        parserVersion: "field-map-authorized-search-v1",
+        rawResponse: rawEvidence,
+        responseHash,
+      });
+    } catch (error: any) {
+      structuredLog("field_map.monitoring_sync_failed", {
+        tenantId,
+        runId,
+        targetId: t.targetId,
+        error: String(error?.message ?? error),
+      }, "warn");
+    }
+  }
 
   // This is the primary-source opportunity signal. It remains provisional here:
   // scan workers NEVER publish a rep-facing lead. The independent-evidence gate

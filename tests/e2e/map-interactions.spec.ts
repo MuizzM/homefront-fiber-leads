@@ -3,6 +3,8 @@ import { mintSession, loginAs } from "./helpers/auth";
 
 const SEARCHED = { lng: -80.2534, lat: 35.8241 };
 
+test.use({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+
 test("search camera is stable and concurrent drawn areas use durable discovery jobs", async ({ page, request }) => {
   const { sessionId } = await mintSession(request);
   await loginAs(page, sessionId);
@@ -31,6 +33,9 @@ test("search camera is stable and concurrent drawn areas use durable discovery j
       id: `canonical-${i}`,
       status: "fresh",
       fresh: true,
+      leadTag: "fresh_fiber_confirmed",
+      freshConfidence: "cross_verified",
+      qualified: true,
     },
   }));
 
@@ -230,9 +235,9 @@ test("search camera is stable and concurrent drawn areas use durable discovery j
   // the first remains queued. No mode prompt, cooldown, or cancel-all toggle.
   await drawBox(0.58, 0.78);
   await expect.poll(() => scanStarts).toBe(2);
-  await expect(page.getByTestId("discovery-job-map-e2e-1")).toBeVisible();
-  await expect(page.getByTestId("discovery-job-map-e2e-2")).toBeVisible();
+  await expect(page.getByTestId("scan-panel")).toBeVisible();
   await expect(page.getByRole("button", { name: /Quick scan|Deep scan/i })).toHaveCount(0);
+  await expect(page.getByText(/provider token|unverified|checking|not fresh|no service/i)).toHaveCount(0);
   expect(scanBodies.every(body => body.geometry?.type === "Polygon")).toBe(true);
   expect(scanBodies.every(body => typeof body.idempotencyKey === "string" && body.idempotencyKey.length > 20)).toBe(true);
   expect(scanBodies[0].idempotencyKey).not.toBe(scanBodies[1].idempotencyKey);
@@ -242,7 +247,7 @@ test("search camera is stable and concurrent drawn areas use durable discovery j
   await expect.poll(() => pendingStreams.length).toBeGreaterThan(0);
   await releaseDiscoveryEvents();
 
-  await expect(page.getByTestId("scan-panel").getByText(/2000 fresh-fiber leads found/i)).toBeVisible();
+  await expect(page.getByTestId("scan-result")).toHaveText("2000 new leads added");
   await expect.poll(() => page.evaluate(() => (window as any).__map.getSource("scan-results")._data.features.length)).toBe(2_000);
   const scanState = await page.evaluate(() => {
     const map = (window as any).__map;
@@ -276,18 +281,14 @@ test("search camera is stable and concurrent drawn areas use durable discovery j
   expect(perf.p95).toBeLessThan(45);
   expect(perf.longFrameRate).toBeLessThan(0.05);
 
-  // A rejected submission never transfers ownership of the geometry. Keep the
-  // rectangle visible and retry with the same request key; clear it only after
-  // the retry is accepted.
+  // Submission diagnostics are not exposed to reps. Clear the temporary box,
+  // show only the brief neutral result, and let the rep draw again immediately.
   rejectNextSubmission = true;
   // Stay below the compact scan-status banner; pointer events on that overlay
   // correctly do not reach the Mapbox canvas.
   await drawBox(0.45, 0.68);
   await expect.poll(() => scanStarts).toBe(3);
-  await expect(page.getByRole("button", { name: "Retry this exact area" })).toBeVisible();
-  await expect.poll(selectedDrawCoordinateCount).toBeGreaterThan(0);
-  await page.getByRole("button", { name: "Retry this exact area" }).click();
-  await expect.poll(() => scanStarts).toBe(4);
-  expect(scanBodies[3].idempotencyKey).toBe(scanBodies[2].idempotencyKey);
+  await expect(page.getByRole("button", { name: "Retry this exact area" })).toHaveCount(0);
   await expect.poll(selectedDrawCoordinateCount).toBe(0);
+  await expect(page.getByTestId("scan-result")).toHaveText("Scan complete");
 });

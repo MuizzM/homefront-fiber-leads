@@ -44,7 +44,7 @@ procedure (runbook).
 | Core | `NODE_ENV=production` · `PORT` · `DATA_DIR=/data` · `APP_ORIGIN` · `TRUST_PROXY=1` · `SUPER_ADMIN_EMAILS` | `APP_ORIGIN` unset ⇒ empty CORS allowlist ⇒ browser blocked |
 | Login (OTP email) | `SMTP_HOST/PORT/USER/PASS` · `MAIL_FROM` · `MAIL_ADMIN` | no email ⇒ **no one can sign in** |
 | Field map | `MAPBOX_PUBLIC_TOKEN` (pk, url-restricted) · `MAPBOX_TOKEN` (secret, server-only) | map returns 503 |
-| Scanning (moat) | `KFS_AUTH_URL` · `KFS_AUTH_BASIC` · `PROXY_URL` · `SCANNER_SUBMIT_SECRET` | scanning disabled |
+| Scanning (moat) | `KFS_AUTOMATION_AUTHORIZED=true` · `PROXY_URL` · `SCANNER_SUBMIT_SECRET` | scanning disabled |
 | Backups | `LITESTREAM_BUCKET` + S3/B2 creds | runs, but **no continuous backup** (logged loudly) |
 | Nightly scan (opt-in) | `ENABLE_NIGHTLY_SCAN` · `NIGHTLY_*` | off by default (spends proxy $ when on) |
 

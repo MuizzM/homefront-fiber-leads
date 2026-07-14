@@ -416,6 +416,11 @@ app.use((req, res, next) => {
   // Resume any budgeted scan that was mid-flight when the process last died —
   // "leave and return without losing progress" must survive a crash/deploy, not
   // just a navigation. Each interrupted run continues from its persisted queue.
+  if (process.env.KFS_AUTOMATION_AUTHORIZED === "true") {
+    const { registerKineticEvidenceSource } = await import("./kineticProviderAdapter");
+    const { KineticAuthorizedSearchAdapter } = await import("./kineticAuthorizedSearchAdapter");
+    registerKineticEvidenceSource(new KineticAuthorizedSearchAdapter());
+  }
   try {
     const { resumeInterruptedRuns, startScanReaper } = await import("./scanEngine");
     resumeInterruptedRuns();

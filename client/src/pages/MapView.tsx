@@ -10,7 +10,6 @@ import {
 // mapbox-gl loaded via CDN in index.html — do not bundle
 declare const mapboxgl: any;
 import {
-  AlertCircle,
   Pencil,
   X,
   Map as MapIcon,
@@ -23,7 +22,6 @@ import {
   Radar,
   Loader2,
   Layers,
-  RefreshCw,
   CheckCircle2,
   List,
   Navigation,
@@ -111,12 +109,9 @@ import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
   bboxPolygon,
   discoveryIdempotencyKey,
-  discoveryStageLabel,
   isTerminalDiscoveryJob,
   type DiscoveryEvent,
-  type DiscoveryJob,
 } from "@/lib/discoveryApi";
-import { applyDiscoveryMapPointBatch } from "@/lib/discoveryMapFeatures";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -434,21 +429,6 @@ function inBBox(lat: number, lng: number, b: BBox) {
   );
 }
 
-// apiRequest throws `Error("400: <body>")`; <body> is usually our JSON envelope
-// `{ error, reason }`. Turn that into a friendly line + typed reason so the scan
-// panel never shows a raw "400: {…}" blob to a field rep.
-function parseScanError(raw: string): { reason?: string; message: string } {
-  const stripped = raw.replace(/^\s*\d{3}:\s*/, ""); // drop the leading status code
-  try {
-    const j = JSON.parse(stripped);
-    if (j && typeof j === "object")
-      return { reason: j.reason, message: j.error || stripped };
-  } catch {
-    /* not JSON — fall through */
-  }
-  return { message: stripped || "Something went wrong. Try again." };
-}
-
 const SEARCH_RESULT_SOURCE = "search-result";
 const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
 const SEARCH_RESULT_POINT_LAYER = "search-result-point";
@@ -507,16 +487,6 @@ function ensureTransientMapLayers(map: any): void {
       cluster: true,
       clusterRadius: 48,
       clusterMaxZoom: 14,
-      clusterProperties: {
-        confirmed: [
-          "+",
-          ["case", ["==", ["get", "scanStatus"], "fresh_confirmed"], 1, 0],
-        ],
-        candidates: [
-          "+",
-          ["case", ["==", ["get", "scanStatus"], "fresh_candidate"], 1, 0],
-        ],
-      },
     });
   }
   if (!map.getLayer(SCAN_RESULTS_CLUSTER_LAYER)) {
@@ -527,14 +497,7 @@ function ensureTransientMapLayers(map: any): void {
       filter: ["has", "point_count"],
       paint: {
         "circle-radius": ["step", ["get", "point_count"], 16, 20, 22, 100, 29],
-        "circle-color": [
-          "case",
-          [">", ["coalesce", ["get", "confirmed"], 0], 0],
-          "#16a34a",
-          [">", ["coalesce", ["get", "candidates"], 0], 0],
-          "#8b5cf6",
-          "#0ea5e9",
-        ],
+        "circle-color": "#16a34a",
         "circle-opacity": 0.9,
         "circle-opacity-transition": { duration: 180, delay: 0 },
         "circle-stroke-width": 2,
@@ -566,59 +529,17 @@ function ensureTransientMapLayers(map: any): void {
       id: SCAN_RESULTS_POINT_LAYER,
       type: "circle",
       source: SCAN_RESULTS_SOURCE,
-      filter: ["!", ["has", "point_count"]],
+      filter: [
+        "all",
+        ["!", ["has", "point_count"]],
+        ["==", ["get", "scanStatus"], "fresh_confirmed"],
+      ],
       paint: {
-        "circle-radius": [
-          "match",
-          ["get", "scanStatus"],
-          "fresh_confirmed",
-          8,
-          "fresh_candidate",
-          7,
-          "checking",
-          5,
-          6,
-        ],
-        "circle-opacity": [
-          "match",
-          ["get", "scanStatus"],
-          "checking",
-          0.72,
-          "not_fresh",
-          0.58,
-          0.94,
-        ],
-        "circle-color": [
-          "match",
-          ["get", "scanStatus"],
-          "fresh_confirmed",
-          "#22c55e",
-          "fresh_candidate",
-          "#8b5cf6",
-          "checking",
-          "#0ea5e9",
-          "no_service",
-          "#64748b",
-          "not_fresh",
-          "#94a3b8",
-          "unsupported",
-          "#475569",
-          "unverified",
-          "#ef4444",
-          "#0ea5e9",
-        ],
+        "circle-radius": 8,
+        "circle-opacity": 0.96,
+        "circle-color": "#22c55e",
         "circle-stroke-width": 2,
-        "circle-stroke-color": [
-          "match",
-          ["get", "scanStatus"],
-          "fresh_confirmed",
-          "#dcfce7",
-          "fresh_candidate",
-          "#ede9fe",
-          "unverified",
-          "#fee2e2",
-          "#e0f2fe",
-        ],
+        "circle-stroke-color": "#dcfce7",
         "circle-blur": 0.08,
         "circle-opacity-transition": { duration: 180, delay: 0 },
         "circle-radius-transition": { duration: 220, delay: 0 },
@@ -647,6 +568,7 @@ export default function MapView() {
   const scanGeoJsonRef = useRef<any>(emptyFeatureCollection());
   const scanFeatureMapRef = useRef(new Map<string, any>());
   const scanFlushRafRef = useRef<number | null>(null);
+  const publishedLeadIdsByJobRef = useRef(new Map<string, Set<string>>());
   const searchGeoJsonRef = useRef<any>(emptyFeatureCollection());
   const didAutoFitRef = useRef(false); // fit the map to leads once on first load
   // Any user/programmatic camera ownership change invalidates delayed GPS work.
@@ -663,13 +585,11 @@ export default function MapView() {
   // absence of a spinner. `scanOutcome` drives the control's success / empty /
   // error / cancelled / stale states and the same-scope rescan guard.
   const [scanOutcome, setScanOutcome] = useState<{
-    kind: "success" | "empty" | "unverified" | "error" | "cancelled" | "known";
+    kind: "success" | "complete";
     found: number;
     at: number; // epoch ms when the scan ended
     boxKey: string | null; // scope identity for dedupe/stale
-    checked?: number; // addresses resolved + qualified (honest empty copy)
-    unverified?: number; // non-answers: never misreported as "no"
-    detail?: string; // friendly error/empty explanation
+    checked?: number;
   } | null>(null);
   const boxKeyOf = (b: BBox | null) =>
     b
@@ -772,23 +692,6 @@ export default function MapView() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const canSubmitScan = useCan("scan.submit");
-  const { data: scanProviderStatus } = useQuery<{
-    automationAuthorized: boolean;
-    hasToken: boolean;
-    expiresIn: number | null;
-  }>({
-    queryKey: ["/api/token-status"],
-    queryFn: () =>
-      apiRequest("GET", "/api/token-status").then((response) =>
-        response.json(),
-      ),
-    enabled: !!user && canSubmitScan,
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  });
-  const scanProviderReady =
-    scanProviderStatus?.automationAuthorized === true &&
-    scanProviderStatus?.hasToken === true;
   const discovery = useDiscoveryJobs(!!user && canSubmitScan);
   const activeDiscoveryJobs = discovery.activeJobs;
   const scanning = activeDiscoveryJobs.length > 0;
@@ -800,11 +703,6 @@ export default function MapView() {
     (sum, job) => sum + job.checkedCount + job.failedCount,
     0,
   );
-  const newFound = activeDiscoveryJobs.reduce(
-    (sum, job) => sum + job.qualifiedCount,
-    0,
-  );
-  const scanConnectionIssue = scanning && !discovery.connected;
   const isAdmin = user?.role === "admin";
   const isRep = user?.role === "rep";
   const canManage = user?.role === "admin" || user?.role === "manager";
@@ -3036,20 +2934,9 @@ export default function MapView() {
     (event: DiscoveryEvent) => {
       const type = event.eventType.toLowerCase();
       const payload = event.payload ?? {};
-      if (
-        (type === "map.candidates" || type === "map.results") &&
-        Array.isArray(payload.points)
-      ) {
-        if (
-          applyDiscoveryMapPointBatch(
-            scanFeatureMapRef.current,
-            event.jobId,
-            payload.points,
-          ) > 0
-        )
-          scheduleScanFeatureFlush();
-        return;
-      }
+      // Field reps only receive operational leads. Rooftop candidates,
+      // provisional results, negatives and provider failures stay server-side.
+      if (type === "map.candidates" || type === "map.results") return;
       // During a rolling deploy the server may publish either a normalized lead
       // object or a ready-to-render GeoJSON feature. Accept both wire shapes, but
       // never infer a lead from an unrelated progress event.
@@ -3074,6 +2961,11 @@ export default function MapView() {
         (row.leadTag === "fresh_fiber_confirmed" &&
           row.freshConfidence === "cross_verified");
       if (!eventCreatesLead && !explicitlyQualified) return;
+      if (
+        row.leadTag !== "fresh_fiber_confirmed" ||
+        row.freshConfidence !== "cross_verified"
+      )
+        return;
 
       const featureCoordinates = Array.isArray(feature?.geometry?.coordinates)
         ? feature.geometry.coordinates
@@ -3091,6 +2983,13 @@ export default function MapView() {
           .trim()
           .toLowerCase()}|${lat.toFixed(6)}|${lng.toFixed(6)}`;
       const key = `${event.jobId}:${canonicalId}`;
+      const publishedId = String(
+        row.leadId ?? row.lead_id ?? row.id ?? canonicalId,
+      );
+      const publishedForJob =
+        publishedLeadIdsByJobRef.current.get(event.jobId) ?? new Set<string>();
+      publishedForJob.add(publishedId);
+      publishedLeadIdsByJobRef.current.set(event.jobId, publishedForJob);
       scanFeatureMapRef.current.set(key, {
         type: "Feature",
         id: key,
@@ -3161,66 +3060,43 @@ export default function MapView() {
     if (changed) scheduleScanFeatureFlush();
   }, [leads, scheduleScanFeatureFlush]);
 
-  // Terminal jobs stay visible as honest outcomes while active jobs keep going.
+  // Terminal jobs collapse to one field-friendly result. Provider diagnostics,
+  // failures and inconclusive homes remain in the server-side admin audit trail.
   // No full-map refetch is triggered for every discovery event: the SSE lead
   // payload already paints immediately, and the normal map stream/safety poll
   // eventually reconciles the durable main lead source.
   useEffect(() => {
+    let handled = false;
+    let found = 0;
+    let checked = 0;
     for (const job of discovery.jobs) {
       if (
         !isTerminalDiscoveryJob(job) ||
         terminalJobsHandledRef.current.has(job.id)
       )
         continue;
+      handled = true;
       terminalJobsHandledRef.current.add(job.id);
-      const checked = job.checkedCount + job.failedCount;
-      if (job.status === "cancelled") {
-        setScanOutcome({
-          kind: "cancelled",
-          found: job.qualifiedCount,
-          checked,
-          at: Date.now(),
-          boxKey: null,
-        });
-      } else if (job.status === "failed") {
-        setScanOutcome({
-          kind: "error",
-          found: job.qualifiedCount,
-          checked,
-          at: Date.now(),
-          boxKey: null,
-          detail:
-            job.error || "The scan failed. Its completed work was preserved.",
-        });
-      } else if (job.qualifiedCount > 0) {
-        setScanOutcome({
-          kind: "success",
-          found: job.qualifiedCount,
-          checked,
-          unverified: job.failedCount,
-          at: Date.now(),
-          boxKey: null,
-        });
-      } else if (job.status === "partial" || job.failedCount > 0) {
-        setScanOutcome({
-          kind: "unverified",
-          found: 0,
-          checked,
-          unverified: job.failedCount,
-          at: Date.now(),
-          boxKey: null,
-        });
-      } else {
-        setScanOutcome({
-          kind: "empty",
-          found: 0,
-          checked,
-          at: Date.now(),
-          boxKey: null,
-        });
-      }
+      checked += job.checkedCount + job.failedCount;
+      found += publishedLeadIdsByJobRef.current.get(job.id)?.size ?? 0;
+      publishedLeadIdsByJobRef.current.delete(job.id);
+    }
+    if (handled) {
+      setScanOutcome({
+        kind: found > 0 ? "success" : "complete",
+        found,
+        checked,
+        at: Date.now(),
+        boxKey: null,
+      });
     }
   }, [discovery.jobs]);
+
+  useEffect(() => {
+    if (!scanOutcome || scanning) return;
+    const timer = window.setTimeout(() => setScanOutcome(null), 4_000);
+    return () => window.clearTimeout(timer);
+  }, [scanOutcome, scanning]);
 
   const startAreaScan = useCallback(
     async (bbox: BBox) => {
@@ -3243,7 +3119,7 @@ export default function MapView() {
       setScanOutcome(null);
       let accepted = false;
       try {
-        const job = await discovery.submit({
+        await discovery.submit({
           geometry,
           idempotencyKey: discoveryIdempotencyKey(
             geometry,
@@ -3258,22 +3134,17 @@ export default function MapView() {
         setDrawnBBox(null);
         setDrawMode(false);
         clearDrawLayer();
-        toast({
-          title: "Area queued",
-          description: `${discoveryStageLabel(job.status)} — you can draw another area now.`,
-        });
-      } catch (error: any) {
-        const parsed = parseScanError(error?.message ?? String(error));
-        // Submission failed before the server acknowledged ownership. Preserve the
-        // exact geometry and nonce so an explicit retry is both convenient and
-        // idempotent (a lost 202 response cannot create a duplicate job).
+      } catch {
+        // Technical failures are intentionally absent from the rep UI. The
+        // authenticated server route records the request and its diagnostic.
         setDrawMode(false);
+        setDrawnBBox(null);
+        clearDrawLayer();
         setScanOutcome({
-          kind: "error",
+          kind: "complete",
           found: 0,
           at: Date.now(),
-          boxKey: scopeKey,
-          detail: parsed.message,
+          boxKey: null,
         });
       } finally {
         if (accepted) scanSubmissionRef.current = null;
@@ -3287,7 +3158,6 @@ export default function MapView() {
       discovery.submit,
       user?.tenantId,
       clearDrawLayer,
-      toast,
     ],
   );
 
@@ -3305,25 +3175,6 @@ export default function MapView() {
     autoStartedBoxKeyRef.current = key;
     void startAreaScan(drawnBBox);
   }, [drawnBBox, canSubmitScan, startAreaScan]);
-
-  const cancelDiscoveryJob = useCallback(
-    async (job: DiscoveryJob) => {
-      try {
-        await discovery.cancel(job.id);
-        toast({
-          title: "Scan cancelled",
-          description: "Completed addresses and leads were kept.",
-        });
-      } catch (error: any) {
-        toast({
-          title: "Could not cancel scan",
-          description: parseScanError(error?.message ?? String(error)).message,
-          variant: "destructive",
-        });
-      }
-    },
-    [discovery.cancel, toast],
-  );
 
   // ── Escape hatch — one keyboard path out of every map tool, in priority
   // order: open panel → armed lasso → armed/boxed scan. Search close returns
@@ -3985,19 +3836,9 @@ export default function MapView() {
         {scanning
           ? "Scanning the selected area."
           : scanOutcome && !scanStale
-            ? scanOutcome.kind === "success"
-              ? `Scan complete. Yes—${scanOutcome.found} fresh-fiber lead${scanOutcome.found === 1 ? "" : "s"} found.`
-              : scanOutcome.kind === "empty"
-                ? `Scan complete. No new fiber found${scanOutcome.checked ? ` across ${scanOutcome.checked} homes` : ""}.`
-                : scanOutcome.kind === "unverified"
-                  ? `Scan complete, but ${scanOutcome.unverified ?? 0} homes could not be verified and need a recheck.`
-                  : scanOutcome.kind === "known"
-                    ? "Every home in this box is already in your leads."
-                    : scanOutcome.kind === "error"
-                      ? scanOutcome.detail || "Scan failed."
-                      : scanOutcome.kind === "cancelled"
-                        ? `Scan stopped. ${scanOutcome.found} found so far.`
-                        : ""
+            ? scanOutcome.found > 0
+              ? `${scanOutcome.found} new lead${scanOutcome.found === 1 ? "" : "s"} added.`
+              : "Scan complete."
             : ""}
       </div>
 
@@ -4085,362 +3926,42 @@ export default function MapView() {
         style={{ top: "calc(env(safe-area-inset-top) + 6.75rem)" }}
         className="absolute left-3 right-[68px] md:top-16 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[min(620px,calc(100vw-24px))] z-30 space-y-1.5 pointer-events-none [&>*]:pointer-events-auto"
       >
-        {/* Draw-complete starts one durable job. Accepted geometry clears at once;
-          active jobs remain compact and independently cancellable while another
-          area can be drawn. */}
-        {(drawMode ||
-          drawnBBox ||
-          scanSubmitting ||
-          scanning ||
-          (scanOutcome && !scanStale)) &&
-          canSubmitScan &&
-          (() => {
-            const freshSameBox =
-              !!scanOutcome &&
-              !scanStale &&
-              (!drawnBBox || scanOutcome.boxKey === boxKeyOf(drawnBBox));
-            const borderClass =
-              scanning || scanSubmitting
-                ? "border-orange-500/40"
-                : freshSameBox && scanOutcome?.kind === "success"
-                  ? "border-emerald-500/40"
-                  : freshSameBox && scanOutcome?.kind === "unverified"
-                    ? "border-amber-500/45"
-                    : freshSameBox && scanOutcome?.kind === "error"
-                      ? "border-red-500/50"
-                      : freshSameBox && scanOutcome?.kind === "known"
-                        ? "border-sky-500/40"
-                        : "border-white/12";
-            const closeBtn = (
-              <button
-                type="button"
-                aria-label="Close scan"
-                className="shrink-0 w-8 h-8 -mr-1 -mt-0.5 grid place-items-center rounded-lg text-white/55 hover:text-white hover:bg-white/10 transition-colors"
-                onClick={() => {
-                  setDrawMode(false);
-                  setDrawnBBox(null);
-                  setScanOutcome(null);
-                  clearDrawLayer();
-                  scanSubmissionRef.current = null;
-                  autoStartedBoxKeyRef.current = null;
-                }}
-              >
-                <X className="w-4 h-4" />
-              </button>
-            );
-            return (
-              <div
-                className={`glass-surface px-3.5 py-3 flex flex-col gap-2.5 ${borderClass}`}
-                data-testid="scan-panel"
-              >
-                {scanProviderStatus && !scanProviderReady && (
-                  <div
-                    className="flex items-start gap-2 rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[10.5px] leading-snug text-amber-100"
-                    role="status"
-                  >
-                    <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
-                    <span>
-                      Address discovery will run and place rooftop pins, but
-                      Kinetic verification will start automatically when the
-                      authorized provider token is active. Until then,
-                      unverified addresses stay red and never become leads.
-                    </span>
-                  </div>
-                )}
-                {/* ── Status row (icon + primary line) ─────────────────────────── */}
-                <div className="flex items-start gap-2">
-                  <span className="flex-1 min-w-0 text-[12.5px] leading-snug flex items-start gap-1.5 text-white/85">
-                    {scanSubmitting ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400 mt-px shrink-0" />
-                        <span>Submitting this area securely…</span>
-                      </>
-                    ) : scanning ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400 mt-px shrink-0" />
-                        <span>
-                          <span className="font-semibold text-white">
-                            {activeDiscoveryJobs.length}
-                          </span>{" "}
-                          area{activeDiscoveryJobs.length === 1 ? "" : "s"}{" "}
-                          running
-                          {total > 0 ? (
-                            <>
-                              {" "}
-                              ·{" "}
-                              <span className="tabular-nums">
-                                {done}/{total}
-                              </span>{" "}
-                              checked
-                            </>
-                          ) : null}
-                          {newFound > 0 ? (
-                            <>
-                              {" "}
-                              ·{" "}
-                              <span className="text-emerald-400 font-semibold">
-                                {newFound} fresh
-                              </span>
-                            </>
-                          ) : null}
-                        </span>
-                      </>
-                    ) : freshSameBox && scanOutcome?.kind === "success" ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-px shrink-0" />
-                        <span>
-                          <span className="font-semibold text-emerald-300">
-                            YES
-                          </span>{" "}
-                          ·{" "}
-                          <span className="font-semibold text-white">
-                            {scanOutcome.found}
-                          </span>{" "}
-                          fresh-fiber lead{scanOutcome.found === 1 ? "" : "s"}{" "}
-                          found
-                          {scanOutcome.checked ? (
-                            <span className="text-white/45">
-                              {" "}
-                              · {scanOutcome.checked} checked
-                            </span>
-                          ) : null}
-                        </span>
-                      </>
-                    ) : freshSameBox && scanOutcome?.kind === "empty" ? (
-                      <>
-                        <Radar className="w-3.5 h-3.5 text-white/40 mt-px shrink-0" />
-                        <span>
-                          <span className="font-semibold text-white">
-                            NO fresh fiber
-                          </span>
-                          {scanOutcome.checked ? (
-                            <>
-                              {" "}
-                              —{" "}
-                              <span className="tabular-nums">
-                                {scanOutcome.checked}
-                              </span>{" "}
-                              home{scanOutcome.checked === 1 ? "" : "s"} checked
-                            </>
-                          ) : (
-                            ""
-                          )}
-                          .
-                        </span>
-                      </>
-                    ) : freshSameBox && scanOutcome?.kind === "unverified" ? (
-                      <>
-                        <AlertCircle className="w-3.5 h-3.5 text-amber-400 mt-px shrink-0" />
-                        <span>
-                          <span className="font-semibold text-amber-300">
-                            Couldn’t verify
-                          </span>{" "}
-                          {scanOutcome.unverified ?? 0} home
-                          {scanOutcome.unverified === 1 ? "" : "s"}. This is not
-                          a “No”—recheck when the provider is available.
-                        </span>
-                      </>
-                    ) : freshSameBox && scanOutcome?.kind === "known" ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-sky-400 mt-px shrink-0" />
-                        <span>
-                          All{" "}
-                          {scanOutcome.checked ? (
-                            <span className="tabular-nums">
-                              {scanOutcome.checked}
-                            </span>
-                          ) : (
-                            ""
-                          )}{" "}
-                          home{scanOutcome.checked === 1 ? "" : "s"} here are
-                          already in your leads.
-                        </span>
-                      </>
-                    ) : freshSameBox && scanOutcome?.kind === "error" ? (
-                      <>
-                        <AlertCircle className="w-3.5 h-3.5 text-red-400 mt-px shrink-0" />
-                        <span>
-                          {scanOutcome.detail || "Scan failed — try again."}
-                        </span>
-                      </>
-                    ) : freshSameBox && scanOutcome?.kind === "cancelled" ? (
-                      <span>
-                        Scan stopped ·{" "}
-                        <span className="tabular-nums">
-                          {scanOutcome.found}
-                        </span>{" "}
-                        found so far
-                      </span>
-                    ) : scanStale ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 text-white/40 mt-px shrink-0" />
-                        <span>Area changed — rescan for current results.</span>
-                      </>
-                    ) : drawnBBox ? (
-                      <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400 mt-px shrink-0" />
-                        <span>Box captured — starting automatically…</span>
-                      </>
-                    ) : (
-                      <span>
-                        Drag a box over the homes. Scanning starts
-                        automatically.
-                      </span>
-                    )}
+        {/* One compact, non-blocking field status. Draw completion starts the
+            single scan automatically; only published lead counts reach this UI. */}
+        {(drawMode || drawnBBox || scanSubmitting || scanning || (scanOutcome && !scanStale)) &&
+          canSubmitScan && (
+            <div
+              className="pointer-events-auto inline-flex min-h-10 max-w-full items-center gap-2 rounded-full border border-white/15 bg-slate-950/88 px-3.5 py-2 text-[12.5px] font-semibold text-white shadow-xl shadow-black/25 backdrop-blur-xl"
+              data-testid="scan-panel"
+              role="status"
+              aria-live="polite"
+            >
+              {scanSubmitting || scanning ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-emerald-400" />
+                  <span className="truncate tabular-nums" data-testid="scan-progress">
+                    {total > 0
+                      ? `Scanning ${Math.min(done, total)} of ${total}`
+                      : "Starting scan…"}
                   </span>
-                  {!scanning && !scanSubmitting && closeBtn}
-                </div>
-
-                {freshSameBox && scanOutcome?.kind === "error" && drawnBBox && (
-                  <button
-                    type="button"
-                    disabled={scanSubmitting}
-                    onClick={() => void startAreaScan(drawnBBox)}
-                    className="min-h-11 w-full rounded-xl bg-orange-500 px-4 text-[12px] font-bold text-slate-950 hover:bg-orange-400 disabled:opacity-50"
-                  >
-                    Retry this exact area
-                  </button>
-                )}
-
-                {/* Per-job progress: no fake precision during address discovery. */}
-                {scanning && (
-                  <div className="space-y-2">
-                    {activeDiscoveryJobs.map((job) => {
-                      const resolved = job.checkedCount + job.failedCount;
-                      const hasDenominator =
-                        job.uniqueCandidateCount > 0 &&
-                        job.status === "qualifying";
-                      const pct = hasDenominator
-                        ? Math.min(
-                            100,
-                            Math.round(
-                              (resolved / job.uniqueCandidateCount) * 100,
-                            ),
-                          )
-                        : 0;
-                      const duplicates = Math.max(
-                        0,
-                        job.discoveredCount - job.uniqueCandidateCount,
-                      );
-                      return (
-                        <div
-                          key={job.id}
-                          className="rounded-xl border border-white/10 bg-black/15 px-2.5 py-2"
-                          data-testid={`discovery-job-${job.id}`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate text-[11.5px] font-semibold text-white">
-                                {job.city
-                                  ? `${job.city}${job.state ? `, ${job.state}` : ""}`
-                                  : `Area ${job.id.slice(0, 8)}`}
-                              </span>
-                              <span className="block text-[10px] text-white/55">
-                                {discoveryStageLabel(job.status)} ·{" "}
-                                {job.coverageStatus || "processing"}
-                              </span>
-                            </span>
-                            <span className="text-[10px] tabular-nums text-white/70">
-                              {job.checkedCount} checked ·{" "}
-                              <b className="text-emerald-300">
-                                {job.qualifiedCount} leads
-                              </b>
-                            </span>
-                            <button
-                              type="button"
-                              aria-label={`Cancel scan ${job.id.slice(0, 8)}`}
-                              onClick={() => void cancelDiscoveryJob(job)}
-                              className="min-h-11 min-w-11 rounded-lg text-red-300 hover:bg-red-500/10 grid place-items-center"
-                            >
-                              <X className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                          <div
-                            className="h-1.5 rounded-full bg-white/10 overflow-hidden"
-                            role="progressbar"
-                            aria-label={`Progress for scan ${job.id}`}
-                            aria-valuemin={0}
-                            aria-valuemax={100}
-                            aria-valuenow={hasDenominator ? pct : undefined}
-                          >
-                            <div
-                              className={`h-full bg-orange-500 rounded-full transition-[width] duration-300 ${hasDenominator ? "" : "animate-pulse"}`}
-                              style={{
-                                width: hasDenominator
-                                  ? `${Math.max(4, pct)}%`
-                                  : "35%",
-                              }}
-                            />
-                          </div>
-                          <div className="mt-1 flex flex-wrap gap-x-2 text-[9.5px] tabular-nums text-white/45">
-                            <span>{job.discoveredCount} raw</span>
-                            <span>{job.uniqueCandidateCount} unique</span>
-                            {duplicates > 0 && (
-                              <span>{duplicates} duplicates skipped</span>
-                            )}
-                            {job.cachedCount > 0 && (
-                              <span>{job.cachedCount} cached</span>
-                            )}
-                            {job.failedCount > 0 && (
-                              <span className="text-amber-300">
-                                {job.failedCount} recheck
-                              </span>
-                            )}
-                          </div>
-                          {job.sourceWarnings
-                            ?.slice(0, 2)
-                            .map((warning, index) => (
-                              <div
-                                key={index}
-                                className="mt-1 text-[9.5px] leading-snug text-amber-300"
-                              >
-                                {warning}
-                              </div>
-                            ))}
-                        </div>
-                      );
-                    })}
-                    {scanConnectionIssue && (
-                      <div
-                        className="flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-300"
-                        role="status"
-                      >
-                        <AlertCircle className="mt-px h-3 w-3 shrink-0" />
-                        Connection interrupted. The server scan is still
-                        running; reconnecting automatically.
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {/* The transient scan layer is intentionally honest: every rooftop is
-              visible while it is checked, but only cross-verified opportunities
-              turn green and enter the durable lead feed. */}
-                {(scanning || scanFeatureMapRef.current.size > 0) && (
-                  <div
-                    className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-white/60"
-                    aria-label="Scan result legend"
-                  >
-                    {[
-                      ["bg-sky-500", "Checking"],
-                      ["bg-violet-500", "Provider candidate"],
-                      ["bg-emerald-500", "Confirmed lead"],
-                      ["bg-slate-400", "Not fresh / no service"],
-                      ["bg-red-500", "Needs recheck"],
-                    ].map(([color, label]) => (
-                      <span key={label} className="flex items-center gap-1.5">
-                        <span
-                          className={`h-2 w-2 shrink-0 rounded-full ${color}`}
-                          aria-hidden="true"
-                        />
-                        {label}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            );
-          })()}
+                </>
+              ) : scanOutcome && !scanStale ? (
+                <>
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                  <span data-testid="scan-result">
+                    {scanOutcome.found > 0
+                      ? `${scanOutcome.found} new lead${scanOutcome.found === 1 ? "" : "s"} added`
+                      : "Scan complete"}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <Radar className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                  <span>Draw around homes to scan</span>
+                </>
+              )}
+            </div>
+          )}
         {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
 
         {canManage && pendingRequests.length > 0 && (
@@ -5287,12 +4808,6 @@ export default function MapView() {
                     icon={
                       scanSubmitting ? (
                         <Loader2 className="w-5 h-5 animate-spin" />
-                      ) : scanOutcome && !scanStale ? (
-                        scanOutcome.kind === "error" ? (
-                          <AlertCircle className="w-5 h-5" />
-                        ) : (
-                          <Radar className="w-5 h-5" />
-                        )
                       ) : (
                         <Radar className="w-5 h-5" />
                       )
@@ -5308,7 +4823,7 @@ export default function MapView() {
                     }
                     testid="ctl-scan"
                     active={drawMode || scanSubmitting || !!drawnBBox}
-                    tone={scanOutcome?.kind === "error" ? "red" : "orange"}
+                    tone="orange"
                     badge={
                       scanning
                         ? String(activeDiscoveryJobs.length)

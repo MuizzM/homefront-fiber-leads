@@ -84,6 +84,23 @@ function fixtureFor(address: string): any {
       rawResponse: { success: false, validationResult: "AddressNotFound" },
     };
   }
+  if (address.startsWith("COMING")) {
+    return {
+      ...base,
+      apiSource: "kinetic_live",
+      fiberStatus: "new_fiber",
+      isNewFiber: true,
+      fiberAvailable: true,
+      billingStatus: "Y",
+      householdSegmentType: "NEW FIBER",
+      leadTag: "coming_soon",
+      leadScore: 65,
+      rawResponse: {
+        success: true,
+        address: { householdSegmentType: "NEW FIBER", billingStatus: "Y" },
+      },
+    };
+  }
   // NEW FIBER + billing N — the target.
   return {
     ...base,
@@ -131,6 +148,22 @@ beforeAll(async () => {
 });
 
 describe("budgeted scan engine (replay — zero proxy)", () => {
+  it("silently enrolls active-service NEW FIBER in prioritized monitoring without creating a lead", async () => {
+    const inserted = rawDb.prepare(`INSERT INTO scan_targets
+      (tenant_id,address,city,state,zip,lat,lng,source) VALUES (1,'COMING 12 Watch Way','Monitorburg','NC','28100',35.51,-80.41,'test')`).run();
+    const runId = "run_coming_soon_watch";
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "address_discovery", label: "Coming Soon watch", city: "Monitorburg", state: "NC", budget: 1 });
+    store.enqueueRunTargets(runId, [{ id: Number(inserted.lastInsertRowid), seq: 0 }]);
+
+    await engine.runScanWorker(runId, TENANT, replay);
+
+    expect(store.getRun(runId, TENANT)).toMatchObject({ status: "done", verified: 1, newFiber: 0 });
+    expect(rawDb.prepare(`SELECT is_coming_soon AS isComingSoon,is_live AS isLive
+      FROM kinetic_addresses WHERE tenant_id=? AND lower(address)=lower(?)`).get(TENANT, "COMING 12 Watch Way"))
+      .toEqual({ isComingSoon: 1, isLive: 1 });
+    expect(storageMod.storage.getLeads(TENANT).some((lead: any) => lead.address === "COMING 12 Watch Way")).toBe(false);
+  });
+
   it("fails closed without an authorized provider session and never records a false negative", async () => {
     const priorAuthorization = process.env.KFS_AUTOMATION_AUTHORIZED;
     delete process.env.KFS_AUTOMATION_AUTHORIZED;

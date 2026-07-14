@@ -17,7 +17,7 @@ beforeAll(async () => {
 });
 
 describe("discovery map event stream", () => {
-  it("announces every rooftop and reports its result exactly once", () => {
+  it("marks rooftop and provider outcomes without sending rep-visible map events", () => {
     const { job } = store.createDiscoveryJob({
       tenantId: 1,
       idempotencyKey: "map-event-contract",
@@ -34,20 +34,14 @@ describe("discovery map event stream", () => {
 
     expect(store.publishQualificationMapCandidates(job)).toBe(1);
     expect(store.publishQualificationMapCandidates(job)).toBe(0);
-    const candidateEvent = store.readDiscoveryEvents({ tenantId: 1, after: 0, jobId: job.id })
-      .find((event) => event.eventType === "map.candidates");
-    expect(candidateEvent.payload.points).toEqual([
-      expect.objectContaining({ canonicalAddressId, address: "101 Map St", scanStatus: "checking", lat: 35.815, lng: -80.255 }),
-    ]);
+    expect(store.readDiscoveryEvents({ tenantId: 1, after: 0, jobId: job.id })
+      .some((event) => event.eventType === "map.candidates")).toBe(false);
 
     rawDb.prepare(`UPDATE qualification_checks SET state='verified',result='no_service',checked_at=datetime('now')
       WHERE job_id=? AND canonical_address_id=?`).run(job.id, canonicalAddressId);
     expect(store.publishQualificationMapResults(job)).toBe(1);
     expect(store.publishQualificationMapResults(job)).toBe(0);
-    const resultEvent = store.readDiscoveryEvents({ tenantId: 1, after: 0, jobId: job.id })
-      .find((event) => event.eventType === "map.results");
-    expect(resultEvent.payload.points).toEqual([
-      expect.objectContaining({ canonicalAddressId, address: "101 Map St", scanStatus: "no_service", result: "no_service" }),
-    ]);
+    expect(store.readDiscoveryEvents({ tenantId: 1, after: 0, jobId: job.id })
+      .some((event) => event.eventType === "map.results")).toBe(false);
   });
 });

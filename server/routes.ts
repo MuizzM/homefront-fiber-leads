@@ -17,6 +17,7 @@ import { decideFreshFiber, type FreshFiberVerdict } from "@shared/freshFiberVerd
 import { structuredLog } from "./structuredLog";
 import { rawDb } from "./db";
 import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
+import type { ProviderRequestPriority } from "./providerRequestQueue";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
 try {
@@ -145,7 +146,7 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, getAddressScanQueueStatus, type ScanResult } from "./scanner";
+import { ProviderAccessDeniedError, scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, resumeAddressScanQueue, getAddressScanQueueStatus, type ScanResult } from "./scanner";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
 import {
@@ -692,36 +693,33 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
   // successes, 0 fiber). Route through the SAME bounded qualifier the tiled/box
   // scans use (pooledMap cap + jittered backoff on throttle) so we stay inside
   // the window and actually harvest fiber. tenantId comes off the job stamp.
-  await qualifyAddressesViaKinetic(addresses as any, job.tenantId ?? 1, {
-    source: "route-city-scan",
-    concurrency: Number(process.env.CITY_SCAN_CONCURRENCY ?? 8),
-    shouldStop: () => job.status !== "running",
-    onScanned: (result, scanned, leads, address, persisted) => {
-      job.done = scanned;
-      (job as any).newFiber = leads;
-      _scanWorkerState.lastHeartbeat = Date.now();
-      if (result) {
-        appendScanResult(job, result, persisted);
-      } else {
-        appendScanResult(job, {
-          ...address,
-          fiberStatus: "unknown",
-          isNewFiber: false,
-          fiberAvailable: false,
-          apiSource: "failed",
-        });
-        // qualifyAddressesViaKinetic records diagnostics for non-null results;
-        // a thrown/null probe is the only case that still needs recording here.
-        recordCheck(false, true);
-      }
-    },
-  });
-
-  job.status = "done";
-  job.completedAt = new Date().toISOString();
-  _scanWorkerState.isRunning = false;
-  _scanWorkerState.checksPerSec = 0;
-  _scanWorkerState.concurrency = 0;
+  try {
+    await qualifyAddressesViaKinetic(addresses as any, job.tenantId ?? 1, {
+      source: "route-city-scan",
+      priority: "city",
+      concurrency: Number(process.env.CITY_SCAN_CONCURRENCY ?? 8),
+      shouldStop: () => job.status !== "running",
+      onScanned: (result, scanned, leads, address, persisted) => {
+        job.done = scanned;
+        (job as any).newFiber = leads;
+        _scanWorkerState.lastHeartbeat = Date.now();
+        if (result) appendScanResult(job, result, persisted);
+        else {
+          appendScanResult(job, { ...address, fiberStatus: "unknown", isNewFiber: false, fiberAvailable: false, apiSource: "failed" });
+          recordCheck(false, true);
+        }
+      },
+    });
+    job.status = "done";
+  } catch (error) {
+    job.status = "error";
+    structuredLog("scan.city.stopped", { jobId, reason: String((error as any)?.message ?? error) }, "error");
+  } finally {
+    job.completedAt = new Date().toISOString();
+    _scanWorkerState.isRunning = false;
+    _scanWorkerState.checksPerSec = 0;
+    _scanWorkerState.concurrency = 0;
+  }
   console.log(`[scan] Job ${jobId} complete: ${job.done} checked, ${_scanWorkerState.diagNewFiber} primary matches`);
 }
 
@@ -735,6 +733,7 @@ async function qualifyAddressesViaKinetic(
   tenantId: number,
   opts: {
     source?: string;
+    priority?: ProviderRequestPriority;
     concurrency?: number;
     shouldStop?: () => boolean;
     onScanned?: (result: ScanResult | null, scanned: number, leads: number, address: RawAddress, persisted: PersistKineticObservationResult | null) => void;
@@ -742,14 +741,18 @@ async function qualifyAddressesViaKinetic(
 ): Promise<{ leads: number; scanned: number }> {
   const concurrency = opts.concurrency ?? Number(process.env.AREA_SCAN_CONCURRENCY ?? 10);
   const source = opts.source ?? "route-address-qualifier";
+  const priority = opts.priority ?? (source.includes("area") || source.includes("tiled") ? "lasso" : source.includes("city") ? "city" : "market");
   let leads = 0, scanned = 0;
   await pooledMap(addresses, concurrency, async (a) => {
     if (opts.shouldStop?.()) return null; // cancelled → stop spending on new probes
     const startedAtMs = Date.now();
     let result: ScanResult | null = null;
     for (let attempt = 0; attempt <= 2; attempt++) {
-      try { result = await addressScanner(a.address, a.city, a.state, a.zip || ""); }
-      catch { result = null; }
+      try { result = await addressScanner(a.address, a.city, a.state, a.zip || "", { source: priority }); }
+      catch (error) {
+        if (error instanceof ProviderAccessDeniedError) throw error;
+        result = null;
+      }
       const throttled = !result || (result.apiSource === "failed" && result.blocked);
       if (!throttled) break;
       if (attempt < 2) await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 400, capMs: 3000 })));
@@ -794,35 +797,30 @@ async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateA
   _scanWorkerState.diagSuccess = 0;
   _scanWorkerState.diagFailed = 0;
 
-  await qualifyAddressesViaKinetic(addresses as any, job.tenantId ?? getDefaultTenantId() ?? 1, {
-    source: "route-area-scan",
-    concurrency: AREA_SCAN_CONCURRENCY,
-    shouldStop: () => !scanJobs.has(jobId),
-    onScanned: (result, scanned, leads, address, persisted) => {
-      job.done = scanned;
-      (job as any).newFiber = leads;
-      _scanWorkerState.lastHeartbeat = Date.now();
-      if (result) {
-        appendScanResult(job, result, persisted);
-      } else {
-        appendScanResult(job, {
-          ...address,
-          fiberStatus: "unknown",
-          isNewFiber: false,
-          fiberAvailable: false,
-          apiSource: "failed",
-        });
-        recordCheck(false, true);
-      }
-    },
-  });
-
-  if (scanJobs.has(jobId)) {
-    job.status = "done";
-    job.completedAt = new Date().toISOString();
+  try {
+    await qualifyAddressesViaKinetic(addresses as any, job.tenantId ?? getDefaultTenantId() ?? 1, {
+      source: "route-area-scan", priority: "lasso", concurrency: AREA_SCAN_CONCURRENCY,
+      shouldStop: () => !scanJobs.has(jobId),
+      onScanned: (result, scanned, leads, address, persisted) => {
+        job.done = scanned;
+        (job as any).newFiber = leads;
+        _scanWorkerState.lastHeartbeat = Date.now();
+        if (result) appendScanResult(job, result, persisted);
+        else {
+          appendScanResult(job, { ...address, fiberStatus: "unknown", isNewFiber: false, fiberAvailable: false, apiSource: "failed" });
+          recordCheck(false, true);
+        }
+      },
+    });
+    if (scanJobs.has(jobId)) job.status = "done";
+  } catch (error) {
+    if (scanJobs.has(jobId)) job.status = "error";
+    structuredLog("scan.area.stopped", { jobId, reason: String((error as any)?.message ?? error) }, "error");
+  } finally {
+    if (scanJobs.has(jobId)) job.completedAt = new Date().toISOString();
+    _scanWorkerState.isRunning = false;
+    _scanWorkerState.concurrency = 0;
   }
-  _scanWorkerState.isRunning = false;
-  _scanWorkerState.concurrency = 0;
   console.log(`[scan] Area job ${jobId} complete: ${job.done}/${job.total} checked, ${_scanWorkerState.diagNewFiber} primary matches`);
 }
 
@@ -1566,6 +1564,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     try {
       // Uses the configured authorized transport and stable provider identity.
       await refreshTokenFromApi();
+      // This admin-only action is the explicit recovery boundary after a 403;
+      // background token refreshes never clear a halted provider queue.
+      resumeAddressScanQueue();
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: `Refresh failed: ${e.message}` });
@@ -1584,7 +1585,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const { address, city, state, zip } = parsed.data;
 
     const startedAtMs = Date.now();
-    const result = await addressScanner(address, city, state, zip);
+    const result = await addressScanner(address, city, state, zip, { source: "manual" });
     const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
 
     // Log to history — stamped with the caller's tenant so reads can be scoped.

@@ -17,7 +17,8 @@
     "test:e2e:install": "playwright install chromium",
     "check:fast": "tsgo --noEmit",
     "calling:dnc:sign": "tsx script/sign-dnc-import.ts",
-    "markets:refresh": "tsx script/build-state-markets.ts"
+    "markets:refresh": "tsx script/build-state-markets.ts",
+    "scanner:load-test": "tsx script/load-test-authorized-scanner.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
