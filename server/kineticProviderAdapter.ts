@@ -28,8 +28,16 @@ export interface NormalizedKineticAddress {
 export interface KineticProviderAdapter {
   readonly name: string;
   ping(signal?: AbortSignal): Promise<{ ok: boolean; latencyMs: number; message: string }>;
+  healthCheck(signal?: AbortSignal): Promise<{ ok: boolean; latencyMs: number; message: string }>;
+  searchAddresses(input: KineticAddressSearchInput, signal?: AbortSignal): Promise<NormalizedKineticAddress[]>;
+  qualifyAddress(key: KineticLookupKey, signal?: AbortSignal): Promise<NormalizedKineticAddress | null>;
   lookup(key: KineticLookupKey, signal?: AbortSignal): Promise<NormalizedKineticAddress | null>;
 }
+
+export const kineticAddressSearchSchema=z.object({
+  address:z.string().trim().min(3).max(160),city:z.string().trim().min(1).max(100),state:z.string().trim().length(2).transform(value=>value.toUpperCase()),zip:z.string().trim().regex(/^\d{5}(?:-\d{4})?$/).optional(),limit:z.number().int().min(1).max(50).default(10),
+}).strict();
+export type KineticAddressSearchInput=z.infer<typeof kineticAddressSearchSchema>;
 
 const mappingSchema = z.object({
   root: z.string().default(""),
@@ -155,6 +163,22 @@ export class HttpKineticProviderAdapter implements KineticProviderAdapter {
       return { ok: false, latencyMs: Math.round(performance.now() - started), message: error instanceof Error ? error.message : String(error) };
     }
   }
+
+  healthCheck(signal?:AbortSignal):Promise<{ok:boolean;latencyMs:number;message:string}>{return this.ping(signal);}
+
+  async searchAddresses(input:KineticAddressSearchInput,signal?:AbortSignal):Promise<NormalizedKineticAddress[]>{
+    const parsed=kineticAddressSearchSchema.parse(input),url=process.env.KINETIC_SEARCH_ENDPOINT;
+    if(!url)throw new Error("Kinetic address-search endpoint is not configured");
+    const method=(process.env.KINETIC_SEARCH_METHOD||"POST").toUpperCase();
+    const requestUrl=method==="GET"?`${url}${url.includes("?")?"&":"?"}${new URLSearchParams({address:parsed.address,city:parsed.city,state:parsed.state,...(parsed.zip?{zip:parsed.zip}:{}),limit:String(parsed.limit)})}`:url;
+    const response=await fetch(requestUrl,{method,headers:{...headers(),...(method==="GET"?{}:{"Content-Type":"application/json"})},body:method==="GET"?undefined:JSON.stringify(parsed),signal});
+    if(!response.ok)throw new Error(`Kinetic address search returned HTTP ${response.status}`);
+    const raw=await response.json(),rootPath=process.env.KINETIC_SEARCH_RESULTS_PATH||"results",root=readPath(raw,rootPath);
+    if(!Array.isArray(root))throw new Error(`Kinetic address search response is missing array path ${rootPath}`);
+    return root.slice(0,parsed.limit).map(item=>normalizeKineticResponse(item,this.mapping));
+  }
+
+  qualifyAddress(key:KineticLookupKey,signal?:AbortSignal):Promise<NormalizedKineticAddress|null>{return this.lookup(key,signal);}
 
   async lookup(key: KineticLookupKey, signal?: AbortSignal): Promise<NormalizedKineticAddress | null> {
     const url = endpointFor(key);
