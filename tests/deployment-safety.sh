@@ -7,7 +7,7 @@ fail() {
   exit 1
 }
 
-for script in scripts/backup.sh scripts/deploy.sh scripts/restore.sh scripts/rollback.sh; do
+for script in scripts/backup.sh scripts/backup-container.sh scripts/deploy.sh scripts/restore.sh scripts/rollback.sh; do
   bash -n "$script"
 done
 
@@ -29,6 +29,11 @@ if grep -q 'homefront-fiber-full_app-data' scripts/deploy.sh; then
   fail "deploy still contains the stale hard-coded volume name"
 fi
 grep -q 'Destination "/data"' scripts/deploy.sh || fail "deploy does not inspect the running /data mount"
+grep -q 'BACKUP_VOLUME="$DATA_MOUNT_NAME"' scripts/deploy.sh || fail "deploy does not back up the named production volume"
+grep -q -- '--network none' scripts/backup.sh || fail "backup helper is not network-isolated"
+grep -q -- '--read-only' scripts/backup.sh || fail "backup helper root filesystem is writable"
+grep -q 'PRAGMA integrity_check' scripts/backup-container.sh || fail "container backup lacks an integrity check"
+grep -q 'age -r' scripts/backup-container.sh || fail "container backup is not encrypted"
 grep -q '.backup-age-recipient' scripts/deploy.sh || fail "deploy does not require encrypted pre-cutover backups"
 grep -q 'scripts/rollback.sh "$PREV_TAG"' scripts/deploy.sh || fail "failed deploy does not use health-gated rollback"
 grep -q '\^\[0-9a-f\].*7,40' scripts/rollback.sh || fail "rollback accepts mutable image tags"
@@ -38,7 +43,7 @@ fi
 grep -q 'docker compose -f docker-compose.production.yml' scripts/restore.sh || fail "restore does not target production Compose"
 
 if command -v shellcheck >/dev/null 2>&1; then
-  shellcheck scripts/backup.sh scripts/deploy.sh scripts/restore.sh scripts/rollback.sh
+  shellcheck scripts/backup.sh scripts/backup-container.sh scripts/deploy.sh scripts/restore.sh scripts/rollback.sh
 else
   echo "[deployment-safety] shellcheck unavailable; skipped"
 fi

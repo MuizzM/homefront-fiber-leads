@@ -52,16 +52,17 @@ if [ -n "$RECORDED_TAG" ] && [ "$RECORDED_TAG" != "$PREV_TAG" ]; then
   exit 1
 fi
 
-DATA_MOUNT_SOURCE="$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{println .Source}}{{end}}{{end}}' "$APP_CONTAINER")"
-if [ -z "$DATA_MOUNT_SOURCE" ] || [[ "$DATA_MOUNT_SOURCE" == *$'\n'* ]] || [ ! -d "$DATA_MOUNT_SOURCE" ]; then
-  echo "[deploy] refusing: running app does not have exactly one inspectable /data mount" >&2
+mapfile -t DATA_MOUNTS < <(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{printf "%s|%s\n" .Type .Name}}{{end}}{{end}}' "$APP_CONTAINER")
+if [ "${#DATA_MOUNTS[@]}" -ne 1 ]; then
+  echo "[deploy] refusing: running app does not have exactly one /data mount" >&2
   exit 1
 fi
-PRODUCTION_DB="$DATA_MOUNT_SOURCE/data.db"
-if [ ! -f "$PRODUCTION_DB" ] || [ ! -r "$PRODUCTION_DB" ]; then
-  echo "[deploy] refusing: production database is missing or unreadable at the running app's /data mount" >&2
+IFS='|' read -r DATA_MOUNT_TYPE DATA_MOUNT_NAME <<< "${DATA_MOUNTS[0]}"
+if [ "$DATA_MOUNT_TYPE" != "volume" ] || [ -z "$DATA_MOUNT_NAME" ]; then
+  echo "[deploy] refusing: /data must be backed by one named Docker volume" >&2
   exit 1
 fi
+docker volume inspect "$DATA_MOUNT_NAME" >/dev/null
 
 # The deployment path handles resident/rep PII, so its mandatory pre-cutover
 # snapshot must be encrypted. AGE_RECIPIENT can be provided by the operator or
@@ -77,18 +78,24 @@ fi
 
 echo "[deploy] target=$NEW_TAG  previous=${PREV_TAG:-none}"
 
-# 1) Pre-deploy backup (fails the deploy if the DB can't be snapshotted).
+# 1) Build a dedicated backup helper. This does not touch the running app.
+BACKUP_TOOL_IMAGE="homefront-backup:$NEW_TAG"
+echo "[deploy] build backup helper $BACKUP_TOOL_IMAGE…"
+docker build --file Dockerfile.backup --tag "$BACKUP_TOOL_IMAGE" .
+
+# 2) Pre-deploy backup (fails the deploy if the DB can't be snapshotted,
+# integrity-checked, and encrypted).
 echo "[deploy] pre-deploy backup…"
-if ! DB_PATH="$PRODUCTION_DB" scripts/backup.sh; then
+if ! BACKUP_VOLUME="$DATA_MOUNT_NAME" BACKUP_TOOL_IMAGE="$BACKUP_TOOL_IMAGE" scripts/backup.sh; then
   echo "[deploy] backup failed; production was not changed" >&2
   exit 1
 fi
 
-# 2) Build the immutable image.
+# 3) Build the immutable application image.
 echo "[deploy] build $NEW_TAG…"
 APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" build app
 
-# 3) Roll out (Caddy waits for app healthy via depends_on).
+# 4) Roll out (Caddy waits for app healthy via depends_on).
 echo "[deploy] up…"
 if ! APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" up -d; then
   echo "[deploy] Compose cutover failed — restoring the previous image" >&2
@@ -100,7 +107,7 @@ if ! APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" up -d; then
   exit 1
 fi
 
-# 4) Health gate.
+# 5) Health gate.
 echo "[deploy] health check…"
 ok=0
 attempts_left=20

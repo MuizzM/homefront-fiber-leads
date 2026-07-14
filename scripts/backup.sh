@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Encrypted, consistent SQLite backup with retention.
-# - Uses `.backup` (a live-consistent snapshot; safe while the app is running,
-#   unlike cp on a WAL database).
-# - Encrypts at rest with age when AGE_RECIPIENT is configured.
-# - Prunes local copies past the retention window.
+# Production uses a locked-down helper container so the deploy user never needs
+# direct access to Docker's private volume directory. Local/cron use can still
+# provide DB_PATH and use host sqlite3 + age.
 # Run from cron (see INFRASTRUCTURE.md). Offsite sync is a separate step.
 #
 # Env:
@@ -18,6 +17,37 @@ BACKUP_DIR="${BACKUP_DIR:-./backups}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$BACKUP_DIR"
+
+if [ -n "${BACKUP_VOLUME:-}" ]; then
+  : "${BACKUP_TOOL_IMAGE:?BACKUP_TOOL_IMAGE is required with BACKUP_VOLUME}"
+  : "${AGE_RECIPIENT:?AGE_RECIPIENT is required for production volume backups}"
+  [[ "$BACKUP_VOLUME" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]] || {
+    echo "[backup] invalid Docker volume name" >&2
+    exit 1
+  }
+  docker volume inspect "$BACKUP_VOLUME" >/dev/null
+  docker image inspect "$BACKUP_TOOL_IMAGE" >/dev/null
+
+  BACKUP_DIR_ABS="$(cd "$BACKUP_DIR" && pwd -P)"
+  docker run --rm \
+    --read-only \
+    --network none \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+    --user "$(id -u):$(id -g)" \
+    -e AGE_RECIPIENT \
+    -e BACKUP_STAMP="$STAMP" \
+    -v "$BACKUP_VOLUME:/data:ro" \
+    -v "$BACKUP_DIR_ABS:/backups" \
+    "$BACKUP_TOOL_IMAGE"
+
+  OUT="$BACKUP_DIR/data-$STAMP.db.age"
+  [ -s "$OUT" ] || { echo "[backup] output artifact is missing or empty" >&2; exit 1; }
+  find "$BACKUP_DIR" -name 'data-*.db.age' -mtime "+$RETENTION_DAYS" -delete
+  echo "[backup] pruned backups older than ${RETENTION_DAYS} days"
+  exit 0
+fi
 
 command -v sqlite3 >/dev/null 2>&1 || { echo "[backup] sqlite3 is required" >&2; exit 1; }
 [ -f "$DB_PATH" ] || { echo "[backup] database does not exist: $DB_PATH" >&2; exit 1; }
@@ -45,7 +75,7 @@ if [ "$(sqlite3 "$RAW" 'PRAGMA integrity_check;')" != "ok" ]; then
 fi
 
 # 3) Encrypt at rest (age if a recipient is configured; otherwise leave a plain
-#    .db but warn — plaintext backups of location/PII data are a finding).
+#    .db but warn for non-production/manual use).
 if [ -n "${AGE_RECIPIENT:-}" ]; then
   command -v age >/dev/null 2>&1 || { echo "[backup] AGE_RECIPIENT is set but age is unavailable" >&2; rm -f "$RAW"; exit 1; }
   age -r "$AGE_RECIPIENT" -o "$RAW.age" "$RAW"
