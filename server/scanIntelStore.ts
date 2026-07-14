@@ -199,8 +199,10 @@ export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq
 const _claimSelect = rawDb.prepare(
   `SELECT t.target_id AS targetId, t.seq AS seq, st.address, st.city, st.state, st.zip, st.lat, st.lng
      FROM scan_run_targets t JOIN scan_targets st ON st.id = t.target_id
-    WHERE t.run_id=? AND t.state='queued' ORDER BY t.seq ASC LIMIT ?`);
-const _claimMark = rawDb.prepare(`UPDATE scan_run_targets SET state='inflight' WHERE run_id=? AND target_id=? AND state='queued'`);
+    WHERE t.run_id=? AND t.state='queued' AND (t.next_attempt_at IS NULL OR t.next_attempt_at<=datetime('now'))
+    ORDER BY t.seq ASC LIMIT ?`);
+const _claimMark = rawDb.prepare(`UPDATE scan_run_targets SET state='inflight',attempt_count=attempt_count+1
+  WHERE run_id=? AND target_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))`);
 const _claimTx = rawDb.transaction((runId: string, limit: number) => {
   const rows = _claimSelect.all(runId, limit) as any[];
   for (const r of rows) _claimMark.run(runId, r.targetId);
@@ -213,11 +215,11 @@ export function claimRunTargets(runId: string, limit: number): Array<{ targetId:
 // Finalize one checked target: set its terminal state AND bump the run counters
 // in a SINGLE transaction, so a crash between the two can never leave the run's
 // verified/cost totals disagreeing with the per-target ledger.
-const _finTarget = rawDb.prepare(`UPDATE scan_run_targets SET state=?, result=? WHERE run_id=? AND target_id=?`);
+const _finTarget = rawDb.prepare(`UPDATE scan_run_targets SET state=?, result=?, next_attempt_at=NULL WHERE run_id=? AND target_id=?`);
 const _finBump = rawDb.prepare(
   `UPDATE scan_runs SET verified = verified + @verified, new_fiber = new_fiber + @newFiber,
       newly_live = newly_live + @newlyLive, failed = failed + @failed,
-      est_bytes = est_bytes + @estBytes, heartbeat_at = datetime('now') WHERE id = @runId`);
+      est_bytes = est_bytes + @estBytes, heartbeat_at = datetime('now'), updated_at=datetime('now') WHERE id = @runId`);
 const _finalizeTx = rawDb.transaction((runId: string, targetId: number, state: string, result: string | null, delta: any) => {
   _finTarget.run(state, result, runId, targetId);
   _finBump.run({ runId, verified: delta.verified ?? 0, newFiber: delta.newFiber ?? 0, newlyLive: delta.newlyLive ?? 0, failed: delta.failed ?? 0, estBytes: delta.estBytes ?? 0 });
@@ -233,7 +235,7 @@ export function resetInflightTargets(runId: string): number {
 
 // Just move the heartbeat forward (worker liveness) without changing counters.
 export function touchRun(runId: string): void {
-  rawDb.prepare(`UPDATE scan_runs SET heartbeat_at=datetime('now') WHERE id=?`).run(runId);
+  rawDb.prepare(`UPDATE scan_runs SET heartbeat_at=datetime('now'),updated_at=datetime('now') WHERE id=?`).run(runId);
 }
 
 // Legacy standalone bump kept for the resume/edge paths that only adjust counts.
@@ -244,7 +246,7 @@ export function bumpRun(runId: string, delta: { verified?: number; newFiber?: nu
 export function setRunStatus(runId: string, status: string, error?: string | null): void {
   const done = status === "done" || status === "error" || status === "cancelled";
   rawDb.prepare(
-    `UPDATE scan_runs SET status=?, error=?, heartbeat_at=datetime('now'), completed_at=${done ? "datetime('now')" : "completed_at"} WHERE id=?`,
+    `UPDATE scan_runs SET status=?, error=?, heartbeat_at=datetime('now'),updated_at=datetime('now'), completed_at=${done ? "datetime('now')" : "completed_at"} WHERE id=?`,
   ).run(status, error ?? null, runId);
 }
 

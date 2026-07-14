@@ -7,8 +7,8 @@ const _API_BASE: string = ("__PORT_5000__" as string).startsWith("__") ? "" : ("
 import { useToast } from "@/hooks/use-toast";
 import {
   Radar, Play, Square, CheckCircle, CircleX,
-  Zap, Download, RefreshCw,
-  MapPin, Search, Globe, Flame,
+  Download, RefreshCw,
+  MapPin, Search, Globe,
   Activity, AlertCircle
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -96,19 +96,13 @@ export default function CityScanner() {
   const [pullingAddresses, setPullingAddresses] = useState(false);
   const [overpassResult, setOverpassResult] = useState<OverpassResult | null>(null);
 
-  // Zero-Mapbox CNS discovery (collect primary evidence for an indexed city)
-  const [coverage, setCoverage] = useState<any>(null);
-  const [discovery, setDiscovery] = useState<any>(null);
-  const [discoveryBusy, setDiscoveryBusy] = useState(false);
-  const discPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   // SSE stream ref
   const abortRef = useRef<AbortController | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  // ── FiberFocus-style: poll scanner state every 3s while scanning ───────────
+  // Poll scanner state every 3s while scanning.
   const { data: scannerState } = useQuery<{
     isRunning: boolean;
     checksPerSec: number;
@@ -243,47 +237,6 @@ export default function CityScanner() {
       setPullingAddresses(false);
     }
   }, [cityInput, stateInput, toast]);
-
-  // Pure DB read — what does the CNS index know about this city? Zero proxy, zero Mapbox.
-  const checkCoverage = useCallback(async () => {
-    if (!cityInput.trim()) return;
-    setCoverage(null); setDiscovery(null);
-    try {
-      const c = await (await apiRequest("GET", `/api/scan/city-cns-coverage?city=${encodeURIComponent(cityInput.trim())}&state=${encodeURIComponent(stateInput.trim())}`)).json();
-      setCoverage(c);
-    } catch (e: any) {
-      toast({ title: "Coverage check failed", description: e.message, variant: "destructive" });
-    }
-  }, [cityInput, stateInput, toast]);
-
-  // Launch a budgeted, zero-Mapbox discovery run against the city's CNS frontier.
-  const startDiscovery = useCallback(async () => {
-    if (!cityInput.trim()) return;
-    setDiscoveryBusy(true); setDiscovery(null);
-    if (discPollRef.current) clearInterval(discPollRef.current);
-    try {
-      const job = await (await apiRequest("POST", "/api/scan/discover-city", { city: cityInput.trim(), state: stateInput.trim(), budget: 750 })).json();
-      setDiscovery(job);
-      discPollRef.current = setInterval(async () => {
-        try {
-          const p = await (await apiRequest("GET", `/api/scan/discover-city/${job.id}`)).json();
-          setDiscovery(p);
-          if (p.done) {
-            if (discPollRef.current) clearInterval(discPollRef.current);
-            setDiscoveryBusy(false);
-            qc.invalidateQueries({ queryKey: ["/api/leads"] });
-            qc.invalidateQueries({ queryKey: ["/api/scan/pool-stats"] });
-          }
-        } catch { /* keep polling */ }
-      }, 2000);
-    } catch (e: any) {
-      const msg = e?.message?.includes("NO_COVERAGE")
-        ? "No CNS history for this city yet — run an ordinary scan or the nightly sweep there first (both feed the index for free)."
-        : e.message;
-      toast({ title: "Discovery not started", description: msg, variant: "destructive" });
-      setDiscoveryBusy(false);
-    }
-  }, [cityInput, stateInput, toast, qc]);
 
   // Step 2: Run scan on pulled addresses
   const runScan = useCallback(async () => {
@@ -496,44 +449,6 @@ export default function CityScanner() {
               </div>
             )}
 
-            {/* ── Zero-Mapbox discovery — collect primary evidence from Kinetic's index ── */}
-            <div className="rounded-xl border border-border bg-secondary/30 p-4 space-y-2.5">
-              <div className="flex items-center gap-2 flex-wrap">
-                <Flame className="w-4 h-4 text-amber-400" />
-                <span className="text-sm font-semibold tracking-tight text-foreground">Discover fresh</span>
-                <span className="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-400">no Mapbox</span>
-                <span className="text-[11px] text-muted-foreground ml-auto">probes Kinetic's CNS frontier directly</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Targets known control-number bands for this city and checks the frontier for provider-side changes. Independent evidence is still required. Zero geocoding.
-              </p>
-              <div className="flex gap-2 flex-wrap">
-                <Button data-testid="button-check-coverage" onClick={checkCoverage} disabled={!cityInput.trim() || discoveryBusy} variant="outline" size="sm" className="gap-2">
-                  <Search className="w-3.5 h-3.5" /> Check coverage
-                </Button>
-                <Button data-testid="button-discover-city" onClick={startDiscovery} disabled={!cityInput.trim() || discoveryBusy || (coverage && coverage.needsAnchor)} size="sm" className="gap-2">
-                  {discoveryBusy ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                  {discoveryBusy ? "Discovering…" : "Discover (no Mapbox)"}
-                </Button>
-              </div>
-              {coverage && (
-                <div className="text-xs text-muted-foreground">
-                  {coverage.needsAnchor
-                    ? <span className="text-amber-400">No CNS history yet — run an ordinary scan or the nightly sweep here first (both feed the index for free).</span>
-                    : <span className="tabular-nums"><b className="text-foreground">{coverage.knownAddresses?.toLocaleString()}</b> known · <b className="text-foreground">{coverage.cnsBands}</b> band(s) · ENV {coverage.env} · ~{coverage.suggestedProbes?.toLocaleString()} probe candidates</span>}
-                </div>
-              )}
-              {discovery && (
-                <div className="rounded-lg bg-background/60 border border-border p-3 text-xs space-y-1.5 tabular-nums">
-                  <div className="flex items-center justify-between">
-                    <span className="text-muted-foreground">Probed <b className="text-foreground">{discovery.probed ?? 0}</b>/{discovery.planned ?? 0}</span>
-                    <span className="text-amber-400 font-semibold">{discovery.newFiber ?? 0} primary match(es) · {discovery.leadsCreated ?? 0} confirmed lead(s)</span>
-                  </div>
-                  <div className="text-muted-foreground">In {cityInput}: <b className="text-foreground">{discovery.sameCityHits ?? 0}</b> · pool +{discovery.poolAdded ?? 0} · failures {discovery.failures ?? 0}</div>
-                  {discovery.reason && <div className="text-[11px] text-muted-foreground/80 pt-1.5 border-t border-border">{discovery.reason}</div>}
-                </div>
-              )}
-            </div>
           </div>
         </CardContent>
       </Card>

@@ -13,7 +13,7 @@ export interface KineticObservation {
   lat?: number | null;
   lng?: number | null;
   fiberStatus?: string | null;
-  /** Full address-check results carry this. CNS results intentionally do not. */
+  /** Direct serviceability result when the provider contract supplies it. */
   fiberAvailable?: boolean | null;
   isNewFiber?: boolean | null;
   billingStatus?: string | null;
@@ -105,8 +105,8 @@ function normalizeObservedAt(value: string | null | undefined): string {
 function inferAvailability(observation: KineticObservation): boolean | null {
   if (observation.checkFailed === true || observation.blocked === true || observation.apiSource === "failed") return null;
   if (typeof observation.fiberAvailable === "boolean") return observation.fiberAvailable;
-  // CNS payloads omit fiberAvailable. NEW FIBER is their only affirmative fiber
-  // signal; a no-service result is a negative; every other CNS shape is unknown.
+  // Legacy address checks may supply an explicit derived isNewFiber boolean.
+  // The Sequential ID adapter never derives this from a segment label.
   if (observation.isNewFiber === true) return true;
   const status = clean(observation.fiberStatus).toLowerCase().replace(/[\s-]+/g, "_");
   return status === "no_service" ? false : null;
@@ -163,7 +163,7 @@ function requestImmediateAlert(tenantId: number): void {
 }
 
 /**
- * Normalizes one legacy Kinetic/CNS result into the durable scan evidence model.
+ * Normalizes one legacy Kinetic address result into the durable evidence model.
  * This is the only path legacy scanners use to reach a lead: first observation
  * is a baseline, an unavailable-to-available transition is provisional, and the
  * independent-evidence projector is the sole publisher.

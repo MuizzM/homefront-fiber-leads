@@ -2,15 +2,15 @@ import { useState } from "react";
 import { Radar, Globe, ScanSearch, ChevronRight } from "lucide-react";
 import CityScanner from "./CityScanner";
 import USAScanner from "./USAScanner";
-import CnsScanner from "./CnsScanner";
+import KineticScanner from "./KineticScanner";
 
 // One Scanner hub — City / USA / Nightly tabs replace three separate nav pages.
-export type ScannerTab = "city" | "usa" | "cns";
+export type ScannerTab = "city" | "usa" | "kinetic";
 
 const TABS: { id: ScannerTab; label: string; hint: string; Icon: React.ElementType }[] = [
   { id: "city", label: "City Scan",    hint: "Fresh fiber: Yes, No, or Recheck",   Icon: Radar },
   { id: "usa",  label: "USA Batch",    hint: "Run the same verdict across cities", Icon: Globe },
-  { id: "cns",  label: "Nightly Auto", hint: "Recheck for newly fresh fiber",       Icon: ScanSearch },
+  { id: "kinetic", label: "Kinetic Scanner", hint: "Sequential Kinetic operations command center", Icon: ScanSearch },
 ];
 
 export default function Scanners({ initialTab = "city" }: { initialTab?: ScannerTab }) {
@@ -81,7 +81,7 @@ export default function Scanners({ initialTab = "city" }: { initialTab?: Scanner
       <div className="flex-1 min-h-0 overflow-y-auto">
         {tab === "city" && <CityScanner />}
         {tab === "usa" && <USAScanner />}
-        {tab === "cns" && <CnsScanner />}
+        {tab === "kinetic" && <KineticScanner />}
       </div>
     </div>
   );

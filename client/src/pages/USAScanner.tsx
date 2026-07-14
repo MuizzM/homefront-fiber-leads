@@ -1,5 +1,5 @@
 /**
- * USA Market Scanner — Beat FiberFocus
+ * USA Market Scanner
  * Uses carrier-owned NC/SC directory evidence to show WHERE Kinetic is served
  * or expanding. Address-level checks remain the only availability truth.
  * Click any market to scan it immediately. Leads auto-saved to map.
@@ -93,7 +93,7 @@ export default function USAScanner() {
     staleTime: Infinity,
   });
 
-  // Live scanner state — polled every 3s while scanning (FiberFocus pattern)
+  // Live scanner state — polled every 3s while scanning.
   const { data: scannerState } = useQuery<ScannerState>({
     queryKey: ["/api/scanner/state"],
     queryFn: async () => (await apiRequest("GET", "/api/scanner/state")).json(),
@@ -346,7 +346,7 @@ export default function USAScanner() {
               </div>
             )}
 
-            {/* Live worker metrics (FiberFocus-style) */}
+            {/* Live worker metrics */}
             {isScanning && scannerState && scannerState.isRunning && (
               <div className="grid grid-cols-4 rounded-lg border border-border divide-x divide-border overflow-hidden">
                 <div className="px-3 py-2">
@@ -545,33 +545,6 @@ export default function USAScanner() {
         </div>
       )}
 
-      {/* How it beats FiberFocus */}
-      <Card className="bg-card border-border">
-        <CardContent className="pt-4 pb-4">
-          <p className="text-[11px] font-medium text-muted-foreground mb-3 uppercase tracking-wide">Scan Engine</p>
-          <div className="grid grid-cols-2 sm:grid-cols-4 rounded-lg border border-border divide-x divide-y sm:divide-y-0 divide-border overflow-hidden">
-            <div className="px-4 py-3">
-              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">200</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">proxy connections</div>
-            </div>
-            <div className="px-4 py-3">
-              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">×2</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">pipeline per socket</div>
-            </div>
-            <div className="px-4 py-3">
-              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">4</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">parallel zone workers</div>
-            </div>
-            <div className="px-4 py-3">
-              <div className="text-lg font-semibold tracking-tight tabular-nums text-foreground">5s</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">timeout (fast recycle)</div>
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground mt-3">
-            400 simultaneous proxy slots · FCC BDC data tells you exactly where fiber is going before Kinetic announces it
-          </p>
-        </CardContent>
-      </Card>
     </div>
   );
 }

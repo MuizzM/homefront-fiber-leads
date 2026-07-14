@@ -17,7 +17,7 @@ interface SaasStats {
   leads: { total: number; newFiber: number; sold: number; unassigned: number };
   team: { total: number; activeClockedIn: number };
   knocks: { total: number; today: number; todaySales: number; weekSales: number };
-  comingSoon: { total: number; converted: number };
+  kinetic: { total: number; live: number };
   revenue: { totalPaid: number; pendingPayout: number };
   fieldHours: { total: number };
 }
@@ -89,8 +89,6 @@ function actionLabel(action: string) {
     "commission.created": "Commission logged",
     "commission.approved": "Commission approved",
     "commission.paid": "Commission paid",
-    "coming_soon.added": "Coming soon address added",
-    "coming_soon.promoted": "Address promoted to lead",
     "territory.assigned": "Territory assigned",
   };
   return map[action] ?? action.replace(/\./g, " ");
@@ -101,7 +99,6 @@ function actionTone(action: string) {
   switch (action.split(".")[0]) {
     case "commission": return "bg-emerald-500/10 text-emerald-400";
     case "lead": return "bg-sky-500/10 text-sky-400";
-    case "coming_soon": return "bg-orange-500/10 text-orange-400";
     case "territory": return "bg-violet-500/10 text-violet-400";
     default: return "bg-primary/10 text-primary";
   }
@@ -378,8 +375,8 @@ export default function Dashboard() {
               value: stats?.knocks.weekSales ?? "—", sub: "last 7 days" },
             { label: "Pending payout", icon: DollarSign, tone: "text-amber-400",
               value: stats ? `$${stats.revenue.pendingPayout.toFixed(0)}` : "—", sub: `$${stats?.revenue.totalPaid.toFixed(0) ?? 0} paid` },
-            { label: "Coming soon", icon: Wifi, tone: "text-orange-400",
-              value: stats?.comingSoon.total ?? "—", sub: `${stats?.comingSoon.converted ?? 0} converted` },
+            { label: "Kinetic addresses", icon: Wifi, tone: "text-orange-400",
+              value: stats?.kinetic.total ?? "—", sub: `${stats?.kinetic.live ?? 0} live` },
             { label: "Field hours", icon: Clock, tone: "text-rose-400",
               value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : "—", sub: "clocked today" },
           ]}

@@ -41,6 +41,14 @@ export interface ScanRun {
   costUsd: number; active: boolean; pct: number; queued?: number;
 }
 export interface RunPreview { poolAvailable: number; available: number; highValue: number; willVerify: number; estimate: CostEstimate; maxPerRun: number }
+export interface FiberOperationsDashboard {
+  runs: { total: number; running: number; paused: number; errored: number; verified: number; primaryMatches: number; newlyLive: number; failed: number };
+  workers: Array<{ workerId: string; runId: string | null; status: string; concurrency: number; lastError: string | null; heartbeatAt: string; healthy: number }>;
+  openDeadLetters: number;
+}
+export interface FiberFailure {
+  id: number; run_id: string; target_id: number | null; category: string; message: string; attempt?: number; attempts?: number; created_at: string;
+}
 
 export interface DeployBriefing {
   doors: number; unworked: number; avgScore: number;
@@ -69,6 +77,10 @@ export const scanApi = {
   previewRun: (city: string, state: string, budget: number, rescan = false) => postJson<RunPreview>("/api/scan/runs/preview", { city, state, budget, rescan }),
   startRun: (city: string, state: string, budget: number, rescan = false) => postJson<{ runId: string; queued: number; budget: number; estimate: CostEstimate; city: string; state: string }>("/api/scan/runs", { city, state, budget, rescan }),
   controlRun: (id: string, action: "pause" | "resume" | "cancel") => postJson<{ ok: boolean }>(`/api/scan/runs/${id}/${action}`),
+  operationsDashboard: () => getJson<FiberOperationsDashboard>("/api/v1/fiber/dashboard"),
+  failures: () => getJson<{ failures: FiberFailure[]; deadLetters: FiberFailure[] }>("/api/v1/fiber/failures?limit=100"),
+  providers: () => getJson<{ providers: Array<{ provider: string; enabled: number; displayName: string; mode: string; rateLimitPerMinute: number; healthStatus: string; consecutiveFailures: number; lastSuccessAt: string | null; lastFailureAt: string | null; lastError: string | null }> }>("/api/v1/fiber/providers"),
+  retryDeadLetter: (id: number) => postJson<{ ok: boolean; runId: string; targetId: number }>(`/api/v1/fiber/dead-letters/${id}/retry`, {}),
   deploy: (polygon: Array<[number, number]>, repId: number | undefined, opts?: { name?: string; sourceRunId?: string; leadIds?: number[]; repIds?: number[] }) =>
     postJson<{ territory: any; assigned: number; briefing: DeployBriefing; deployments?: Array<{ territoryId: number; repId: number; assigned: number }> }>("/api/scan/deploy", { polygon, repId, ...opts }),
 };

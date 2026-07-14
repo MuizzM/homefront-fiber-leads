@@ -119,6 +119,18 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     const failedSnapshot: any = rawDb.prepare(`SELECT conclusive, error FROM availability_snapshots WHERE run_id=? AND scan_target_id=?`).get(runId, failTarget.target_id);
     expect(failedSnapshot.conclusive).toBe(0);
     expect(failedSnapshot.error).toBeTruthy();
+
+    // The canonical operations stream is durable and replayable. It records
+    // lifecycle + per-address outcomes without exposing raw provider payloads.
+    const events: any[] = rawDb.prepare(`SELECT event_type FROM fiber_job_events WHERE run_id=? ORDER BY sequence`).all(runId) as any[];
+    expect(events[0].event_type).toBe("job.started");
+    expect(events.filter((event) => event.event_type === "address.completed")).toHaveLength(7);
+    expect(events.filter((event) => event.event_type === "address.failed")).toHaveLength(1);
+    expect(events.at(-1)?.event_type).toBe("job.completed");
+    const freshness: any = rawDb.prepare(`SELECT COUNT(*) AS count FROM fiber_freshness_scores WHERE tenant_id=?`).get(TENANT);
+    expect(freshness.count).toBeGreaterThanOrEqual(8);
+    const failureAudit: any = rawDb.prepare(`SELECT category,attempt FROM fiber_job_failures WHERE run_id=? AND target_id=?`).get(runId, failTarget.target_id);
+    expect(failureAudit).toMatchObject({ category: "inconclusive", attempt: 1 });
   });
 
   it("detects a provable unavailable->live flip as newly_live on rescan", async () => {

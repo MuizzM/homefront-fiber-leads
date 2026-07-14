@@ -4,7 +4,7 @@ import {
   leads, fiberChecks, teamMembers, knockLog,
   users, sessions, otpCodes, territories, repApplications,
   territoryRequests, locationPings, clockSessions,
-  comingSoonAddresses, commissions, commissionRates, activityLog, tenants,
+  commissions, commissionRates, activityLog, tenants,
   activityOverrides, leadPhotos,
   type LeadPhoto,
   type ActivityOverride,
@@ -19,7 +19,6 @@ import {
   type TerritoryRequest,
   type LocationPing, type InsertLocationPing,
   type ClockSession,
-  type ComingSoonAddress, type InsertComingSoon,
   type Commission, type InsertCommission,
   type CommissionRate, type InsertCommissionRate,
   type ActivityLogEntry,
@@ -183,28 +182,12 @@ export interface IStorage {
   getActiveClockSession(repId: number): ClockSession | undefined;
   getClockSessionsByRep(repId: number): ClockSession[];
   getAllClockSessions(date?: string, tenantId?: number): ClockSession[];
-  // ── Coming Soon Pipeline ───────────────────────────────────────────────────
-  getComingSoonAddresses(tenantId?: number): ComingSoonAddress[];
-  getComingSoonHistory(tenantId?: number, limit?: number): ComingSoonAddress[];
-  archiveComingSoon(id: number, reason: string): ComingSoonAddress | undefined;
-  ageOutComingSoon(maxChecks?: number, maxAgeDays?: number): number;
   wasDeepSeeded(city: string, state: string): boolean;
   markDeepSeeded(city: string, state: string, addressCount: number): void;
-  createComingSoon(addr: InsertComingSoon): ComingSoonAddress;
-  updateComingSoon(id: number, updates: Partial<ComingSoonAddress>): ComingSoonAddress | undefined;
-  deleteComingSoon(id: number): boolean;
-  markComingSoonAvailable(id: number, leadId: number): ComingSoonAddress | undefined;
-  markComingSoonChecked(id: number): ComingSoonAddress | undefined;
-  upsertComingSoonByDfAddressId(addr: InsertComingSoon & { dfAddressId?: string | null; householdSegmentType?: string | null; buildStatus?: string | null }): ComingSoonAddress;
-  getComingSoonWithDfId(limit?: number): ComingSoonAddress[];
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null; canonicalKey?: string | null; dfAddressId?: string | null; scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null }>): number;
   getScanTargetsToRescan(limit: number): any[];
   getScanTargetsByCity(city: string, state: string): any[];
-  getCnsCoverageRows(): Array<{ dfAddressId: string | null; city: string | null; state: string | null; isNewFiber: boolean }>;
-  recordCnsProbes(env: string, probes: Array<{ cns: number; result: "hit" | "miss" }>): void;
-  getProbedCns(env: string, withinDays?: number): number[];
-  getMaxHitCns(env: string): number | null;
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean };
   bumpScanTargetInconclusive(ref: { id?: number; address?: string }): void;
   getScanTargetExhaustedCount(city?: string, zip?: string): number;
@@ -266,7 +249,6 @@ export function runMigrations() {
     // New SaaS tables
     `CREATE TABLE IF NOT EXISTS location_pings (id INTEGER PRIMARY KEY AUTOINCREMENT, rep_id INTEGER NOT NULL, user_id INTEGER NOT NULL, lat REAL NOT NULL, lng REAL NOT NULL, accuracy REAL, ping_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS clock_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, rep_id INTEGER NOT NULL, user_id INTEGER NOT NULL, clocked_in TEXT NOT NULL, clocked_out TEXT, duration_minutes INTEGER, notes TEXT, date TEXT NOT NULL)`,
-    `CREATE TABLE IF NOT EXISTS coming_soon_addresses (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, city TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'NC', zip TEXT NOT NULL, lat REAL, lng REAL, reason TEXT NOT NULL DEFAULT 'no_service', last_checked TEXT, fiber_available INTEGER DEFAULT 0, converted_to_lead_id INTEGER, added_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE TABLE IF NOT EXISTS commissions (id INTEGER PRIMARY KEY AUTOINCREMENT, rep_id INTEGER NOT NULL, lead_id INTEGER, knock_id INTEGER, amount REAL NOT NULL, status TEXT NOT NULL DEFAULT 'pending', sale_date TEXT NOT NULL, paid_date TEXT, notes TEXT, approved_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     // Persistent marker: a town deep-Mapbox-grid-seeded into the pool. Its whole
     // job is to make the nightly deep-seed run ONCE per town, ever (the one-time
@@ -284,12 +266,7 @@ export function runMigrations() {
     // tenant_id support for multi-tenant tables (safe — duplicate column errors are swallowed)
     `ALTER TABLE team_members ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE territories ADD COLUMN tenant_id INTEGER`,
-    `ALTER TABLE coming_soon_addresses ADD COLUMN tenant_id INTEGER`,
     // Coming-Soon lifecycle: recheck → promote or age-out, with archived history.
-    `ALTER TABLE coming_soon_addresses ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
-    `ALTER TABLE coming_soon_addresses ADD COLUMN check_count INTEGER NOT NULL DEFAULT 0`,
-    `ALTER TABLE coming_soon_addresses ADD COLUMN archived_at TEXT`,
-    `ALTER TABLE coming_soon_addresses ADD COLUMN archived_reason TEXT`,
     `ALTER TABLE commissions ADD COLUMN tenant_id INTEGER`,
     // users/leads got tenant_id from drizzle-kit push in prod; these ALTERs make
     // a migrations-only DB (tests, fresh installs) match.
@@ -314,10 +291,6 @@ export function runMigrations() {
     `ALTER TABLE fiber_checks ADD COLUMN billing_status TEXT`,
     `ALTER TABLE fiber_checks ADD COLUMN tenant_id INTEGER`,
     // dfAddressId watchlist — the moat: recheck these by Kinetic's own key nightly.
-    `ALTER TABLE coming_soon_addresses ADD COLUMN df_address_id TEXT`,
-    `ALTER TABLE coming_soon_addresses ADD COLUMN household_segment_type TEXT`,
-    `ALTER TABLE coming_soon_addresses ADD COLUMN build_status TEXT`,
-    `CREATE INDEX IF NOT EXISTS idx_coming_soon_df ON coming_soon_addresses(df_address_id) WHERE df_address_id IS NOT NULL`,
     // Address dedup for upsertLeadByAddress must hit the DB every time (cross-process
     // cache can't be trusted) — index it so that lookup stays cheap.
     `CREATE INDEX IF NOT EXISTS idx_leads_address ON leads(address)`,
@@ -380,10 +353,6 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN last_inconclusive_at TEXT`,
     // Partial-ish index for the re-probe selection (never-scanned, not-yet-exhausted).
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`,
-    // CNS negative cache — conclusive probe outcomes so discovery/nightly never
-    // re-buy the same misses; the frontier advances instead of re-scanning.
-    `CREATE TABLE IF NOT EXISTS cns_probes (env TEXT NOT NULL, cns INTEGER NOT NULL, result TEXT NOT NULL, probed_at TEXT NOT NULL DEFAULT (datetime('now')), PRIMARY KEY (env, cns))`,
-    `CREATE INDEX IF NOT EXISTS idx_cns_probes_env ON cns_probes(env, probed_at)`,
     // Speed up knock lookups (leaderboard, territory progress, knock history)
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead ON knock_log(lead_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_rep ON knock_log(rep_id)`,
@@ -1487,6 +1456,108 @@ export function runMigrations() {
     // city's address to a qualification run.
     `ALTER TABLE scan_targets ADD COLUMN canonical_key TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`,
+
+    // ── Fiber operations control plane ─────────────────────────────────────
+    // Additive companions around scan_runs: the existing worker remains the
+    // single execution engine while these tables make its state observable,
+    // replayable and diagnosable across deploys and process crashes.
+    `ALTER TABLE scan_runs ADD COLUMN provider TEXT NOT NULL DEFAULT 'kinetic'`,
+    `ALTER TABLE scan_runs ADD COLUMN correlation_id TEXT`,
+    `ALTER TABLE scan_runs ADD COLUMN current_checkpoint TEXT`,
+    `ALTER TABLE scan_runs ADD COLUMN stop_requested_at TEXT`,
+    `ALTER TABLE scan_runs ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE scan_run_targets ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE scan_run_targets ADD COLUMN next_attempt_at TEXT`,
+    `ALTER TABLE scan_run_targets ADD COLUMN last_error_category TEXT`,
+    `ALTER TABLE scan_run_targets ADD COLUMN last_error_message TEXT`,
+    `CREATE TABLE IF NOT EXISTS fiber_job_events (
+       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+       event_type TEXT NOT NULL,
+       target_id INTEGER,
+       correlation_id TEXT,
+       payload_json TEXT NOT NULL DEFAULT '{}',
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_events_stream ON fiber_job_events(tenant_id, sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_events_run ON fiber_job_events(tenant_id, run_id, sequence)`,
+    `CREATE TABLE IF NOT EXISTS fiber_worker_heartbeats (
+       worker_id TEXT PRIMARY KEY,
+       tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT REFERENCES scan_runs(id) ON DELETE SET NULL,
+       status TEXT NOT NULL,
+       concurrency INTEGER NOT NULL DEFAULT 0,
+       last_error TEXT,
+       metadata_json TEXT NOT NULL DEFAULT '{}',
+       started_at TEXT NOT NULL DEFAULT (datetime('now')),
+       heartbeat_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_worker_health ON fiber_worker_heartbeats(heartbeat_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS fiber_job_failures (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+       target_id INTEGER,
+       category TEXT NOT NULL,
+       message TEXT NOT NULL,
+       attempt INTEGER NOT NULL DEFAULT 1,
+       retryable INTEGER NOT NULL DEFAULT 1,
+       correlation_id TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_failures_run ON fiber_job_failures(tenant_id, run_id, created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS fiber_dead_letters (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+       target_id INTEGER,
+       category TEXT NOT NULL,
+       message TEXT NOT NULL,
+       attempts INTEGER NOT NULL,
+       payload_json TEXT NOT NULL DEFAULT '{}',
+       resolved_at TEXT,
+       resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(run_id, target_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_dead_letters_open ON fiber_dead_letters(tenant_id, resolved_at, created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS fiber_job_checkpoints (
+       run_id TEXT PRIMARY KEY REFERENCES scan_runs(id) ON DELETE CASCADE,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       last_sequence INTEGER NOT NULL DEFAULT 0,
+       completed_targets INTEGER NOT NULL DEFAULT 0,
+       checkpoint_json TEXT NOT NULL DEFAULT '{}',
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE TABLE IF NOT EXISTS provider_adapter_configs (
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       provider TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 0,
+       display_name TEXT NOT NULL,
+       mode TEXT NOT NULL DEFAULT 'authorized_http',
+       rate_limit_per_minute INTEGER NOT NULL DEFAULT 30,
+       health_status TEXT NOT NULL DEFAULT 'unknown',
+       consecutive_failures INTEGER NOT NULL DEFAULT 0,
+       last_success_at TEXT,
+       last_failure_at TEXT,
+       last_error TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY(tenant_id, provider)
+     )`,
+    `CREATE TABLE IF NOT EXISTS fiber_freshness_scores (
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       scan_target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,
+       score INTEGER NOT NULL,
+       verification_state TEXT NOT NULL,
+       formula_version TEXT NOT NULL,
+       factors_json TEXT NOT NULL,
+       explanation_json TEXT NOT NULL,
+       calculated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY(tenant_id, scan_target_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_freshness_rank ON fiber_freshness_scores(tenant_id, score DESC, calculated_at DESC)`,
+
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -2393,46 +2464,6 @@ export class Storage implements IStorage {
     return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(clockSessions.clockedIn)).all();
   }
 
-  // ── Coming Soon Pipeline ───────────────────────────────────────────────────
-  getComingSoonAddresses(tenantId?: number): ComingSoonAddress[] {
-    // ACTIVE watchlist only — archived (promoted / aged-out / removed) rows are
-    // history, surfaced separately by getComingSoonHistory so the live list stays
-    // clean of junk.
-    return db.select().from(comingSoonAddresses)
-      .where(and(
-        sql`(status = 'active' OR status IS NULL)`,
-        tenantId != null ? eq(comingSoonAddresses.tenantId, tenantId) : undefined,
-      ))
-      .orderBy(desc(comingSoonAddresses.createdAt)).all();
-  }
-  // Archived (non-active) rows — the KEEP-HISTORY side. Newest-archived first.
-  getComingSoonHistory(tenantId?: number, limit = 500): ComingSoonAddress[] {
-    return db.select().from(comingSoonAddresses)
-      .where(and(
-        sql`status IS NOT NULL AND status != 'active'`,
-        tenantId != null ? eq(comingSoonAddresses.tenantId, tenantId) : undefined,
-      ))
-      .orderBy(sql`archived_at DESC`).limit(limit).all();
-  }
-  // Soft-archive: leave the active list but keep the row as history.
-  archiveComingSoon(id: number, reason: string): ComingSoonAddress | undefined {
-    return db.update(comingSoonAddresses)
-      .set({ status: reason === "promoted_to_lead" ? "promoted" : (reason === "manual" ? "removed" : "aged_out"), archivedReason: reason, archivedAt: new Date().toISOString() })
-      .where(eq(comingSoonAddresses.id, id)).returning().get();
-  }
-  // Age-out sweep: archive ACTIVE rows that have been watched too long without
-  // going live (rechecked ≥ maxChecks OR older than maxAgeDays) — the "remove the
-  // junk, keep the history" rule. Returns how many were archived.
-  ageOutComingSoon(maxChecks = 45, maxAgeDays = 120): number {
-    const cutoff = new Date(Date.now() - maxAgeDays * 86400000).toISOString();
-    return db.update(comingSoonAddresses)
-      .set({ status: "aged_out", archivedReason: "aged_out", archivedAt: new Date().toISOString() })
-      .where(and(
-        sql`(status = 'active' OR status IS NULL)`,
-        eq(comingSoonAddresses.fiberAvailable, false),
-        sql`(check_count >= ${maxChecks} OR created_at < ${cutoff})`,
-      )).run().changes;
-  }
   // ── Deep-seed marker — a town's one-time Mapbox-grid seed happened. ──────────
   wasDeepSeeded(city: string, state: string): boolean {
     const key = `${city.trim().toLowerCase()}|${state.trim().toLowerCase()}`;
@@ -2443,67 +2474,11 @@ export class Storage implements IStorage {
     rawDb.prepare("INSERT OR REPLACE INTO deep_seed_log (city_key, city, state, address_count, seeded_at) VALUES (?,?,?,?,datetime('now'))")
       .run(key, city.trim(), state.trim().toUpperCase(), addressCount);
   }
-  createComingSoon(addr: InsertComingSoon): ComingSoonAddress {
-    return db.insert(comingSoonAddresses).values({ ...addr, createdAt: new Date().toISOString() }).returning().get();
-  }
-  updateComingSoon(id: number, updates: Partial<ComingSoonAddress>): ComingSoonAddress | undefined {
-    return db.update(comingSoonAddresses).set(updates).where(eq(comingSoonAddresses.id, id)).returning().get();
-  }
-  deleteComingSoon(id: number): boolean {
-    return db.delete(comingSoonAddresses).where(eq(comingSoonAddresses.id, id)).run().changes > 0;
-  }
-  markComingSoonAvailable(id: number, leadId: number): ComingSoonAddress | undefined {
-    // Went live → promote + archive as history (leaves the active watchlist).
-    return db.update(comingSoonAddresses)
-      .set({ fiberAvailable: true, convertedToLeadId: leadId, lastChecked: new Date().toISOString(),
-             status: "promoted", archivedReason: "promoted_to_lead", archivedAt: new Date().toISOString() })
-      .where(eq(comingSoonAddresses.id, id)).returning().get();
-  }
-  markComingSoonChecked(id: number): ComingSoonAddress | undefined {
-    // Count the recheck so the age-out sweep can retire never-materializing junk.
-    return db.update(comingSoonAddresses)
-      .set({ lastChecked: new Date().toISOString(), checkCount: sql`check_count + 1` })
-      .where(eq(comingSoonAddresses.id, id)).returning().get();
-  }
-  // Add/refresh a watchlist address keyed by Kinetic's dfAddressId (the exact,
-  // stable key). Dedups by dfAddressId when present, else by address. Refreshes the
-  // segment/build status on re-sight. Idempotent — safe to call every scan.
-  upsertComingSoonByDfAddressId(addr: InsertComingSoon & { dfAddressId?: string | null; householdSegmentType?: string | null; buildStatus?: string | null }): ComingSoonAddress {
-    const df = addr.dfAddressId ?? null;
-    // Match by dfAddressId first (the exact key), else by address — so a legacy
-    // address-only row gets its df backfilled instead of colliding on UNIQUE(address).
-    const existing =
-      (df ? db.select().from(comingSoonAddresses).where(eq(comingSoonAddresses.dfAddressId, df)).get() : undefined)
-      ?? db.select().from(comingSoonAddresses).where(eq(comingSoonAddresses.address, addr.address)).get();
-    if (existing) {
-      return db.update(comingSoonAddresses).set({
-        dfAddressId: df ?? existing.dfAddressId,
-        householdSegmentType: addr.householdSegmentType ?? existing.householdSegmentType,
-        buildStatus: addr.buildStatus ?? existing.buildStatus,
-        reason: addr.reason ?? existing.reason,
-        lat: addr.lat ?? existing.lat, lng: addr.lng ?? existing.lng,
-        lastChecked: new Date().toISOString(),
-      }).where(eq(comingSoonAddresses.id, existing.id)).returning().get();
-    }
-    return db.insert(comingSoonAddresses).values({ ...addr, createdAt: new Date().toISOString() }).returning().get();
-  }
-  // The nightly-recheck work list: watchlist addresses that carry a dfAddressId and
-  // haven't converted to a lead yet — rechecked by exact key, oldest-checked first.
-  getComingSoonWithDfId(limit = 100000): ComingSoonAddress[] {
-    return db.select().from(comingSoonAddresses)
-      .where(and(
-        isNotNull(comingSoonAddresses.dfAddressId),
-        eq(comingSoonAddresses.fiberAvailable, false),
-        sql`(status = 'active' OR status IS NULL)`, // don't recheck archived junk
-      ))
-      .orderBy(sql`last_checked IS NOT NULL, last_checked ASC`).limit(limit).all();
-  }
-
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   // Insert harvested addresses once; duplicates are ignored (address is UNIQUE),
   // so the pool grows without re-geocoding. Returns how many NEW rows were added.
   // Insert new pool addresses AND enrich existing ones. A row discovered from
-  // Kinetic itself (the CNS/nightly scanner) arrives WITH its df_address_id,
+  // Provider observations may arrive with an address identifier,
   // provider coords, and current status — so it lands complete and needs no
   // Mapbox geocode and no immediate re-scan. Re-harvesting an existing address
   // backfills any missing df_address_id / coords / zip (e.g. a Mapbox-seeded row
@@ -2606,44 +2581,6 @@ export class Storage implements IStorage {
       `SELECT address, city, state, zip, lat, lng FROM scan_targets
        WHERE lower(city) = lower(?) AND lower(state) = lower(?)`
     ).all(city.trim(), state.trim());
-  }
-  // Every pooled address that carries a Kinetic df id (ENV+CNS) — the raw material
-  // for the city↔CNS index (server/cnsDiscovery.ts). Reads the SHARED scan_targets
-  // pool only (not leads) so no tenant's private lead data leaks into another
-  // tenant's coverage view; harvest-as-you-scan keeps every discovery in the pool
-  // anyway, so the pool is the canonical, tenant-neutral address book. Zero proxy.
-  getCnsCoverageRows(): Array<{ dfAddressId: string | null; city: string | null; state: string | null; isNewFiber: boolean }> {
-    const pool = rawDb.prepare(
-      `SELECT df_address_id AS df, city, state, last_is_new_fiber AS nf FROM scan_targets WHERE df_address_id IS NOT NULL AND df_address_id != ''`
-    ).all() as any[];
-    return pool.map(r => ({ dfAddressId: r.df, city: r.city, state: r.state, isNewFiber: !!r.nf }));
-  }
-
-  // ── CNS negative cache — remember conclusive probe outcomes so discovery and the
-  // nightly never re-buy the same misses. A miss can later become a hit (Kinetic
-  // assigns the number), so callers apply an age window when treating a miss as
-  // "already probed". Hits also land here (belt-and-suspenders with the pool).
-  recordCnsProbes(env: string, probes: Array<{ cns: number; result: "hit" | "miss" }>): void {
-    if (!probes.length) return;
-    const stmt = rawDb.prepare(
-      `INSERT INTO cns_probes (env, cns, result, probed_at) VALUES (?,?,?,datetime('now'))
-       ON CONFLICT(env, cns) DO UPDATE SET result=excluded.result, probed_at=excluded.probed_at`
-    );
-    const tx = rawDb.transaction((rows: typeof probes) => { for (const p of rows) stmt.run(env.toUpperCase(), p.cns, p.result); });
-    tx(probes);
-  }
-  // Control numbers probed within `withinDays` for an env — the set discovery skips
-  // so it never re-probes a recent miss (older misses are retried automatically).
-  getProbedCns(env: string, withinDays = 45): number[] {
-    return (rawDb.prepare(
-      `SELECT cns FROM cns_probes WHERE env = ? AND probed_at >= datetime('now', ?)`
-    ).all(env.toUpperCase(), `-${Math.max(0, Math.floor(withinDays))} days`) as any[]).map(r => r.cns);
-  }
-  // Highest control number Kinetic has ever answered (hit) for an env — the true
-  // observed frontier the nightly sweep should advance past. Null if none seen.
-  getMaxHitCns(env: string): number | null {
-    const r = rawDb.prepare(`SELECT MAX(cns) m FROM cns_probes WHERE env = ? AND result = 'hit'`).get(env.toUpperCase()) as any;
-    return r?.m ?? null;
   }
   // Record a primary-provider scan result. Returns the previous classification so
   // callers can detect a change; publication still requires independent evidence.
