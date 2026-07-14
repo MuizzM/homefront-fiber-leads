@@ -442,6 +442,11 @@ app.use((req, res, next) => {
   await registerRoutes(httpServer, app);
   registerSaasRoutes(app);
 
+  // Unknown API paths must fail as JSON. Without this boundary Vite/SPA static
+  // fallback returns index.html with HTTP 200, making removed or mistyped API
+  // routes appear to exist and hiding integration mistakes.
+  app.use("/api", (_req, res) => res.status(404).json({ error: "Not found." }));
+
   // ── Global error handler — never leak stack traces or internal error details ──
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     if (res.headersSent) return next(err);

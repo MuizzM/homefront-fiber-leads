@@ -420,50 +420,7 @@ export const insertClockSessionSchema = createInsertSchema(clockSessions).omit({
 export type InsertClockSession = z.infer<typeof insertClockSessionSchema>;
 export type ClockSession = typeof clockSessions.$inferSelect;
 
-// ── Coming Soon Pipeline ──────────────────────────────────────────────────────
-// Addresses where fiber isn't available yet — future lead pipeline
-// Monitor these addresses for when Kinetic builds out to them
-export const comingSoonAddresses = sqliteTable("coming_soon_addresses", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  address: text("address").notNull().unique(),
-  city: text("city").notNull(),
-  state: text("state").notNull().default("NC"),
-  tenantId: integer("tenant_id"),              // which tenant owns this lead
-  zip: text("zip").notNull(),
-  lat: real("lat"),
-  lng: real("lng"),
-  // Why it's in this list
-  reason: text("reason").notNull().default("no_service"),
-  // "no_service" | "copper_only" | "competitor_only" | "coming_soon"
-  lastChecked: text("last_checked"),
-  nextCheckAt: text("next_check_at"),
-  // When fiber becomes available, this flips
-  fiberAvailable: integer("fiber_available", { mode: "boolean" }).default(false),
-  convertedToLeadId: integer("converted_to_lead_id"), // set when promoted to lead
-  addedBy: integer("added_by"),                // users.id
-  // Kinetic's own address key — enables the exact, fast nightly recheck by
-  // dfAddressId (no address parsing). THIS is what catches "went live" the
-  // moment it flips, so a rep can knock the day the installer leaves.
-  dfAddressId: text("df_address_id"),
-  householdSegmentType: text("household_segment_type"), // COMING SOON | PROSPECT | EXISTING COPPER | …
-  buildStatus: text("build_status"),
-  // ── Lifecycle (adaptive recheck → promote) ─────────────────────────────────
-  // status: "active" (watched until it changes) | "promoted" (went live → lead)
-  //         | "aged_out" (legacy/explicit retention policy) | "removed" (manual).
-  // Archived rows leave the active list but are KEPT as history.
-  status: text("status").notNull().default("active"),
-  checkCount: integer("check_count").notNull().default(0), // times rechecked
-  archivedAt: text("archived_at"),                          // when it left the active list
-  archivedReason: text("archived_reason"),                 // why it was archived
-  createdAt: text("created_at").notNull().default(new Date().toISOString()),
-});
-export const insertComingSoonSchema = createInsertSchema(comingSoonAddresses).omit({
-  id: true, createdAt: true, fiberAvailable: true, convertedToLeadId: true
-});
-export type InsertComingSoon = z.infer<typeof insertComingSoonSchema>;
-export type ComingSoonAddress = typeof comingSoonAddresses.$inferSelect;
-
-// ── Scan targets — persistent address pool (FiberFocus model) ──────────────────
+// ── Scan targets — persistent address pool ───────────────────────────────────
 // Every address ever harvested is stored here ONCE (geocoded once), then
 // re-scanned over time. Re-scans read from this pool instead of re-harvesting,
 // so geocoding is a one-time cost, and comparing lastIsNewFiber against a fresh

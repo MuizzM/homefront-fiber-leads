@@ -35,7 +35,6 @@ const MyCommission = lazy(() => import("@/pages/MyCommission"));
 const CommissionConsole = lazy(() => import("@/pages/CommissionConsole"));
 const MyDocuments = lazy(() => import("@/pages/MyDocuments"));
 const LiveMap = lazy(() => import("@/pages/LiveMap"));
-const ComingSoon = lazy(() => import("@/pages/ComingSoon"));
 const ClockIn = lazy(() => import("@/pages/ClockIn"));
 const Profile = lazy(() => import("@/pages/Profile"));
 const Diagnostics = lazy(() => import("@/pages/Diagnostics"));
@@ -239,11 +238,6 @@ function AppRoutes() {
               <Scanners />
             </Guard>
           </Route>
-          <Route path="/coming-soon">
-            <Guard role={role} allowed={["admin", "manager"]}>
-              <ComingSoon />
-            </Guard>
-          </Route>
           <Route path="/live-map">
             <Guard role={role} allowed={["admin", "manager"]}>
               <LiveMap />
@@ -261,9 +255,9 @@ function AppRoutes() {
               <Scanners initialTab="usa" />
             </Guard>
           </Route>
-          <Route path="/cns-scanner">
+          <Route path="/kinetic-scanner">
             <Guard role={role} allowed={["admin"]}>
-              <Scanners initialTab="cns" />
+              <Scanners initialTab="kinetic" />
             </Guard>
           </Route>
           {/* ── Admin only ── */}

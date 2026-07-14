@@ -16,7 +16,6 @@ import { packMapPins, type PackedMapPins } from "@shared/mapPinsWire";
 import { decideFreshFiber, type FreshFiberVerdict } from "@shared/freshFiberVerdict";
 import { structuredLog } from "./structuredLog";
 import { rawDb } from "./db";
-import { projectConfirmedFreshLeads } from "./freshFiberProjector";
 import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
@@ -84,7 +83,7 @@ import * as commissionSvc from "./commissionService";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
-import { registerCnsOperationsRoutes } from "./cnsOperationsRoutes";
+import { registerKineticScannerRoutes } from "./kineticScannerRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -146,12 +145,8 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi, getAddressScanQueueStatus, type ScanResult } from "./scanner";
+import { scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, getAddressScanQueueStatus, type ScanResult } from "./scanner";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
-import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob, archiveCnsJob } from "./cns-scanner";
-import { scannerSettings } from "./cnsOperationsStore";
-import { planCnsRange } from "@shared/cnsRange";
-import { planCityDiscovery, startCityDiscovery, getDiscoveryJob, getDiscoveryJobs, MAX_DISCOVERY_BUDGET } from "./cnsDiscovery";
 import * as scanSvc from "./scanService";
 import {
   CORROBORATION_SOURCES, freshPoints, knockList, listMarkets, monitoringSummary,
@@ -449,8 +444,7 @@ function sanitizeFiberResult(r: any, persisted?: PersistKineticObservationResult
   };
 }
 
-// ── Live scanner state (FiberFocus-style) ───────────────────────────────────
-// Mirrors FiberFocus's /api/coming-soon/state pattern:
+// ── Live address-scanner state ──────────────────────────────────────────────
 // Real-time metrics polled every 3s by the frontend.
 interface ScanWorkerState {
   isRunning: boolean;
@@ -840,7 +834,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   registerFiberOperationsRoutes(app, {
     requireAuth, requireCapability, requireScanningAllowed, scanAdmission: authorizedScanAdmission,
   });
-  registerCnsOperationsRoutes(app, { requireCapability });
+  registerKineticScannerRoutes(app, {
+    requireCapability, requireScanningAllowed, scanAdmission: authorizedScanAdmission,
+  });
 
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
@@ -1011,7 +1007,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
-  // ── FiberFocus-style scanner state ───────────────────────────────────────────────
+  // ── Address-scanner state ──────────────────────────────────────────────────
   // Polled every 3s by the CityScanner UI to show live efficiency metrics.
   app.get("/api/scanner/state", requireManager, (_req, res) => {
     const activeJob = Array.from(scanJobs.values()).find(j => j.status === "running");
@@ -4785,197 +4781,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       url: slug ? `${origin}/join/${slug}` : `${origin}/join`,
     });
   });
-
-  // ── CNS Scanner Routes ────────────────────────────────────────────────────────
-  // GET /api/cns/envs — list available ENV codes
-  app.get("/api/cns/envs", requireManager, (_req, res) => {
-    res.json(KINETIC_ENVS);
-  });
-
-  // POST /api/cns/jobs — start a new CNS scan
-  // Body: { env: "MS", startCns: 1, endCns: 50000 }
-  // Proxy spend is admin-only + capped everywhere else (discovery, area, harvest);
-  // a raw CNS range is up to 100k Kinetic probes, so it must be admin-gated too.
-  app.post("/api/cns/jobs", requireAdmin, requireScanningAllowed, authorizedScanAdmission, async (req, res) => {
-    const { env, startCns, endCns } = req.body;
-    if (!env || typeof env !== "string") return res.status(400).json({ error: "env required" });
-    const envInfo = KINETIC_ENVS.find(e => e.code === env);
-    if (!envInfo) return res.status(400).json({ error: `Unknown ENV: ${env}. Valid: ${KINETIC_ENVS.map(e => e.code).join(", ")}` });
-
-    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
-    if (!tenantId) return res.status(403).json({ error: "Organization required" });
-    const settings = scannerSettings(tenantId);
-    const plan = planCnsRange({ start: Number(startCns), end: Number(endCns), upperLimit: envInfo.upperLimit, jobSizeLimit: settings.jobSizeLimit });
-    if (!plan.valid) return res.status(400).json({ error: plan.error === "job_limit" ? `Max range is ${Number(settings.jobSizeLimit).toLocaleString()} CNS per job. Split into multiple jobs.` : `Invalid CNS range: ${plan.error}` });
-    const { start, end } = plan;
-
-    const job = createCnsJob(env, start, end, () => getAuthToken(), tenantId, (req as any).user?.id);
-    storage.logActivity((req as any).user?.id ?? null, "cns.scan.started", "cns_job", 0, { env, start, end, jobId: job.id }, req.ip);
-    res.status(201).json(job);
-  });
-
-  // ═══ ZERO-MAPBOX CITY DISCOVERY — gather primary evidence for indexed cities ══
-  // Kinetic returns the full address on every probe, so once a city has been
-  // scanned its addresses (with df ids = ENV+CNS) accumulate in the pool. These
-  // routes target a city by name using ONLY that accumulated CNS evidence — no
-  // Mapbox geocoding, ever. See server/cnsDiscovery.ts.
-
-  // Coverage preview: what do we know about this city's CNS footprint? Pure read,
-  // zero proxy, zero Mapbox — safe for managers to inspect before spending.
-  app.get("/api/scan/city-cns-coverage", requireManager, (req, res) => {
-    const city = qstr(req.query.city), state = qstr(req.query.state) || "NC";
-    if (!city) return res.status(400).json({ error: "city required" });
-    const plan = planCityDiscovery(city, state, 2000);
-    res.json({
-      city: plan.city, state: plan.state, env: plan.env,
-      hasCoverage: plan.hasCoverage, needsAnchor: plan.needsAnchor,
-      knownAddresses: plan.knownCount, cnsBands: plan.bands,
-      frontierCandidates: plan.frontierCount, gapCandidates: plan.gapCount,
-      suggestedProbes: plan.probeDfIds.length, reason: plan.reason,
-    });
-  });
-
-  // Launch a budgeted, zero-Mapbox discovery run against a city's CNS frontier.
-  // Admin-only + rate-limited; proxy spend is capped at `budget` Kinetic checks.
-  app.post("/api/scan/discover-city", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req, res) => {
-    const { city, state, budget } = req.body ?? {};
-    if (!city || typeof city !== "string") return res.status(400).json({ error: "city required" });
-    const st = typeof state === "string" && state.trim() ? state.trim() : "NC";
-    const b = Math.min(Math.max(1, Number(budget) || 500), MAX_DISCOVERY_BUDGET);
-    const preview = planCityDiscovery(city, st, b);
-    if (preview.needsAnchor) {
-      return res.status(409).json({ error: "NO_COVERAGE", ...preview });
-    }
-    const job = startCityDiscovery({ city, state: st, budget: b, tenantId: (req as any).user?.tenantId ?? undefined, getToken: () => getAuthToken() });
-    storage.logActivity((req as any).user?.id ?? null, "scan.discover_city.started", "discovery", 0, { city, state: st, budget: b, jobId: job.id }, req.ip);
-    res.status(201).json(job);
-  });
-
-  // Poll a discovery run (tenant-scoped).
-  app.get("/api/scan/discover-city/:id", requireManager, (req, res) => {
-    const job = getDiscoveryJob(String(req.params.id));
-    const tid = (req as any).user?.tenantId;
-    if (!job || (tid != null && job.tenantId != null && job.tenantId !== tid)) return res.status(404).json({ error: "Not found" });
-    res.json(job);
-  });
-
-  // List this tenant's discovery runs.
-  app.get("/api/scan/discover-jobs", requireManager, (req, res) => {
-    res.json(getDiscoveryJobs((req as any).user?.tenantId ?? undefined));
-  });
-
-  // GET /api/cns/jobs — this tenant's CNS jobs (null-tenant/system jobs visible to all).
-  app.get("/api/cns/jobs", requireManager, (req, res) => {
-    const tid = (req as any).user?.tenantId;
-    res.json(getCnsJobs().filter(j => tid == null || j.tenantId == null || j.tenantId === tid).map(j => ({
-      id: j.id, env: j.env, envLabel: j.envLabel,
-      startCns: j.startCns, endCns: j.endCns, currentCns: j.currentCns,
-      status: j.status, scanned: j.scanned, hits: j.hits, newFiberHits: j.newFiberHits,
-      confirmedLeads: j.confirmedLeads,
-      skipped: j.skipped, errors: j.errors, retries: j.retries,
-      ratePerMin: j.ratePerMin, estimatedMinutes: j.estimatedMinutes,
-      startedAt: j.startedAt, completedAt: j.completedAt, lastError: j.lastError,
-    })));
-  });
-
-  // GET /api/cns/jobs/:id — single job detail (includes found array)
-  app.get("/api/cns/jobs/:id", requireManager, (req, res) => {
-    const job = getCnsJob(qstr(req.params.id));
-    const _cnsTid = (req as any).user?.tenantId;
-    // Allow null-tenant (super_admin-created) jobs through — matches the list
-    // endpoint, so a listed job is always openable.
-    if (!job || (_cnsTid != null && (job as any).tenantId != null && (job as any).tenantId !== _cnsTid)) return res.status(404).json({ error: "Not found" });
-    res.json(job);
-  });
-
-  // GET /api/cns/jobs/:id/stream — SSE stream for CNS job results
-  app.get("/api/cns/jobs/:id/stream", requireManager, (req, res) => {
-    const job = getCnsJob(qstr(req.params.id));
-    // Tenant guard — mirror the single-job reader; a CNS stream leaks the found
-    // address rows (dfAddressId/coords/fiber) cross-tenant without it.
-    const _cnsSseTid = (req as any).user?.tenantId;
-    if (!job || (_cnsSseTid && (job as any).tenantId != null && (job as any).tenantId !== _cnsSseTid)) {
-      return res.status(404).json({ error: "Job not found" });
-    }
-
-    res.setHeader("Content-Type", "text/event-stream");
-    res.setHeader("Cache-Control", "no-cache");
-    res.setHeader("Connection", "keep-alive");
-    res.setHeader("X-Accel-Buffering", "no");
-    res.flushHeaders();
-
-    let lastSent = 0;
-
-    function emit() {
-      const j = getCnsJob(qstr(req.params.id));
-      if (!j) { res.end(); return; }
-
-      // Drip new results
-      const newResults = j.found.slice(lastSent);
-      for (const r of newResults) {
-        res.write(`event: result\ndata: ${JSON.stringify(r)}\n\n`);
-      }
-      lastSent = j.found.length;
-
-      // Progress event
-      const progress = {
-        jobId: j.id, env: j.env, status: j.status,
-        scanned: j.scanned, hits: j.hits, newFiberHits: j.newFiberHits,
-        confirmedLeads: j.confirmedLeads,
-        currentCns: j.currentCns, ratePerMin: j.ratePerMin,
-        estimatedMinutes: j.estimatedMinutes, lastError: j.lastError,
-      };
-      res.write(`event: progress\ndata: ${JSON.stringify(progress)}\n\n`);
-
-      if (j.status === "done" || j.status === "stopped" || j.status === "error") {
-        res.write(`event: done\ndata: ${JSON.stringify({ status: j.status })}\n\n`);
-        clearInterval(timer);
-        res.end();
-      }
-    }
-
-    const timer = setInterval(emit, 1000);
-    emit();
-    req.on("close", () => clearInterval(timer));
-  });
-
-  // POST /api/cns/jobs/:id/stop
-  app.post("/api/cns/jobs/:id/stop", requireManager, (req, res) => {
-    const job = getCnsJob(qstr(req.params.id));
-    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
-    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
-    stopCnsJob(qstr(req.params.id));
-    res.json({ ok: true, status: "stopped" });
-  });
-
-  // POST /api/cns/jobs/:id/pause
-  app.post("/api/cns/jobs/:id/pause", requireManager, (req, res) => {
-    const job = getCnsJob(qstr(req.params.id));
-    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
-    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
-    pauseCnsJob(qstr(req.params.id));
-    res.json({ ok: true, status: "paused" });
-  });
-
-  // POST /api/cns/jobs/:id/resume
-  app.post("/api/cns/jobs/:id/resume", requireManager, (req, res) => {
-    const job = getCnsJob(qstr(req.params.id));
-    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
-    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
-    resumeCnsJob(qstr(req.params.id), () => getAuthToken());
-    res.json({ ok: true, status: "running" });
-  });
-
-  // DELETE /api/cns/jobs/:id — remove a completed/stopped job from memory
-  app.delete("/api/cns/jobs/:id", requireManager, (req, res) => {
-    const job = getCnsJob(qstr(req.params.id));
-    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
-    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
-    if (["running","paused"].includes(job.status)) return res.status(409).json({ error: "Stop the job before archiving it" });
-    if (!archiveCnsJob(qstr(req.params.id),tid)) return res.status(409).json({ error: "Job could not be archived" });
-    res.json({ ok: true });
-  });
-
   // PATCH /api/onboarding/applications/:id — approve or reject
   app.patch("/api/onboarding/applications/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
@@ -5327,75 +5132,6 @@ export function registerSaasRoutes(app: any) {
     res.json(result);
   });
 
-  // ── Coming Soon Pipeline ─────────────────────────────────────────────────────
-  app.get("/api/coming-soon", requireAuth, (req: Request, res: Response) => {
-    res.json(storage.getComingSoonAddresses((req as any).user?.tenantId));
-  });
-
-  // GET /api/coming-soon/history — archived watchlist rows (promoted / aged-out /
-  // removed). The "keep history" side of the lifecycle.
-  app.get("/api/coming-soon/history", requireManager, (req: Request, res: Response) => {
-    res.json(storage.getComingSoonHistory((req as any).user?.tenantId, Number(req.query.limit ?? 500)));
-  });
-
-  app.post("/api/coming-soon", requireManager, (req: Request, res: Response) => {
-    const user = (req as any).user;
-    const { address, city, state, zip, lat, lng, reason } = req.body;
-    if (!address || !city || !zip) return res.status(400).json({ error: "address, city, zip required" });
-    try {
-      const entry = storage.createComingSoon({ tenantId: user?.tenantId ?? getDefaultTenantId(), address, city, state: state ?? "NC", zip, lat, lng, reason: reason ?? "no_service", addedBy: user.id, lastChecked: new Date().toISOString() });
-      storage.logActivity(user.id, "coming_soon.added", "coming_soon", entry.id, { address }, req.ip);
-      res.json(entry);
-    } catch (e: any) {
-      if (e.message?.includes("UNIQUE")) return res.status(409).json({ error: "Address already in pipeline" });
-      res.status(500).json({ error: "Failed to add address" });
-    }
-  });
-
-  app.delete("/api/coming-soon/:id", requireManager, (req: Request, res: Response) => {
-    const id = Number(req.params.id);
-    const tid = (req as any).user?.tenantId;
-    // Tenant wall: a manager may only remove their own tenant's watchlist rows.
-    const entry = storage.getComingSoonAddresses(tid).find(a => a.id === id);
-    if (!entry) return res.status(404).json({ error: "Not found" });
-    // Archive (keep history), don't hard-delete — it moves to /api/coming-soon/history.
-    storage.archiveComingSoon(id, "manual");
-    res.json({ ok: true });
-  });
-
-  // POST /api/coming-soon/:id/promote — publish only after the same authoritative
-  // cross-verification gate used by automatic scans. Managers may request the
-  // projection, but cannot override evidence or manufacture a fresh lead.
-  app.post("/api/coming-soon/:id/promote", requireManager, (req: Request, res: Response) => {
-    const user = (req as any).user;
-    const id = Number(req.params.id);
-    // Tenant-scoped lookup — a manager can't promote another tenant's entry.
-    const entry = storage.getComingSoonAddresses(user?.tenantId).find(a => a.id === id);
-    if (!entry) return res.status(404).json({ error: "Not found" });
-    const tenantId = Number(entry.tenantId ?? user?.tenantId ?? getDefaultTenantId());
-    const target = rawDb.prepare(`SELECT id,converted_to_lead_id AS leadId FROM scan_targets
-      WHERE address=? AND lower(city)=lower(?) AND upper(state)=upper(?) AND tenant_id=?
-      LIMIT 1`).get(entry.address, entry.city, entry.state, tenantId) as { id: number; leadId: number | null } | undefined;
-    if (!target) return res.status(409).json({
-      error: "This address has no provider snapshot yet. Recheck it before requesting publication.",
-      code: "PRIMARY_EVIDENCE_REQUIRED",
-    });
-    projectConfirmedFreshLeads(tenantId, [target.id]);
-    const refreshed = rawDb.prepare(`SELECT converted_to_lead_id AS leadId FROM scan_targets WHERE id=?`).get(target.id) as { leadId: number | null };
-    const lead = refreshed?.leadId ? storage.getLeadById(refreshed.leadId) : undefined;
-    if (!lead || lead.tenantId !== tenantId || lead.freshConfidence !== "cross_verified") {
-      return res.status(409).json({
-        error: "This address is still provisional. A proven availability flip and recent independent address-level fiber evidence are required.",
-        code: "CROSS_VERIFICATION_REQUIRED",
-      });
-    }
-    storage.markComingSoonAvailable(id, lead.id);
-    storage.logActivity(user.id, "coming_soon.promoted", "lead", lead.id, {
-      fromComingSoonId: id, confirmation: "cross_verified", scanTargetId: target.id,
-    }, req.ip);
-    res.json({ lead: stripProviderIds(lead, user), updated: true });
-  });
-
   // ── Commissions ──────────────────────────────────────────────────────────────
   // GET /api/commissions — admin sees all, rep sees own
   app.get("/api/commissions", requireCapability("field.app.use"), (req: Request, res: Response) => {
@@ -5623,7 +5359,9 @@ export function registerSaasRoutes(app: any) {
     const scopedMembers = scopeIds ? members.filter(m => scopeIds.includes(m.id)) : members;
     const allKnocks = storage.getKnocks(tid);
     const knocks = scopeIds ? allKnocks.filter((k: any) => scopeIds.includes(k.repId)) : allKnocks;
-    const comingSoon = storage.getComingSoonAddresses(tid);
+    const kineticAddresses = tid == null
+      ? rawDb.prepare(`SELECT COUNT(*) AS total,SUM(CASE WHEN is_live=1 THEN 1 ELSE 0 END) AS live FROM kinetic_addresses`).get() as any
+      : rawDb.prepare(`SELECT COUNT(*) AS total,SUM(CASE WHEN is_live=1 THEN 1 ELSE 0 END) AS live FROM kinetic_addresses WHERE tenant_id=?`).get(tid) as any;
     const allCommissions = storage.getCommissions(tid);
     const commissions = scopeIds ? allCommissions.filter((c: any) => scopeIds.includes(c.repId)) : allCommissions;
     const allSessions = storage.getAllClockSessions(undefined, tid);
@@ -5649,7 +5387,7 @@ export function registerSaasRoutes(app: any) {
       },
       team: isRep ? { total: 1, activeClockedIn } : { total: scopedMembers.length, activeClockedIn },
       knocks: { total: knocks.length, today: todayKnocks.length, todaySales, weekSales },
-      comingSoon: { total: comingSoon.length, converted: comingSoon.filter(a => a.fiberAvailable).length },
+      kinetic: { total: Number(kineticAddresses?.total ?? 0), live: Number(kineticAddresses?.live ?? 0) },
       revenue: { totalPaid: totalRevenue, pendingPayout },
       fieldHours: { total: sessions.reduce((s, c) => s + (c.durationMinutes ?? 0), 0) },
     });

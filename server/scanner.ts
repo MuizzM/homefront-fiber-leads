@@ -138,7 +138,7 @@ export async function refreshTokenFromApi(): Promise<string> {
   finally { refreshInFlight = null; }
 }
 
-/** Exported for use by CNS scanner and routes */
+/** Shared token accessor for authorized server-side scanner routes. */
 export async function getAuthToken(): Promise<string> {
   assertAutomationAuthorized();
   const now = Date.now();
