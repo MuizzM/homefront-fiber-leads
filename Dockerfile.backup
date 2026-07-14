@@ -1,0 +1,11 @@
+FROM debian:bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends age ca-certificates sqlite3 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/backup-container.sh /usr/local/bin/homefront-backup
+RUN chmod 0555 /usr/local/bin/homefront-backup
+
+USER 1000:1000
+ENTRYPOINT ["/usr/local/bin/homefront-backup"]
