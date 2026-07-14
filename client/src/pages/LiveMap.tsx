@@ -155,7 +155,7 @@ export default function LiveMap() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto space-y-4">
+    <div className="w-full max-w-7xl mx-auto p-4 pt-5 pb-24 space-y-4 md:p-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-xl font-bold text-white">Live Field Map</h1>

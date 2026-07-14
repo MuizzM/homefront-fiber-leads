@@ -203,7 +203,7 @@ export interface IStorage {
   recordCnsProbes(env: string, probes: Array<{ cns: number; result: "hit" | "miss" }>): void;
   getProbedCns(env: string, withinDays?: number): number[];
   getMaxHitCns(env: string): number | null;
-  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean }): { prevIsNewFiber: boolean };
+  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean };
   bumpScanTargetInconclusive(ref: { id?: number; address?: string }): void;
   getScanTargetExhaustedCount(city?: string, zip?: string): number;
   getFirstSeenLive(sinceHours: number, limit?: number, tenantId?: number): any[];
@@ -350,6 +350,13 @@ export function runMigrations() {
     // Bootstrap adopts existing null rows into the default tenant.
     `ALTER TABLE rep_applications ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE rep_applications ADD COLUMN invite_id INTEGER`,
+    `ALTER TABLE rep_applications ADD COLUMN application_source TEXT NOT NULL DEFAULT 'public_join'`,
+    `ALTER TABLE rep_applications ADD COLUMN desired_role TEXT`,
+    `ALTER TABLE rep_applications ADD COLUMN login_email_id TEXT`,
+    `ALTER TABLE rep_applications ADD COLUMN login_sent_at TEXT`,
+    `ALTER TABLE rep_applications ADD COLUMN agreements_issued_at TEXT`,
+    `ALTER TABLE rep_applications ADD COLUMN activated_at TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_rep_applications_tenant_status_source ON rep_applications(tenant_id, status, application_source, created_at DESC)`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
     // Persistent address pool — harvest once, re-scan for fiber-status changes
@@ -942,6 +949,152 @@ export function runMigrations() {
        WHERE application_id IS NULL AND status IN ('creating','invited','failed')`,
     `CREATE INDEX IF NOT EXISTS idx_rep_applications_invite
        ON rep_applications(invite_id) WHERE invite_id IS NOT NULL`,
+
+    // Complete NC/SC incorporated-place target inventory. This is planning
+    // metadata only: it never substitutes city-level claims for address-level
+    // availability. The address pool + observations remain the ground truth.
+    `CREATE TABLE IF NOT EXISTS state_fiber_markets (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       state TEXT NOT NULL CHECK(state IN ('NC','SC')),
+       place_fips TEXT NOT NULL,
+       city TEXT NOT NULL,
+       legal_name TEXT NOT NULL,
+       county_fips TEXT,
+       county TEXT,
+       counties_json TEXT NOT NULL DEFAULT '[]',
+       population INTEGER NOT NULL DEFAULT 0,
+       lat REAL,
+       lng REAL,
+       priority_class TEXT NOT NULL CHECK(priority_class IN ('critical','high','medium','low')),
+       priority_score REAL NOT NULL DEFAULT 0,
+       priority_reasons TEXT NOT NULL DEFAULT '[]',
+       cadence_hours INTEGER NOT NULL,
+       announcement_url TEXT,
+       last_scanned_at TEXT,
+       last_status TEXT NOT NULL DEFAULT 'unknown',
+       fresh_flag INTEGER NOT NULL DEFAULT 0,
+       next_scan_at TEXT,
+       source_vintage TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(state, place_fips)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_state_markets_due ON state_fiber_markets(next_scan_at, priority_score DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_state_markets_state_priority ON state_fiber_markets(state, priority_class, priority_score DESC)`,
+
+    // Independent/licensed verification evidence. A Kinetic result is only
+    // cross-verified when a distinct source records address-level availability.
+    `CREATE TABLE IF NOT EXISTS availability_corroboration (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       scan_target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,
+       source TEXT NOT NULL,
+       source_record_id TEXT,
+       observed_at TEXT NOT NULL,
+       availability TEXT NOT NULL CHECK(availability IN ('available','unavailable','unknown')),
+       technology TEXT,
+       max_down_mbps INTEGER,
+       evidence_hash TEXT NOT NULL,
+       reference_url TEXT,
+       import_batch_id TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, scan_target_id, source, evidence_hash)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_corroboration_target ON availability_corroboration(tenant_id, scan_target_id, observed_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_corroboration_batch ON availability_corroboration(import_batch_id)`,
+
+    // Announcement watch ledger. Sources are fetched conditionally and content
+    // hashes prevent duplicate prioritization/alerts.
+    `CREATE TABLE IF NOT EXISTS market_announcements (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       source_url TEXT NOT NULL,
+       title TEXT NOT NULL,
+       published_at TEXT,
+       state TEXT CHECK(state IN ('NC','SC')),
+       locations_json TEXT NOT NULL DEFAULT '[]',
+       content_hash TEXT NOT NULL UNIQUE,
+       last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_market_announcements_state ON market_announcements(state, published_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS monitor_source_polls (
+       source_url TEXT PRIMARY KEY,
+       etag TEXT,
+       last_modified TEXT,
+       last_checked_at TEXT,
+       last_success_at TEXT,
+       next_poll_at TEXT,
+       status TEXT NOT NULL DEFAULT 'never',
+       error TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `ALTER TABLE scan_targets ADD COLUMN last_fiber_available INTEGER`,
+    `ALTER TABLE scan_targets ADD COLUMN first_seen_fiber_at TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN last_customer_segment TEXT NOT NULL DEFAULT 'unknown'`,
+    `ALTER TABLE scan_targets ADD COLUMN last_customer_confidence TEXT NOT NULL DEFAULT 'low'`,
+    `ALTER TABLE scan_targets ADD COLUMN last_customer_signals TEXT NOT NULL DEFAULT '[]'`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`,
+    `CREATE TABLE IF NOT EXISTS availability_snapshots (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       scan_target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,
+       run_id TEXT,
+       checked_at TEXT NOT NULL DEFAULT (datetime('now')),
+       conclusive INTEGER NOT NULL,
+       fiber_available INTEGER,
+       fiber_status TEXT,
+       max_download_mbps INTEGER,
+       service_status TEXT,
+       household_segment_type TEXT,
+       billing_status TEXT,
+       customer_segment TEXT NOT NULL DEFAULT 'unknown',
+       customer_confidence TEXT NOT NULL DEFAULT 'low',
+       customer_signals TEXT NOT NULL DEFAULT '[]',
+       transition_status TEXT NOT NULL,
+       fresh INTEGER NOT NULL DEFAULT 0,
+       api_source TEXT,
+       evidence_hash TEXT NOT NULL,
+       fiber_check_id INTEGER REFERENCES fiber_checks(id),
+       error TEXT
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_target ON availability_snapshots(scan_target_id, checked_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_run ON availability_snapshots(run_id, checked_at)`,
+    `CREATE TABLE IF NOT EXISTS sweep_jobs (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL,
+       kind TEXT NOT NULL DEFAULT 'city',
+       query TEXT NOT NULL,
+       city TEXT,
+       state TEXT,
+       radius_meters INTEGER,
+       phase TEXT NOT NULL DEFAULT 'queued',
+       status TEXT NOT NULL DEFAULT 'running',
+       source TEXT,
+       harvested INTEGER NOT NULL DEFAULT 0,
+       queued INTEGER NOT NULL DEFAULT 0,
+       checked INTEGER NOT NULL DEFAULT 0,
+       failed INTEGER NOT NULL DEFAULT 0,
+       fresh_found INTEGER NOT NULL DEFAULT 0,
+       opportunities_found INTEGER NOT NULL DEFAULT 0,
+       max_checks INTEGER NOT NULL,
+       current_run_id TEXT,
+       error TEXT,
+       created_by INTEGER,
+       started_at TEXT NOT NULL DEFAULT (datetime('now')),
+       heartbeat_at TEXT,
+       completed_at TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_sweep_jobs_tenant ON sweep_jobs(tenant_id, started_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS sweep_job_targets (
+       sweep_job_id TEXT NOT NULL REFERENCES sweep_jobs(id) ON DELETE CASCADE,
+       target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,
+       seq INTEGER NOT NULL,
+       state TEXT NOT NULL DEFAULT 'queued',
+       run_id TEXT,
+       PRIMARY KEY(sweep_job_id, target_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_sweep_targets_queue ON sweep_job_targets(sweep_job_id, state, seq)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -2090,15 +2243,20 @@ export class Storage implements IStorage {
   }
   // Record a fresh scan result. Returns the PREVIOUS is_new_fiber so the caller
   // can detect a change (was not new fiber → now new fiber = new hot lead).
-  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean }): { prevIsNewFiber: boolean } {
+  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean } {
     const prev = rawDb.prepare("SELECT last_is_new_fiber FROM scan_targets WHERE id = ?").get(id) as any;
     rawDb.prepare(
       `UPDATE scan_targets SET last_fiber_status=@fs, last_is_new_fiber=@nf, last_billing_status=@bs,
+         last_fiber_available=COALESCE(@fiberAvailable,last_fiber_available),
+         last_customer_segment=COALESCE(@customerSegment,last_customer_segment),
+         last_customer_confidence=COALESCE(@customerConfidence,last_customer_confidence),
+         last_customer_signals=COALESCE(@customerSignals,last_customer_signals),
          df_address_id=COALESCE(@df, df_address_id),
          converted_to_lead_id=COALESCE(@lead, converted_to_lead_id),
          last_availability_status=COALESCE(@avail, last_availability_status),
          -- first-seen-live is stamped ONCE on the first newly_live flip, never overwritten
          first_seen_live_at=CASE WHEN @newly=1 AND first_seen_live_at IS NULL THEN datetime('now') ELSE first_seen_live_at END,
+         first_seen_fiber_at=CASE WHEN @newly=1 AND first_seen_fiber_at IS NULL THEN datetime('now') ELSE first_seen_fiber_at END,
          -- a conclusive answer clears the inconclusive streak (belt-and-suspenders:
          -- the row also leaves the never-scanned pool now that last_scanned_at is set)
          inconclusive_attempts=0,
@@ -2107,6 +2265,10 @@ export class Storage implements IStorage {
       id, fs: r.fiberStatus ?? null, nf: r.isNewFiber ? 1 : 0, bs: r.billingStatus ?? null,
       df: r.dfAddressId ?? null, lead: r.convertedToLeadId ?? null,
       avail: r.availabilityStatus ?? null, newly: r.newlyLive ? 1 : 0,
+      fiberAvailable: r.fiberAvailable == null ? null : (r.fiberAvailable ? 1 : 0),
+      customerSegment: r.customerSegment ?? null,
+      customerConfidence: r.customerConfidence ?? null,
+      customerSignals: r.customerSignals ? JSON.stringify(r.customerSignals) : null,
     });
     return { prevIsNewFiber: !!(prev && prev.last_is_new_fiber) };
   }

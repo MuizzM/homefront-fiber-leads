@@ -78,7 +78,7 @@ export default function Leaderboard() {
   );
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="w-full max-w-6xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
@@ -100,7 +100,7 @@ export default function Leaderboard() {
 
       {/* Date-range filter — preset segments + custom From–To */}
       <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter ranking by date range">
-        <div className="inline-flex items-center gap-0.5 rounded-lg bg-secondary/60 border border-border p-0.5 overflow-x-auto max-w-full">
+        <div className="no-scrollbar inline-flex max-w-full items-center gap-0.5 overflow-x-auto rounded-xl border border-border bg-secondary/60 p-1 md:rounded-lg md:p-0.5">
           {PRESETS.map((p) => (
             <button
               key={p.key}
@@ -220,7 +220,7 @@ export default function Leaderboard() {
               <div
                 key={entry.rep.id}
                 data-testid={`row-rep-${entry.rep.id}`}
-                className={`relative flex items-center gap-3 sm:gap-4 px-4 py-3 border-b border-border last:border-b-0 transition-colors overflow-hidden ${
+                className={`render-lazy relative flex min-h-[64px] items-center gap-3 overflow-hidden border-b border-border px-4 py-3 transition-colors last:border-b-0 sm:gap-4 ${
                   isMe ? "bg-primary/[0.08]" : "hover:bg-muted/40"
                 }`}
               >

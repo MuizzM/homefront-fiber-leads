@@ -102,7 +102,7 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     expect(failRow.last_scanned_at).toBeNull();
     expect(failRow.last_availability_status).toBeNull();
     expect(failRow.scan_count).toBe(0);
-    const failTarget: any = rawDb.prepare(`SELECT t.state AS state FROM scan_run_targets t JOIN scan_targets s ON s.id=t.target_id WHERE s.address=? AND t.run_id=?`).get("FAIL 300 Timeout Ave", runId);
+    const failTarget: any = rawDb.prepare(`SELECT t.target_id, t.state AS state FROM scan_run_targets t JOIN scan_targets s ON s.id=t.target_id WHERE s.address=? AND t.run_id=?`).get("FAIL 300 Timeout Ave", runId);
     expect(failTarget.state).toBe("failed");
 
     // No-service address: pool row WAS recorded (a real negative), no lead.
@@ -110,10 +110,15 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     expect(noSvc.last_scanned_at).not.toBeNull();
     expect(noSvc.last_availability_status).toBe("checked_unavailable");
 
-    // Evidence preserved: a fiber_checks row per successful check carries the raw
-    // response behind the decision.
+    // Evidence preserved: every attempt, including a failed provider response, is
+    // append-only so the sweep has a complete audit trail without changing truth.
     const evidence: any = rawDb.prepare(`SELECT COUNT(*) c FROM fiber_checks WHERE address LIKE '%Testburg%'`).get();
-    expect(evidence.c).toBe(7);
+    expect(evidence.c).toBe(8);
+    const snapshots: any = rawDb.prepare(`SELECT COUNT(*) c FROM availability_snapshots WHERE run_id=?`).get(runId);
+    expect(snapshots.c).toBe(8);
+    const failedSnapshot: any = rawDb.prepare(`SELECT conclusive, error FROM availability_snapshots WHERE run_id=? AND scan_target_id=?`).get(runId, failTarget.target_id);
+    expect(failedSnapshot.conclusive).toBe(0);
+    expect(failedSnapshot.error).toBeTruthy();
   });
 
   it("detects a provable unavailable->live flip as newly_live on rescan", async () => {

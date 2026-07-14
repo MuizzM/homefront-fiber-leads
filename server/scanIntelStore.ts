@@ -277,10 +277,13 @@ export function countQueued(runId: string): number {
 }
 
 // ── Per-target scan memory (used by the live engine) ──────────────────────────
-export function getTargetSnapshot(id: number): { everScanned: boolean; wasLive: boolean } {
-  const r = g<any>(`SELECT last_scanned_at AS s, last_is_new_fiber AS nf, last_billing_status AS bs FROM scan_targets WHERE id=?`, id);
-  if (!r) return { everScanned: false, wasLive: false };
-  return { everScanned: !!r.s, wasLive: !!r.nf && r.bs === "N" };
+export function getTargetSnapshot(id: number): { everScanned: boolean; wasLive: boolean; fiberAvailable: boolean } {
+  const r = g<any>(`SELECT last_scanned_at AS s, last_is_new_fiber AS nf, last_billing_status AS bs,
+                           last_fiber_available AS fa, last_fiber_status AS fs
+                      FROM scan_targets WHERE id=?`, id);
+  if (!r) return { everScanned: false, wasLive: false, fiberAvailable: false };
+  const inferredFiber = ["new_fiber", "existing_fiber", "tenured_fiber"].includes(String(r.fs ?? ""));
+  return { everScanned: !!r.s, wasLive: !!r.nf && r.bs === "N", fiberAvailable: r.fa == null ? inferredFiber : !!r.fa };
 }
 
 // ── Market outcome memory (learning loop write path) ──────────────────────────

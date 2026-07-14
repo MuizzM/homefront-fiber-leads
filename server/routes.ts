@@ -68,16 +68,15 @@ import {
   sendOnboardingWelcome,
 } from "./onboardingDocumentRoutes";
 import {
-  attachApplicationToInvite,
   getRecruitingInviteByApplication,
   markInviteAgreementsIssued,
   markInviteApproved,
   markInviteLoginSent,
   markInviteRejected,
-  resolveRecruitingInviteToken,
 } from "./onboardingRecruitingStore";
+import { ApplicationIntakeError, submitPublicApplication } from "./onboardingApplicationService";
+import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
-import { rawDb } from "./db";
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
 // Legacy flat rows (no effective_from) are treated as always-on flat plans.
@@ -118,6 +117,14 @@ import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
 import { planCityDiscovery, startCityDiscovery, getDiscoveryJob, getDiscoveryJobs, MAX_DISCOVERY_BUDGET } from "./cnsDiscovery";
 import * as scanSvc from "./scanService";
+import {
+  CORROBORATION_SOURCES, freshPoints, knockList, listMarkets, monitoringSummary,
+  recordCorroboration, seedStateMarkets, syncMarketState, toCsv,
+} from "./stateMonitorStore";
+import { clusterFreshFiber } from "@shared/freshFiberClusters";
+import { getStateMonitorStatus, runStateMonitorTick, startStateMonitorScheduler } from "./stateMonitorScheduler";
+import { announcementSourceStatus, pollAnnouncementsIfDue } from "./announcementWatcher";
+import * as sweepService from "./sweepService";
 import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
@@ -151,26 +158,27 @@ function normalizeAddrForDedup(addr: string): string {
 }
 
 // ── Email (Resend/SMTP via env — see server/mail.ts; dev console fallback) ──
-async function sendOtpEmail(to: string, code: string, name: string) {
+async function sendOtpEmail(to: string, code: string, name: string): Promise<"email" | "console"> {
   // If SMTP env vars set, use them; otherwise log to console (dev mode)
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     const transporter = mailTransport();
     try {
       await sendViaTransport(transporter, to, code, name);
-      return;
+      return "email";
     } catch (e: any) {
       if (process.env.NODE_ENV !== "production") {
         // Dev machines often can't reach the prod SMTP host — never block a
         // local login on mail. (Prod NEVER logs codes; it rethrows below.)
         console.warn(`[otp] SMTP send failed (${e?.message ?? e}) — dev fallback:`);
         console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
-        return;
+        return "console";
       }
       throw new Error("email_send_failed");
     }
   } else {
     // Dev fallback — print to server console so you can test without SMTP
     console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
+    return "console";
   }
 }
 
@@ -2027,6 +2035,197 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // and run/control budgeted scans (admin only — every check spends proxy money).
   const tid = (req: any) => req.user?.tenantId ?? getDefaultTenantId();
 
+  // ═══ NC/SC KINETIC STATE MONITOR ═══════════════════════════════════════════
+  // Planning targets are city-level; every fresh/knock output below is sourced
+  // exclusively from time-stamped address-level transitions.
+  const marketQuerySchema = z.object({
+    state: z.enum(["NC", "SC"]).optional(),
+    priority: z.enum(["critical", "high", "medium", "low"]).optional(),
+    due: z.enum(["true", "false"]).optional(),
+    limit: z.coerce.number().int().min(1).max(2_000).default(1_000),
+  });
+  const freshQuerySchema = z.object({
+    days: z.coerce.number().int().min(1).max(365).default(30),
+    confidence: z.enum(["cross_verified", "single_source_provisional"]).optional(),
+    format: z.enum(["json", "csv"]).default("json"),
+  });
+  const corroborationSchema = z.object({
+    rows: z.array(z.object({
+      scanTargetId: z.number().int().positive(), source: z.enum(CORROBORATION_SOURCES),
+      sourceRecordId: z.string().trim().max(200).nullable().optional(),
+      observedAt: z.string().datetime(), availability: z.enum(["available", "unavailable", "unknown"]),
+      technology: z.string().trim().max(100).nullable().optional(),
+      maxDownMbps: z.number().int().min(0).max(1_000_000).nullable().optional(),
+      referenceUrl: z.string().url().max(2_000).nullable().optional(),
+      importBatchId: z.string().trim().max(200).nullable().optional(),
+    })).min(1).max(5_000),
+  });
+  const citySweepSchema = z.object({
+    city: z.string().trim().min(2).max(120), state: z.enum(["NC", "SC"]),
+    maxChecks: z.number().int().min(1).max(100_000).optional(),
+  });
+  const addressSearchSchema = z.object({
+    query: z.string().trim().min(5).max(250), radiusMeters: z.coerce.number().int().min(50).max(5_000).default(500),
+  });
+  const addressSweepSchema = addressSearchSchema.extend({
+    maxChecks: z.number().int().min(1).max(100_000).optional(),
+  });
+
+  app.post("/api/sweeps/city", requireAdmin, requireScanningAllowed, scanLimiter, (req: any, res) => {
+    const parsed = citySweepSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid city sweep", issues: parsed.error.issues });
+    const job = sweepService.startCitySweep({ tenantId: tid(req), createdBy: req.user?.id, ...parsed.data });
+    storage.logActivity(req.user?.id ?? null, "sweep.city_started", "sweep_job", undefined, { sweepId: job.id, city: job.city, state: job.state, maxChecks: job.maxChecks });
+    res.status(202).json(job);
+  });
+
+  app.get("/api/sweeps/address-search", requireManager, async (req: any, res) => {
+    const parsed = addressSearchSchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid address search", issues: parsed.error.issues });
+    try { res.json(await sweepService.searchAddressArea({ tenantId: tid(req), ...parsed.data })); }
+    catch (error: any) { res.status(error.message === "ADDRESS_NOT_FOUND" ? 404 : 502).json({ error: error.message }); }
+  });
+
+  app.post("/api/sweeps/address", requireAdmin, requireScanningAllowed, scanLimiter, (req: any, res) => {
+    const parsed = addressSweepSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid address sweep", issues: parsed.error.issues });
+    const job = sweepService.startAddressSweep({ tenantId: tid(req), createdBy: req.user?.id, ...parsed.data });
+    storage.logActivity(req.user?.id ?? null, "sweep.address_started", "sweep_job", undefined, { sweepId: job.id, query: parsed.data.query, radiusMeters: parsed.data.radiusMeters, maxChecks: job.maxChecks });
+    res.status(202).json(job);
+  });
+
+  app.get("/api/sweeps", requireManager, (req: any, res) => {
+    res.json({ sweeps: sweepService.listSweeps(tid(req), Number(req.query.limit) || 30) });
+  });
+
+  app.get("/api/sweeps/:id", requireManager, (req: any, res) => {
+    const job = sweepService.getSweep(qstr(req.params.id), tid(req));
+    if (!job) return res.status(404).json({ error: "Sweep not found" });
+    res.json(job);
+  });
+
+  app.get("/api/sweeps/:id/results", requireManager, (req: any, res) => {
+    const query = z.object({
+      stage: z.enum(["fresh", "available", "unavailable"]).optional(),
+      customer: z.enum(["new_opportunity", "existing_customer", "unknown"]).optional(),
+      limit: z.coerce.number().int().min(1).max(5_000).default(500), offset: z.coerce.number().int().min(0).default(0),
+    }).safeParse(req.query);
+    if (!query.success) return res.status(400).json({ error: "Invalid results query", issues: query.error.issues });
+    const result = sweepService.getSweepResults(qstr(req.params.id), tid(req), query.data);
+    if (!result) return res.status(404).json({ error: "Sweep not found" });
+    res.json(result);
+  });
+
+  app.get("/api/sweeps/:id/knock-list", requireManager, (req: any, res) => {
+    const result = sweepService.getSweepKnockList(qstr(req.params.id), tid(req));
+    if (!result) return res.status(404).json({ error: "Sweep not found" });
+    res.json({ job: result.job, count: result.count, clusters: result.clusters, rows: result.rows });
+  });
+
+  app.get("/api/sweeps/:id/fresh", requireManager, (req: any, res) => {
+    const result = sweepService.getSweepResults(qstr(req.params.id), tid(req), { stage: "fresh", limit: 5_000 });
+    if (!result) return res.status(404).json({ error: "Sweep not found" });
+    res.json(result);
+  });
+
+  app.get("/api/sweeps/:id/knock-list.csv", requireManager, (req: any, res) => {
+    const result = sweepService.getSweepKnockList(qstr(req.params.id), tid(req));
+    if (!result) return res.status(404).json({ error: "Sweep not found" });
+    res.type("text/csv").attachment(`knock-list-${qstr(req.params.id)}.csv`).send(result.csv);
+  });
+
+  app.post("/api/sweeps/:id/cancel", requireAdmin, (req: any, res) => {
+    if (!sweepService.cancelSweep(qstr(req.params.id), tid(req))) return res.status(404).json({ error: "Running sweep not found" });
+    res.json({ cancelled: true });
+  });
+
+  app.get("/api/monitor/markets", requireManager, (req: any, res) => {
+    const parsed = marketQuerySchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid market query", issues: parsed.error.issues });
+    syncMarketState();
+    res.json({ sourceVintage: "Census 2025 Subcounty Estimates + 2025 Gazetteer", markets: listMarkets({
+      ...parsed.data, due: parsed.data.due === "true",
+    }) });
+  });
+
+  app.get("/api/monitor/markets.csv", requireManager, (_req: any, res) => {
+    syncMarketState();
+    res.type("text/csv").attachment("nc-sc-kinetic-markets.csv").send(toCsv(listMarkets({ limit: 2_000 }) as any));
+  });
+
+  app.get("/api/monitor/summary", requireManager, (req: any, res) => {
+    const days = z.coerce.number().int().min(1).max(365).default(7).safeParse(req.query.days);
+    if (!days.success) return res.status(400).json({ error: "Invalid days" });
+    syncMarketState();
+    res.json(monitoringSummary(tid(req), days.data));
+  });
+
+  app.get("/api/monitor/fresh", requireManager, (req: any, res) => {
+    const parsed = freshQuerySchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid fresh-fiber query", issues: parsed.error.issues });
+    const rows = freshPoints(tid(req), parsed.data.days).filter((p) => !parsed.data.confidence || p.confidence === parsed.data.confidence);
+    if (parsed.data.format === "csv") {
+      const clusterByTarget = new Map(clusterFreshFiber(rows).flatMap((c) => c.addresses.map((p) => [p.id, c] as const)));
+      const csvRows = rows.map((p) => ({ ...p, sources: p.sources.join("|"), cluster_score: clusterByTarget.get(p.id)?.score ?? 0, cluster_density: clusterByTarget.get(p.id)?.density ?? 1 }));
+      return res.type("text/csv").attachment("fresh-kinetic-fiber.csv").send(toCsv(csvRows as any));
+    }
+    res.json({ generatedAt: new Date().toISOString(), count: rows.length, addresses: rows });
+  });
+
+  app.get("/api/monitor/clusters", requireManager, (req: any, res) => {
+    const days = z.coerce.number().int().min(1).max(365).default(30).safeParse(req.query.days);
+    const radius = z.coerce.number().min(25).max(1_000).default(250).safeParse(req.query.radiusMeters);
+    if (!days.success || !radius.success) return res.status(400).json({ error: "Invalid cluster query" });
+    const points = freshPoints(tid(req), days.data);
+    res.json({ points: points.length, clusters: clusterFreshFiber(points, { radiusMeters: radius.data }) });
+  });
+
+  app.get("/api/monitor/knock-list.csv", requireManager, (req: any, res) => {
+    const days = z.coerce.number().int().min(1).max(365).default(30).safeParse(req.query.days);
+    if (!days.success) return res.status(400).json({ error: "Invalid days" });
+    res.type("text/csv").attachment("fresh-fiber-knock-list.csv").send(toCsv(knockList(tid(req), days.data) as any));
+  });
+
+  app.get("/api/monitor/schedule", requireManager, (_req: any, res) => {
+    syncMarketState();
+    res.json({ scheduler: getStateMonitorStatus(), due: listMarkets({ due: true, limit: 100 }) });
+  });
+
+  app.get("/api/monitor/sources", requireManager, (_req: any, res) => {
+    res.json({
+      announcementWatch: announcementSourceStatus(),
+      addressAvailability: {
+        primary: "kinetic_authorized_lookup",
+        independentAccepted: CORROBORATION_SOURCES,
+        confirmationRule: "A Kinetic-only transition is provisional until a recent independent address-level available observation is imported.",
+      },
+    });
+  });
+
+  app.post("/api/monitor/announcements/poll", requireAdmin, async (_req: any, res) => {
+    try { res.json(await pollAnnouncementsIfDue(true)); }
+    catch (error: any) { res.status(502).json({ error: error.message }); }
+  });
+
+  app.post("/api/monitor/corroboration", requireAdmin, (req: any, res) => {
+    const parsed = corroborationSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid corroboration batch", issues: parsed.error.issues });
+    const result = recordCorroboration(tid(req), parsed.data.rows);
+    storage.logActivity(req.user?.id ?? null, "fiber.corroboration_import", "scan_target", undefined, { ...result, sources: [...new Set(parsed.data.rows.map((r) => r.source))] });
+    res.status(201).json(result);
+  });
+
+  app.post("/api/monitor/tick", requireAdmin, requireScanningAllowed, async (_req: any, res) => {
+    try { res.json(await runStateMonitorTick({ allowSpend: true })); }
+    catch (error: any) { res.status(409).json({ error: error.message }); }
+  });
+
+  app.post("/api/monitor/seed", requireAdmin, (_req: any, res) => {
+    const result = seedStateMarkets();
+    syncMarketState();
+    res.json(result);
+  });
+
   // Markets grid — every harvested city scored as an opportunity. Pure DB read,
   // ZERO proxy. Manager+ so leadership can decide where to launch.
   app.get("/api/scan/markets", requireManager, (req: any, res) => {
@@ -3165,8 +3364,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   const otpRequestLimiter = new Map<string, { count: number; windowStart: number; lockedUntil: number }>();
   const otpVerifyLimiter  = new Map<string, { count: number; windowStart: number; lockedUntil: number }>();
 
-  const OTP_REQUEST_MAX  = 5;   // max requests per email per window
-  const OTP_VERIFY_MAX   = 5;   // max verify attempts per email per window
+  const OTP_REQUEST_EMAIL_MAX = 5;  // strict account-specific send cap
+  const OTP_VERIFY_EMAIL_MAX  = 5;  // strict account-specific guess cap
+  const OTP_REQUEST_IP_MAX   = 50;  // shared office/cellular NAT safety
+  const OTP_VERIFY_IP_MAX    = 50;
   const RATE_WINDOW_MS   = 15 * 60 * 1000; // 15 minutes
   const LOCKOUT_MS       = 30 * 60 * 1000; // 30 min lockout after too many attempts
 
@@ -3204,8 +3405,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const cleanEmail = email.trim().toLowerCase();
     // IP + email rate limiting
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit(otpRequestLimiter, `ip:${ip}`, OTP_REQUEST_MAX);
-    const emailCheck = checkRateLimit(otpRequestLimiter, `email:${cleanEmail}`, OTP_REQUEST_MAX);
+    const ipCheck = checkRateLimit(otpRequestLimiter, `ip:${ip}`, OTP_REQUEST_IP_MAX);
+    const emailCheck = checkRateLimit(otpRequestLimiter, `email:${cleanEmail}`, OTP_REQUEST_EMAIL_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
@@ -3225,13 +3426,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.json({ sent: true });
     }
     const code = storage.createOtp(cleanEmail);
+    let delivery: "email" | "console";
     try {
-      await sendOtpEmail(cleanEmail, code, user.name);
+      delivery = await sendOtpEmail(cleanEmail, code, user.name);
     } catch {
       // Mail infrastructure down (prod path) — tell the rep plainly, fast.
       return res.status(502).json({ error: "Couldn't send the code right now. Try again in a moment." });
     }
-    res.json({ sent: true });
+    // Localhost must remain usable without a paid mail account. The code is
+    // returned only in non-production when delivery fell back to the console;
+    // production can never expose an authentication secret in an API response.
+    res.json({
+      sent: true,
+      ...(process.env.NODE_ENV !== "production" && delivery === "console" ? { developmentCode: code } : {}),
+    });
   });
 
   // Step 2: Verify OTP code
@@ -3242,8 +3450,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const cleanEmail = email.trim().toLowerCase();
     // Rate limit verify attempts per email
     const ip = (req.ip ?? req.socket.remoteAddress ?? "unknown");
-    const ipCheck = checkRateLimit(otpVerifyLimiter, `ip:${ip}`, OTP_VERIFY_MAX);
-    const emailCheck = checkRateLimit(otpVerifyLimiter, `email:${cleanEmail}`, OTP_VERIFY_MAX);
+    const ipCheck = checkRateLimit(otpVerifyLimiter, `ip:${ip}`, OTP_VERIFY_IP_MAX);
+    const emailCheck = checkRateLimit(otpVerifyLimiter, `email:${cleanEmail}`, OTP_VERIFY_EMAIL_MAX);
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
@@ -3256,6 +3464,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Reset verify limiter on success
     otpVerifyLimiter.delete(`email:${cleanEmail}`);
     otpVerifyLimiter.delete(`ip:${ip}`);
+    otpRequestLimiter.delete(`email:${cleanEmail}`);
     const session = storage.createSession(user.id);
     res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId } });
   });
@@ -4078,7 +4287,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     (req, res) => {
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { fullName, email, phone, city, zip, state, hasSalesExperience,
-              salesExperienceDetails, preferredCarriers, referralSource, orgSlug, inviteToken } = req.body;
+              salesExperienceDetails, preferredCarriers, referralSource, orgSlug, inviteToken,
+              applicationSource, desiredRole, consent } = req.body;
 
       if (!fullName || !email || !phone || !city || !zip || !preferredCarriers) {
         cleanupUploads(files);
@@ -4092,78 +4302,45 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         cleanupUploads(files);
         return res.status(400).json({ error: "Invalid or oversized field values." });
       }
-
-      // Route the applicant to the org whose join link they used. An unknown or
-      // absent slug falls back to the default tenant so a bad link never drops an
-      // application on the floor. Slug is sanitized to [a-z0-9-].
-      const secureInvite = typeof inviteToken === "string" && inviteToken.length > 20
-        ? resolveRecruitingInviteToken(inviteToken)
-        : null;
-      if (inviteToken && !secureInvite) {
+      if (applicationSource === "careers" && consent !== "true" && consent !== true) {
         cleanupUploads(files);
-        return res.status(400).json({ error: "This invitation is invalid, expired, or already used. Ask your recruiter for a new link." });
-      }
-      if (secureInvite && secureInvite.candidateEmail !== String(email).trim().toLowerCase()) {
-        cleanupUploads(files);
-        return res.status(400).json({ error: "Use the email address that received this private invitation." });
-      }
-      const cleanSlug = typeof orgSlug === "string" ? orgSlug.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64) : "";
-      const routedTenantId = secureInvite?.tenantId ?? (cleanSlug ? storage.getTenantBySlug(cleanSlug)?.id : null) ?? getDefaultTenantId() ?? undefined;
-
-      // Duplicate check is per-tenant: the same person may legitimately apply to
-      // two different orgs, but not twice to the same one.
-      const existing = storage.getRepApplications(undefined, routedTenantId).find(
-        a => a.email.toLowerCase() === email.toLowerCase() && a.status === "pending"
-      );
-      if (existing) {
-        cleanupUploads(files);
-        return res.status(409).json({ error: "An application with this email is already pending review." });
+        return res.status(400).json({ error: "Consent is required before submitting a careers application." });
       }
 
       const headshotFile = files?.headshot?.[0];
       const licenseFile = files?.license?.[0];
-
-      const app2 = storage.createRepApplication({
-        tenantId: routedTenantId,
-        inviteId: secureInvite?.id ?? null,
-        fullName,
-        email: email.toLowerCase(),
-        phone,
-        city,
-        zip,
-        state: state || "NC",
-        hasSalesExperience: hasSalesExperience === "true" || hasSalesExperience === true,
-        salesExperienceDetails: salesExperienceDetails || null,
-        preferredCarriers: Array.isArray(preferredCarriers) ? preferredCarriers.join(",") : preferredCarriers,
-        referralSource: referralSource || null,
-        headshotPath: headshotFile ? "/uploads/headshots/" + headshotFile.filename : null,
-        licensePath: licenseFile ? "/uploads/licenses/" + licenseFile.filename : null,
-      });
-      if (secureInvite) {
-        try {
-          attachApplicationToInvite(secureInvite.id, app2.id);
-          storage.logActivity(null, "onboarding.application.attached", "rep_application", app2.id,
-            { inviteId: secureInvite.id, tenantId: secureInvite.tenantId }, req.ip);
-        } catch (error: any) {
-          rawDb.prepare("DELETE FROM rep_applications WHERE id = ? AND user_id IS NULL").run(app2.id);
-          cleanupUploads(files);
-          return res.status(409).json({ error: error?.message || "This invitation has already been used." });
-        }
+      let app2: any;
+      try {
+        app2 = submitPublicApplication({
+          fullName, email, phone, city, zip, state: state || "NC",
+          hasSalesExperience: hasSalesExperience === "true" || hasSalesExperience === true,
+          salesExperienceDetails: typeof salesExperienceDetails === "string" ? salesExperienceDetails.slice(0, 4_000) : null,
+          preferredCarriers: Array.isArray(preferredCarriers) ? preferredCarriers.join(",") : String(preferredCarriers),
+          referralSource: typeof referralSource === "string" ? referralSource.slice(0, 200) : null,
+          desiredRole: typeof desiredRole === "string" ? desiredRole : null,
+          requestedSource: typeof applicationSource === "string" ? applicationSource : null,
+          orgSlug: typeof orgSlug === "string" ? orgSlug : null,
+          inviteToken: typeof inviteToken === "string" && inviteToken.length > 20 ? inviteToken : null,
+          headshotPath: headshotFile ? "/uploads/headshots/" + headshotFile.filename : null,
+          licensePath: licenseFile ? "/uploads/licenses/" + licenseFile.filename : null,
+          actorIp: req.ip,
+        });
+      } catch (error) {
+        cleanupUploads(files);
+        const status = error instanceof ApplicationIntakeError ? error.status : 500;
+        return res.status(status).json({ error: error instanceof Error ? error.message : "Application could not be submitted." });
       }
 
       // Email admin notification
-      const adminEmail = process.env.SMTP_USER;
+      const owningTenant: any = app2.tenantId != null ? storage.getTenantById(app2.tenantId) : null;
+      const adminEmail = owningTenant?.ownerEmail || process.env.MAIL_ADMIN || process.env.SMTP_USER;
       if (adminEmail) {
         // HTML-escape helper — prevents injection of HTML from public form fields into admin email
         const esc = (s: string) => String(s)
           .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
           .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-        const transporter = mailTransport();
-        transporter.sendMail({
-          from: mailFrom(),
-          to: adminEmail,
-          subject: `New Rep Application — ${esc(fullName)}`,
-          html: `
+        const subject = `New Rep Application — ${String(fullName).replace(/[\r\n]/g, " ").slice(0, 120)}`;
+        const html = `
             <h2>New Rep Application Received</h2>
             <table style="border-collapse:collapse;font-family:sans-serif;font-size:14px;">
               <tr><td style="padding:6px 12px;font-weight:bold;">Name</td><td style="padding:6px 12px;">${esc(fullName)}</td></tr>
@@ -4173,12 +4350,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               <tr><td style="padding:6px 12px;font-weight:bold;">Carriers</td><td style="padding:6px 12px;">${esc(Array.isArray(preferredCarriers) ? preferredCarriers.join(", ") : preferredCarriers)}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Sales Exp.</td><td style="padding:6px 12px;">${hasSalesExperience === "true" ? "Yes" : "No"}${salesExperienceDetails ? " — " + esc(salesExperienceDetails) : ""}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Referred by</td><td style="padding:6px 12px;">${esc(referralSource || "—")}</td></tr>
+              <tr><td style="padding:6px 12px;font-weight:bold;">Source</td><td style="padding:6px 12px;">${esc(app2.applicationSource)}</td></tr>
+              <tr><td style="padding:6px 12px;font-weight:bold;">Role</td><td style="padding:6px 12px;">${esc(app2.desiredRole || "Field Representative")}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">Headshot</td><td style="padding:6px 12px;">${headshotFile ? "✓ Uploaded" : "Not uploaded"}</td></tr>
               <tr><td style="padding:6px 12px;font-weight:bold;">License</td><td style="padding:6px 12px;">${licenseFile ? "✓ Uploaded" : "Not uploaded"}</td></tr>
             </table>
             <p style="margin-top:16px;color:#666;">Log in to Fiber Scout to approve or reject this application.</p>
-          `,
-        }).catch((e: any) => console.error("Email error:", e));
+          `;
+        const delivery = resendConfigured()
+          ? sendResendEmail({
+              to: adminEmail,
+              subject,
+              html,
+              text: `New rep application from ${fullName} (${email}) for ${app2.desiredRole || "Field Representative"}. Open the recruiting portal to review it.`,
+              idempotencyKey: `application-admin-notice-${app2.id}`,
+              tags: [{ name: "category", value: "application_admin_notice" }],
+            })
+          : process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS
+            ? mailTransport().sendMail({ from: mailFrom(), to: adminEmail, subject, html })
+            : null;
+        delivery?.catch((e: any) => console.error("Email error:", e));
       }
 
       res.status(201).json({
@@ -4395,36 +4586,47 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // PATCH /api/onboarding/applications/:id — approve or reject
-  app.patch("/api/onboarding/applications/:id", requireManager, async (req, res) => {
+  app.patch("/api/onboarding/applications/:id", requireAdmin, async (req, res) => {
     const id = Number(req.params.id);
     const { status, reviewNotes, commission } = req.body;
     if (!["approved", "rejected"].includes(status)) {
       return res.status(400).json({ error: "status must be 'approved' or 'rejected'" });
     }
+    if (status === "rejected" && (typeof reviewNotes !== "string" || reviewNotes.trim().length < 3)) {
+      return res.status(400).json({ error: "A rejection reason is required." });
+    }
 
     const application = storage.getRepApplicationById(id);
     if (!application) return res.status(404).json({ error: "Application not found" });
-    if (application.status !== "pending") return res.status(409).json({ error: "This application has already been reviewed" });
+    if (application.status === "rejected" && status === "approved") return res.status(409).json({ error: "A rejected application cannot be approved without reopening it." });
+    if (application.status === "approved" && status === "rejected") return res.status(409).json({ error: "An approved application cannot be rejected." });
+    if (!['pending', status].includes(application.status)) return res.status(409).json({ error: "This application has already been reviewed" });
+    if (application.status === "rejected" && status === "rejected") return res.json(application);
+    const approvalRetry = application.status === "approved" && status === "approved";
 
     const sessionId = req.headers["x-session-id"] as string;
     const sessionObj = storage.getSession(sessionId);
     const reviewer = (req as any).user ?? (sessionObj ? storage.getUserById(sessionObj.userId) : null);
-    // Reviewer's org, falling back to the default org so approvals are never
-    // tenant-less (commission assignment requires a tenant).
-    const tenantId = (reviewer as any)?.tenantId ?? getDefaultTenantId();
-    if (application.tenantId != null && tenantId != null && application.tenantId !== tenantId) {
+    // The application already owns its tenant through an invite token or the
+    // server-owned careers source. Never derive it from the applicant, and never
+    // let an unscoped reviewer adopt it implicitly.
+    const tenantId = (reviewer as any)?.tenantId ?? null;
+    if (tenantId == null) return res.status(403).json({ error: "Your administrator account is not assigned to an organization." });
+    if (application.tenantId !== tenantId) {
       return res.status(404).json({ error: "Application not found" });
     }
     const existingAccount = status === "approved" ? storage.getUserByEmail(application.email) : undefined;
-    if (existingAccount && existingAccount.tenantId !== tenantId) {
+    // `NULL` means pre-membership and is safe to claim during approval. A real,
+    // different tenant remains a hard conflict.
+    if (existingAccount && existingAccount.tenantId != null && existingAccount.tenantId !== tenantId) {
       return res.status(409).json({ error: "That email already belongs to an account in another organization." });
     }
     if (existingAccount && existingAccount.role !== "rep") {
       return res.status(409).json({ error: "That email already belongs to a staff account and cannot be converted into a rep account." });
     }
+    const existingLinkedRep = existingAccount?.teamMemberId ? storage.getTeamMemberById(existingAccount.teamMemberId) : undefined;
     if (existingAccount?.teamMemberId) {
-      const linkedRep = storage.getTeamMemberById(existingAccount.teamMemberId);
-      if (!linkedRep || linkedRep.tenantId !== tenantId) {
+      if (!existingLinkedRep || (existingLinkedRep.tenantId != null && existingLinkedRep.tenantId !== tenantId)) {
         return res.status(409).json({ error: "The existing rep profile is not part of this organization." });
       }
     }
@@ -4445,9 +4647,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const existing = existingAccount;
       if (existing) {
         userId = existing.id;
-        // Reactivate if inactive
-        if (!existing.active) {
-          storage.updateUser(existing.id, { active: true });
+        // Claim only an unassigned pre-membership login; never move an account
+        // from another tenant. Keep login active so the applicant can sign.
+        storage.updateUser(existing.id, { active: true, tenantId } as any);
+        if (existingLinkedRep && existingLinkedRep.tenantId == null) {
+          storage.updateTeamMember(existingLinkedRep.id, { tenantId } as any);
         }
       } else {
         const newUser = storage.createUser({
@@ -4509,28 +4713,33 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
       // Send the first login code through the same Resend HTTP path as the
       // document invitation and await acceptance before issuing agreements.
-      try {
-        const otp = storage.createOtp(application.email);
-        const welcome = await sendOnboardingWelcome({
-          email: application.email,
-          name: application.fullName,
-          otp,
-          origin: onboardingAppOrigin(req),
-        });
-        welcomeEmailId = welcome.id;
-        if (recruitingInvite) markInviteLoginSent(recruitingInvite.id, welcome.id);
-        storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.sent", "rep_application", application.id, {
-          candidateEmail: application.email.toLowerCase(),
-          emailProvider: "resend",
-          emailId: welcome.id,
-        }, req.ip);
-      } catch (e: any) {
-        welcomeWarning = e?.message || "Account created, but the first sign-in code could not be emailed.";
-        storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.failed", "rep_application", application.id, {
-          candidateEmail: application.email.toLowerCase(),
-          emailProvider: "resend",
-          reason: welcomeWarning,
-        }, req.ip);
+      if (!(application.loginSentAt || recruitingInvite?.loginSentAt)) {
+        try {
+          const otp = storage.createOtp(application.email);
+          const welcome = await sendOnboardingWelcome({
+            email: application.email,
+            name: application.fullName,
+            otp,
+            origin: onboardingAppOrigin(req),
+          });
+          welcomeEmailId = welcome.id;
+          storage.updateRepApplication(application.id, { loginEmailId: welcome.id, loginSentAt: new Date().toISOString() } as any);
+          if (recruitingInvite) markInviteLoginSent(recruitingInvite.id, welcome.id);
+          storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.sent", "rep_application", application.id, {
+            candidateEmail: application.email.toLowerCase(),
+            emailProvider: "resend",
+            emailId: welcome.id,
+          }, req.ip);
+        } catch (e: any) {
+          welcomeWarning = e?.message || "Account created, but the first sign-in code could not be emailed.";
+          storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.failed", "rep_application", application.id, {
+            candidateEmail: application.email.toLowerCase(),
+            emailProvider: "resend",
+            reason: welcomeWarning,
+          }, req.ip);
+        }
+      } else {
+        welcomeEmailId = application.loginEmailId ?? recruitingInvite?.loginEmailId ?? null;
       }
 
       // Account + team profile now exist and the first login code has been
@@ -4547,7 +4756,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           });
           const failedCount = onboardingDocuments.results.filter((result: any) => result.failed).length;
           if (failedCount) onboardingWarning = `Account created, but ${failedCount} onboarding document${failedCount === 1 ? "" : "s"} could not be emailed.`;
-          else if (recruitingInvite) markInviteAgreementsIssued(recruitingInvite.id);
+          else {
+            storage.updateRepApplication(application.id, { agreementsIssuedAt: application.agreementsIssuedAt ?? new Date().toISOString() } as any);
+            if (recruitingInvite) markInviteAgreementsIssued(recruitingInvite.id);
+          }
         } catch (e: any) {
           onboardingWarning = e?.message || "Account created, but onboarding documents could not be issued.";
           console.error("Automatic onboarding document issuance failed:", e?.message);
@@ -4564,8 +4776,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       userId: userId ?? null,
     });
     if (recruitingInvite && status === "rejected") markInviteRejected(recruitingInvite.id);
-    storage.logActivity(reviewer?.id ?? null, `onboarding.application.${status}`, "rep_application", application.id, {
+    storage.logActivity(reviewer?.id ?? null, approvalRetry ? "onboarding.application.approval_retried" : `onboarding.application.${status}`, "rep_application", application.id, {
       tenantId,
+      source: application.applicationSource,
       inviteId: recruitingInvite?.id ?? null,
       userId: userId ?? null,
       repId: teamMemberId,
@@ -5233,5 +5446,6 @@ export function registerSaasRoutes(app: any) {
 
   // Start nightly cron at server boot
   startNightlyCron();
+  startStateMonitorScheduler();
 
 }

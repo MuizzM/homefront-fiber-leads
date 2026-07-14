@@ -21,8 +21,12 @@ function apiKey(): string {
   return "";
 }
 
+function localDeliveryMode(): boolean {
+  return process.env.RESEND_DELIVERY_MODE === "log" && process.env.NODE_ENV !== "production";
+}
+
 export function resendConfigured(): boolean {
-  return Boolean(apiKey() && (process.env.RESEND_FROM || process.env.MAIL_FROM));
+  return localDeliveryMode() || Boolean(apiKey() && (process.env.RESEND_FROM || process.env.MAIL_FROM));
 }
 
 function sender(): string {
@@ -30,6 +34,11 @@ function sender(): string {
 }
 
 export async function sendResendEmail(message: ResendMessage): Promise<{ id: string }> {
+  if (localDeliveryMode()) {
+    const id = `local-${message.idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 120)}`;
+    console.info(JSON.stringify({ event: "email.delivery.logged", provider: "local", id, to: message.to.toLowerCase(), subject: message.subject }));
+    return { id };
+  }
   const key = apiKey();
   const from = sender();
   if (!key || !from) throw new Error("Resend email is not configured");

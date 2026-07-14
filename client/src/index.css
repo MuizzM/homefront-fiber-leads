@@ -110,6 +110,8 @@
     /* App-wide guard against horizontal scroll at any width (QA: no page may
        scroll sideways from 320px up). Vertical scrolling is unaffected. */
     overflow-x: hidden;
+    min-height: 100dvh;
+    -webkit-tap-highlight-color: transparent;
   }
 
   /* Snappy taps: kill the 300ms delay and double-tap-zoom on real controls, so
@@ -129,6 +131,53 @@
 
   .font-mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+}
+
+/* Product shell — shared by every lazy route. A quiet depth cue replaces the
+   flat desktop canvas without adding images, requests, or paint-heavy blur. */
+.app-canvas {
+  background:
+    radial-gradient(80rem 30rem at 50% -18rem, hsl(var(--primary) / 0.075), transparent 64%),
+    hsl(var(--background));
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+
+/* One low-cost compositor shimmer for all route and card skeletons. The old
+   opacity pulse made the whole surface repaint and looked like a stalled app. */
+@keyframes app-skeleton-shimmer {
+  from { background-position: 130% 0; }
+  to { background-position: -30% 0; }
+}
+.app-skeleton {
+  background-image: linear-gradient(
+    100deg,
+    hsl(var(--muted)) 20%,
+    hsl(var(--secondary)) 40%,
+    hsl(var(--muted)) 60%
+  );
+  background-size: 220% 100%;
+  animation: app-skeleton-shimmer 1.25s ease-in-out infinite;
+}
+
+/* Opt-in for long, repeated rows (lead tables, history, scanner results). It
+   lets the browser skip offscreen layout/paint while preserving scroll size. */
+.render-lazy {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+
+@media (max-width: 767px) {
+  .app-canvas {
+    scrollbar-gutter: auto;
+  }
+
+  /* A finger needs a larger hit area than a mouse, including custom controls
+     that do not use the shared Button primitive. */
+  .touch-target {
+    min-width: 44px;
+    min-height: 44px;
   }
 }
 

@@ -22,6 +22,8 @@ export interface OnboardingPipelineRecord {
   tenantId: number;
   candidateName: string;
   candidateEmail: string;
+  source: "invited" | "careers" | "public_join";
+  desiredRole: string | null;
   stage: OnboardingPipelineStage;
   progress: { completed: number; total: number };
   milestones: {
@@ -78,7 +80,7 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
   const active = Boolean(rep?.active) && fullySigned;
   const applied = Boolean(application);
   const approved = application?.status === "approved";
-  const loginCodeSent = Boolean(invite?.loginSentAt);
+  const loginCodeSent = Boolean(invite?.loginSentAt ?? application?.login_sent_at);
   const rejected = application?.status === "rejected" || invite?.status === "rejected";
 
   let stage: OnboardingPipelineStage = "invited";
@@ -92,13 +94,15 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
   if (active) stage = "active";
   if (rejected) stage = "rejected";
 
-  const completedMilestones = [Boolean(invite?.sentAt), applied, approved, loginCodeSent, agreementsIssued, fullySigned, active].filter(Boolean).length;
+  const source = (application?.application_source ?? (invite ? "invited" : "public_join")) as OnboardingPipelineRecord["source"];
+  const isInvited = source === "invited";
+  const completedMilestones = [isInvited ? Boolean(invite?.sentAt) : applied, applied, approved, loginCodeSent, agreementsIssued, fullySigned, active].filter(Boolean).length;
   const tenantRow = rawDb.prepare("SELECT slug FROM tenants WHERE id = ?").get(tenantId) as { slug?: string } | undefined;
   const secureUrl = invite && !application
     ? `${origin}/join/${encodeURIComponent(tenantRow?.slug ?? "")}?invite=${encodeURIComponent(secureTokenForInvite(invite.id))}`
     : "";
   const timeline = [
-    { label: "Invitation sent", at: invite?.sentAt ?? invite?.createdAt ?? "", done: Boolean(invite?.sentAt) },
+    { label: isInvited ? "Invitation sent" : source === "careers" ? "Careers application started" : "Public application started", at: invite?.sentAt ?? application?.created_at ?? "", done: isInvited ? Boolean(invite?.sentAt) : applied },
     { label: "Application received", at: invite?.appliedAt ?? application?.created_at ?? "", done: applied },
     { label: rejected ? "Application rejected" : "Application approved", at: invite?.rejectedAt ?? invite?.approvedAt ?? application?.updated_at ?? "", done: rejected || approved },
     { label: "Login code sent", at: invite?.loginSentAt ?? "", done: loginCodeSent },
@@ -114,6 +118,8 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
     tenantId,
     candidateName: invite?.candidateName ?? application?.full_name ?? "Applicant",
     candidateEmail: invite?.candidateEmail ?? application?.email ?? "",
+    source,
+    desiredRole: application?.desired_role ?? null,
     stage,
     progress: { completed: completedMilestones, total: 7 },
     milestones: { invited: Boolean(invite?.sentAt), applied, approved, loginCodeSent, agreementsIssued, signedCount, fullySigned, active },
@@ -168,6 +174,8 @@ export function syncRepActivation(input: { tenantId: number; repId: number }): {
   if (invite && signedCount > 0 && signedCount < ONBOARDING_DOCUMENT_TYPES.length) markInvitePartiallySigned(invite.id);
   if (signedCount !== ONBOARDING_DOCUMENT_TYPES.length) return { signedCount, activated: false, inviteId: invite?.id ?? null };
   rawDb.prepare("UPDATE team_members SET active = 1 WHERE id = ? AND tenant_id = ?").run(input.repId, input.tenantId);
+  if (application) rawDb.prepare("UPDATE rep_applications SET activated_at = COALESCE(activated_at, ?), updated_at = ? WHERE id = ? AND tenant_id = ?")
+    .run(new Date().toISOString(), new Date().toISOString(), application.id, input.tenantId);
   if (invite) markInviteActive(invite.id);
   return { signedCount, activated: true, inviteId: invite?.id ?? null };
 }

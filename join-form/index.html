@@ -568,6 +568,8 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
   fd.append("salesExperienceDetails", $("salesExpDetails").value.trim());
   fd.append("preferredCarriers", carriers.join(","));
   fd.append("referralSource", $("referralSource").value);
+  fd.append("applicationSource", "public_join");
+  fd.append("desiredRole", "Field Representative");
   if (ORG_SLUG) fd.append("orgSlug", ORG_SLUG);
   if (INVITE_TOKEN) fd.append("inviteToken", INVITE_TOKEN);
   if ($("headshotFile").files[0]) fd.append("headshot", $("headshotFile").files[0]);

@@ -33,7 +33,7 @@ export default function Login() {
 
   // Request (or re-request) a one-time code for the entered email. Throws with a
   // user-facing message on any non-OK response.
-  async function requestCode() {
+  async function requestCode(): Promise<string | null> {
     const res = await apiFetch("/api/auth/otp/request", { email: email.trim().toLowerCase() });
     const data = await res.json();
     if (res.status === 429) throw new Error(data.error);
@@ -42,6 +42,9 @@ export default function Login() {
     // IP AND per email, so this can't be used to probe addresses in bulk.
     if (res.status === 404) throw new Error("This email isn't registered. Contact your manager to get access.");
     if (!res.ok) throw new Error(data.error ?? "Something went wrong");
+    return typeof data.developmentCode === "string" && /^\d{6}$/.test(data.developmentCode)
+      ? data.developmentCode
+      : null;
   }
 
   async function handleEmailSubmit(e: React.FormEvent) {
@@ -49,10 +52,11 @@ export default function Login() {
     if (!email.trim()) return;
     setLoading(true);
     try {
-      await requestCode();
+      const developmentCode = await requestCode();
       setStep("code");
+      if (developmentCode) setCode(developmentCode);
       setResendIn(30);
-      toast({ title: "Code sent — check your email." });
+      toast({ title: developmentCode ? "Local sign-in code filled in — tap Continue." : "Code sent — check your email." });
     } catch (err: any) {
       toast({ title: err.message || "Something went wrong", variant: "destructive" });
     } finally {
@@ -64,10 +68,10 @@ export default function Login() {
     if (resendIn > 0 || loading) return;
     setLoading(true);
     try {
-      await requestCode();
-      setCode("");
+      const developmentCode = await requestCode();
+      setCode(developmentCode ?? "");
       setResendIn(30);
-      toast({ title: "New code sent — check your email." });
+      toast({ title: developmentCode ? "New local code filled in — tap Continue." : "New code sent — check your email." });
     } catch (err: any) {
       toast({ title: err.message || "Something went wrong", variant: "destructive" });
     } finally {

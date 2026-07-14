@@ -15,7 +15,8 @@
     "test:rtl": "vitest run tests/rtl",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
-    "check:fast": "tsgo --noEmit"
+    "check:fast": "tsgo --noEmit",
+    "markets:refresh": "tsx script/build-state-markets.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",

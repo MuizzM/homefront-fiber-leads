@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle, CheckCircle2, Clock3, Download, FileCheck2,
+  AlertTriangle, ArrowRight, CheckCircle2, Clock3, Download, FileCheck2,
   FileSignature, FileText, Loader2, LockKeyhole, ShieldCheck, XCircle,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
@@ -254,6 +254,9 @@ export default function MyDocuments() {
 
   const data = query.data;
   const percentage = data?.progress.total ? Math.round((data.progress.completed / data.progress.total) * 100) : 0;
+  const nextDocument = data?.documents.find(document =>
+    document.envelope?.status === "sent" || document.envelope?.status === "delivered"
+  );
 
   return (
     <div className="p-4 sm:p-6 pb-24 md:pb-6 max-w-3xl mx-auto space-y-5">
@@ -270,6 +273,23 @@ export default function MyDocuments() {
 
       {data && !data.noRepProfile && (
         <>
+          {nextDocument?.envelope && (
+            <section className="rounded-2xl border border-primary/25 bg-primary/[0.07] p-4" aria-label="Next onboarding task" data-testid="next-document-task">
+              <div className="flex items-start gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/15 text-primary">
+                  <FileSignature className="h-5 w-5" aria-hidden="true" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">Next step</div>
+                  <div className="mt-0.5 text-[15px] font-semibold text-foreground">Sign {nextDocument.label}</div>
+                  <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Review the agreement and confirm your consent to keep onboarding moving.</p>
+                </div>
+              </div>
+              <Button className="mt-4 w-full" onClick={() => setActiveRecord(nextDocument.envelope)}>
+                Review &amp; sign <ArrowRight className="h-4 w-4" />
+              </Button>
+            </section>
+          )}
           <section className="rounded-2xl bg-card border border-border p-4" aria-label="Onboarding progress">
             <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${percentage === 100 ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
             <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className="h-full bg-primary rounded-full transition-all" style={{ width: `${percentage}%` }} /></div>
@@ -278,9 +298,9 @@ export default function MyDocuments() {
             {data.documents.map(document => {
               const record = document.envelope;
               const actionable = record && (record.status === "sent" || record.status === "delivered");
-              return <article key={document.type} className="p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid={`onboarding-document-${document.type}`}>
+              return <article key={document.type} className="render-lazy p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid={`onboarding-document-${document.type}`}>
                 <div className="flex items-start gap-3 min-w-0 flex-1"><div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${record?.status === "completed" ? "bg-emerald-500/10" : "bg-secondary"}`}>{record?.status === "completed" ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <FileText className="w-5 h-5 text-muted-foreground" />}</div><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-red-400 mt-1">{record.failureReason}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"><Clock3 className="w-3 h-3" /> Waiting for your manager</p>}</div></div>
-                <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="h-9 bg-primary hover:bg-primary/90 text-white" onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}><FileSignature className="w-3.5 h-3.5 mr-1" /> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="h-9 border-border" onClick={() => download(document)}><Download className="w-3.5 h-3.5 mr-1" /> Signed PDF</Button>}</div>
+                <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="h-9 bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}><FileSignature className="w-3.5 h-3.5 mr-1" /> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="h-9 border-border" onClick={() => download(document)}><Download className="w-3.5 h-3.5 mr-1" /> Signed PDF</Button>}</div>
               </article>;
             })}
           </div></section>

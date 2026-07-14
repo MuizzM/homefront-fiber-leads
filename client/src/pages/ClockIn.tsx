@@ -89,7 +89,7 @@ export default function ClockIn() {
   const isOnClock = !!clockStatus?.clockedIn;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-8">
+    <div className="w-full max-w-4xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-8">
       <div>
         <h1 className="text-xl font-semibold tracking-tight text-foreground">Field Hours</h1>
         <p className="text-sm text-muted-foreground">Clock in/out tracker · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
@@ -97,7 +97,7 @@ export default function ClockIn() {
 
       {/* Current status */}
       <Card className="bg-card border-border rounded-xl">
-        <CardContent className="p-6">
+        <CardContent className="p-4 md:p-6">
           {statusLoading ? (
             <Skeleton className="h-24 bg-secondary" />
           ) : statusError ? (
@@ -112,7 +112,7 @@ export default function ClockIn() {
               </button>
             </div>
           ) : (
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-8">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-5 md:gap-8">
               <div className="space-y-3 text-center sm:text-left">
                 <span
                   className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-[11px] font-medium uppercase tracking-wide ${
@@ -139,7 +139,7 @@ export default function ClockIn() {
                     size="lg"
                     onClick={() => clockInMutation.mutate()}
                     disabled={clockInMutation.isPending}
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground px-8"
+                    className="w-full bg-primary hover:bg-primary/90 text-primary-foreground px-8 sm:w-auto"
                     data-testid="button-clock-in"
                   >
                     <LogIn className="w-5 h-5 mr-2" />
@@ -151,7 +151,7 @@ export default function ClockIn() {
                     variant="outline"
                     onClick={() => clockOutMutation.mutate()}
                     disabled={clockOutMutation.isPending}
-                    className="border-rose-500/30 text-rose-400 hover:bg-rose-500/10 px-8"
+                    className="w-full border-rose-500/30 text-rose-400 hover:bg-rose-500/10 px-8 sm:w-auto"
                     data-testid="button-clock-out"
                   >
                     <LogOut className="w-5 h-5 mr-2" />
@@ -167,19 +167,19 @@ export default function ClockIn() {
       {/* Metric strip */}
       <Card className="bg-card border-border rounded-xl">
         <div className="grid grid-cols-3 divide-x divide-border">
-          <div className="p-5">
+          <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
               <Clock className="w-3.5 h-3.5 text-primary" /> Today
             </div>
             <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{formatDuration(todayMinutes)}</p>
           </div>
-          <div className="p-5">
+          <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
               <TrendingUp className="w-3.5 h-3.5 text-muted-foreground" /> This Week
             </div>
             <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{formatDuration(weekMinutes)}</p>
           </div>
-          <div className="p-5">
+          <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
               <Users className="w-3.5 h-3.5 text-muted-foreground" /> {isManager ? "Active Now" : "My Status"}
             </div>

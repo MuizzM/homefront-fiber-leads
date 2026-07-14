@@ -19,7 +19,7 @@ export function BottomTabs() {
     <nav
       data-testid="bottom-tabs"
       aria-label="Primary navigation"
-      className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/80 bg-card/95 backdrop-blur-xl shadow-[0_-8px_24px_rgba(0,0,0,0.18)]"
+      className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/80 bg-card shadow-[0_-8px_24px_rgba(0,0,0,0.18)]"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom), 6px)" }}
     >
       <div className="grid grid-cols-5 h-[58px] px-1">

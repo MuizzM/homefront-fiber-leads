@@ -10,9 +10,12 @@
 // → transition → lead creation → resume) is verifiable by REPLAYING real
 // recorded responses, with zero proxy bandwidth spent.
 import { scanAddress, refreshTokenFromApi, type ScanResult } from "./scanner";
+import crypto from "node:crypto";
 import { storage } from "./storage";
+import { rawDb } from "./db";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
 import { classifyAvailabilityTransition } from "@shared/fiberDetect";
+import { classifyCustomerOpportunity, classifyFiberAvailabilityTransition } from "@shared/opportunitySegment";
 import { initController, observeRound, onSessionRefreshed, DEFAULT_RATE_CFG, type RateState } from "./rateController";
 import {
   getRun, setRunStatus, claimRunTargets, finalizeRunTarget, touchRun,
@@ -107,6 +110,14 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
 }
 
 function applyCheck(runId: string, tenantId: number, t: { targetId: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }, result: ScanResult, bytes: number, checkFailed: boolean): void {
+  const snapshot = getTargetSnapshot(t.targetId);
+  const customer = classifyCustomerOpportunity(result);
+  const fiberTransition = classifyFiberAvailabilityTransition(
+    { everObserved: snapshot.everScanned, fiberAvailable: snapshot.fiberAvailable },
+    { conclusive: !checkFailed, fiberAvailable: result.fiberAvailable },
+  );
+  persistSnapshot(runId, tenantId, t, result, checkFailed, customer, fiberTransition);
+
   // FAILED CHECK: record nothing about availability, keep it in the recheck
   // queue conceptually (marked failed on THIS run so we don't re-dispatch it),
   // count it against budget + cost. Product law: a non-answer is not a "no".
@@ -115,51 +126,32 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
     return;
   }
 
-  const snapshot = getTargetSnapshot(t.targetId);
   const reduced = {
     isNewFiber: result.isNewFiber,
     fiberAvailable: result.fiberAvailable,
     billingStatus: result.billingStatus,
     checkFailed: false,
   };
-  const transition = classifyAvailabilityTransition(snapshot, reduced);
+  const opportunityTransition = classifyAvailabilityTransition(snapshot, reduced);
 
   // Persist per-target scan memory + availability status + first-seen-live stamp.
   storage.recordScanTargetResult(t.targetId, {
     fiberStatus: result.fiberStatus,
+    fiberAvailable: result.fiberAvailable,
     isNewFiber: result.isNewFiber,
     billingStatus: result.billingStatus,
     dfAddressId: result.dfAddressId,
-    availabilityStatus: transition.status,
-    newlyLive: transition.isNewlyLive,
+    availabilityStatus: legacyAvailabilityStatus(fiberTransition.status),
+    newlyLive: fiberTransition.fresh,
+    customerSegment: customer.segment,
+    customerConfidence: customer.confidence,
+    customerSignals: customer.signals,
   });
-
-  // Preserve the EVIDENCE behind the decision — the raw Kinetic response — so the
-  // provider-verification claim is auditable, not a bare boolean.
-  try {
-    storage.createFiberCheck({
-      tenantId,  // stamp the run's tenant so scoped reads (and boot adoption) stay correct
-      address: `${t.address}, ${t.city}, ${t.state} ${t.zip}`,
-      lat: result.lat ?? t.lat, lng: result.lng ?? t.lng,
-      result: JSON.stringify(result.rawResponse ?? result),
-      fiberAvailable: result.fiberAvailable,
-      isNewFiber: result.isNewFiber,
-      isTenured: result.isTenured,
-      householdSegmentType: result.householdSegmentType,
-      billingStatus: result.billingStatus,
-      techType: result.techType,
-      speedTier: result.speedTier,
-      maxDownload: result.maxDownloadMbps,
-      competitorName: result.competitorName,
-      addressCatalogDate: result.addressCatalogDate,
-      apiSource: result.apiSource,
-    } as any);
-  } catch { /* evidence is best-effort — never fail a check on it */ }
 
   // Create/refresh a lead only for a genuine door-knock target (NEW FIBER +
   // billing N + serviceable). Links the pool target to the lead it produced.
   const isTarget = result.isNewFiber && result.billingStatus === "N" && result.fiberAvailable;
-  if (isTarget && transition.shouldCreateLead) {
+  if (isTarget && opportunityTransition.shouldCreateLead) {
     try {
       storage.upsertLeadByAddress({
         address: result.address, city: result.city, state: result.state, zip: result.zip,
@@ -183,7 +175,46 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
 
   finalizeRunTarget(runId, t.targetId, "verified",
     isTarget ? "new_fiber" : (result.fiberStatus === "no_service" ? "no_service" : "other"),
-    { verified: 1, newFiber: isTarget ? 1 : 0, newlyLive: transition.isNewlyLive ? 1 : 0, estBytes: bytes });
+    { verified: 1, newFiber: isTarget ? 1 : 0, newlyLive: fiberTransition.fresh ? 1 : 0, estBytes: bytes });
+}
+
+function legacyAvailabilityStatus(status: ReturnType<typeof classifyFiberAvailabilityTransition>["status"]): string {
+  return ({
+    check_failed: "check_failed", baseline_available: "checked_available", unavailable: "checked_unavailable",
+    freshly_available: "newly_live", still_available: "still_available", went_unavailable: "went_stale",
+  } as const)[status];
+}
+
+function persistSnapshot(
+  runId: string, tenantId: number,
+  t: { targetId: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null },
+  result: ScanResult, checkFailed: boolean,
+  customer: ReturnType<typeof classifyCustomerOpportunity>,
+  transition: ReturnType<typeof classifyFiberAvailabilityTransition>,
+): void {
+  const evidence = JSON.stringify(result.rawResponse ?? result);
+  const evidenceHash = crypto.createHash("sha256").update(evidence).digest("hex");
+  let fiberCheckId: number | null = null;
+  try {
+    fiberCheckId = storage.createFiberCheck({
+      tenantId, address: `${t.address}, ${t.city}, ${t.state} ${t.zip}`,
+      lat: result.lat ?? t.lat, lng: result.lng ?? t.lng, result: evidence,
+      fiberAvailable: result.fiberAvailable, isNewFiber: result.isNewFiber, isTenured: result.isTenured,
+      householdSegmentType: result.householdSegmentType, billingStatus: result.billingStatus,
+      techType: result.techType, speedTier: result.speedTier, maxDownload: result.maxDownloadMbps,
+      competitorName: result.competitorName, addressCatalogDate: result.addressCatalogDate, apiSource: result.apiSource,
+    } as any).id;
+  } catch { /* append the normalized snapshot even if the legacy evidence row fails */ }
+  rawDb.prepare(`INSERT INTO availability_snapshots
+    (tenant_id,scan_target_id,run_id,conclusive,fiber_available,fiber_status,max_download_mbps,service_status,
+     household_segment_type,billing_status,customer_segment,customer_confidence,customer_signals,
+     transition_status,fresh,api_source,evidence_hash,fiber_check_id,error)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      tenantId, t.targetId, runId, checkFailed ? 0 : 1, checkFailed ? null : (result.fiberAvailable ? 1 : 0),
+      result.fiberStatus, result.maxDownloadMbps, result.notes, result.householdSegmentType, result.billingStatus,
+      customer.segment, customer.confidence, JSON.stringify(customer.signals), transition.status, transition.fresh ? 1 : 0,
+      result.apiSource, evidenceHash, fiberCheckId, checkFailed ? result.notes : null,
+    );
 }
 
 function finish(run: ScanRunRow, status: string): void {

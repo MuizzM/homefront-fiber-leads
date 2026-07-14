@@ -339,6 +339,8 @@ export const repApplications = sqliteTable("rep_applications", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   tenantId: integer("tenant_id"),              // which org this applicant is joining (null = unrouted inbound)
   inviteId: integer("invite_id"),              // onboarding_recruiting_invites.id when entered through a secure invite
+  applicationSource: text("application_source").notNull().default("public_join"),
+  desiredRole: text("desired_role"),
   fullName: text("full_name").notNull(),
   email: text("email").notNull(),
   phone: text("phone").notNull(),
@@ -355,6 +357,10 @@ export const repApplications = sqliteTable("rep_applications", {
   reviewedBy: integer("reviewed_by"),
   reviewNotes: text("review_notes"),
   userId: integer("user_id"),
+  loginEmailId: text("login_email_id"),
+  loginSentAt: text("login_sent_at"),
+  agreementsIssuedAt: text("agreements_issued_at"),
+  activatedAt: text("activated_at"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });

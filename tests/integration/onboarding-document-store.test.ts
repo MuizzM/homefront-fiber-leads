@@ -10,6 +10,7 @@ let store: typeof import("../../server/onboardingDocumentStore");
 let recruitingStore: typeof import("../../server/onboardingRecruitingStore");
 let workflow: typeof import("../../server/onboardingDocumentRoutes");
 let pipeline: typeof import("../../server/onboardingPipeline");
+let applicationService: typeof import("../../server/onboardingApplicationService");
 let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: import("better-sqlite3").Database;
 
@@ -24,6 +25,7 @@ beforeAll(async () => {
   recruitingStore = await import("../../server/onboardingRecruitingStore");
   workflow = await import("../../server/onboardingDocumentRoutes");
   pipeline = await import("../../server/onboardingPipeline");
+  applicationService = await import("../../server/onboardingApplicationService");
 });
 
 beforeEach(() => {
@@ -203,6 +205,80 @@ describe("first-party onboarding signing store", () => {
     expect(storage.getRepApplicationById(application.id)).toMatchObject({ inviteId: invite.id, tenantId: 1 });
     expect(recruitingStore.resolveRecruitingInviteToken(token)).toBeNull();
     expect(() => recruitingStore.attachApplicationToInvite(invite.id, application.id)).toThrow("already been used");
+  });
+
+  it("accepts a careers applicant with no account or organization membership into the owning tenant queue", () => {
+    process.env.CAREERS_TENANT_SLUG = "home-front-solutions";
+    const email = "public-careers-applicant@example.com";
+    expect(storage.getUserByEmail(email)).toBeUndefined();
+
+    const application = applicationService.submitPublicApplication({
+      fullName: "Public Careers Applicant",
+      email,
+      phone: "3365550199",
+      city: "Greensboro",
+      state: "NC",
+      zip: "27401",
+      hasSalesExperience: false,
+      preferredCarriers: "Kinetic Fiber",
+      desiredRole: "Field Sales Representative",
+      requestedSource: "careers",
+      actorIp: "127.0.0.1",
+    });
+
+    expect(storage.getUserByEmail(email)).toBeUndefined();
+    expect(application).toMatchObject({
+      tenantId: 1,
+      applicationSource: "careers",
+      desiredRole: "Field Sales Representative",
+      status: "pending",
+      userId: null,
+    });
+    expect(pipeline.buildOnboardingPipeline(1, "https://portal.example.com")).toEqual(
+      expect.arrayContaining([expect.objectContaining({
+        applicationId: application.id,
+        candidateEmail: email,
+        source: "careers",
+        stage: "under_review",
+      })]),
+    );
+    expect(pipeline.buildOnboardingPipeline(2, "https://portal.example.com").some(record => record.applicationId === application.id)).toBe(false);
+  });
+
+  it("uses an invitation token as the authoritative tenant and blocks org spoofing", () => {
+    const invite = recruitingStore.createRecruitingInvite({
+      tenantId: 2,
+      candidateName: "Invited Candidate",
+      candidateEmail: "invited-candidate@example.com",
+      invitedBy: null,
+    });
+    recruitingStore.markRecruitingInviteSent(invite.id, "invite-email-id");
+    const application = applicationService.submitPublicApplication({
+      fullName: "Invited Candidate",
+      email: "invited-candidate@example.com",
+      phone: "3365550188",
+      city: "Lexington",
+      state: "NC",
+      zip: "27292",
+      hasSalesExperience: true,
+      preferredCarriers: "Kinetic Fiber",
+      requestedSource: "careers",
+      orgSlug: "home-front-solutions",
+      inviteToken: recruitingStore.secureTokenForInvite(invite.id),
+    });
+    expect(application).toMatchObject({ tenantId: 2, inviteId: invite.id, applicationSource: "invited" });
+
+    expect(() => applicationService.submitPublicApplication({
+      fullName: "Spoofed Candidate",
+      email: "spoofed@example.com",
+      phone: "3365550177",
+      city: "Lexington",
+      state: "NC",
+      zip: "27292",
+      hasSalesExperience: false,
+      preferredCarriers: "Kinetic Fiber",
+      orgSlug: "tenant-that-does-not-exist",
+    })).toThrow("organization application link is invalid");
   });
 
   it("issues the full required agreement pack once after approval", async () => {

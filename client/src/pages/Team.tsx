@@ -427,7 +427,7 @@ export default function Team() {
               ];
               return (
                 <div key={member.id} data-testid={`card-rep-${member.id}`}
-                  className="group flex items-center gap-3 p-4 hover:bg-secondary/40 transition-colors">
+                  className="render-lazy group flex items-center gap-3 p-4 hover:bg-secondary/40 transition-colors">
                   {/* Avatar */}
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ring-1 ring-inset ring-black/5 dark:ring-white/10 ${ri2.avatarColor} ${!member.active ? "opacity-60" : ""}`}>
                     {initials(member.name)}
@@ -532,7 +532,7 @@ export default function Team() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="mx-auto w-full max-w-7xl space-y-5 p-4 pt-5 pb-24 md:space-y-6 md:p-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>

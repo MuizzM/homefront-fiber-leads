@@ -21,6 +21,7 @@ Verify the sending domain in Resend and create an API key. Configure production 
 
 ```env
 APP_ORIGIN=https://portal.homefrontsolutionsllc.com
+CAREERS_TENANT_SLUG=home-front-solutions
 RESEND_API_KEY=re_your_api_key
 RESEND_FROM=Home Front Solutions <noreply@portal.homefrontsolutionsllc.com>
 ONBOARDING_INVITE_SECRET=<64-character output from: openssl rand -hex 32>
@@ -32,9 +33,9 @@ Resend must show the sender domain as verified. SPF and DKIM should pass, and DM
 
 ## Signing workflow
 
-1. A manager opens **Rep Onboarding**, enters a candidate’s name and email, and selects **Send private invite**. The server creates a tenant-scoped recruiting record first, signs a candidate-specific 14-day link with `ONBOARDING_INVITE_SECRET`, stores only the token digest, and sends it through Resend.
-2. The candidate opens the private link without needing an account. Their invited name and email are verified and prefilled; the submitted application is atomically attached to the recruiting record and appears in the same onboarding queue.
-3. The manager selects the commission structure and chooses **Approve & Start Onboarding**.
+1. An administrator or manager opens **Rep Onboarding**, enters a candidate’s name and email, and selects **Send private invite**. The server creates a tenant-scoped recruiting record first, signs a candidate-specific 14-day link with `ONBOARDING_INVITE_SECRET`, stores only the token digest, and sends it through Resend. Candidates may also start from the public marketing careers page.
+2. The candidate applies without an account or organization membership. A private invitation token is authoritative for tenant routing. A marketing-site submission sends `applicationSource=careers`, which the server maps to the server-owned `CAREERS_TENANT_SLUG`; it never accepts a tenant ID from the browser. Both sources enter the same queue.
+3. An administrator selects the commission structure and chooses **Approve & Start Onboarding**. Managers may monitor the tenant queue but cannot approve or reject applicants.
 4. The server creates and links the rep account and team profile, assigns the commission structure, creates a one-time login code, and freezes all four required agreement snapshots.
 5. The rep receives a welcome/login-code email and a Home Front Sign email linking to **My Documents**. No bearer signing token appears in email.
 6. The rep signs in, reviews each complete record, accepts the electronic-record disclosure, acknowledges review, confirms intent, and types the exact legal name on the rep profile.
@@ -42,6 +43,18 @@ Resend must show the sender domain as verified. SPF and DKIM should pass, and DM
 8. Resend emails each completed PDF. The same PDFs remain available to the rep and authorized managers. Only after all four current required agreements are complete does the server activate the field-sales team profile.
 
 Managers use **Rep Onboarding** for every onboarding action, including safe resends and signed-PDF downloads. The Team roster links back to that one operational screen instead of presenting a second document workflow. Active agreements are idempotent: approving or retrying cannot create a second active copy of the same document type or version.
+
+## Tenant and account safety
+
+- `POST /api/onboarding/apply` is public, rate-limited before file upload, validates and bounds every field, and requires consent for careers-source submissions.
+- Secure invitation tokens override all source/slug fields. Unknown organization slugs fail closed.
+- Careers submissions are routed only through `CAREERS_TENANT_SLUG`, which must be a tenant already stored by the server.
+- Review queries and decisions are tenant-scoped. Only an administrator in the owning tenant can approve or reject.
+- A `NULL` tenant on an existing rep login/profile means pre-membership and may be claimed during approval. A non-null different tenant remains a hard conflict.
+- Approval retries reuse the linked user and team member, do not resend an already accepted welcome email, and do not create duplicate active agreements.
+- The team profile stays inactive until every required current agreement is signed. The login remains usable so the candidate can complete signing.
+
+For local browser tests only, `RESEND_DELIVERY_MODE=log` records delivery metadata without contacting Resend. This switch is ignored when `NODE_ENV=production`.
 
 ## Production verification
 

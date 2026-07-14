@@ -1,8 +1,9 @@
 import Database from "better-sqlite3";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { APIRequestContext, Page } from "@playwright/test";
 
-const DB_PATH = process.env.E2E_DB_PATH ?? path.resolve(__dirname, "../../../data.db");
+const DB_PATH = process.env.E2E_DB_PATH ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../data.db");
 const ADMIN_EMAIL = process.env.E2E_ADMIN_EMAIL ?? "muizzm21@gmail.com";
 
 /**

@@ -25,6 +25,7 @@ const MapView = lazy(() => import("@/pages/MapView"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Scanners = lazy(() => import("@/pages/Scanners"));
 const ScanIntel = lazy(() => import("@/pages/ScanIntel"));
+const SweepCommand = lazy(() => import("@/pages/SweepCommand"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
@@ -45,12 +46,21 @@ const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
 // while a page chunk loads — never a blank screen.
 function PageLoader() {
   return (
-    <div className="flex-1 flex items-center justify-center" style={{ minHeight: 0 }} data-testid="page-loader">
-      <div className="flex flex-col items-center gap-3">
-        <div className="w-11 h-11 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center">
-          <div className="w-5 h-5 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
+    <div className="flex-1 overflow-hidden px-4 pt-5 md:px-6" style={{ minHeight: 0 }} data-testid="page-loader" aria-busy="true" aria-label="Loading page">
+      <div className="mx-auto w-full max-w-5xl space-y-5">
+        <div className="flex items-center gap-3">
+          <div className="app-skeleton h-11 w-11 rounded-2xl bg-muted" />
+          <div className="flex-1 space-y-2">
+            <div className="app-skeleton h-5 w-40 rounded-lg bg-muted" />
+            <div className="app-skeleton h-3 w-56 max-w-[70vw] rounded bg-muted" />
+          </div>
         </div>
-        <div className="text-xs text-muted-foreground">Loading…</div>
+        <div className="app-skeleton h-36 rounded-2xl bg-muted" />
+        <div className="grid grid-cols-3 gap-2">
+          <div className="app-skeleton h-20 rounded-2xl bg-muted" />
+          <div className="app-skeleton h-20 rounded-2xl bg-muted" />
+          <div className="app-skeleton h-20 rounded-2xl bg-muted" />
+        </div>
       </div>
     </div>
   );
@@ -80,22 +90,46 @@ function AppRoutes() {
   const [location] = useHashLocation();
   const role = user?.role;
 
-  // Warm the heavy route chunks (Mapbox map, lead list) right after login so
-  // the first click on Field Map / Leads is instant instead of a chunk fetch.
+  // Warm likely destinations only after the browser is idle. Save-Data and
+  // slower cellular connections never prefetch the large Mapbox chunk: the
+  // current screen wins the bandwidth budget on a rep's phone.
   useEffect(() => {
     if (!user) return;
-    const t = setTimeout(() => {
-      import("@/pages/MapView");
+    const connection = (navigator as Navigator & {
+      connection?: { saveData?: boolean; effectiveType?: string };
+      deviceMemory?: number;
+    }).connection;
+    const canWarmMap = !connection?.saveData
+      && !["slow-2g", "2g", "3g"].includes(connection?.effectiveType ?? "")
+      && ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4) >= 4;
+    const warm = () => {
       import("@/pages/Leads");
-      import("@/pages/Dashboard");
-    }, 1500);
-    return () => clearTimeout(t);
+      if (user.role === "rep") import("@/pages/Today");
+      else import("@/pages/Dashboard");
+      if (canWarmMap) import("@/pages/MapView");
+    };
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (idleWindow.requestIdleCallback) {
+      const id = idleWindow.requestIdleCallback(warm, { timeout: 5000 });
+      return () => idleWindow.cancelIdleCallback?.(id);
+    }
+    const timer = window.setTimeout(warm, 3500);
+    return () => window.clearTimeout(timer);
   }, [user]);
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
-        <div className="text-muted-foreground text-sm animate-pulse">Loading…</div>
+      <div className="min-h-[100dvh] bg-background px-5 pt-[max(5rem,env(safe-area-inset-top))]">
+        <div className="mx-auto max-w-sm" aria-busy="true" aria-label="Loading Home Front Solutions">
+          <div className="text-lg font-bold tracking-tight">Home Front</div>
+          <div className="text-[11px] font-semibold tracking-[0.18em] text-primary">SOLUTIONS</div>
+          <div className="app-skeleton mt-8 h-12 rounded-2xl bg-muted" />
+          <div className="app-skeleton mt-3 h-12 rounded-2xl bg-muted" />
+          <div className="app-skeleton mt-6 h-12 rounded-2xl bg-muted" />
+        </div>
       </div>
     );
   }
@@ -111,7 +145,7 @@ function AppRoutes() {
         <Suspense fallback={<PageLoader />}>
         {/* Keyed by route → each page fades/slides in for a smooth tab switch.
             Also the single scroll container for tall pages (map pages fill it). */}
-        <div key={location} className="flex-1 flex flex-col min-h-0 overflow-y-auto animate-in fade-in slide-in-from-bottom-1 duration-200">
+        <div key={location} className="app-canvas flex-1 flex flex-col min-h-0 overflow-y-auto animate-in fade-in duration-150">
         <Switch>
           {/* ── All roles ── */}
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
@@ -163,6 +197,11 @@ function AppRoutes() {
           <Route path="/markets">
             <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
               <ScanIntel />
+            </Guard>
+          </Route>
+          <Route path="/sweeps">
+            <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
+              <SweepCommand />
             </Guard>
           </Route>
 

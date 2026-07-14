@@ -66,6 +66,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/my-documents", label: "My Documents",  icon: FileSignature,show: () => true,                               group: "Field" },
   // ── Scan — market intelligence (manager+ read/deploy); Scanner=admin tools ─
   { href: "/markets",      label: "Markets",       icon: TrendingUp,   show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
+  { href: "/sweeps",       label: "Fresh Fiber",   icon: Radar,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
   { href: "/scanner",      label: "Scan Tools",    icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
@@ -281,7 +282,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Mobile header — standard app chrome on every page EXCEPT the map:
             the Field Map is full-bleed (owner spec) with its own floating menu. */}
         {!onMap && (
-        <header className="md:hidden sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border/80 bg-card/[0.92] px-3 backdrop-blur-xl">
+        <header className="md:hidden sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border/80 bg-card px-3">
           <button type="button" aria-label="Open navigation menu" aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
             className="inline-flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground">

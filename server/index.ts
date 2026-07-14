@@ -12,6 +12,7 @@ import helmet from "helmet";
 import cors from "cors";
 import compression from "compression";
 import { structuredLog } from "./structuredLog";
+import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPolicy";
 
 // Node <20.12 compat: Vite 7's dep optimizer calls crypto.hash(), which was
 // only added in Node 20.12/21. Polyfill it so dev works on older runtimes;
@@ -43,11 +44,18 @@ app.set(
 // origin; EXTRA_ORIGINS is an optional comma-separated list for embeds/staging.
 const ALLOWED_ORIGINS = [
   process.env.APP_ORIGIN,
+  // The public careers site submits unauthenticated applications into the same
+  // tenant-scoped portal queue. Auth still uses an explicit session header, not
+  // ambient cookies, so allowing this first-party origin does not grant account
+  // access.
+  "https://www.homefrontsolutionsllc.com",
+  "https://homefrontsolutionsllc.com",
   ...(process.env.EXTRA_ORIGINS?.split(",").map(s => s.trim()).filter(Boolean) ?? []),
 ].filter(Boolean) as string[];
 
 function originAllowed(origin: string | undefined): boolean {
   if (!origin) return true; // same-origin / curl / server-side — allow
+  if (process.env.NODE_ENV !== "production" && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
   return ALLOWED_ORIGINS.includes(origin);
 }
 
@@ -225,10 +233,10 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Global rate limit: 150 req / 15 min per IP (env-tunable for ops) ─────────
+// ── Global rate limit: mobile/shared-NAT safe, env-tunable for ops ────────────
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: Number(process.env.API_RATE_LIMIT_MAX) > 0 ? Number(process.env.API_RATE_LIMIT_MAX) : 150,
+  max: globalApiRateLimitMax(process.env.API_RATE_LIMIT_MAX),
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests. Try again in 15 minutes." },
@@ -236,7 +244,10 @@ app.use(rateLimit({
   // Express app; counting them exhausts the budget in a couple of reloads and
   // 429s the whole app. Only meter API traffic in dev — prod ships a bundle,
   // so the global limit still guards every request there.
-  skip: (req) => process.env.NODE_ENV !== "production" && !req.path.startsWith("/api"),
+  // Login has its own tighter IP + email limiters below. Keeping auth outside
+  // this general bucket prevents normal map/polling traffic from locking the
+  // user out of the only way to authenticate.
+  skip: (req) => shouldSkipGlobalRateLimit(req.path, process.env.NODE_ENV),
   // Key on req.ip — with `trust proxy` set, Express resolves the real client from
   // the RIGHTMOST trusted hop. The old leftmost X-Forwarded-For parse was
   // client-spoofable (prepend a fake IP → dodge the limit), so never use raw XFF.
@@ -246,20 +257,20 @@ app.use(rateLimit({
   },
 }));
 
-// ── Strict auth rate limit: 10 attempts / 15 min per IP ──────────────────────
+// ── Strict auth rate limit: failed attempts only; email limits live in route ─
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 50,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many login attempts. Try again in 15 minutes." },
   skipSuccessfulRequests: true,
 });
 
-// ── OTP rate limit: 5 requests / 10 min per IP ───────────────────────────────
+// ── OTP network limit: generous enough for shared NAT; per-email remains 5 ──
 const otpLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 5,
+  max: 50,
   message: { error: "Too many code requests. Wait 10 minutes." },
 });
 
@@ -345,6 +356,10 @@ app.use((req, res, next) => {
     resumeInterruptedRuns();
     startScanReaper(); // periodic reaper: pick up runs whose worker died sans restart
   } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
+  try {
+    const { resumeSweepJobs } = await import("./sweepService");
+    resumeSweepJobs();
+  } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────
   setInterval(() => {

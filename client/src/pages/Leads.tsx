@@ -1064,7 +1064,7 @@ export default function Leads() {
                   : `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`)}`;
                 const next = nextAction(lead);
                 return (
-                  <article key={lead.id} className="px-4 py-4" data-testid={`mobile-lead-${lead.id}`}>
+                  <article key={lead.id} className="render-lazy px-4 py-4" data-testid={`mobile-lead-${lead.id}`}>
                     <button onClick={() => setIntelLead(lead)} className="w-full text-left">
                       <div className="flex items-start justify-between gap-3">
                         <div className="min-w-0">

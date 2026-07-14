@@ -2,7 +2,7 @@
 // Identity + session controls, mobile-first. Deliberately small: who am I,
 // which role, light/dark, sign out. Everything else lives in its own tab.
 
-import { ChevronRight, FileSignature, LogOut, Moon, Sun } from "lucide-react";
+import { ChevronRight, Clock3, FileSignature, LogOut, Moon, Sun, Trophy } from "lucide-react";
 import { Link } from "wouter";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
@@ -72,6 +72,30 @@ export default function Profile() {
                 </span>
               </span>
               <ChevronRight className="w-4 h-4 text-muted-foreground" />
+            </Link>
+          </div>
+        </section>
+
+        <section className="space-y-3">
+          <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground px-1">
+            Field tools
+          </h2>
+          <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
+            <Link
+              href="/clock"
+              className="flex min-h-[60px] items-center gap-3 px-4 py-3 active:bg-secondary/60"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-sky-500/10 text-sky-400"><Clock3 className="h-4 w-4" /></span>
+              <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-foreground">Field hours</span><span className="block text-xs text-muted-foreground">Clock in and review sessions</span></span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
+            </Link>
+            <Link
+              href="/leaderboard"
+              className="flex min-h-[60px] items-center gap-3 px-4 py-3 active:bg-secondary/60"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-amber-500/10 text-amber-400"><Trophy className="h-4 w-4" /></span>
+              <span className="min-w-0 flex-1"><span className="block text-sm font-medium text-foreground">Leaderboard</span><span className="block text-xs text-muted-foreground">See team progress and your rank</span></span>
+              <ChevronRight className="h-4 w-4 text-muted-foreground" />
             </Link>
           </div>
         </section>

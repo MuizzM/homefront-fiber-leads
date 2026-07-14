@@ -75,7 +75,7 @@ export interface StartRunResult {
 // Create + dispatch a budgeted market scan. Ranks the city's pool by expected
 // value, enqueues the top `budget`, persists the run, and kicks the worker.
 // Returns immediately — the run drives itself and is resumable.
-export function startMarketRun(opts: { tenantId: number; city: string; state: string; budget: number; createdBy?: number | null; rescan?: boolean }): StartRunResult {
+export function startMarketRun(opts: { tenantId: number; city: string; state: string; budget: number; createdBy?: number | null; rescan?: boolean; runKind?: string; label?: string }): StartRunResult {
   const { tenantId, city, state, createdBy } = opts;
   const budget = clampBudget(opts.budget);
 
@@ -90,8 +90,8 @@ export function startMarketRun(opts: { tenantId: number; city: string; state: st
   const runId = `run_${tenantId}_${Date.now().toString(36)}`;
   const estimate = estimateScanCost(selected.length, costRate());
   createScanRun({
-    id: runId, tenantId, kind: opts.rescan ? "rescan" : "market",
-    label: `${opts.rescan ? "Rescan" : "Scan"} ${city}, ${state}`,
+    id: runId, tenantId, kind: opts.runKind ?? (opts.rescan ? "rescan" : "market"),
+    label: opts.label ?? `${opts.rescan ? "Rescan" : "Scan"} ${city}, ${state}`,
     city, state, budget: selected.length, createdBy,
   });
   enqueueRunTargets(runId, selected.map(s => ({ id: s.id, seq: s.seq })));
@@ -101,6 +101,21 @@ export function startMarketRun(opts: { tenantId: number; city: string; state: st
   void runScanWorker(runId, tenantId);
 
   return { runId, queued: selected.length, budget: selected.length, estimate, city, state };
+}
+
+export function startTargetRun(opts: { tenantId: number; city: string; state: string; targetIds: number[]; createdBy?: number | null; runKind?: string; label?: string }): StartRunResult {
+  const ids = [...new Set(opts.targetIds.map(Number).filter(Number.isInteger))].slice(0, MAX_CHECKS_PER_RUN);
+  if (!ids.length) throw new Error("NO_TARGETS: sweep batch is empty");
+  const runId = `run_${opts.tenantId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
+  const estimate = estimateScanCost(ids.length, costRate());
+  createScanRun({
+    id: runId, tenantId: opts.tenantId, kind: opts.runKind ?? "sweep",
+    label: opts.label ?? `Sweep ${opts.city}, ${opts.state}`, city: opts.city, state: opts.state,
+    budget: ids.length, createdBy: opts.createdBy,
+  });
+  enqueueRunTargets(runId, ids.map((id, seq) => ({ id, seq })));
+  void runScanWorker(runId, opts.tenantId);
+  return { runId, queued: ids.length, budget: ids.length, estimate, city: opts.city, state: opts.state };
 }
 
 // Preview a run's cost WITHOUT spending anything — how many high-EV targets

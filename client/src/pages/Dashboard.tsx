@@ -248,7 +248,7 @@ export default function Dashboard() {
   const todaySessionCount = clockSessions.filter((s: any) => s.date === today).length;
 
   return (
-    <div className="mx-auto max-w-7xl space-y-7 p-6 pb-10">
+    <div className="mx-auto w-full max-w-7xl space-y-5 p-4 pt-5 pb-24 md:space-y-7 md:p-6 md:pb-10">
       {/* Header — time-aware, personalized greeting */}
       <div className="flex items-start justify-between gap-4">
         <div>
