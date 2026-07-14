@@ -7,13 +7,17 @@ import { mailTransport, mailFrom, adminInbox, emailShell, escapeHtml, logoAttach
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage, getDefaultTenantId } from "./storage";
-import { meterQualifiedLead, billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
+import { billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
 import { stripeConfigured, webhookConfigured, verifyStripeSignature, createCheckoutSession, createPortalSession, processWebhookEvent } from "./stripeAdapter";
 import Database from "better-sqlite3";
 import { z } from "zod";
 import { packMapPins, type PackedMapPins } from "@shared/mapPinsWire";
+import { decideFreshFiber, type FreshFiberVerdict } from "@shared/freshFiberVerdict";
 import { structuredLog } from "./structuredLog";
+import { rawDb } from "./db";
+import { projectConfirmedFreshLeads } from "./freshFiberProjector";
+import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
 
 // ── Apply SQLite performance pragmas on startup ──────────────────────────────
 try {
@@ -77,6 +81,17 @@ import {
 import { ApplicationIntakeError, submitPublicApplication } from "./onboardingApplicationService";
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
+import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
+import { registerCallingRoutes } from "./calling/routes";
+
+type AddressScanner = typeof scanAddress;
+let addressScanner: AddressScanner = scanAddress;
+
+/** Test-only seam for exercising the full async scan route without network I/O. */
+export function setAddressScannerForTest(scanner: AddressScanner): void {
+  if (process.env.NODE_ENV !== "test") throw new Error("Address scanner overrides are test-only");
+  addressScanner = scanner;
+}
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
 // Legacy flat rows (no effective_from) are treated as always-on flat plans.
@@ -104,6 +119,23 @@ function safeJson<T = number[]>(s: string | null | undefined): T | undefined {
   try { return JSON.parse(s) as T; } catch { return undefined; }
 }
 
+// Generic lead APIs are intentionally non-callable. Full phone values may
+// only leave the server after the isolated Calling module has produced and
+// atomically consumed a short-lived authorization. Provider internals remain
+// visible only to leadership roles that need them for operations.
+const PROVIDER_INTERNAL_FIELDS = ["dfAddressId", "accessId", "exchangeId"] as const;
+function stripProviderIds<T extends Record<string, any>>(lead: T, user?: any): T {
+  if (!lead) return lead;
+  const clone: any = { ...lead };
+  delete clone.contactPhone;
+  delete clone.ownerPhone;
+  const role = user?.role;
+  if (role !== "admin" && role !== "manager" && role !== "super_admin") {
+    for (const field of PROVIDER_INTERNAL_FIELDS) delete clone[field];
+  }
+  return clone;
+}
+
 // An area is "auto-named" if it follows the "<Rep>'s area" / "Unassigned area"
 // convention we generate. Only those get renamed on reclaim/reassign so a rep's
 // name never lingers on an area they no longer own — custom names are preserved.
@@ -112,23 +144,25 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi, type ScanResult } from "./scanner";
-import { scanLimiter, ownerLookupLimiter, onboardingLimiter } from "./limiters";
+import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi, getAddressScanQueueStatus, type ScanResult } from "./scanner";
+import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
 import { planCityDiscovery, startCityDiscovery, getDiscoveryJob, getDiscoveryJobs, MAX_DISCOVERY_BUDGET } from "./cnsDiscovery";
 import * as scanSvc from "./scanService";
 import {
   CORROBORATION_SOURCES, freshPoints, knockList, listMarkets, monitoringSummary,
-  recordCorroboration, seedStateMarkets, syncMarketState, toCsv,
+  operationalMetrics, recordCorroboration, seedStateMarkets, syncMarketState, toCsv,
 } from "./stateMonitorStore";
 import { clusterFreshFiber } from "@shared/freshFiberClusters";
-import { getStateMonitorStatus, runStateMonitorTick, startStateMonitorScheduler } from "./stateMonitorScheduler";
+import { flushFreshOpportunityAlerts, getStateMonitorStatus, runStateMonitorTick, startStateMonitorScheduler } from "./stateMonitorScheduler";
 import { announcementSourceStatus, pollAnnouncementsIfDue } from "./announcementWatcher";
+import { CATALOG_OBSERVED_AT, KINETIC_DIRECTORY_URLS, refreshKineticLocationDirectory } from "./kineticMarketCatalog";
 import * as sweepService from "./sweepService";
 import * as radarStore from "./radarStore";
 import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import { harvestRockwellAddresses, harvestCityAddresses, getRockwellGridSize, harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { validateScanBbox, adaptiveGridStep, pooledMap, backoffDelayMs, type BboxLL } from "./bboxScan";
+import { mergeAreaAddressSources, planUnifiedAreaScan } from "./areaScanStrategy";
 import { gatherCoverage, providerStatus, type BBox as CoverageBBox, type RawAddress } from "./providers";
 import { createTileScanJob, runTileScan, type TileScanJob, type Tile } from "./tileScan";
 import { getCronStatus, triggerManualScan, startNightlyCron, getEngineStatus } from "./cron-scanner";
@@ -350,25 +384,64 @@ function repInCallerTenant(user: any, repId: number): boolean {
   if (user?.role === "super_admin") return true;
   const member = storage.getTeamMemberById(repId);
   if (!member) return false;
-  if (user?.tenantId == null || member.tenantId == null) return true; // legacy rows — bootstrap adopts these
+  if (user?.tenantId == null || member.tenantId == null) return false;
   return member.tenantId === user.tenantId;
 }
 
 // ── Sanitize fiber result — strip proprietary vendor fields before sending to client ──
-function sanitizeFiberResult(r: any) {
+function evidenceBackedVerdict(r: any, persisted?: PersistKineticObservationResult | null) {
+  const primary = decideFreshFiber(r);
+  const confirmed = !!persisted && persisted.projection.confirmed > 0 && persisted.projection.leadIds.length > 0;
+  if (confirmed) return {
+    verdict: "fresh" as const,
+    isFreshFiber: true,
+    label: "Confirmed fresh fiber",
+    message: "Unavailable-to-fiber transition independently confirmed at this address.",
+    confirmation: "cross_verified" as const,
+  };
+  if (!persisted?.conclusive || primary.verdict === "unverified") return {
+    verdict: "unverified" as const,
+    isFreshFiber: false,
+    label: "Couldn't verify",
+    message: "The provider did not return a conclusive answer. Recheck later.",
+    confirmation: "inconclusive" as const,
+  };
+  if (persisted.transition.fresh) return {
+    verdict: "unverified" as const,
+    isFreshFiber: false,
+    label: "Confirmation pending",
+    message: "A primary-source fiber flip was observed; independent address-level fiber evidence is still required.",
+    confirmation: "single_source_provisional" as const,
+  };
+  if (primary.isFreshFiber) return {
+    verdict: "unverified" as const,
+    isFreshFiber: false,
+    label: "Freshness unknown",
+    message: "Fiber is available, but there is no earlier unavailable observation proving that it is fresh.",
+    confirmation: "baseline_available" as const,
+  };
   return {
-    address: r.address,
-    lat: r.lat,
-    lng: r.lng,
-    fiberAvailable: r.fiberAvailable,
-    isNewFiber: r.isNewFiber,
-    isTenured: r.isTenured,
-    fiberStatus: r.fiberStatus,
-    techType: r.techType,
-    speedTier: r.speedTier,
-    maxDownloadMbps: r.maxDownloadMbps,
-    // Intentionally omitted: rawResponse, householdSegmentType, billingStatus, apiSource,
-    // competitorName, addressCatalogDate, confidence, notes
+    verdict: "not_fresh" as const,
+    isFreshFiber: false,
+    label: "Not fresh fiber",
+    message: "The current conclusive result does not satisfy the fresh-fiber opportunity rule.",
+    confirmation: "not_fresh" as const,
+  };
+}
+
+function sanitizeFiberResult(r: any, persisted?: PersistKineticObservationResult | null) {
+  const decision = evidenceBackedVerdict(r, persisted);
+  return {
+    address: { line1: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng },
+    verdict: decision.verdict,
+    isFreshFiber: decision.isFreshFiber,
+    label: decision.label,
+    message: decision.message,
+    confirmation: decision.confirmation,
+    checkedAt: new Date().toISOString(),
+    // Intentionally omitted: rawResponse, provider ids, segment, billing status,
+    // competitor data, confidence, and transport diagnostics. Operators need the
+    // server-authored business answer; evidence remains in fiber_checks.
   };
 }
 
@@ -384,7 +457,7 @@ interface ScanWorkerState {
   totalChecked: number;      // cumulative checks this session
   diagHttpError: number;     // HTTP errors in last window
   diagSuccess: number;       // successful checks in last window
-  diagNewFiber: number;      // new fiber found in last window
+  diagNewFiber: number;      // primary-provider NEW FIBER matches in last window
   diagFailed: number;        // failed/unknown in last window
   proxyEnabled: boolean;
 }
@@ -430,8 +503,71 @@ interface ScanJob {
   total: number; done: number; results: any[];
   startedAt: string; completedAt?: string;
   bbox?: { minLat: number; maxLat: number; minLng: number; maxLng: number };
+  summary?: ScanSummary;
 }
 const scanJobs = new Map<string, ScanJob>();
+
+interface ScanSummary {
+  fresh: number;
+  not_fresh: number;
+  unverified: number;
+  new_fiber: number;
+  tenured_fiber: number;
+  existing_fiber: number;
+  copper: number;
+  no_service: number;
+  unknown: number;
+}
+
+function emptyScanSummary(): ScanSummary {
+  return {
+    fresh: 0, not_fresh: 0, unverified: 0,
+    new_fiber: 0, tenured_fiber: 0, existing_fiber: 0,
+    copper: 0, no_service: 0, unknown: 0,
+  };
+}
+
+function scanResultView(result: any, persisted?: PersistKineticObservationResult | null) {
+  const decision = evidenceBackedVerdict(result, persisted);
+  return {
+    address: result.address,
+    city: result.city,
+    state: result.state,
+    zip: result.zip,
+    lat: result.lat ?? null,
+    lng: result.lng ?? null,
+    fiberStatus: result.fiberStatus ?? "unknown",
+    isNewFiber: result.isNewFiber === true,
+    fiberAvailable: result.fiberAvailable === true,
+    freshFiberVerdict: decision.verdict,
+    isFreshFiber: decision.isFreshFiber,
+    verdictLabel: decision.label,
+    verdictMessage: decision.message,
+    confirmation: decision.confirmation,
+  };
+}
+
+function countScanRow(summary: ScanSummary, row: any): void {
+  const verdict: FreshFiberVerdict = row.freshFiberVerdict ?? decideFreshFiber(row).verdict;
+  summary[verdict]++;
+  const status = String(row.fiberStatus ?? "unknown") as keyof ScanSummary;
+  if (status in summary && !["fresh", "not_fresh", "unverified"].includes(status)) summary[status]++;
+}
+
+function appendScanResult(job: ScanJob, result: any, persisted?: PersistKineticObservationResult | null): void {
+  const row = scanResultView(result, persisted);
+  job.results.push(row);
+  job.summary ??= emptyScanSummary();
+  countScanRow(job.summary, row);
+}
+
+function scanSummary(job: ScanJob): ScanSummary {
+  if (!job.summary) {
+    job.summary = emptyScanSummary();
+    for (const row of job.results) countScanRow(job.summary, row);
+  }
+  return job.summary;
+}
 
 // ── Rockwell address list — real streets in ZIP 28138 ────────────────────────
 // Sources: Rowan County GIS, Census TIGER, OSM Overpass.
@@ -466,109 +602,72 @@ function generateAddresses(zip = "28138", _city = "Rockwell") {
   return loadGisAddresses().filter(a => a.zip === zip);
 }
 
-// ── Background scanner — concurrent batch mode ────────────────────────────────
-// Proxy pool has 20 persistent sockets (pipelining=1 per socket) → 20 true parallel slots.
-// Set to 50 concurrent: undici queues the overflow and dispatches as sockets free up.
-// At 50 concurrent + 60ms batch delay → ~833 addr/sec (vs previous 167 addr/sec at 10 conc).
-// A full 10,500-address Rockwell scan completes in ~15 seconds with proxy.
+// ── Background scanner — bounded provider queue ──────────────────────────────
+// Every route shares the process-wide queue in scanner.ts. The queue, adaptive
+// backpressure, and configured authorization—not the socket pool—set throughput.
 // Express 5 types req.params/query/header values as string | string[]; normalize
 // to a plain string (first element for arrays, "" for absent) without changing
 // behavior for the single-string case.
 const qstr = (v: unknown): string => Array.isArray(v) ? String(v[0] ?? "") : typeof v === "string" ? v : "";
 
-// ── Multi-worker scan engine ─────────────────────────────────────────────────
-// 200 concurrent + 0ms delay + 4 parallel zone workers = maximum throughput.
-// Proxy pool: 200 connections × 2 pipeline = 400 slots.
-// Kinetic API: ~100-200ms avg response → theoretical ceiling ~2,000 checks/sec.
-// In practice with residential proxy overhead: ~300-800 checks/sec sustained.
-// NB: the old "fill all 400 proxy slots, continuous fire, 4 parallel zones"
-// city-scan path was REMOVED — it blew past Kinetic's refilling rolling-window and
+// ── Shared scan engine ───────────────────────────────────────────────────────
+// The old continuous-fire, multi-zone city-scan path was removed because it
+// blew past Kinetic's refilling rolling-window and
 // self-throttled to ~90% 403s / 0 leads. The city scan now runs through the same
 // bounded, backoff-aware qualifyAddressesViaKinetic() the tiled/box scans use.
 
-// ── Write queue: batch DB inserts every 500ms instead of one-by-one ─────────
-// SQLite is fast but the upsertLeadByAddress call has overhead.
-// Batching 50+ inserts per flush reduces I/O contention during high-throughput scans.
-type LeadInsert = Parameters<typeof storage.upsertLeadByAddress>[0];
-let _writeQueue: LeadInsert[] = [];
-let _writeQueueTimer: ReturnType<typeof setInterval> | null = null;
-
-function enqueueLeadWrite(lead: LeadInsert) {
-  // Scans are platform-initiated (no acting user) — new leads file under the
-  // default org so they're never tenant-less. One stamp covers every scan path.
-  if ((lead as any).tenantId == null) (lead as any).tenantId = getDefaultTenantId();
-  _writeQueue.push(lead);
-  if (!_writeQueueTimer) {
-    _writeQueueTimer = setInterval(flushWriteQueue, 500);
-  }
+// ── Provider observation persistence ─────────────────────────────────────────
+// Route scanners do not create leads. Every provider answer becomes immutable
+// evidence first; only freshFiberProjector may publish an operational door after
+// an unavailable→fiber transition and independent address-level corroboration.
+function persistRouteKineticObservation(
+  source: string,
+  tenantId: number,
+  result: ScanResult,
+  fallback: { lat?: number | null; lng?: number | null } = {},
+  startedAtMs?: number,
+): PersistKineticObservationResult {
+  return persistKineticObservation({
+    tenantId,
+    source,
+    latencyMs: startedAtMs == null ? undefined : Date.now() - startedAtMs,
+    observation: {
+      address: result.address,
+      city: result.city,
+      state: result.state,
+      zip: result.zip,
+      lat: result.lat ?? fallback.lat ?? null,
+      lng: result.lng ?? fallback.lng ?? null,
+      fiberStatus: result.fiberStatus,
+      fiberAvailable: result.fiberAvailable,
+      isNewFiber: result.isNewFiber,
+      billingStatus: result.billingStatus,
+      householdSegmentType: result.householdSegmentType,
+      dfAddressId: result.dfAddressId,
+      maxDownloadMbps: result.maxDownloadMbps,
+      techType: result.techType,
+      speedTier: result.speedTier,
+      competitorName: result.competitorName,
+      addressCatalogDate: result.addressCatalogDate,
+      apiSource: result.apiSource,
+      blocked: result.blocked,
+      checkFailed: result.apiSource === "failed",
+      discoveredAt: new Date().toISOString(),
+      rawResponse: result.rawResponse,
+    },
+  });
 }
 
-function flushWriteQueue() {
-  if (_writeQueue.length === 0) {
-    if (_writeQueueTimer) { clearInterval(_writeQueueTimer); _writeQueueTimer = null; }
-    return;
-  }
-  const batch = _writeQueue.splice(0, 200); // process up to 200 at a time
-  for (const lead of batch) {
-    try {
-      const { lead: saved, created } = storage.upsertLeadByAddress(lead);
-      // Billing: a lead credit is consumed ONLY when a NEW qualified opportunity is
-      // delivered to a tenant (never on a re-scan update). No-op for tenants without
-      // a billing row — dark by default, so the live portal is unaffected. Idempotent
-      // per lead, and metering must never break a scan write, so it's best-effort.
-      // KNOWN LIMITATION (multi-tenant): upsertLeadByAddress dedupes leads by address
-      // ACROSS all tenants, so an address is billed once, to whichever tenant scans it
-      // first (later tenants get created:false → not charged). Irrelevant for the
-      // single-tenant live org today; when true multi-tenant billing goes live, lead
-      // ownership/dedupe must become tenant-scoped so each org is billed for its own
-      // deliveries. Tracked in memory: billing-lead-credit-system.
-      if (created && saved?.tenantId != null) {
-        try { meterQualifiedLead(saved.tenantId, saved.id); }
-        catch (e: any) { console.error(`[billing] meter error: ${e.message}`); }
-      }
-    } catch (e: any) {
-      console.error(`[write-queue] Insert error: ${e.message}`);
-    }
-  }
-  // Bust map cache after every flush
-  if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache();
-}
-
-// ── One scan result → a lead insert, or null ─────────────────────────────────
-// SAVE ONLY: NEW FIBER + billingStatus "N" (not a current subscriber) + service
-// available — the actual door-knock targets (fiber just reached the house, the
-// resident doesn't know yet). Shared by the city-scan batch loop and the drawn-
-// box qualifier so both paths persist identical lead shapes.
-function leadInsertFromResult(result: ScanResult, a: { lat?: number | null; lng?: number | null }): LeadInsert | null {
-  const isTarget = result.isNewFiber && result.billingStatus === "N" && result.fiberAvailable;
-  if (!isTarget) return null;
-  return {
-    address: result.address, city: result.city, state: result.state, zip: result.zip,
-    lat: result.lat ?? a.lat ?? null, lng: result.lng ?? a.lng ?? null,
-    fiberStatus: result.fiberStatus,
-    householdSegmentType: result.householdSegmentType,
-    billingStatus: result.billingStatus,
-    isNewFiber: result.isNewFiber,
-    isTenured: false,
-    speedTier: result.speedTier,
-    maxDownloadMbps: result.maxDownloadMbps,
-    techType: result.techType,
-    chipSetType: result.chipSetType,
-    placement: result.placement,
-    maxQual: result.maxQual,
-    competitorName: result.competitorName,
-    competitorSpeedMbps: result.competitorSpeedMbps,
-    competitorTech: result.competitorTech,
-    inCompetitorArea: result.inCompetitorArea,
-    dfAddressId: result.dfAddressId,
-    accessId: result.accessId,
-    exchangeId: result.exchangeId,
-    addressCatalogDate: result.addressCatalogDate,
-    leadStatus: "prospect",
-    leadTag: result.leadTag,
-    leadScore: result.leadScore,
-    deploymentNotes: result.notes,
-  } as LeadInsert;
+function logObservationFailure(source: string, result: Pick<ScanResult, "address" | "city" | "state">, error: unknown): void {
+  const addressKey = crypto.createHash("sha256")
+    .update(`${result.address}|${result.city}|${result.state}`.toLowerCase())
+    .digest("hex")
+    .slice(0, 16);
+  structuredLog("scan.observation_persist_failed", {
+    source,
+    addressKey,
+    error: String((error as any)?.message ?? error),
+  }, "error");
 }
 
 // (scanOneBatch + runZoneWorker removed — the continuous-fire city-scan path they
@@ -596,64 +695,85 @@ async function runCityScan(jobId: string, addresses: ReturnType<typeof generateA
   // scans use (pooledMap cap + jittered backoff on throttle) so we stay inside
   // the window and actually harvest fiber. tenantId comes off the job stamp.
   await qualifyAddressesViaKinetic(addresses as any, job.tenantId ?? 1, {
+    source: "route-city-scan",
     concurrency: Number(process.env.CITY_SCAN_CONCURRENCY ?? 8),
     shouldStop: () => job.status !== "running",
-    onScanned: (result, scanned, leads) => {
+    onScanned: (result, scanned, leads, address, persisted) => {
       job.done = scanned;
       (job as any).newFiber = leads;
       _scanWorkerState.lastHeartbeat = Date.now();
       if (result) {
-        if (result.apiSource === "failed") _scanWorkerState.diagHttpError++;
-        else _scanWorkerState.diagSuccess++;
-        if (result.isNewFiber && result.billingStatus === "N") _scanWorkerState.diagNewFiber++;
+        appendScanResult(job, result, persisted);
+      } else {
+        appendScanResult(job, {
+          ...address,
+          fiberStatus: "unknown",
+          isNewFiber: false,
+          fiberAvailable: false,
+          apiSource: "failed",
+        });
+        // qualifyAddressesViaKinetic records diagnostics for non-null results;
+        // a thrown/null probe is the only case that still needs recording here.
+        recordCheck(false, true);
       }
     },
   });
 
-  // Flush any remaining queued writes before marking done
-  flushWriteQueue();
-  if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache();
   job.status = "done";
   job.completedAt = new Date().toISOString();
   _scanWorkerState.isRunning = false;
   _scanWorkerState.checksPerSec = 0;
   _scanWorkerState.concurrency = 0;
-  console.log(`[scan] Job ${jobId} complete: ${job.done} checked, ${_scanWorkerState.diagNewFiber} new fiber`);
+  console.log(`[scan] Job ${jobId} complete: ${job.done} checked, ${_scanWorkerState.diagNewFiber} primary matches`);
 }
 
 // ── Qualify a resolved address list through Kinetic (bounded + backoff) ───────
 // Shared by the tiled region worker. Probes each address with capped concurrency,
-// retries transient throttles, writes new-fiber leads, and returns counts. Does
-// NOT touch scanJobs — the caller owns progress. tenantId stamps the leads.
+// retries transient throttles, persists every answer as evidence, and returns
+// only independently-confirmed publications. Does NOT touch scanJobs — the
+// caller owns progress and the evidence projector owns lead creation.
 async function qualifyAddressesViaKinetic(
   addresses: RawAddress[],
   tenantId: number,
-  opts: { concurrency?: number; shouldStop?: () => boolean; onScanned?: (result: ScanResult | null, scanned: number, leads: number) => void } = {},
+  opts: {
+    source?: string;
+    concurrency?: number;
+    shouldStop?: () => boolean;
+    onScanned?: (result: ScanResult | null, scanned: number, leads: number, address: RawAddress, persisted: PersistKineticObservationResult | null) => void;
+  } = {},
 ): Promise<{ leads: number; scanned: number }> {
   const concurrency = opts.concurrency ?? Number(process.env.AREA_SCAN_CONCURRENCY ?? 10);
+  const source = opts.source ?? "route-address-qualifier";
   let leads = 0, scanned = 0;
   await pooledMap(addresses, concurrency, async (a) => {
     if (opts.shouldStop?.()) return null; // cancelled → stop spending on new probes
+    const startedAtMs = Date.now();
     let result: ScanResult | null = null;
     for (let attempt = 0; attempt <= 2; attempt++) {
-      try { result = await scanAddress(a.address, a.city, a.state, a.zip || ""); }
+      try { result = await addressScanner(a.address, a.city, a.state, a.zip || ""); }
       catch { result = null; }
       const throttled = !result || (result.apiSource === "failed" && result.blocked);
       if (!throttled) break;
       if (attempt < 2) await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 400, capMs: 3000 })));
     }
     scanned++;
+    let persisted: PersistKineticObservationResult | null = null;
     if (result) {
       if (!result.lat && a.lat) result.lat = a.lat;
       if (!result.lng && a.lng) result.lng = a.lng;
-      recordCheck(result.isNewFiber && result.billingStatus === "N", result.apiSource === "failed");
-      const lead = leadInsertFromResult(result, a);
-      if (lead) { (lead as any).tenantId = tenantId; enqueueLeadWrite(lead); leads++; }
+      recordCheck(decideFreshFiber(result).isFreshFiber === true, result.apiSource === "failed");
+      try {
+        persisted = persistRouteKineticObservation(source, tenantId, result, a, startedAtMs);
+        leads += persisted.projection.published;
+      } catch (error) {
+        // One malformed/colliding address must not abort a city or tiled scan,
+        // but it also must never fall back to a direct lead write.
+        logObservationFailure(source, result, error);
+      }
     }
-    opts.onScanned?.(result, scanned, leads); // caller-owned progress (city scan drives job.done + diag)
+    opts.onScanned?.(result, scanned, leads, a, persisted); // caller-owned progress (city scan drives job.done + diag)
     return result;
   });
-  flushWriteQueue();
   return { leads, scanned };
 }
 
@@ -664,8 +784,6 @@ async function qualifyAddressesViaKinetic(
 // pooledMap caps in-flight calls; each call retries transient failures with
 // jittered backoff and yields politely when Kinetic pushes back (403).
 const AREA_SCAN_CONCURRENCY = Number(process.env.AREA_SCAN_CONCURRENCY ?? 10);
-const AREA_SCAN_MAX_RETRIES = 2;
-
 async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateAddresses>) {
   const job = scanJobs.get(jobId);
   if (!job) return;
@@ -678,52 +796,43 @@ async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateA
   _scanWorkerState.diagSuccess = 0;
   _scanWorkerState.diagFailed = 0;
 
-  await pooledMap(addresses, AREA_SCAN_CONCURRENCY, async (a: any) => {
-    if (!scanJobs.has(jobId)) return; // cancelled → stop taking work
-    let result: ScanResult | null = null;
-    for (let attempt = 0; attempt <= AREA_SCAN_MAX_RETRIES; attempt++) {
-      try {
-        result = await scanAddress(a.address, a.city, a.state, a.zip);
-      } catch {
-        result = null; // network/timeout throw — treat as transient, retry
+  await qualifyAddressesViaKinetic(addresses as any, job.tenantId ?? getDefaultTenantId() ?? 1, {
+    source: "route-area-scan",
+    concurrency: AREA_SCAN_CONCURRENCY,
+    shouldStop: () => !scanJobs.has(jobId),
+    onScanned: (result, scanned, leads, address, persisted) => {
+      job.done = scanned;
+      (job as any).newFiber = leads;
+      _scanWorkerState.lastHeartbeat = Date.now();
+      if (result) {
+        appendScanResult(job, result, persisted);
+      } else {
+        appendScanResult(job, {
+          ...address,
+          fiberStatus: "unknown",
+          isNewFiber: false,
+          fiberAvailable: false,
+          apiSource: "failed",
+        });
+        recordCheck(false, true);
       }
-      // scanAddress returns blocked:true on a 403 throttle (a typed back-pressure
-      // signal, NOT a no-service). Back off and retry so the box still completes.
-      const throttled = !result || (result.apiSource === "failed" && result.blocked);
-      if (!throttled) break;
-      if (attempt < AREA_SCAN_MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 400, capMs: 3000 })));
-      }
-    }
-    if (!scanJobs.has(jobId)) return;
-    if (result) {
-      if (!result.lat && a.lat) result.lat = a.lat;
-      if (!result.lng && a.lng) result.lng = a.lng;
-      job.results.push(result);
-      const isNewFiberResult = result.isNewFiber && result.billingStatus === "N";
-      recordCheck(isNewFiberResult, result.apiSource === "failed");
-      const lead = leadInsertFromResult(result, a);
-      if (lead) { (lead as any).tenantId = job.tenantId ?? getDefaultTenantId(); enqueueLeadWrite(lead); }
-    } else {
-      job.results.push({ ...a, fiberStatus: "unknown", apiSource: "failed" });
-      recordCheck(false, true);
-    }
-    job.done = Math.min(job.done + 1, job.total);
+    },
   });
 
-  flushWriteQueue();
-  if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache();
   if (scanJobs.has(jobId)) {
     job.status = "done";
     job.completedAt = new Date().toISOString();
   }
   _scanWorkerState.isRunning = false;
   _scanWorkerState.concurrency = 0;
-  console.log(`[scan] Area job ${jobId} complete: ${job.done}/${job.total} checked, ${_scanWorkerState.diagNewFiber} new fiber`);
+  console.log(`[scan] Area job ${jobId} complete: ${job.done}/${job.total} checked, ${_scanWorkerState.diagNewFiber} primary matches`);
 }
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 export function registerRoutes(_httpServer: Server, app: Express) {
+
+  registerAddressDiscoveryRoutes(app, { requireAuth, requireCapability, requireScanningAllowed });
+  registerCallingRoutes(app, { requireAuth, requireCapability });
 
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
@@ -787,7 +896,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // forever (street coordinates don't move), so repeat lookups cost nothing.
   // Mapbox includes 100k free geocoding requests/month; this uses a handful.
   const geocodeCache = new Map<string, { lng: number; lat: number; placeName: string }>();
-  app.get("/api/geocode", requireAdmin, async (req, res) => {
+  app.get("/api/geocode", requireCapability("scan.submit"), async (req, res) => {
     const q = String(req.query.q ?? "").trim();
     if (q.length < 3) return res.status(400).json({ error: "query too short" });
     const key = q.toLowerCase();
@@ -862,91 +971,35 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
 
-  // ── FCC-sourced Kinetic active build markets ───────────────────────────────
-  // Active build zones from FCC BDC Jan 2025 → Jun 2025 delta analysis.
-  // These are markets where Kinetic added NEW fiber passings in last 6 months.
-  // Sorted by estimated new passings (desc) — highest activity first.
+  // ── Evidence-backed NC/SC Kinetic market catalog ───────────────────────────
+  // Never publish fabricated passings or generalize address availability from a
+  // city. This is a planning/scheduling catalog; only address-level checks can
+  // produce availability evidence and only cross-verified flips produce leads.
   app.get("/api/markets/kinetic", requireManager, (_req, res) => {
+    syncMarketState();
+    let rows = listMarkets({ eligibility: "verified", limit: 2_000 }) as any[];
+    // Startup normally initializes the catalog. Keep this route independently
+    // deployable without rewriting the 820-row Census catalog on every visit.
+    if (!rows.length) {
+      seedStateMarkets();
+      syncMarketState();
+      rows = listMarkets({ eligibility: "verified", limit: 2_000 }) as any[];
+    }
     res.json({
-      lastUpdated: "FCC BDC Jun 2025",
-      totalNewPassings: 298000,
-      markets: [
-        // ── NC (Home market) ─────────────────────────────────────────
-        { state:"NC", city:"Rockwell",       zip:"28138", newPassings: 4200, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"NC", city:"Concord",        zip:"28025", newPassings: 8700, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"NC", city:"Kannapolis",     zip:"28081", newPassings: 6300, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"NC", city:"Salisbury",      zip:"28144", newPassings: 5100, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"NC", city:"Statesville",    zip:"28677", newPassings: 3900, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"NC", city:"Lexington",      zip:"27292", newPassings: 3200, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"NC", city:"Asheboro",       zip:"27203", newPassings: 2800, priority:"medium",   buildStatus:"planned",   buildDate:"Q2 2026" },
-        { state:"NC", city:"High Point",     zip:"27262", newPassings: 7200, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"NC", city:"Albemarle",      zip:"28001", newPassings: 2100, priority:"medium",   buildStatus:"active",    buildDate:"Q2 2026" },
-        // ── TX (Largest Kinetic market) ──────────────────────────────
-        { state:"TX", city:"Lubbock",        zip:"79401", newPassings:18400, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"TX", city:"Amarillo",       zip:"79101", newPassings:14200, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"TX", city:"Midland",        zip:"79701", newPassings: 9800, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"TX", city:"Odessa",         zip:"79760", newPassings: 8300, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"TX", city:"Abilene",        zip:"79601", newPassings: 7100, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"TX", city:"Wichita Falls",  zip:"76301", newPassings: 5900, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"TX", city:"Tyler",          zip:"75701", newPassings: 6800, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"TX", city:"Longview",       zip:"75601", newPassings: 4200, priority:"medium",   buildStatus:"active",    buildDate:"Q2 2026" },
-        { state:"TX", city:"Andrews",        zip:"79714", newPassings: 2100, priority:"medium",   buildStatus:"active",    buildDate:"Q1 2026" },
-        // ── KY (Strong mid-size builds) ───────────────────────────────
-        { state:"KY", city:"Lexington",      zip:"40502", newPassings:11200, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"KY", city:"Louisville",     zip:"40201", newPassings: 9300, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"KY", city:"Elizabethtown",  zip:"42701", newPassings: 4800, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"KY", city:"Bowling Green",  zip:"42101", newPassings: 5200, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"KY", city:"Bullitt County", zip:"40165", newPassings: 3100, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"KY", city:"Covington",      zip:"41011", newPassings: 4100, priority:"high",     buildStatus:"planned",   buildDate:"Q2 2026" },
-        // ── OH (Large urban builds) ──────────────────────────────────
-        { state:"OH", city:"Columbus",       zip:"43215", newPassings:16800, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"OH", city:"Toledo",         zip:"43601", newPassings:12100, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"OH", city:"Canton",         zip:"44701", newPassings: 7200, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"OH", city:"Akron",          zip:"44301", newPassings: 8900, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"OH", city:"Lima",           zip:"45801", newPassings: 3800, priority:"medium",   buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"OH", city:"Youngstown",     zip:"44501", newPassings: 5100, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        // ── NE (Active rural expansion) ───────────────────────────────
-        { state:"NE", city:"Lincoln",        zip:"68501", newPassings:13200, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"NE", city:"Omaha",          zip:"68101", newPassings:10800, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"NE", city:"Grand Island",   zip:"68801", newPassings: 4100, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"NE", city:"Kearney",        zip:"68847", newPassings: 2900, priority:"medium",   buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"NE", city:"Beatrice",       zip:"68310", newPassings: 1800, priority:"medium",   buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"NE", city:"York",           zip:"68467", newPassings: 1400, priority:"medium",   buildStatus:"active",    buildDate:"Q2 2026" },
-        // ── MO (Active CAB builds) ────────────────────────────────────
-        { state:"MO", city:"Doniphan",       zip:"63935", newPassings: 2200, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"MO", city:"Poplar Bluff",   zip:"63901", newPassings: 3800, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"MO", city:"Springfield",    zip:"65801", newPassings: 9200, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"MO", city:"Joplin",         zip:"64801", newPassings: 5600, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"MO", city:"Cape Girardeau", zip:"63701", newPassings: 3100, priority:"medium",   buildStatus:"planned",   buildDate:"Q2 2026" },
-        // ── OK ───────────────────────────────────────────────────────────
-        { state:"OK", city:"Oklahoma City",  zip:"73101", newPassings:14600, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"OK", city:"Tulsa",          zip:"74101", newPassings:11400, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"OK", city:"Lawton",         zip:"73501", newPassings: 4200, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"OK", city:"Norman",         zip:"73069", newPassings: 6800, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        // ── GA / SC / AL / FL ───────────────────────────────────────────
-        { state:"GA", city:"Augusta",        zip:"30901", newPassings: 8200, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"GA", city:"Columbus",       zip:"31901", newPassings: 7100, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"SC", city:"Greenville",     zip:"29601", newPassings: 9400, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"SC", city:"Spartanburg",    zip:"29301", newPassings: 6200, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"SC", city:"Columbia",       zip:"29201", newPassings: 8100, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"AL", city:"Huntsville",     zip:"35801", newPassings:12300, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"AL", city:"Madison",        zip:"35758", newPassings: 5800, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"FL", city:"Pensacola",      zip:"32501", newPassings: 9700, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"FL", city:"Panama City",    zip:"32401", newPassings: 6100, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        // ── PA / NY ────────────────────────────────────────────────────
-        { state:"PA", city:"Pittsburgh",     zip:"15201", newPassings:11800, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"PA", city:"Scranton",       zip:"18501", newPassings: 6400, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        { state:"NY", city:"Syracuse",       zip:"13201", newPassings: 8900, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"NY", city:"Binghamton",     zip:"13901", newPassings: 4200, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-        // ── IA / MN / MS / AR / NM ──────────────────────────────────────
-        { state:"IA", city:"Des Moines",     zip:"50301", newPassings:13100, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"IA", city:"Cedar Rapids",   zip:"52401", newPassings: 8700, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"MN", city:"Rochester",      zip:"55901", newPassings: 7200, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"MS", city:"Jackson",        zip:"39201", newPassings: 6800, priority:"high",     buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"AR", city:"Little Rock",    zip:"72201", newPassings: 9100, priority:"critical", buildStatus:"active",    buildDate:"Q4 2025" },
-        { state:"NM", city:"Albuquerque",    zip:"87101", newPassings:10200, priority:"critical", buildStatus:"active",    buildDate:"Q3 2025" },
-        { state:"NM", city:"Las Cruces",     zip:"88001", newPassings: 4800, priority:"high",     buildStatus:"active",    buildDate:"Q1 2026" },
-      ],
+      lastUpdated: CATALOG_OBSERVED_AT,
+      source: "Kinetic official NC/SC fiber and other-high-speed location directories",
+      sourceUrls: KINETIC_DIRECTORY_URLS,
+      totalNewPassings: null,
+      markets: rows.map((market) => ({
+        state: market.state, city: market.city, zip: "",
+        newPassings: 0, addressCount: Number(market.address_count ?? 0), freshWeek: Number(market.fresh_week ?? 0),
+        priority: market.priority_class,
+        buildStatus: market.kinetic_status === "verified_expanding" ? "active"
+          : market.kinetic_status === "verified_legacy_service" ? "change_watch" : "complete",
+        buildDate: market.evidence_checked_at ?? CATALOG_OBSERVED_AT,
+        kineticStatus: market.kinetic_status, evidenceUrl: market.announcement_url ?? market.directory_url,
+        inventoryStatus: market.inventory_status, coverageGap: market.coverage_gap,
+      })),
     });
   });
 
@@ -954,10 +1007,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Polled every 3s by the CityScanner UI to show live efficiency metrics.
   app.get("/api/scanner/state", requireManager, (_req, res) => {
     const activeJob = Array.from(scanJobs.values()).find(j => j.status === "running");
-    const secondsSinceHeartbeat = Math.floor((Date.now() - _scanWorkerState.lastHeartbeat) / 1000);
+    const providerQueue = getAddressScanQueueStatus();
+    const lastActivityAt = Math.max(_scanWorkerState.lastHeartbeat, providerQueue.lastActivityAt);
+    const secondsSinceHeartbeat = Math.floor((Date.now() - lastActivityAt) / 1000);
     res.json({
       ..._scanWorkerState,
-      isStuck: _scanWorkerState.isRunning && secondsSinceHeartbeat > 120,
+      isRunning: _scanWorkerState.isRunning || providerQueue.active > 0 || providerQueue.queued > 0,
+      concurrency: providerQueue.active,
+      maxInFlight: providerQueue.maxConcurrency,
+      queueDepth: providerQueue.queued,
+      providerQueue,
+      isStuck: (_scanWorkerState.isRunning || providerQueue.active > 0) && secondsSinceHeartbeat > 120,
       secondsSinceHeartbeat,
       activeJob: activeJob ? {
         id: activeJob.id,
@@ -965,7 +1025,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         total: activeJob.total,
         done: activeJob.done,
         pct: activeJob.total ? Math.round(activeJob.done / activeJob.total * 100) : 0,
-        newFiber: activeJob.results.filter(r => r.isNewFiber && r.billingStatus === "N").length,
+        newFiber: scanSummary(activeJob).fresh,
       } : null,
     });
   });
@@ -1004,6 +1064,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   const _leadsEtagBoot = Date.now().toString(36);
   let _leadsEpoch = 0;
   const _leadsBustByTenant = new Map<number, number>();
+  const _leadMapStreams = new Map<number, Set<Response>>();
+
+  function emitLeadMapChanged(tenantId?: number) {
+    const groups = tenantId == null ? [..._leadMapStreams.values()] : [_leadMapStreams.get(tenantId)];
+    const payload = `event: map-changed\ndata: ${JSON.stringify({ at: new Date().toISOString() })}\n\n`;
+    for (const clients of groups) for (const client of clients ?? []) {
+      if (client.writableEnded || client.destroyed) clients?.delete(client);
+      else { try { client.write(payload); } catch { clients?.delete(client); } }
+    }
+  }
 
   function getMapPins(tenantId?: number, repFilter?: number | number[], dataVer?: string): {
     entry: MapPinCacheEntry;
@@ -1129,7 +1199,36 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(payload);
   });
 
-  // GET /api/leads/fresh — the "fresh leads" feed: leads DISCOVERED within the last
+  // Tenant-scoped invalidation stream. It carries no lead/address data: clients
+  // refetch through the normal role-scoped map endpoint, so an event can never
+  // widen visibility. The 60s ETag poll remains a reconnect fallback.
+  app.get("/api/leads/events", requireAuth, (req: any, res: Response) => {
+    const tenantId = Number(req.user?.tenantId ?? 0);
+    const clients = _leadMapStreams.get(tenantId) ?? new Set<Response>();
+    if (clients.size >= 250) return res.status(503).json({ error: "Too many live map connections; use the polling fallback." });
+    res.status(200);
+    res.set({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders();
+    clients.add(res);
+    _leadMapStreams.set(tenantId, clients);
+    res.write(`event: ready\ndata: {}\n\n`);
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) { try { res.write(": keepalive\n\n"); } catch { res.end(); } }
+    }, 25_000);
+    heartbeat.unref();
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      clients.delete(res);
+      if (!clients.size) _leadMapStreams.delete(tenantId);
+    });
+  });
+
+  // GET /api/leads/fresh — confirmed fresh-fiber leads published within the last
   // ?days (default 30, clamped 1..365), as slim GeoJSON for map pins. Row-level
   // scoped exactly like /api/leads/map (reps see only their own). ?city & ?state
   // narrow it (e.g. Lexington, NC). Properties are intentionally minimal:
@@ -1154,19 +1253,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }));
     res.json({ type: "FeatureCollection", features, count: features.length, days, city: city ?? null, state: state ?? null, status: status ?? null });
   });
-
-  // Raw provider fabric identifiers (Kinetic's internal address/access/exchange
-  // ids) are ops-internal — FIELD roles (rep, team_lead) must never see them.
-  // Managers/admins keep them for provider reference. Strip on the way out.
-  const PROVIDER_INTERNAL_FIELDS = ["dfAddressId", "accessId", "exchangeId"] as const;
-  function stripProviderIds<T extends Record<string, any>>(lead: T, user: any): T {
-    if (!lead) return lead;
-    const role = user?.role;
-    if (role === "admin" || role === "manager" || role === "super_admin") return lead;
-    const clone: any = { ...lead };
-    for (const f of PROVIDER_INTERNAL_FIELDS) delete clone[f];
-    return clone;
-  }
 
   app.get("/api/leads", requireAuth, (req, res) => {
     const { search, limit, offset, status, zip, city, state, assignedRepId, fiberStatus } = req.query;
@@ -1226,21 +1312,47 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       _mapPinCache.clear();
       _leadsEpoch++;
     }
+    emitLeadMapChanged(tenantId);
   }
-  // Expose globally so write queue (module scope) can call it
+  // Expose globally so the evidence projector can invalidate map pins only when
+  // a confirmed operational lead is actually published.
   (globalThis as any).__bustMapCache = bustMapCache;
 
   app.post("/api/leads", requireTeamLead, (req: any, res: any) => {
+    if (req.body?.contactPhone != null || req.body?.ownerPhone != null) {
+      return res.status(400).json({
+        error: "Phone data must be added through the Calling compliance module.",
+        code: "CALLING_MODULE_REQUIRED",
+      });
+    }
     const parsed = insertLeadSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    // Fresh-fiber provenance is server-authored by freshFiberProjector only.
+    // A browser-created ordinary prospect must never forge the confirmation
+    // badge, evidence sources, source target, or a provider-fresh classification.
+    const protectedFreshFields = ["sourceScanTargetId", "freshConfirmedAt", "freshConfidence", "freshSources"];
+    if (protectedFreshFields.some((field) => Object.prototype.hasOwnProperty.call(req.body ?? {}, field)) ||
+        req.body?.leadTag === "fresh_fiber_confirmed" || req.body?.isNewFiber === true ||
+        String(req.body?.fiberStatus ?? "").toLowerCase() === "new_fiber") {
+      return res.status(400).json({ error: "Fresh-fiber leads can only be created by the cross-verified scan pipeline." });
+    }
     // Tenancy is never client-supplied: the lead belongs to the creator's org.
     const tenantId = req.user?.tenantId ?? getDefaultTenantId();
-    res.status(201).json(storage.createLead({ ...parsed.data, tenantId } as any));
+    const safeLead = {
+      ...parsed.data,
+      tenantId,
+      isNewFiber: false,
+      sourceScanTargetId: undefined,
+      freshConfirmedAt: undefined,
+      freshConfidence: undefined,
+      freshSources: undefined,
+    };
+    res.status(201).json(stripProviderIds(storage.createLead(safeLead as any), req.user));
   });
   app.patch("/api/leads/:id", requireManager, (req, res) => {
     // Allowlist only safe fields — prevent mass-assignment of internal fields
     const ALLOWED_LEAD_FIELDS = new Set([
-      "leadStatus", "assignedRepId", "ownerName", "ownerPhone", "ownerEmail",
+      "leadStatus", "assignedRepId", "ownerName", "ownerEmail",
       "notes", "incomeRange", "homeValue", "yearsAtAddress", "isHomeowner",
       "deploymentNotes",
     ]);
@@ -1251,7 +1363,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = (req as any).user?.tenantId ?? undefined;
     const updated = storage.updateLead(Number(req.params.id), safeUpdate as any, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
-    res.json(updated);
+    res.json(stripProviderIds(updated, (req as any).user));
   });
   app.delete("/api/leads/:id", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
@@ -1428,6 +1540,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Manual token injection — user pastes JWT from their browser
   // Set Kinetic token — admin only
   app.post("/api/set-token", requireAdmin, (req, res) => {
+    if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true") {
+      return res.status(409).json({ error: "Live availability automation is disabled until provider authorization is documented." });
+    }
     const { token } = req.body;
     if (!token || typeof token !== "string" || token.length < 20) {
       return res.status(400).json({ error: "Invalid token" });
@@ -1445,7 +1560,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Token is stored server-side; never returned to client
   app.post("/api/internal/refresh-token", requireAdmin, async (_req, res) => {
     try {
-      // Routes through Decodo residential proxy — bypasses Kinetic's datacenter IP block
+      // Uses the configured authorized transport and stable provider identity.
       await refreshTokenFromApi();
       res.json({ success: true });
     } catch (e: any) {
@@ -1454,15 +1569,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // Manager+ can run fiber checks and scans
-  app.post("/api/check-fiber", requireManager, requireScanningAllowed, async (req, res) => {
-    const { address, city, state = "NC", zip } = req.body;
-    if (!address || !city || !zip) return res.status(400).json({ error: "address, city, zip required" });
+  app.post("/api/check-fiber", requireManager, requireScanningAllowed, authorizedScanAdmission, async (req, res) => {
+    const parsed = z.object({
+      address: z.string().trim().min(3).max(180),
+      city: z.string().trim().min(2).max(100),
+      state: z.string().trim().length(2).transform(value => value.toUpperCase()).default("NC"),
+      zip: z.string().trim().regex(/^\d{5}(?:-\d{4})?$/),
+    }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Enter a valid street address, city, two-letter state, and ZIP code." });
+    const { address, city, state, zip } = parsed.data;
 
-    const result = await scanAddress(address, city, state, zip);
+    const startedAtMs = Date.now();
+    const result = await addressScanner(address, city, state, zip);
+    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
 
     // Log to history — stamped with the caller's tenant so reads can be scoped.
     storage.createFiberCheck({
-      tenantId: (req as any).user?.tenantId ?? null,
+      tenantId,
       address: `${address}, ${city}, ${state} ${zip}`,
       lat: result.lat, lng: result.lng,
       result: JSON.stringify(result.rawResponse ?? result),
@@ -1479,8 +1602,21 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       apiSource: result.apiSource,
     });
 
+    let persisted: PersistKineticObservationResult;
+    try {
+      persisted = persistRouteKineticObservation("route-manual-check", tenantId, result, {}, startedAtMs);
+    } catch (error) {
+      // Do not present a provider answer as durable when the evidence write
+      // failed. In particular, never fall back to the old direct lead insert.
+      logObservationFailure("route-manual-check", result, error);
+      const code = String((error as any)?.message ?? "");
+      return res.status(code.includes("TENANT_CONFLICT") || code.includes("ADDRESS_COLLISION") ? 409 : 500).json({
+        error: "The provider answered, but the result could not be recorded safely. No lead was created.",
+      });
+    }
+
     // Strip internal/proprietary fields before sending to client
-    res.json(sanitizeFiberResult(result));
+    res.json(sanitizeFiberResult(result, persisted));
   });
 
   // Draw-area scan — accepts a bounding box {minLat, maxLat, minLng, maxLng}
@@ -1493,8 +1629,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(loadGisAddresses());
   });
 
-  // Cost preview for a deep (Mapbox-grid) box scan — how many billable
-  // reverse-geocode calls + the $ cost, so an admin sees the price before running.
+  // Deprecated compatibility endpoint for older clients. The field map no
+  // longer calls this or asks the operator to choose a mode; the server selects
+  // the bounded unified strategy automatically when /api/scan/area starts.
   app.post("/api/scan/area-estimate", requireAdmin, (req, res) => {
     const v = validateScanBbox(req.body ?? {});
     if (!v.ok) return res.status(400).json({ error: v.message, reason: v.code });
@@ -1508,6 +1645,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const overFree = Math.max(0, gridPoints - 100_000);
     const estCostUsd = (overFree / 1000) * 0.75;
     res.json({
+      deprecated: true,
+      strategy: "unified",
       gridPoints,
       mapboxCalls: gridPoints,
       estCostUsd: Number(estCostUsd.toFixed(2)),
@@ -1518,8 +1657,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
-  app.post("/api/scan/area", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
-    const { city = "", state = "NC", deep = false } = req.body ?? {};
+  app.post("/api/scan/area", requireAdmin, requireScanningAllowed, authorizedScanAdmission, async (req, res) => {
+    const { city = "", state = "NC" } = req.body ?? {};
 
     // ── Step 1: validate + normalize the outgoing bbox ───────────────────────
     // A malformed / lat-first / zero-area box used to slip through and enumerate
@@ -1530,55 +1669,48 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: v.message, reason: v.code });
     }
     const bbox: BboxLL = v.bbox;
-    console.log(`[scan/area] bbox=[${bbox.west},${bbox.south},${bbox.east},${bbox.north}] ~${v.approxKm2.toFixed(3)}km² deep=${!!deep}${v.corrected ? " (order-corrected)" : ""}`);
+    console.log(`[scan/area] bbox=[${bbox.west},${bbox.south},${bbox.east},${bbox.north}] ~${v.approxKm2.toFixed(3)}km² strategy=unified${v.corrected ? " (order-corrected)" : ""}`);
 
     const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
-    let source = deep ? "mapbox-grid" : "overpass";
-    let addresses: any[] = [];
+    const plan = planUnifiedAreaScan(bbox, {
+      hasMapboxToken: Boolean(token),
+      autoGridMaxPoints: Number(process.env.AREA_AUTO_GRID_POINTS ?? 900),
+      harvestCap: Number(process.env.MAPBOX_HARVEST_CAP ?? 5000),
+    });
 
     // ── Step 2: resolve addresses INSIDE the box (enumeration, not forward
-    //    geocoding). Primary = mapped address datasets (OSM / local GIS parcels);
-    //    fallback = a reverse-geocode grid that samples the box and dedupes by
-    //    normalized address — the only thing that finds a brand-new street. ──
-    if (deep) {
-      // FULL COVERAGE grid — admin-only, capped, adaptive density (dense for a
-      // tight subdivision box). Finds homes OSM doesn't have yet (new builds).
-      if (!token) return res.status(400).json({ error: "Deep scan isn't configured (no Mapbox token).", reason: "no_token" });
-      try {
-        addresses = await harvestBboxAddresses(bbox, state, token);
-      } catch (e: any) {
-        return res.status(400).json({ error: e.message, reason: "grid_failed" });
-      }
-    } else {
-      // Free primary: real addresses inside the box from OpenStreetMap (0 Mapbox).
-      try {
-        addresses = await pullAddressesFromOverpass(bbox, city || "", state);
-      } catch { addresses = []; }
-      // Free fallback: local GIS parcels that fall inside the box (Rockwell).
-      if (addresses.length === 0) {
-        addresses = generateAddresses("28138", "Rockwell").filter((a: any) =>
-          a.lat >= bbox.south && a.lat <= bbox.north && a.lng >= bbox.west && a.lng <= bbox.east);
-      }
-      // Auto grid fallback: the free sources have nothing (classic new-construction
-      // gap). If — and only if — the box is small enough that the grid is a handful
-      // of FREE-tier reverse-geocode calls, run it automatically so the operator
-      // isn't stuck. Big boxes are NOT auto-escalated (cost guardrail): they get a
-      // clear "run Deep scan" message instead of silent Mapbox spend.
-      if (addresses.length === 0 && token) {
-        const step = adaptiveGridStep(bbox, { minSamplesPerSide: 6, maxPoints: 5000 });
-        const AUTO_GRID_MAX_POINTS = Number(process.env.AREA_AUTO_GRID_POINTS ?? 900);
-        const gridPoints = bboxGridSize(bbox, step);
-        if (gridPoints <= AUTO_GRID_MAX_POINTS) {
-          console.log(`[scan/area] free sources empty — auto grid fallback (${gridPoints} pts, within free tier)`);
-          try {
-            addresses = await harvestBboxAddresses(bbox, state, token);
-            if (addresses.length > 0) source = "mapbox-grid-auto";
-          } catch (e: any) {
-            console.warn(`[scan/area] auto grid fallback failed: ${e.message}`);
-          }
-        }
-      }
+    //    geocoding). The single field strategy always unions mapped sources and,
+    //    for a normal-sized box, a dense capped Mapbox grid. Running the network
+    //    sources together keeps auto-start fast; either source may fail without
+    //    discarding candidates from the other.
+    const gisAddresses = generateAddresses("28138", "Rockwell").filter((a: any) =>
+      a.lat >= bbox.south && a.lat <= bbox.north && a.lng >= bbox.west && a.lng <= bbox.east);
+    const [overpassResult, mapboxResult] = await Promise.allSettled([
+      pullAddressesFromOverpass(bbox, city || "", state),
+      plan.gridEnabled
+        ? harvestBboxAddresses(bbox, state, token, undefined, plan.gridStep)
+        : Promise.resolve([]),
+    ]);
+    const overpassAddresses = overpassResult.status === "fulfilled" ? overpassResult.value : [];
+    const mapboxAddresses = mapboxResult.status === "fulfilled" ? mapboxResult.value : [];
+    if (overpassResult.status === "rejected") {
+      console.warn(`[scan/area] Overpass unavailable; continuing with other sources: ${String(overpassResult.reason?.message ?? overpassResult.reason)}`);
     }
+    if (mapboxResult.status === "rejected") {
+      console.warn(`[scan/area] Mapbox augmentation unavailable; continuing with mapped sources: ${String(mapboxResult.reason?.message ?? mapboxResult.reason)}`);
+    }
+
+    const addresses = mergeAreaAddressSources(
+      [overpassAddresses, gisAddresses, mapboxAddresses],
+      { city: city || "", state },
+    );
+    const sources = {
+      overpass: overpassAddresses.length,
+      gis: gisAddresses.length,
+      mapbox: mapboxAddresses.length,
+    };
+    const source = `unified:${Object.entries(sources).filter(([, count]) => count > 0).map(([name]) => name).join("+") || "none"}`;
+    console.log(`[scan/area] unified enumeration addresses=${addresses.length} overpass=${sources.overpass} gis=${sources.gis} mapbox=${sources.mapbox} grid=${plan.gridEnabled ? plan.gridPoints : "skipped"}`);
 
     // ── Step 3: distinguish the two empty states ─────────────────────────────
     // "0 addresses" is a DATA GAP (map hasn't caught up to a new street) — never
@@ -1587,23 +1719,28 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (addresses.length === 0) {
       return res.status(400).json({
         reason: "no_addresses",
-        deep: !!deep,
-        error: deep
-          ? "No addresses are mapped inside this box yet — the street may be too new for the address data. The pre-imported pins here still work; try a slightly larger box."
-          : "No mapped addresses here yet — this often means new construction. Run Deep scan to sweep the box for brand-new streets.",
+        strategy: "unified",
+        error: "No addresses could be resolved inside this box. Try drawing a slightly larger area around the street.",
+        sources,
+        gridAugmented: plan.gridEnabled,
+        gridPoints: plan.gridEnabled ? plan.gridPoints : 0,
       });
     }
 
-    // Persist to the pool (geocoded once → re-scannable for free later)
+    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
+
+    // Persist to the tenant-owned pool (geocoded once → re-scannable for free later).
+    // persistKineticObservation is deliberately fail-closed on tenant ownership,
+    // so every authenticated harvest must stamp the same tenant before scanning.
     try {
       storage.upsertScanTargets(addresses.map((a: any) => ({
         address: a.address, city: a.city ?? city, state: a.state ?? state,
-        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source,
+        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source, tenantId,
       })));
     } catch {}
 
     // Dedup against existing leads so we don't re-scan/re-create known addresses.
-    const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
+    const existingSet = new Set(storage.getLeads(tenantId).map((l: any) => normalizeAddrForDedup(l.address)));
     const newAddrs = addresses.filter((a: any) => !existingSet.has(normalizeAddrForDedup(a.address || "")));
 
     // Homes ARE here, but every one is already in leads — a real, non-error state.
@@ -1615,6 +1752,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         harvested: addresses.length,
         alreadyKnown: addresses.length,
         source,
+        strategy: "unified",
+        sources,
+        gridAugmented: plan.gridEnabled,
+        gridPoints: plan.gridEnabled ? plan.gridPoints : 0,
         reason: "all_known",
         bbox: { minLat: bbox.south, maxLat: bbox.north, minLng: bbox.west, maxLng: bbox.east },
       });
@@ -1625,7 +1766,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Stamp the job's org so the poll (GET) and Cancel (DELETE) tenant checks
       // resolve — without it a tenant-scoped admin 404s on cancel and the
       // qualifier keeps hitting Kinetic after "Cancel scan".
-      tenantId: (req as any).user?.tenantId ?? getDefaultTenantId(),
+      tenantId,
       id: jobId, city: city || "Drawn area", zip: "", status: "running",
       total: newAddrs.length, done: 0, results: [],
       startedAt: new Date().toISOString(),
@@ -1639,6 +1780,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       harvested: addresses.length,   // addresses resolved inside the box
       alreadyKnown: addresses.length - newAddrs.length, // dedup'd against existing leads
       source,
+      strategy: "unified",
+      sources,
+      gridAugmented: plan.gridEnabled,
+      gridPoints: plan.gridEnabled ? plan.gridPoints : 0,
       bbox: { minLat: bbox.south, maxLat: bbox.north, minLng: bbox.west, maxLng: bbox.east },
     });
   });
@@ -1681,7 +1826,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   //   • Cancel stops qualification immediately (no more proxy probes).
   const tiledJobs = new Map<string, { job: TileScanJob; tenantId: number; cancelled: boolean }>();
   let tiledJobSeq = 0;
-  app.post("/api/scan/tiled", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
+  app.post("/api/scan/tiled", requireAdmin, requireScanningAllowed, authorizedScanAdmission, async (req, res) => {
     const v = validateScanBbox(req.body ?? {});
     if (!v.ok) return res.status(400).json({ error: v.message, reason: v.code });
     const region: CoverageBBox = { south: v.bbox.south, north: v.bbox.north, west: v.bbox.west, east: v.bbox.east };
@@ -1734,6 +1879,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         }
         remaining -= fresh.length;
         return qualifyAddressesViaKinetic(fresh, tenantId, {
+          source: "route-tiled-scan",
           concurrency: Number(process.env.TILE_QUALIFY_CONCURRENCY ?? 6),
           shouldStop: () => entry.cancelled || remaining < 0,
         });
@@ -1767,7 +1913,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // useMapbox:true from an ADMIN — it is never the default.
   // Running a scan hits the Kinetic API through the paid residential proxy, so
   // only ADMIN can trigger scans (managers/team leads can still view + assign).
-  app.post("/api/scan/start", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
+  app.post("/api/scan/start", requireAdmin, requireScanningAllowed, authorizedScanAdmission, async (req, res) => {
     const { city = "Rockwell", zip = "28138", state = "NC", useMapbox = false } = req.body;
     const jobId = `scan_${Date.now()}`;
     const mapboxToken = process.env.MAPBOX_TOKEN ?? "";
@@ -1876,6 +2022,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const isRockwell = city.trim().toLowerCase().includes("rockwell");
     const mbToken = process.env.MAPBOX_TOKEN ?? "";
     const wantMapbox = req.query.source === "mapbox";
+    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
 
     // Cache a pulled set to the address pool, keyed on the SEARCHED city/state so
     // the follow-up scan (/api/scan/start-city) re-reads the identical set from the
@@ -1885,7 +2032,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       try {
         storage.upsertScanTargets(addrs.map((a: any) => ({
           address: a.address, city: city.trim(), state: st.trim(),
-          zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: src,
+          zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: src, tenantId,
         })));
       } catch { /* pool cache is best-effort — never block the pull */ }
     };
@@ -1947,12 +2094,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // POST /api/scan/start-city — scan with pre-pulled addresses or pull them fresh
-  app.post("/api/scan/start-city", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
+  app.post("/api/scan/start-city", requireAdmin, requireScanningAllowed, authorizedScanAdmission, async (req, res) => {
     const { city, state, addresses: providedAddresses } = req.body;
     if (!city) return res.status(400).json({ error: "city required" });
     const st = state ?? "NC";
     const isRockwell = city.trim().toLowerCase().includes("rockwell");
     const mbToken = process.env.MAPBOX_TOKEN ?? "";
+    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
 
     // Address source, ordered for low cost. Free sources ONLY by default:
     //   pool (already harvested) → live OSM → GIS parcel file (Rockwell).
@@ -2003,19 +2151,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const src = usedSource;
       storage.upsertScanTargets(addresses.map((a: any) => ({
         address: a.address, city: a.city ?? city, state: a.state ?? st,
-        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: src,
+        zip: a.zip ?? "", lat: a.lat ?? null, lng: a.lng ?? null, source: src, tenantId,
       })));
     } catch {}
 
     // Dedup against existing leads (normalize suffixes for Court/Ct, Drive/Dr, etc.)
-    const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
+    const existingSet = new Set(storage.getLeads(tenantId).map((l: any) => normalizeAddrForDedup(l.address)));
     const newAddrs = addresses.filter((a: any) => !existingSet.has(normalizeAddrForDedup(a.address || "")));
 
     const jobId = `city_${city.toLowerCase().replace(/\s+/g, "_")}_${Date.now()}`;
     const job: ScanJob = {
       // Stamp the org so poll/cancel/list resolve (without it a tenant-scoped
       // admin 404s on this job and can't see or stop it while Kinetic spends).
-      tenantId: (req as any).user?.tenantId ?? getDefaultTenantId(),
+      tenantId,
       id: jobId, city: `${city}, ${st}`, zip: "",
       status: "running", total: newAddrs.length, done: 0, results: [],
       startedAt: new Date().toISOString(),
@@ -2041,6 +2189,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   const marketQuerySchema = z.object({
     state: z.enum(["NC", "SC"]).optional(),
     priority: z.enum(["critical", "high", "medium", "low"]).optional(),
+    eligibility: z.enum(["verified", "unverified", "all"]).default("verified"),
     due: z.enum(["true", "false"]).optional(),
     limit: z.coerce.number().int().min(1).max(2_000).default(1_000),
   });
@@ -2059,6 +2208,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       referenceUrl: z.string().url().max(2_000).nullable().optional(),
       importBatchId: z.string().trim().max(200).nullable().optional(),
     })).min(1).max(5_000),
+  }).superRefine((value, ctx) => {
+    const futureLimit = Date.now() + 5 * 60_000;
+    value.rows.forEach((row, index) => {
+      if (Date.parse(row.observedAt) > futureLimit) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["rows", index, "observedAt"], message: "Evidence timestamp cannot be in the future" });
+    });
   });
   const citySweepSchema = z.object({
     city: z.string().trim().min(2).max(120), state: z.enum(["NC", "SC"]),
@@ -2071,7 +2225,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     maxChecks: z.number().int().min(1).max(100_000).optional(),
   });
 
-  app.post("/api/sweeps/city", requireAdmin, requireScanningAllowed, scanLimiter, (req: any, res) => {
+  app.post("/api/sweeps/city", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
     const parsed = citySweepSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid city sweep", issues: parsed.error.issues });
     const job = sweepService.startCitySweep({ tenantId: tid(req), createdBy: req.user?.id, ...parsed.data });
@@ -2086,7 +2240,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     catch (error: any) { res.status(error.message === "ADDRESS_NOT_FOUND" ? 404 : 502).json({ error: error.message }); }
   });
 
-  app.post("/api/sweeps/address", requireAdmin, requireScanningAllowed, scanLimiter, (req: any, res) => {
+  app.post("/api/sweeps/address", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
     const parsed = addressSweepSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid address sweep", issues: parsed.error.issues });
     const job = sweepService.startAddressSweep({ tenantId: tid(req), createdBy: req.user?.id, ...parsed.data });
@@ -2123,9 +2277,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   app.get("/api/sweeps/:id/fresh", requireManager, (req: any, res) => {
-    const result = sweepService.getSweepResults(qstr(req.params.id), tid(req), { stage: "fresh", limit: 5_000 });
+    const result = sweepService.getSweepResults(qstr(req.params.id), tid(req), {
+      stage: "fresh", customer: "new_opportunity", limit: 5_000,
+    });
     if (!result) return res.status(404).json({ error: "Sweep not found" });
-    res.json(result);
+    const confirmed = result.results.filter((row: any) => row.crossVerified === true);
+    res.json({ ...result, total: confirmed.length, results: confirmed, confirmation: "cross_verified" });
   });
 
   app.get("/api/sweeps/:id/knock-list.csv", requireManager, (req: any, res) => {
@@ -2143,14 +2300,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const parsed = marketQuerySchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ error: "Invalid market query", issues: parsed.error.issues });
     syncMarketState();
-    res.json({ sourceVintage: "Census 2025 Subcounty Estimates + 2025 Gazetteer", markets: listMarkets({
+    res.json({
+      sourceVintage: "Kinetic official NC/SC fiber + other-high-speed directories (carrier eligibility) + Census/GNIS enrichment",
+      carrierDirectoryObservedAt: CATALOG_OBSERVED_AT,
+      markets: listMarkets({
       ...parsed.data, due: parsed.data.due === "true",
-    }) });
+      }),
+    });
   });
 
   app.get("/api/monitor/markets.csv", requireManager, (_req: any, res) => {
     syncMarketState();
-    res.type("text/csv").attachment("nc-sc-kinetic-markets.csv").send(toCsv(listMarkets({ limit: 2_000 }) as any));
+    res.type("text/csv").attachment("nc-sc-kinetic-markets.csv").send(toCsv(listMarkets({ eligibility: "verified", limit: 2_000 }) as any));
   });
 
   app.get("/api/monitor/summary", requireManager, (req: any, res) => {
@@ -2158,6 +2319,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!days.success) return res.status(400).json({ error: "Invalid days" });
     syncMarketState();
     res.json(monitoringSummary(tid(req), days.data));
+  });
+
+  app.get("/api/monitor/operations", requireManager, (req: any, res) => {
+    const hours = z.coerce.number().int().min(1).max(24 * 30).default(24).safeParse(req.query.hours);
+    if (!hours.success) return res.status(400).json({ error: "Invalid operations window" });
+    res.json({ generatedAt: new Date().toISOString(), ...operationalMetrics(tid(req), hours.data) });
   });
 
   app.get("/api/monitor/fresh", requireManager, (req: any, res) => {
@@ -2188,7 +2355,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   app.get("/api/monitor/schedule", requireManager, (_req: any, res) => {
     syncMarketState();
-    res.json({ scheduler: getStateMonitorStatus(), due: listMarkets({ due: true, limit: 100 }) });
+    res.json({ scheduler: getStateMonitorStatus(), due: listMarkets({ due: true, eligibility: "verified", limit: 100 }) });
   });
 
   app.get("/api/monitor/sources", requireManager, (_req: any, res) => {
@@ -2207,12 +2374,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     catch (error: any) { res.status(502).json({ error: error.message }); }
   });
 
-  app.post("/api/monitor/corroboration", requireAdmin, (req: any, res) => {
+  app.post("/api/monitor/directory/poll", requireAdmin, async (_req: any, res) => {
+    try { res.json(await refreshKineticLocationDirectory(true)); }
+    catch (error: any) { res.status(502).json({ error: error.message }); }
+  });
+
+  app.post("/api/monitor/corroboration", requireAdmin, async (req: any, res) => {
     const parsed = corroborationSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid corroboration batch", issues: parsed.error.issues });
-    const result = recordCorroboration(tid(req), parsed.data.rows);
-    storage.logActivity(req.user?.id ?? null, "fiber.corroboration_import", "scan_target", undefined, { ...result, sources: [...new Set(parsed.data.rows.map((r) => r.source))] });
-    res.status(201).json(result);
+    try {
+      const result = recordCorroboration(tid(req), parsed.data.rows);
+      const alerts = await flushFreshOpportunityAlerts(tid(req));
+      storage.logActivity(req.user?.id ?? null, "fiber.corroboration_import", "scan_target", undefined, { ...result, alerts, sources: [...new Set(parsed.data.rows.map((r) => r.source))] });
+      res.status(201).json({ ...result, alerts });
+    } catch (error: any) {
+      res.status(409).json({ error: error.message });
+    }
   });
 
   app.post("/api/monitor/tick", requireAdmin, requireScanningAllowed, async (_req: any, res) => {
@@ -2283,8 +2460,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // Start a budgeted scan — the ONLY money-spending create path. Admin +
-  // scanLimiter. Returns immediately; the run is persisted + resumable.
-  app.post("/api/scan/runs", requireAdmin, requireScanningAllowed, scanLimiter, (req: any, res) => {
+  // authorizedScanAdmission. Returns immediately; the run is persisted + resumable.
+  app.post("/api/scan/runs", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
     const { city, state = "NC", budget, rescan } = req.body ?? {};
     if (!city || budget == null) return res.status(400).json({ error: "city and budget required" });
     try {
@@ -2307,14 +2484,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ZERO proxy. Honest empty state when nothing has flipped yet.
   app.get("/api/scan/changes", requireManager, (req: any, res) => {
     const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
-    const newlyLive = storage.getFirstSeenLive(hours, 200, tid(req));
+    const cutoff = Date.now() - hours * 3_600_000;
+    const newlyLive = freshPoints(tid(req), Math.ceil(hours / 24) + 1)
+      .filter((point) => Date.parse(point.firstSeenLiveAt) >= cutoff)
+      .slice(0, 200);
     const runs = scanSvc.getRuns(tid(req)).filter((r: any) =>
       r.completedAt && (Date.now() - (Date.parse(r.completedAt + "Z") || Date.parse(r.completedAt))) <= hours * 3600_000);
     res.json({
       windowHours: hours,
-      newlyLive: { count: newlyLive.length, readyToAssign: newlyLive.filter((r: any) => r.leadId != null).length, addresses: newlyLive },
+      newlyLive: {
+        count: newlyLive.length,
+        confirmed: newlyLive.filter((r: any) => r.confidence === "cross_verified").length,
+        provisional: newlyLive.filter((r: any) => r.confidence === "single_source_provisional").length,
+        readyToAssign: newlyLive.filter((r: any) => r.confidence === "cross_verified" && r.leadId != null).length,
+        addresses: newlyLive,
+      },
       recentRuns: runs.map((r: any) => ({ id: r.id, label: r.label, verified: r.verified, newFiber: r.newFiber, newlyLive: r.newlyLive, completedAt: r.completedAt, costUsd: r.costUsd })),
-      foundNewFiber: runs.reduce((s: number, r: any) => s + r.newFiber, 0),
+      primaryMatches: runs.reduce((s: number, r: any) => s + r.newFiber, 0),
+      confirmedFresh: newlyLive.filter((r: any) => r.confidence === "cross_verified").length,
     });
   });
 
@@ -2355,7 +2542,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       avgScore: Math.round(scores.reduce((s, x) => s + x, 0) / Math.max(1, scores.length)),
       topCompetitor: topCompetitor ? { name: topCompetitor[0], count: topCompetitor[1] } : null,
       competitorShare: Math.round((leads.filter(l => l.competitorName).length / leads.length) * 100),
-      newFiber: leads.filter(l => l.isNewFiber).length,
+      newFiber: leads.filter(l => l.leadTag === "fresh_fiber_confirmed" && l.freshConfidence === "cross_verified").length,
       generatedAt: new Date().toISOString(),
     };
   }
@@ -2456,26 +2643,33 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // This is the core "New Fiber Today / First Seen Live" manager surface.
   app.get("/api/scan/first-seen-live", requireManager, (req: any, res) => {
     const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
-    const rows = storage.getFirstSeenLive(hours, 200, req.user?.tenantId ?? getDefaultTenantId());
+    const tenantId = req.user?.tenantId ?? getDefaultTenantId();
+    const cutoff = Date.now() - hours * 3_600_000;
+    const rows = freshPoints(tenantId, Math.ceil(hours / 24) + 1)
+      .filter((point) => Date.parse(point.firstSeenLiveAt) >= cutoff)
+      .slice(0, 200);
     res.json({
       windowHours: hours,
       count: rows.length,
-      readyToAssign: rows.filter(r => r.leadId != null).length,
+      confirmed: rows.filter(r => r.confidence === "cross_verified").length,
+      provisional: rows.filter(r => r.confidence === "single_source_provisional").length,
+      readyToAssign: rows.filter(r => r.confidence === "cross_verified" && r.leadId != null).length,
       addresses: rows,
     });
   });
 
   // POST /api/scan/rescan-pool — re-scan the stored address pool for CHANGES.
   // Uses zero geocoding (addresses are already stored), dedups against existing
-  // leads, and surfaces newly-lit fiber as fresh leads. This is the cheap,
-  // repeatable "detect new fiber" engine (FiberFocus model).
-  app.post("/api/scan/rescan-pool", requireAdmin, requireScanningAllowed, scanLimiter, (req, res) => {
+  // leads, records address-level changes, and lets the shared projector publish
+  // only independently confirmed fresh fiber. This is the cheap repeatable pass.
+  app.post("/api/scan/rescan-pool", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req, res) => {
     const limit = Math.min(Number(req.body?.limit) || 50000, 100000);
     const targets = storage.getScanTargetsToRescan(limit);
     if (!targets.length) {
       return res.status(400).json({ error: "Address pool is empty. Run a city scan first to build it." });
     }
-    // Only re-check addresses that aren't already leads → surfaces new fiber only.
+    // Only re-check addresses that aren't already leads; confirmed transitions
+    // are published by the evidence projector, never by this route.
     const existingSet = new Set(storage.getLeads().map((l: any) => normalizeAddrForDedup(l.address)));
     const toScan = targets
       .filter((t: any) => !existingSet.has(normalizeAddrForDedup(t.address || "")))
@@ -2520,13 +2714,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         }
         lastSent = r.results.length;
       }
+      const counts = scanSummary(r);
       const progress = {
         jobId: r.id, status: r.status, done: r.done, total: r.total,
         summary: {
-          new_fiber:     r.results.filter(x => x.fiberStatus === "new_fiber").length,
-          tenured_fiber: r.results.filter(x => x.fiberStatus === "tenured_fiber").length,
-          no_service:    r.results.filter(x => x.fiberStatus === "no_service").length,
-          eligible:      r.results.filter(x => x.fiberStatus === "new_fiber").length,
+          ...counts,
+          eligible: counts.fresh,
+          scanned: r.done,
+          remaining: Math.max(0, r.total - r.done),
         }
       };
       res.write(`event: progress\ndata: ${JSON.stringify(progress)}\n\n`);
@@ -2551,18 +2746,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // scan; a 10k-address deep scan ends at ~2MB × 2.5/s of re-parse on a
     // phone). resultCount carries the new cursor. One summary pass, not seven.
     const since = Math.max(0, Number(req.query.since) || 0);
-    const summary: Record<string, number> = {
-      new_fiber: 0, tenured_fiber: 0, existing_fiber: 0, copper: 0, no_service: 0, unknown: 0,
-    };
-    for (const x of r) if (summary[x.fiberStatus] !== undefined) summary[x.fiberStatus]++;
+    const summary = scanSummary(job);
     res.json({
       ...job,
       results: since > 0 ? r.slice(since) : r,
       resultCount: r.length,
       summary: {
         ...summary,
-        // Eligible = NEW FIBER + not subscribed — these become dots on map + saved leads
-        eligible: summary.new_fiber,
+        // Eligible means cross-verified fresh fiber published by the projector.
+        eligible: summary.fresh,
         scanned: job.done,
         remaining: job.total - job.done,
       }
@@ -2599,7 +2791,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // ── Team Members ─────────────────────────────────────────────────────────────
-  app.get("/api/team", requireAuth, (req, res) => {
+  app.get("/api/team", requireCapability("field.app.use"), (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const members = storage.getTeamMembers(tid);
@@ -2627,31 +2819,111 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Team lead, manager, and admin can add/edit reps
   // Team members with an email automatically get a login account (OTP by email).
   // The Team page is the ONE place to manage people — no separate Accounts page.
-  function syncLoginAccount(member: { id: number; name: string; email?: string | null; role: string; active: boolean; tenantId?: number | null }) {
-    try {
-      const linked = storage.getAllUsers().find(u => u.teamMemberId === member.id);
-      // Login account lives in the member's org. Only stamp when known — never
-      // strip an existing tenant with a null.
-      const tenantPatch = member.tenantId != null ? { tenantId: member.tenantId } : {};
-      if (member.email) {
-        if (linked) {
-          storage.updateUser(linked.id, { name: member.name, email: member.email, role: member.role, active: member.active, ...tenantPatch } as any);
-        } else {
-          const byEmail = storage.getUserByEmail(member.email);
-          if (byEmail) {
-            storage.updateUser(byEmail.id, { teamMemberId: member.id, name: member.name, role: member.role, active: member.active, ...tenantPatch } as any);
-          } else {
-            storage.createUser({ name: member.name, email: member.email, role: member.role, active: member.active, teamMemberId: member.id, ...tenantPatch } as any);
-          }
-        }
-      } else if (linked) {
-        // Email removed → login disabled (account kept for history)
-        storage.updateUser(linked.id, { active: false } as any);
-      }
-    } catch (e: any) {
-      console.warn("[team-sync] login account sync failed:", e.message);
+  class TeamLoginSyncError extends Error {
+    constructor(public readonly code: string, message: string) {
+      super(message);
+      this.name = "TeamLoginSyncError";
     }
   }
+
+  const normalizeTeamEmail = (email: unknown): string | null => {
+    if (email == null) return null;
+    if (typeof email !== "string") throw new TeamLoginSyncError("INVALID_TEAM_EMAIL", "A valid email is required.");
+    const normalized = email.trim().toLowerCase();
+    return normalized || null;
+  };
+
+  /** Validate the login claim before the team row is changed. A same-tenant,
+   * unlinked account may be adopted only when its role already matches; foreign
+   * accounts and accounts linked to another member are never moved or relinked. */
+  function teamLoginEmailConflict(input: {
+    tenantId: number;
+    memberId?: number;
+    memberRole: string;
+    email: string | null;
+  }): TeamLoginSyncError | null {
+    if (!input.email) return null;
+    const byEmail = storage.getUserByEmail(input.email);
+    if (!byEmail) return null;
+    if (byEmail.tenantId !== input.tenantId) {
+      return new TeamLoginSyncError(
+        "LOGIN_EMAIL_OTHER_ORGANIZATION",
+        "That email belongs to a login in another organization.",
+      );
+    }
+    if (byEmail.teamMemberId != null && byEmail.teamMemberId !== input.memberId) {
+      return new TeamLoginSyncError(
+        "LOGIN_EMAIL_ALREADY_LINKED",
+        "That email is already linked to another team member.",
+      );
+    }
+    const linked = input.memberId == null
+      ? undefined
+      : storage.getAllUsers(input.tenantId).find((user) => user.teamMemberId === input.memberId);
+    if (linked && linked.id !== byEmail.id) {
+      return new TeamLoginSyncError(
+        "LOGIN_EMAIL_IN_USE",
+        "That email is already used by another login.",
+      );
+    }
+    if (byEmail.teamMemberId == null && byEmail.role !== input.memberRole) {
+      return new TeamLoginSyncError(
+        "LOGIN_EMAIL_ROLE_CONFLICT",
+        "That email belongs to an existing login with a different role.",
+      );
+    }
+    return null;
+  }
+
+  function syncLoginAccount(member: { id: number; name: string; email?: string | null; role: string; active: boolean; tenantId?: number | null }) {
+    const tenantId = member.tenantId;
+    if (!Number.isInteger(tenantId)) {
+      throw new TeamLoginSyncError("TEAM_TENANT_REQUIRED", "Organization context is required to synchronize a login.");
+    }
+    const email = normalizeTeamEmail(member.email);
+    const conflict = teamLoginEmailConflict({ tenantId: tenantId!, memberId: member.id, memberRole: member.role, email });
+    if (conflict) throw conflict;
+
+    const linked = storage.getAllUsers(tenantId!).find((user) => user.teamMemberId === member.id);
+    if (email) {
+      if (linked) {
+        const updated = storage.updateUser(linked.id, {
+          name: member.name, email, role: member.role, active: member.active,
+        } as any, tenantId!);
+        if (!updated) throw new Error("Tenant-scoped login update failed");
+      } else {
+        const byEmail = storage.getUserByEmail(email);
+        if (byEmail) {
+          const updated = storage.updateUser(byEmail.id, {
+            teamMemberId: member.id, name: member.name, role: member.role, active: member.active,
+          } as any, tenantId!);
+          if (!updated) throw new Error("Tenant-scoped login adoption failed");
+        } else {
+          storage.createUser({
+            name: member.name,
+            email,
+            role: member.role,
+            active: member.active,
+            teamMemberId: member.id,
+            tenantId: tenantId!,
+          } as any);
+        }
+      }
+    } else if (linked) {
+      // Email removed → login disabled (account kept for history). The tenant
+      // predicate ensures a corrupt foreign link can never be modified here.
+      const updated = storage.updateUser(linked.id, { active: false } as any, tenantId!);
+      if (!updated) throw new Error("Tenant-scoped login disable failed");
+    }
+  }
+
+  const sendTeamLoginSyncError = (res: Response, error: unknown) => {
+    if (error instanceof TeamLoginSyncError) {
+      return res.status(error.code === "INVALID_TEAM_EMAIL" ? 400 : 409).json({ error: error.message, code: error.code });
+    }
+    console.error("[team-sync] login account sync failed:", (error as any)?.message ?? error);
+    return res.status(500).json({ error: "Could not synchronize the team login." });
+  };
 
   app.post("/api/team", requireTeamLead, (req, res) => {
     const parsed = insertTeamMemberSchema.safeParse(req.body);
@@ -2661,14 +2933,29 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!(HIRABLE_ROLES[creatorRole] ?? []).includes(newRole)) {
       return res.status(403).json({ error: `Your role cannot create a ${newRole.replace("_", " ")}` });
     }
+    const tenantId = (req as any).user?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
+    let email: string | null;
+    try { email = normalizeTeamEmail(parsed.data.email); }
+    catch (error) { return sendTeamLoginSyncError(res, error); }
+    const conflict = teamLoginEmailConflict({ tenantId, memberRole: newRole, email });
+    if (conflict) return sendTeamLoginSyncError(res, conflict);
     // Tenancy is NEVER client-supplied: a new member always joins the creator's
     // org (overrides any tenantId smuggled into the body).
-    const member = storage.createTeamMember({ ...parsed.data, tenantId: (req as any).user.tenantId ?? null });
-    syncLoginAccount(member as any);
-    res.status(201).json(member);
+    try {
+      const tx = rawDb.transaction(() => {
+        const member = storage.createTeamMember({ ...parsed.data, email, tenantId });
+        syncLoginAccount(member as any);
+        return member;
+      });
+      res.status(201).json(tx.immediate());
+    } catch (error) {
+      return sendTeamLoginSyncError(res, error);
+    }
   });
   app.patch("/api/team/:id", requireTeamLead, (req, res) => {
-    const tid = (req as any).user?.tenantId ?? undefined;
+    const tenantId = (req as any).user?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
     const id = Number(req.params.id);
     // Scope guard: a team_lead may only edit members on their own team — NOT any
     // member in the tenant. Without this, a team_lead could PATCH a victim's `email`
@@ -2699,20 +2986,39 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (Object.keys(safeUpdate).length === 0) {
       return res.status(400).json({ error: "No valid fields to update" });
     }
-    const updated = storage.updateTeamMember(id, safeUpdate, tid);
-    if (!updated) return res.status(404).json({ error: "Not found" });
-    syncLoginAccount(updated as any);
-    res.json(updated);
+    const existing = storage.getTeamMembers(tenantId).find((member) => member.id === id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    let email: string | null;
+    try { email = normalizeTeamEmail(Object.prototype.hasOwnProperty.call(safeUpdate, "email") ? safeUpdate.email : existing.email); }
+    catch (error) { return sendTeamLoginSyncError(res, error); }
+    if (Object.prototype.hasOwnProperty.call(safeUpdate, "email")) safeUpdate.email = email;
+    const memberRole = typeof safeUpdate.role === "string" ? safeUpdate.role : existing.role;
+    const conflict = teamLoginEmailConflict({ tenantId, memberId: id, memberRole, email });
+    if (conflict) return sendTeamLoginSyncError(res, conflict);
+    try {
+      const tx = rawDb.transaction(() => {
+        const updated = storage.updateTeamMember(id, safeUpdate, tenantId);
+        if (!updated) return null;
+        syncLoginAccount(updated as any);
+        return updated;
+      });
+      const updated = tx.immediate();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json(updated);
+    } catch (error) {
+      return sendTeamLoginSyncError(res, error);
+    }
   });
   // Only manager+ can delete reps
   app.delete("/api/team/:id", requireManager, (req, res) => {
-    const tid = (req as any).user?.tenantId ?? undefined;
+    const tenantId = (req as any).user?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
     const id = Number(req.params.id);
-    if (!storage.deleteTeamMember(id, tid)) return res.status(404).json({ error: "Not found" });
+    if (!storage.deleteTeamMember(id, tenantId)) return res.status(404).json({ error: "Not found" });
     // Member removed → disable their login (account kept for knock history)
     try {
-      const linked = storage.getAllUsers().find(u => u.teamMemberId === id);
-      if (linked) storage.updateUser(linked.id, { active: false } as any);
+      const linked = storage.getAllUsers(tenantId).find(u => u.teamMemberId === id);
+      if (linked) storage.updateUser(linked.id, { active: false } as any, tenantId);
     } catch {}
     res.json({ success: true });
   });
@@ -2869,7 +3175,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     res.json({
       ownerName: ownerName ?? lead.ownerName ?? null,
-      ownerPhone: lead.ownerPhone ?? null,
       ownerEmail: lead.ownerEmail ?? null,
       incomeRange: incomeRange ?? lead.incomeRange ?? null,
       homeValue: homeValue ?? lead.homeValue ?? null,
@@ -2892,7 +3197,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // PATCH /api/leads/:id/enrichment — manually update owner contact info
   app.patch("/api/leads/:id/enrichment", requireTeamLead, (req, res) => {
-    const { ownerName, ownerPhone, ownerEmail, yearsAtAddress, isHomeowner } = req.body;
+    const { ownerName, ownerEmail, yearsAtAddress, isHomeowner } = req.body;
+    if (req.body?.ownerPhone != null || req.body?.contactPhone != null) {
+      return res.status(400).json({
+        error: "Phone data must be added through the Calling compliance module.",
+        code: "CALLING_MODULE_REQUIRED",
+      });
+    }
     const lead = storage.getLeadById(Number(req.params.id));
     const _euser = (req as any).user;
     const _etid = _euser?.tenantId;
@@ -2902,7 +3213,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!repCanAccessLead(_euser, lead)) return res.status(404).json({ error: "Not found" });
     const updated = storage.updateLead(lead.id, {
       ownerName: ownerName ?? lead.ownerName,
-      ownerPhone: ownerPhone ?? lead.ownerPhone,
       ownerEmail: ownerEmail ?? lead.ownerEmail,
       yearsAtAddress: yearsAtAddress ?? lead.yearsAtAddress,
       isHomeowner: isHomeowner ?? lead.isHomeowner,
@@ -2912,7 +3222,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // ── Knock log ────────────────────────────────────────────────────────────────
-  app.get("/api/leads/:id/knocks", requireAuth, (req, res) => {
+  app.get("/api/leads/:id/knocks", requireCapability("field.app.use"), (req, res) => {
     const user = (req as any).user;
     // Tenant wall for EVERY role (a manager/team_lead of tenant A must not read
     // tenant B's knock history by guessing an id), then rep-scope on top.
@@ -2935,7 +3245,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Conflict-safe: the client sends the lead `updatedAt` it loaded (base
   // version); if another device saved a different note since, respond 409 with
   // the server copy so the client can merge instead of silently overwriting.
-  app.patch("/api/leads/:id/notes", requireAuth, (req, res) => {
+  app.patch("/api/leads/:id/notes", requireCapability("lead.note.write"), (req, res) => {
     const user = (req as any).user;
     const notes = req.body?.notes;
     const baseUpdatedAt = typeof req.body?.baseUpdatedAt === "string" ? req.body.baseUpdatedAt : null;
@@ -2961,7 +3271,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // status_change rows come from knock_log; assignment + note rows from
   // lead_events. Merged, newest first, capped — append-only sources make each
   // read one indexed scan per table, no joins.
-  app.get("/api/leads/:id/history", requireAuth, (req, res) => {
+  app.get("/api/leads/:id/history", requireCapability("field.app.use"), (req, res) => {
     const user = (req as any).user;
     const lead = storage.getLeadById(Number(req.params.id));
     const _htid = user?.tenantId;
@@ -3018,7 +3328,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(merged);
   });
   // Any authenticated rep can log a knock
-  app.post("/api/leads/:id/knock", requireAuth, (req, res) => {
+  app.post("/api/leads/:id/knock", requireCapability("lead.disposition.update"), (req, res) => {
     const _knu = (req as any).user;
     // Tenant wall for EVERY role (super_admin exempt): you can only knock leads
     // in your own org — a manager must not flip another tenant's lead.
@@ -3183,7 +3493,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Note typed AFTER the knock saved — attaches to the existing knock row without
   // re-picking the outcome. Only `notes` is writable; reps can only annotate
   // their own knocks (fail-closed 404, same shape as the lead guard).
-  app.patch("/api/knocks/:id", requireAuth, (req, res) => {
+  app.patch("/api/knocks/:id", requireCapability("lead.note.write"), (req, res) => {
     const user = (req as any).user;
     const notes = req.body?.notes;
     if (typeof notes !== "string" || notes.length > 2000) return res.status(400).json({ error: "notes must be a string ≤2000 chars" });
@@ -3514,22 +3824,58 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(allUsers);
   });
 
-  // Admin: create rep account
+  const LOGIN_ROLES = [
+    "admin", "manager", "team_lead", "rep",
+    "calling_rep", "calling_manager", "compliance_admin", "auditor",
+  ] as const;
+
+  const validateLoginTeamMember = (teamMemberId: number | null | undefined, tenantId: number) => {
+    if (teamMemberId == null) return null;
+    const member = storage.getTeamMemberById(teamMemberId);
+    return member?.tenantId === tenantId ? null : {
+      error: "The selected rep profile is not part of this organization.",
+      code: "TEAM_MEMBER_TENANT_MISMATCH",
+    };
+  };
+
+  // Admin: create a tenant-scoped login account. Calling/audit roles are kept
+  // separate from the field-team hierarchy and receive only named capabilities.
   app.post("/api/users", requireAdmin, async (req, res) => {
-    const { name, email, teamMemberId } = req.body;
-    if (!name || !email) return res.status(400).json({ error: "name and email required" });
+    const parsed = z.object({
+      name: z.string().trim().min(2).max(100),
+      email: z.string().trim().email().max(254).transform((value) => value.toLowerCase()),
+      role: z.enum(LOGIN_ROLES).default("rep"),
+      teamMemberId: z.number().int().positive().nullable().optional(),
+    }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid account", issues: parsed.error.issues });
+    const { name, email, role, teamMemberId } = parsed.data;
+    const tenantId = (req as any).user?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
+    const memberError = validateLoginTeamMember(teamMemberId, tenantId);
+    if (memberError) return res.status(409).json(memberError);
     const existing = storage.getUserByEmail(email);
     if (existing) return res.status(409).json({ error: "Email already in use" });
-    // New account joins the creating admin's org (or the linked member's tenant).
+    // New account always joins the creating admin's org. The membership check
+    // above prevents an arbitrary foreign teamMemberId from becoming an account
+    // link (and, transitively, a commission/payout identity).
     const user = storage.createUser({
-      name, email, role: "rep", active: true, teamMemberId: teamMemberId ?? null,
-      tenantId: (req as any).user?.tenantId ?? null,
+      name, email, role, active: true, teamMemberId: teamMemberId ?? null,
+      tenantId,
     } as any);
     res.status(201).json({ id: user.id, name: user.name, email: user.email, role: user.role });
   });
 
   // Admin: update user — allowlisted fields only (no passwordHash injection)
   app.patch("/api/users/:id", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid user id" });
+    const tenantId = (req as any).user?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
+    // Check the target before validating linked ids so a tenant admin cannot use
+    // this endpoint to probe or mutate another organization's login.
+    const target = storage.getAllUsers(tenantId).find((user) => user.id === id);
+    if (!target) return res.status(404).json({ error: "Not found" });
+
     const ALLOWED_USER_FIELDS = new Set(["name", "email", "role", "active", "teamMemberId"]);
     const safeUpdate: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(req.body)) {
@@ -3539,27 +3885,49 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(400).json({ error: "No valid fields to update" });
     }
     // Validate role if provided
-    if (safeUpdate.role && !["admin", "manager", "team_lead", "rep"].includes(safeUpdate.role as string)) {
+    if (safeUpdate.role && !(LOGIN_ROLES as readonly string[]).includes(safeUpdate.role as string)) {
       return res.status(400).json({ error: "Invalid role" });
     }
-    const tid = (req as any).user?.tenantId ?? undefined;
-    const updated = storage.updateUser(Number(req.params.id), safeUpdate as any, tid);
+    if (Object.prototype.hasOwnProperty.call(safeUpdate, "teamMemberId")) {
+      const teamMemberId = safeUpdate.teamMemberId;
+      if (teamMemberId !== null && (!Number.isInteger(teamMemberId) || Number(teamMemberId) <= 0)) {
+        return res.status(400).json({ error: "Invalid teamMemberId" });
+      }
+      const memberError = validateLoginTeamMember(teamMemberId as number | null, tenantId);
+      if (memberError) return res.status(409).json(memberError);
+    }
+    const updated = storage.updateUser(id, safeUpdate as any, tenantId);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json({ id: updated.id, name: updated.name, email: updated.email, role: updated.role, active: updated.active });
   });
 
-  // Admin: delete user
-  // Manager+ can remove rep login accounts
-  app.delete("/api/users/:id", requireManager, (req, res) => {
-    const tid = (req as any).user?.tenantId ?? undefined;
-    const ok = storage.deleteUser(Number(req.params.id), tid);
+  // Admin-only destructive identity action. Managers can manage field work, but
+  // cannot delete logins (especially admins/compliance/auditor identities).
+  app.delete("/api/users/:id", requireAdmin, (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid user id" });
+    const actor = (req as any).user;
+    const tenantId = actor?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
+    const target = storage.getAllUsers(tenantId).find((user) => user.id === id);
+    if (!target) return res.status(404).json({ error: "Not found" });
+    if (target.id === actor.id) {
+      return res.status(409).json({ error: "You cannot delete your own login.", code: "CANNOT_DELETE_SELF" });
+    }
+    if (target.role === "admin" && target.active) {
+      const activeAdmins = storage.getAllUsers(tenantId).filter((user) => user.role === "admin" && user.active);
+      if (activeAdmins.length <= 1) {
+        return res.status(409).json({ error: "The organization must retain an active admin.", code: "LAST_ACTIVE_ADMIN" });
+      }
+    }
+    const ok = storage.deleteUser(id, tenantId);
     if (!ok) return res.status(404).json({ error: "Not found" });
     res.json({ success: true });
   });
 
   // ── TERRITORIES ───────────────────────────────────────────────────────────
 
-  app.get("/api/territories", requireAuth, (req, res) => {
+  app.get("/api/territories", requireCapability("field.app.use"), (req, res) => {
     const user = (req as any).user;
     // Admins and managers see all territories in their tenant
     if (user.role === "admin" || user.role === "manager" || user.role === "team_lead") {
@@ -3830,13 +4198,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // GET /api/territories/progress — canvassing progress per assigned area.
   // For each territory polygon: how many leads fall inside, and how many have
   // been knocked (≥1 door knock logged) → "X/Y doors done". No scanning.
-  app.get("/api/territories/progress", requireAuth, (req, res) => {
+  app.get("/api/territories/progress", requireCapability("field.app.use"), (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     // Reps only see their own territory's progress; managers/admins see all.
-    const isRep = user?.role === "rep";
-    if (isRep && !user?.teamMemberId) return res.json([]);
-    const territories = isRep ? storage.getTerritoriesByRep(user.teamMemberId) : storage.getTerritories(tid);
+    const scope = leadVisibilityScope(user);
+    if (Array.isArray(scope) && !scope.length) return res.json([]);
+    const territories = Array.isArray(scope)
+      ? storage.getTerritories(tid).filter((territory) => territory.repId != null && scope.includes(territory.repId))
+      : storage.getTerritories(tid);
     if (territories.length === 0) return res.json([]);
 
     const leads = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null);
@@ -3908,12 +4278,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // territory: every lead-marking activity with its distance-when-marked, GPS
   // accuracy, verdict, and both coordinate pairs for the map preview. Reps see
   // only their own territory; managers/admins see any in their tenant.
-  app.get("/api/territories/:id/activity", requireAuth, (req, res) => {
+  app.get("/api/territories/:id/activity", requireCapability("field.app.use"), (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const territory = storage.getTerritories(tid).find(t => t.id === Number(req.params.id));
     if (!territory) return res.status(404).json({ error: "Not found" });
-    if (user?.role === "rep" && territory.repId !== user?.teamMemberId) return res.status(404).json({ error: "Not found" });
+    const scope = leadVisibilityScope(user);
+    if (Array.isArray(scope) && (territory.repId == null || !scope.includes(territory.repId))) {
+      return res.status(404).json({ error: "Not found" });
+    }
     let poly: [number, number][] = [];
     try { poly = JSON.parse(territory.polygon); } catch { poly = []; }
     const within = poly.length >= 3
@@ -4415,7 +4788,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Body: { env: "MS", startCns: 1, endCns: 50000 }
   // Proxy spend is admin-only + capped everywhere else (discovery, area, harvest);
   // a raw CNS range is up to 100k Kinetic probes, so it must be admin-gated too.
-  app.post("/api/cns/jobs", requireAdmin, requireScanningAllowed, scanLimiter, async (req, res) => {
+  app.post("/api/cns/jobs", requireAdmin, requireScanningAllowed, authorizedScanAdmission, async (req, res) => {
     const { env, startCns, endCns } = req.body;
     if (!env || typeof env !== "string") return res.status(400).json({ error: "env required" });
     const envInfo = KINETIC_ENVS.find(e => e.code === env);
@@ -4431,7 +4804,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.status(201).json(job);
   });
 
-  // ═══ ZERO-MAPBOX CITY DISCOVERY — get fresh leads for any city we've indexed ══
+  // ═══ ZERO-MAPBOX CITY DISCOVERY — gather primary evidence for indexed cities ══
   // Kinetic returns the full address on every probe, so once a city has been
   // scanned its addresses (with df ids = ENV+CNS) accumulate in the pool. These
   // routes target a city by name using ONLY that accumulated CNS evidence — no
@@ -4454,7 +4827,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // Launch a budgeted, zero-Mapbox discovery run against a city's CNS frontier.
   // Admin-only + rate-limited; proxy spend is capped at `budget` Kinetic checks.
-  app.post("/api/scan/discover-city", requireAdmin, requireScanningAllowed, scanLimiter, (req, res) => {
+  app.post("/api/scan/discover-city", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req, res) => {
     const { city, state, budget } = req.body ?? {};
     if (!city || typeof city !== "string") return res.status(400).json({ error: "city required" });
     const st = typeof state === "string" && state.trim() ? state.trim() : "NC";
@@ -4488,6 +4861,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       id: j.id, env: j.env, envLabel: j.envLabel,
       startCns: j.startCns, endCns: j.endCns, currentCns: j.currentCns,
       status: j.status, scanned: j.scanned, hits: j.hits, newFiberHits: j.newFiberHits,
+      confirmedLeads: j.confirmedLeads,
       ratePerMin: j.ratePerMin, estimatedMinutes: j.estimatedMinutes,
       startedAt: j.startedAt, completedAt: j.completedAt, lastError: j.lastError,
     })));
@@ -4536,6 +4910,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const progress = {
         jobId: j.id, env: j.env, status: j.status,
         scanned: j.scanned, hits: j.hits, newFiberHits: j.newFiberHits,
+        confirmedLeads: j.confirmedLeads,
         currentCns: j.currentCns, ratePerMin: j.ratePerMin,
         estimatedMinutes: j.estimatedMinutes, lastError: j.lastError,
       };
@@ -4835,13 +5210,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 export function registerSaasRoutes(app: any) {
   // ── GPS Location Pings ──────────────────────────────────────────────────────
   // POST /api/location-pings — rep sends their GPS position
-  app.post("/api/location-pings", requireAuth, (req: Request, res: Response) => {
+  app.post("/api/location-pings", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const { lat, lng, accuracy, repId } = req.body;
     if (!lat || !lng) return res.status(400).json({ error: "lat/lng required" });
     const resolvedRepId = user.role === "rep" ? user.teamMemberId : (repId ?? user.teamMemberId);
     if (!resolvedRepId) return res.status(400).json({ error: "No rep ID" });
     if (!repInCallerTenant(user, resolvedRepId)) return res.status(404).json({ error: "Rep not found" });
+    if (!repInVisibilityScope(user, resolvedRepId)) return res.status(403).json({ error: "Forbidden" });
     const ping = storage.createLocationPing({ repId: resolvedRepId, userId: user.id, lat, lng, accuracy });
     res.json(ping);
   });
@@ -4861,7 +5237,7 @@ export function registerSaasRoutes(app: any) {
   });
 
   // GET /api/location-pings/:repId — history for a specific rep
-  app.get("/api/location-pings/:repId", requireAuth, (req: Request, res: Response) => {
+  app.get("/api/location-pings/:repId", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const repId = Number(req.params.repId);
     // Reps can only view their own; a scoped role only within their team; and
@@ -4876,13 +5252,14 @@ export function registerSaasRoutes(app: any) {
 
   // ── Clock Sessions ──────────────────────────────────────────────────────────
   // POST /api/clock/in — clock in
-  app.post("/api/clock/in", requireAuth, (req: Request, res: Response) => {
+  app.post("/api/clock/in", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     // A rep can ONLY clock themselves in/out — never another rep. Higher roles
     // may clock a specific rep (ride-alongs) via body.repId.
     const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
     if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
+    if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "Forbidden" });
     const existing = storage.getActiveClockSession(repId);
     if (existing) return res.status(400).json({ error: "Already clocked in", session: existing });
     const session = storage.clockIn(repId, user.id, req.body.notes);
@@ -4891,13 +5268,14 @@ export function registerSaasRoutes(app: any) {
   });
 
   // POST /api/clock/out — clock out
-  app.post("/api/clock/out", requireAuth, (req: Request, res: Response) => {
+  app.post("/api/clock/out", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     // A rep can ONLY clock themselves in/out — never another rep. Higher roles
     // may clock a specific rep (ride-alongs) via body.repId.
     const repId = user.role === "rep" ? user.teamMemberId : (req.body.repId ?? user.teamMemberId);
     if (!repId) return res.status(400).json({ error: "No rep ID linked to your account" });
     if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
+    if (!repInVisibilityScope(user, repId)) return res.status(403).json({ error: "Forbidden" });
     const active = storage.getActiveClockSession(repId);
     if (!active) return res.status(400).json({ error: "Not clocked in" });
     const session = storage.clockOut(active.id);
@@ -4906,7 +5284,7 @@ export function registerSaasRoutes(app: any) {
   });
 
   // GET /api/clock/status — current clock status for the logged-in rep
-  app.get("/api/clock/status", requireAuth, (req: Request, res: Response) => {
+  app.get("/api/clock/status", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const repId = user.teamMemberId;
     if (!repId) return res.json({ clockedIn: false, session: null });
@@ -4915,16 +5293,15 @@ export function registerSaasRoutes(app: any) {
   });
 
   // GET /api/clock/sessions — all sessions (admin/manager) or own (rep)
-  app.get("/api/clock/sessions", requireAuth, (req: Request, res: Response) => {
+  app.get("/api/clock/sessions", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const date = req.query.date as string | undefined;
     const tid = user.tenantId ?? undefined; // super_admin (null) sees all
-    let sessions;
-    if (user.role === "rep") {
-      sessions = storage.getClockSessionsByRep(user.teamMemberId ?? 0);
-    } else {
-      // Tenant-scoped — a manager never sees another org's labor records.
-      sessions = storage.getAllClockSessions(date, tid);
+    const scope = leadVisibilityScope(user);
+    let sessions = storage.getAllClockSessions(date, tid);
+    if (Array.isArray(scope)) {
+      const visibleRepIds = new Set(scope);
+      sessions = sessions.filter((session) => visibleRepIds.has(session.repId));
     }
     const members = storage.getTeamMembers(tid);
     const result = sessions.map(s => ({
@@ -4970,42 +5347,63 @@ export function registerSaasRoutes(app: any) {
     res.json({ ok: true });
   });
 
-  // POST /api/coming-soon/:id/promote — convert to active lead
+  // POST /api/coming-soon/:id/promote — publish only after the same authoritative
+  // cross-verification gate used by automatic scans. Managers may request the
+  // projection, but cannot override evidence or manufacture a fresh lead.
   app.post("/api/coming-soon/:id/promote", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
     const id = Number(req.params.id);
     // Tenant-scoped lookup — a manager can't promote another tenant's entry.
     const entry = storage.getComingSoonAddresses(user?.tenantId).find(a => a.id === id);
     if (!entry) return res.status(404).json({ error: "Not found" });
-    // Create lead from this address
-    const lead = storage.createLead({
-      tenantId: entry.tenantId ?? user?.tenantId ?? undefined, // watchlist's org, else the promoter's
-      address: entry.address, city: entry.city, state: entry.state, zip: entry.zip,
-      lat: entry.lat ?? undefined, lng: entry.lng ?? undefined,
-      fiberStatus: "new_fiber", isNewFiber: true,
-      leadStatus: "prospect",
+    const tenantId = Number(entry.tenantId ?? user?.tenantId ?? getDefaultTenantId());
+    const target = rawDb.prepare(`SELECT id,converted_to_lead_id AS leadId FROM scan_targets
+      WHERE address=? AND lower(city)=lower(?) AND upper(state)=upper(?) AND tenant_id=?
+      LIMIT 1`).get(entry.address, entry.city, entry.state, tenantId) as { id: number; leadId: number | null } | undefined;
+    if (!target) return res.status(409).json({
+      error: "This address has no provider snapshot yet. Recheck it before requesting publication.",
+      code: "PRIMARY_EVIDENCE_REQUIRED",
     });
+    projectConfirmedFreshLeads(tenantId, [target.id]);
+    const refreshed = rawDb.prepare(`SELECT converted_to_lead_id AS leadId FROM scan_targets WHERE id=?`).get(target.id) as { leadId: number | null };
+    const lead = refreshed?.leadId ? storage.getLeadById(refreshed.leadId) : undefined;
+    if (!lead || lead.tenantId !== tenantId || lead.freshConfidence !== "cross_verified") {
+      return res.status(409).json({
+        error: "This address is still provisional. A proven availability flip and recent independent address-level fiber evidence are required.",
+        code: "CROSS_VERIFICATION_REQUIRED",
+      });
+    }
     storage.markComingSoonAvailable(id, lead.id);
-    storage.logActivity(user.id, "coming_soon.promoted", "lead", lead.id, { fromComingSoonId: id }, req.ip);
-    res.json({ lead, updated: true });
+    storage.logActivity(user.id, "coming_soon.promoted", "lead", lead.id, {
+      fromComingSoonId: id, confirmation: "cross_verified", scanTargetId: target.id,
+    }, req.ip);
+    res.json({ lead: stripProviderIds(lead, user), updated: true });
   });
 
   // ── Commissions ──────────────────────────────────────────────────────────────
   // GET /api/commissions — admin sees all, rep sees own
-  app.get("/api/commissions", requireAuth, (req: Request, res: Response) => {
+  app.get("/api/commissions", requireCapability("field.app.use"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const tid = user.tenantId ?? undefined; // super_admin (null) = all tenants
     let repId: number | undefined;
-    if (user.role === "rep") {
+    const canReadAll = hasCapability(user.role, "commission.read.all");
+    const canReadTeam = hasCapability(user.role, "commission.read.team");
+    if (!canReadAll && !canReadTeam) {
       repId = user.teamMemberId ?? -1;
     } else if (req.query.repId) {
       repId = Number(req.query.repId);
       // The ?repId filter must not become a cross-tenant IDOR — a manager may
       // only target a rep inside their own org.
       if (!repInCallerTenant(user, repId)) return res.status(404).json({ error: "Rep not found" });
+      if (!canReadAll && !repInVisibilityScope(user, repId)) return res.status(403).json({ error: "Forbidden" });
     }
     // Tenant-scoped: a manager/admin never receives another org's payout ledger.
-    const comms = storage.getCommissions(tid, repId);
+    let comms = storage.getCommissions(tid, repId);
+    if (!canReadAll && canReadTeam && repId == null) {
+      const scope = leadVisibilityScope(user);
+      const visibleRepIds = new Set(Array.isArray(scope) ? scope : []);
+      comms = comms.filter((commission) => commission.repId != null && visibleRepIds.has(commission.repId));
+    }
     // Mobile entries read "sold date · rep · address, city" — enrich once here
     // (two Map builds, O(1) per row) instead of N client round-trips.
     const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
@@ -5227,7 +5625,12 @@ export function registerSaasRoutes(app: any) {
     const activeClockedIn = (scopeIds ? scopedMembers : members).filter(m => storage.getActiveClockSession(m.id)).length;
 
     res.json({
-      leads: { total: leads.length, newFiber: leads.filter(l => l.isNewFiber).length, sold: leads.filter(l => l.leadStatus === "sold").length, unassigned: leads.filter(l => !l.assignedRepId).length },
+      leads: {
+        total: leads.length,
+        newFiber: leads.filter(l => l.leadTag === "fresh_fiber_confirmed" && l.freshConfidence === "cross_verified").length,
+        sold: leads.filter(l => l.leadStatus === "sold").length,
+        unassigned: leads.filter(l => !l.assignedRepId).length,
+      },
       team: isRep ? { total: 1, activeClockedIn } : { total: scopedMembers.length, activeClockedIn },
       knocks: { total: knocks.length, today: todayKnocks.length, todaySales, weekSales },
       comingSoon: { total: comingSoon.length, converted: comingSoon.filter(a => a.fiberAvailable).length },
@@ -5365,84 +5768,15 @@ export function registerSaasRoutes(app: any) {
     res.json({ summary, totalMrr, yourMrr, tenantCount: allTenants.length });
   });
 
-  // ─── Tracerfy Owner Enrichment ──────────────────────────────────────────────
-  // POST /api/leads/:id/owner-lookup  — pay-per-hit owner name/phone/email
-  app.post("/api/leads/:id/owner-lookup", requireAuth, ownerLookupLimiter, async (req: Request, res: Response) => {
-    const lead = storage.getLeadById(Number(req.params.id));
-    const _olu = (req as any).user;
-    const _oltid = _olu?.tenantId;
-    if (!lead || (_oltid && lead.tenantId !== _oltid)) return res.status(404).json({ error: "Not found" });
-    // Reps can only run (paid) owner lookups on their own assigned leads
-    if (!repCanAccessLead(_olu, lead)) return res.status(404).json({ error: "Not found" });
-    
-    // Use tenant's Tracerfy key if available, else fall back to env
-    const user = (req as any).user as any;
-    let apiKey = process.env.TRACERFY_API_KEY || "";
-    if (user?.tenantId) {
-      const tenant = storage.getTenantById(user.tenantId);
-      if (tenant?.enrichmentApiKey) apiKey = tenant.enrichmentApiKey;
-    }
-
-    if (!apiKey) {
-      return res.status(402).json({ 
-        error: "No enrichment API key configured",
-        message: "Add a Tracerfy API key in tenant settings or contact HomeFront Fiber support. Cost: $0.20/hit, $0 on miss.",
-        signupUrl: "https://www.tracerfy.com"
-      });
-    }
-
-    try {
-      const fullAddress = `${lead.address}, ${lead.city}, ${lead.state} ${lead.zip}`;
-      const response = await fetch("https://api.tracerfy.com/v1/api/lead-builder/lookup/", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({ address: fullAddress }),
-        signal: AbortSignal.timeout(10000),
-      });
-
-      const data = await response.json() as any;
-      
-      if (!response.ok) {
-        return res.status(response.status).json({ error: data?.detail || "Tracerfy API error" });
-      }
-
-      // Map Tracerfy response fields
-      const ownerName  = data?.owner_name || data?.name || null;
-      const ownerPhone = data?.phone_numbers?.[0] || data?.phone || null;
-      const ownerEmail = data?.emails?.[0] || data?.email || null;
-      const homeValue  = data?.property_value ? `$${Number(data.property_value).toLocaleString()}` : null;
-      const yearsAt    = data?.years_owned ? Number(data.years_owned) : null;
-      const isOwner    = data?.owner_occupied ?? null;
-
-      // Save to lead
-      if (ownerName || ownerPhone || ownerEmail) {
-        storage.updateLead(lead.id, {
-          ownerName:      ownerName  ?? lead.ownerName,
-          ownerPhone:     ownerPhone ?? lead.ownerPhone,
-          ownerEmail:     ownerEmail ?? lead.ownerEmail,
-          homeValue:      homeValue  ?? lead.homeValue,
-          yearsAtAddress: yearsAt    ?? lead.yearsAtAddress,
-          isHomeowner:    isOwner    ?? lead.isHomeowner,
-          enrichedAt:     new Date().toISOString(),
-        } as any);
-        storage.logActivity(user?.id ?? null, "lead.owner_lookup", "lead", lead.id, { ownerName, hit: true });
-      } else {
-        storage.logActivity(user?.id ?? null, "lead.owner_lookup.miss", "lead", lead.id, { hit: false });
-      }
-
-      res.json({
-        hit: !!(ownerName || ownerPhone || ownerEmail),
-        ownerName, ownerPhone, ownerEmail,
-        homeValue, yearsAtAddress: yearsAt, isHomeowner: isOwner,
-        cost: (ownerName || ownerPhone || ownerEmail) ? "$0.20" : "$0.00",
-      });
-    } catch (e: any) {
-      console.error("Tracerfy error:", e);
-      res.status(500).json({ error: "Owner lookup failed: " + e.message });
-    }
+  // Legacy owner lookup is permanently closed. It bypassed contract approval,
+  // budgets, identity matching, DNC, phone validation, encryption, and the
+  // Calling authorization boundary. Approved providers are configured and
+  // invoked only inside /api/v1/calling.
+  app.post("/api/leads/:id/owner-lookup", requireAuth, ownerLookupLimiter, (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: "Legacy owner lookup has been retired. Use the Calling compliance module.",
+      code: "CALLING_MODULE_REQUIRED",
+    });
   });
 
 

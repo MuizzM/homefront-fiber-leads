@@ -6,8 +6,8 @@ import { join } from "node:path";
 /**
  * The dfAddressId watchlist — the moat: save in-fabric, not-yet-live addresses with
  * Kinetic's own key, so the nightly recheck can catch a "went live" flip by EXACT
- * key and promote it to a lead the same night. These test the data layer that
- * powers it (dedup by df id, backfill, the recheck work-list, and promotion),
+ * key and detect the flip the same night. These test the data layer that
+ * powers it (dedup by df id, backfill, the recheck work-list, and fail-closed publication),
  * with zero network.
  */
 let storage: typeof import("../../server/storage").storage;
@@ -49,16 +49,17 @@ describe("dfAddressId watchlist", () => {
     expect(work.map((w: any) => w.address).sort()).toEqual(["A St", "B St"]);
   });
 
-  it("promotion: marking available removes it from the recheck work-list", () => {
+  it("a single provider result cannot publish or retire a watch row", () => {
     const row = storage.upsertComingSoonByDfAddressId(CS({ dfAddressId: "8000000000000000999999" }));
     expect(storage.getComingSoonWithDfId()).toHaveLength(1);
-    // Simulate the nightly promote: create the lead, mark the watch row available.
-    const up = storage.upsertLeadByAddress({ address: row.address, city: row.city, state: row.state, zip: row.zip, fiberStatus: "new_fiber", isNewFiber: true, dfAddressId: row.dfAddressId } as any);
-    storage.markComingSoonAvailable(row.id, up.lead.id);
-    expect(storage.getComingSoonWithDfId()).toHaveLength(0);        // no longer rechecked
+    expect(() => storage.upsertLeadByAddress({
+      address: row.address, city: row.city, state: row.state, zip: row.zip,
+      fiberStatus: "new_fiber", isNewFiber: true, dfAddressId: row.dfAddressId,
+    } as any)).toThrow(/fresh_fiber_requires_cross_verification/);
+    expect(storage.getComingSoonWithDfId()).toHaveLength(1);
     const cs = rawDb.prepare("SELECT * FROM coming_soon_addresses WHERE id=?").get(row.id) as any;
-    expect(cs.fiber_available).toBe(1);
-    expect(cs.converted_to_lead_id).toBe(up.lead.id);
-    expect((rawDb.prepare("SELECT COUNT(*) c FROM leads WHERE is_new_fiber=1").get() as any).c).toBe(1);
+    expect(cs.fiber_available).toBe(0);
+    expect(cs.converted_to_lead_id).toBeNull();
+    expect((rawDb.prepare("SELECT COUNT(*) c FROM leads").get() as any).c).toBe(0);
   });
 });

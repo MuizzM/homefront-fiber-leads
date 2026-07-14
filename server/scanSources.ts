@@ -1,6 +1,6 @@
 // ── scanSources — WorkSource implementations for the kinetic scheduler ────────
 // A WorkSource turns "a set of addresses to check" into tasks the scheduler pulls,
-// and owns what happens to each result: persist to the pool, promote a lead, enroll a
+// and owns what happens to each result: persist to the pool, request confirmed projection, enroll a
 // coming-soon watch, or (on a 403) re-queue for retry. This is the ONE place the
 // "what a Kinetic answer means for our data" rules live, so the manual scan, the
 // nightly cron and discovery all persist identically (killing the old per-copy drift).
@@ -11,11 +11,10 @@ import type { WorkSource, ProbeTask } from "./kineticScheduler";
 import type { ProbeOutcome } from "./kineticProbe";
 import { fringeCandidates, normAddr } from "@shared/fringe";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
+import { persistKineticObservation } from "./kineticObservation";
+import { structuredLog } from "./structuredLog";
 
 const taskId = (t: ProbeTask): string => t.key.kind === "df" ? t.key.dfAddressId : t.key.address;
-
-const getTargetId = (address: string, city: string): number | undefined =>
-  (rawDb.prepare("SELECT id FROM scan_targets WHERE address=? AND lower(city)=lower(?) LIMIT 1").get(address, city) as any)?.id;
 
 export interface ScanCounters {
   answered: number; newFiber: number; leads: number; comingSoon: number;
@@ -27,37 +26,30 @@ const zeroCounters = (): ScanCounters => ({
   fringeQueued: 0, fringeLeads: 0,
 });
 
-// Persist ONE answered/no_service result: pool row + lead-or-watchlist routing.
+// Persist ONE answered/no_service result: durable observation + projection/watch routing.
 // Centralizes the rule that used to be copy-pasted in nc-live-scan/cron/discovery.
 export function persistScanResult(r: any, tenantId: number | null, sourceTag: string, counters: ScanCounters): void {
   try {
-    storage.upsertScanTargets([{
-      address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng,
-      source: `live-${sourceTag}`, tenantId: null, dfAddressId: r.dfAddressId,
-      scannedNow: true, fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
-    }]);
-    const id = getTargetId(r.address, r.city);
-    if (id) storage.recordScanTargetResult(id, {
-      fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
-      dfAddressId: r.dfAddressId, availabilityStatus: r.fiberStatus, newlyLive: false,
+    const persisted = persistKineticObservation({
+      tenantId,
+      source: `scan-source:${sourceTag}`,
+      observation: r,
     });
-  } catch { /* pool write is best-effort */ }
+    // A raw provider hit and a confirmed rep-facing lead are intentionally
+    // separate counters. Only the evidence projector can increment `leads`.
+    counters.leads += persisted.projection.published;
+  } catch (error: any) {
+    structuredLog("legacy_scan.observation_failed", {
+      source: sourceTag,
+      error: String(error?.message ?? error),
+    }, "warn");
+  }
 
   const seg = (r.householdSegmentType ?? "").toUpperCase();
+  if (r.isNewFiber) counters.newFiber++;
   if (r.isNewFiber && r.billingStatus === "N") {
-    // NEW FIBER + no subscriber → a fresh lead (deduped by address).
-    try {
-      const up = storage.upsertLeadByAddress({
-        tenantId, address: r.address, city: r.city, state: r.state, zip: r.zip,
-        lat: r.lat ?? undefined, lng: r.lng ?? undefined,
-        fiberStatus: "new_fiber", isNewFiber: true, isTenured: false, billingStatus: r.billingStatus,
-        householdSegmentType: r.householdSegmentType, techType: r.techType, speedTier: r.speedTier,
-        maxDownloadMbps: r.maxDownloadMbps, competitorName: r.competitorName, addressCatalogDate: r.addressCatalogDate,
-        dfAddressId: r.dfAddressId, leadStatus: "prospect", deploymentNotes: `Live scan (${sourceTag}) — NEW FIBER, no subscriber.`,
-      } as any);
-      if (up?.created) counters.leads++;
-    } catch { /* lead upsert best-effort */ }
-    counters.newFiber++;
+    // The primary Kinetic hit stays provisional until independent evidence is
+    // present. persistKineticObservation above invokes the sole projector.
   } else if (r.dfAddressId && r.billingStatus === "N" && !["new_fiber", "existing_fiber", "tenured_fiber"].includes(r.fiberStatus)) {
     // In Kinetic's fabric, no subscriber, not yet on fiber → a FUTURE lead: watch it by
     // dfAddressId so the nightly recheck promotes it the instant it flips to NEW FIBER.
@@ -70,7 +62,6 @@ export function persistScanResult(r: any, tenantId: number | null, sourceTag: st
       } as any);
       counters.comingSoon++;
     } catch { /* already watched */ }
-    if (r.isNewFiber) counters.newFiber++;
   } else if (r.fiberStatus === "no_service") {
     counters.noService++;
   } else {

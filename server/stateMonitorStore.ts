@@ -3,6 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { rawDb } from "./db";
 import { clusterFreshFiber, type FreshFiberPoint } from "@shared/freshFiberClusters";
+import { applyAuthoritativeMarketCatalog } from "./kineticMarketCatalog";
+import { projectConfirmedFreshLeads } from "./freshFiberProjector";
+export { toCsv } from "./csv";
 
 export const CORROBORATION_SOURCES = ["fcc_bdc_licensed", "carrier_partner_feed", "third_party_licensed", "field_verification"] as const;
 export type CorroborationSource = typeof CORROBORATION_SOURCES[number];
@@ -26,8 +29,21 @@ function parseCsv(text: string): Record<string, string>[] {
   return rows.filter((r) => r.some(Boolean)).map((values) => Object.fromEntries(headers.map((h, i) => [h, values[i] ?? ""])));
 }
 
-export function seedStateMarkets(csvPath = path.resolve(process.cwd(), "data/nc_sc_kinetic_markets.csv")): { total: number; insertedOrUpdated: number } {
-  if (!fs.existsSync(csvPath)) throw new Error(`MARKET_DATA_MISSING: run npm run markets:refresh (${csvPath})`);
+export function seedStateMarkets(csvPath = path.resolve(process.cwd(), "data/nc_sc_kinetic_markets.csv")): { total: number; insertedOrUpdated: number; verifiedMarkets: number; expandingMarkets: number; syntheticMarkets: number } {
+  // The Census place catalog enriches county/population metadata, but it is not
+  // required for a safe production boot. A deployment that intentionally omits
+  // the generated CSV still receives the authoritative Kinetic catalog as
+  // synthetic market rows instead of crashing every monitor route/scheduler.
+  if (!fs.existsSync(csvPath)) {
+    const catalog = applyAuthoritativeMarketCatalog();
+    return {
+      total: 0,
+      insertedOrUpdated: 0,
+      verifiedMarkets: catalog.verified,
+      expandingMarkets: catalog.expanding,
+      syntheticMarkets: catalog.synthetic,
+    };
+  }
   const rows = parseCsv(fs.readFileSync(csvPath, "utf8"));
   const stmt = rawDb.prepare(`
     INSERT INTO state_fiber_markets
@@ -69,7 +85,12 @@ export function seedStateMarkets(csvPath = path.resolve(process.cwd(), "data/nc_
     }
     return changed;
   });
-  return { total: rows.length, insertedOrUpdated: tx() };
+  const insertedOrUpdated = tx();
+  const catalog = applyAuthoritativeMarketCatalog();
+  return {
+    total: rows.length, insertedOrUpdated,
+    verifiedMarkets: catalog.verified, expandingMarkets: catalog.expanding, syntheticMarkets: catalog.synthetic,
+  };
 }
 
 export function syncMarketState(): number {
@@ -81,22 +102,29 @@ export function syncMarketState(): number {
         WHEN EXISTS (SELECT 1 FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state AND s.last_is_new_fiber=1) THEN 'fiber_detected'
         WHEN EXISTS (SELECT 1 FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state AND s.last_scanned_at IS NOT NULL) THEN 'monitored'
         ELSE 'inventory_ready' END,
+      inventory_status=CASE WHEN EXISTS (SELECT 1 FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state) THEN 'ready' ELSE inventory_status END,
       fresh_flag=CASE WHEN EXISTS (
         SELECT 1 FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state
           AND COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) >= datetime('now','-30 days')) THEN 1 ELSE 0 END,
+      -- A single recently checked address must never defer the rest of a city.
+      -- Unscanned inventory is due immediately; otherwise cadence is measured
+      -- from the oldest address so complete coverage stays fair and bounded.
       next_scan_at=CASE
-        WHEN (SELECT MAX(s.last_scanned_at) FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state) IS NULL THEN COALESCE(next_scan_at, datetime('now'))
-        ELSE datetime((SELECT MAX(s.last_scanned_at) FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state), '+' || cadence_hours || ' hours') END,
+        WHEN NOT EXISTS (SELECT 1 FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state) THEN COALESCE(next_scan_at, datetime('now'))
+        WHEN EXISTS (SELECT 1 FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state AND s.last_scanned_at IS NULL) THEN datetime('now')
+        ELSE datetime((SELECT MIN(s.last_scanned_at) FROM scan_targets s WHERE lower(s.city)=lower(m.city) AND s.state=m.state), '+' || cadence_hours || ' hours') END,
       updated_at=datetime('now')`).run();
   return result.changes;
 }
 
-export function listMarkets(filters: { state?: "NC" | "SC"; priority?: string; due?: boolean; limit?: number } = {}) {
+export function listMarkets(filters: { state?: "NC" | "SC"; priority?: string; due?: boolean; eligibility?: "verified" | "unverified" | "all"; limit?: number } = {}) {
   const where: string[] = ["1=1"];
   const args: any[] = [];
   if (filters.state) { where.push("m.state=?"); args.push(filters.state); }
   if (filters.priority) { where.push("m.priority_class=?"); args.push(filters.priority); }
   if (filters.due) where.push("m.next_scan_at <= datetime('now')");
+  if (filters.eligibility === "verified") where.push("m.auto_scan_eligible=1");
+  if (filters.eligibility === "unverified") where.push("m.auto_scan_eligible=0");
   args.push(Math.max(1, Math.min(2_000, filters.limit ?? 1_000)));
   return rawDb.prepare(`
     SELECT m.*,
@@ -111,7 +139,7 @@ export function listMarkets(filters: { state?: "NC" | "SC"; priority?: string; d
 }
 
 export function dueMarkets(limit = 25) {
-  return listMarkets({ due: true, limit }).filter((m: any) => Number(m.address_count) > 0);
+  return listMarkets({ due: true, eligibility: "verified", limit }).filter((m: any) => Number(m.address_count) > 0);
 }
 
 export interface CorroborationInput {
@@ -127,7 +155,7 @@ export interface CorroborationInput {
 }
 
 export function recordCorroboration(tenantId: number, rows: CorroborationInput[]): { accepted: number; duplicates: number } {
-  const target = rawDb.prepare(`SELECT id, address, city, state FROM scan_targets WHERE id=? AND (tenant_id=? OR tenant_id IS NULL)`);
+  const target = rawDb.prepare(`SELECT id, address, city, state FROM scan_targets WHERE id=? AND tenant_id=?`);
   const insert = rawDb.prepare(`
     INSERT OR IGNORE INTO availability_corroboration
       (tenant_id, scan_target_id, source, source_record_id, observed_at, availability, technology,
@@ -137,6 +165,9 @@ export function recordCorroboration(tenantId: number, rows: CorroborationInput[]
   const tx = rawDb.transaction(() => {
     let accepted = 0, duplicates = 0;
     for (const row of rows) {
+      const observedMs = Date.parse(row.observedAt);
+      if (!Number.isFinite(observedMs)) throw new Error("CORROBORATION_INVALID_TIMESTAMP");
+      if (observedMs > Date.now() + 5 * 60_000) throw new Error("CORROBORATION_FUTURE_TIMESTAMP");
       const t = target.get(row.scanTargetId, tenantId) as any;
       if (!t) throw new Error(`SCAN_TARGET_NOT_FOUND: ${row.scanTargetId}`);
       const evidenceHash = crypto.createHash("sha256").update(JSON.stringify({
@@ -151,7 +182,11 @@ export function recordCorroboration(tenantId: number, rows: CorroborationInput[]
     }
     return { accepted, duplicates };
   });
-  return tx();
+  const result = tx();
+  // Projection is retry-safe. Valid evidence can promote provisional flips
+  // immediately; non-fiber/stale/negative evidence leaves them provisional.
+  projectConfirmedFreshLeads(tenantId, rows.map((row) => row.scanTargetId));
+  return result;
 }
 
 export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
@@ -163,10 +198,16 @@ export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
       FROM scan_targets s
       LEFT JOIN availability_corroboration c
         ON c.scan_target_id=s.id AND c.tenant_id=? AND c.availability='available'
-       AND c.observed_at >= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'-7 days')
-       AND c.observed_at <= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'+31 days')
-     WHERE s.state IN ('NC','SC') AND COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) >= datetime('now', ?)
-       AND s.lat IS NOT NULL AND s.lng IS NOT NULL AND (s.tenant_id=? OR s.tenant_id IS NULL)
+       AND (lower(COALESCE(c.technology,'')) LIKE '%fiber%' OR lower(COALESCE(c.technology,'')) IN ('fttp','ftth'))
+       AND datetime(c.observed_at) >= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'-7 days')
+       AND datetime(c.observed_at) <= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'+31 days')
+       AND datetime(c.observed_at) <= datetime('now','+5 minutes')
+     WHERE s.state IN ('NC','SC')
+       -- A historical flip remains in the audit ledger, but it must disappear
+       -- from current opportunity/knock surfaces as soon as Kinetic regresses.
+       AND s.last_fiber_available=1
+       AND COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) >= datetime('now', ?)
+       AND s.lat IS NOT NULL AND s.lng IS NOT NULL AND s.tenant_id=?
      GROUP BY s.id ORDER BY s.first_seen_live_at DESC`).all(tenantId, `-${Math.max(1, Math.min(365, days))} days`, tenantId) as any[];
   return rows.map((r) => {
     const independent = String(r.corroboratingSources ?? "").split(",").filter(Boolean);
@@ -181,23 +222,34 @@ export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
 }
 
 export function monitoringSummary(tenantId: number, days = 7) {
-  const tracked = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE state IN ('NC','SC') AND (tenant_id=? OR tenant_id IS NULL)`).get(tenantId) as any;
+  const tracked = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE state IN ('NC','SC') AND tenant_id=?`).get(tenantId) as any;
   const fresh = freshPoints(tenantId, days);
   const clusters = clusterFreshFiber(fresh);
-  const markets = rawDb.prepare(`SELECT COUNT(*) n, SUM(CASE WHEN next_scan_at <= datetime('now') THEN 1 ELSE 0 END) due, SUM(fresh_flag) fresh FROM state_fiber_markets`).get() as any;
+  const markets = rawDb.prepare(`SELECT COUNT(*) n,
+    SUM(auto_scan_eligible) eligible,
+    SUM(CASE WHEN auto_scan_eligible=1 AND next_scan_at <= datetime('now') THEN 1 ELSE 0 END) due,
+    SUM(CASE WHEN auto_scan_eligible=1 THEN fresh_flag ELSE 0 END) fresh,
+    SUM(CASE WHEN auto_scan_eligible=1 AND EXISTS (SELECT 1 FROM scan_targets s WHERE lower(s.city)=lower(state_fiber_markets.city) AND s.state=state_fiber_markets.state) THEN 1 ELSE 0 END) inventoried
+    FROM state_fiber_markets`).get() as any;
+  const operational = operationalMetrics(tenantId, 24);
   return {
     generatedAt: new Date().toISOString(), windowDays: days,
-    markets: { total: markets.n ?? 0, due: markets.due ?? 0, fresh: markets.fresh ?? 0 },
+    markets: {
+      catalogTotal: markets.n ?? 0, verified: markets.eligible ?? 0, due: markets.due ?? 0,
+      fresh: markets.fresh ?? 0, inventoried: markets.inventoried ?? 0,
+      inventoryCompletenessPct: markets.eligible ? Math.round((markets.inventoried / markets.eligible) * 1_000) / 10 : 0,
+    },
     addressesTracked: tracked.n ?? 0, newlyAvailable: fresh.length,
     crossVerified: fresh.filter((p) => p.confidence === "cross_verified").length,
     provisional: fresh.filter((p) => p.confidence === "single_source_provisional").length,
     topFreshClusters: clusters.slice(0, 10),
-    nextScans: listMarkets({ limit: 20 }).sort((a: any, b: any) => String(a.next_scan_at).localeCompare(String(b.next_scan_at))).slice(0, 20),
+    operations: operational,
+    nextScans: listMarkets({ eligibility: "verified", limit: 20 }).sort((a: any, b: any) => String(a.next_scan_at).localeCompare(String(b.next_scan_at))).slice(0, 20),
   };
 }
 
 export function knockList(tenantId: number, days = 30) {
-  return clusterFreshFiber(freshPoints(tenantId, days).filter((p) => p.customerSegment === "new_opportunity")).flatMap((cluster, clusterRank) =>
+  return clusterFreshFiber(freshPoints(tenantId, days).filter((p) => p.customerSegment === "new_opportunity" && p.confidence === "cross_verified")).flatMap((cluster, clusterRank) =>
     cluster.addresses.map((point) => ({
       rank: clusterRank + 1, cluster_id: cluster.id, cluster_score: cluster.score,
       cluster_density: cluster.density, confidence: point.confidence, first_seen_live_at: point.firstSeenLiveAt,
@@ -208,17 +260,45 @@ export function knockList(tenantId: number, days = 30) {
   );
 }
 
-export function toCsv(rows: Record<string, unknown>[]): string {
-  if (!rows.length) return "";
-  const headers = Object.keys(rows[0]);
-  const cell = (value: unknown) => {
-    const text = value == null ? "" : String(value);
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+export function operationalMetrics(tenantId: number, hours = 24) {
+  const bounded = Math.max(1, Math.min(24 * 30, Math.floor(hours)));
+  const since = `-${bounded} hours`;
+  const snapshots = rawDb.prepare(`SELECT COUNT(*) checks,
+      SUM(conclusive=1) conclusive,SUM(conclusive=0) failures,
+      SUM(blocked=1) blocked,AVG(latency_ms) avg_latency_ms,
+      MIN(checked_at) first_check,MAX(checked_at) last_check
+    FROM availability_snapshots WHERE tenant_id=? AND checked_at>=datetime('now',?)`).get(tenantId, since) as any;
+  const alerts = rawDb.prepare(`SELECT created_at,sent_at,payload,status,attempts,last_error FROM notification_outbox
+    WHERE tenant_id=? AND kind='fresh_fiber' AND created_at>=datetime('now',?)`).all(tenantId, since) as any[];
+  const latencies = alerts.flatMap((row) => {
+    if (!row.sent_at) return [];
+    try {
+      const detected = JSON.parse(row.payload || "{}").cluster?.latestDetectedAt;
+      const ms = detected ? Date.parse(toIso(row.sent_at)) - Date.parse(detected) : NaN;
+      return Number.isFinite(ms) && ms >= 0 ? [ms] : [];
+    } catch { return []; }
+  }).sort((a, b) => a - b);
+  const checks = Number(snapshots.checks ?? 0), failures = Number(snapshots.failures ?? 0), blocked = Number(snapshots.blocked ?? 0);
+  return {
+    windowHours: bounded, checks, conclusive: Number(snapshots.conclusive ?? 0), failures, blocked,
+    conclusiveRate: checks ? Math.round(((checks - failures) / checks) * 10_000) / 100 : 0,
+    blockRate: checks ? Math.round((blocked / checks) * 10_000) / 100 : 0,
+    checksPerHour: Math.round((checks / bounded) * 100) / 100,
+    averageLatencyMs: snapshots.avg_latency_ms == null ? null : Math.round(Number(snapshots.avg_latency_ms)),
+    alerts: {
+      total: alerts.length, pending: alerts.filter((a) => a.status === "pending").length,
+      failed: alerts.filter((a) => a.status === "failed").length,
+      detectionToAlertP50Ms: percentile(latencies, 0.5), detectionToAlertP95Ms: percentile(latencies, 0.95),
+    },
   };
-  return [headers.join(","), ...rows.map((row) => headers.map((h) => cell(row[h])).join(","))].join("\n") + "\n";
 }
 
 function toIso(value: string): string {
   const normalized = value.includes("T") ? value : value.replace(" ", "T") + "Z";
   return new Date(normalized).toISOString();
+}
+
+function percentile(values: number[], p: number): number | null {
+  if (!values.length) return null;
+  return Math.round(values[Math.min(values.length - 1, Math.max(0, Math.ceil(values.length * p) - 1))]);
 }

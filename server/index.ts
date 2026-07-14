@@ -2,7 +2,6 @@ import "dotenv/config";
 import express, { Response, NextFunction } from 'express';
 import type { Request } from 'express';
 import crypto from "crypto";
-import { registerRoutes, registerSaasRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import { runMigrations } from "./storage";
@@ -179,7 +178,7 @@ app.use((req, res, next) => {
 // Prevents passwordHash, tokens, stack traces, and vendor URLs leaking via network tab.
 const BLOCKED_FIELDS = new Set([
   "passwordHash", "password_hash", "password", "tempPassword",
-  "stack", "trace", "errno", "syscall", "code",
+  "stack", "trace", "errno", "syscall",
   "KFS_AUTH_BASIC", "SCANNER_SUBMIT_SECRET", "SMTP_PASS",
   "RESEND_API_KEY",
   "kfsAuthBasic", "scannerSecret", "mapboxToken", "enrichmentApiKey",
@@ -227,7 +226,13 @@ const SANITIZE_EXEMPT_PATHS = new Set([
   "/api/onboarding/pipeline",
 ]);
 app.use((req, res, next) => {
-  if (SANITIZE_EXEMPT_PATHS.has(req.path) || /^\/api\/onboarding\/invitations\/\d+\/resend$/.test(req.path)) return next();
+  if (SANITIZE_EXEMPT_PATHS.has(req.path)
+      || /^\/api\/onboarding\/invitations\/\d+\/resend$/.test(req.path)
+      // This response intentionally contains the short-lived, tenant/user/
+      // lead-bound one-use authorization. The generic JWT-looking-string
+      // scrubber would otherwise replace it with "[redacted]" and make the
+      // compliant manual-call flow unusable.
+      || /^\/api\/v1\/calling\/leads\/\d+\/authorize-call$/.test(req.path)) return next();
   const origJson = res.json.bind(res);
   res.json = function(body: any) { return origJson(sanitizeVal(body)); };
   next();
@@ -296,6 +301,16 @@ app.use(
   ["/api/billing/webhook/stripe", "/api/payouts/webhook/stripe"],
   express.json({ limit: "1mb", verify: (req, _res, buf) => { req.rawBody = buf; } }),
 );
+// Admin address-dataset uploads are explicitly capped at 10 MB and parsed
+// before the normal 64 KB API limit. Authorization still runs in the route;
+// this exception exists only for the documented CSV/GeoJSON ingestion surface.
+app.use(
+  "/api/discovery/uploads",
+  express.json({
+    limit: Math.max(64 * 1024, Math.min(10 * 1024 * 1024, Number(process.env.DISCOVERY_UPLOAD_MAX_BYTES) || 10 * 1024 * 1024)),
+    verify: (req, _res, buf) => { req.rawBody = buf; },
+  }),
+);
 app.use(
   express.json({
     limit: "64kb",   // API JSON payloads: 64 KB max
@@ -340,6 +355,56 @@ app.use((req, res, next) => {
 
 (async () => {
   runMigrations();
+  // The Calling/DNC schema is a strict transactional migration. If it cannot
+  // be created and verified, startup stops: serving a half-migrated compliance
+  // system would be less safe than remaining offline.
+  const { runCallingMigrations } = await import("./calling/migrations");
+  runCallingMigrations();
+  // Provider contracts can require prompt deletion of cached payloads even
+  // when no representative opens Calling. Run a bounded global cleanup at
+  // startup and hourly; durable usage/cost/audit metadata is preserved.
+  const { purgeExpiredProviderPayloads } = await import("./calling/providers");
+  const purgeCallingProviderPayloads = () => {
+    try {
+      let result = { purged: 0, hasMore: true };
+      let purged = 0;
+      for (let batch = 0; batch < 10 && result.hasMore; batch += 1) {
+        result = purgeExpiredProviderPayloads({ batchSize: 500 });
+        purged += result.purged;
+      }
+      if (purged > 0 || result.hasMore) structuredLog("calling.provider_payload_retention", { purged, hasMore: result.hasMore });
+    } catch (error) {
+      structuredLog("calling.provider_payload_retention_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  purgeCallingProviderPayloads();
+  const providerRetentionTimer = setInterval(purgeCallingProviderPayloads, 60 * 60 * 1_000);
+  providerRetentionTimer.unref();
+  const { verifyCallingAuditIntegrity } = await import("./calling/store");
+  const verifyCallingAuditChain = () => {
+    try {
+      const result = verifyCallingAuditIntegrity();
+      structuredLog(result.invalidTenants.length ? "calling.audit_integrity_failed" : "calling.audit_integrity_ok", {
+        tenantsChecked: result.tenantsChecked,
+        eventsChecked: result.eventsChecked,
+        invalidTenants: JSON.stringify(result.invalidTenants),
+      });
+    } catch (error) {
+      structuredLog("calling.audit_integrity_failed", {
+        message: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  };
+  verifyCallingAuditChain();
+  const callingAuditTimer = setInterval(verifyCallingAuditChain, 6 * 60 * 60 * 1_000);
+  callingAuditTimer.unref();
+
+  // Route modules import stores that prepare statements for migrated tables.
+  // Load them only after migrations so a brand-new deployment can boot from an
+  // empty data directory instead of failing during module evaluation.
+  const { registerRoutes, registerSaasRoutes } = await import("./routes");
 
   // One-time, idempotent: adopt every currently-sold door into the weekly
   // commission ledger so the engine reflects real production from day one.
@@ -360,6 +425,10 @@ app.use((req, res, next) => {
     const { resumeSweepJobs } = await import("./sweepService");
     resumeSweepJobs();
   } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
+  try {
+    const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");
+    resumeDiscoveryJobs();
+  } catch (e: any) { console.warn("[address-discovery] resume skipped:", e?.message); }
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────
   setInterval(() => {

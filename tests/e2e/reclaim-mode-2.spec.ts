@@ -33,18 +33,23 @@ let sessionId: string;
 let repId: number;
 let territoryId: number;
 let seededLeadIds: number[] = [];
+let runSuffix: string;
 
 // An authenticated request context (session in the x-session-id header).
 function authed(request: APIRequestContext) {
   return {
     get: (url: string) => request.get(url, { headers: { "x-session-id": sessionId } }),
     post: (url: string, data: unknown) =>
-      request.post(url, { headers: { "x-session-id": sessionId }, data }),
+      request.post(url, {
+        headers: { "x-session-id": sessionId, "x-csrf-token": sessionId },
+        data,
+      }),
   };
 }
 
 test.beforeAll(async ({ request }) => {
   ({ sessionId } = await mintSession(request));
+  runSuffix = `${Date.now()}-${process.pid}`;
   const api = authed(request);
 
   // A rep (team member) to own the area.
@@ -58,7 +63,7 @@ test.beforeAll(async ({ request }) => {
   // Seed three leads inside the polygon, starting unassigned.
   for (let i = 0; i < 3; i++) {
     const res = await api.post("/api/leads", {
-      address: `${100 + i} E2E Reclaim St`,
+      address: `${100 + i} E2E Reclaim ${runSuffix} St`,
       city: "Rockwell",
       state: "NC",
       zip: "28138",
@@ -66,18 +71,21 @@ test.beforeAll(async ({ request }) => {
       lng: CENTER.lng + (i - 1) * 0.001,
       fiberStatus: "unknown",
     });
-    expect(res.ok()).toBeTruthy();
-    seededLeadIds.push((await res.json()).id);
+    const responseBody = await res.text();
+    expect(res.ok(), responseBody).toBeTruthy();
+    seededLeadIds.push(JSON.parse(responseBody).id);
   }
 
   // Draw→assign: creates the territory and assigns the enclosed leads to the rep.
   const assign = await api.post("/api/territories/assign-area", {
     polygon: POLYGON,
     repId,
-    name: "E2E Reclaim Area",
+    name: `E2E Reclaim Area ${runSuffix}`,
   });
-  expect(assign.ok()).toBeTruthy();
-  territoryId = (await assign.json()).territory?.id ?? (await assign.json()).id;
+  const assignBody = await assign.text();
+  expect(assign.ok(), assignBody).toBeTruthy();
+  const assignedTerritory = JSON.parse(assignBody);
+  territoryId = assignedTerritory.territory?.id ?? assignedTerritory.id;
 
   // Sanity: leads are now assigned to the rep before we reclaim.
   const before = await (await api.get(`/api/leads/${seededLeadIds[0]}`)).json();
@@ -89,13 +97,13 @@ test("reclaim mode 2 returns every enclosed lead to the overall pool", async ({
   request,
 }) => {
   await loginAs(page, sessionId);
-  await page.goto("/map");
+  await page.goto("/#/map");
 
-  // Open the territory, launch the reclaim modal, pick mode 2, confirm.
+  // Open the assigned-area list, select the territory, and choose return-to-pool.
+  await page.getByRole("button", { name: "Open legend, status filter and assigned areas" }).click();
   await page.getByTestId(`territory-row-${territoryId}`).click();
   await page.getByTestId("reclaim-btn").click();
   await page.getByTestId("reclaim-mode-return_to_pool").click();
-  await page.getByTestId("reclaim-confirm").click();
 
   // UI reflects the new status.
   await expect(page.getByTestId("territory-status")).toHaveText(/unassigned/i);
@@ -108,6 +116,8 @@ test("reclaim mode 2 returns every enclosed lead to the overall pool", async ({
   }
 
   // And the territory itself is unassigned, not deleted (history preserved).
-  const territory = await (await api.get(`/api/territories/${territoryId}`)).json();
+  const territoryRows = await (await api.get("/api/territories")).json();
+  const territory = territoryRows.find((row: { id: number }) => row.id === territoryId);
+  expect(territory).toBeTruthy();
   expect(territory.status).toBe("unassigned");
 });

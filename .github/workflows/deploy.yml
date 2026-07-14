@@ -1,71 +1,130 @@
-# Auto-deploy the portal to the Hetzner server on every push to this branch.
-# Requires three repo secrets (Settings → Secrets and variables → Actions):
-#   DEPLOY_HOST   → 178.156.204.225
-#   DEPLOY_USER   → deploy
-#   DEPLOY_SSH_KEY → the PRIVATE half of the github-actions-deploy key
-name: Deploy portal
+name: Deploy production
 
-# Least privilege: this job only SSHes out with its own secrets and never touches
-# the GitHub API, so the auto-provisioned GITHUB_TOKEN needs no scopes at all.
-permissions: {}
-
+# Production is deliberately manual. Configure the `production` environment
+# with required reviewers before adding its SSH secrets.
 on:
-  push:
-    branches: [rep-knocking-workflow]
-  workflow_dispatch:        # lets you trigger a deploy by hand from the Actions tab
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full 40-character commit SHA from the protected default branch
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 concurrency:
-  group: deploy-portal      # never run two deploys at once
+  group: deploy-production
   cancel-in-progress: false
 
 jobs:
-  deploy:
+  validate-release:
+    name: Validate release SHA
     runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+      default_branch: ${{ steps.release.outputs.default_branch }}
     steps:
-      - name: SSH in and deploy
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: release
+        name: Require an exact commit on the default branch
         env:
-          KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          HOST: ${{ secrets.DEPLOY_HOST }}
-          USER: ${{ secrets.DEPLOY_USER }}
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        shell: bash
         run: |
           set -euo pipefail
-          install -d -m700 ~/.ssh
-          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/id_ed25519 "$USER@$HOST" bash -se <<'REMOTE'
-            set -euo pipefail
-            cd /srv/homefront
-            git pull --ff-only
-            # Private recruiting links require a stable HMAC key. Bootstrap it
-            # once on the host without printing it or storing it in GitHub.
-            if ! grep -q '^ONBOARDING_INVITE_SECRET=' .env; then
-              umask 077
-              printf 'ONBOARDING_INVITE_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
-            fi
-            export APP_IMAGE_TAG=$(git rev-parse --short HEAD)
-            # BuildKit layers accumulate quickly on this small host. When the root
-            # disk crosses 85%, remove ONLY unused build cache/images before the
-            # build. Never prune volumes: app-data contains the production DB.
-            disk_used=$(df -P / | awk 'NR==2 { gsub("%", "", $5); print $5 }')
-            if [ "$disk_used" -ge 85 ]; then
-              echo "disk ${disk_used}% full — pruning unused Docker build data"
-              docker builder prune -af
-              docker image prune -af
-            fi
-            if ! docker compose -f docker-compose.production.yml up -d --build; then
-              docker compose -f docker-compose.production.yml logs --tail 120 app
+          if [[ ! "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit_sha must be a full, lowercase 40-character Git commit SHA" >&2
+            exit 1
+          fi
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git fetch --no-tags origin "$REQUESTED_SHA"
+          test "$(git cat-file -t "${REQUESTED_SHA}^{commit}")" = commit
+          test "$(git rev-parse "${REQUESTED_SHA}^{commit}")" = "$REQUESTED_SHA"
+          if ! git merge-base --is-ancestor "$REQUESTED_SHA" "origin/$DEFAULT_BRANCH"; then
+            echo "Refusing to deploy a commit that is not on origin/$DEFAULT_BRANCH" >&2
+            exit 1
+          fi
+          printf 'commit_sha=%s\n' "$REQUESTED_SHA" >> "$GITHUB_OUTPUT"
+          printf 'default_branch=%s\n' "$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+
+  deploy-production:
+    name: Approval-gated production deploy
+    needs: validate-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Deploy exact release over pinned SSH host key
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          RELEASE_SHA: ${{ needs.validate-release.outputs.commit_sha }}
+          DEFAULT_BRANCH: ${{ needs.validate-release.outputs.default_branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS RELEASE_SHA DEFAULT_BRANCH; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required production deployment value $required is not configured" >&2
               exit 1
             fi
-            # wait for health, else fail the job so you get a red X + email
-            for i in $(seq 1 30); do
-              if docker inspect --format '{{.State.Health.Status}}' homefront-app-1 | grep -q healthy; then
-                echo "deployed $APP_IMAGE_TAG — healthy"
-                docker builder prune -af --filter 'until=24h' >/dev/null 2>&1 || true
-                docker image prune -af --filter 'until=24h' >/dev/null 2>&1 || true
-                exit 0
-              fi
-              sleep 3
-            done
-            echo "app did not become healthy"; docker compose -f docker-compose.production.yml logs --tail 40 app; exit 1
+          done
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DEFAULT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]
+          [[ "$DEFAULT_BRANCH" != -* ]]
+          git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null
+
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "DEPLOY_KNOWN_HOSTS does not contain a pinned key for DEPLOY_HOST" >&2
+            exit 1
+          }
+
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            bash -s -- "$RELEASE_SHA" "$DEFAULT_BRANCH" <<'REMOTE'
+          set -euo pipefail
+          RELEASE_SHA="$1"
+          DEFAULT_BRANCH="$2"
+          [[ "$RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$DEFAULT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ ]]
+          [[ "$DEFAULT_BRANCH" != -* ]]
+          git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null
+
+          cd /srv/homefront
+          git diff --quiet
+          git diff --cached --quiet
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git fetch --no-tags origin "$RELEASE_SHA"
+          test "$(git cat-file -t "${RELEASE_SHA}^{commit}")" = commit
+          test "$(git rev-parse "${RELEASE_SHA}^{commit}")" = "$RELEASE_SHA"
+          git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"
+          git checkout --detach "$RELEASE_SHA"
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "Refusing to build from a dirty production checkout" >&2
+            git status --short >&2
+            exit 1
+          fi
+
+          scripts/deploy.sh "$RELEASE_SHA"
           REMOTE

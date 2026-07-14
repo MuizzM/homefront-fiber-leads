@@ -12,6 +12,13 @@ describe("global API rate-limit policy", () => {
     expect(shouldSkipGlobalRateLimit("/api/monitor/summary", "production")).toBe(false);
   });
 
+  it("does not turn authenticated scan admission and progress polling into a hidden cooldown", () => {
+    expect(shouldSkipGlobalRateLimit("/api/scan/area", "production")).toBe(true);
+    expect(shouldSkipGlobalRateLimit("/api/scan/run-123", "production")).toBe(true);
+    expect(shouldSkipGlobalRateLimit("/api/scanner/state", "production")).toBe(true);
+    expect(shouldSkipGlobalRateLimit("/api/check-fiber", "production")).toBe(true);
+  });
+
   it("uses a mobile/shared-network-safe default while honoring an override", () => {
     expect(globalApiRateLimitMax(undefined)).toBe(1_200);
     expect(globalApiRateLimitMax("2500")).toBe(2_500);

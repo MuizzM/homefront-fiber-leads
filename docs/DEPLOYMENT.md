@@ -43,6 +43,7 @@ Internet ──443──▶ Caddy (TLS, HTTP→HTTPS, gzip/zstd, security header
 ```bash
 ssh root@SERVER_IP
 apt update && apt -y upgrade
+apt install -y age sqlite3
 
 # Non-root deploy user with your key
 adduser --disabled-password --gecos "" deploy && usermod -aG sudo deploy
@@ -82,7 +83,21 @@ cp .env.example .env && nano .env      # .env.example documents every variable
 #   MAPBOX_*, SUPER_ADMIN_EMAILS, SCANNER_SUBMIT_SECRET (openssl rand -hex 32)
 
 # DNS must already resolve (see docs/DNS.md) so Caddy can get a certificate.
-scripts/deploy.sh                      # builds SHA image, backs up, up, health-gates
+# The normal release script intentionally refuses to run until an existing app
+# can be backed up. Bootstrap the empty volume once, verify health, then record
+# the exact first release SHA:
+export APP_IMAGE_TAG="$(git rev-parse HEAD)"
+docker compose -f docker-compose.production.yml up -d --build
+docker compose -f docker-compose.production.yml exec -T app \
+  node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+printf '%s\n' "$APP_IMAGE_TAG" > .deployed-tag
+
+# Configure the public age recipient used for mandatory encrypted pre-release
+# snapshots. Keep the private identity offline/from this host.
+read -r -p 'Verified age public recipient: ' AGE_PUBLIC_RECIPIENT
+printf '%s\n' "$AGE_PUBLIC_RECIPIENT" > .backup-age-recipient
+unset AGE_PUBLIC_RECIPIENT
+chmod 600 .backup-age-recipient
 ```
 
 Verify: `curl -fsS https://portal.homefrontsolutionsllc.com/api/health` →
@@ -91,10 +106,13 @@ address on the login page.
 
 ## 5. Releases, rollback
 
-- **Deploy:** `scripts/deploy.sh [sha]` — immutable SHA tag, pre-deploy backup,
-  health-gated cutover, auto-rollback on health failure. CI/CD does this via
-  [.github/workflows/deploy.yml](../.github/workflows/deploy.yml)
-  (staging → approval → prod).
+- **Deploy:** dispatch [.github/workflows/deploy.yml](../.github/workflows/deploy.yml)
+  manually with a full 40-character commit SHA from the protected default
+  branch. The `production` environment approval gate must pass before the job
+  fetches and checks out that exact SHA on the host and calls
+  `scripts/deploy.sh`. The script requires an encrypted pre-deploy backup and a
+  clean checkout, health-gates the cutover, and health-checks an automatic code
+  rollback if the new release fails.
 - **Roll back code:** `scripts/rollback.sh` (redeploys the previous SHA).
 - **Roll back data:** `scripts/restore.sh <backup> --apply` (see the runbook).
 - Migrations run on boot and are **additive/idempotent only**; destructive schema
@@ -107,7 +125,9 @@ Two options — pick one (Litestream is stronger):
   Set `LITESTREAM_BUCKET` + S3/B2 creds in `.env`; every write streams offsite,
   and a fresh volume auto-restores on boot. **RPO ≈ seconds, RTO ≈ minutes.**
 - **Nightly snapshots:** `scripts/backup.sh` (WAL-safe `.backup` → integrity
-  check → age-encrypt → gzip → retention prune) from cron; offsite via rclone.
+  check → age encryption, or gzip only when encryption is not configured →
+  retention prune) from cron; offsite via rclone. Production releases refuse
+  the unencrypted fallback.
   **RPO ≤ 24h.** Restore/verify with `scripts/restore.sh`.
 
 Back up **all five**, not just the DB: `app-data` volume (DB + uploads), `.env`
@@ -132,10 +152,14 @@ before infra changes** (snapshot ≠ app backup).
 1. Provision the Hetzner server + Cloud Firewall (§2–3).
 2. Create the DNS A record (docs/DNS.md) **before** first deploy.
 3. Fill `.env` with real, rotated secrets on the server.
-4. Add the GitHub Environments (`staging`, `production` + reviewers) and the SSH
-   secrets for `deploy.yml`.
-5. Stand up a `staging` server + `homefront-staging.service`/compose for the
-   pipeline's staging stage.
+4. Add a protected GitHub `production` Environment with required reviewers and
+   environment-scoped `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, and
+   `DEPLOY_KNOWN_HOSTS` secrets. Populate `DEPLOY_KNOWN_HOSTS` only from the SSH
+   host-key fingerprint verified out-of-band (for example, the Hetzner console),
+   never from `ssh-keyscan` during a deployment.
+5. Protect the default branch: require PR review and green CI before merge. The
+   production workflow also rejects any requested SHA not reachable from that
+   branch.
 6. Wire Sentry + an uptime monitor (§7).
 7. Enable HSTS only after HTTPS is verified (Caddyfile note + helmet).
 8. **Marketing site "Portal" tab** (separate codebase — `homefrontsolutionsllc.com`,

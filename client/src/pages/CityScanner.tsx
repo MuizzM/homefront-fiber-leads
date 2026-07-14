@@ -6,7 +6,7 @@ import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 const _API_BASE: string = ("__PORT_5000__" as string).startsWith("__") ? "" : ("__PORT_5000__" as string);
 import { useToast } from "@/hooks/use-toast";
 import {
-  Radar, Play, Square, Wifi, CheckCircle,
+  Radar, Play, Square, CheckCircle, CircleX,
   Zap, Download, RefreshCw,
   MapPin, Search, Globe, Flame,
   Activity, AlertCircle
@@ -15,22 +15,22 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Input } from "@/components/ui/input";
+import type { FreshFiberVerdict } from "@shared/freshFiberVerdict";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ScanRow {
   address: string; city: string; state: string; zip: string;
   fiberStatus: string;
-  isNewFiber: boolean; isTenured: boolean; fiberAvailable: boolean;
-  householdSegmentType: string | null;
-  billingStatus: string | null;
-  techType: string | null; chipSetType: string | null; placement: string | null;
-  maxDownloadMbps: number | null;
-  competitorName: string | null; competitorSpeedMbps: number | null; competitorTech: string | null;
-  addressCatalogDate: string | null;
-  confidence: string; apiSource: string; notes: string;
+  isNewFiber: boolean; fiberAvailable: boolean;
+  billingStatus?: string | null;
+  apiSource?: string | null;
+  blocked?: boolean | null;
   lat: number | null; lng: number | null;
-  leadTag: string | null;
-  leadScore: number;
+  freshFiberVerdict?: FreshFiberVerdict;
+  isFreshFiber?: boolean | null;
+  verdictLabel?: string;
+  verdictMessage?: string;
+  confirmation?: "cross_verified" | "single_source_provisional" | "baseline_available" | "not_fresh" | "inconclusive";
 }
 
 interface ScanJobStatus {
@@ -41,6 +41,7 @@ interface ScanJobStatus {
   summary: {
     new_fiber: number; tenured_fiber: number; existing_fiber: number;
     copper: number; no_service: number; unknown: number;
+    fresh: number; not_fresh: number; unverified: number;
     scanned: number; remaining: number;
   };
 }
@@ -53,22 +54,28 @@ interface OverpassResult {
   addresses: { address: string; city: string; state: string; zip: string; lat: number; lng: number }[];
 }
 
-const STATUS_CONFIG: Record<string, { label: string; dot: string; pill: string }> = {
-  new_fiber:      { label: "New fiber",  dot: "bg-emerald-400", pill: "bg-emerald-500/15 text-emerald-400" },
-  tenured_fiber:  { label: "Tenured",    dot: "bg-violet-400",  pill: "bg-violet-500/15 text-violet-400" },
-  existing_fiber: { label: "Fiber",      dot: "bg-sky-400",     pill: "bg-sky-500/15 text-sky-400" },
-  copper:         { label: "Copper/DSL", dot: "bg-amber-400",   pill: "bg-amber-500/15 text-amber-400" },
-  no_service:     { label: "No service", dot: "bg-rose-400",    pill: "bg-rose-500/15 text-rose-400" },
-  unknown:        { label: "Unknown",    dot: "bg-muted-foreground", pill: "bg-muted text-muted-foreground" },
+const VERDICT_CONFIG: Record<FreshFiberVerdict, { answer: string; label: string; dot: string; pill: string }> = {
+  fresh: { answer: "YES", label: "Fresh fiber", dot: "bg-emerald-400", pill: "bg-emerald-500/15 text-emerald-400 ring-emerald-500/25" },
+  not_fresh: { answer: "NO", label: "Not fresh fiber", dot: "bg-slate-400", pill: "bg-slate-500/15 text-slate-300 ring-slate-500/25" },
+  unverified: { answer: "RECHECK", label: "Couldn't verify", dot: "bg-amber-400", pill: "bg-amber-500/15 text-amber-400 ring-amber-500/25" },
 };
 
-const TAG_CONFIG: Record<string, { label: string; icon: string; color: string }> = {
-  hot_lead:       { label: "HOT LEAD",       icon: "🔥", color: "bg-amber-500/15 text-amber-400" },
-  coming_soon:    { label: "COMING SOON",     icon: "⏳", color: "bg-amber-500/15 text-amber-400" },
-  upgrade_target: { label: "UPGRADE TARGET",  icon: "⬆️", color: "bg-sky-500/15 text-sky-400" },
-};
+type FilterKey = "all" | FreshFiberVerdict;
 
-type FilterKey = "all" | "new_fiber" | "tenured_fiber" | "copper" | "no_service";
+function verdictOf(row: ScanRow): FreshFiberVerdict {
+  // Eligibility is server-authored. Older/malformed rows fail closed instead of
+  // being reclassified from raw provider fields in the browser.
+  return row.freshFiberVerdict ?? "unverified";
+}
+
+function emptySummary(total: number): ScanJobStatus["summary"] {
+  return {
+    fresh: 0, not_fresh: 0, unverified: 0,
+    new_fiber: 0, tenured_fiber: 0, existing_fiber: 0,
+    copper: 0, no_service: 0, unknown: 0,
+    scanned: 0, remaining: total,
+  };
+}
 
 // US State abbreviations
 const US_STATES = [
@@ -85,12 +92,11 @@ export default function CityScanner() {
   const [done, setDone] = useState(false);
   const [jobStatus, setJobStatus] = useState<ScanJobStatus | null>(null);
   const [filter, setFilter] = useState<FilterKey>("all");
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
   const [pullingAddresses, setPullingAddresses] = useState(false);
   const [overpassResult, setOverpassResult] = useState<OverpassResult | null>(null);
 
-  // Zero-Mapbox CNS discovery (get fresh leads for any indexed city, no geocoding)
+  // Zero-Mapbox CNS discovery (collect primary evidence for an indexed city)
   const [coverage, setCoverage] = useState<any>(null);
   const [discovery, setDiscovery] = useState<any>(null);
   const [discoveryBusy, setDiscoveryBusy] = useState(false);
@@ -108,6 +114,7 @@ export default function CityScanner() {
     checksPerSec: number;
     concurrency: number;
     maxInFlight: number;
+    queueDepth: number;
     lastHeartbeat: number;
     totalChecked: number;
     diagHttpError: number;
@@ -158,7 +165,10 @@ export default function CityScanner() {
               setScanning(false); setDone(true);
               qc.invalidateQueries({ queryKey: ["/api/leads"] });
               qc.invalidateQueries({ queryKey: ["/api/stats"] });
-              toast({ title: "Scan complete", description: `${status.summary.new_fiber} new fiber · ${status.summary.tenured_fiber} tenured` });
+              toast({
+                title: `${status.summary.fresh} fresh-fiber lead${status.summary.fresh === 1 ? "" : "s"} found`,
+                description: status.summary.unverified > 0 ? `${status.summary.unverified} address${status.summary.unverified === 1 ? " needs" : "es need"} a recheck` : "Every address received a conclusive answer",
+              });
             }
           } catch {}
         }, 1500);
@@ -197,8 +207,8 @@ export default function CityScanner() {
                   const finalStatus: ScanJobStatus = await (await apiRequest("GET", `/api/scan/${id}`)).json();
                   setJobStatus(finalStatus);
                   toast({
-                    title: "Scan complete",
-                    description: `${finalStatus.summary.new_fiber} new fiber · ${finalStatus.summary.tenured_fiber} tenured`
+                    title: `${finalStatus.summary.fresh} fresh-fiber lead${finalStatus.summary.fresh === 1 ? "" : "s"} found`,
+                    description: finalStatus.summary.unverified > 0 ? `${finalStatus.summary.unverified} address${finalStatus.summary.unverified === 1 ? " needs" : "es need"} a recheck` : "Every address received a conclusive answer",
                   });
                 } catch {}
               }
@@ -296,7 +306,7 @@ export default function CityScanner() {
       setJobStatus({
         id: newJobId, city: cityLabel, zip: "",
         status: "running", total, done: 0, results: [],
-        summary: { new_fiber: 0, tenured_fiber: 0, existing_fiber: 0, copper: 0, no_service: 0, unknown: 0, scanned: 0, remaining: total }
+        summary: emptySummary(total),
       });
       toast({ title: "Scan started", description: `Checking ${total.toLocaleString()} addresses via live stream` });
       connectSseStream(newJobId);
@@ -329,7 +339,7 @@ export default function CityScanner() {
       setJobStatus({
         id: data.jobId, city: "Address pool re-scan", zip: "",
         status: "running", total: data.total, done: 0, results: [],
-        summary: { new_fiber: 0, tenured_fiber: 0, existing_fiber: 0, copper: 0, no_service: 0, unknown: 0, scanned: 0, remaining: data.total },
+        summary: emptySummary(data.total),
       });
       toast({ title: "Pool re-scan started", description: `Re-checking ${Number(data.total).toLocaleString()} stored addresses — free, no geocoding` });
       connectSseStream(data.jobId);
@@ -347,28 +357,35 @@ export default function CityScanner() {
   const currentAddr = results[checkedCount - 1]?.address ?? "";
 
   const exportCSV = useCallback(() => {
-    const header = "Address,City,ZIP,Status,Tag,Score,Segment,billingStatus,Tech,ChipSet,Speed Mbps,Competitor,CompSpeed,Catalog Date,Notes";
-    const rows = filteredResults.map(r =>
-      `"${r.address}","${r.city}","${r.zip}","${r.fiberStatus}","${r.leadTag ?? ""}","${r.leadScore ?? ""}","${r.householdSegmentType ?? ""}","${r.billingStatus ?? ""}","${r.techType ?? ""}","${r.chipSetType ?? ""}","${r.maxDownloadMbps ?? ""}","${r.competitorName ?? ""}","${r.competitorSpeedMbps ?? ""}","${r.addressCatalogDate ?? ""}","${r.notes}"`
-    );
+    const cell = (value: unknown) => {
+      let text = String(value ?? "");
+      // Neutralize spreadsheet formulas in exported provider/address text.
+      if (/^[=+\-@]/.test(text)) text = `'${text}`;
+      return `"${text.replace(/"/g, '""')}"`;
+    };
+    const header = "Address,City,State,ZIP,Fresh Fiber,Verification";
+    const rows = filteredResults.map(r => {
+      const verdict = verdictOf(r);
+      const cfg = VERDICT_CONFIG[verdict];
+      return [r.address, r.city, r.state, r.zip, verdict === "fresh" ? "YES" : verdict === "not_fresh" ? "NO" : "RECHECK", cfg.label].map(cell).join(",");
+    });
     const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(blob);
+    a.href = url;
     a.download = `homefront_fiber_${cityInput.trim().toLowerCase()}_scan.csv`;
     a.click();
+    URL.revokeObjectURL(url);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [results, filter, cityInput]);
 
   const filteredResults = results.filter(r => {
     if (filter === "all") return true;
-    return r.fiberStatus === filter;
+    return verdictOf(r) === filter;
   }).sort((a, b) => {
-    // Sort by lead score descending (hot leads first)
-    return (b.leadScore ?? 0) - (a.leadScore ?? 0);
+    const rank: Record<FreshFiberVerdict, number> = { fresh: 0, unverified: 1, not_fresh: 2 };
+    return rank[verdictOf(a)] - rank[verdictOf(b)] || a.address.localeCompare(b.address);
   });
-
-  // Hot leads count
-  const hotLeads = results.filter(r => r.leadTag === "hot_lead").length;
 
   return (
     <div className="w-full max-w-5xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6">
@@ -380,7 +397,7 @@ export default function CityScanner() {
             <h1 className="text-xl font-semibold tracking-tight text-foreground">City Scanner</h1>
           </div>
           <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-            Type any city in the USA — pulls all addresses via Overpass, then scans each live against Kinetic. Hot Leads saved automatically.
+            Scan every address and get one sales answer: confirmed fresh, not fresh, or recheck. Only independently confirmed leads are saved.
           </p>
         </div>
         {scanning && (
@@ -407,7 +424,7 @@ export default function CityScanner() {
               <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{poolStats.neverScanned.toLocaleString()}</div>
             </div>
             <div className="p-4">
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">New fiber found</div>
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Primary matches</div>
               <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-primary">{poolStats.newFiber.toLocaleString()}</div>
             </div>
           </div>
@@ -479,7 +496,7 @@ export default function CityScanner() {
               </div>
             )}
 
-            {/* ── Zero-Mapbox discovery — find fresh leads from Kinetic's own index ── */}
+            {/* ── Zero-Mapbox discovery — collect primary evidence from Kinetic's index ── */}
             <div className="rounded-xl border border-border bg-secondary/30 p-4 space-y-2.5">
               <div className="flex items-center gap-2 flex-wrap">
                 <Flame className="w-4 h-4 text-amber-400" />
@@ -488,7 +505,7 @@ export default function CityScanner() {
                 <span className="text-[11px] text-muted-foreground ml-auto">probes Kinetic's CNS frontier directly</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Targets the control-number bands where this city already lives (learned for free from past scans) and checks the frontier for brand-new builds. Zero geocoding.
+                Targets known control-number bands for this city and checks the frontier for provider-side changes. Independent evidence is still required. Zero geocoding.
               </p>
               <div className="flex gap-2 flex-wrap">
                 <Button data-testid="button-check-coverage" onClick={checkCoverage} disabled={!cityInput.trim() || discoveryBusy} variant="outline" size="sm" className="gap-2">
@@ -510,7 +527,7 @@ export default function CityScanner() {
                 <div className="rounded-lg bg-background/60 border border-border p-3 text-xs space-y-1.5 tabular-nums">
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Probed <b className="text-foreground">{discovery.probed ?? 0}</b>/{discovery.planned ?? 0}</span>
-                    <span className="text-amber-400 font-semibold">{discovery.newFiber ?? 0} new fiber · {discovery.leadsCreated ?? 0} lead(s)</span>
+                    <span className="text-amber-400 font-semibold">{discovery.newFiber ?? 0} primary match(es) · {discovery.leadsCreated ?? 0} confirmed lead(s)</span>
                   </div>
                   <div className="text-muted-foreground">In {cityInput}: <b className="text-foreground">{discovery.sameCityHits ?? 0}</b> · pool +{discovery.poolAdded ?? 0} · failures {discovery.failures ?? 0}</div>
                   {discovery.reason && <div className="text-[11px] text-muted-foreground/80 pt-1.5 border-t border-border">{discovery.reason}</div>}
@@ -564,7 +581,7 @@ export default function CityScanner() {
                   onClick={rescanPool}
                   variant="outline"
                   className="gap-2"
-                  title={`Re-scan ${poolStats.total.toLocaleString()} stored addresses for new fiber — no geocoding cost`}
+                  title={`Re-scan ${poolStats.total.toLocaleString()} stored addresses for availability changes — no geocoding cost`}
                 >
                   <RefreshCw className="w-4 h-4" /> Re-scan Pool
                 </Button>
@@ -626,7 +643,7 @@ export default function CityScanner() {
               </div>
               <div className="px-4 py-3">
                 <div className="text-lg font-semibold font-mono tabular-nums text-emerald-400">{scannerState.diagNewFiber}</div>
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">new fiber</div>
+                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">primary matches</div>
               </div>
               <div className="px-4 py-3">
                 <div className={`text-lg font-semibold font-mono tabular-nums ${scannerState.diagHttpError > 0 ? "text-rose-400" : "text-muted-foreground"}`}>
@@ -637,7 +654,9 @@ export default function CityScanner() {
             </div>
             <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
               <span className="font-mono tabular-nums">{scannerState.totalChecked.toLocaleString()} total checks this session</span>
-              <span className="font-mono tabular-nums">max {scannerState.maxInFlight} concurrent</span>
+              <span className="font-mono tabular-nums">
+                {scannerState.queueDepth > 0 ? `${scannerState.queueDepth.toLocaleString()} queued · ` : ""}max {scannerState.maxInFlight} provider-safe
+              </span>
             </div>
           </CardContent>
         </Card>
@@ -645,32 +664,23 @@ export default function CityScanner() {
 
       {/* Summary metric strip */}
       {summary && (
-        <div className="rounded-xl border border-border bg-card">
-          <div className={`grid ${hotLeads > 0 ? "grid-cols-2 md:grid-cols-5" : "grid-cols-2 md:grid-cols-4"} divide-x divide-border`}>
-            <div className="p-4">
-              <div className="text-2xl font-semibold tracking-tight tabular-nums text-emerald-400">{summary.new_fiber}</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">New fiber</div>
+        <div className="overflow-hidden rounded-2xl border border-border bg-card">
+          <div className="grid grid-cols-3 divide-x divide-border">
+            <div className="p-4 text-center sm:p-5">
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-emerald-400">{summary.fresh}</div>
+              <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-400/80">Yes · Confirmed fresh</div>
             </div>
-            {hotLeads > 0 && (
-              <div className="p-4">
-                <div className="flex items-center gap-1.5 text-2xl font-semibold tracking-tight tabular-nums text-amber-400">
-                  <Flame className="w-5 h-5" />{hotLeads}
-                </div>
-                <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Hot leads</div>
-              </div>
-            )}
-            <div className="p-4">
-              <div className="text-2xl font-semibold tracking-tight tabular-nums text-violet-400">{summary.tenured_fiber}</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Tenured</div>
+            <div className="p-4 text-center sm:p-5">
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-slate-300">{summary.not_fresh}</div>
+              <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">No · Not fresh</div>
             </div>
-            <div className="p-4">
-              <div className="text-2xl font-semibold tracking-tight tabular-nums text-amber-400">{summary.copper}</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Copper/DSL</div>
+            <div className="p-4 text-center sm:p-5">
+              <div className="text-3xl font-bold tracking-tight tabular-nums text-amber-400">{summary.unverified}</div>
+              <div className="mt-1 text-[11px] font-semibold uppercase tracking-wide text-amber-400/80">Recheck</div>
             </div>
-            <div className="p-4">
-              <div className="text-2xl font-semibold tracking-tight tabular-nums text-foreground">{summary.scanned}</div>
-              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mt-0.5">Scanned</div>
-            </div>
+          </div>
+          <div className="border-t border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
+            {summary.scanned.toLocaleString()} checked · {(summary.remaining ?? 0).toLocaleString()} remaining
           </div>
         </div>
       )}
@@ -678,9 +688,9 @@ export default function CityScanner() {
       {/* Filter bar */}
       {results.length > 0 && (
         <div className="flex gap-2 flex-wrap">
-          {(["all", "new_fiber", "tenured_fiber", "copper", "no_service"] as FilterKey[]).map(f => {
-            const cfg = STATUS_CONFIG[f];
-            const count = f === "all" ? results.length : results.filter(r => r.fiberStatus === f).length;
+          {(["all", "fresh", "not_fresh", "unverified"] as FilterKey[]).map(f => {
+            const cfg = f === "all" ? null : VERDICT_CONFIG[f];
+            const count = f === "all" ? results.length : results.filter(r => verdictOf(r) === f).length;
             return (
               <button
                 data-testid={`filter-${f}`}
@@ -693,7 +703,7 @@ export default function CityScanner() {
                 }`}
               >
                 {cfg && <span className={`w-1.5 h-1.5 rounded-full ${cfg.dot}`} />}
-                {f === "all" ? "All" : cfg?.label} <span className="tabular-nums opacity-70">({count})</span>
+                {f === "all" ? "All answers" : cfg?.label} <span className="tabular-nums opacity-70">({count})</span>
               </button>
             );
           })}
@@ -704,92 +714,26 @@ export default function CityScanner() {
       {filteredResults.length > 0 && (
         <div className="space-y-2">
           {filteredResults.map((r, i) => {
-            const cfg = STATUS_CONFIG[r.fiberStatus] ?? STATUS_CONFIG.unknown;
-            const tag = r.leadTag ? TAG_CONFIG[r.leadTag] : null;
-            const isExpanded = expandedIdx === i;
+            const verdict = verdictOf(r);
+            const cfg = VERDICT_CONFIG[verdict];
             return (
               <div
-                key={i}
+                key={`${r.address}-${i}`}
                 data-testid={`result-row-${i}`}
-                className="rounded-xl border border-border bg-card transition-colors cursor-pointer hover:border-primary/40"
-                onClick={() => setExpandedIdx(isExpanded ? null : i)}
+                data-verdict={verdict}
+                className={`rounded-2xl border bg-card px-4 py-3.5 ${verdict === "fresh" ? "border-emerald-500/30" : verdict === "unverified" ? "border-amber-500/25" : "border-border"}`}
               >
-                <div className="px-4 py-3 flex items-center gap-3">
-                  <div className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${cfg.dot} ${r.isNewFiber ? "shadow-[0_0_8px_currentColor] animate-pulse" : ""}`} />
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-sm text-foreground truncate">{r.address}</span>
-                      <span className="text-xs text-muted-foreground">{r.city}, {r.state} {r.zip}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${cfg.pill}`}>{cfg.label}</span>
-                      {tag && (
-                        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${tag.color}`}>{tag.icon} {tag.label}</span>
-                      )}
-                      {r.leadScore > 0 && (
-                        <span className="text-xs text-muted-foreground">Score: <span className={`font-semibold tabular-nums ${r.leadScore >= 85 ? "text-amber-400" : r.leadScore >= 60 ? "text-emerald-400" : "text-muted-foreground"}`}>{r.leadScore}</span></span>
-                      )}
-                      {r.billingStatus === "N" && (
-                        <span className="text-xs font-semibold text-emerald-400">No subscriber</span>
-                      )}
-                    </div>
+                <div className="flex items-center gap-3">
+                  <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl ring-1 ${cfg.pill}`}>
+                    {verdict === "fresh" ? <CheckCircle className="h-5 w-5" /> : verdict === "not_fresh" ? <CircleX className="h-5 w-5" /> : <AlertCircle className="h-5 w-5" />}
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    {r.maxDownloadMbps && (
-                      <span className="text-xs text-sky-400 font-mono tabular-nums">
-                        {r.maxDownloadMbps >= 1000 ? (r.maxDownloadMbps / 1000).toFixed(0) + "G" : r.maxDownloadMbps + "M"}
-                      </span>
-                    )}
-                    {r.fiberAvailable && <Wifi className="w-3.5 h-3.5 text-emerald-400" />}
-                    {r.isNewFiber && <Zap className="w-3.5 h-3.5 text-emerald-400" />}
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-[13px] font-bold tracking-wide ${verdict === "fresh" ? "text-emerald-400" : verdict === "unverified" ? "text-amber-400" : "text-slate-300"}`}>{cfg.answer} · {r.verdictLabel ?? cfg.label}</div>
+                    <div className="mt-0.5 truncate text-sm font-semibold text-foreground">{r.address}</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">{r.city}, {r.state} {r.zip}</div>
+                    {r.verdictMessage && <div className="mt-1 text-[11px] leading-snug text-muted-foreground">{r.verdictMessage}</div>}
                   </div>
                 </div>
-
-                {isExpanded && (
-                  <div className="px-4 pb-4 pt-0 border-t border-border">
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mt-3 text-xs">
-                      <div>
-                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Segment</div>
-                        <div className="font-mono text-foreground">{r.householdSegmentType ?? "—"}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Subscriber</div>
-                        <div className={`font-semibold ${r.billingStatus === "N" ? "text-emerald-400" : "text-foreground"}`}>
-                          {r.billingStatus === "N" ? "Not subscribed — prime target" : r.billingStatus === "Y" ? "Active subscriber" : "—"}
-                        </div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Technology</div>
-                        <div className="font-mono text-foreground">{r.techType ?? "—"} {r.chipSetType ? `/ ${r.chipSetType}` : ""}</div>
-                      </div>
-                      <div>
-                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Max Speed</div>
-                        <div className="font-mono text-sky-400 tabular-nums">{r.maxDownloadMbps ? `${r.maxDownloadMbps} Mbps` : "—"}</div>
-                      </div>
-                      {r.competitorName && (
-                        <div>
-                          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Competitor</div>
-                          <div className="font-mono text-amber-400">{r.competitorName} {r.competitorSpeedMbps ? `${r.competitorSpeedMbps}M` : ""}</div>
-                        </div>
-                      )}
-                      <div>
-                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Catalog Date</div>
-                        <div className="font-mono text-foreground">{r.addressCatalogDate ?? "—"}</div>
-                      </div>
-                      {r.leadScore > 0 && (
-                        <div>
-                          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">Lead Score</div>
-                          <div className={`font-bold tabular-nums ${r.leadScore >= 85 ? "text-amber-400" : r.leadScore >= 60 ? "text-emerald-400" : "text-foreground"}`}>
-                            {r.leadScore} / 100
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    {r.notes && (
-                      <div className="mt-3 text-xs text-muted-foreground border-t border-border pt-2">{r.notes}</div>
-                    )}
-                  </div>
-                )}
               </div>
             );
           })}

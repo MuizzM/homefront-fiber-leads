@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 let rawDb: import("better-sqlite3").Database;
 let monitor: typeof import("../../server/stateMonitorStore");
+let billing: typeof import("../../server/billingStore");
 const TENANT = 1;
 let freshId: number;
 
@@ -14,10 +15,16 @@ beforeAll(async () => {
   const storage = await import("../../server/storage");
   storage.runMigrations();
   monitor = await import("../../server/stateMonitorStore");
+  billing = await import("../../server/billingStore");
+  billing.ensureBilling(TENANT, { planKey: "starter", state: "active" });
   const insert = rawDb.prepare(`INSERT INTO scan_targets
-    (address,city,state,zip,lat,lng,tenant_id,last_is_new_fiber,last_scanned_at,first_seen_live_at,source,last_customer_segment,last_customer_confidence)
-    VALUES (?,?,?,?,?,?,?,1,datetime('now'),datetime('now'),'test','new_opportunity','medium')`);
+    (address,city,state,zip,lat,lng,tenant_id,last_is_new_fiber,last_scanned_at,first_seen_live_at,first_seen_fiber_at,last_fiber_available,source,last_customer_segment,last_customer_confidence)
+    VALUES (?,?,?,?,?,?,?,1,datetime('now'),datetime('now'),datetime('now'),1,'test','new_opportunity','medium')`);
   freshId = Number(insert.run("100 Fresh St", "Lexington", "NC", "27292", 35.8240, -80.2534, TENANT).lastInsertRowid);
+  rawDb.prepare(`INSERT INTO availability_snapshots
+    (tenant_id,scan_target_id,run_id,conclusive,fiber_available,customer_segment,customer_confidence,transition_status,fresh,api_source,evidence_hash)
+    VALUES (?,?,?,1,1,'new_opportunity','medium','freshly_available',1,'kinetic_live','fresh-test')`)
+    .run(TENANT, freshId, "state-monitor-test");
   // A baseline-live record is not fresh without a proven flip timestamp.
   rawDb.prepare(`INSERT INTO scan_targets
     (address,city,state,zip,lat,lng,tenant_id,last_is_new_fiber,last_scanned_at,source)
@@ -25,6 +32,19 @@ beforeAll(async () => {
 });
 
 describe("state monitoring evidence store", () => {
+  it("seeds every official market with the intended critical, weekly, and change-watch cadence tiers", () => {
+    expect(monitor.seedStateMarkets("/definitely/missing-market-catalog.csv")).toMatchObject({
+      verifiedMarkets: 132, expandingMarkets: 13, syntheticMarkets: 132,
+    });
+    const tiers = rawDb.prepare(`SELECT priority_class AS priorityClass,cadence_hours AS cadenceHours,COUNT(*) AS count
+      FROM state_fiber_markets GROUP BY priority_class,cadence_hours ORDER BY cadence_hours`).all();
+    expect(tiers).toEqual([
+      { priorityClass: "critical", cadenceHours: 24, count: 13 },
+      { priorityClass: "medium", cadenceHours: 168, count: 50 },
+      { priorityClass: "low", cadenceHours: 336, count: 69 },
+    ]);
+  });
+
   it("reports only proven flips and labels Kinetic-only evidence provisional", () => {
     const points = monitor.freshPoints(TENANT, 30);
     expect(points).toHaveLength(1);
@@ -40,6 +60,13 @@ describe("state monitoring evidence store", () => {
     expect(monitor.recordCorroboration(TENANT, [row])).toEqual({ accepted: 1, duplicates: 0 });
     expect(monitor.recordCorroboration(TENANT, [row])).toEqual({ accepted: 0, duplicates: 1 });
     expect(monitor.freshPoints(TENANT, 30)[0]).toMatchObject({ confidence: "cross_verified", sources: ["kinetic", "fcc_bdc_licensed"] });
+    const leads = rawDb.prepare(`SELECT id,fresh_confidence,source_scan_target_id FROM leads WHERE tenant_id=?`).all(TENANT) as any[];
+    expect(leads).toHaveLength(1);
+    expect(leads[0]).toMatchObject({ fresh_confidence: "cross_verified", source_scan_target_id: freshId });
+    expect(billing.getBilling(TENANT)?.creditsUsed).toBe(1);
+    // Reprojection is accounting-idempotent as well as lead-idempotent.
+    expect(monitor.recordCorroboration(TENANT, [row])).toEqual({ accepted: 0, duplicates: 1 });
+    expect(billing.getBilling(TENANT)?.creditsUsed).toBe(1);
   });
 
   it("produces a ranked, mappable knock-list row", () => {
@@ -47,6 +74,13 @@ describe("state monitoring evidence store", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ address: "100 Fresh St", confidence: "cross_verified", cluster_density: 1 });
     expect(rows[0].map_url).toContain("google.com/maps");
+  });
+
+  it("removes a regressed address from live fresh and knock surfaces", () => {
+    rawDb.prepare(`UPDATE scan_targets SET last_fiber_available=0,last_availability_status='went_stale' WHERE id=?`).run(freshId);
+    expect(monitor.freshPoints(TENANT, 30)).toHaveLength(0);
+    expect(monitor.knockList(TENANT, 30)).toHaveLength(0);
+    rawDb.prepare(`UPDATE scan_targets SET last_fiber_available=1,last_availability_status='still_available' WHERE id=?`).run(freshId);
   });
 
   it("rejects evidence for an inaccessible target", () => {

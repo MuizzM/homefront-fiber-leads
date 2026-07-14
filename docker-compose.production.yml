@@ -28,24 +28,24 @@ services:
       #    (new Kinetic fiber lands on new streets OSM lacks — Lexington had ~7,900
       #    OSM-missed addresses, ~87% fiber). Deep-seed is idempotent per town and
       #    capped, so Mapbox is a bounded one-time cost that spreads across nights.
-      ENABLE_NIGHTLY_SCAN: "true"
+      # Fail closed. Operations must opt in through the host's protected .env
+      # after validating provider budgets and the active scan plan.
+      ENABLE_NIGHTLY_SCAN: "${ENABLE_NIGHTLY_SCAN:-false}"
       # BOTH paths on the full SC+NC list ("use both"): the Mapbox address grid finds
       # the new-build streets OSM lacks (Lexington had ~7,900 OSM-missed, ~87% fiber),
       # while the OSM sweep below covers the rest for free. Deep-seed is idempotent per
       # town + hard-capped at NIGHTLY_DEEP_SEED_MAX_MAPBOX/night, so cost is bounded per
       # night and spreads across nights (big towns like Charlotte finish last). This
       # per-night cap is the guardrail against the historical uncapped-Mapbox incidents.
-      NIGHTLY_DEEP_SEED_CITIES: "Lexington,NC;Albemarle,NC;Concord,NC;Kannapolis,NC;Indian Trail,NC;Wingate,NC;Broadway,NC;Pine Bluff,NC;Tryon,NC;Morven,NC;Aberdeen,NC;Mint Hill,NC;Monroe,NC;Badin,NC;Mooresville,NC;Cameron,NC;Mount Pleasant,NC;Charlotte,NC;China Grove,NC;New London,NC;Columbus,NC;Norwood,NC;Oakboro,NC;Cornelius,NC;Peachland,NC;Davidson,NC;Pfafftown,NC;Denton,NC;Gold Hill,NC;Polkton,NC;Granite Quarry,NC;Richfield,NC;Harrisburg,NC;Rockwell,NC;Huntersville,NC;Rural Hall,NC;Salisbury,NC;Sanford,NC;King,NC;Stallings,NC;Landis,NC;Stanfield,NC;Thomasville,NC;Lewisville,NC;Wadesboro,NC;Linwood,NC;Waxhaw,NC;Marshville,NC;Weddington,NC;Marvin,NC;Matthews,NC;Winston-Salem,NC;Midland,NC;Cameron,SC;Lexington,SC;Campobello,SC;Saint Matthews,SC;Inman,SC;Spartanburg,SC;Kershaw,SC;West Columbia,SC;Landrum,SC"
+      NIGHTLY_DEEP_SEED_CITIES: "${NIGHTLY_DEEP_SEED_CITIES:-}"
       # FREE OSM sweep (Overpass, $0 — one cheap Mapbox bbox lookup per town only):
       # enumerate every Kinetic-served SC + NC town into the pool; the existing
       # Decodo-paced pool re-scan then qualifies them (fiber vs copper) into leads.
       # This is the "use OpenStreetMap → Kinetic via Decodo" path — no Mapbox grid.
-      NIGHTLY_OSM_SWEEP_CITIES: "Aberdeen,NC;Mint Hill,NC;Albemarle,NC;Monroe,NC;Badin,NC;Mooresville,NC;Broadway,NC;Morven,NC;Cameron,NC;Mount Pleasant,NC;Charlotte,NC;China Grove,NC;New London,NC;Columbus,NC;Norwood,NC;Concord,NC;Oakboro,NC;Cornelius,NC;Peachland,NC;Davidson,NC;Pfafftown,NC;Denton,NC;Pinebluff,NC;Gold Hill,NC;Polkton,NC;Granite Quarry,NC;Richfield,NC;Harrisburg,NC;Rockwell,NC;Huntersville,NC;Rural Hall,NC;Indian Trail,NC;Salisbury,NC;Kannapolis,NC;Sanford,NC;King,NC;Stallings,NC;Landis,NC;Stanfield,NC;Thomasville,NC;Lewisville,NC;Tryon,NC;Lexington,NC;Wadesboro,NC;Linwood,NC;Waxhaw,NC;Marshville,NC;Weddington,NC;Marvin,NC;Wingate,NC;Matthews,NC;Winston-Salem,NC;Midland,NC;Cameron,SC;Lexington,SC;Campobello,SC;Saint Matthews,SC;Inman,SC;Spartanburg,SC;Kershaw,SC;West Columbia,SC;Landrum,SC"
-      # RAISED 12000 → 30000: complete the full 62-town SC+NC grid in days, not weeks.
-      # Still hard-capped (never uncapped — the guardrail vs the historical Mapbox
-      # incidents). Deep-seed is idempotent per town, so the TOTAL Mapbox spend is
-      # fixed (sum of all town grid sizes); the cap only paces how fast it front-loads.
-      NIGHTLY_DEEP_SEED_MAX_MAPBOX: "30000"
+      NIGHTLY_OSM_SWEEP_CITIES: "${NIGHTLY_OSM_SWEEP_CITIES:-}"
+      # No paid Mapbox seed budget is granted by the image. Operations must set
+      # an explicit non-zero nightly cap in the protected host environment.
+      NIGHTLY_DEEP_SEED_MAX_MAPBOX: "${NIGHTLY_DEEP_SEED_MAX_MAPBOX:-0}"
       # Status-marker glyph pins (arrow ▲/▼, $, star…) for EVERYONE, not just admins.
       # Safe because the client fail-safe keeps the circle pins visible if the glyph
       # bitmaps ever fail to register on a device — leads are never blank. Set to
@@ -53,7 +53,7 @@ services:
       STATUS_MARKER_GLYPHS: "all"
       # FREE OSM sweep window per night (Overpass is $0). Widened 25min → 45min so more
       # towns' full address sets land per night at no Mapbox cost.
-      NIGHTLY_OSM_SWEEP_MAX_MS: "2700000"
+      NIGHTLY_OSM_SWEEP_MAX_MS: "${NIGHTLY_OSM_SWEEP_MAX_MS:-0}"
     volumes:
       - app-data:/data         # DB + uploads — the ONLY stateful mount
     expose:

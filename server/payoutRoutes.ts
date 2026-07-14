@@ -36,13 +36,16 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
     const repId = myRepId(req);
     if (!repId) return res.status(400).json({ error: "No rep profile linked to your login." });
     const tenantId = tid(req);
+    const rep = repById(tenantId, repId);
+    // A legacy/corrupt login may point at another organization's rep id. Never
+    // turn that link into a hosted Stripe account-management URL.
+    if (!rep) return res.status(403).json({ error: "Rep profile is not part of this organization." });
     try {
       const acct = payoutStore.ensurePayoutAccount(repId, tenantId);
       let stripeAccountId = acct.stripeAccountId;
       if (!stripeAccountId) {
-        const rep = repById(tenantId, repId);
         stripeAccountId = await createConnectedAccount({ email: rep?.email ?? null, repId, tenantId });
-        payoutStore.setStripeAccountId(repId, stripeAccountId);
+        payoutStore.setStripeAccountId(tenantId, repId, stripeAccountId);
       }
       const origin = (req.headers.origin as string) || `https://${req.headers.host}`;
       const url = await createAccountLink(stripeAccountId, `${origin}/#/my-commission?onboard=refresh`, `${origin}/#/my-commission?onboard=done`);
@@ -56,14 +59,16 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
   app.get("/api/payouts/account", requireAuth, requireCapability("commission.read.self"), (req: Request, res: Response) => {
     const repId = myRepId(req);
     if (!repId) return res.json({ hasRepProfile: false });
-    const acct = payoutStore.getPayoutAccount(repId);
+    const tenantId = tid(req);
+    if (!repById(tenantId, repId)) return res.status(403).json({ error: "Rep profile is not part of this organization." });
+    const acct = payoutStore.getPayoutAccount(tenantId, repId);
     res.json({
       hasRepProfile: true,
       enabled: connectConfigured(),
       onboardingStatus: acct?.onboardingStatus ?? "none",
       payoutsEnabled: !!acct?.payoutsEnabled,
       detailsSubmitted: !!acct?.detailsSubmitted,
-      history: payoutStore.listPayouts(tid(req), { repId, limit: 25 }),
+      history: payoutStore.listPayouts(tenantId, { repId, limit: 25 }),
     });
   });
 
@@ -72,13 +77,15 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
     if (!connectConfigured()) return res.status(503).json({ error: "Payouts aren't enabled yet." });
     const repId = myRepId(req);
     if (!repId) return res.status(400).json({ error: "No rep profile linked to your login." });
-    const acct = payoutStore.getPayoutAccount(repId);
+    const tenantId = tid(req);
+    if (!repById(tenantId, repId)) return res.status(403).json({ error: "Rep profile is not part of this organization." });
+    const acct = payoutStore.getPayoutAccount(tenantId, repId);
     if (!acct?.stripeAccountId) return res.status(409).json({ error: "No payout account yet." });
     try {
       await ensureAutomaticPayoutSchedule(acct.stripeAccountId);
       const facts = await fetchAccount(acct.stripeAccountId);
-      payoutStore.updateAccountFromStripe(acct.stripeAccountId, { ...facts, onboardingStatus: onboardingStatusFrom(facts) });
-      const fresh = payoutStore.getPayoutAccount(repId);
+      payoutStore.updateAccountFromStripe(tenantId, acct.stripeAccountId, { ...facts, onboardingStatus: onboardingStatusFrom(facts) });
+      const fresh = payoutStore.getPayoutAccount(tenantId, repId);
       res.json({ onboardingStatus: fresh?.onboardingStatus, payoutsEnabled: !!fresh?.payoutsEnabled });
     } catch (e: any) {
       res.status(502).json({ error: e.message || "Could not refresh account" });
@@ -91,8 +98,8 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
     const weekRef = typeof req.query.week === "string" ? req.query.week : new Date().toISOString();
     const overview = commissionSvc.getWeekOverview(tenantId, uid(req), weekRef, null);
     const rows = overview.rows.map((r: any) => {
-      const acct = payoutStore.getPayoutAccount(r.repId);
-      const existing = r.statementId ? payoutStore.getPayoutByStatement(r.statementId) : null;
+      const acct = payoutStore.getPayoutAccount(tenantId, r.repId);
+      const existing = r.statementId ? payoutStore.getPayoutByStatement(tenantId, r.statementId) : null;
       const elig = payoutEligibility({
         statementStatus: r.status,
         finalCents: r.finalCommissionCents,
@@ -156,9 +163,9 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
       if (onlyRepIds && !onlyRepIds.includes(r.repId)) continue;
       const statementId: number | null = r.statementId;
       if (statementId == null) continue; // only finalized statements are payable
-      const acct = payoutStore.getPayoutAccount(r.repId);
+      const acct = payoutStore.getPayoutAccount(tenantId, r.repId);
       const group = `payout-stmt-${statementId}`;
-      let existing = statementId ? payoutStore.getPayoutByStatement(statementId) : null;
+      let existing = statementId ? payoutStore.getPayoutByStatement(tenantId, statementId) : null;
 
       // ── Reconcile any existing row BEFORE deciding to pay ──────────────────────
       if (existing) {
@@ -170,18 +177,18 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
         if (existing.status === "reversed") { results.push({ repId: r.repId, skipped: true, reason: "reversed" }); continue; }
         // pending / processing / failed — money MIGHT have moved. Ask Stripe.
         if (existing.stripeTransferId) {
-          payoutStore.markPayoutPaid(existing.id, existing.stripeTransferId); safeTransition(statementId!);
+          payoutStore.markPayoutPaid(tenantId, existing.id, existing.stripeTransferId); safeTransition(statementId!);
           results.push({ repId: r.repId, paid: true, reconciled: true, transferId: existing.stripeTransferId });
           continue;
         }
         const found = await findTransferByGroup(group).catch(() => null);
         if (found) { // a transfer exists but our row missed it (lost response) → adopt, don't re-send
-          payoutStore.markPayoutPaid(existing.id, found.transferId); safeTransition(statementId!);
+          payoutStore.markPayoutPaid(tenantId, existing.id, found.transferId); safeTransition(statementId!);
           results.push({ repId: r.repId, paid: true, reconciled: true, transferId: found.transferId });
           continue;
         }
         // No transfer exists anywhere → safe to retry: clear the stale row + re-create clean.
-        payoutStore.resetPayoutForRetry(existing.id);
+        payoutStore.resetPayoutForRetry(tenantId, existing.id);
         existing = null;
       }
 
@@ -210,12 +217,12 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
         amountCents: r.finalCommissionCents, destinationAccountId: acct!.stripeAccountId, createdBy: actorId,
       });
       if (prior) {
-        payoutStore.markPayoutPaid(row.id, prior.transferId); safeTransition(statementId!);
+        payoutStore.markPayoutPaid(tenantId, row.id, prior.transferId); safeTransition(statementId!);
         results.push({ repId: r.repId, paid: true, reconciled: true, transferId: prior.transferId });
         continue;
       }
       // Mark IN-FLIGHT before the call so a lost response leaves an active row.
-      payoutStore.markPayoutProcessing(row.id);
+      payoutStore.markPayoutProcessing(tenantId, row.id);
       let transferId: string | undefined;
       try {
         ({ transferId } = await createTransfer({
@@ -229,16 +236,16 @@ export function registerPayoutRoutes(app: Express, { requireAuth, requireCapabil
         // The transfer might still have landed (lost response). Reconcile before failing.
         const late = await findTransferByGroup(group).catch(() => null);
         if (late) {
-          payoutStore.markPayoutPaid(row.id, late.transferId); safeTransition(statementId!);
+          payoutStore.markPayoutPaid(tenantId, row.id, late.transferId); safeTransition(statementId!);
           results.push({ repId: r.repId, paid: true, reconciled: true, transferId: late.transferId });
         } else {
-          payoutStore.markPayoutFailed(row.id, e.message || "transfer error"); // safe: no transfer id
+          payoutStore.markPayoutFailed(tenantId, row.id, e.message || "transfer error"); // safe: no transfer id
           results.push({ repId: r.repId, failed: true, reason: e.message || "transfer error" });
         }
         continue;
       }
       // Success: persist paid (with transfer id) FIRST — this is the source of truth.
-      payoutStore.markPayoutPaid(row.id, transferId);
+      payoutStore.markPayoutPaid(tenantId, row.id, transferId);
       safeTransition(statementId!); // bookkeeping — never downgrades the payout on failure
       results.push({ repId: r.repId, paid: true, amountCents: r.finalCommissionCents, transferId });
     }

@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Deployment safety checks
+        run: bash tests/deployment-safety.sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -47,19 +50,3 @@ jobs:
       #   run: npm run test:e2e:install
       # - name: E2E
       #   run: npm run test:e2e
-
-  # Gated deploy: only after `quality` is green, only on master, only via a
-  # protected environment (add the SSH secret + reviewers in repo settings).
-  deploy-staging:
-    name: Deploy to staging
-    needs: quality
-    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment: staging   # add required reviewers / secrets here in GitHub
-    steps:
-      - uses: actions/checkout@v4
-      - name: Deploy over SSH (build on host, restart systemd)
-        run: |
-          echo "Configure SSH deploy here. Example (secrets.STAGING_SSH_KEY):"
-          echo "  ssh deploy@staging 'cd /srv/homefront && git pull && npm ci && npm run build && sudo systemctl restart homefront'"
-          echo "  then curl -fsS https://staging.homefrontsolutionsllc.com/api/health | grep '\"ok\":true'"

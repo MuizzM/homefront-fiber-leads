@@ -44,8 +44,14 @@ export async function pollAnnouncementsIfDue(force = false): Promise<{ status: s
       discovered += insert.changes;
       if (locations.length) {
         const marks = locations.map(() => "?").join(",");
-        prioritized += rawDb.prepare(`UPDATE state_fiber_markets SET priority_class='critical', priority_score=MAX(priority_score,100), cadence_hours=MIN(cadence_hours,24), announcement_url=?, priority_reasons=?, next_scan_at=MIN(COALESCE(next_scan_at,datetime('now')),datetime('now')), updated_at=datetime('now') WHERE state=? AND city IN (${marks})`)
+        prioritized += rawDb.prepare(`UPDATE state_fiber_markets SET priority_class='critical', priority_score=MAX(priority_score,100), cadence_hours=MIN(cadence_hours,24),
+          kinetic_status='verified_expanding',auto_scan_eligible=1,evidence_checked_at=datetime('now'),coverage_gap=CASE WHEN lat IS NULL OR lng IS NULL THEN 'coordinates_pending' ELSE NULL END,
+          announcement_url=?, priority_reasons=?, next_scan_at=MIN(COALESCE(next_scan_at,datetime('now')),datetime('now')), updated_at=datetime('now') WHERE state=? AND city IN (${marks})`)
           .run(link.url, JSON.stringify([`Official announcement: ${link.title}`]), state, ...locations).changes;
+        const evidence = rawDb.prepare(`INSERT INTO market_evidence (market_id,evidence_type,source_url,source_title,observed_at,content_hash)
+          SELECT id,'official_announcement',?,?,datetime('now'),? FROM state_fiber_markets WHERE state=? AND city=?
+          ON CONFLICT(market_id,evidence_type,source_url) DO UPDATE SET observed_at=datetime('now'),source_title=excluded.source_title,content_hash=excluded.content_hash`);
+        for (const city of locations) evidence.run(link.url, link.title, hash, state, city);
       }
     }
     recordPoll(sourceUrl, response, "ok", null, "+7 days");

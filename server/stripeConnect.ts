@@ -126,7 +126,9 @@ function applyConnectEvent(event: any): ConnectApplyResult {
   switch (intent.kind) {
     case "account_updated": {
       if (!intent.accountId || !intent.facts) return { applied: false, kind: intent.kind, reason: "no account" };
-      store.updateAccountFromStripe(intent.accountId, {
+      const tenantId = store.resolvePayoutAccountTenantForWebhook(intent.accountId);
+      if (tenantId == null) return { applied: false, kind: intent.kind, reason: "no account" };
+      const updated = store.updateAccountFromStripe(tenantId, intent.accountId, {
         payoutsEnabled: !!intent.facts.payoutsEnabled,
         chargesEnabled: !!intent.facts.chargesEnabled,
         detailsSubmitted: !!intent.facts.detailsSubmitted,
@@ -134,11 +136,12 @@ function applyConnectEvent(event: any): ConnectApplyResult {
         onboardingStatus: onboardingStatusFrom(intent.facts),
         eventCreated: intent.eventCreated ?? null, // ordering guard
       });
-      return { applied: true, kind: intent.kind };
+      return { applied: updated, kind: intent.kind, ...(updated ? {} : { reason: "stale or missing account" }) };
     }
     case "transfer_reversed": {
       if (intent.transferId) {
-        const matched = store.markPayoutReversedByTransfer(intent.transferId);
+        const tenantId = store.resolvePayoutTenantForWebhook(intent.transferId);
+        const matched = tenantId == null ? 0 : store.markPayoutReversedByTransfer(tenantId, intent.transferId);
         // A reversal we can't match to a payout row (e.g. a transfer whose response
         // was lost, so no row carries its id) must be surfaced, not silently acked.
         if (matched === 0) console.warn(`[payouts] transfer.reversed ${intent.transferId} matched no payout row — needs reconciliation`);

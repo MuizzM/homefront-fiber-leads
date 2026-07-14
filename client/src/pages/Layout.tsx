@@ -27,6 +27,7 @@ import {
   Radio,
   CreditCard,
   FileSignature,
+  PhoneCall,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -36,14 +37,17 @@ import { PaywallBanner } from "@/components/PaywallBanner";
 import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
+import { can, type Role as AppRole } from "@shared/capabilities";
 
 // (BrandMark logo removed per owner — brand is now text-only wordmark.)
 
 // ── Role hierarchy helpers ────────────────────────────────────────────────────
-type AppRole = "admin" | "manager" | "team_lead" | "rep";
-
 function hasRole(userRole: string | undefined, ...allowed: AppRole[]) {
   return allowed.includes((userRole ?? "rep") as AppRole);
+}
+
+function isFieldRole(role: AppRole): boolean {
+  return hasRole(role, "rep", "team_lead", "manager", "admin", "super_admin");
 }
 
 // ── Nav item definitions with per-role visibility ─────────────────────────────
@@ -57,14 +61,18 @@ type NavItem = {
 
 const NAV_ITEMS: NavItem[] = [
   // ── Core ──────────────────────────────────────────────────────────────────
-  { href: "/",      label: "Dashboard",    icon: LayoutDashboard, show: () => true,                                    group: "Core" },
-  { href: "/map",   label: "Field Map",    icon: Map,             show: () => true,                                    group: "Core" },
-  { href: "/leads", label: "Leads",        icon: MapPin,          show: () => true,                                    group: "Core" },
+  { href: "/",      label: "Dashboard",    icon: LayoutDashboard, show: isFieldRole,                                   group: "Core" },
+  { href: "/map",   label: "Field Map",    icon: Map,             show: isFieldRole,                                   group: "Core" },
+  { href: "/leads", label: "Leads",        icon: MapPin,          show: isFieldRole,                                   group: "Core" },
+  // Calling is a separate, capability-gated workspace. Field-map access never
+  // implies calling authority and the map never reveals a phone number.
+  { href: "/calling", label: "Calling Queue", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
+  { href: "/calling/compliance", label: "Calling Compliance", icon: ShieldCheck, show: r => can(r, "calling.compliance.read"), group: "Calling" },
   // ── Field ─────────────────────────────────────────────────────────────────
-  { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: () => true,                               group: "Field" },
-  { href: "/clock",        label: "Field Hours",   icon: Clock,        show: () => true,                               group: "Field" },
-  { href: "/my-commission",label: "My Commission", icon: Wallet,       show: () => true,                               group: "Field" },
-  { href: "/my-documents", label: "My Documents",  icon: FileSignature,show: () => true,                               group: "Field" },
+  { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
+  { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
+  { href: "/my-commission",label: "My Commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
+  { href: "/my-documents", label: "My Documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
   // ── Scan — market intelligence (manager+ read/deploy); Scanner=admin tools ─
   { href: "/markets",      label: "Markets",       icon: TrendingUp,   show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
   { href: "/sweeps",       label: "Fresh Fiber",   icon: Radar,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
@@ -89,6 +97,10 @@ function RoleBadge({ role }: { role: string }) {
     manager: { label: "Manager", color: "text-amber-400", Icon: Crown },
     team_lead: { label: "Team Lead", color: "text-purple-400", Icon: Star },
     rep: { label: "Sales Rep", color: "text-blue-400", Icon: UserIcon },
+    calling_rep: { label: "Calling Rep", color: "text-emerald-400", Icon: PhoneCall },
+    calling_manager: { label: "Calling Manager", color: "text-teal-400", Icon: PhoneCall },
+    compliance_admin: { label: "Compliance Admin", color: "text-amber-400", Icon: ShieldCheck },
+    auditor: { label: "Auditor", color: "text-sky-400", Icon: Activity },
   };
   const { label, color, Icon } = map[role] ?? map.rep;
   return (
@@ -106,6 +118,10 @@ function avatarBg(role: string) {
     manager: "bg-amber-500",
     team_lead: "bg-purple-500",
     rep: "bg-blue-500",
+    calling_rep: "bg-emerald-600",
+    calling_manager: "bg-teal-600",
+    compliance_admin: "bg-amber-600",
+    auditor: "bg-sky-600",
   };
   return map[role] ?? "bg-blue-500";
 }
@@ -124,6 +140,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // tabs, no padding — the map itself carries a floating menu button that
   // fires "hfs:open-menu" to open the sidebar drawer.
   const onMap = location === "/map";
+  const onCalling = location.startsWith("/calling");
   const closeMore = useCallback(() => {
     setMoreOpen(false);
     requestAnimationFrame(() => moreTriggerRef.current?.focus());
@@ -184,6 +201,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/clock" ? "Field hours"
     : location === "/leaderboard" ? "Leaderboard"
     : location === "/my-documents" ? "Documents"
+    : onCalling ? "Calling"
     : location === "/profile" ? "Profile"
     : NAV_ITEMS.find(item => item.href === location)?.label ?? orgName;
 
@@ -230,7 +248,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     {group}
                   </div>
                   {items.map(({ href, label, icon: Icon }) => {
-                    const isActive = location === href;
+                    const isActive = href === "/calling" ? location === href || location.startsWith("/calling/lead/") : location === href;
                     const badgeCount = canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount : 0;
                     return (
                       <Link
@@ -336,17 +354,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Billing status — renders only when a provisioned tenant has a problem
             (past_due / suspended / low credits); invisible otherwise. */}
         <PaywallBanner />
-        <FieldStatusBar overlay={onMap} />
+        {!onCalling && <FieldStatusBar overlay={onMap} />}
 
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
-        <main className={`flex-1 overflow-hidden ${onMap ? "" : "pb-[calc(64px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(64px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
-        {!onMap && <BottomTabs moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
+        {!onMap && !onCalling && <BottomTabs moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
       </div>
 
-      {moreOpen && !onMap && (
+      {moreOpen && !onMap && !onCalling && (
         <div className="fixed inset-0 z-[60] md:hidden" role="presentation">
           <button type="button" aria-label="Close more menu" className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={closeMore} />
           <div

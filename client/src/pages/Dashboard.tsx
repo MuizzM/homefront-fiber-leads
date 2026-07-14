@@ -123,8 +123,8 @@ interface LeaderRow {
   knocks: number; sales: number; knocksToday: number; salesToday: number;
 }
 interface FirstSeenLive {
-  windowHours: number; count: number; readyToAssign: number;
-  addresses: { id: number; address: string; city: string; firstSeenLiveAt: string; availabilityStatus: string; leadId: number | null }[];
+  windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
+  addresses: { id: number; address: string; city: string; firstSeenLiveAt: string; leadId: number | null; confidence: "cross_verified" | "single_source_provisional" }[];
 }
 interface RepActivity {
   rep: { id: number; name: string; role: string };
@@ -326,18 +326,18 @@ export default function Dashboard() {
       )}
       {openRepId != null && <RepActivityCard repId={openRepId} onClose={() => setOpenRepId(null)} />}
 
-      {/* ── New Fiber Today — first-observed-by-HomeFront detections from the nightly scan ── */}
+      {/* ── Fiber changes — every row carries explicit confirmation confidence ── */}
       {isManager && newFiber && (
         <section data-testid="new-fiber-today">
           <div className="mb-2 flex items-baseline justify-between">
-            <h2 className={EYEBROW}>New fiber · last 24h</h2>
+            <h2 className={EYEBROW}>Fiber changes · last 24h</h2>
             {newFiber.count > 0 && (
-              <span className="text-[11px] tabular-nums text-muted-foreground">{newFiber.readyToAssign} already leads</span>
+              <span className="text-[11px] tabular-nums text-muted-foreground">{newFiber.confirmed} confirmed · {newFiber.provisional} provisional</span>
             )}
           </div>
           {newFiber.count === 0 ? (
             <div className="rounded-2xl border border-border bg-card px-4 py-5 text-[13px] italic text-muted-foreground">
-              No newly live fiber detected in the last 24 hours — the nightly scan is watching the address pool.
+              No current fiber flips detected in the last 24 hours — the monitor is watching the address pool.
             </div>
           ) : (
             <div className="divide-y divide-border overflow-hidden rounded-2xl border border-orange-500/25 bg-card">
@@ -347,12 +347,12 @@ export default function Dashboard() {
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
                     <div className="text-[11px] text-muted-foreground">
-                      First observed live {new Date(a.firstSeenLiveAt.replace(" ", "T") + "Z").toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+                      First observed live {new Date(a.firstSeenLiveAt.includes("T") ? a.firstSeenLiveAt : `${a.firstSeenLiveAt.replace(" ", "T")}Z`).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                     </div>
                   </div>
-                  <span className={`h-[20px] shrink-0 rounded-full px-2 text-[10px] font-bold uppercase leading-[20px] tracking-wide ${a.leadId
+                  <span className={`h-[20px] shrink-0 rounded-full px-2 text-[10px] font-bold uppercase leading-[20px] tracking-wide ${a.confidence === "cross_verified"
                     ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>
-                    {a.leadId ? "Lead created" : "Newly live"}
+                    {a.confidence === "cross_verified" ? "Cross-verified" : "Provisional"}
                   </span>
                 </div>
               ))}

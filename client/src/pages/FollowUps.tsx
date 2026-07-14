@@ -20,7 +20,7 @@ interface FollowUp {
   leadId: number; address: string; city: string; state?: string | null; zip?: string | null;
   lat?: number | null; lng?: number | null;
   leadStatus: string; leadTag?: string | null; leadScore?: number | null;
-  contactName?: string | null; contactPhone?: string | null; assignedRepId?: number | null;
+  contactName?: string | null; assignedRepId?: number | null;
   repId: number; callbackDate: string; callbackTime?: string | null; notes?: string | null; setAt: string;
 }
 

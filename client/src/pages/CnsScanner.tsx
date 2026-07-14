@@ -38,7 +38,7 @@ interface CnsJob {
   id: string; env: string; envLabel: string;
   startCns: number; endCns: number; currentCns: number;
   status: "running" | "paused" | "done" | "stopped" | "error";
-  scanned: number; hits: number; newFiberHits: number;
+  scanned: number; hits: number; newFiberHits: number; confirmedLeads: number;
   ratePerMin: number; estimatedMinutes?: number;
   startedAt: string; completedAt?: string; lastError?: string;
 }
@@ -283,8 +283,8 @@ export default function CnsScanner() {
           CNS Scanner
         </h1>
         <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-          Brute-force scan Kinetic control numbers to discover new fiber builds before anyone else.
-          Finds NEW FIBER addresses directly by their internal address ID — works across all markets.
+          Run bounded, authorized provider-index checks to collect address-level availability evidence.
+          A NEW FIBER response is a primary match that still requires historical change and independent confirmation.
         </p>
       </div>
 
@@ -298,18 +298,18 @@ export default function CnsScanner() {
           </p>
         </div>
         <div>
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">How we find new fiber</div>
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">How candidates are found</div>
           <p className="text-xs text-muted-foreground">
             We iterate CNS values sequentially. When the API returns
             <span className="font-mono text-emerald-400 mx-1">householdSegmentType = "NEW FIBER"</span>
-            that address just entered the Kinetic network — it's a brand-new build.
+            we store a primary-provider observation; that label alone does not establish freshness.
           </p>
         </div>
         <div>
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">What happens to hits</div>
           <p className="text-xs text-muted-foreground">
-            Every NEW FIBER address is auto-saved as a lead in Lead Management.
-            TENURED and other segment types are shown in results but not saved.
+            Every result is stored as evidence. Only an unavailable-to-available change with independent
+            fiber confirmation is published to Lead Management.
           </p>
         </div>
       </div>
@@ -417,7 +417,7 @@ export default function CnsScanner() {
               { label: "Scanned",     value: job.scanned.toLocaleString() },
               { label: "Rate",        value: `${job.ratePerMin}/min` },
               { label: "Found",       value: job.hits.toLocaleString() },
-              { label: "New Fiber",   value: job.newFiberHits.toLocaleString(), accent: true },
+              { label: "Confirmed leads", value: (job.confirmedLeads ?? 0).toLocaleString(), accent: true },
               { label: "ETA",         value: fmtEta(job.estimatedMinutes) },
             ];
 
@@ -442,10 +442,10 @@ export default function CnsScanner() {
 
                     <div className="ml-auto flex items-center gap-2">
                       {/* New fiber badge */}
-                      {job.newFiberHits > 0 && (
+                      {(job.confirmedLeads ?? 0) > 0 && (
                         <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-xs font-semibold tabular-nums">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          {job.newFiberHits} new fiber
+                          {job.confirmedLeads} confirmed fresh
                         </span>
                       )}
 
@@ -508,7 +508,8 @@ export default function CnsScanner() {
                       <span className="flex items-center gap-1.5 text-muted-foreground">
                         {job.status === "running" && <Activity className="w-3 h-3 animate-pulse text-primary" />}
                         <span className="tabular-nums">{job.hits} in fabric</span>
-                        <span className="text-emerald-400 font-semibold tabular-nums">· {job.newFiberHits} saved as leads</span>
+                        <span className="text-amber-400 font-semibold tabular-nums">· {job.newFiberHits} primary match{job.newFiberHits === 1 ? "" : "es"}</span>
+                        <span className="text-emerald-400 font-semibold tabular-nums">· {job.confirmedLeads ?? 0} confirmed lead{(job.confirmedLeads ?? 0) === 1 ? "" : "s"}</span>
                       </span>
                       <span className="tabular-nums text-muted-foreground">
                         {pct}% · ETA {fmtEta(job.estimatedMinutes)}
@@ -530,7 +531,7 @@ export default function CnsScanner() {
                           Showing {displayedResults.length} addresses found in Kinetic fabric
                           {newFiberResults.length > 0 && (
                             <span className="ml-2 text-emerald-400 font-semibold">
-                              ({newFiberResults.length} NEW FIBER)
+                              ({newFiberResults.length} PRIMARY NEW FIBER — confirmation required)
                             </span>
                           )}
                         </div>
@@ -613,7 +614,7 @@ export default function CnsScanner() {
             <ScanSearch className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
             <div className="text-sm text-muted-foreground mb-1">No CNS scans yet</div>
             <div className="text-xs text-muted-foreground max-w-sm mx-auto">
-              Select a region and CNS range above to discover new fiber builds.
+              Select a region and CNS range above to collect provider availability observations.
               Start with a small range (1–10,000) to test, then scale up.
             </div>
           </CardContent>

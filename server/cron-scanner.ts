@@ -9,69 +9,25 @@
  * is governed by a single AIMD congestion window. No pacing constant lives here.
  */
 
-import { mailTransport, mailFrom, adminInbox } from "./mail";
 import { storage } from "./storage";
+import { rawDb } from "./db";
 import { KINETIC_ENVS } from "./cns-scanner";
 import { KineticScheduler, type ProbeTask } from "./kineticScheduler";
 import { StreamSource, arrayPuller, cnsRangePuller, dfTasksFromRows, addrTasksFromTargets } from "./scanSources";
 import type { ProbeOutcome, ProbeKey } from "./kineticProbe";
-import { classifyAvailabilityTransition, snapshotFromTarget } from "@shared/fiberDetect";
-import {
-  buildInventoryIndex, qualifyDetection, normalizeAddressKey, summarizeExclusions,
-  type ExclusionReason,
-} from "@shared/leadQualify";
 import { geocodeCity, tileBbox, getCityAddresses } from "./overpass";
 import { harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { pastDueGraceExpired, setBillingState } from "./billingStore";
+import { persistKineticObservation } from "./kineticObservation";
+import { structuredLog } from "./structuredLog";
 
-// Address-match guard: only promote if Kinetic's answer is for the SAME address we
-// watched (zip match, or normalized street match) — a re-keyed/recycled dfAddressId
-// must never turn a watched row into a lead based on ANOTHER premise's status.
+// Address-match guard: normalized street identity must match, and a returned ZIP
+// must also match. A re-keyed/recycled dfAddressId must never attach another
+// premise's status to the watched door.
 function sameWatchedAddress(cs: any, r: { address?: string | null; zip?: string | null }): boolean {
-  if (r.zip && cs.zip && String(r.zip) === String(cs.zip)) return true;
   const n = (s: any) => String(s ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+  if (r.zip && cs.zip && n(r.zip) !== n(cs.zip)) return false;
   return !!r.address && n(r.address) === n(cs.address);
-}
-
-// ── Email (shared transport — see server/mail.ts; Resend/SMTP via env) ──
-async function sendAlertEmail(subject: string, html: string) {
-  const to = adminInbox();
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS || !to) {
-    console.log(`[cron-alert] EMAIL: ${subject}`);
-    return;
-  }
-  await mailTransport().sendMail({ from: mailFrom(), to, subject, html });
-}
-
-const esc = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-function newFiberAlertHtml(count: number, addresses: string[]): string {
-  const rows = addresses.slice(0, 20).map(a => `<li style="margin:4px 0;color:#3EA394;">${esc(a)}</li>`).join("");
-  return `
-  <div style="font-family:sans-serif;max-width:500px;margin:auto;padding:36px;background:#0F2A44;color:#fff;border-radius:12px;">
-    <h2 style="color:#3EA394;margin:0 0 4px;font-size:20px">HomeFront Fiber</h2>
-    <p style="color:#CBD4DD;font-size:12px;margin:0 0 20px">Nightly CNS Scan Alert</p>
-    <div style="background:#061624;border:1px solid rgba(62,163,148,0.3);border-radius:8px;padding:20px;margin-bottom:16px;">
-      <p style="margin:0;font-size:28px;font-weight:700;color:#3EA394">${count} NEW FIBER lead${count === 1 ? "" : "s"} found</p>
-      <p style="margin:4px 0 0;color:#CBD4DD;font-size:13px;">Addresses automatically created as Hot Leads</p>
-    </div>
-    <ul style="padding-left:20px;margin:0;">${rows}</ul>
-    ${addresses.length > 20 ? `<p style="color:#CBD4DD;font-size:12px;margin-top:8px;">...and ${addresses.length - 20} more. Log in to view all.</p>` : ""}
-  </div>`;
-}
-
-function comingSoonPromotedHtml(count: number, addresses: string[]): string {
-  const rows = addresses.slice(0, 10).map(a => `<li style="margin:4px 0;color:#f59e0b;">${esc(a)}</li>`).join("");
-  return `
-  <div style="font-family:sans-serif;max-width:500px;margin:auto;padding:36px;background:#0F2A44;color:#fff;border-radius:12px;">
-    <h2 style="color:#3EA394;margin:0 0 4px;font-size:20px">HomeFront Fiber</h2>
-    <p style="color:#CBD4DD;font-size:12px;margin:0 0 20px">Coming Soon → Live Alert</p>
-    <div style="background:#061624;border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:20px;margin-bottom:16px;">
-      <p style="margin:0;font-size:24px;font-weight:700;color:#f59e0b;">${count} address${count === 1 ? "" : "es"} now have fiber!</p>
-      <p style="margin:4px 0 0;color:#CBD4DD;font-size:13px;">Previously "Coming Soon" — now promoted to Hot Lead</p>
-    </div>
-    <ul style="padding-left:20px;margin:0;">${rows}</ul>
-  </div>`;
 }
 
 // ── Cron state (in-memory, not persisted) ─────────────────────────────────────
@@ -99,8 +55,9 @@ export function getEngineStatus(): any {
 
 // ── CNS frontier sweep, as a WorkSource ───────────────────────────────────────
 // Advancing-frontier sweep of df-ids: re-check a recent overlap (catch flips) then
-// probe NEW territory just above the frontier. Every hit harvests into the pool; a
-// NEW FIBER + billing-N hit becomes a lead. Records hit/miss into the negative cache.
+// probe NEW territory just above the frontier. Every hit becomes durable evidence;
+// only the independent-evidence projector may publish it. Records hit/miss into the
+// negative cache.
 function buildCnsFrontierSource(): { source: StreamSource; finalize: () => void } {
   const ENV = process.env.NIGHTLY_SCAN_ENV || "MS";
   const envInfo = KINETIC_ENVS.find(e => e.code === ENV);
@@ -112,7 +69,7 @@ function buildCnsFrontierSource(): { source: StreamSource; finalize: () => void 
   const endCns = frontier + (SCAN_COUNT - overlap);
   const recentMiss = new Set(storage.getProbedCns(ENV, 30));
 
-  const newFiber: string[] = [];
+  const confirmedFresh: string[] = [];
   const probeOutcomes: Array<{ cns: number; result: "hit" | "miss" }> = [];
   const flush = () => { if (probeOutcomes.length) { try { storage.recordCnsProbes(ENV, probeOutcomes.splice(0)); } catch { /* best-effort */ } } };
 
@@ -123,27 +80,20 @@ function buildCnsFrontierSource(): { source: StreamSource; finalize: () => void 
     const r = o.result;
     probeOutcomes.push({ cns, result: "hit" }); if (probeOutcomes.length >= 500) flush();
     try {
-      storage.upsertScanTargets([{
-        address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng,
-        source: "kinetic-cns", tenantId: null, dfAddressId: r.dfAddressId, scannedNow: true,
-        fiberStatus: r.isNewFiber ? "new_fiber" : "other", isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
-      }]);
-    } catch { /* pool best-effort */ }
-    if (r.isNewFiber && r.billingStatus === "N") {
-      const full = `${r.address}, ${r.city}, ${r.state} ${r.zip}`;
-      try {
-        const up = storage.upsertLeadByAddress({
-          address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat ?? undefined, lng: r.lng ?? undefined,
-          fiberStatus: "new_fiber", isNewFiber: true, isTenured: false, billingStatus: r.billingStatus,
-          householdSegmentType: r.householdSegmentType, techType: r.techType, speedTier: r.speedTier,
-          maxDownloadMbps: r.maxDownloadMbps, competitorName: r.competitorName, addressCatalogDate: r.addressCatalogDate,
-          dfAddressId: r.dfAddressId, leadStatus: "prospect", deploymentNotes: `Nightly CNS sweep ENV=${ENV}. Hot Lead — NEW FIBER, no subscriber.`,
-        } as any);
-        if (up?.created) {
-          newFiber.push(full); cronStatus.totalNewFiberFound++;
-          if (newFiber.length === 1) sendAlertEmail("🔥 NEW FIBER Lead Found — HomeFront Fiber Nightly Scan", newFiberAlertHtml(1, newFiber)).catch(() => {});
-        }
-      } catch { /* dedup — skip */ }
+      const persisted = persistKineticObservation({
+        source: "nightly-cns-frontier",
+        observation: { ...r, fiberStatus: r.isNewFiber ? "new_fiber" : r.fiberStatus },
+        latencyMs: o.latencyMs,
+      });
+      if (persisted.projection.published > 0) {
+        confirmedFresh.push(`${r.address}, ${r.city}, ${r.state} ${r.zip}`);
+        cronStatus.totalNewFiberFound += persisted.projection.published;
+      }
+    } catch (error: any) {
+      structuredLog("nightly_cns.observation_failed", {
+        dfAddressId: r.dfAddressId,
+        error: String(error?.message ?? error),
+      }, "warn");
     }
   };
 
@@ -151,43 +101,109 @@ function buildCnsFrontierSource(): { source: StreamSource; finalize: () => void 
   const source = new StreamSource("cns-frontier", "cns", cnsRangePuller(ENV, startCns, endCns, recentMiss, frontier), handler, 0, () => Math.max(0, endCns - startCns));
   const finalize = () => {
     flush();
-    if (newFiber.length > 1) sendAlertEmail(`🔥 ${newFiber.length} NEW FIBER Leads — HomeFront Fiber Nightly Scan`, newFiberAlertHtml(newFiber.length, newFiber)).catch(() => {});
+    console.log(`[cron] CNS frontier confirmed ${confirmedFresh.length} fresh lead(s); raw provider hits remain provisional`);
   };
   return { source, finalize };
 }
 
 // ── Coming Soon Auto-Promote ──────────────────────────────────────────────────
-// Promote a watchlist address to a lead the moment its fiber goes live, dedup by
-// address, mark the watchlist row converted, and alert only on a genuine first go-live.
-function promoteComingSoon(cs: any, billing: string | null, segment: string | null, promoted: string[]): void {
-  const fullAddress = `${cs.address}, ${cs.city}, ${cs.state} ${cs.zip}`;
-  try {
-    const up = storage.upsertLeadByAddress({
-      tenantId: cs.tenantId ?? undefined,
-      address: cs.address, city: cs.city, state: cs.state, zip: cs.zip,
-      lat: cs.lat ?? undefined, lng: cs.lng ?? undefined,
-      fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
-      billingStatus: billing, householdSegmentType: segment,
-      dfAddressId: cs.dfAddressId ?? undefined, leadStatus: "prospect",
-      deploymentNotes: `Coming Soon → LIVE: fiber went live (watched since ${cs.createdAt}).`,
-    } as any);
-    try { storage.markComingSoonAvailable(cs.id, up.lead.id); } catch { /* ignore */ }
-    if (up.created) {
-      promoted.push(fullAddress);
-      sendAlertEmail(`🔥 FIBER WENT LIVE: ${cs.address}`, comingSoonPromotedHtml(1, [fullAddress])).catch(() => {});
-    }
-  } catch { /* dedup/constraint — skip */ }
+// A watch row is historical provider evidence, not permission to publish. The
+// shared projector remains the only lead writer and the watch closes only after
+// that projector attaches a cross-verified lead to this exact scan target.
+type ConclusiveProbeOutcome = Extract<ProbeOutcome, { kind: "answered" | "no_service" }>;
+
+function sqliteTimeMs(value: unknown): number | null {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(text)
+    ? `${text.replace(" ", "T")}Z`
+    : text;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
-// The watchlist recheck, as a WorkSource. A non-answer NEVER demotes; only a NEW
-// FIBER + billing-N hit for the SAME watched address promotes (exactly once).
+function trustedWatchBaseline(cs: any, observedAt: string) {
+  const reason = String(cs.reason ?? "").trim().toLowerCase();
+  if (!["no_service", "copper_only", "coming_soon"].includes(reason)) return undefined;
+  // last_checked is mutable and may itself be a later live/inconclusive result.
+  // created_at is the only durable timestamp for the watch's original status.
+  const baselineMs = sqliteTimeMs(cs.createdAt);
+  const observedMs = sqliteTimeMs(observedAt);
+  if (baselineMs == null || observedMs == null || baselineMs >= observedMs) return undefined;
+  return {
+    observedAt: new Date(baselineMs).toISOString(),
+    source: `coming-soon-watchlist:${reason}`,
+    evidenceId: `coming-soon-${cs.id}`,
+  };
+}
+
+function persistComingSoonObservation(cs: any, o: ConclusiveProbeOutcome, promoted: string[]): "persisted" | "closed" | null {
+  const r = o.result;
+  if (o.kind === "answered" && !sameWatchedAddress(cs, r)) {
+    structuredLog("coming_soon.address_mismatch", {
+      watchId: cs.id,
+      watchedAddress: cs.address,
+      returnedAddress: r.address,
+      dfAddressId: cs.dfAddressId ?? null,
+    }, "warn");
+    return null;
+  }
+
+  const observedAt = new Date().toISOString();
+  try {
+    const persisted = persistKineticObservation({
+      tenantId: cs.tenantId ?? null,
+      source: "nightly-coming-soon",
+      observation: {
+        ...r,
+        // A df-id miss carries no premise fields. The scheduled watch is the
+        // exact identity that was probed, so persist against that watched door.
+        address: cs.address,
+        city: cs.city,
+        state: cs.state,
+        zip: cs.zip,
+        lat: r.lat ?? cs.lat ?? null,
+        lng: r.lng ?? cs.lng ?? null,
+        fiberStatus: o.kind === "no_service" ? "no_service" : r.fiberStatus,
+        fiberAvailable: o.kind === "no_service" ? false : (r as any).fiberAvailable,
+        discoveredAt: observedAt,
+        apiSource: o.kind === "no_service" ? "kinetic_df_no_service" : "kinetic_df_recheck",
+        rawResponse: r,
+      },
+      legacyPriorUnavailableEvidence: trustedWatchBaseline(cs, observedAt),
+      latencyMs: o.latencyMs,
+    });
+
+    const linked = rawDb.prepare(`SELECT s.converted_to_lead_id AS leadId
+      FROM scan_targets s
+      JOIN leads l ON l.id=s.converted_to_lead_id AND l.tenant_id=?
+     WHERE s.id=? AND l.fresh_confidence='cross_verified'
+       AND l.lead_tag='fresh_fiber_confirmed'`).get(persisted.tenantId, persisted.targetId) as { leadId: number } | undefined;
+    if (!linked) return "persisted";
+
+    storage.markComingSoonAvailable(cs.id, linked.leadId);
+    if (persisted.projection.published > 0) {
+      promoted.push(`${cs.address}, ${cs.city}, ${cs.state} ${cs.zip}`);
+      cronStatus.totalNewFiberFound += persisted.projection.published;
+    }
+    return "closed";
+  } catch (error: any) {
+    structuredLog("coming_soon.observation_failed", {
+      watchId: cs.id,
+      error: String(error?.message ?? error),
+    }, "warn");
+    return null;
+  }
+}
+
+// The watchlist recheck, as a WorkSource. A non-answer NEVER demotes. A matching
+// provider hit is evidence only; cross-verification is required before promotion.
 function buildWatchlistSource(rows: any[], promoted: string[]): StreamSource {
   const handler = (task: ProbeTask, o: ProbeOutcome) => {
     const cs = task.ctx;
-    if (o.kind === "inconclusive") return; // non-answer: never demote, recheck next night
-    try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
-    if (o.kind === "answered" && o.result.isNewFiber && o.result.billingStatus === "N" && sameWatchedAddress(cs, o.result)) {
-      promoteComingSoon(cs, o.result.billingStatus, o.result.householdSegmentType, promoted);
+    if (o.kind === "inconclusive" || o.kind === "blocked") return;
+    if (persistComingSoonObservation(cs, o, promoted) === "persisted") {
+      try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
     }
   };
   const tasks = dfTasksFromRows(rows);
@@ -202,14 +218,13 @@ function buildLegacyWatchlistSource(promoted: string[], budget: number): StreamS
   const tasks = rows.map((cs) => ({ key: { kind: "addr", address: cs.address, city: cs.city, state: cs.state, zip: cs.zip } as ProbeKey, ctx: cs }));
   const handler = (task: ProbeTask, o: ProbeOutcome) => {
     const cs = task.ctx;
-    if (o.kind === "inconclusive") return;
-    try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
+    if (o.kind === "inconclusive" || o.kind === "blocked") return;
     const r = o.kind === "answered" || o.kind === "no_service" ? o.result : null;
-    if (r?.dfAddressId) {
+    if (r?.dfAddressId && (o.kind === "no_service" || sameWatchedAddress(cs, r))) {
       try { storage.upsertComingSoonByDfAddressId({ address: cs.address, city: cs.city, state: cs.state, zip: cs.zip, tenantId: cs.tenantId ?? null, reason: cs.reason, lat: cs.lat, lng: cs.lng, dfAddressId: r.dfAddressId, householdSegmentType: r.householdSegmentType } as any); } catch { /* ignore */ }
     }
-    if (o.kind === "answered" && r && r.isNewFiber && r.billingStatus === "N" && sameWatchedAddress(cs, r)) {
-      promoteComingSoon(cs, r.billingStatus, r.householdSegmentType, promoted);
+    if (persistComingSoonObservation(cs, o, promoted) === "persisted") {
+      try { storage.markComingSoonChecked(cs.id); } catch { /* ignore */ }
     }
   };
   return new StreamSource("watchlist-legacy", "watchlist", arrayPuller(tasks), handler, 3, () => tasks.length);
@@ -238,8 +253,7 @@ export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Prom
   await scheduler.run([buildWatchlistSource(watch, promoted), legacy]);
 
   if (promoted.length > 0) {
-    console.log(`[cron] Coming Soon promoted ${promoted.length} addresses to leads`);
-    if (promoted.length > 1) sendAlertEmail(`🟡 ${promoted.length} Coming Soon Addresses Now LIVE — HomeFront Fiber`, comingSoonPromotedHtml(promoted.length, promoted)).catch(() => {});
+    console.log(`[cron] Coming Soon cross-verified and promoted ${promoted.length} address(es)`);
   } else {
     console.log("[cron] Coming Soon check complete — no changes");
   }
@@ -261,8 +275,6 @@ export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Prom
 // genuine unavailable→live FLIP from a first-ever scan of an already-live address.
 function buildPoolRescanSource(): { source: StreamSource; finalize: () => void } {
   const targets = storage.getScanTargetsToRescan(100000);
-  const inventory = buildInventoryIndex(storage.getLeads() as any[]);
-  const exclusionReasons: ExclusionReason[] = [];
   const newFiberAddrs: string[] = [];
   if (!targets.length) console.log("[cron] Address pool empty — skipping pool re-scan");
 
@@ -278,47 +290,41 @@ function buildPoolRescanSource(): { source: StreamSource; finalize: () => void }
     }
     if (o.kind !== "answered" && o.kind !== "no_service") return; // blocked → transient, never changes fiber state
     const r = o.result;
-    // A real signal (answered or conclusive no_service) → run transition detection.
-    const outcome = classifyAvailabilityTransition(snapshotFromTarget(t), { ...r, checkFailed: false } as any);
-    let leadId: number | null = null;
-    const qual = outcome.shouldCreateLead ? qualifyDetection(t.address, inventory) : null;
-    if (qual) exclusionReasons.push(qual.reason);
-    if (qual?.qualified) {
-      try {
-        const lead = storage.createLead({
-          tenantId: t.tenant_id ?? t.tenantId ?? undefined,
-          address: r.address, city: r.city, state: r.state, zip: r.zip,
-          lat: r.lat ?? t.lat ?? undefined, lng: r.lng ?? t.lng ?? undefined,
-          fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
-          billingStatus: r.billingStatus, householdSegmentType: r.householdSegmentType,
-          techType: r.techType, speedTier: r.speedTier, maxDownloadMbps: r.maxDownloadMbps,
-          competitorName: r.competitorName, dfAddressId: r.dfAddressId, leadStatus: "prospect",
-          deploymentNotes: outcome.isNewlyLive
-            ? "Nightly re-scan — NEWLY LIVE fiber (flipped from unavailable). First observed by HomeFront."
-            : "Nightly re-scan — live fiber (first observation).",
-        });
-        leadId = lead.id;
-      } catch { /* duplicate — skip */ }
-      inventory.set(normalizeAddressKey(t.address), { leadStatus: "prospect", assignedRepId: null });
-      newFiberAddrs.push(t.address); cronStatus.totalNewFiberFound++;
-    }
-    if (outcome.recordSnapshot) {
-      try {
-        storage.recordScanTargetResult(t.id, {
-          fiberStatus: r.fiberStatus, isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
-          dfAddressId: r.dfAddressId, convertedToLeadId: leadId,
-          availabilityStatus: outcome.status, newlyLive: outcome.isNewlyLive,
-        });
-      } catch { /* best-effort */ }
+    try {
+      const persisted = persistKineticObservation({
+        tenantId: t.tenant_id ?? t.tenantId ?? null,
+        source: "nightly-pool-rescan",
+        observation: {
+          ...r,
+          address: r.address || t.address,
+          city: r.city || t.city,
+          state: r.state || t.state,
+          zip: r.zip || t.zip,
+          lat: r.lat ?? t.lat ?? null,
+          lng: r.lng ?? t.lng ?? null,
+          fiberStatus: o.kind === "no_service" ? "no_service" : r.fiberStatus,
+          fiberAvailable: o.kind === "no_service" ? false : (r as any).fiberAvailable,
+          apiSource: o.kind === "no_service" ? "kinetic_no_service" : "kinetic_live",
+          rawResponse: r,
+        },
+        latencyMs: o.latencyMs,
+      });
+      if (persisted.projection.published > 0) {
+        newFiberAddrs.push(t.address);
+        cronStatus.totalNewFiberFound += persisted.projection.published;
+      }
+    } catch (error: any) {
+      structuredLog("nightly_pool.observation_failed", {
+        targetId: t.id,
+        error: String(error?.message ?? error),
+      }, "warn");
     }
   };
 
   const source = new StreamSource("pool-rescan", "rescan", arrayPuller(addrTasksFromTargets(targets)), handler, 3, () => targets.length);
   const finalize = () => {
-    const summary = summarizeExclusions(exclusionReasons);
-    console.log(`[cron] Pool re-scan done: ${newFiberAddrs.length} new fiber from ${targets.length} · qualification: ${JSON.stringify(summary)}`);
-    try { storage.logActivity(null, "scan.pool_rescan_completed", "scan_batch", undefined, { targets: targets.length, created: newFiberAddrs.length, exclusions: summary }); } catch { /* audit best-effort */ }
-    if (newFiberAddrs.length > 0) sendAlertEmail(`🔥 ${newFiberAddrs.length} NEW FIBER lead(s) — HomeFront pool re-scan`, newFiberAlertHtml(newFiberAddrs.length, newFiberAddrs)).catch(() => {});
+    console.log(`[cron] Pool re-scan done: ${newFiberAddrs.length} cross-verified fresh lead(s) from ${targets.length}`);
+    try { storage.logActivity(null, "scan.pool_rescan_completed", "scan_batch", undefined, { targets: targets.length, confirmedPublished: newFiberAddrs.length }); } catch { /* audit best-effort */ }
   };
   return { source, finalize };
 }
@@ -455,9 +461,8 @@ async function runNightlyBatch(): Promise<void> {
     // Fair round-robin: the moat recheck shares the window, never starved behind the sweep.
     const sum = await scheduler.run([watch, cns.source, pool.source]);
     cns.finalize(); pool.finalize();
-    if (promoted.length > 1) sendAlertEmail(`🟡 ${promoted.length} Coming Soon Addresses Now LIVE — HomeFront Fiber`, comingSoonPromotedHtml(promoted.length, promoted)).catch(() => {});
     const created = cronStatus.totalNewFiberFound - before;
-    cronStatus.lastRunResult = `${created} new fiber this run · ${sum.totalOk} checks · block ${(sum.blockRate * 100).toFixed(1)}% · ${sum.sessionRefreshes} refresh`;
+    cronStatus.lastRunResult = `${created} confirmed fresh leads this run · ${sum.totalOk} checks · block ${(sum.blockRate * 100).toFixed(1)}% · ${sum.sessionRefreshes} refresh`;
     cronStatus.totalRunCount++;
     console.log(`[cron] Nightly batch complete: ${cronStatus.lastRunResult}`);
   } catch (err: any) {

@@ -2,25 +2,27 @@
 // A scan is a durable, budgeted spend of proxy money against the address pool.
 // This engine dispatches the highest-EV queued targets for a run, verifies each
 // through Kinetic (the ONE real integration), records the availability signal +
-// raw evidence, creates leads for genuine new-fiber, and persists progress so a
+// raw evidence, records provisional fresh-fiber transitions, and persists progress so a
 // run survives a restart. It NEVER auto-starts — a run exists only because a
 // route (admin-gated) created one — and it NEVER fabricates a result.
 //
 // The Kinetic checker is injectable so the whole pipeline (ranking → persistence
 // → transition → lead creation → resume) is verifiable by REPLAYING real
-// recorded responses, with zero proxy bandwidth spent.
+// recorded responses, with zero proxy bandwidth spent. Rep-facing leads are
+// projected later, only after independent fiber evidence.
 import { scanAddress, refreshTokenFromApi, type ScanResult } from "./scanner";
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import { rawDb } from "./db";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
-import { classifyAvailabilityTransition } from "@shared/fiberDetect";
 import { classifyCustomerOpportunity, classifyFiberAvailabilityTransition } from "@shared/opportunitySegment";
 import { initController, observeRound, onSessionRefreshed, DEFAULT_RATE_CFG, type RateState } from "./rateController";
 import {
   getRun, setRunStatus, claimRunTargets, finalizeRunTarget, touchRun,
   getTargetSnapshot, countQueued, getResumableRuns, resetInflightTargets, type ScanRunRow,
 } from "./scanIntelStore";
+import { projectConfirmedFreshLeads } from "./freshFiberProjector";
+import { structuredLog } from "./structuredLog";
 
 // The reduced result the engine needs, plus the bytes billed for cost evidence.
 export interface CheckResult {
@@ -82,9 +84,10 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
         // it — and no check (no spend) is made.
         const live = getRun(runId, tenantId);
         if (!live || live.status !== "running") return;
+        const checkStartedAt = Date.now();
         try {
           const { result, bytes, checkFailed } = await checker({ address: t.address, city: t.city, state: t.state, zip: t.zip });
-          applyCheck(runId, tenantId, t, result, bytes, checkFailed);
+          applyCheck(runId, tenantId, t, result, bytes, checkFailed, Date.now() - checkStartedAt);
           if (result.blocked) blocked++; else if (checkFailed) neutral++; else ok++;
         } catch (err: any) {
           // An unexpected throw is still a FAILED check — never a negative.
@@ -92,6 +95,20 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
           neutral++;
         }
       }));
+
+      // Independent evidence can arrive before the primary flip (for example a
+      // licensed FCC/partner batch loaded earlier in the day). Project after
+      // every completed batch so pre-existing evidence unlocks a confirmed lead
+      // immediately instead of waiting for the evidence to be re-imported.
+      const projected = projectConfirmedFreshLeads(tenantId, batch.map((target) => target.targetId));
+      if (projected.published > 0) {
+        const alertHook = (globalThis as any).__flushFreshFiberAlerts;
+        if (typeof alertHook === "function") {
+          void Promise.resolve(alertHook(tenantId)).catch((error: any) => {
+            structuredLog("fresh_fiber.immediate_alert_failed", { tenantId, error: String(error?.message ?? error) });
+          });
+        }
+      }
 
       // Feed the round to the controller; act on its verdict (grow / shrink+pause /
       // refresh the session at the floor / wall-clock backoff when truly drained).
@@ -109,14 +126,14 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
   }
 }
 
-function applyCheck(runId: string, tenantId: number, t: { targetId: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }, result: ScanResult, bytes: number, checkFailed: boolean): void {
+function applyCheck(runId: string, tenantId: number, t: { targetId: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }, result: ScanResult, bytes: number, checkFailed: boolean, latencyMs: number): void {
   const snapshot = getTargetSnapshot(t.targetId);
   const customer = classifyCustomerOpportunity(result);
   const fiberTransition = classifyFiberAvailabilityTransition(
     { everObserved: snapshot.everScanned, fiberAvailable: snapshot.fiberAvailable },
     { conclusive: !checkFailed, fiberAvailable: result.fiberAvailable },
   );
-  persistSnapshot(runId, tenantId, t, result, checkFailed, customer, fiberTransition);
+  persistSnapshot(runId, tenantId, t, result, checkFailed, customer, fiberTransition, latencyMs);
 
   // FAILED CHECK: record nothing about availability, keep it in the recheck
   // queue conceptually (marked failed on THIS run so we don't re-dispatch it),
@@ -125,14 +142,6 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
     finalizeRunTarget(runId, t.targetId, "failed", "failed", { failed: 1, estBytes: bytes });
     return;
   }
-
-  const reduced = {
-    isNewFiber: result.isNewFiber,
-    fiberAvailable: result.fiberAvailable,
-    billingStatus: result.billingStatus,
-    checkFailed: false,
-  };
-  const opportunityTransition = classifyAvailabilityTransition(snapshot, reduced);
 
   // Persist per-target scan memory + availability status + first-seen-live stamp.
   storage.recordScanTargetResult(t.targetId, {
@@ -148,30 +157,10 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
     customerSignals: customer.signals,
   });
 
-  // Create/refresh a lead only for a genuine door-knock target (NEW FIBER +
-  // billing N + serviceable). Links the pool target to the lead it produced.
+  // This is the primary-source opportunity signal. It remains provisional here:
+  // scan workers NEVER publish a rep-facing lead. The independent-evidence gate
+  // in freshFiberProjector is the sole lead projection path.
   const isTarget = result.isNewFiber && result.billingStatus === "N" && result.fiberAvailable;
-  if (isTarget && opportunityTransition.shouldCreateLead) {
-    try {
-      storage.upsertLeadByAddress({
-        address: result.address, city: result.city, state: result.state, zip: result.zip,
-        lat: result.lat ?? t.lat ?? undefined, lng: result.lng ?? t.lng ?? undefined,
-        fiberStatus: result.fiberStatus,
-        householdSegmentType: result.householdSegmentType,
-        billingStatus: result.billingStatus,
-        isNewFiber: result.isNewFiber, isTenured: false,
-        speedTier: result.speedTier, maxDownloadMbps: result.maxDownloadMbps,
-        techType: result.techType, chipSetType: result.chipSetType, placement: result.placement,
-        maxQual: result.maxQual, competitorName: result.competitorName,
-        competitorSpeedMbps: result.competitorSpeedMbps, competitorTech: result.competitorTech,
-        inCompetitorArea: result.inCompetitorArea, dfAddressId: result.dfAddressId,
-        accessId: result.accessId, exchangeId: result.exchangeId,
-        addressCatalogDate: result.addressCatalogDate,
-        leadStatus: "prospect", leadTag: result.leadTag, leadScore: result.leadScore,
-        deploymentNotes: result.notes, tenantId,
-      } as any);
-    } catch { /* dedup/constraint — the pool row still records the availability */ }
-  }
 
   finalizeRunTarget(runId, t.targetId, "verified",
     isTarget ? "new_fiber" : (result.fiberStatus === "no_service" ? "no_service" : "other"),
@@ -191,7 +180,14 @@ function persistSnapshot(
   result: ScanResult, checkFailed: boolean,
   customer: ReturnType<typeof classifyCustomerOpportunity>,
   transition: ReturnType<typeof classifyFiberAvailabilityTransition>,
+  latencyMs: number,
 ): void {
+  // A crash can replay a claimed target. The logical attempt is one
+  // (tenant,run,target), so preserve exactly one snapshot and one legacy evidence
+  // record for it before doing any append work.
+  const alreadyPersisted = rawDb.prepare(`SELECT 1 FROM availability_snapshots
+    WHERE tenant_id=? AND run_id=? AND scan_target_id=? LIMIT 1`).get(tenantId, runId, t.targetId);
+  if (alreadyPersisted) return;
   const evidence = JSON.stringify(result.rawResponse ?? result);
   const evidenceHash = crypto.createHash("sha256").update(evidence).digest("hex");
   let fiberCheckId: number | null = null;
@@ -205,15 +201,15 @@ function persistSnapshot(
       competitorName: result.competitorName, addressCatalogDate: result.addressCatalogDate, apiSource: result.apiSource,
     } as any).id;
   } catch { /* append the normalized snapshot even if the legacy evidence row fails */ }
-  rawDb.prepare(`INSERT INTO availability_snapshots
+  rawDb.prepare(`INSERT OR IGNORE INTO availability_snapshots
     (tenant_id,scan_target_id,run_id,conclusive,fiber_available,fiber_status,max_download_mbps,service_status,
      household_segment_type,billing_status,customer_segment,customer_confidence,customer_signals,
-     transition_status,fresh,api_source,evidence_hash,fiber_check_id,error)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+     transition_status,fresh,api_source,evidence_hash,fiber_check_id,error,blocked,latency_ms)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       tenantId, t.targetId, runId, checkFailed ? 0 : 1, checkFailed ? null : (result.fiberAvailable ? 1 : 0),
       result.fiberStatus, result.maxDownloadMbps, result.notes, result.householdSegmentType, result.billingStatus,
       customer.segment, customer.confidence, JSON.stringify(customer.signals), transition.status, transition.fresh ? 1 : 0,
-      result.apiSource, evidenceHash, fiberCheckId, checkFailed ? result.notes : null,
+      result.apiSource, evidenceHash, fiberCheckId, checkFailed ? result.notes : null, result.blocked ? 1 : 0, Math.max(0, Math.round(latencyMs)),
     );
 }
 

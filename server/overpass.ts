@@ -14,6 +14,11 @@
  * subdivisions OSM tags without addr:street) and normalize the state to 2 letters.
  */
 import { pooledMap } from "./bboxScan";
+import {
+  OverpassClient,
+  bboxToGeometry,
+  parseOsmElements,
+} from "./addressDiscovery/overpass";
 
 export interface OverpassAddress {
   address: string;
@@ -62,7 +67,7 @@ export function normalizeState(raw: string | undefined, fallback: string): strin
   return norm(raw) || norm(fallback) || (fallback ?? "").trim().toUpperCase().slice(0, 2);
 }
 
-type Bbox = { south: number; west: number; north: number; east: number };
+export type Bbox = { south: number; west: number; north: number; east: number };
 
 /**
  * Geocode a city name via Mapbox → returns bounding box. Cached forever.
@@ -118,99 +123,56 @@ export async function geocodeCity(city: string, state: string): Promise<CityGeo>
   return result;
 }
 
-// ── One Overpass query for a single (small) bbox, with retry ──────────────────
-function overpassQL(b: Bbox): string {
-  // Match addr:street OR addr:place (rural / unincorporated communities and many
-  // new subdivisions tag addr:place, not addr:street — exactly the fiber targets).
-  return `
-[out:json][timeout:45];
-(
-  node["addr:housenumber"]["addr:street"](${b.south},${b.west},${b.north},${b.east});
-  way["addr:housenumber"]["addr:street"](${b.south},${b.west},${b.north},${b.east});
-  node["addr:housenumber"]["addr:place"](${b.south},${b.west},${b.north},${b.east});
-  way["addr:housenumber"]["addr:place"](${b.south},${b.west},${b.north},${b.east});
-);
-out center;
-`.trim();
-}
+let overpassClient: OverpassClient | undefined;
 
-const OVERPASS_ENDPOINTS = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter", // fallback mirror on 429/5xx
-];
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-async function fetchOverpass(query: string, attempts = 2): Promise<{ elements: any[]; truncated: boolean }> {
-  let lastErr: any;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const endpoint = OVERPASS_ENDPOINTS[attempt % OVERPASS_ENDPOINTS.length];
-    try {
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "Accept": "application/json",
-          "User-Agent": "HomeFrontFiber/1.0 (field sales lead tool)",
-        },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(50000), // > server [timeout:45] so a hit-the-cap query returns its partial+remark
-      });
-      // 429 (rate limit) / 5xx (gateway) are transient — back off + retry (rotates mirror).
-      if (res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504) {
-        lastErr = new Error(`Overpass ${res.status}`);
-        await sleep(800 * (attempt + 1) + Math.floor(Math.random() * 400));
-        continue;
-      }
-      if (!res.ok) throw new Error(`Overpass API failed: ${res.status}`);
-      const data = await res.json();
-      // A query that hit the server runtime cap returns HTTP 200 with PARTIAL
-      // elements + a remark — surface that as truncated so the caller doesn't
-      // treat an under-count as the complete set.
-      const remark: string = data.remark ?? "";
-      const truncated = /timed out|runtime error|out of memory/i.test(remark);
-      if (truncated) console.warn(`[overpass] partial result (remark: ${remark.slice(0, 120)})`);
-      return { elements: data.elements ?? [], truncated };
-    } catch (e: any) {
-      lastErr = e;
-      await sleep(600 * (attempt + 1));
-    }
-  }
-  throw lastErr ?? new Error("Overpass failed");
-}
-
-function parseElements(elements: any[], cityName: string, stateName: string, seen: Set<string>, out: OverpassAddress[]) {
-  for (const el of elements) {
-    const tags = el.tags ?? {};
-    const houseNum = tags["addr:housenumber"] ?? "";
-    const street = tags["addr:street"] || tags["addr:place"] || ""; // addr:place fallback for rural
-    if (!houseNum || !street) continue;
-
-    const fullAddress = `${houseNum} ${street}`;
-    const key = fullAddress.toLowerCase();
-    if (seen.has(key)) continue;
-
-    const lat = el.lat ?? el.center?.lat;
-    const lng = el.lon ?? el.center?.lon;
-    if (!lat || !lng) continue;
-    seen.add(key);
-
-    out.push({
-      address: fullAddress,
-      city: tags["addr:city"] || cityName,
-      state: normalizeState(tags["addr:state"], stateName), // full-name → 2-letter for Kinetic
-      zip: tags["addr:postcode"] || "",
-      lat, lng,
-    });
-  }
+function configuredOverpassClient(): OverpassClient {
+  if (overpassClient) return overpassClient;
+  const endpoints = (process.env.OVERPASS_ENDPOINTS ?? "")
+    .split(",")
+    .map((endpoint) => endpoint.trim())
+    .filter(Boolean);
+  const allowedHosts = (process.env.OVERPASS_ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((host) => host.trim())
+    .filter(Boolean);
+  overpassClient = new OverpassClient({
+    endpoints: endpoints.length ? endpoints : undefined,
+    allowedHosts,
+    concurrency: Number(process.env.OVERPASS_CONCURRENCY ?? 2),
+    timeoutMs: Number(process.env.OVERPASS_TIMEOUT_MS ?? 55_000),
+    maxAttempts: Number(process.env.OVERPASS_MAX_ATTEMPTS ?? 4),
+    cacheTtlMs: Number(process.env.OVERPASS_CACHE_TTL_MS ?? 15 * 60_000),
+  });
+  return overpassClient;
 }
 
 /** One tile → addresses + whether the query was truncated (hit the runtime cap). */
 async function pullTile(bbox: Bbox, cityName: string, stateName: string): Promise<{ addresses: OverpassAddress[]; truncated: boolean }> {
-  const { elements, truncated } = await fetchOverpass(overpassQL(bbox));
-  const seen = new Set<string>();
-  const out: OverpassAddress[] = [];
-  parseElements(elements, cityName, stateName, seen, out);
-  return { addresses: out, truncated };
+  const geometry = bboxToGeometry(bbox);
+  const result = await configuredOverpassClient().fetchArea(geometry, {
+    // Existing callers already tile large cities. This keeps one legacy tile as
+    // one initial request, while still subdividing a partial response safely.
+    targetTileAreaKm2: 1_000_000,
+    maxTiles: 1,
+    maxSubdivisionDepth: 4,
+    maxRequests: 128,
+  });
+  const candidates = parseOsmElements(result.elements, {
+    city: cityName,
+    state: normalizeState(undefined, stateName),
+    geometry,
+  });
+  const addresses: OverpassAddress[] = candidates
+    .filter((candidate) => candidate.normalizedHouseNumber && candidate.normalizedStreet && candidate.lat != null && candidate.lng != null)
+    .map((candidate) => ({
+      address: [candidate.normalizedHouseNumber, candidate.normalizedStreet, candidate.normalizedUnit].filter(Boolean).join(" "),
+      city: candidate.normalizedCity || cityName,
+      state: normalizeState(candidate.normalizedState, stateName),
+      zip: candidate.normalizedPostalCode,
+      lat: candidate.lat!,
+      lng: candidate.lng!,
+    }));
+  return { addresses, truncated: !result.complete };
 }
 
 /**

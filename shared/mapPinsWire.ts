@@ -5,12 +5,12 @@
  * allocate. The packed response sends the schema once in shared code and rows
  * as arrays. The object response remains available for backward compatibility.
  */
-export const MAP_PINS_WIRE_VERSION = 1 as const;
+export const MAP_PINS_WIRE_VERSION = 2 as const;
 
 export const MAP_PIN_WIRE_FIELDS = [
   "id", "lat", "lng", "leadStatus", "address", "city", "state", "zip",
   "fiberStatus", "assignedRepId", "leadScore", "visited", "knockCount",
-  "lastOutcome", "lastKnockedAt",
+  "lastOutcome", "lastKnockedAt", "leadTag", "freshConfidence",
 ] as const;
 
 export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];

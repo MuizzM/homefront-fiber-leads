@@ -92,7 +92,12 @@ export function getSweepResults(id: string, tenantId: number, filters: { stage?:
       s.last_customer_signals AS customerSignals,s.last_scanned_at AS checkedAt,COALESCE(a.transition_status,s.last_availability_status) AS transitionStatus,
       a.max_download_mbps AS maxDownloadMbps,a.household_segment_type AS householdSegmentType,a.billing_status AS billingStatus,
       a.conclusive,a.error,
-      EXISTS(SELECT 1 FROM availability_corroboration c WHERE c.scan_target_id=s.id AND c.tenant_id=? AND c.availability='available') AS crossVerified
+      EXISTS(SELECT 1 FROM availability_corroboration c
+        WHERE c.scan_target_id=s.id AND c.tenant_id=? AND c.availability='available'
+          AND (lower(COALESCE(c.technology,'')) LIKE '%fiber%' OR lower(COALESCE(c.technology,'')) IN ('fttp','ftth'))
+          AND datetime(c.observed_at)>=datetime(s.first_seen_fiber_at,'-7 days')
+          AND datetime(c.observed_at)<=datetime(s.first_seen_fiber_at,'+31 days')
+          AND datetime(c.observed_at)<=datetime('now','+5 minutes')) AS crossVerified
     FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id
     LEFT JOIN availability_snapshots a ON a.id=(SELECT MAX(a2.id) FROM availability_snapshots a2 WHERE a2.scan_target_id=s.id)
     WHERE ${where.join(" AND ")} ORDER BY (s.first_seen_fiber_at IS NOT NULL) DESC,s.first_seen_fiber_at DESC,s.address LIMIT ? OFFSET ?`).all(tenantId, ...args, limit, offset) as any[];
@@ -102,10 +107,10 @@ export function getSweepResults(id: string, tenantId: number, filters: { stage?:
 export function getSweepKnockList(id: string, tenantId: number) {
   const result = getSweepResults(id, tenantId, { stage: "fresh", customer: "new_opportunity", limit: 5_000 });
   if (!result) return null;
-  const points: FreshFiberPoint[] = result.results.filter((r: any) => Number.isFinite(r.lat) && Number.isFinite(r.lng)).map((r: any) => ({
+  const points: FreshFiberPoint[] = result.results.filter((r: any) => r.crossVerified && Number.isFinite(r.lat) && Number.isFinite(r.lng)).map((r: any) => ({
     id: r.id, address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng,
-    firstSeenLiveAt: iso(r.firstSeenFiberAt), confidence: r.crossVerified ? "cross_verified" : "single_source_provisional",
-    sources: r.crossVerified ? ["kinetic", "independent_address_evidence"] : ["kinetic"],
+    firstSeenLiveAt: iso(r.firstSeenFiberAt), confidence: "cross_verified",
+    sources: ["kinetic", "independent_address_fiber_evidence"],
     customerSegment: r.customerSegment, customerConfidence: r.customerConfidence,
   }));
   const clusters = clusterFreshFiber(points);

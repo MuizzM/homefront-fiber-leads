@@ -1,6 +1,7 @@
 /**
  * USA Market Scanner — Beat FiberFocus
- * Uses FCC BDC data to show WHERE Kinetic is actively building new fiber.
+ * Uses carrier-owned NC/SC directory evidence to show WHERE Kinetic is served
+ * or expanding. Address-level checks remain the only availability truth.
  * Click any market to scan it immediately. Leads auto-saved to map.
  */
 import { useState, useCallback, useRef } from "react";
@@ -23,6 +24,8 @@ const _API_BASE: string = ("__PORT_5000__" as string).startsWith("__") ? "" : ("
 interface KineticMarket {
   state: string; city: string; zip: string;
   newPassings: number;
+  addressCount: number;
+  freshWeek: number;
   priority: "critical" | "high" | "medium";
   buildStatus: "active" | "planned" | "complete";
   buildDate: string;
@@ -30,7 +33,7 @@ interface KineticMarket {
 
 interface MarketsData {
   lastUpdated: string;
-  totalNewPassings: number;
+  totalNewPassings: number | null;
   markets: KineticMarket[];
 }
 
@@ -83,7 +86,7 @@ export default function USAScanner() {
   const { toast } = useToast();
   const qc = useQueryClient();
 
-  // FCC market data
+  // Evidence-backed carrier market catalog
   const { data: marketsData, isLoading: marketsLoading } = useQuery<MarketsData>({
     queryKey: ["/api/markets/kinetic"],
     queryFn: async () => (await apiRequest("GET", "/api/markets/kinetic")).json(),
@@ -124,14 +127,14 @@ export default function USAScanner() {
                 ...prev,
                 status: s.status === "done" ? "done" : s.status === "error" ? "error" : "scanning",
                 done: s.done, total: s.total,
-                newFiber: s.summary?.new_fiber ?? 0,
+                newFiber: s.summary?.fresh ?? s.summary?.new_fiber ?? 0,
               } : null);
               if (s.status === "done" || s.status === "error") {
                 clearInterval(pollId);
                 qc.invalidateQueries({ queryKey: ["/api/leads"] });
                 qc.invalidateQueries({ queryKey: ["/api/stats"] });
                 setCompletedScans(prev => new Set([...prev, `${city},${state}`]));
-                toast({ title: `Done — ${city}, ${state}`, description: `${s.summary?.new_fiber ?? 0} new fiber leads saved` });
+                toast({ title: `Done — ${city}, ${state}`, description: `${s.summary?.fresh ?? s.summary?.new_fiber ?? 0} fresh-fiber leads saved` });
               }
             } catch {}
           }, 2000);
@@ -157,7 +160,7 @@ export default function USAScanner() {
                   setActiveScan(prev => prev ? {
                     ...prev, status: "scanning",
                     done: p.done, total: p.total,
-                    newFiber: p.summary?.new_fiber ?? prev.newFiber,
+                    newFiber: p.summary?.fresh ?? p.summary?.new_fiber ?? prev.newFiber,
                   } : null);
                 } else if (evType === "done") {
                   setActiveScan(prev => prev ? { ...prev, status: "done" } : null);
@@ -280,8 +283,8 @@ export default function USAScanner() {
             <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{markets.filter(m=>m.buildStatus==="active").length.toLocaleString()}</div>
           </div>
           <div className="px-4 py-3">
-            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">New Homes</div>
-            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{(marketsData.totalNewPassings/1000).toFixed(0)}K</div>
+            <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Addresses inventoried</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{markets.reduce((sum,m)=>sum+m.addressCount,0).toLocaleString()}</div>
           </div>
         </div>
       )}
@@ -311,7 +314,7 @@ export default function USAScanner() {
                   {activeScan.newFiber > 0 && (
                     <div className="flex items-center gap-1.5 mt-1">
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
-                        <Zap className="w-3 h-3" />{activeScan.newFiber} new fiber leads
+                        <Zap className="w-3 h-3" />{activeScan.newFiber} confirmed fresh leads
                       </span>
                       <span className="text-xs text-muted-foreground">saved to map</span>
                     </div>
@@ -356,7 +359,7 @@ export default function USAScanner() {
                 </div>
                 <div className="px-3 py-2">
                   <div className="text-lg font-semibold tracking-tight font-mono tabular-nums text-emerald-400">{scannerState.diagNewFiber}</div>
-                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">new fiber</div>
+                  <div className="text-[11px] uppercase tracking-wide text-muted-foreground">primary matches</div>
                 </div>
                 <div className="px-3 py-2">
                   <div className={`text-lg font-semibold tracking-tight font-mono tabular-nums ${scannerState.diagHttpError > 5 ? "text-rose-400" : "text-muted-foreground"}`}>
@@ -422,14 +425,14 @@ export default function USAScanner() {
       {/* State groups */}
       {marketsLoading ? (
         <div className="flex items-center justify-center py-12 text-muted-foreground text-sm gap-2">
-          <Loader2 className="w-4 h-4 animate-spin" /> Loading FCC market data…
+          <Loader2 className="w-4 h-4 animate-spin" /> Loading verified carrier markets…
         </div>
       ) : (
         <div className="space-y-3">
           {states.map(abbr => {
             const cityList = byState[abbr];
             const isOpen = expandedState === abbr || !!search.trim() || filterPriority !== "all";
-            const totalPassings = cityList.reduce((s, m) => s + m.newPassings, 0);
+            const trackedAddresses = cityList.reduce((s, m) => s + m.addressCount, 0);
             const hasCritical = cityList.some(m => m.priority === "critical");
 
             return (
@@ -450,7 +453,7 @@ export default function USAScanner() {
                         {STATE_NAMES[abbr]}
                       </div>
                       <div className="text-xs text-muted-foreground tabular-nums">
-                        {cityList.length} markets · {(totalPassings/1000).toFixed(1)}K new passings
+                        {cityList.length} markets · {trackedAddresses.toLocaleString()} addresses inventoried
                       </div>
                     </div>
                   </div>
@@ -467,7 +470,7 @@ export default function USAScanner() {
 
                 {isOpen && (
                   <div className="border-t border-border divide-y divide-border/50">
-                    {cityList.sort((a, b) => b.newPassings - a.newPassings).map(market => {
+                    {cityList.sort((a, b) => b.addressCount - a.addressCount).map(market => {
                       const key = `${market.city},${market.state}`;
                       const isActive = activeScan?.city === market.city && activeScan?.state === market.state;
                       const isDone = completedScans.has(key);
@@ -493,7 +496,7 @@ export default function USAScanner() {
                               <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">
                                 <span className="flex items-center gap-1 tabular-nums">
                                   <Building className="w-3 h-3" />
-                                  {market.newPassings.toLocaleString()} new homes
+                                  {market.addressCount.toLocaleString()} tracked · {market.freshWeek.toLocaleString()} provisional flips this week
                                 </span>
                                 <span className="tabular-nums">{market.buildDate}</span>
                                 <span className={`font-medium ${market.buildStatus === "active" ? "text-emerald-400" : "text-amber-400"}`}>

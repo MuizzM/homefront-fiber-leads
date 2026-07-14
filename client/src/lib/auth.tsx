@@ -10,7 +10,9 @@ export interface AuthUser {
   email: string;
   // Full server role set (shared/schema.ts users.role) — was "admin" | "rep",
   // which made manager/team_lead comparisons type-lies across the app.
-  role: "super_admin" | "admin" | "manager" | "team_lead" | "rep";
+  role:
+    | "super_admin" | "admin" | "manager" | "team_lead" | "rep"
+    | "calling_rep" | "calling_manager" | "compliance_admin" | "auditor";
   teamMemberId?: number | null;
   tenantId?: number | null; // the user's organization (tenants.id)
 }

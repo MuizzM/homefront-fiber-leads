@@ -13,16 +13,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-COMPOSE="docker compose -f docker-compose.production.yml"
+COMPOSE=(docker compose -f docker-compose.production.yml)
 TAG="${1:-$(cat .previous-tag 2>/dev/null || true)}"
 [ -n "$TAG" ] || { echo "[rollback] no previous tag recorded and none given" >&2; exit 1; }
+[[ "$TAG" =~ ^[0-9a-f]{7,40}$ ]] || { echo "[rollback] refusing non-immutable image tag: $TAG" >&2; exit 1; }
 
 echo "[rollback] rolling to $TAG…"
-APP_IMAGE_TAG="$TAG" $COMPOSE up -d app
+APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" up -d app
 
 echo "[rollback] health check…"
 for i in $(seq 1 20); do
-  if $COMPOSE exec -T app node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
+  if APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" exec -T app node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
     echo "$TAG" > .deployed-tag
     echo "[rollback] HEALTHY — $TAG is live"; exit 0
   fi

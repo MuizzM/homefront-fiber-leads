@@ -67,7 +67,7 @@ describe("Radar transition engine (fixtures — zero proxy)", () => {
     const t = seedTarget("k2");
     await play(t, [COPPER(1000), NEW("N", 5000)]);
     expect(episodesFor(t.id)).toBe(1);
-    expect(alertsFor(t.id, "candidate_new")).toBe(1);
+    expect(alertsFor(t.id, "primary_candidate_new")).toBe(1);
     const ep = rawDb.prepare(`SELECT * FROM transition_episodes WHERE target_id=?`).get(t.id) as any;
     expect(ep.status).toBe("candidate");
     expect(ep.detection_from).not.toBeNull(); // interval-censored window recorded
@@ -117,7 +117,7 @@ describe("Radar transition engine (fixtures — zero proxy)", () => {
     await play(t, [COPPER(1000), NEW("N", 2000)], { n: 3, m: 5 }); // only 1 New → candidate, needs 3
     const ep = rawDb.prepare(`SELECT status FROM transition_episodes WHERE target_id=?`).get(t.id) as any;
     expect(ep.status).toBe("candidate");
-    expect(alertsFor(t.id, "verified_new")).toBe(0);
+    expect(alertsFor(t.id, "primary_reconfirmed_new")).toBe(0);
   });
 
   it("#6 an out-of-order (older) observation cannot overwrite newer truth", async () => {
@@ -140,8 +140,8 @@ describe("Radar transition engine (fixtures — zero proxy)", () => {
     const provider = new PA.FixtureProvider({ [t.providerTargetKey]: Array.from({ length: 100 }, (_, i) => NEW("N", 2000 + i)) }, () => Date.now());
     await Promise.all(Array.from({ length: 100 }, () => engine.checkAndIngest(provider, t)));
     expect(episodesFor(t.id)).toBe(1);                 // ONE episode, not 100
-    expect(alertsFor(t.id, "candidate_new")).toBe(1);  // the candidate alert exactly once
-    expect(alertsFor(t.id, "candidate_new") + alertsFor(t.id, "verified_new")).toBeLessThanOrEqual(2); // no alert storm
+    expect(alertsFor(t.id, "primary_candidate_new")).toBe(1);  // the candidate alert exactly once
+    expect(alertsFor(t.id, "primary_candidate_new") + alertsFor(t.id, "primary_reconfirmed_new")).toBeLessThanOrEqual(2); // no alert storm
     expect(obsCount(t.id)).toBe(101);                  // every observation still audited
   });
 
@@ -166,7 +166,7 @@ describe("Radar transition engine (fixtures — zero proxy)", () => {
     const n2 = await engine.drainOutbox(100, row => delivered.push(row)); // nothing left
     expect(n1).toBeGreaterThanOrEqual(1);
     expect(n2).toBe(0);
-    expect(delivered.filter(r => r.target_id === t.id && r.kind === "candidate_new").length).toBe(1);
+    expect(delivered.filter(r => r.target_id === t.id && r.kind === "primary_candidate_new").length).toBe(1);
   });
 
   it("LIVE GATE: KineticProvider.check throws when RADAR_LIVE!=true (no accidental proxy spend)", async () => {
@@ -239,8 +239,8 @@ describe("Radar transition engine (fixtures — zero proxy)", () => {
     await play(t, [COPPER(1000), NEW("N", 2000)], { n: 1 });
     const ep = rawDb.prepare(`SELECT status FROM transition_episodes WHERE target_id=?`).get(t.id) as any;
     expect(ep.status).toBe("verified");
-    expect(alertsFor(t.id, "verified_new")).toBe(1);
-    expect(alertsFor(t.id, "candidate_new")).toBe(0);
+    expect(alertsFor(t.id, "primary_reconfirmed_new")).toBe(1);
+    expect(alertsFor(t.id, "primary_candidate_new")).toBe(0);
   });
 
   it("#F6 KineticProvider: a soft `success:false` / empty segment is INCONCLUSIVE, never a conclusive 'no'", async () => {

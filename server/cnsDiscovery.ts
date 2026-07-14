@@ -1,11 +1,11 @@
 // ── Zero-Mapbox city discovery ────────────────────────────────────────────────
-// "Get me fresh leads for city X" WITHOUT geocoding a single address. We already
+// Collect primary provider evidence for city X WITHOUT geocoding an address. We
 // know where a city lives in Kinetic's control-number space (from every address
 // Kinetic handed us for free on past probes — see shared/cnsIndex.ts). This engine
 // turns that into a targeted probe plan: check the FRONTIER of the city's CNS bands
 // (where Kinetic numbers its newest builds) and unprobed GAPS inside them, straight
 // against the authorized Kinetic API. Every hit is persisted into the pool (growing
-// the Kinetic-native address book), and NEW-FIBER + billing-N hits become leads.
+// the Kinetic-native address book); only cross-verified flips become leads.
 //
 // Cost discipline: ZERO Mapbox. Bounded by an explicit `budget` of control-number
 // probes, and it stops early (a) when the same-city hit-rate collapses (we've
@@ -17,6 +17,8 @@ import {
   buildCityCoverage, planCityProbe, parseDfAddressId, dfIdFor,
 } from "@shared/cnsIndex";
 import { probeKineticDfId, type CnsProbe } from "./cns-scanner";
+import { persistKineticObservation } from "./kineticObservation";
+import { structuredLog } from "./structuredLog";
 
 export interface DiscoveryPlan {
   city: string; state: string; env: string | null;
@@ -145,34 +147,27 @@ export async function runCityDiscovery(opts: RunCityDiscoveryOpts): Promise<Disc
       p.hits++;
       if (isSameCity) { p.sameCityHits++; dryStreak = 0; } else dryStreak++;
       if (r.isNewFiber) p.newFiber++;
-      // Persist EVERY hit (even other cities — free address-book growth). Best-effort.
+      // Persist EVERY hit (even other cities — free address-book growth). A CNS
+      // NEW FIBER hit remains a raw hit unless the durable evidence projector
+      // independently confirms a real unavailable→available transition.
       try {
-        p.poolAdded += storage.upsertScanTargets([{
-          address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng,
-          source: "kinetic-discover", tenantId: opts.tenantId ?? null, dfAddressId: r.dfAddressId,
-          scannedNow: true, fiberStatus: r.isNewFiber ? "new_fiber" : "other",
-          isNewFiber: r.isNewFiber, billingStatus: r.billingStatus,
-        }]);
-        // Genuine door-knock target (new fiber, no subscriber). Deduped by address;
-        // the note names the address's OWN city (honest provenance even when the
-        // walk incidentally surfaces a neighboring city).
-        if (r.isNewFiber && r.billingStatus === "N") {
-          try {
-            const up = storage.upsertLeadByAddress({
-              tenantId: opts.tenantId ?? undefined,
-              address: r.address, city: r.city, state: r.state, zip: r.zip,
-              lat: r.lat ?? undefined, lng: r.lng ?? undefined,
-              fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
-              billingStatus: r.billingStatus, householdSegmentType: r.householdSegmentType,
-              techType: r.techType, speedTier: r.speedTier, maxDownloadMbps: r.maxDownloadMbps,
-              competitorName: r.competitorName, addressCatalogDate: r.addressCatalogDate,
-              dfAddressId: r.dfAddressId, leadStatus: "prospect",
-              deploymentNotes: `Zero-Mapbox CNS discovery (target ${opts.city}, ${opts.state}) — ${r.city}, ${r.state} · ${r.dfAddressId}.`,
-            } as any);
-            if (up?.created) p.leadsCreated++;
-          } catch { /* dedup/constraint — skip */ }
-        }
-      } catch { /* pool write best-effort */ }
+        const persisted = persistKineticObservation({
+          tenantId: opts.tenantId,
+          source: "cns-discovery",
+          observation: {
+            ...r,
+            fiberStatus: r.isNewFiber ? "new_fiber" : "other",
+          },
+        });
+        if (persisted.targetCreated) p.poolAdded++;
+        p.leadsCreated += persisted.projection.published;
+      } catch (error: any) {
+        structuredLog("cns_discovery.observation_failed", {
+          tenantId: opts.tenantId ?? null,
+          dfAddressId: r.dfAddressId,
+          error: String(error?.message ?? error),
+        }, "warn");
+      }
     }
 
     if (opts.onProgress && p.probed % 25 === 0) opts.onProgress({ ...p });
@@ -188,7 +183,7 @@ export async function runCityDiscovery(opts: RunCityDiscoveryOpts): Promise<Disc
 
   flush();
   p.done = true;
-  if (!p.stoppedEarly) p.reason = `Discovery complete: ${p.probed} probed, ${p.sameCityHits} in ${opts.city}, ${p.newFiber} new-fiber, ${p.leadsCreated} lead(s), pool +${p.poolAdded}. Zero Mapbox.`;
+  if (!p.stoppedEarly) p.reason = `Discovery complete: ${p.probed} probed, ${p.sameCityHits} in ${opts.city}, ${p.newFiber} primary new-fiber match(es), ${p.leadsCreated} independently confirmed lead(s), pool +${p.poolAdded}. Zero Mapbox.`;
   opts.onProgress?.(p);
   return p;
 }

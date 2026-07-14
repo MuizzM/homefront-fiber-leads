@@ -3,15 +3,17 @@
  * Kept in a separate file to avoid circular imports between index ↔ routes.
  */
 import rateLimit from "express-rate-limit";
+import type { RequestHandler } from "express";
 
-// Scan rate limit: 3 scans / hour per IP (expensive operation)
-export const scanLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 3,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: "Scan rate limit reached. Maximum 3 scans per hour." },
-});
+// Scan routes are already authenticated, role-gated, billing-gated, validated,
+// and dispatched through the one bounded provider queue. Do not apply a starts-
+// per-hour limit here: authorized operators can enqueue consecutive scans while
+// the provider queue supplies the actual backpressure. This middleware remains
+// explicit on every spending route so admission policy has one auditable hook.
+export const authorizedScanAdmission: RequestHandler = (_req, res, next) => {
+  res.setHeader("X-Scan-Admission", "queued");
+  next();
+};
 
 // Owner lookup rate limit: 20 hits / hour per IP (each costs $0.20)
 export const ownerLookupLimiter = rateLimit({

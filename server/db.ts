@@ -9,6 +9,12 @@ const dataDir = process.env.DATA_DIR || process.cwd();
 const dbPath = path.join(dataDir, "data.db");
 const sqlite = new Database(dbPath);
 sqlite.pragma("journal_mode = WAL");
+// Enforce the durable discovery/qualification graph in local SQLite just as
+// PostgreSQL does in production. WAL + a busy timeout lets background workers
+// checkpoint while field/API reads continue without spurious SQLITE_BUSY.
+sqlite.pragma("foreign_keys = ON");
+sqlite.pragma("synchronous = NORMAL");
+sqlite.pragma("busy_timeout = 5000");
 
 export const db = drizzle(sqlite, { schema });
 export const rawDb = sqlite; // Raw better-sqlite3 instance for prepared statements

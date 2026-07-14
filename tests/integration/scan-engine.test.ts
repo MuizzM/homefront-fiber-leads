@@ -7,7 +7,7 @@ import { join } from "node:path";
  * Budgeted scan ENGINE — verified end to end by REPLAYING real-shaped Kinetic
  * responses through the real engine code, with ZERO proxy bandwidth spent. This
  * is how we prove the money-spending pipeline (rank → persist → verify →
- * classify transition → create lead → resume) without a live scan or a bill.
+ * classify transition → preserve provisional evidence → resume) without a live scan or a bill.
  *
  * The fixture responses mirror real recorded Kinetic results from fiber_checks:
  * a NEW FIBER + billing-N hit (the door-knock target), a no-service miss, and a
@@ -73,7 +73,7 @@ beforeAll(async () => {
 });
 
 describe("budgeted scan engine (replay — zero proxy)", () => {
-  it("ranks, verifies, records evidence, creates leads, and stays truthful about failures", async () => {
+  it("ranks, verifies, records evidence, keeps baseline-live results provisional, and stays truthful about failures", async () => {
     const targets = store.getPoolTargetsForCity("Testburg", "NC");
     expect(targets.length).toBe(8);
     const ranked = priority.rankTargets(targets, [{ lat: 35.5, lng: -80.4 }], { nowMs: Date.now() });
@@ -91,10 +91,10 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     expect(run.newFiber).toBe(6);          // 6 NEW FIBER targets (8 - 1 nosvc - 1 fail)
     expect(run.estBytes).toBe(8 * 12000);  // every check (incl. failed) costs bytes
 
-    // Leads created for the 6 new-fiber targets, none for no-service or failed.
+    // First observations establish a baseline. They are not proven fresh flips
+    // and must never leak into the rep-facing lead table.
     const leads = storageMod.storage.getLeads(TENANT).filter((l: any) => l.city === "Testburg");
-    expect(leads.length).toBe(6);
-    expect(leads.every((l: any) => l.isNewFiber && l.fiberStatus === "new_fiber")).toBe(true);
+    expect(leads.length).toBe(0);
 
     // FAILED address: pool row was NOT touched (no availability recorded), and no
     // lead exists for it. Product law — a non-answer is not a "no".
@@ -143,7 +143,7 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
   it("learning loop: a worked territory's outcome accumulates into its market", async () => {
     const svc = await import("../../server/scanService");
     // Seed 5 leads in 'Learnville' assigned to territory 777, 2 sold, with knocks.
-    const insLead = rawDb.prepare(`INSERT INTO leads (address, city, state, zip, lat, lng, fiber_status, is_new_fiber, lead_status, assigned_territory_id, tenant_id, lead_score, created_at, updated_at) VALUES (?,?,?,?,?,?,'new_fiber',1,?,777,1,100,datetime('now'),datetime('now'))`);
+    const insLead = rawDb.prepare(`INSERT INTO leads (address, city, state, zip, lat, lng, fiber_status, is_new_fiber, lead_status, assigned_territory_id, tenant_id, lead_score, created_at, updated_at) VALUES (?,?,?,?,?,?,'unknown',0,?,777,1,100,datetime('now'),datetime('now'))`);
     const leadIds: number[] = [];
     for (let i = 0; i < 5; i++) leadIds.push(Number(insLead.run(`${i} Learn St`, "Learnville", "NC", "28200", 35.9 + i * 1e-4, -80.9, i < 2 ? "sold" : "prospect").lastInsertRowid));
     const insKnock = rawDb.prepare(`INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at) VALUES (?,1,?,?,datetime('now'))`);
@@ -175,7 +175,7 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
 
   it("delete detaches leads instead of orphaning them", async () => {
     const svc = await import("../../server/scanService");
-    const ins = rawDb.prepare(`INSERT INTO leads (address, city, state, zip, lat, lng, fiber_status, is_new_fiber, lead_status, assigned_rep_id, assigned_territory_id, tenant_id, created_at, updated_at) VALUES (?,?,?,?,?,?,'new_fiber',1,'prospect',9,888,1,datetime('now'),datetime('now'))`);
+    const ins = rawDb.prepare(`INSERT INTO leads (address, city, state, zip, lat, lng, fiber_status, is_new_fiber, lead_status, assigned_rep_id, assigned_territory_id, tenant_id, created_at, updated_at) VALUES (?,?,?,?,?,?,'unknown',0,'prospect',9,888,1,datetime('now'),datetime('now'))`);
     const id = Number(ins.run("1 Orphan Rd", "Orphanton", "NC", "28201", 35.1, -80.1).lastInsertRowid);
     const detached = svc.detachTerritoryLeads(888);
     expect(detached).toBe(1);
