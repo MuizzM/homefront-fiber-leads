@@ -62,4 +62,15 @@ describe("dfAddressId watchlist", () => {
     expect(cs.converted_to_lead_id).toBeNull();
     expect((rawDb.prepare("SELECT COUNT(*) c FROM leads").get() as any).c).toBe(0);
   });
+
+  it("keeps unavailable addresses indefinitely while scheduling the next due check", () => {
+    const row = storage.upsertComingSoonByDfAddressId(CS({ address: "Cadence St", dfAddressId: "8000000000000000777777" }));
+    expect(storage.getDueComingSoonWithDfId().map((item: any) => item.id)).toContain(row.id);
+    storage.markComingSoonChecked(row.id);
+    expect(storage.getDueComingSoonWithDfId().map((item: any) => item.id)).not.toContain(row.id);
+    expect(storage.getComingSoonWithDfId().map((item: any) => item.id)).toContain(row.id);
+    const persisted = rawDb.prepare("SELECT status,next_check_at AS nextCheckAt FROM coming_soon_addresses WHERE id=?").get(row.id) as any;
+    expect(persisted.status).toBe("active");
+    expect(Date.parse(`${persisted.nextCheckAt.replace(" ", "T")}Z`)).toBeGreaterThan(Date.now());
+  });
 });

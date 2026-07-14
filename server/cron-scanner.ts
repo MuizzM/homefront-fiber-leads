@@ -11,7 +11,6 @@
 
 import { storage } from "./storage";
 import { rawDb } from "./db";
-import { KINETIC_ENVS } from "./cns-scanner";
 import { KineticScheduler, type ProbeTask } from "./kineticScheduler";
 import { StreamSource, arrayPuller, cnsRangePuller, dfTasksFromRows, addrTasksFromTargets } from "./scanSources";
 import type { ProbeOutcome, ProbeKey } from "./kineticProbe";
@@ -20,6 +19,8 @@ import { harvestBboxAddresses, bboxGridSize } from "./mapbox-addresses";
 import { pastDueGraceExpired, setBillingState } from "./billingStore";
 import { persistKineticObservation } from "./kineticObservation";
 import { structuredLog } from "./structuredLog";
+import { allocateEnvironmentBudget, isKineticFootprintState, KINETIC_ENVIRONMENTS, planEnvironmentWindow } from "@shared/kineticFootprint";
+import { beginNationalEnvironmentRun, completeNationalEnvironmentRun, listNationalCnsFrontiers, seedNationalCnsFrontiers } from "./nationalCnsStore";
 
 // Address-match guard: normalized street identity must match, and a returned ZIP
 // must also match. A re-keyed/recycled dfAddressId must never attach another
@@ -58,52 +59,73 @@ export function getEngineStatus(): any {
 // probe NEW territory just above the frontier. Every hit becomes durable evidence;
 // only the independent-evidence projector may publish it. Records hit/miss into the
 // negative cache.
-function buildCnsFrontierSource(): { source: StreamSource; finalize: () => void } {
-  const ENV = process.env.NIGHTLY_SCAN_ENV || "MS";
-  const envInfo = KINETIC_ENVS.find(e => e.code === ENV);
-  const SCAN_COUNT = Number(process.env.NIGHTLY_SCAN_COUNT ?? 50_000);
-  const observedMax = storage.getMaxHitCns(ENV) ?? 0;
-  const frontier = Math.max(envInfo?.upperLimit ?? 0, observedMax);
-  const overlap = Math.min(Math.floor(SCAN_COUNT / 2), 10_000);
-  const startCns = Math.max(1, frontier - overlap);
-  const endCns = frontier + (SCAN_COUNT - overlap);
-  const recentMiss = new Set(storage.getProbedCns(ENV, 30));
+function buildNationalCnsFrontierSources(): Array<{ source: StreamSource; finalize: (error?: string) => void }> {
+  seedNationalCnsFrontiers();
+  const frontiers = new Map(listNationalCnsFrontiers().map((row) => [row.environment, row]));
+  const enabled = KINETIC_ENVIRONMENTS.filter((env) => frontiers.get(env.code)?.enabled !== false);
+  const totalBudget = Math.max(enabled.length, Number(process.env.NATIONAL_CNS_DAILY_BUDGET ?? process.env.NIGHTLY_SCAN_COUNT ?? 50_000));
+  const allocations = allocateEnvironmentBudget(totalBudget, enabled.length);
+  const overlapSetting = Math.max(0, Number(process.env.NATIONAL_CNS_OVERLAP_PER_ENV ?? 1_000));
 
-  const confirmedFresh: string[] = [];
-  const probeOutcomes: Array<{ cns: number; result: "hit" | "miss" }> = [];
-  const flush = () => { if (probeOutcomes.length) { try { storage.recordCnsProbes(ENV, probeOutcomes.splice(0)); } catch { /* best-effort */ } } };
-
-  const handler = (task: ProbeTask, o: ProbeOutcome) => {
-    const cns = task.ctx?.cns as number;
-    if (o.kind === "no_service") { probeOutcomes.push({ cns, result: "miss" }); if (probeOutcomes.length >= 500) flush(); return; }
-    if (o.kind !== "answered") return; // inconclusive → don't record; re-probe another sweep
-    const r = o.result;
-    probeOutcomes.push({ cns, result: "hit" }); if (probeOutcomes.length >= 500) flush();
-    try {
-      const persisted = persistKineticObservation({
-        source: "nightly-cns-frontier",
-        observation: { ...r, fiberStatus: r.isNewFiber ? "new_fiber" : r.fiberStatus },
-        latencyMs: o.latencyMs,
-      });
-      if (persisted.projection.published > 0) {
-        confirmedFresh.push(`${r.address}, ${r.city}, ${r.state} ${r.zip}`);
-        cronStatus.totalNewFiberFound += persisted.projection.published;
+  return enabled.map((env, index) => {
+    const row = frontiers.get(env.code);
+    const observedMax = storage.getMaxHitCns(env.code) ?? 0;
+    const cursor = Math.max(row?.nextCns ?? env.upperLimit + 1, observedMax + 1, env.upperLimit + 1);
+    const plan = planEnvironmentWindow({ cursor, dailyBudget: allocations[index], overlap: overlapSetting });
+    const recent = new Set(storage.getProbedCns(env.code, 30));
+    const probeOutcomes: Array<{ cns: number; result: "hit" | "miss" }> = [];
+    let checked = 0, hits = 0, confirmed = 0, maxConclusiveCns: number | null = null;
+    let finalized = false;
+    const flush = () => {
+      if (probeOutcomes.length) {
+        try { storage.recordCnsProbes(env.code, probeOutcomes.splice(0)); } catch { /* best-effort */ }
       }
-    } catch (error: any) {
-      structuredLog("nightly_cns.observation_failed", {
-        dfAddressId: r.dfAddressId,
-        error: String(error?.message ?? error),
-      }, "warn");
-    }
-  };
+    };
+    beginNationalEnvironmentRun(env.code, plan.startCns, plan.endCns);
 
-  console.log(`[cron] CNS frontier source ENV=${ENV} window ${startCns}–${endCns} (frontier ${frontier})`);
-  const source = new StreamSource("cns-frontier", "cns", cnsRangePuller(ENV, startCns, endCns, recentMiss, frontier), handler, 0, () => Math.max(0, endCns - startCns));
-  const finalize = () => {
-    flush();
-    console.log(`[cron] CNS frontier confirmed ${confirmedFresh.length} fresh lead(s); raw provider hits remain provisional`);
-  };
-  return { source, finalize };
+    const handler = (task: ProbeTask, outcome: ProbeOutcome) => {
+      checked++;
+      const cns = Number(task.ctx?.cns);
+      if (outcome.kind === "no_service") {
+        maxConclusiveCns = Math.max(maxConclusiveCns ?? 0, cns);
+        probeOutcomes.push({ cns, result: "miss" });
+        if (probeOutcomes.length >= 500) flush();
+        return;
+      }
+      if (outcome.kind !== "answered") return;
+      maxConclusiveCns = Math.max(maxConclusiveCns ?? 0, cns);
+      hits++;
+      const result = outcome.result;
+      probeOutcomes.push({ cns, result: "hit" });
+      if (probeOutcomes.length >= 500) flush();
+      if (result.state && !isKineticFootprintState(result.state)) {
+        structuredLog("nightly_cns.outside_official_footprint", { environment: env.code, state: result.state, dfAddressId: result.dfAddressId }, "warn");
+        return;
+      }
+      try {
+        const persisted = persistKineticObservation({
+          source: "nightly-national-cns-frontier",
+          observation: { ...result, fiberStatus: result.isNewFiber ? "new_fiber" : result.fiberStatus },
+          latencyMs: outcome.latencyMs,
+        });
+        confirmed += persisted.projection.published;
+        cronStatus.totalNewFiberFound += persisted.projection.published;
+      } catch (error: any) {
+        structuredLog("nightly_cns.observation_failed", { environment: env.code, dfAddressId: result.dfAddressId, error: String(error?.message ?? error) }, "warn");
+      }
+    };
+
+    console.log(`[cron] national CNS ${env.code} (${env.states}) window ${plan.startCns}–${plan.endCns}; ${allocations[index]} candidates`);
+    const source = new StreamSource(`cns-frontier-${env.code}`, "cns", cnsRangePuller(env.code, plan.startCns, plan.endCns, recent, cursor - 1), handler, 0, () => allocations[index]);
+    const finalize = (error?: string) => {
+      if (finalized) return;
+      finalized = true;
+      flush();
+      completeNationalEnvironmentRun({ environment: env.code, maxConclusiveCns, checked, hits, confirmed, error });
+      console.log(`[cron] national CNS ${env.code}: ${checked} checked, ${hits} hits, ${confirmed} confirmed fresh`);
+    };
+    return { source, finalize };
+  });
 }
 
 // ── Coming Soon Auto-Promote ──────────────────────────────────────────────────
@@ -242,7 +264,7 @@ export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Prom
   console.log("[cron] Rechecking Coming Soon watchlist…");
   const budget = Math.max(1, deps.budget ?? 20_000);
   let watch: any[] = [];
-  try { watch = storage.getComingSoonWithDfId(budget); } catch { /* pre-migration */ }
+  try { watch = deps.probe ? storage.getComingSoonWithDfId(budget) : storage.getDueComingSoonWithDfId(budget); } catch { /* pre-migration */ }
   const promoted: string[] = [];
   const legacy = buildLegacyWatchlistSource(promoted, Math.max(0, budget - watch.length));
   if (!watch.length && legacy.remaining() === 0) { console.log("[cron] Coming Soon watchlist empty"); return; }
@@ -258,16 +280,15 @@ export async function runComingSoonCheck(deps: ComingSoonRecheckDeps = {}): Prom
     console.log("[cron] Coming Soon check complete — no changes");
   }
 
-  // Age-out sweep — retire watchlist addresses that have been rechecked for
-  // months and never went live (junk), keeping them as archived history so the
-  // active list stays clean. Env-tunable.
-  try {
-    const aged = storage.ageOutComingSoon(
-      Number(process.env.COMING_SOON_MAX_CHECKS ?? 45),
-      Number(process.env.COMING_SOON_MAX_AGE_DAYS ?? 120),
-    );
-    if (aged > 0) console.log(`[cron] Coming Soon aged out ${aged} stale addresses → archived history`);
-  } catch { /* pre-migration DB — skip */ }
+  // Default retention is indefinite: a known unavailable provider address stays
+  // on adaptive recheck until it changes or an operator removes it. Legacy
+  // age-out remains an explicit opt-in policy for constrained installations.
+  if (process.env.COMING_SOON_ARCHIVE_STALE === "true") {
+    try {
+      const aged = storage.ageOutComingSoon(Number(process.env.COMING_SOON_MAX_CHECKS ?? 45), Number(process.env.COMING_SOON_MAX_AGE_DAYS ?? 120));
+      if (aged > 0) console.log(`[cron] Coming Soon aged out ${aged} stale addresses → archived history`);
+    } catch { /* pre-migration DB — skip */ }
+  }
 }
 
 // ── Pool re-scan, as a WorkSource ─────────────────────────────────────────────
@@ -442,6 +463,7 @@ async function runNightlyBatch(): Promise<void> {
   const scheduler = new KineticScheduler({ timeBudgetMs: budgetMin * 60_000 });
   activeScheduler = scheduler;
   const before = cronStatus.totalNewFiberFound;
+  let nationalCns: Array<{ source: StreamSource; finalize: (error?: string) => void }> = [];
   try {
     // Billing dunning: suspend tenants whose past_due grace window has expired.
     // No-op when no tenant is on billing (dark) — safe for the live single-tenant org.
@@ -452,20 +474,21 @@ async function runNightlyBatch(): Promise<void> {
     // FREE OSM sweep of the full SC + NC town list into the pool (Overpass, $0),
     // so the pool re-scan below qualifies them through Kinetic/Decodo this same run.
     try { await osmSweepCities(); } catch (e: any) { console.warn("[cron] osm-sweep error:", e.message); }
-    const cns = buildCnsFrontierSource();
+    nationalCns = buildNationalCnsFrontierSources();
     const pool = buildPoolRescanSource();
     const promoted: string[] = [];
     let watchRows: any[] = [];
-    try { watchRows = storage.getComingSoonWithDfId(20_000); } catch { /* pre-migration */ }
+    try { watchRows = storage.getDueComingSoonWithDfId(20_000); } catch { /* pre-migration */ }
     const watch = buildWatchlistSource(watchRows, promoted);
     // Fair round-robin: the moat recheck shares the window, never starved behind the sweep.
-    const sum = await scheduler.run([watch, cns.source, pool.source]);
-    cns.finalize(); pool.finalize();
+    const sum = await scheduler.run([watch, ...nationalCns.map((entry) => entry.source), pool.source]);
+    nationalCns.forEach((entry) => entry.finalize()); pool.finalize();
     const created = cronStatus.totalNewFiberFound - before;
     cronStatus.lastRunResult = `${created} confirmed fresh leads this run · ${sum.totalOk} checks · block ${(sum.blockRate * 100).toFixed(1)}% · ${sum.sessionRefreshes} refresh`;
     cronStatus.totalRunCount++;
     console.log(`[cron] Nightly batch complete: ${cronStatus.lastRunResult}`);
   } catch (err: any) {
+    nationalCns.forEach((entry) => entry.finalize(String(err.message)));
     cronStatus.lastRunResult = `Nightly run failed: ${err.message}`;
     console.error("[cron] Nightly run failed:", err.message);
   } finally {

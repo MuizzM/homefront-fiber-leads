@@ -197,6 +197,7 @@ export interface IStorage {
   markComingSoonChecked(id: number): ComingSoonAddress | undefined;
   upsertComingSoonByDfAddressId(addr: InsertComingSoon & { dfAddressId?: string | null; householdSegmentType?: string | null; buildStatus?: string | null }): ComingSoonAddress;
   getComingSoonWithDfId(limit?: number): ComingSoonAddress[];
+  getDueComingSoonWithDfId(limit?: number): ComingSoonAddress[];
   // ── Scan targets (persistent address pool) ───────────────────────────────────
   upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null; canonicalKey?: string | null; dfAddressId?: string | null; scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null }>): number;
   getScanTargetsToRescan(limit: number): any[];
@@ -288,6 +289,7 @@ export function runMigrations() {
     // Coming-Soon lifecycle: recheck → promote or age-out, with archived history.
     `ALTER TABLE coming_soon_addresses ADD COLUMN status TEXT NOT NULL DEFAULT 'active'`,
     `ALTER TABLE coming_soon_addresses ADD COLUMN check_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE coming_soon_addresses ADD COLUMN next_check_at TEXT`,
     `ALTER TABLE coming_soon_addresses ADD COLUMN archived_at TEXT`,
     `ALTER TABLE coming_soon_addresses ADD COLUMN archived_reason TEXT`,
     `ALTER TABLE commissions ADD COLUMN tenant_id INTEGER`,
@@ -318,6 +320,7 @@ export function runMigrations() {
     `ALTER TABLE coming_soon_addresses ADD COLUMN household_segment_type TEXT`,
     `ALTER TABLE coming_soon_addresses ADD COLUMN build_status TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_coming_soon_df ON coming_soon_addresses(df_address_id) WHERE df_address_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_coming_soon_due ON coming_soon_addresses(status,fiber_available,next_check_at)`,
     // Address dedup for upsertLeadByAddress must hit the DB every time (cross-process
     // cache can't be trusted) — index it so that lookup stays cheap.
     `CREATE INDEX IF NOT EXISTS idx_leads_address ON leads(address)`,
@@ -1651,6 +1654,25 @@ export function runMigrations() {
        created_at TEXT NOT NULL DEFAULT (datetime('now'))
      )`,
     `CREATE INDEX IF NOT EXISTS idx_cns_events_stream ON cns_job_events(tenant_id,job_id,sequence)`,
+    `CREATE TABLE IF NOT EXISTS cns_national_frontiers (
+       environment TEXT PRIMARY KEY,
+       states_json TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 1,
+       next_cns INTEGER NOT NULL,
+       upper_limit INTEGER NOT NULL,
+       last_window_start INTEGER,
+       last_window_end INTEGER,
+       last_run_at TEXT,
+       last_completed_at TEXT,
+       last_status TEXT NOT NULL DEFAULT 'ready',
+       last_error TEXT,
+       total_checked INTEGER NOT NULL DEFAULT 0,
+       total_hits INTEGER NOT NULL DEFAULT 0,
+       total_confirmed INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_cns_national_due ON cns_national_frontiers(enabled,last_run_at,environment)`,
     `CREATE TABLE IF NOT EXISTS cns_scanner_settings (
        tenant_id INTEGER PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
        default_environment TEXT NOT NULL DEFAULT 'MS',
@@ -2656,9 +2678,18 @@ export class Storage implements IStorage {
       .where(eq(comingSoonAddresses.id, id)).returning().get();
   }
   markComingSoonChecked(id: number): ComingSoonAddress | undefined {
-    // Count the recheck so the age-out sweep can retire never-materializing junk.
+    // Never abandon a conclusive unavailable address. Back off adaptively so the
+    // watch remains economically durable: daily → every 3 days → weekly → biweekly.
     return db.update(comingSoonAddresses)
-      .set({ lastChecked: new Date().toISOString(), checkCount: sql`check_count + 1` })
+      .set({
+        lastChecked: new Date().toISOString(),
+        checkCount: sql`check_count + 1`,
+        nextCheckAt: sql`CASE
+          WHEN check_count < 1 THEN datetime('now','+1 day')
+          WHEN check_count < 3 THEN datetime('now','+3 days')
+          WHEN check_count < 8 THEN datetime('now','+7 days')
+          ELSE datetime('now','+14 days') END`,
+      })
       .where(eq(comingSoonAddresses.id, id)).returning().get();
   }
   // Add/refresh a watchlist address keyed by Kinetic's dfAddressId (the exact,
@@ -2686,13 +2717,20 @@ export class Storage implements IStorage {
   // The nightly-recheck work list: watchlist addresses that carry a dfAddressId and
   // haven't converted to a lead yet — rechecked by exact key, oldest-checked first.
   getComingSoonWithDfId(limit = 100000): ComingSoonAddress[] {
+    return this.selectComingSoonWithDfId(limit, true);
+  }
+  getDueComingSoonWithDfId(limit = 100000): ComingSoonAddress[] {
+    return this.selectComingSoonWithDfId(limit, false);
+  }
+  private selectComingSoonWithDfId(limit: number, includeNotDue: boolean): ComingSoonAddress[] {
     return db.select().from(comingSoonAddresses)
       .where(and(
         isNotNull(comingSoonAddresses.dfAddressId),
         eq(comingSoonAddresses.fiberAvailable, false),
         sql`(status = 'active' OR status IS NULL)`, // don't recheck archived junk
+        includeNotDue ? undefined : sql`(next_check_at IS NULL OR next_check_at <= datetime('now'))`,
       ))
-      .orderBy(sql`last_checked IS NOT NULL, last_checked ASC`).limit(limit).all();
+      .orderBy(sql`next_check_at IS NOT NULL, next_check_at ASC, last_checked ASC`).limit(limit).all();
   }
 
   // ── Scan targets (persistent address pool) ───────────────────────────────────

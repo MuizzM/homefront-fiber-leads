@@ -5,6 +5,8 @@ import { rawDb } from "./db";
 import { getDefaultTenantId, storage } from "./storage";
 import { KINETIC_ENVS } from "./cns-scanner";
 import { scannerSettings, seedClassificationRule } from "./cnsOperationsStore";
+import { listNationalCnsFrontiers } from "./nationalCnsStore";
+import { KINETIC_FOOTPRINT_STATES } from "@shared/kineticFootprint";
 
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
 export interface CnsOperationsRouteDeps { requireCapability: (capability: Capability) => Middleware }
@@ -157,7 +159,19 @@ export function registerCnsOperationsRoutes(app: Express, deps: CnsOperationsRou
     const rules = rawDb.prepare(`SELECT id,source_field AS sourceField,operator,expected_value AS expectedValue,
       classification,availability_result AS availabilityResult,fiber_indicator AS fiberIndicator,priority,active
       FROM cns_classification_rules WHERE tenant_id=? ORDER BY priority DESC,id`).all(tid);
-    res.json({ settings: scannerSettings(tid), environments: KINETIC_ENVS, rules });
+    res.json({ settings: scannerSettings(tid), environments: KINETIC_ENVS, nationalFrontiers: listNationalCnsFrontiers(), footprintStates: KINETIC_FOOTPRINT_STATES, rules });
+  });
+
+  app.get("/api/cns/ops/national", auth, (_req, res) => {
+    const frontiers = listNationalCnsFrontiers();
+    res.json({
+      enabled: process.env.ENABLE_NIGHTLY_SCAN === "true",
+      schedule: "02:00 server local time",
+      dailyBudget: Math.max(frontiers.length, Number(process.env.NATIONAL_CNS_DAILY_BUDGET ?? process.env.NIGHTLY_SCAN_COUNT ?? 50_000)),
+      overlapPerEnvironment: Math.max(0, Number(process.env.NATIONAL_CNS_OVERLAP_PER_ENV ?? 1_000)),
+      states: KINETIC_FOOTPRINT_STATES,
+      environments: frontiers,
+    });
   });
 
   app.patch("/api/cns/ops/settings", auth, (req, res) => {

@@ -13,6 +13,7 @@ export interface CnsOpsAddress {
 
 export const cnsOpsApi = {
   dashboard: () => get<any>("/api/cns/ops/dashboard"),
+  national: () => get<any>("/api/cns/ops/national"),
   addresses: (params: URLSearchParams) => get<{items:CnsOpsAddress[];page:number;pageSize:number;total:number;pages:number}>(`/api/cns/ops/addresses?${params}`),
   map: () => get<any>("/api/cns/ops/map"),
   hotspots: (minimum=3) => get<{hotspots:any[]}>(`/api/cns/ops/hotspots?minimum=${minimum}`),
@@ -35,4 +36,3 @@ export const cnsOpsApi = {
     anchor.href=url; anchor.download=filename; anchor.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
   },
 };
-

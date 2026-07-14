@@ -2,7 +2,7 @@
  * CNS (Control Number Scanner) — HomeFront Fiber
  *
  * Kinetic assigns every address in its network:
- *   ENV  — a region code (e.g. "MS" = IN/MI/NC/SC, "PA" = Pennsylvania)
+ *   ENV  — a provider index partition (e.g. "MS" = NC/SC, "PA" = Pennsylvania)
  *   CNS  — a sequential integer control number (their internal address ID)
  *
  * With written authorization, bounded CNS probes can collect primary-provider
@@ -24,31 +24,15 @@ import { canonicalizeAddress } from "@shared/cnsIndex";
 import { persistKineticObservation } from "./kineticObservation";
 import { structuredLog } from "./structuredLog";
 import { assertAutomationAuthorized, providerHeaders } from "./scanner";
+import { KINETIC_ENVIRONMENTS, type KineticEnvironment } from "@shared/kineticFootprint";
 import {
   createPersistedCnsJob, loadCnsResults, loadPersistedCnsJobs, persistCnsObservation, persistCnsProgress,
   archivePersistedCnsJob,
 } from "./cnsOperationsStore";
 
-// ── ENV Registry — all known Kinetic ENV codes from FiberFocus bundle ─────────
-export interface KineticEnv {
-  code: string;        // e.g. "MS"
-  label: string;       // human-readable
-  states: string;      // states covered
-  upperLimit: number;  // highest known control number
-  prefix: string;      // CNS prefix format  
-}
-
-export const KINETIC_ENVS: KineticEnv[] = [
-  { code: "MS", label: "Carolinas / Midwest", states: "IN, MI, NC, SC", upperLimit: 3_062_552, prefix: "MS" },
-  { code: "PA", label: "Pennsylvania",        states: "PA",              upperLimit: 573_208,   prefix: "PA" },
-  { code: "NW", label: "Northwest California",states: "CA",              upperLimit: 14_936,    prefix: "NW" },
-  { code: "AL", label: "Alabama / Southeast", states: "AL, GA, FL, MS",  upperLimit: 800_000,   prefix: "AL" },
-  { code: "OH", label: "Ohio / Kentucky",     states: "OH, KY",          upperLimit: 500_000,   prefix: "OH" },
-  { code: "TX", label: "Texas",               states: "TX, OK, NM",      upperLimit: 600_000,   prefix: "TX" },
-  { code: "MO", label: "Missouri / Iowa",     states: "MO, IA, NE, MN",  upperLimit: 700_000,   prefix: "MO" },
-  { code: "NY", label: "New York",            states: "NY",              upperLimit: 400_000,   prefix: "NY" },
-  { code: "AR", label: "Arkansas",            states: "AR",              upperLimit: 300_000,   prefix: "AR" },
-];
+// One shared, reviewed registry powers manual scans, nightly rotation, and UI.
+export type KineticEnv = KineticEnvironment;
+export const KINETIC_ENVS = KINETIC_ENVIRONMENTS;
 
 // ── CNS Scanner State ─────────────────────────────────────────────────────────
 export interface CnsJob {

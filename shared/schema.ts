@@ -436,6 +436,7 @@ export const comingSoonAddresses = sqliteTable("coming_soon_addresses", {
   reason: text("reason").notNull().default("no_service"),
   // "no_service" | "copper_only" | "competitor_only" | "coming_soon"
   lastChecked: text("last_checked"),
+  nextCheckAt: text("next_check_at"),
   // When fiber becomes available, this flips
   fiberAvailable: integer("fiber_available", { mode: "boolean" }).default(false),
   convertedToLeadId: integer("converted_to_lead_id"), // set when promoted to lead
@@ -446,9 +447,9 @@ export const comingSoonAddresses = sqliteTable("coming_soon_addresses", {
   dfAddressId: text("df_address_id"),
   householdSegmentType: text("household_segment_type"), // COMING SOON | PROSPECT | EXISTING COPPER | …
   buildStatus: text("build_status"),
-  // ── Lifecycle (recheck → promote or age-out) ────────────────────────────────
-  // status: "active" (still watching) | "promoted" (went live → lead) | "aged_out"
-  //         (watched too long / never materialized — junk) | "removed" (manual).
+  // ── Lifecycle (adaptive recheck → promote) ─────────────────────────────────
+  // status: "active" (watched until it changes) | "promoted" (went live → lead)
+  //         | "aged_out" (legacy/explicit retention policy) | "removed" (manual).
   // Archived rows leave the active list but are KEPT as history.
   status: text("status").notNull().default("active"),
   checkCount: integer("check_count").notNull().default(0), // times rechecked
