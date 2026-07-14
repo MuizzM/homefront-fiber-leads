@@ -37,6 +37,12 @@ jobs:
             set -euo pipefail
             cd /srv/homefront
             git pull --ff-only
+            # Private recruiting links require a stable HMAC key. Bootstrap it
+            # once on the host without printing it or storing it in GitHub.
+            if ! grep -q '^ONBOARDING_INVITE_SECRET=' .env; then
+              umask 077
+              printf 'ONBOARDING_INVITE_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
+            fi
             export APP_IMAGE_TAG=$(git rev-parse --short HEAD)
             # BuildKit layers accumulate quickly on this small host. When the root
             # disk crosses 85%, remove ONLY unused build cache/images before the
