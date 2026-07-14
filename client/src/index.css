@@ -150,6 +150,23 @@
   scrollbar-gutter: stable;
 }
 
+/* Route changes use one short compositor-only entrance. It gives mobile tab
+   changes spatial continuity without delaying input or animating large layout
+   properties. Mapbox remains full-bleed and is excluded from this transform by
+   its own fixed canvas composition. */
+@keyframes app-route-enter {
+  from { opacity: 0.55; transform: translate3d(0, 5px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+.app-route-stage {
+  animation: app-route-enter 180ms cubic-bezier(.2,.8,.2,1) both;
+  transform-origin: 50% 0;
+}
+
+@media (min-width: 768px) {
+  .app-route-stage { animation-duration: 140ms; }
+}
+
 /* One low-cost compositor shimmer for all route and card skeletons. The old
    opacity pulse made the whole surface repaint and looked like a stalled app. */
 @keyframes app-skeleton-shimmer {

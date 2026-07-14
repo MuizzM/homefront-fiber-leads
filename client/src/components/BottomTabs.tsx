@@ -20,7 +20,7 @@ export function BottomTabs({ onMore, moreOpen = false, moreButtonRef }: { onMore
     <nav
       data-testid="bottom-tabs"
       aria-label="Primary navigation"
-      className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/80 bg-card shadow-[0_-8px_24px_rgba(0,0,0,0.18)]"
+      className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/70 bg-card/92 shadow-[0_-10px_32px_rgba(0,0,0,0.22)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/78"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom), 6px)" }}
     >
       <div className="grid grid-cols-5 h-[58px] px-1">
@@ -43,6 +43,7 @@ export function BottomTabs({ onMore, moreOpen = false, moreButtonRef }: { onMore
             <span className={`text-[10px] font-semibold ${active ? "text-primary" : "text-muted-foreground"}`}>
               {label}
             </span>
+            {active && !primary && <span className="absolute bottom-0.5 h-0.5 w-4 rounded-full bg-primary" aria-hidden="true" />}
           </Link>
         );
       })}

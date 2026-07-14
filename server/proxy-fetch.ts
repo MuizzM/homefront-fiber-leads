@@ -17,6 +17,26 @@ function boundedInt(value: string | undefined, fallback: number, min: number, ma
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.floor(parsed))) : fallback;
 }
 
+export function proxyUrlFromEnv(env: NodeJS.ProcessEnv): string | null {
+  const explicit = env.PROXY_URL?.trim();
+  if (explicit) return explicit;
+  const host = env.DECODO_HOST?.trim();
+  const port = env.DECODO_PORT?.trim();
+  const password = env.DECODO_PASS?.trim();
+  const country = env.DECODO_COUNTRY?.trim() || "us";
+  const template = env.DECODO_USERNAME_TEMPLATE?.trim();
+  const username = env.DECODO_USER?.trim()
+    || template?.replace(/\{country\}/gi, country).replace(/\$\{country\}/gi, country);
+  if (!host || !port || !username || !password) return null;
+  const protocol = env.DECODO_PROTOCOL?.trim() || "http";
+  if (!/^(https?|socks5)$/i.test(protocol)) throw new Error("Unsupported DECODO_PROTOCOL");
+  return `${protocol.toLowerCase()}://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
+}
+
+function configuredProxyUrl(): string | null {
+  return proxyUrlFromEnv(process.env);
+}
+
 function buildAgent(proxyUrl: string) {
   return new _ProxyAgent({
     uri: proxyUrl,
@@ -43,7 +63,7 @@ async function loadUndici() {
     _undiciFetch = undici.fetch;
     _proxyLoaded = true;
 
-    const proxyUrl = process.env.PROXY_URL;
+    const proxyUrl = configuredProxyUrl();
     if (proxyUrl && _ProxyAgent) {
       _sharedDispatcher = buildAgent(proxyUrl);
       console.log(`[proxy-fetch] Pool created: ${POOL_SIZE} connections × ${PIPELINE} pipeline = ${POOL_SIZE * PIPELINE} slots`);
@@ -57,7 +77,7 @@ async function loadUndici() {
 loadUndici();
 
 export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<Response> {
-  const proxyUrl = process.env.PROXY_URL;
+  const proxyUrl = configuredProxyUrl();
 
   // When an authorized proxy is configured it is required for that deployment:
   // never silently change egress after a transport failure. Retry one broken
@@ -82,7 +102,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
 }
 
 export function getProxyStatus(): { enabled: boolean; url: string | null; slots: number } {
-  const proxyUrl = process.env.PROXY_URL;
+  const proxyUrl = configuredProxyUrl();
   return {
     enabled: !!proxyUrl && !!_sharedDispatcher,
     url: proxyUrl ? proxyUrl.replace(/:[^:@]+@/, ":****@") : null,
