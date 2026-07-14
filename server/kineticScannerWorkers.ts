@@ -42,12 +42,18 @@ async function runScan(id:string):Promise<void>{
     for(let sequentialId=start;sequentialId<=record.end_sequential_id;sequentialId++){
       await waitIfPaused(id,runtime);if(runtime.stopped)break;
       const tick=Date.now();let found=0,live=0,errors=0;
+      const itemKey=`sequential:${sequentialId}`;
+      rawDb.prepare(`INSERT INTO kinetic_scan_job_items (tenant_id,job_id,item_key,sequential_id,status,attempts,lease_owner,lease_expires_at)
+        VALUES (?,?,?,?, 'leased',1,?,datetime('now','+2 minutes')) ON CONFLICT(job_id,item_key) DO UPDATE SET status='leased',attempts=attempts+1,lease_owner=excluded.lease_owner,lease_expires_at=excluded.lease_expires_at,updated_at=datetime('now')`)
+        .run(record.tenant_id,id,itemKey,sequentialId,`process:${process.pid}`);
       try{
         const result=await lookupWithRetry({sequentialId},runtime.controller.signal);
         if(result){const stored=upsertKineticAddress(record.tenant_id,id,result);found=stored.inserted?1:0;live=result.isLive===true?1:0;}
+        rawDb.prepare(`UPDATE kinetic_scan_job_items SET status='completed',completed_at=datetime('now'),lease_owner=NULL,lease_expires_at=NULL,updated_at=datetime('now') WHERE job_id=? AND item_key=?`).run(id,itemKey);
       }catch(error){
         if(runtime.stopped)break;errors=1;
         heartbeat(id,{last_error:error instanceof Error?error.message:String(error)});
+        rawDb.prepare(`UPDATE kinetic_scan_job_items SET status='dead_letter',last_error=?,lease_owner=NULL,lease_expires_at=NULL,updated_at=datetime('now') WHERE job_id=? AND item_key=?`).run(error instanceof Error?error.message:String(error),id,itemKey);
       }
       rawDb.prepare(`UPDATE kinetic_scan_jobs SET current_sequential_id=?,checked=checked+1,found=found+?,live=live+?,errors=errors+?,last_heartbeat=datetime('now'),updated_at=datetime('now') WHERE id=?`)
         .run(sequentialId,found,live,errors,id);
@@ -68,7 +74,9 @@ async function runRecheck(id:string):Promise<void>{
   const record=job(id);if(!record){runtimes.delete(id);return;}
   rawDb.prepare(`UPDATE kinetic_scan_jobs SET status='running',started_at=COALESCE(started_at,datetime('now')),last_heartbeat=datetime('now') WHERE id=?`).run(id);
   event(record.tenant_id,id,"recheck","started");
-  const rows=rawDb.prepare(`SELECT id,kinetic_address_id AS kineticAddressId FROM kinetic_addresses WHERE tenant_id=? AND kinetic_address_id IS NOT NULL ORDER BY last_checked_at ASC`).all(record.tenant_id) as any[];
+  const rows=rawDb.prepare(`SELECT a.id,a.kinetic_address_id AS kineticAddressId FROM kinetic_addresses a LEFT JOIN kinetic_address_state s ON s.address_id=a.id
+    WHERE a.tenant_id=? AND a.kinetic_address_id IS NOT NULL
+    ORDER BY CASE s.discovery_state WHEN 'CANDIDATE_FRESH' THEN 0 WHEN 'REGRESSED' THEN 1 WHEN 'NON_FIBER' THEN 2 WHEN 'BASELINE_FIBER' THEN 3 ELSE 4 END,a.last_checked_at ASC`).all(record.tenant_id) as any[];
   try{
     for(const row of rows){
       if(runtime.stopped)break;const tick=Date.now();let live=0,errors=0;
