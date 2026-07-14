@@ -10,7 +10,7 @@ export type ScannerTab = "city" | "usa" | "cns";
 const TABS: { id: ScannerTab; label: string; hint: string; Icon: React.ElementType }[] = [
   { id: "city", label: "City Scan",    hint: "Fresh fiber: Yes, No, or Recheck",   Icon: Radar },
   { id: "usa",  label: "USA Batch",    hint: "Run the same verdict across cities", Icon: Globe },
-  { id: "cns",  label: "Nightly Auto", hint: "Recheck for newly fresh fiber",       Icon: ScanSearch },
+  { id: "cns",  label: "CNS Scanner",  hint: "Provider-index operations command center", Icon: ScanSearch },
 ];
 
 export default function Scanners({ initialTab = "city" }: { initialTab?: ScannerTab }) {

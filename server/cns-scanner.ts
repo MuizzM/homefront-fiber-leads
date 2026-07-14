@@ -24,6 +24,10 @@ import { canonicalizeAddress } from "@shared/cnsIndex";
 import { persistKineticObservation } from "./kineticObservation";
 import { structuredLog } from "./structuredLog";
 import { assertAutomationAuthorized, providerHeaders } from "./scanner";
+import {
+  createPersistedCnsJob, loadCnsResults, loadPersistedCnsJobs, persistCnsObservation, persistCnsProgress,
+  archivePersistedCnsJob,
+} from "./cnsOperationsStore";
 
 // ── ENV Registry — all known Kinetic ENV codes from FiberFocus bundle ─────────
 export interface KineticEnv {
@@ -61,6 +65,9 @@ export interface CnsJob {
   hits: number;           // addresses found in Kinetic fabric
   newFiberHits: number;   // raw primary-source NEW FIBER matches
   confirmedLeads: number; // independently confirmed projector publications
+  skipped: number;
+  errors: number;
+  retries: number;
   startedAt: string;
   completedAt?: string;
   estimatedMinutes?: number;
@@ -93,6 +100,20 @@ export interface CnsResult {
 const cnsJobs = new Map<string, CnsJob>();
 const stopFlags = new Set<string>(); // jobs that should stop
 const pauseFlags = new Set<string>(); // jobs that should pause
+const activeWorkers = new Set<string>();
+
+// Rehydrate the operator ledger after a deploy. Active jobs fail safe to paused;
+// a manager explicitly resumes from currentCns, preventing surprise proxy spend.
+for (const row of loadPersistedCnsJobs()) {
+  cnsJobs.set(row.id, {
+    tenantId: row.tenantId, id: row.id, env: row.env, envLabel: KINETIC_ENVS.find(e => e.code === row.env)?.label ?? row.env,
+    startCns: row.startCns, endCns: row.endCns, currentCns: row.currentCns, status: row.status,
+    found: loadCnsResults(row.id), scanned: row.scanned, hits: row.hits, newFiberHits: row.newFiberHits,
+    confirmedLeads: row.confirmedLeads, skipped: row.skipped, errors: row.errors, retries: row.retries,
+    startedAt: row.startedAt, completedAt: row.completedAt, lastError: row.lastError, ratePerMin: row.ratePerMin,
+  });
+  if (row.status === "paused") pauseFlags.add(row.id);
+}
 
 export function getCnsJobs(): CnsJob[] {
   return Array.from(cnsJobs.values());
@@ -104,14 +125,37 @@ export function getCnsJob(id: string): CnsJob | undefined {
 
 export function stopCnsJob(id: string) {
   stopFlags.add(id);
+  const job = cnsJobs.get(id);
+  if (job) { job.status = "stopped"; job.completedAt = new Date().toISOString(); persistCnsProgress(job, "job.stopped"); }
 }
 
 export function pauseCnsJob(id: string) {
   pauseFlags.add(id);
+  const job = cnsJobs.get(id);
+  if (job) { job.status = "paused"; persistCnsProgress(job, "job.paused"); }
 }
 
-export function resumeCnsJob(id: string) {
+export function resumeCnsJob(id: string, getToken?: () => Promise<string>) {
   pauseFlags.delete(id);
+  const job = cnsJobs.get(id);
+  if (!job) return;
+  job.status = "running";
+  job.completedAt = undefined;
+  job.lastError = undefined;
+  job.retries++;
+  persistCnsProgress(job, "job.resumed");
+  if (!activeWorkers.has(id) && getToken) {
+    const resumeAt = Math.max(job.startCns, job.currentCns + (job.scanned > 0 ? 1 : 0));
+    void runCnsScan(id, job.env, resumeAt, job.endCns, getToken);
+  }
+}
+
+export function archiveCnsJob(id: string, tenantId: number): boolean {
+  const job = cnsJobs.get(id);
+  if (!job || job.tenantId !== tenantId || ["running","paused"].includes(job.status)) return false;
+  if (!archivePersistedCnsJob(id,tenantId)) return false;
+  cnsJobs.delete(id); stopFlags.delete(id); pauseFlags.delete(id);
+  return true;
 }
 
 // ── Canonical Kinetic df-id probe ─────────────────────────────────────────────
@@ -226,6 +270,8 @@ export async function runCnsScan(
   getToken: () => Promise<string>
 ) {
   const job = cnsJobs.get(jobId)!;
+  if (!job || activeWorkers.has(jobId)) return;
+  activeWorkers.add(jobId);
   const rateWindow: number[] = []; // timestamps for rate calculation
 
   let consecutiveErrors = 0;
@@ -235,7 +281,9 @@ export async function runCnsScan(
     if (stopFlags.has(jobId)) {
       job.status = "stopped";
       job.completedAt = new Date().toISOString();
+      persistCnsProgress(job, "job.stopped");
       stopFlags.delete(jobId);
+      activeWorkers.delete(jobId);
       return;
     }
 
@@ -258,7 +306,8 @@ export async function runCnsScan(
         // as if this control number were unassigned.
         consecutiveErrors++;
         job.lastError = `probe ${lk.reason}`;
-        if (consecutiveErrors >= 10) { job.status = "error"; job.completedAt = new Date().toISOString(); return; }
+        job.errors++;
+        if (consecutiveErrors >= 10) { job.status = "error"; job.completedAt = new Date().toISOString(); persistCnsProgress(job, "job.failed"); activeWorkers.delete(jobId); return; }
         await new Promise(r => setTimeout(r, lk.reason === "blocked" ? 2000 : 300));
         continue;
       }
@@ -297,6 +346,7 @@ export async function runCnsScan(
             error: String(error?.message ?? error),
           }, "warn");
         }
+        persistCnsObservation(job, result);
         if (result.isNewFiber) job.newFiberHits++; // raw primary-source hit only
 
         // Brief pause after a hit (live address found — be respectful)
@@ -313,9 +363,11 @@ export async function runCnsScan(
       if (job.ratePerMin > 0) {
         job.estimatedMinutes = Math.round(remaining / job.ratePerMin);
       }
+      if (job.scanned % 25 === 0 || found) persistCnsProgress(job, "job.progress");
 
     } catch (err: any) {
       consecutiveErrors++;
+      job.errors++;
       job.lastError = err.message;
 
       if (err.message?.startsWith("TOKEN_EXPIRED")) {
@@ -323,6 +375,7 @@ export async function runCnsScan(
         job.status = "paused";
         pauseFlags.add(jobId);
         job.lastError = "Token expired. Paste a new token in Token Setup, then resume.";
+        persistCnsProgress(job, "job.token_expired");
         while (pauseFlags.has(jobId)) {
           await new Promise(r => setTimeout(r, 2000));
         }
@@ -334,6 +387,8 @@ export async function runCnsScan(
         job.status = "error";
         job.lastError = `Too many consecutive errors: ${err.message}`;
         job.completedAt = new Date().toISOString();
+        persistCnsProgress(job, "job.failed");
+        activeWorkers.delete(jobId);
         return;
       }
 
@@ -343,6 +398,8 @@ export async function runCnsScan(
 
   job.status = "done";
   job.completedAt = new Date().toISOString();
+  persistCnsProgress(job, "job.completed");
+  activeWorkers.delete(jobId);
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -352,6 +409,7 @@ export function createCnsJob(
   endCns: number,
   getToken: () => Promise<string>,
   tenantId?: number,
+  createdBy?: number,
 ): CnsJob {
   const envInfo = KINETIC_ENVS.find(e => e.code === env);
   const jobId = `cns_${env}_${Date.now()}`;
@@ -370,11 +428,15 @@ export function createCnsJob(
     hits: 0,
     newFiberHits: 0,
     confirmedLeads: 0,
+    skipped: 0,
+    errors: 0,
+    retries: 0,
     startedAt: new Date().toISOString(),
     ratePerMin: 0,
   };
 
   cnsJobs.set(jobId, job);
+  createPersistedCnsJob(job, createdBy);
 
   // Run in background — non-blocking
   runCnsScan(jobId, env, startCns, endCns, getToken).catch(err => {
@@ -383,6 +445,9 @@ export function createCnsJob(
       j.status = "error";
       j.lastError = err.message;
       j.completedAt = new Date().toISOString();
+      j.errors++;
+      persistCnsProgress(j, "job.failed");
+      activeWorkers.delete(jobId);
     }
   });
 

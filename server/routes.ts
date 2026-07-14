@@ -84,6 +84,7 @@ import * as commissionSvc from "./commissionService";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
+import { registerCnsOperationsRoutes } from "./cnsOperationsRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -147,7 +148,9 @@ function isAutoAreaName(name?: string | null): boolean {
 }
 import { scanAddress, setManualToken, getTokenStatus, getAuthToken, refreshTokenFromApi, getAddressScanQueueStatus, type ScanResult } from "./scanner";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
-import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob } from "./cns-scanner";
+import { KINETIC_ENVS, createCnsJob, getCnsJobs, getCnsJob, stopCnsJob, pauseCnsJob, resumeCnsJob, archiveCnsJob } from "./cns-scanner";
+import { scannerSettings } from "./cnsOperationsStore";
+import { planCnsRange } from "@shared/cnsRange";
 import { planCityDiscovery, startCityDiscovery, getDiscoveryJob, getDiscoveryJobs, MAX_DISCOVERY_BUDGET } from "./cnsDiscovery";
 import * as scanSvc from "./scanService";
 import {
@@ -837,6 +840,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   registerFiberOperationsRoutes(app, {
     requireAuth, requireCapability, requireScanningAllowed, scanAdmission: authorizedScanAdmission,
   });
+  registerCnsOperationsRoutes(app, { requireCapability });
 
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
@@ -4798,12 +4802,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const envInfo = KINETIC_ENVS.find(e => e.code === env);
     if (!envInfo) return res.status(400).json({ error: `Unknown ENV: ${env}. Valid: ${KINETIC_ENVS.map(e => e.code).join(", ")}` });
 
-    const start = Math.max(1, Number(startCns) || 1);
-    const end   = Math.min(Number(endCns) || 10000, envInfo.upperLimit);
-    if (start >= end) return res.status(400).json({ error: "startCns must be less than endCns" });
-    if (end - start > 100_000) return res.status(400).json({ error: "Max range is 100,000 CNS per job. Split into multiple jobs." });
+    const tenantId = (req as any).user?.tenantId ?? getDefaultTenantId();
+    if (!tenantId) return res.status(403).json({ error: "Organization required" });
+    const settings = scannerSettings(tenantId);
+    const plan = planCnsRange({ start: Number(startCns), end: Number(endCns), upperLimit: envInfo.upperLimit, jobSizeLimit: settings.jobSizeLimit });
+    if (!plan.valid) return res.status(400).json({ error: plan.error === "job_limit" ? `Max range is ${Number(settings.jobSizeLimit).toLocaleString()} CNS per job. Split into multiple jobs.` : `Invalid CNS range: ${plan.error}` });
+    const { start, end } = plan;
 
-    const job = createCnsJob(env, start, end, () => getAuthToken(), (req as any).user?.tenantId ?? undefined);
+    const job = createCnsJob(env, start, end, () => getAuthToken(), tenantId, (req as any).user?.id);
     storage.logActivity((req as any).user?.id ?? null, "cns.scan.started", "cns_job", 0, { env, start, end, jobId: job.id }, req.ip);
     res.status(201).json(job);
   });
@@ -4866,6 +4872,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       startCns: j.startCns, endCns: j.endCns, currentCns: j.currentCns,
       status: j.status, scanned: j.scanned, hits: j.hits, newFiberHits: j.newFiberHits,
       confirmedLeads: j.confirmedLeads,
+      skipped: j.skipped, errors: j.errors, retries: j.retries,
       ratePerMin: j.ratePerMin, estimatedMinutes: j.estimatedMinutes,
       startedAt: j.startedAt, completedAt: j.completedAt, lastError: j.lastError,
     })));
@@ -4935,7 +4942,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // POST /api/cns/jobs/:id/stop
   app.post("/api/cns/jobs/:id/stop", requireManager, (req, res) => {
     const job = getCnsJob(qstr(req.params.id));
-    if (!job) return res.status(404).json({ error: "Not found" });
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
+    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
     stopCnsJob(qstr(req.params.id));
     res.json({ ok: true, status: "stopped" });
   });
@@ -4943,7 +4951,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // POST /api/cns/jobs/:id/pause
   app.post("/api/cns/jobs/:id/pause", requireManager, (req, res) => {
     const job = getCnsJob(qstr(req.params.id));
-    if (!job) return res.status(404).json({ error: "Not found" });
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
+    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
     pauseCnsJob(qstr(req.params.id));
     res.json({ ok: true, status: "paused" });
   });
@@ -4951,16 +4960,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // POST /api/cns/jobs/:id/resume
   app.post("/api/cns/jobs/:id/resume", requireManager, (req, res) => {
     const job = getCnsJob(qstr(req.params.id));
-    if (!job) return res.status(404).json({ error: "Not found" });
-    resumeCnsJob(qstr(req.params.id));
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
+    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
+    resumeCnsJob(qstr(req.params.id), () => getAuthToken());
     res.json({ ok: true, status: "running" });
   });
 
   // DELETE /api/cns/jobs/:id — remove a completed/stopped job from memory
   app.delete("/api/cns/jobs/:id", requireManager, (req, res) => {
     const job = getCnsJob(qstr(req.params.id));
-    if (!job) return res.status(404).json({ error: "Not found" });
-    if (job.status === "running") stopCnsJob(qstr(req.params.id));
+    const tid = (req as any).user?.tenantId ?? getDefaultTenantId();
+    if (!job || !tid || job.tenantId !== tid) return res.status(404).json({ error: "Not found" });
+    if (["running","paused"].includes(job.status)) return res.status(409).json({ error: "Stop the job before archiving it" });
+    if (!archiveCnsJob(qstr(req.params.id),tid)) return res.status(409).json({ error: "Job could not be archived" });
     res.json({ ok: true });
   });
 

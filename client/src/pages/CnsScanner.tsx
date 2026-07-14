@@ -1,625 +1,118 @@
-import { useState, useCallback, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
-import { useToast } from "@/hooks/use-toast";
 import {
-  ScanSearch, Play, Square, PauseCircle, PlayCircle, Trash2,
-  Zap, Globe, RefreshCw, AlertTriangle, KeyRound,
-  Activity, ChevronDown, ChevronUp, MapPin, Download
+  Activity, AlertTriangle, Archive, BarChart3, ChevronLeft, ChevronRight,
+  CircleDot, Database, Download, FileSearch, Filter, Flame, Gauge,
+  History, Loader2, Map, Network, Pause, Play, Plus, Radio, RefreshCw,
+  Search, Settings2, ShieldCheck, Square, Table2, Target, Wifi, WifiOff, X, Zap,
 } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue
-} from "@/components/ui/select";
-import { Input } from "@/components/ui/input";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { cnsOpsApi, type CnsOpsAddress } from "@/lib/cnsOpsApi";
+import { CnsOperationsMap } from "@/components/cns/CnsOperationsMap";
+import { formatCnsIdentifier, planCnsRange } from "@shared/cnsRange";
 
-// Resolve backend base URL (empty string in dev, proxied path after deploy)
-const API_BASE_URL: string = ("__PORT_5000__" as string).startsWith("__") ? "" : "__PORT_5000__";
+type Tab = "dashboard"|"jobs"|"addresses"|"map"|"hotspots"|"changes"|"evidence"|"leads"|"settings";
+interface Env { code:string;label:string;states:string;upperLimit:number;prefix:string }
+interface Job { id:string;env:string;envLabel:string;startCns:number;endCns:number;currentCns:number;status:string;scanned:number;hits:number;newFiberHits:number;confirmedLeads:number;skipped?:number;errors?:number;retries?:number;ratePerMin:number;estimatedMinutes?:number;startedAt:string;completedAt?:string;lastError?:string }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-interface KineticEnv {
-  code: string; label: string; states: string; upperLimit: number;
-}
+const NAV: Array<{id:Tab;label:string;Icon:React.ElementType}> = [
+  {id:"dashboard",label:"Dashboard",Icon:Gauge},{id:"jobs",label:"Scan Jobs",Icon:Activity},
+  {id:"addresses",label:"Addresses",Icon:Table2},{id:"map",label:"Map",Icon:Map},
+  {id:"hotspots",label:"Hotspots",Icon:Flame},{id:"changes",label:"Changes",Icon:History},
+  {id:"evidence",label:"Evidence",Icon:FileSearch},{id:"leads",label:"Lead Management",Icon:Target},
+  {id:"settings",label:"Settings",Icon:Settings2},
+];
+const FINAL = new Set(["done","completed","stopped","error","failed","cancelled"]);
+const fmt=(n:unknown)=>Number(n||0).toLocaleString();
+const cnsId=formatCnsIdentifier;
+const pct=(job:Job)=>Math.max(0,Math.min(100,Math.round((job.scanned/Math.max(1,job.endCns-job.startCns+1))*100)));
+const statusTone=(status:string)=>status==="running"?"bg-amber-500/12 text-amber-400 border-amber-500/20":status==="paused"?"bg-violet-500/12 text-violet-400 border-violet-500/20":["done","completed"].includes(status)?"bg-emerald-500/12 text-emerald-400 border-emerald-500/20":["error","failed"].includes(status)?"bg-rose-500/12 text-rose-400 border-rose-500/20":"bg-secondary text-muted-foreground border-border";
 
-interface CnsResult {
-  env: string; cns: number; dfAddressId: string;
-  address: string; city: string; state: string; zip: string;
-  lat: number | null; lng: number | null;
-  householdSegmentType: string | null;
-  isNewFiber: boolean;
-  techType: string | null; speedTier: string | null; maxDownloadMbps: number | null;
-  billingStatus: string | null; addressCatalogDate: string | null;
-  competitorName: string | null; discoveredAt: string;
-}
-
-interface CnsJob {
-  id: string; env: string; envLabel: string;
-  startCns: number; endCns: number; currentCns: number;
-  status: "running" | "paused" | "done" | "stopped" | "error";
-  scanned: number; hits: number; newFiberHits: number; confirmedLeads: number;
-  ratePerMin: number; estimatedMinutes?: number;
-  startedAt: string; completedAt?: string; lastError?: string;
-}
-
-interface CnsJobDetail extends CnsJob {
-  found: CnsResult[];
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function statusStyle(s: string): { pill: string; dot: string } {
-  const map: Record<string, { pill: string; dot: string }> = {
-    running: { pill: "bg-primary/15 text-primary",                dot: "bg-primary" },
-    paused:  { pill: "bg-amber-500/15 text-amber-400",           dot: "bg-amber-400" },
-    done:    { pill: "bg-sky-500/15 text-sky-400",               dot: "bg-sky-400" },
-    stopped: { pill: "bg-muted text-muted-foreground",           dot: "bg-muted-foreground" },
-    error:   { pill: "bg-rose-500/15 text-rose-400",             dot: "bg-rose-400" },
-  };
-  return map[s] ?? map.stopped;
-}
-
-function fmtEta(min?: number) {
-  if (min == null || min < 0) return "—";
-  if (min < 1) return "<1 min";
-  if (min < 60) return `${min} min`;
-  return `${Math.floor(min / 60)}h ${min % 60}m`;
-}
-
-function fmtCns(n: number) {
-  return n.toLocaleString();
-}
-
-// ── Main Component ────────────────────────────────────────────────────────────
-export default function CnsScanner() {
-  const { toast } = useToast();
-  const qc = useQueryClient();
-
-  // ── Form state ───────────────────────────────────────────────────────────────
-  const [selectedEnv, setSelectedEnv] = useState("MS");
-  const [startCns, setStartCns] = useState("1");
-  const [endCns, setEndCns] = useState("10000");
-
-  // ── Jobs list (from API, polled) ─────────────────────────────────────────────
-  const { data: jobs = [], refetch: refetchJobs } = useQuery<CnsJob[]>({
-    queryKey: ["/api/cns/jobs"],
-    // Poll fast only while a job is actually in flight; idle when nothing runs.
-    refetchInterval: (q) => (Array.isArray(q.state.data) && q.state.data.some((j: any) => j.status === "running" || j.status === "queued")) ? 3000 : 15000,
-  });
-
-  // ── ENV list ─────────────────────────────────────────────────────────────────
-  const { data: envs = [] } = useQuery<KineticEnv[]>({
-    queryKey: ["/api/cns/envs"],
-  });
-
-  // ── Token status ─────────────────────────────────────────────────────────────
-  const { data: tokenStatus } = useQuery<{ hasToken: boolean; expiresIn: number | null }>({
-    queryKey: ["/api/token-status"],
-  });
-  const tokenOk = tokenStatus?.hasToken && (tokenStatus.expiresIn ?? 0) > 60;
-
-  // ── Active job SSE stream ─────────────────────────────────────────────────────
-  const [streamJobId, setStreamJobId] = useState<string | null>(null);
-  const [streamResults, setStreamResults] = useState<CnsResult[]>([]);
-  const [, setStreamProgress] = useState<Partial<CnsJob> | null>(null);
-  const eventSourceRef = useRef<EventSource | null>(null);
-
-  const connectStream = useCallback((jobId: string) => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-    }
-    setStreamJobId(jobId);
-    setStreamResults([]);
-
-    // Build the SSE URL with auth header via fetch is not possible — SSE doesn't support headers
-    // Instead, we use a query parameter approach: the session token is passed in URL
-    // The server validates it via x-session-id normally, but for SSE we'll use polling fallback
-    // Actually: we just poll the /api/cns/jobs/:id endpoint every 2s for the stream view
-    // and use the SSE endpoint for progress events only (progress events don't need full auth in URL)
-    // The proper SSE solution: open it and the server validates the x-session-id cookie/header
-    // Since EventSource can't set headers, we instead poll for results and use SSE for progress
-    // via a small helper that uses fetch with ReadableStream
-    startFetchStream(jobId);
-  }, []);
-
-  const startFetchStream = useCallback(async (jobId: string) => {
-    try {
-      const sessionId = getStoredSessionId() ?? (window as any).__sessionId ?? "";
-
-      const resp = await fetch(`${API_BASE_URL}/api/cns/jobs/${jobId}/stream`, {
-        headers: {
-          "x-session-id": sessionId,
-          "x-csrf-token": sessionId, // CSRF token = session ID in this app
-        },
-      });
-
-      if (!resp.ok || !resp.body) return;
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        let eventType = "";
-        for (const line of lines) {
-          if (line.startsWith("event:")) {
-            eventType = line.slice(6).trim();
-          } else if (line.startsWith("data:")) {
-            try {
-              const payload = JSON.parse(line.slice(5).trim());
-              if (eventType === "result") {
-                setStreamResults(prev => [...prev, payload]);
-              } else if (eventType === "progress") {
-                setStreamProgress(payload);
-                refetchJobs();
-              } else if (eventType === "done") {
-                qc.invalidateQueries({ queryKey: ["/api/leads"] });
-                refetchJobs();
-              }
-            } catch {}
-            eventType = "";
-          }
-        }
-      }
-    } catch (e) {
-      // SSE failed — fall back to polling for results
-    }
-  }, [qc, refetchJobs]);
-
-  // ── Start scan ───────────────────────────────────────────────────────────────
-  const [starting, setStarting] = useState(false);
-
-  const handleStart = useCallback(async () => {
-    if (!tokenOk) {
-      toast({ title: "API token required", description: "Set your token first.", variant: "destructive" });
-      return;
-    }
-    const start = parseInt(startCns, 10);
-    const end   = parseInt(endCns, 10);
-    if (isNaN(start) || isNaN(end) || start >= end) {
-      toast({ title: "Invalid range", description: "Start CNS must be less than end CNS.", variant: "destructive" });
-      return;
-    }
-    setStarting(true);
-    try {
-      const job: CnsJobDetail = await (await apiRequest("POST", "/api/cns/jobs", {
-        env: selectedEnv, startCns: start, endCns: end,
-      })).json();
-      toast({ title: "CNS scan started", description: `${selectedEnv} · CNS ${fmtCns(start)}–${fmtCns(end)}` });
-      refetchJobs();
-      connectStream(job.id);
-    } catch (e: any) {
-      toast({ title: "Failed to start", description: e.message, variant: "destructive" });
-    } finally {
-      setStarting(false);
-    }
-  }, [selectedEnv, startCns, endCns, tokenOk, toast, refetchJobs, connectStream]);
-
-  // ── Job controls ─────────────────────────────────────────────────────────────
-  const handleStop = useCallback(async (jobId: string) => {
-    await apiRequest("POST", `/api/cns/jobs/${jobId}/stop`);
-    refetchJobs();
-  }, [refetchJobs]);
-
-  const handlePause = useCallback(async (jobId: string) => {
-    await apiRequest("POST", `/api/cns/jobs/${jobId}/pause`);
-    refetchJobs();
-  }, [refetchJobs]);
-
-  const handleResume = useCallback(async (jobId: string) => {
-    await apiRequest("POST", `/api/cns/jobs/${jobId}/resume`);
-    refetchJobs();
-  }, [refetchJobs]);
-
-  const handleDelete = useCallback(async (jobId: string) => {
-    await apiRequest("DELETE", `/api/cns/jobs/${jobId}`);
-    if (streamJobId === jobId) {
-      setStreamJobId(null);
-      setStreamResults([]);
-      setStreamProgress(null);
-    }
-    refetchJobs();
-  }, [refetchJobs, streamJobId]);
-
-  // ── Load results for a job ───────────────────────────────────────────────────
-  const [viewJobId, setViewJobId] = useState<string | null>(null);
-  const { data: viewJob } = useQuery<CnsJobDetail>({
-    queryKey: ["/api/cns/jobs", viewJobId],
-    queryFn: async () => (await apiRequest("GET", `/api/cns/jobs/${viewJobId}`)).json(),
-    enabled: !!viewJobId,
-    refetchInterval: viewJobId ? 3000 : false,
-  });
-
-  const displayedResults = viewJobId === streamJobId
-    ? streamResults
-    : (viewJob?.found ?? []);
-
-  const newFiberResults = displayedResults.filter(r => r.isNewFiber);
-
-  // ── CSV export ───────────────────────────────────────────────────────────────
-  const exportCSV = useCallback(() => {
-    const header = "ENV,CNS,dfAddressId,Address,City,State,ZIP,Lat,Lng,Segment,isNewFiber,Tech,Speed,billingStatus,CatalogDate,Competitor,DiscoveredAt";
-    const rows = displayedResults.map(r =>
-      `"${r.env}","${r.cns}","${r.dfAddressId}","${r.address}","${r.city}","${r.state}","${r.zip}","${r.lat ?? ""}","${r.lng ?? ""}","${r.householdSegmentType ?? ""}","${r.isNewFiber}","${r.techType ?? ""}","${r.maxDownloadMbps ?? ""}","${r.billingStatus ?? ""}","${r.addressCatalogDate ?? ""}","${r.competitorName ?? ""}","${r.discoveredAt}"`
-    );
-    const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `cns_scan_${viewJobId ?? "results"}.csv`;
-    a.click();
-  }, [displayedResults, viewJobId]);
-
-  const selectedEnvInfo = envs.find(e => e.code === selectedEnv);
-  const rangeSize = Math.max(0, (parseInt(endCns) || 0) - (parseInt(startCns) || 0));
-
-  return (
-    <div className="w-full max-w-5xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6">
-      {/* Token warning */}
-      {!tokenOk && (
-        <div className="flex items-center gap-3 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4">
-          <AlertTriangle className="w-5 h-5 text-rose-400 flex-shrink-0" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-rose-400">API token required for CNS scanning</p>
-            <p className="text-xs text-muted-foreground mt-0.5">Paste a valid Kinetic token in Token Setup before running scans.</p>
+export default function CnsScanner(){
+  const [tab,setTab]=useState<Tab>("dashboard"),[showStart,setShowStart]=useState(false),[evidenceTarget,setEvidenceTarget]=useState<number|null>(null);
+  const qc=useQueryClient();
+  const {data:jobs=[]}=useQuery<Job[]>({queryKey:["/api/cns/jobs"],queryFn:()=>apiRequest("GET","/api/cns/jobs").then(r=>r.json()),refetchInterval:q=>(q.state.data as Job[]|undefined)?.some(j=>j.status==="running")?2500:15000});
+  const {data:envs=[]}=useQuery<Env[]>({queryKey:["/api/cns/envs"],queryFn:()=>apiRequest("GET","/api/cns/envs").then(r=>r.json()),staleTime:300_000});
+  const {data:token}=useQuery<{hasToken:boolean;expiresIn:number|null}>({queryKey:["/api/token-status"],queryFn:()=>apiRequest("GET","/api/token-status").then(r=>r.json()),refetchInterval:60_000});
+  const active=jobs.find(j=>j.status==="running"||j.status==="paused")??null;
+  const tokenOnline=!!token?.hasToken&&(token.expiresIn??0)>60;
+  const openEvidence=useCallback((id:number)=>{setEvidenceTarget(id);setTab("evidence")},[]);
+  return <div className="min-h-full bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.08),transparent_28%),linear-gradient(hsl(var(--border)/0.16)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border)/0.12)_1px,transparent_1px)] bg-[size:auto,32px_32px,32px_32px] pb-24">
+    <header className="sticky top-0 z-20 border-b border-border/80 bg-background/92 backdrop-blur-xl">
+      <div className="mx-auto max-w-[1500px] px-3 pt-3 sm:px-5">
+        <div className="flex flex-wrap items-center gap-3 pb-3">
+          <div className="grid h-10 w-10 place-items-center rounded-xl border border-primary/25 bg-primary/10"><Network className="h-5 w-5 text-primary"/></div>
+          <div className="min-w-0"><h1 className="text-lg font-semibold tracking-tight">CNS Scanner</h1><p className="text-[11px] text-muted-foreground">Sequential provider-index intelligence · evidence before publication</p></div>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+            <StatusBadge label={tokenOnline?"Online":"Offline"} good={tokenOnline} Icon={tokenOnline?Wifi:WifiOff}/>
+            <StatusBadge label={active?.status==="running"?"Scanning":active?.status==="paused"?"Paused":"Stopped"} good={active?.status==="running"} Icon={Radio}/>
+            <button onClick={()=>setShowStart(true)} className="ml-1 flex h-11 items-center gap-2 rounded-xl bg-primary px-3.5 text-xs font-semibold text-primary-foreground shadow-lg shadow-primary/15 hover:bg-primary/90"><Plus className="h-4 w-4"/>Start New CNS Scan</button>
           </div>
-          <a href="#/token"
-            className="flex items-center gap-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-400 text-xs font-semibold px-3 py-1.5 transition-colors whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/50">
-            <KeyRound className="w-3.5 h-3.5" /> Set Token
-          </a>
         </div>
-      )}
-
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight flex items-center gap-2">
-          <ScanSearch className="w-5 h-5 text-primary" />
-          CNS Scanner
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1 max-w-2xl">
-          Run bounded, authorized provider-index checks to collect address-level availability evidence.
-          A NEW FIBER response is a primary match that still requires historical change and independent confirmation.
-        </p>
+        <nav className="flex gap-1 overflow-x-auto" role="tablist" aria-label="CNS Scanner sections">{NAV.map(({id,label,Icon})=><button key={id} role="tab" aria-selected={tab===id} onClick={()=>setTab(id)} className={`flex h-10 shrink-0 items-center gap-1.5 border-b-2 px-2.5 text-[11px] font-semibold transition sm:text-xs ${tab===id?"border-primary text-foreground":"border-transparent text-muted-foreground hover:text-foreground"}`}><Icon className="h-3.5 w-3.5"/>{label}</button>)}</nav>
       </div>
-
-      {/* How it works — calm reference row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-4 rounded-xl border border-border bg-card p-5">
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">What is a CNS?</div>
-          <p className="text-xs text-muted-foreground">
-            Every address in Kinetic's network has an internal ID: <span className="font-mono text-foreground">ENV + 7-digit control number</span>.
-            e.g. <span className="font-mono text-emerald-400">MS0012345</span>
-          </p>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">How candidates are found</div>
-          <p className="text-xs text-muted-foreground">
-            We iterate CNS values sequentially. When the API returns
-            <span className="font-mono text-emerald-400 mx-1">householdSegmentType = "NEW FIBER"</span>
-            we store a primary-provider observation; that label alone does not establish freshness.
-          </p>
-        </div>
-        <div>
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1.5">What happens to hits</div>
-          <p className="text-xs text-muted-foreground">
-            Every result is stored as evidence. Only an unavailable-to-available change with independent
-            fiber confirmation is published to Lead Management.
-          </p>
-        </div>
-      </div>
-
-      {/* Start new scan — config console */}
-      <Card className="bg-card border-border rounded-xl">
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold tracking-tight flex items-center gap-2">
-            <Globe className="w-4 h-4 text-primary" />
-            Start New CNS Scan
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* ENV selector */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Region (ENV)</label>
-              <Select value={selectedEnv} onValueChange={setSelectedEnv}>
-                <SelectTrigger data-testid="select-env" className="h-9 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {envs.map(e => (
-                    <SelectItem key={e.code} value={e.code}>
-                      <span className="font-mono font-bold text-primary mr-2">{e.code}</span>
-                      <span className="text-muted-foreground text-xs">{e.label}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedEnvInfo && (
-                <div className="text-xs text-muted-foreground tabular-nums">
-                  {selectedEnvInfo.states} · up to {fmtCns(selectedEnvInfo.upperLimit)} addresses
-                </div>
-              )}
-            </div>
-
-            {/* Start CNS */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] uppercase tracking-wide text-muted-foreground">Start CNS</label>
-              <Input
-                type="number"
-                value={startCns}
-                onChange={e => setStartCns(e.target.value)}
-                className="h-9 text-sm font-mono tabular-nums"
-                data-testid="input-start-cns"
-                min={1}
-              />
-            </div>
-
-            {/* End CNS */}
-            <div className="space-y-1.5">
-              <label className="text-[11px] uppercase tracking-wide text-muted-foreground">End CNS</label>
-              <Input
-                type="number"
-                value={endCns}
-                onChange={e => setEndCns(e.target.value)}
-                className="h-9 text-sm font-mono tabular-nums"
-                data-testid="input-end-cns"
-                min={2}
-              />
-              <div className="text-xs text-muted-foreground tabular-nums">
-                Max 100,000 per job · {rangeSize.toLocaleString()} addresses
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-between gap-4 border-t border-border pt-4">
-            <div className="text-xs text-muted-foreground">
-              <span className="font-mono font-semibold text-foreground">{selectedEnv}</span>
-              <span className="mx-1.5">·</span>
-              <span className="tabular-nums">CNS {fmtCns(parseInt(startCns) || 0)} – {fmtCns(parseInt(endCns) || 0)}</span>
-            </div>
-            <Button
-              onClick={handleStart}
-              disabled={starting || !tokenOk}
-              size="lg"
-              className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
-              data-testid="btn-start-cns"
-            >
-              {starting ? (
-                <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Starting…</>
-              ) : (
-                <><Play className="w-4 h-4 mr-2" /> Start Scan</>
-              )}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Active Jobs */}
-      {jobs.length > 0 && (
-        <div className="space-y-3">
-          <h2 className="text-[11px] uppercase tracking-wide text-muted-foreground">Scan Jobs</h2>
-          {jobs.map(job => {
-            const isStreaming = streamJobId === job.id;
-            const isOpen = viewJobId === job.id;
-            const st = statusStyle(job.status);
-            const pct = job.endCns > job.startCns
-              ? Math.round(((job.currentCns - job.startCns) / (job.endCns - job.startCns)) * 100)
-              : 0;
-
-            const metrics: { label: string; value: string; accent?: boolean }[] = [
-              { label: "Current CNS", value: fmtCns(job.currentCns) },
-              { label: "Scanned",     value: job.scanned.toLocaleString() },
-              { label: "Rate",        value: `${job.ratePerMin}/min` },
-              { label: "Found",       value: job.hits.toLocaleString() },
-              { label: "Confirmed leads", value: (job.confirmedLeads ?? 0).toLocaleString(), accent: true },
-              { label: "ETA",         value: fmtEta(job.estimatedMinutes) },
-            ];
-
-            return (
-              <Card key={job.id} className={`rounded-xl border transition-colors ${
-                isStreaming ? "border-primary/40 bg-primary/[0.03]" : "border-border bg-card"
-              }`}>
-                <CardContent className="pt-4 pb-4">
-                  {/* Header row */}
-                  <div className="flex items-center gap-3 flex-wrap">
-                    <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-semibold ${st.pill}`}>
-                      <span className={`w-1.5 h-1.5 rounded-full ${st.dot} ${job.status === "running" ? "animate-pulse" : ""}`} />
-                      {job.status}
-                    </span>
-                    <span className="font-mono text-sm font-bold text-foreground">
-                      {job.env}
-                    </span>
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {fmtCns(job.startCns)} → {fmtCns(job.endCns)}
-                    </span>
-                    <span className="text-xs text-muted-foreground">{job.envLabel}</span>
-
-                    <div className="ml-auto flex items-center gap-2">
-                      {/* New fiber badge */}
-                      {(job.confirmedLeads ?? 0) > 0 && (
-                        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-xs font-semibold tabular-nums">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          {job.confirmedLeads} confirmed fresh
-                        </span>
-                      )}
-
-                      {/* Controls */}
-                      {job.status === "running" && (
-                        <>
-                          <Button size="sm" variant="outline" className="h-7 text-xs px-2"
-                            onClick={() => handlePause(job.id)} data-testid={`btn-pause-${job.id}`}>
-                            <PauseCircle className="w-3.5 h-3.5 mr-1" /> Pause
-                          </Button>
-                          <Button size="sm" variant="outline"
-                            className="h-7 text-xs px-2 border-rose-500/50 text-rose-400 hover:bg-rose-500/10"
-                            onClick={() => handleStop(job.id)} data-testid={`btn-stop-${job.id}`}>
-                            <Square className="w-3.5 h-3.5 mr-1" /> Stop
-                          </Button>
-                        </>
-                      )}
-                      {job.status === "paused" && (
-                        <Button size="sm" variant="outline" className="h-7 text-xs px-2 border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/10"
-                          onClick={() => handleResume(job.id)} data-testid={`btn-resume-${job.id}`}>
-                          <PlayCircle className="w-3.5 h-3.5 mr-1" /> Resume
-                        </Button>
-                      )}
-                      {(job.status === "done" || job.status === "stopped" || job.status === "error") && (
-                        <Button size="sm" variant="ghost" className="h-7 text-xs px-2 text-muted-foreground"
-                          onClick={() => handleDelete(job.id)} data-testid={`btn-delete-${job.id}`}>
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </Button>
-                      )}
-                      <Button size="sm" variant={isOpen ? "default" : "outline"}
-                        className="h-7 text-xs px-2"
-                        onClick={() => {
-                          setViewJobId(isOpen ? null : job.id);
-                          if (!isOpen && job.status === "running") {
-                            connectStream(job.id);
-                          }
-                        }}
-                        data-testid={`btn-view-${job.id}`}>
-                        {isOpen ? <ChevronUp className="w-3.5 h-3.5 mr-1" /> : <ChevronDown className="w-3.5 h-3.5 mr-1" />}
-                        Results
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Metric strip — hairline divided */}
-                  <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px rounded-lg overflow-hidden border border-border bg-border">
-                    {metrics.map(m => (
-                      <div key={m.label} className="bg-card px-3 py-2">
-                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{m.label}</div>
-                        <div className={`text-sm font-semibold tabular-nums ${m.accent ? "text-emerald-400" : "text-foreground"}`}>
-                          {m.value}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Progress bar */}
-                  <div className="mt-4 space-y-1.5">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="flex items-center gap-1.5 text-muted-foreground">
-                        {job.status === "running" && <Activity className="w-3 h-3 animate-pulse text-primary" />}
-                        <span className="tabular-nums">{job.hits} in fabric</span>
-                        <span className="text-amber-400 font-semibold tabular-nums">· {job.newFiberHits} primary match{job.newFiberHits === 1 ? "" : "es"}</span>
-                        <span className="text-emerald-400 font-semibold tabular-nums">· {job.confirmedLeads ?? 0} confirmed lead{(job.confirmedLeads ?? 0) === 1 ? "" : "s"}</span>
-                      </span>
-                      <span className="tabular-nums text-muted-foreground">
-                        {pct}% · ETA {fmtEta(job.estimatedMinutes)}
-                      </span>
-                    </div>
-                    <Progress value={pct} className="h-1.5" />
-                    {job.lastError && (
-                      <div className="text-xs text-rose-400 bg-rose-500/10 rounded-lg px-2 py-1 mt-1">
-                        {job.lastError}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Results panel */}
-                  {isOpen && (
-                    <div className="mt-4 border-t border-border pt-4 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="text-xs text-muted-foreground tabular-nums">
-                          Showing {displayedResults.length} addresses found in Kinetic fabric
-                          {newFiberResults.length > 0 && (
-                            <span className="ml-2 text-emerald-400 font-semibold">
-                              ({newFiberResults.length} PRIMARY NEW FIBER — confirmation required)
-                            </span>
-                          )}
-                        </div>
-                        {displayedResults.length > 0 && (
-                          <Button size="sm" variant="outline" className="h-7 text-xs px-2"
-                            onClick={exportCSV} data-testid="btn-export-cns">
-                            <Download className="w-3 h-3 mr-1" /> CSV
-                          </Button>
-                        )}
-                      </div>
-
-                      {displayedResults.length === 0 ? (
-                        <div className="text-xs text-muted-foreground text-center py-6">
-                          {job.status === "running" ? "Scanning… results will appear here as they're found." : "No addresses found in this range."}
-                        </div>
-                      ) : (
-                        <div className="space-y-1 max-h-96 overflow-y-auto">
-                          {displayedResults.map((r, i) => (
-                            <div key={i}
-                              className={`rounded-lg border text-xs px-3 py-2 flex items-center gap-2.5 ${
-                                r.isNewFiber
-                                  ? "border-emerald-500/30 bg-emerald-500/[0.06]"
-                                  : "border-border bg-card"
-                              }`}
-                              data-testid={`cns-result-${i}`}
-                            >
-                              <div className={`w-2 h-2 rounded-full flex-shrink-0 ${r.isNewFiber ? "bg-emerald-400" : "bg-muted-foreground"}`} />
-
-                              <span className="font-mono text-muted-foreground text-[10px] w-14 flex-shrink-0 tabular-nums">
-                                {r.dfAddressId}
-                              </span>
-
-                              <span className="font-medium text-foreground flex-1 min-w-0 truncate">
-                                {r.address}, {r.city}, {r.state} {r.zip}
-                              </span>
-
-                              {r.householdSegmentType && (
-                                <span className={`px-1.5 py-0.5 rounded font-mono font-bold text-[10px] flex-shrink-0 ${
-                                  r.isNewFiber
-                                    ? "bg-emerald-500/15 text-emerald-400"
-                                    : "bg-muted text-muted-foreground"
-                                }`}>
-                                  {r.householdSegmentType}
-                                </span>
-                              )}
-
-                              {r.maxDownloadMbps && (
-                                <span className="text-muted-foreground flex items-center gap-0.5 flex-shrink-0 tabular-nums">
-                                  <Zap className="w-3 h-3 text-primary" />
-                                  {r.maxDownloadMbps >= 1000
-                                    ? `${r.maxDownloadMbps / 1000}G`
-                                    : `${r.maxDownloadMbps}M`}
-                                </span>
-                              )}
-
-                              {r.lat && r.lng && (
-                                <MapPin className="w-3 h-3 text-muted-foreground flex-shrink-0" />
-                              )}
-
-                              {r.isNewFiber && (
-                                <span className="text-emerald-400 font-bold text-[10px] flex-shrink-0">SAVED</span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Empty state */}
-      {jobs.length === 0 && (
-        <Card className="bg-card border-border border-dashed rounded-xl">
-          <CardContent className="py-12 text-center">
-            <ScanSearch className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
-            <div className="text-sm text-muted-foreground mb-1">No CNS scans yet</div>
-            <div className="text-xs text-muted-foreground max-w-sm mx-auto">
-              Select a region and CNS range above to collect provider availability observations.
-              Start with a small range (1–10,000) to test, then scale up.
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
-  );
+    </header>
+    <main className="mx-auto max-w-[1500px] p-3 sm:p-5">
+      {!tokenOnline&&<div className="mb-4 flex items-center gap-3 rounded-xl border border-amber-500/25 bg-amber-500/8 p-3 text-xs"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-500"/><span className="flex-1"><b>Provider connection is offline.</b> Configure an authorized Kinetic token before starting a paid scan.</span><a href="#/token" className="rounded-lg border border-amber-500/25 px-3 py-2 font-semibold text-amber-500">Token setup</a></div>}
+      {tab==="dashboard"&&<Dashboard active={active} onStart={()=>setShowStart(true)} onOpenJob={()=>setTab("jobs")}/>}
+      {tab==="jobs"&&<Jobs jobs={jobs}/>}
+      {tab==="addresses"&&<Addresses onEvidence={openEvidence}/>}
+      {tab==="map"&&<CnsOperationsMap onOpen={openEvidence}/>}
+      {tab==="hotspots"&&<Hotspots onMap={()=>setTab("map")}/>}
+      {tab==="changes"&&<Changes onEvidence={openEvidence}/>}
+      {tab==="evidence"&&<Evidence targetId={evidenceTarget}/>}
+      {tab==="leads"&&<LeadManagement onEvidence={openEvidence}/>}
+      {tab==="settings"&&<ScannerSettings envs={envs}/>}
+    </main>
+    {showStart&&<StartScanModal envs={envs} jobs={jobs} tokenOnline={tokenOnline} onClose={()=>setShowStart(false)} onStarted={()=>{setShowStart(false);setTab("jobs");qc.invalidateQueries({queryKey:["/api/cns/jobs"]})}}/>}
+  </div>;
 }
+
+function StatusBadge({label,good,Icon}:{label:string;good:boolean;Icon:React.ElementType}){return <span className={`inline-flex h-8 items-center gap-1.5 rounded-full border px-2.5 text-[10px] font-semibold ${good?"border-emerald-500/20 bg-emerald-500/10 text-emerald-400":"border-border bg-secondary/70 text-muted-foreground"}`}><Icon className={`h-3 w-3 ${good?"animate-pulse":""}`}/>{label}</span>}
+
+function Dashboard({active,onStart,onOpenJob}:{active:Job|null;onStart:()=>void;onOpenJob:()=>void}){
+  const {data,isLoading}=useQuery({queryKey:["/api/cns/ops/dashboard"],queryFn:cnsOpsApi.dashboard,refetchInterval:10_000});
+  const totals=data?.totals??{};
+  return <div className="space-y-4">
+    <section className="overflow-hidden rounded-2xl border border-border bg-card/85 p-4 shadow-sm sm:p-5"><div className="grid gap-4 lg:grid-cols-[1.2fr_.8fr]"><div><div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[.18em] text-primary"><CircleDot className="h-3.5 w-3.5"/>Provider-index operations</div><h2 className="text-xl font-semibold tracking-tight">CNS Scanner</h2><p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">Run bounded provider-index checks to collect address-level availability evidence. A <code className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-xs text-emerald-400">NEW FIBER</code> response is a primary match that still requires historical change analysis and confirmation before publication.</p><div className="mt-4 flex flex-wrap gap-2"><button onClick={onStart} className="h-10 rounded-xl bg-primary px-4 text-xs font-semibold text-primary-foreground"><Play className="mr-1.5 inline h-3.5 w-3.5"/>Start bounded scan</button><button onClick={()=>void cnsOpsApi.downloadExport()} className="h-10 rounded-xl border border-border px-4 text-xs font-semibold hover:bg-secondary"><Download className="mr-1.5 inline h-3.5 w-3.5"/>Export address evidence</button></div></div><div className="grid grid-cols-2 gap-2 rounded-xl border border-border bg-background/60 p-3"><Identity label="ENV" value="MS"/><Identity label="Control number" value="0012345"/><div className="col-span-2 rounded-xl border border-primary/15 bg-primary/5 p-3"><div className="text-[10px] uppercase tracking-wider text-muted-foreground">Formatted candidate</div><div className="mt-1 font-mono text-xl font-bold tracking-wider text-primary"><span className="text-sky-400">MS</span><span>0012345</span></div></div><p className="col-span-2 text-[10px] leading-relaxed text-muted-foreground">Candidates are checked sequentially. Every answered result becomes immutable evidence; only confirmed transitions reach lead operations.</p></div></div></section>
+    <div className="grid grid-cols-2 gap-2 lg:grid-cols-4"><Kpi label="Total Addresses" value={totals.totalAddresses} Icon={Database}/><Kpi label="Primary Matches" value={totals.primaryMatches} Icon={Zap} tone="text-sky-400"/><Kpi label="Live Fiber" value={totals.liveFiber} Icon={Wifi} tone="text-emerald-400"/><Kpi label="Copper Upgrades" value={totals.copperUpgrades} Icon={RefreshCw} tone="text-violet-400"/></div>
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-4 lg:grid-cols-8"><MiniKpi label="Checked Today" value={totals.checkedToday}/><MiniKpi label="Checks / sec" value={active?((active.ratePerMin||0)/60).toFixed(1):"0.0"}/><MiniKpi label="New Matches" value={totals.newMatches}/><MiniKpi label="Recent Changes" value={totals.changedAddresses}/><MiniKpi label="Awaiting" value={totals.awaitingConfirmation}/><MiniKpi label="Publishable" value={totals.publishableLeads}/><MiniKpi label="Published" value={active?.confirmedLeads??0}/><MiniKpi label="Errors" value={totals.errors} warn={Number(totals.errors)>0}/></div>
+    <div className="grid gap-4 xl:grid-cols-[1.15fr_.85fr]"><WorkerCard job={active} onOpen={onOpenJob}/><VelocityChart points={data?.velocity??[]} loading={isLoading}/></div>
+    <section className="grid gap-3 md:grid-cols-3"><Info title="What is a CNS?" Icon={Network}>Every candidate combines an environment code with a zero-padded numeric control number.</Info><Info title="How candidates are found" Icon={Search}>The worker moves sequentially through the authorized inclusive range, with bounded size and persisted checkpoints.</Info><Info title="What happens to hits?" Icon={ShieldCheck}>Results are compared with earlier observations. First-seen availability is never presented as a recent change.</Info></section>
+  </div>;
+}
+
+function Identity({label,value}:{label:string;value:string}){return <div className="rounded-xl bg-secondary/50 p-3"><div className="text-[9px] uppercase tracking-wider text-muted-foreground">{label}</div><div className="mt-1 font-mono text-base font-bold">{value}</div></div>}
+function Kpi({label,value,Icon,tone}:{label:string;value:unknown;Icon:React.ElementType;tone?:string}){return <div className="rounded-2xl border border-border bg-card/90 p-3 sm:p-4"><div className="flex items-center justify-between"><span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</span><Icon className={`h-4 w-4 ${tone??"text-primary"}`}/></div><div className={`mt-3 text-2xl font-bold tabular-nums ${tone??""}`}>{fmt(value)}</div></div>}
+function MiniKpi({label,value,warn}:{label:string;value:unknown;warn?:boolean}){return <div className="rounded-xl border border-border bg-card/70 p-3"><div className={`text-lg font-bold tabular-nums ${warn?"text-rose-400":""}`}>{typeof value==="string"?value:fmt(value)}</div><div className="mt-1 text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div></div>}
+function Info({title,Icon,children}:{title:string;Icon:React.ElementType;children:React.ReactNode}){return <div className="rounded-xl border border-border bg-card/70 p-4"><Icon className="h-4 w-4 text-primary"/><h3 className="mt-3 text-xs font-semibold">{title}</h3><p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{children}</p></div>}
+
+function WorkerCard({job,onOpen}:{job:Job|null;onOpen:()=>void}){const qc=useQueryClient();const control=async(action:"pause"|"resume"|"stop")=>{if(job){await cnsOpsApi.control(job.id,action);qc.invalidateQueries({queryKey:["/api/cns/jobs"]})}};if(!job)return <section className="rounded-2xl border border-dashed border-border bg-card/70 p-6"><div className="flex items-center gap-2"><Radio className="h-4 w-4 text-muted-foreground"/><h3 className="text-sm font-semibold">Scan Worker</h3><span className="ml-auto rounded-full bg-secondary px-2 py-1 text-[10px] text-muted-foreground">Stopped</span></div><div className="grid min-h-48 place-items-center text-center text-xs text-muted-foreground">No active CNS scan. Start a bounded job when you are ready.</div></section>;
+  return <section className="rounded-2xl border border-amber-500/20 bg-card/90 p-4"><div className="flex items-center gap-2"><Radio className={`h-4 w-4 text-amber-400 ${job.status==="running"?"animate-pulse":""}`}/><h3 className="text-sm font-semibold">Scan Worker</h3><span className={`ml-auto rounded-full border px-2 py-1 text-[10px] font-semibold capitalize ${statusTone(job.status)}`}>{job.status}</span></div><div className="mt-4 flex items-end justify-between gap-3"><div><div className="text-[9px] uppercase tracking-wider text-muted-foreground">Current candidate</div><div className="mt-1 font-mono text-xl font-bold text-amber-400">{cnsId(job.env,job.currentCns)}</div></div><div className="text-right"><div className="text-xl font-bold tabular-nums">{pct(job)}%</div><div className="text-[9px] uppercase text-muted-foreground">overall</div></div></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-gradient-to-r from-amber-500 to-primary transition-[width] duration-500" style={{width:`${Math.max(1,pct(job))}%`}}/></div><div className="mt-4 grid grid-cols-3 gap-2 sm:grid-cols-6">{[["Checked",job.scanned],["Found",job.hits],["Primary",job.newFiberHits],["Published",job.confirmedLeads],["Errors",job.errors??0],["/ sec",((job.ratePerMin||0)/60).toFixed(1)]].map(([label,value])=><div key={String(label)} className="rounded-lg bg-secondary/50 p-2"><div className="text-sm font-bold tabular-nums">{typeof value==="number"?fmt(value):value}</div><div className="text-[8px] uppercase text-muted-foreground">{label}</div></div>)}</div><div className="mt-4 flex gap-2"><button onClick={()=>void control(job.status==="paused"?"resume":"pause")} className="h-10 flex-1 rounded-xl border border-border text-xs font-semibold hover:bg-secondary">{job.status==="paused"?<Play className="mr-1 inline h-3.5 w-3.5"/>:<Pause className="mr-1 inline h-3.5 w-3.5"/>}{job.status==="paused"?"Resume":"Pause"}</button><button onClick={()=>void control("stop")} className="h-10 rounded-xl border border-rose-500/25 px-3 text-xs font-semibold text-rose-400"><Square className="mr-1 inline h-3.5 w-3.5"/>Stop</button><button onClick={onOpen} className="h-10 rounded-xl bg-primary px-3 text-xs font-semibold text-primary-foreground">Open job</button></div>{job.lastError&&<div className="mt-3 rounded-lg bg-rose-500/8 p-2 text-[10px] text-rose-400">{job.lastError}</div>}</section>}
+
+function VelocityChart({points,loading}:{points:any[];loading:boolean}){const max=Math.max(1,...points.map(p=>Number(p.checked)||0));return <section className="rounded-2xl border border-border bg-card/90 p-4"><div className="flex items-center gap-2"><BarChart3 className="h-4 w-4 text-primary"/><h3 className="text-sm font-semibold">Scan velocity · 24 hours</h3></div>{loading?<div className="grid h-56 place-items-center"><Loader2 className="h-4 w-4 animate-spin"/></div>:points.length?<div className="mt-5 flex h-48 items-end gap-1.5">{points.map((p,i)=><div key={i} className="group relative flex min-w-0 flex-1 flex-col justify-end"><div className="rounded-t bg-primary/75 transition-all group-hover:bg-primary" style={{height:`${Math.max(3,(Number(p.checked)/max)*170)}px`}}/><span className="mt-1 truncate text-center text-[8px] text-muted-foreground">{p.bucket}</span></div>)}</div>:<div className="grid h-56 place-items-center text-xs text-muted-foreground">Velocity appears after the first persisted job.</div>}</section>}
+
+function Jobs({jobs}:{jobs:Job[]}){const qc=useQueryClient(),{toast}=useToast();const act=async(job:Job,action:"pause"|"resume"|"stop"|"archive")=>{try{if(action==="archive")await cnsOpsApi.archive(job.id);else await cnsOpsApi.control(job.id,action);await qc.invalidateQueries({queryKey:["/api/cns/jobs"]})}catch(e:any){toast({title:"Job control failed",description:String(e?.message??e),variant:"destructive"})}};return <section className="space-y-3"><SectionTitle title="Scan Jobs" description="Durable job history with checkpoint-safe controls." action={<button onClick={()=>void cnsOpsApi.downloadExport()} className="h-10 rounded-xl border border-border px-3 text-xs font-semibold"><Download className="mr-1 inline h-3.5 w-3.5"/>Export</button>}/>{jobs.length?jobs.map(job=><article key={job.id} className="rounded-2xl border border-border bg-card/90 p-4"><div className="flex flex-wrap items-start gap-3"><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className={`rounded-full border px-2 py-1 text-[10px] font-semibold capitalize ${statusTone(job.status)}`}>{job.status}</span><code className="truncate text-xs font-semibold">{job.id}</code></div><div className="mt-2 font-mono text-sm text-primary">{cnsId(job.env,job.startCns)} → {cnsId(job.env,job.endCns)}</div><div className="mt-1 text-[10px] text-muted-foreground">Inclusive range · {fmt(job.endCns-job.startCns+1)} candidates · started {new Date(job.startedAt).toLocaleString()}</div></div><div className="grid grid-cols-4 gap-1.5">{[["Checked",job.scanned],["Found",job.hits],["Primary",job.newFiberHits],["Errors",job.errors??0]].map(([l,v])=><div key={String(l)} className="rounded-lg bg-secondary/50 px-2 py-1.5 text-center"><div className="text-xs font-bold">{fmt(v)}</div><div className="text-[8px] uppercase text-muted-foreground">{l}</div></div>)}</div></div><div className="mt-3 h-1.5 overflow-hidden rounded-full bg-secondary"><div className="h-full rounded-full bg-primary" style={{width:`${Math.max(1,pct(job))}%`}}/></div><div className="mt-3 flex flex-wrap justify-end gap-2">{job.status==="running"&&<button onClick={()=>void act(job,"pause")} className="job-btn"><Pause className="h-3.5 w-3.5"/>Pause</button>}{job.status==="paused"&&<button onClick={()=>void act(job,"resume")} className="job-btn"><Play className="h-3.5 w-3.5"/>Resume</button>}{!FINAL.has(job.status)&&<button onClick={()=>void act(job,"stop")} className="job-btn text-rose-400"><Square className="h-3.5 w-3.5"/>Stop</button>}{FINAL.has(job.status)&&<button onClick={()=>void act(job,"archive")} className="job-btn"><Archive className="h-3.5 w-3.5"/>Archive</button>}</div></article>):<Empty Icon={Activity} title="No CNS scan jobs" text="Start a bounded range to initialize the durable job ledger."/>}</section>}
+
+function Addresses({onEvidence}:{onEvidence:(id:number)=>void}){const [search,setSearch]=useState(""),[env,setEnv]=useState(""),[primary,setPrimary]=useState(false),[page,setPage]=useState(1);const params=useMemo(()=>{const p=new URLSearchParams({page:String(page),pageSize:"50"});if(search)p.set("search",search);if(env)p.set("env",env);if(primary)p.set("primaryOnly","true");return p},[search,env,primary,page]);const {data,isLoading}=useQuery({queryKey:["/api/cns/ops/addresses",params.toString()],queryFn:()=>cnsOpsApi.addresses(params),placeholderData:p=>p});useEffect(()=>setPage(1),[search,env,primary]);return <section className="space-y-3"><SectionTitle title="Address Intelligence" description="Latest CNS observations with server-side pagination and evidence state." action={<button onClick={()=>void cnsOpsApi.downloadExport()} className="h-10 rounded-xl border border-border px-3 text-xs font-semibold"><Download className="mr-1 inline h-3.5 w-3.5"/>Export</button>}/><div className="flex flex-wrap gap-2 rounded-xl border border-border bg-card/80 p-2"><div className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search address, city, ZIP, or CNS" className="h-10 w-full rounded-lg bg-secondary/60 pl-9 pr-3 text-xs outline-none focus:ring-2 focus:ring-primary/30"/></div><input value={env} onChange={e=>setEnv(e.target.value.toUpperCase().slice(0,3))} placeholder="ENV" className="h-10 w-20 rounded-lg bg-secondary/60 px-3 font-mono text-xs outline-none"/><button onClick={()=>setPrimary(v=>!v)} className={`h-10 rounded-lg border px-3 text-xs font-semibold ${primary?"border-sky-500/30 bg-sky-500/10 text-sky-400":"border-border"}`}><Filter className="mr-1 inline h-3.5 w-3.5"/>NEW FIBER</button></div><div className="overflow-hidden rounded-2xl border border-border bg-card/90"><div className="overflow-x-auto"><table className="w-full min-w-[1000px] text-left text-xs"><thead className="bg-secondary/55 text-[9px] uppercase tracking-wider text-muted-foreground"><tr>{["CNS","Address","City / State","Technology","Qualification","Classification","Evidence","Last checked","Lead","Actions"].map(h=><th key={h} className="px-3 py-2.5">{h}</th>)}</tr></thead><tbody className="divide-y divide-border">{data?.items.map(row=><AddressRow key={row.id} row={row} onEvidence={onEvidence}/>)}</tbody></table></div>{isLoading&&<div className="grid h-40 place-items-center"><Loader2 className="h-5 w-5 animate-spin"/></div>}{!isLoading&&!data?.items.length&&<div className="p-10 text-center text-xs text-muted-foreground">No addresses match these filters.</div>}<div className="flex items-center justify-between border-t border-border p-3 text-[10px] text-muted-foreground"><span>{fmt(data?.total)} records · page {data?.page??1} of {data?.pages??1}</span><div className="flex gap-1"><button disabled={page<=1} onClick={()=>setPage(p=>p-1)} className="grid h-9 w-9 place-items-center rounded-lg border border-border disabled:opacity-30"><ChevronLeft className="h-4 w-4"/></button><button disabled={page>=(data?.pages??1)} onClick={()=>setPage(p=>p+1)} className="grid h-9 w-9 place-items-center rounded-lg border border-border disabled:opacity-30"><ChevronRight className="h-4 w-4"/></button></div></div></div></section>}
+function AddressRow({row,onEvidence}:{row:CnsOpsAddress;onEvidence:(id:number)=>void}){return <tr className="hover:bg-secondary/25"><td className="px-3 py-3 font-mono font-semibold text-primary">{row.formattedCns}</td><td className="max-w-[240px] px-3 py-3"><div className="truncate font-medium">{row.address||"Provider address"}</div><div className="text-[9px] text-muted-foreground">{row.zip}</div></td><td className="px-3 py-3">{row.city}, {row.state}</td><td className="px-3 py-3">{row.technology||"Unknown"}</td><td className="px-3 py-3 tabular-nums">{row.maxQualification?`${fmt(row.maxQualification)} Mbps`:"—"}</td><td className="px-3 py-3"><EvidencePill value={row.classification}/></td><td className="px-3 py-3"><EvidencePill value={row.evidenceState}/></td><td className="px-3 py-3 text-muted-foreground">{new Date(row.lastChecked).toLocaleString()}</td><td className="px-3 py-3">{row.leadId?<span className="text-emerald-400">Published</span>:"—"}</td><td className="px-3 py-3"><button onClick={()=>onEvidence(row.scanTargetId)} className="h-9 rounded-lg border border-border px-2.5 text-[10px] font-semibold">Evidence</button></td></tr>}
+
+function Hotspots({onMap}:{onMap:()=>void}){const [minimum,setMinimum]=useState(3);const {data,isLoading}=useQuery({queryKey:["/api/cns/ops/hotspots",minimum],queryFn:()=>cnsOpsApi.hotspots(minimum)});return <section className="space-y-3"><SectionTitle title="Hotspots" description="Geographic concentrations ranked by publishable lead potential." action={<label className="flex h-10 items-center gap-2 rounded-xl border border-border px-3 text-xs">Minimum <input type="number" min={1} max={100} value={minimum} onChange={e=>setMinimum(Math.max(1,Number(e.target.value)||1))} className="w-12 bg-transparent text-right font-mono outline-none"/></label>}/>{isLoading?<Loading/>:<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{data?.hotspots.map((h:any,i:number)=><article key={`${h.city}-${h.zip}-${i}`} className="rounded-2xl border border-border bg-card/90 p-4"><div className="flex items-start"><div><div className="text-[9px] uppercase tracking-wider text-primary">#{i+1} hotspot</div><h3 className="mt-1 text-base font-semibold">{h.city}, {h.state} {h.zip}</h3></div><button onClick={onMap} className="ml-auto grid h-10 w-10 place-items-center rounded-xl border border-border"><Map className="h-4 w-4"/></button></div><div className="mt-4 grid grid-cols-4 gap-1.5">{[["Addresses",h.addressCount],["Primary",h.primaryMatches],["Live",h.liveAddresses],["Publishable",h.publishableLeads]].map(([l,v])=><div key={String(l)} className="rounded-lg bg-secondary/50 p-2 text-center"><div className="text-sm font-bold">{fmt(v)}</div><div className="text-[8px] uppercase text-muted-foreground">{l}</div></div>)}</div><div className="mt-3 text-[10px] text-muted-foreground">Latest activity · {new Date(h.lastActivity).toLocaleString()}</div></article>)}</div>}{!isLoading&&!data?.hotspots.length&&<Empty Icon={Flame} title="No hotspots yet" text="Hotspots appear after enough CNS addresses accumulate in a city or ZIP."/>}</section>}
+
+function Changes({onEvidence}:{onEvidence:(id:number)=>void}){const {data,isLoading}=useQuery({queryKey:["/api/cns/ops/changes"],queryFn:cnsOpsApi.changes,refetchInterval:30_000});return <section className="space-y-3"><SectionTitle title="Availability Changes" description="Only time-ordered provider transitions; baseline availability is excluded."/>{isLoading?<Loading/>:data?.items.length?<div className="space-y-2">{data.items.map((item:any)=><article key={item.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card/90 p-3"><div className={`grid h-10 w-10 place-items-center rounded-xl ${item.changeType==="freshly_available"?"bg-emerald-500/10 text-emerald-400":"bg-rose-500/10 text-rose-400"}`}><RefreshCw className="h-4 w-4"/></div><div className="min-w-0 flex-1"><div className="text-xs font-semibold">{item.address}</div><div className="text-[10px] text-muted-foreground">{item.city}, {item.state} · <span className="font-mono">{item.formattedCns}</span></div></div><EvidencePill value={item.changeType}/><span className="text-[10px] text-muted-foreground">{new Date(item.changedAt).toLocaleString()}</span><button onClick={()=>onEvidence(item.scanTargetId)} className="h-9 rounded-lg border border-border px-3 text-[10px] font-semibold">Before / after</button></article>)}</div>:<Empty Icon={History} title="No historical changes detected" text="A first observation establishes a baseline. Changes appear only after a later, conclusive recheck differs."/>}</section>}
+
+function Evidence({targetId}:{targetId:number|null}){const {data,isLoading}=useQuery({queryKey:["/api/cns/ops/evidence",targetId],queryFn:()=>cnsOpsApi.evidence(targetId!),enabled:!!targetId});if(!targetId)return <Empty Icon={FileSearch} title="Select an address" text="Open Evidence from an address, change, map marker, or lead candidate."/>;if(isLoading)return <Loading/>;return <section className="space-y-4"><SectionTitle title="Evidence Timeline" description="Immutable provider observations and the reason behind the current decision."/><div className="rounded-2xl border border-border bg-card/90 p-4"><div className="flex flex-wrap items-start gap-3"><div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/10"><FileSearch className="h-5 w-5 text-primary"/></div><div className="min-w-0 flex-1"><h3 className="text-base font-semibold">{data?.address.address}</h3><p className="text-xs text-muted-foreground">{data?.address.city}, {data?.address.state} {data?.address.zip}</p><code className="mt-1 block text-xs text-primary">{data?.address.formattedCns}</code></div><EvidencePill value={data?.address.firstSeenLiveAt?"historical_change_detected":data?.address.available?"insufficient_history":"awaiting_recheck"}/></div></div><div className="relative ml-4 border-l border-border pl-6">{data?.observations.map((o:any)=><article key={o.id} className="relative mb-4 rounded-xl border border-border bg-card/90 p-4 before:absolute before:-left-[31px] before:top-5 before:h-3 before:w-3 before:rounded-full before:border-2 before:border-background before:bg-primary"><div className="flex flex-wrap items-center gap-2"><EvidencePill value={o.classification}/><span className="text-[10px] text-muted-foreground">{new Date(o.observedAt).toLocaleString()}</span><code className="ml-auto text-[10px] text-muted-foreground">{o.responseHash.slice(0,12)}</code></div><div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">{[["Availability",o.available==null?"Unknown":o.available?"Available":"Unavailable"],["Technology",o.technology||"Unknown"],["Qualification",o.maxQualification?`${fmt(o.maxQualification)} Mbps`:"Unknown"],["Confirmation",o.confirmationStatus]].map(([l,v])=><div key={String(l)} className="rounded-lg bg-secondary/50 p-2"><div className="text-[9px] uppercase text-muted-foreground">{l}</div><div className="mt-1 text-xs font-semibold capitalize">{String(v).replaceAll("_"," ")}</div></div>)}</div><details className="mt-3"><summary className="cursor-pointer text-[10px] font-semibold text-primary">Raw response evidence</summary><pre className="mt-2 max-h-72 overflow-auto rounded-lg bg-slate-950 p-3 text-[10px] text-slate-300">{JSON.stringify(o.rawResponse,null,2)}</pre></details></article>)}</div></section>}
+
+function LeadManagement({onEvidence}:{onEvidence:(id:number)=>void}){const {data,isLoading}=useQuery({queryKey:["/api/cns/ops/leads"],queryFn:cnsOpsApi.leads});const groups=useMemo(()=>{const out:Record<string,any[]>={"Awaiting History":[],"Awaiting Confirmation":[],"Ready to Publish":[],"Published":[]};for(const item of data?.items??[]){const key=item.leadId?"Published":item.evidenceState==="historical_change_detected"?"Ready to Publish":item.evidenceState==="insufficient_history"?"Awaiting History":"Awaiting Confirmation";out[key].push(item)}return out},[data]);return <section className="space-y-3"><SectionTitle title="Lead Management" description="Evidence-gated candidates. The UI cannot override the independent-confirmation projector."/>{isLoading?<Loading/>:<div className="grid gap-3 xl:grid-cols-4">{Object.entries(groups).map(([name,items])=><div key={name} className="rounded-2xl border border-border bg-card/70 p-3"><div className="mb-3 flex items-center"><h3 className="text-xs font-semibold">{name}</h3><span className="ml-auto rounded-full bg-secondary px-2 py-1 text-[9px] font-bold">{items.length}</span></div><div className="space-y-2">{items.slice(0,25).map(item=><article key={item.id} className="rounded-xl border border-border bg-background/60 p-3"><div className="truncate text-xs font-semibold">{item.address}</div><div className="mt-1 font-mono text-[10px] text-primary">{item.formattedCns}</div><div className="mt-2 flex items-center justify-between"><span className="text-[9px] text-muted-foreground">Confidence {item.confidenceScore}/100</span><button onClick={()=>onEvidence(item.scanTargetId)} className="h-8 rounded-lg border border-border px-2 text-[9px] font-semibold">Evidence</button></div></article>)}{!items.length&&<div className="rounded-xl border border-dashed border-border p-5 text-center text-[10px] text-muted-foreground">Empty</div>}</div></div>)}</div>}</section>}
+
+function ScannerSettings({envs}:{envs:Env[]}){const qc=useQueryClient(),{toast}=useToast();const {data,isLoading}=useQuery({queryKey:["/api/cns/ops/settings"],queryFn:cnsOpsApi.settings});const [form,setForm]=useState<Record<string,any>>({});useEffect(()=>{if(data?.settings)setForm(data.settings)},[data]);const save=async()=>{try{await cnsOpsApi.saveSettings(form);await qc.invalidateQueries({queryKey:["/api/cns/ops/settings"]});toast({title:"CNS settings saved"})}catch(e:any){toast({title:"Settings failed",description:String(e?.message??e),variant:"destructive"})}};if(isLoading)return <Loading/>;return <section className="space-y-4"><SectionTitle title="Scanner Settings" description="Tenant-scoped limits, worker safety, identifiers, and configurable classification rules." action={<button onClick={()=>void save()} className="h-10 rounded-xl bg-primary px-4 text-xs font-semibold text-primary-foreground">Save settings</button>}/><div className="grid gap-4 lg:grid-cols-2"><div className="rounded-2xl border border-border bg-card/90 p-4"><h3 className="text-xs font-semibold">Worker limits</h3><div className="mt-4 grid grid-cols-2 gap-3">{[["requestsPerMinute","Requests / minute"],["concurrency","Concurrency"],["maxInFlight","Maximum in flight"],["jobSizeLimit","Job-size limit"],["retryCount","Retry count"],["requestTimeoutMs","Request timeout (ms)"],["heartbeatIntervalSeconds","Heartbeat (sec)"],["staleHeartbeatSeconds","Stale threshold (sec)"]].map(([key,label])=><label key={key} className="text-[10px] text-muted-foreground">{label}<input type="number" value={form[key]??""} onChange={e=>setForm(f=>({...f,[key]:Number(e.target.value)}))} className="mt-1 h-10 w-full rounded-lg border border-border bg-secondary/50 px-3 font-mono text-xs text-foreground outline-none"/></label>)}</div></div><div className="rounded-2xl border border-border bg-card/90 p-4"><h3 className="text-xs font-semibold">Environment registry</h3><div className="mt-4 space-y-2">{envs.map(env=><div key={env.code} className="flex items-center gap-3 rounded-xl bg-secondary/50 p-3"><code className="rounded-lg bg-primary/10 px-2 py-1 font-bold text-primary">{env.code}</code><div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold">{env.label}</div><div className="text-[9px] text-muted-foreground">{env.states}</div></div><div className="text-right"><div className="font-mono text-xs">{fmt(env.upperLimit)}</div><div className="text-[8px] uppercase text-muted-foreground">upper limit</div></div></div>)}</div></div></div><div className="rounded-2xl border border-border bg-card/90 p-4"><div className="flex items-center"><div><h3 className="text-xs font-semibold">Classification rules</h3><p className="mt-1 text-[10px] text-muted-foreground">Rules are data, not hard-coded UI labels. A rule classifies provider evidence; it does not prove freshness.</p></div></div><div className="mt-4 overflow-x-auto"><table className="w-full min-w-[700px] text-left text-xs"><thead className="text-[9px] uppercase text-muted-foreground"><tr>{["Field","Operator","Expected value","Classification","Availability","Fiber","Priority","Status"].map(h=><th key={h} className="px-2 py-2">{h}</th>)}</tr></thead><tbody className="divide-y divide-border">{data?.rules.map((r:any)=><tr key={r.id}><td className="px-2 py-3 font-mono">{r.sourceField}</td><td className="px-2 py-3">{r.operator}</td><td className="px-2 py-3 font-mono text-emerald-400">{r.expectedValue}</td><td className="px-2 py-3">{r.classification}</td><td className="px-2 py-3">{r.availabilityResult}</td><td className="px-2 py-3">{r.fiberIndicator?"Yes":"No"}</td><td className="px-2 py-3">{r.priority}</td><td className="px-2 py-3"><span className="text-emerald-400">{r.active?"Active":"Disabled"}</span></td></tr>)}</tbody></table></div></div></section>}
+
+function StartScanModal({envs,jobs,tokenOnline,onClose,onStarted}:{envs:Env[];jobs:Job[];tokenOnline:boolean;onClose:()=>void;onStarted:()=>void}){const {toast}=useToast();const [env,setEnv]=useState("MS"),[start,setStart]=useState("1"),[end,setEnd]=useState("10000"),[starting,setStarting]=useState(false);const info=envs.find(e=>e.code===env);const s=Number(start),e=Number(end),plan=planCnsRange({start:s,end:e,upperLimit:info?.upperLimit??0,jobSizeLimit:100000}),count=plan.candidateCount;const overlap=jobs.filter(j=>j.env===env&&Math.max(s,j.startCns)<=Math.min(e,j.endCns)).length;const invalid=!tokenOnline||!plan.valid;const submit=async()=>{setStarting(true);try{await cnsOpsApi.start({env,startCns:s,endCns:e});toast({title:"CNS scan queued",description:`${cnsId(env,s)} through ${cnsId(env,e)} · ${fmt(count)} inclusive candidates`});onStarted()}catch(error:any){toast({title:"Could not start scan",description:String(error?.message??error),variant:"destructive"})}finally{setStarting(false)}};return <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/65 p-0 backdrop-blur-sm sm:items-center sm:p-4" onClick={onClose}><section role="dialog" aria-modal="true" aria-label="Start New CNS Scan" onClick={e=>e.stopPropagation()} className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-2xl border border-border bg-card shadow-2xl sm:rounded-2xl"><header className="sticky top-0 z-10 flex items-center border-b border-border bg-card/95 p-4 backdrop-blur"><div><h2 className="text-base font-semibold">Start New CNS Scan</h2><p className="text-[10px] text-muted-foreground">Bounded, inclusive, and checkpointed before provider spend begins.</p></div><button onClick={onClose} className="ml-auto grid h-11 w-11 place-items-center rounded-xl hover:bg-secondary"><X className="h-4 w-4"/></button></header><div className="space-y-4 p-4"><label className="block text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Region (ENV)<select value={env} onChange={e=>setEnv(e.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-secondary/50 px-3 text-sm text-foreground">{envs.map(item=><option key={item.code} value={item.code}>{item.code} · {item.label}</option>)}</select></label>{info&&<div className="grid grid-cols-2 gap-2 sm:grid-cols-4"><Mini label="State coverage" value={info.states}/><Mini label="Upper limit" value={fmt(info.upperLimit)}/><Mini label="Padding" value="7 digits"/><Mini label="Range behavior" value="End included"/></div>}<div className="grid gap-3 sm:grid-cols-2"><CnsInput label="Start CNS" value={start} onChange={setStart} preview={cnsId(env,s)}/><CnsInput label="End CNS · included" value={end} onChange={setEnd} preview={cnsId(env,e)}/></div><div className="rounded-2xl border border-primary/20 bg-primary/5 p-4"><div className="text-[10px] font-semibold uppercase tracking-wider text-primary">Job summary</div><div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3"><Summary label="Region" value={env}/><Summary label="Candidates" value={fmt(count)}/><Summary label="Estimated requests" value={fmt(count)}/><Summary label="Estimated duration" value={`${Math.ceil(count/60)} min @ 60/min`}/><Summary label="Overlapping jobs" value={fmt(overlap)}/><Summary label="Worker concurrency" value="1"/></div><div className="mt-4 font-mono text-xs text-foreground">{env} · CNS {fmt(s)}–{fmt(e)} · {fmt(count)} candidates · end included</div></div>{plan.error&&<div className="rounded-xl bg-rose-500/10 p-3 text-xs text-rose-400">{plan.error==="job_limit"?"Max 100,000 candidates per job.":`Invalid range: ${plan.error.replaceAll("_"," ")}`}</div>}{!tokenOnline&&<div className="rounded-xl bg-amber-500/10 p-3 text-xs text-amber-400">Provider token is offline. Scanning cannot start.</div>}</div><footer className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border bg-card/95 p-4 backdrop-blur"><button onClick={onClose} className="h-11 rounded-xl border border-border px-4 text-xs font-semibold">Cancel</button><button disabled={invalid||starting} onClick={()=>void submit()} className="h-11 rounded-xl bg-primary px-5 text-xs font-semibold text-primary-foreground disabled:opacity-40">{starting?<Loader2 className="mr-2 inline h-4 w-4 animate-spin"/>:<Play className="mr-2 inline h-4 w-4"/>}Start {fmt(count)} checks</button></footer></section></div>}
+function CnsInput({label,value,onChange,preview}:{label:string;value:string;onChange:(v:string)=>void;preview:string}){return <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}<input inputMode="numeric" value={value} onChange={e=>onChange(e.target.value.replace(/\D/g,""))} className="mt-1 h-11 w-full rounded-xl border border-border bg-secondary/50 px-3 font-mono text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/30"/><code className="mt-1 block text-[10px] text-primary">{preview}</code></label>}
+function Mini({label,value}:{label:string;value:string}){return <div className="rounded-xl bg-secondary/50 p-3"><div className="text-[8px] uppercase tracking-wider text-muted-foreground">{label}</div><div className="mt-1 text-xs font-semibold">{value}</div></div>}
+function Summary({label,value}:{label:string;value:string}){return <div><div className="text-[8px] uppercase tracking-wider text-muted-foreground">{label}</div><div className="mt-1 text-sm font-bold tabular-nums">{value}</div></div>}
+function EvidencePill({value}:{value:string}){const good=["historical_change_detected","confirmed","publishable","published","freshly_available"].includes(value),warn=["insufficient_history","awaiting_recheck","primary_fiber_match"].includes(value);return <span className={`inline-flex rounded-full border px-2 py-1 text-[9px] font-semibold capitalize ${good?"border-emerald-500/20 bg-emerald-500/10 text-emerald-400":warn?"border-amber-500/20 bg-amber-500/10 text-amber-400":"border-border bg-secondary text-muted-foreground"}`}>{String(value||"unknown").replaceAll("_"," ")}</span>}
+function SectionTitle({title,description,action}:{title:string;description:string;action?:React.ReactNode}){return <div className="flex flex-wrap items-center gap-3"><div className="min-w-0 flex-1"><h2 className="text-base font-semibold tracking-tight">{title}</h2><p className="text-[11px] text-muted-foreground">{description}</p></div>{action}</div>}
+function Empty({Icon,title,text}:{Icon:React.ElementType;title:string;text:string}){return <div className="grid min-h-72 place-items-center rounded-2xl border border-dashed border-border bg-card/60 p-8 text-center"><div><Icon className="mx-auto h-7 w-7 text-muted-foreground/50"/><h3 className="mt-3 text-sm font-semibold">{title}</h3><p className="mt-1 max-w-sm text-xs text-muted-foreground">{text}</p></div></div>}
+function Loading(){return <div className="grid min-h-72 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-primary"/></div>}
