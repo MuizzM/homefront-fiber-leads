@@ -5,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [master, main, staging]
+    branches: [master, main, staging, rep-knocking-workflow]
   pull_request:
-    branches: [master, main]
+    branches: [master, main, rep-knocking-workflow]
 
 concurrency:
   group: ci-${{ github.ref }}
