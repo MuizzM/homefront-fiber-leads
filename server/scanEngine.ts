@@ -23,6 +23,11 @@ import {
 } from "./scanIntelStore";
 import { projectConfirmedFreshLeads } from "./freshFiberProjector";
 import { structuredLog } from "./structuredLog";
+import { calculateFiberFreshness } from "@shared/fiberFreshness";
+import {
+  appendFiberEvent, beginFiberWorker, heartbeatWorker, persistFreshness,
+  recordFiberFailure, recordProviderOutcome, targetAttempt,
+} from "./fiberOperationsStore";
 
 // The reduced result the engine needs, plus the bytes billed for cost evidence.
 export interface CheckResult {
@@ -56,6 +61,10 @@ export function isRunActive(runId: string): boolean { return activeRuns.has(runI
 export async function runScanWorker(runId: string, tenantId: number, checker: Checker = liveChecker): Promise<void> {
   if (activeRuns.has(runId)) return;
   activeRuns.add(runId);
+  const workerId = `scan:${runId}`;
+  let terminalError: string | null = null;
+  beginFiberWorker(tenantId, runId);
+  heartbeatWorker({ workerId, tenantId, runId, status: "running", concurrency: 1 });
   // Batch size is the AIMD congestion window, not a fixed 25 — it self-tunes to
   // Kinetic's 403 push-back so a budgeted market run obeys the same one-bucket
   // discipline as every other scan (measures blocked per batch, shrinks/refreshes).
@@ -75,6 +84,8 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
       const batch = claimRunTargets(runId, conc);
       if (batch.length === 0) { finish(run, "done"); return; } // queue drained
       touchRun(runId); // heartbeat before a batch of slow network calls
+      heartbeatWorker({ workerId, tenantId, runId, status: "running", concurrency: batch.length,
+        metadata: { completed: run.verified + run.failed, budget: run.budget } });
 
       const t0 = Date.now();
       let ok = 0, blocked = 0, neutral = 0;
@@ -92,9 +103,21 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
         } catch (err: any) {
           // An unexpected throw is still a FAILED check — never a negative.
           finalizeRunTarget(runId, t.targetId, "failed", "failed", { failed: 1, estBytes: DEFAULT_BYTES_PER_CHECK });
+          const message = String(err?.message ?? err ?? "Provider check failed");
+          const attempt = targetAttempt(runId, t.targetId);
+          recordFiberFailure({ tenantId, runId, targetId: t.targetId, category: "provider_exception", message, attempt, retryable: true });
+          recordProviderOutcome(tenantId, false, message);
+          appendFiberEvent({ tenantId, runId, eventType: "address.failed", targetId: t.targetId,
+            payload: { category: "provider_exception", attempt } });
           neutral++;
         }
       }));
+
+      const current = getRun(runId, tenantId);
+      if (current) appendFiberEvent({ tenantId, runId, eventType: "job.progress", payload: {
+        completedTargets: current.verified + current.failed, verified: current.verified,
+        failed: current.failed, newFiber: current.newFiber, newlyLive: current.newlyLive, budget: current.budget,
+      } });
 
       // Independent evidence can arrive before the primary flip (for example a
       // licensed FCC/partner batch loaded earlier in the day). Project after
@@ -120,8 +143,13 @@ export async function runScanWorker(runId: string, tenantId: number, checker: Ch
       else if (d.recoveryPauseMs > 0) await sleep(d.recoveryPauseMs);
     }
   } catch (err: any) {
-    setRunStatus(runId, "error", String(err?.message ?? err).slice(0, 300));
+    const message = String(err?.message ?? err).slice(0, 300);
+    terminalError = message;
+    setRunStatus(runId, "error", message);
+    appendFiberEvent({ tenantId, runId, eventType: "job.failed", payload: { message } });
+    heartbeatWorker({ workerId, tenantId, runId, status: "error", concurrency: 0, lastError: message });
   } finally {
+    heartbeatWorker({ workerId, tenantId, runId, status: terminalError ? "error" : "idle", concurrency: 0, lastError: terminalError });
     activeRuns.delete(runId);
   }
 }
@@ -140,6 +168,14 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
   // count it against budget + cost. Product law: a non-answer is not a "no".
   if (checkFailed) {
     finalizeRunTarget(runId, t.targetId, "failed", "failed", { failed: 1, estBytes: bytes });
+    const attempt = targetAttempt(runId, t.targetId);
+    recordFiberFailure({ tenantId, runId, targetId: t.targetId, category: result.blocked ? "provider_blocked" : "inconclusive",
+      message: result.notes || "Provider returned no conclusive availability answer", attempt, retryable: true });
+    recordProviderOutcome(tenantId, false, result.notes);
+    const freshness = calculateFiberFreshness({ serviceability: "unknown", conclusive: false, checkedAtMs: Date.now() });
+    persistFreshness({ tenantId, targetId: t.targetId, ...freshness });
+    appendFiberEvent({ tenantId, runId, eventType: "address.failed", targetId: t.targetId,
+      payload: { category: result.blocked ? "provider_blocked" : "inconclusive", attempt } });
     return;
   }
 
@@ -156,6 +192,7 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
     customerConfidence: customer.confidence,
     customerSignals: customer.signals,
   });
+  recordProviderOutcome(tenantId, true);
 
   // This is the primary-source opportunity signal. It remains provisional here:
   // scan workers NEVER publish a rep-facing lead. The independent-evidence gate
@@ -165,6 +202,17 @@ function applyCheck(runId: string, tenantId: number, t: { targetId: number; addr
   finalizeRunTarget(runId, t.targetId, "verified",
     isTarget ? "new_fiber" : (result.fiberStatus === "no_service" ? "no_service" : "other"),
     { verified: 1, newFiber: isTarget ? 1 : 0, newlyLive: fiberTransition.fresh ? 1 : 0, estBytes: bytes });
+  const freshness = calculateFiberFreshness({
+    serviceability: result.fiberAvailable ? "live" : "no_service",
+    conclusive: true, checkedAtMs: Date.now(), transitionObserved: fiberTransition.fresh,
+    firstSeenLiveAtMs: fiberTransition.fresh ? Date.now() : null,
+    providerConfidence: customer.confidence === "medium" ? 0.75 : 0.55,
+  });
+  persistFreshness({ tenantId, targetId: t.targetId, ...freshness });
+  appendFiberEvent({ tenantId, runId, eventType: "address.completed", targetId: t.targetId, payload: {
+    result: isTarget ? "new_fiber" : (result.fiberStatus === "no_service" ? "no_service" : "other"),
+    freshnessScore: freshness.score, newlyLive: fiberTransition.fresh,
+  } });
 }
 
 function legacyAvailabilityStatus(status: ReturnType<typeof classifyFiberAvailabilityTransition>["status"]): string {
@@ -215,6 +263,11 @@ function persistSnapshot(
 
 function finish(run: ScanRunRow, status: string): void {
   setRunStatus(run.id, status);
+  const current = getRun(run.id, run.tenantId) ?? run;
+  appendFiberEvent({ tenantId: run.tenantId, runId: run.id, eventType: "job.completed", payload: {
+    completedTargets: current.verified + current.failed, verified: current.verified, failed: current.failed,
+    newFiber: current.newFiber, newlyLive: current.newlyLive, budget: current.budget,
+  } });
   // A completed scan may have created leads — refresh the map layer for clients.
   const bust = (globalThis as any).__bustMapCache;
   if (typeof bust === "function") bust(run.tenantId);

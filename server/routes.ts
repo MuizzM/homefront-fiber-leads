@@ -83,6 +83,7 @@ import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
+import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
 
 type AddressScanner = typeof scanAddress;
 let addressScanner: AddressScanner = scanAddress;
@@ -833,6 +834,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   registerAddressDiscoveryRoutes(app, { requireAuth, requireCapability, requireScanningAllowed });
   registerCallingRoutes(app, { requireAuth, requireCapability });
+  registerFiberOperationsRoutes(app, {
+    requireAuth, requireCapability, requireScanningAllowed, scanAdmission: authorizedScanAdmission,
+  });
 
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────

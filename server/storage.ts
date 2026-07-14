@@ -1487,6 +1487,107 @@ export function runMigrations() {
     // city's address to a qualification run.
     `ALTER TABLE scan_targets ADD COLUMN canonical_key TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`,
+
+    // ── Fiber operations control plane ─────────────────────────────────────
+    // Additive companions around scan_runs: the existing worker remains the
+    // single execution engine while these tables make its state observable,
+    // replayable and diagnosable across deploys and process crashes.
+    `ALTER TABLE scan_runs ADD COLUMN provider TEXT NOT NULL DEFAULT 'kinetic'`,
+    `ALTER TABLE scan_runs ADD COLUMN correlation_id TEXT`,
+    `ALTER TABLE scan_runs ADD COLUMN current_checkpoint TEXT`,
+    `ALTER TABLE scan_runs ADD COLUMN stop_requested_at TEXT`,
+    `ALTER TABLE scan_runs ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE scan_run_targets ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE scan_run_targets ADD COLUMN next_attempt_at TEXT`,
+    `ALTER TABLE scan_run_targets ADD COLUMN last_error_category TEXT`,
+    `ALTER TABLE scan_run_targets ADD COLUMN last_error_message TEXT`,
+    `CREATE TABLE IF NOT EXISTS fiber_job_events (
+       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+       event_type TEXT NOT NULL,
+       target_id INTEGER,
+       correlation_id TEXT,
+       payload_json TEXT NOT NULL DEFAULT '{}',
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_events_stream ON fiber_job_events(tenant_id, sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_events_run ON fiber_job_events(tenant_id, run_id, sequence)`,
+    `CREATE TABLE IF NOT EXISTS fiber_worker_heartbeats (
+       worker_id TEXT PRIMARY KEY,
+       tenant_id INTEGER REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT REFERENCES scan_runs(id) ON DELETE SET NULL,
+       status TEXT NOT NULL,
+       concurrency INTEGER NOT NULL DEFAULT 0,
+       last_error TEXT,
+       metadata_json TEXT NOT NULL DEFAULT '{}',
+       started_at TEXT NOT NULL DEFAULT (datetime('now')),
+       heartbeat_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_worker_health ON fiber_worker_heartbeats(heartbeat_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS fiber_job_failures (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+       target_id INTEGER,
+       category TEXT NOT NULL,
+       message TEXT NOT NULL,
+       attempt INTEGER NOT NULL DEFAULT 1,
+       retryable INTEGER NOT NULL DEFAULT 1,
+       correlation_id TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_failures_run ON fiber_job_failures(tenant_id, run_id, created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS fiber_dead_letters (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+       target_id INTEGER,
+       category TEXT NOT NULL,
+       message TEXT NOT NULL,
+       attempts INTEGER NOT NULL,
+       payload_json TEXT NOT NULL DEFAULT '{}',
+       resolved_at TEXT,
+       resolved_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(run_id, target_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_dead_letters_open ON fiber_dead_letters(tenant_id, resolved_at, created_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS fiber_job_checkpoints (
+       run_id TEXT PRIMARY KEY REFERENCES scan_runs(id) ON DELETE CASCADE,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       last_sequence INTEGER NOT NULL DEFAULT 0,
+       completed_targets INTEGER NOT NULL DEFAULT 0,
+       checkpoint_json TEXT NOT NULL DEFAULT '{}',
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE TABLE IF NOT EXISTS provider_adapter_configs (
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       provider TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 0,
+       display_name TEXT NOT NULL,
+       mode TEXT NOT NULL DEFAULT 'authorized_http',
+       rate_limit_per_minute INTEGER NOT NULL DEFAULT 30,
+       health_status TEXT NOT NULL DEFAULT 'unknown',
+       consecutive_failures INTEGER NOT NULL DEFAULT 0,
+       last_success_at TEXT,
+       last_failure_at TEXT,
+       last_error TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY(tenant_id, provider)
+     )`,
+    `CREATE TABLE IF NOT EXISTS fiber_freshness_scores (
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       scan_target_id INTEGER NOT NULL REFERENCES scan_targets(id) ON DELETE CASCADE,
+       score INTEGER NOT NULL,
+       verification_state TEXT NOT NULL,
+       formula_version TEXT NOT NULL,
+       factors_json TEXT NOT NULL,
+       explanation_json TEXT NOT NULL,
+       calculated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY(tenant_id, scan_target_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_fiber_freshness_rank ON fiber_freshness_scores(tenant_id, score DESC, calculated_at DESC)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

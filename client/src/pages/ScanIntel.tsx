@@ -12,6 +12,7 @@ import {
   Zap, Search, Gauge, CircleDollarSign, Sparkles, MapPinned, Database, RefreshCw,
   AlertTriangle, CheckCircle2, Upload, SlidersHorizontal, FileSearch, ShieldCheck,
   Eye, Map as MapIcon, RotateCcw,
+  ServerCog,
 } from "lucide-react";
 import { OpportunityMap } from "@/components/scan/OpportunityMap";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
@@ -33,7 +34,7 @@ import {
 // are free (pure DB); a budgeted scan is the ONLY spend and is admin-gated. The
 // product should make an operator feel it sees the market before they do.
 
-type View = "markets" | "opportunity" | "activity" | "discovery";
+type View = "markets" | "opportunity" | "activity" | "discovery" | "system";
 
 export default function ScanIntel() {
   const { user } = useAuth();
@@ -59,6 +60,7 @@ export default function ScanIntel() {
         {view === "opportunity" && <OpportunityMap focusCity={selected} onBack={() => setView("markets")} />}
         {view === "activity" && <ActivityView />}
         {view === "discovery" && canManageDiscovery && <DiscoveryOperations />}
+        {view === "system" && canManageDiscovery && <FiberSystemView />}
       </div>
 
       {/* Run panel — opens over any view when a market is chosen to scan. */}
@@ -80,6 +82,7 @@ function ScanHeader({ view, setView, isAdmin, canManageDiscovery }: { view: View
     { id: "opportunity", label: "Opportunity Map", Icon: MapPinned },
     { id: "activity", label: "Activity", Icon: Activity },
     ...(canManageDiscovery ? [{ id: "discovery" as View, label: "Discovery Ops", Icon: Database }] : []),
+    ...(canManageDiscovery ? [{ id: "system" as View, label: "System", Icon: ServerCog }] : []),
   ];
   return (
     <header className="flex-shrink-0 border-b border-border bg-card">
@@ -965,6 +968,93 @@ function AddressEvidence({ evidence }: { evidence: DiscoveryAddressExplanation }
 function UnavailablePanel({ title, error }: { title: string; error?: unknown }) {
   const message = error instanceof Error ? error.message : error ? String(error) : null;
   return <div className="rounded-xl border border-dashed border-border bg-card p-6 text-center"><AlertTriangle className="mx-auto h-5 w-5 text-amber-500" /><div className="mt-2 text-sm font-semibold">{title}</div>{message && <div className="mt-1 break-words text-[11px] text-muted-foreground">{message}</div>}</div>;
+}
+
+// ── Fiber system — durable worker/provider/failure observability ─────────────
+function FiberSystemView() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const dashboard = useQuery({ queryKey: ["/api/v1/fiber/dashboard"], queryFn: scanApi.operationsDashboard, refetchInterval: 5_000 });
+  const failures = useQuery({ queryKey: ["/api/v1/fiber/failures"], queryFn: scanApi.failures, refetchInterval: 10_000 });
+  const providers = useQuery({ queryKey: ["/api/v1/fiber/providers"], queryFn: scanApi.providers, refetchInterval: 30_000 });
+  const [retrying, setRetrying] = useState<number | null>(null);
+  const retry = async (id: number) => {
+    setRetrying(id);
+    try {
+      await scanApi.retryDeadLetter(id);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["/api/v1/fiber/failures"] }),
+        qc.invalidateQueries({ queryKey: ["/api/v1/fiber/dashboard"] }),
+        qc.invalidateQueries({ queryKey: ["/api/scan/runs"] }),
+      ]);
+      toast({ title: "Address requeued", description: "The durable worker will retry it without restarting the whole scan." });
+    } catch (error: any) {
+      toast({ title: "Retry failed", description: await extractError(error), variant: "destructive" });
+    } finally { setRetrying(null); }
+  };
+  if (dashboard.isLoading) return <CenterNote><Loader2 className="h-5 w-5 animate-spin" /> Loading scanner health…</CenterNote>;
+  if (dashboard.error) return <CenterNote><AlertTriangle className="h-5 w-5 text-amber-500" /> Scanner health is temporarily unavailable.</CenterNote>;
+  const data = dashboard.data!;
+  return (
+    <div className="h-full overflow-y-auto" data-testid="fiber-system-view">
+      <div className="mx-auto max-w-6xl space-y-4 px-3 py-4 sm:px-4">
+        <div>
+          <h2 className="text-base font-semibold tracking-tight">Fiber system health</h2>
+          <p className="text-xs text-muted-foreground">Persisted worker state, provider readiness, retries, and dead letters.</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <DiscoveryMetric label="Running" value={Number(data.runs.running) || 0} tone="text-primary" />
+          <DiscoveryMetric label="Verified" value={Number(data.runs.verified) || 0} tone="text-emerald-500" />
+          <DiscoveryMetric label="Failed checks" value={Number(data.runs.failed) || 0} tone={Number(data.runs.failed) ? "text-amber-500" : undefined} />
+          <DiscoveryMetric label="Needs retry" value={Number(data.openDeadLetters) || 0} tone={Number(data.openDeadLetters) ? "text-rose-500" : undefined} />
+        </div>
+
+        <section className="rounded-xl border border-border bg-card p-3">
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Provider readiness</h3>
+          <div className="space-y-2">
+            {(providers.data?.providers ?? []).map(provider => (
+              <div key={provider.provider} className="flex min-h-12 items-center gap-3 rounded-xl bg-secondary/50 px-3 py-2">
+                <span className={`h-2.5 w-2.5 rounded-full ${provider.enabled && provider.healthStatus !== "down" ? "bg-emerald-500" : "bg-slate-400"}`} />
+                <div className="min-w-0 flex-1"><div className="text-sm font-semibold">{provider.displayName}</div><div className="text-[10px] text-muted-foreground">{provider.mode} · {provider.rateLimitPerMinute}/min</div></div>
+                <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${provider.enabled ? "bg-emerald-500/10 text-emerald-500" : "bg-secondary text-muted-foreground"}`}>{provider.enabled ? provider.healthStatus : "disabled"}</span>
+              </div>
+            ))}
+            {!providers.isLoading && !(providers.data?.providers.length) && <div className="py-5 text-center text-xs text-muted-foreground">No provider is configured for this organization.</div>}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-3">
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Durable workers</h3>
+          <div className="space-y-2">
+            {data.workers.map(worker => (
+              <div key={worker.workerId} className="flex min-h-12 items-center gap-3 rounded-xl bg-secondary/50 px-3 py-2">
+                <span className={`h-2.5 w-2.5 rounded-full ${worker.healthy ? "bg-emerald-500" : "bg-rose-500"}`} />
+                <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold">{worker.runId ?? worker.workerId}</div><div className="text-[10px] text-muted-foreground">{worker.status} · concurrency {worker.concurrency}</div></div>
+                <span className="text-[10px] text-muted-foreground">{worker.healthy ? "healthy" : "stale"}</span>
+              </div>
+            ))}
+            {!data.workers.length && <div className="py-5 text-center text-xs text-muted-foreground">No worker heartbeat yet. Start a scan to initialize the worker ledger.</div>}
+          </div>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-3">
+          <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Addresses requiring intervention</h3>
+          <div className="space-y-2">
+            {(failures.data?.deadLetters ?? []).map(item => (
+              <div key={item.id} className="flex items-center gap-3 rounded-xl border border-rose-500/15 bg-rose-500/5 p-3">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
+                <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold">{item.category.replaceAll("_", " ")}</div><div className="truncate text-[10px] text-muted-foreground">Target {item.target_id ?? "unknown"} · {item.message}</div></div>
+                <button onClick={() => void retry(item.id)} disabled={retrying === item.id} className="h-11 rounded-xl border border-border px-3 text-xs font-semibold hover:bg-secondary disabled:opacity-50">
+                  {retrying === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Retry"}
+                </button>
+              </div>
+            ))}
+            {!failures.isLoading && !(failures.data?.deadLetters.length) && <div className="py-5 text-center text-xs text-muted-foreground"><CheckCircle2 className="mx-auto mb-1 h-5 w-5 text-emerald-500" />No open dead letters.</div>}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
 }
 
 // ── Activity view (change feed + run history) ─────────────────────────────────
