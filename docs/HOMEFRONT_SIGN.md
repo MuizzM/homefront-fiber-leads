@@ -23,6 +23,7 @@ Verify the sending domain in Resend and create an API key. Configure production 
 APP_ORIGIN=https://portal.homefrontsolutionsllc.com
 RESEND_API_KEY=re_your_api_key
 RESEND_FROM=Home Front Solutions <noreply@portal.homefrontsolutionsllc.com>
+ONBOARDING_INVITE_SECRET=<64-character output from: openssl rand -hex 32>
 ```
 
 For backward compatibility, Home Front Sign will use `SMTP_PASS` as the Resend API key and `MAIL_FROM` as the sender when `SMTP_HOST=smtp.resend.com`. New deployments should set the explicit `RESEND_*` variables.
@@ -31,16 +32,16 @@ Resend must show the sender domain as verified. SPF and DKIM should pass, and DM
 
 ## Signing workflow
 
-1. A manager opens **Applications**, enters a candidate’s name and email, and selects **Send invite**. The candidate receives the organization-specific application link through Resend.
-2. The candidate completes the public application. The submission appears in **Applications → Pending** for that organization.
+1. A manager opens **Rep Onboarding**, enters a candidate’s name and email, and selects **Send private invite**. The server creates a tenant-scoped recruiting record first, signs a candidate-specific 14-day link with `ONBOARDING_INVITE_SECRET`, stores only the token digest, and sends it through Resend.
+2. The candidate opens the private link without needing an account. Their invited name and email are verified and prefilled; the submitted application is atomically attached to the recruiting record and appears in the same onboarding queue.
 3. The manager selects the commission structure and chooses **Approve & Start Onboarding**.
 4. The server creates and links the rep account and team profile, assigns the commission structure, creates a one-time login code, and freezes all four required agreement snapshots.
 5. The rep receives a welcome/login-code email and a Home Front Sign email linking to **My Documents**. No bearer signing token appears in email.
 6. The rep signs in, reviews each complete record, accepts the electronic-record disclosure, acknowledges review, confirms intent, and types the exact legal name on the rep profile.
 7. The server creates the evidence digest and signed PDF, commits both atomically, and records a hash-chained signing event.
-8. Resend emails each completed PDF. The same PDFs remain available to the rep and authorized managers.
+8. Resend emails each completed PDF. The same PDFs remain available to the rep and authorized managers. Only after all four current required agreements are complete does the server activate the field-sales team profile.
 
-Managers can still open **Team → Onboarding** to resend a failed document or issue a later version. Active agreements are idempotent: approving or retrying cannot create a second active copy of the same document type.
+Managers use **Rep Onboarding** for every onboarding action, including safe resends and signed-PDF downloads. The Team roster links back to that one operational screen instead of presenting a second document workflow. Active agreements are idempotent: approving or retrying cannot create a second active copy of the same document type or version.
 
 ## Production verification
 

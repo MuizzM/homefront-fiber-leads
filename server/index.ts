@@ -212,9 +212,14 @@ const SANITIZE_EXEMPT_PATHS = new Set([
   // Fixed server-owned projection with no secret fields. Skipping the generic
   // recursive sanitizer avoids cloning up to 5,000+ rows before serialization.
   "/api/leads/map",
+  // These manager-only endpoints intentionally return the candidate-specific
+  // application URL so an operator can copy it. The URL's HMAC token looks
+  // JWT-like to the generic redactor but grants only one pre-account application.
+  "/api/onboarding/invitations",
+  "/api/onboarding/pipeline",
 ]);
 app.use((req, res, next) => {
-  if (SANITIZE_EXEMPT_PATHS.has(req.path)) return next();
+  if (SANITIZE_EXEMPT_PATHS.has(req.path) || /^\/api\/onboarding\/invitations\/\d+\/resend$/.test(req.path)) return next();
   const origJson = res.json.bind(res);
   res.json = function(body: any) { return origJson(sanitizeVal(body)); };
   next();

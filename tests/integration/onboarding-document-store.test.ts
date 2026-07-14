@@ -3,21 +3,27 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ELECTRONIC_CONSENT_VERSION } from "../../shared/onboardingDocuments";
+import { ELECTRONIC_CONSENT_VERSION, ONBOARDING_DOCUMENT_TYPES } from "../../shared/onboardingDocuments";
 import { buildAgreementSnapshot } from "../../server/onboardingAgreementTemplates";
 
 let store: typeof import("../../server/onboardingDocumentStore");
 let recruitingStore: typeof import("../../server/onboardingRecruitingStore");
 let workflow: typeof import("../../server/onboardingDocumentRoutes");
+let pipeline: typeof import("../../server/onboardingPipeline");
+let storage: (typeof import("../../server/storage"))["storage"];
 let rawDb: import("better-sqlite3").Database;
 
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-onboarding-sign-"));
-  (await import("../../server/storage")).runMigrations();
+  process.env.ONBOARDING_INVITE_SECRET = "test-onboarding-invite-secret-with-more-than-32-characters";
+  const storageModule = await import("../../server/storage");
+  storageModule.runMigrations();
+  storage = storageModule.storage;
   ({ rawDb } = await import("../../server/db"));
   store = await import("../../server/onboardingDocumentStore");
   recruitingStore = await import("../../server/onboardingRecruitingStore");
   workflow = await import("../../server/onboardingDocumentRoutes");
+  pipeline = await import("../../server/onboardingPipeline");
 });
 
 beforeEach(() => {
@@ -32,6 +38,7 @@ beforeEach(() => {
   rawDb.prepare("DELETE FROM onboarding_signature_events").run();
   rawDb.prepare("DELETE FROM onboarding_signing_documents").run();
   rawDb.prepare("DELETE FROM onboarding_recruiting_invites").run();
+  rawDb.prepare("DELETE FROM rep_applications").run();
   rawDb.prepare("DELETE FROM users WHERE id = 100").run();
   rawDb.prepare("DELETE FROM team_members WHERE id IN (10, 20)").run();
   rawDb.prepare("INSERT OR IGNORE INTO tenants (id, slug, company_name, owner_name, owner_email, brand_name) VALUES (2, 'second-tenant', 'Second Tenant', 'Owner', 'owner2@example.com', 'Second Tenant')").run();
@@ -117,6 +124,9 @@ describe("first-party onboarding signing store", () => {
       pdf,
       pdfSha256,
     })).toThrow("not available");
+    const sameVersion = store.reserveSigningDocument(reservation());
+    expect(sameVersion.created).toBe(false);
+    expect(sameVersion.row.id).toBe(row.id);
   });
 
   it("keeps rep document lists tenant scoped", () => {
@@ -137,6 +147,12 @@ describe("first-party onboarding signing store", () => {
       invitedBy: 100,
     });
     recruitingStore.markRecruitingInviteSent(first.id, "resend-invite-1");
+    expect(() => recruitingStore.createRecruitingInvite({
+      tenantId: 1,
+      candidateName: "Casey Again",
+      candidateEmail: "casey@example.com",
+      invitedBy: 100,
+    })).toThrow("open invitation");
     const second = recruitingStore.createRecruitingInvite({
       tenantId: 2,
       candidateName: "Taylor Candidate",
@@ -148,7 +164,7 @@ describe("first-party onboarding signing store", () => {
     expect(recruitingStore.listRecruitingInvites(1)).toMatchObject([{
       candidateName: "Casey Candidate",
       candidateEmail: "casey@example.com",
-      status: "sent",
+      status: "invited",
       emailId: "resend-invite-1",
     }]);
     expect(recruitingStore.listRecruitingInvites(2)).toMatchObject([{
@@ -156,6 +172,37 @@ describe("first-party onboarding signing store", () => {
       status: "failed",
       failureReason: "Mailbox unavailable",
     }]);
+  });
+
+  it("creates a secure pre-account invite, resolves it once, and attaches the application", () => {
+    const invite = recruitingStore.createRecruitingInvite({
+      tenantId: 1,
+      candidateName: "Casey Candidate",
+      candidateEmail: "casey@example.com",
+      invitedBy: 100,
+    });
+    recruitingStore.markRecruitingInviteSent(invite.id, "resend-invite-1");
+    const token = recruitingStore.secureTokenForInvite(invite.id);
+    expect(recruitingStore.resolveRecruitingInviteToken(token)).toMatchObject({ id: invite.id, tenantId: 1, applicationId: null });
+    expect(recruitingStore.resolveRecruitingInviteToken(`${token.slice(0, -1)}x`)).toBeNull();
+
+    const application = storage.createRepApplication({
+      tenantId: 1,
+      inviteId: invite.id,
+      fullName: "Casey Candidate",
+      email: "casey@example.com",
+      phone: "3365550100",
+      city: "Lexington",
+      zip: "27292",
+      state: "NC",
+      hasSalesExperience: false,
+      preferredCarriers: "Kinetic",
+    });
+    const attached = recruitingStore.attachApplicationToInvite(invite.id, application.id);
+    expect(attached).toMatchObject({ applicationId: application.id, status: "under_review" });
+    expect(storage.getRepApplicationById(application.id)).toMatchObject({ inviteId: invite.id, tenantId: 1 });
+    expect(recruitingStore.resolveRecruitingInviteToken(token)).toBeNull();
+    expect(() => recruitingStore.attachApplicationToInvite(invite.id, application.id)).toThrow("already been used");
   });
 
   it("issues the full required agreement pack once after approval", async () => {
@@ -184,6 +231,83 @@ describe("first-party onboarding signing store", () => {
     expect(retried.createdCount).toBe(0);
     expect(retried.results.filter(result => result.skipped)).toHaveLength(4);
     expect(fetch).toHaveBeenCalledTimes(1);
+
+    const resent = await workflow.issueOnboardingDocuments({
+      tenantId: 1,
+      repId: 10,
+      sentBy: 100,
+      actorIp: "127.0.0.1",
+      actorUserAgent: "Vitest",
+      origin: "https://portal.example.com",
+      forceEmail: true,
+      deliveryAttempt: "safe-retry-1",
+    });
+    expect(resent.createdCount).toBe(0);
+    expect(resent.results.filter(result => result.resent)).toHaveLength(4);
+    expect(store.listRepDocuments(1, 10)).toHaveLength(4);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps the pipeline tenant scoped and activates only after all four required signatures", async () => {
+    rawDb.prepare("UPDATE team_members SET active = 0 WHERE id = 10").run();
+    const invite = recruitingStore.createRecruitingInvite({
+      tenantId: 1, candidateName: "Jordan Rep", candidateEmail: "jordan@example.com", invitedBy: 100,
+    });
+    recruitingStore.markRecruitingInviteSent(invite.id, "recruiting-email-1");
+    const application = storage.createRepApplication({
+      tenantId: 1, inviteId: invite.id, fullName: "Jordan Rep", email: "jordan@example.com",
+      phone: "3365550100", city: "Lexington", zip: "27292", state: "NC",
+      hasSalesExperience: true, preferredCarriers: "Kinetic",
+    });
+    recruitingStore.attachApplicationToInvite(invite.id, application.id);
+    recruitingStore.markInviteApproved(invite.id);
+    recruitingStore.markInviteLoginSent(invite.id, "login-email-1");
+    storage.updateRepApplication(application.id, { status: "approved", userId: 100 });
+
+    const otherTenantInvite = recruitingStore.createRecruitingInvite({
+      tenantId: 2, candidateName: "Other Tenant", candidateEmail: "other@example.com", invitedBy: null,
+    });
+    recruitingStore.markRecruitingInviteSent(otherTenantInvite.id, "other-email");
+    const tenantOneRecords = pipeline.buildOnboardingPipeline(1, "https://portal.example.com");
+    expect(tenantOneRecords.map(record => record.candidateEmail)).toContain("jordan@example.com");
+    expect(tenantOneRecords.map(record => record.candidateEmail)).not.toContain("other@example.com");
+
+    const issued = await workflow.issueOnboardingDocuments({
+      tenantId: 1, repId: 10, sentBy: 100, actorIp: "127.0.0.1",
+      actorUserAgent: "Vitest", origin: "https://portal.example.com",
+    });
+    expect(issued.results.filter(result => result.sent)).toHaveLength(4);
+    recruitingStore.markInviteAgreementsIssued(invite.id);
+
+    const documents = store.listRepDocuments(1, 10);
+    expect(documents).toHaveLength(ONBOARDING_DOCUMENT_TYPES.length);
+    for (let index = 0; index < documents.length; index += 1) {
+      const document = store.getSigningDocument(documents[index].id)!;
+      const pdf = Buffer.from(`%PDF-1.7 signed-${index}`);
+      store.completeSigning({
+        id: document.id,
+        expectedContentSha256: document.contentSha256,
+        signatureName: document.signerName,
+        signatureSha256: String(index + 1).repeat(64),
+        consentVersion: ELECTRONIC_CONSENT_VERSION,
+        signedAt: new Date(Date.UTC(2026, 6, 13, 12, index)).toISOString(),
+        signedUserId: 100,
+        ipAddress: "127.0.0.1",
+        userAgent: "Vitest",
+        evidence: { intentToSign: true },
+        pdf,
+        pdfSha256: crypto.createHash("sha256").update(pdf).digest("hex"),
+      });
+      const activation = pipeline.syncRepActivation({ tenantId: 1, repId: 10 });
+      expect(activation.signedCount).toBe(index + 1);
+      expect(activation.activated).toBe(index === documents.length - 1);
+      expect(rawDb.prepare("SELECT active FROM team_members WHERE id = 10").get()).toMatchObject({ active: index === documents.length - 1 ? 1 : 0 });
+    }
+    expect(recruitingStore.getRecruitingInvite(invite.id)).toMatchObject({ status: "active" });
+    expect(pipeline.buildOnboardingPipeline(1, "https://portal.example.com").find(record => record.inviteId === invite.id)).toMatchObject({
+      stage: "active",
+      milestones: { signedCount: 4, fullySigned: true, active: true },
+    });
   });
 
   it("sends the initial login code through Resend with the signing destination", async () => {

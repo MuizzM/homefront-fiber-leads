@@ -426,8 +426,37 @@
 const FIBER_SCOUT_SERVER = "FIBER_SCOUT_SERVER_PLACEHOLDER";
 const API_ENDPOINT = FIBER_SCOUT_SERVER + "/api/onboarding/apply";
 const ORG_SLUG = "FIBER_SCOUT_ORG_PLACEHOLDER";
+const INVITE_TOKEN = new URLSearchParams(window.location.search).get("invite") || "";
 
 const $ = (id) => document.getElementById(id);
+
+async function hydrateSecureInvite() {
+  if (!INVITE_TOKEN) return;
+  try {
+    const response = await fetch(FIBER_SCOUT_SERVER + "/api/onboarding/invitations/resolve?token=" + encodeURIComponent(INVITE_TOKEN), {
+      headers: { "Accept": "application/json" },
+      cache: "no-store",
+    });
+    const invite = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(invite.error || "Invitation unavailable");
+    $("fullName").value = invite.name || "";
+    $("email").value = invite.email || "";
+    $("email").readOnly = true;
+    $("email").setAttribute("aria-describedby", "email-invite-note");
+    const note = document.createElement("div");
+    note.id = "email-invite-note";
+    note.className = "hint";
+    note.textContent = "Verified from your private recruiting invitation";
+    $("email").parentElement.appendChild(note);
+    updateSteps();
+  } catch {
+    document.getElementById("applyForm").style.display = "none";
+    $("errorCard").classList.add("show");
+    const message = $("errorCard").querySelector(".result-msg");
+    if (message) message.textContent = "This private invitation is invalid or expired. Ask your recruiter to send a new link.";
+    $("retryBtn").textContent = "Check link again";
+  }
+}
 
 // ── Experience toggle ────────────────────────────────────────────────────────
 function setExp(hasExp) {
@@ -540,6 +569,7 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
   fd.append("preferredCarriers", carriers.join(","));
   fd.append("referralSource", $("referralSource").value);
   if (ORG_SLUG) fd.append("orgSlug", ORG_SLUG);
+  if (INVITE_TOKEN) fd.append("inviteToken", INVITE_TOKEN);
   if ($("headshotFile").files[0]) fd.append("headshot", $("headshotFile").files[0]);
   if ($("licenseFile").files[0]) fd.append("license", $("licenseFile").files[0]);
 
@@ -563,9 +593,11 @@ document.getElementById("applyForm").addEventListener("submit", async (e) => {
 });
 
 $("retryBtn").addEventListener("click", () => {
+  if (INVITE_TOKEN) { window.location.reload(); return; }
   $("errorCard").classList.remove("show");
   document.getElementById("applyForm").style.display = "block";
 });
+hydrateSecureInvite();
 </script>
 </body>
 </html>

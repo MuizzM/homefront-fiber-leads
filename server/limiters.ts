@@ -42,3 +42,11 @@ export const recruitingInviteLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Recruiting invitation limit reached. Try again in an hour." },
 });
+
+export const inviteResolveLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many invitation checks. Try again shortly." },
+});

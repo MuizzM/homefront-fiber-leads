@@ -338,6 +338,7 @@ export type ActivityOverride = typeof activityOverrides.$inferSelect;
 export const repApplications = sqliteTable("rep_applications", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   tenantId: integer("tenant_id"),              // which org this applicant is joining (null = unrouted inbound)
+  inviteId: integer("invite_id"),              // onboarding_recruiting_invites.id when entered through a secure invite
   fullName: text("full_name").notNull(),
   email: text("email").notNull(),
   phone: text("phone").notNull(),

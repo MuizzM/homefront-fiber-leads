@@ -166,9 +166,9 @@ export function reserveSigningDocument(input: {
   const active = rawDb.prepare(
     `SELECT * FROM onboarding_signing_documents
       WHERE tenant_id = ? AND rep_id = ? AND document_type = ?
-        AND status IN ('creating','sent','delivered')
+        AND (status IN ('creating','sent','delivered') OR (status = 'completed' AND document_version = ?))
       ORDER BY id DESC LIMIT 1`,
-  ).get(input.tenantId, input.repId, input.documentType);
+  ).get(input.tenantId, input.repId, input.documentType, input.snapshot.documentVersion);
   if (active) return { row: mapRecord(active)!, created: false };
 
   const transaction = rawDb.transaction(() => {
@@ -217,9 +217,9 @@ export function reserveSigningDocument(input: {
     const winner = rawDb.prepare(
       `SELECT * FROM onboarding_signing_documents
         WHERE tenant_id = ? AND rep_id = ? AND document_type = ?
-          AND status IN ('creating','sent','delivered')
+          AND (status IN ('creating','sent','delivered') OR (status = 'completed' AND document_version = ?))
         ORDER BY id DESC LIMIT 1`,
-    ).get(input.tenantId, input.repId, input.documentType);
+    ).get(input.tenantId, input.repId, input.documentType, input.snapshot.documentVersion);
     if (winner) return { row: mapRecord(winner)!, created: false };
     throw error;
   }

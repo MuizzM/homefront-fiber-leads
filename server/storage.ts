@@ -349,6 +349,7 @@ export function runMigrations() {
     // Inbound rep applications carry the org they're joining (null = unrouted).
     // Bootstrap adopts existing null rows into the default tenant.
     `ALTER TABLE rep_applications ADD COLUMN tenant_id INTEGER`,
+    `ALTER TABLE rep_applications ADD COLUMN invite_id INTEGER`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
     // Persistent address pool — harvest once, re-scan for fiber-status changes
@@ -921,6 +922,26 @@ export function runMigrations() {
        ON onboarding_recruiting_invites(tenant_id, created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_recruiting_invites_email
        ON onboarding_recruiting_invites(tenant_id, candidate_email, created_at DESC)`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN token_sha256 TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN expires_at TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN application_id INTEGER`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN applied_at TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN approved_at TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN rejected_at TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN login_email_id TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN login_sent_at TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN agreements_issued_at TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN activated_at TEXT`,
+    `ALTER TABLE onboarding_recruiting_invites ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_token
+       ON onboarding_recruiting_invites(token_sha256) WHERE token_sha256 IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_application
+       ON onboarding_recruiting_invites(application_id) WHERE application_id IS NOT NULL`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_recruiting_invites_open_email
+       ON onboarding_recruiting_invites(tenant_id, candidate_email)
+       WHERE application_id IS NULL AND status IN ('creating','invited','failed')`,
+    `CREATE INDEX IF NOT EXISTS idx_rep_applications_invite
+       ON rep_applications(invite_id) WHERE invite_id IS NOT NULL`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {

@@ -67,7 +67,17 @@ import {
   registerOnboardingDocumentRoutes,
   sendOnboardingWelcome,
 } from "./onboardingDocumentRoutes";
+import {
+  attachApplicationToInvite,
+  getRecruitingInviteByApplication,
+  markInviteAgreementsIssued,
+  markInviteApproved,
+  markInviteLoginSent,
+  markInviteRejected,
+  resolveRecruitingInviteToken,
+} from "./onboardingRecruitingStore";
 import * as commissionSvc from "./commissionService";
+import { rawDb } from "./db";
 
 // Map a stored commission_rates row → the engine's CommissionStructure.
 // Legacy flat rows (no effective_from) are treated as always-on flat plans.
@@ -4040,7 +4050,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     (req, res) => {
       const files = req.files as Record<string, Express.Multer.File[]>;
       const { fullName, email, phone, city, zip, state, hasSalesExperience,
-              salesExperienceDetails, preferredCarriers, referralSource, orgSlug } = req.body;
+              salesExperienceDetails, preferredCarriers, referralSource, orgSlug, inviteToken } = req.body;
 
       if (!fullName || !email || !phone || !city || !zip || !preferredCarriers) {
         cleanupUploads(files);
@@ -4058,8 +4068,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Route the applicant to the org whose join link they used. An unknown or
       // absent slug falls back to the default tenant so a bad link never drops an
       // application on the floor. Slug is sanitized to [a-z0-9-].
+      const secureInvite = typeof inviteToken === "string" && inviteToken.length > 20
+        ? resolveRecruitingInviteToken(inviteToken)
+        : null;
+      if (inviteToken && !secureInvite) {
+        cleanupUploads(files);
+        return res.status(400).json({ error: "This invitation is invalid, expired, or already used. Ask your recruiter for a new link." });
+      }
+      if (secureInvite && secureInvite.candidateEmail !== String(email).trim().toLowerCase()) {
+        cleanupUploads(files);
+        return res.status(400).json({ error: "Use the email address that received this private invitation." });
+      }
       const cleanSlug = typeof orgSlug === "string" ? orgSlug.toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64) : "";
-      const routedTenantId = (cleanSlug ? storage.getTenantBySlug(cleanSlug)?.id : null) ?? getDefaultTenantId() ?? undefined;
+      const routedTenantId = secureInvite?.tenantId ?? (cleanSlug ? storage.getTenantBySlug(cleanSlug)?.id : null) ?? getDefaultTenantId() ?? undefined;
 
       // Duplicate check is per-tenant: the same person may legitimately apply to
       // two different orgs, but not twice to the same one.
@@ -4076,6 +4097,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
       const app2 = storage.createRepApplication({
         tenantId: routedTenantId,
+        inviteId: secureInvite?.id ?? null,
         fullName,
         email: email.toLowerCase(),
         phone,
@@ -4089,6 +4111,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         headshotPath: headshotFile ? "/uploads/headshots/" + headshotFile.filename : null,
         licensePath: licenseFile ? "/uploads/licenses/" + licenseFile.filename : null,
       });
+      if (secureInvite) {
+        try {
+          attachApplicationToInvite(secureInvite.id, app2.id);
+          storage.logActivity(null, "onboarding.application.attached", "rep_application", app2.id,
+            { inviteId: secureInvite.id, tenantId: secureInvite.tenantId }, req.ip);
+        } catch (error: any) {
+          rawDb.prepare("DELETE FROM rep_applications WHERE id = ? AND user_id IS NULL").run(app2.id);
+          cleanupUploads(files);
+          return res.status(409).json({ error: error?.message || "This invitation has already been used." });
+        }
+      }
 
       // Email admin notification
       const adminEmail = process.env.SMTP_USER;
@@ -4354,6 +4387,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (application.tenantId != null && tenantId != null && application.tenantId !== tenantId) {
       return res.status(404).json({ error: "Application not found" });
     }
+    const existingAccount = status === "approved" ? storage.getUserByEmail(application.email) : undefined;
+    if (existingAccount && existingAccount.tenantId !== tenantId) {
+      return res.status(409).json({ error: "That email already belongs to an account in another organization." });
+    }
+    if (existingAccount && existingAccount.role !== "rep") {
+      return res.status(409).json({ error: "That email already belongs to a staff account and cannot be converted into a rep account." });
+    }
+    if (existingAccount?.teamMemberId) {
+      const linkedRep = storage.getTeamMemberById(existingAccount.teamMemberId);
+      if (!linkedRep || linkedRep.tenantId !== tenantId) {
+        return res.status(409).json({ error: "The existing rep profile is not part of this organization." });
+      }
+    }
 
     let userId: number | undefined;
     let teamMemberId: number | null = null;
@@ -4363,10 +4409,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let onboardingWarning: string | null = null;
     let welcomeEmailId: string | null = null;
     let welcomeWarning: string | null = null;
+    const recruitingInvite = getRecruitingInviteByApplication(application.id);
+    if (recruitingInvite && status === "approved") markInviteApproved(recruitingInvite.id);
 
     if (status === "approved") {
       // Create user account — OTP-only, no passwords stored or emailed
-      const existing = storage.getUserByEmail(application.email);
+      const existing = existingAccount;
       if (existing) {
         userId = existing.id;
         // Reactivate if inactive
@@ -4401,12 +4449,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             phone: application.phone || null,
             email: application.email,
             role: "rep",
-            active: true,
+            active: false,
             tenantId: tenantId ?? undefined,
           } as any);
           teamMemberId = member.id;
           if (userId != null) storage.updateUser(userId, { teamMemberId } as any);
         }
+        if (teamMemberId != null) storage.updateTeamMember(teamMemberId, { active: false }, tenantId ?? undefined);
 
         if (commission && tenantId != null && teamMemberId != null) {
           const structure = commission.structure === "FLAT" ? "FLAT" : "TIERED";
@@ -4430,31 +4479,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         console.error("Onboarding commission assignment failed:", e?.message);
       }
 
-      // Account + team profile now exist, so issue the complete agreement pack
-      // immediately. The candidate receives a Home Front Sign link without the
-      // manager having to find the rep again on Team and send documents by hand.
-      if (tenantId != null && teamMemberId != null) {
-        try {
-          onboardingDocuments = await issueOnboardingDocuments({
-            tenantId,
-            repId: teamMemberId,
-            sentBy: reviewer?.id ?? null,
-            actorIp: String(req.ip || req.socket.remoteAddress || "unknown").slice(0, 100),
-            actorUserAgent: String(req.headers["user-agent"] ?? "unknown").slice(0, 500),
-            origin: onboardingAppOrigin(req),
-          });
-          const failedCount = onboardingDocuments.results.filter((result: any) => result.failed).length;
-          if (failedCount) onboardingWarning = `Account created, but ${failedCount} onboarding document${failedCount === 1 ? "" : "s"} could not be emailed.`;
-        } catch (e: any) {
-          onboardingWarning = e?.message || "Account created, but onboarding documents could not be issued.";
-          console.error("Automatic onboarding document issuance failed:", e?.message);
-        }
-      } else {
-        onboardingWarning = "Account created, but the rep profile was not linked, so onboarding documents were not issued.";
-      }
-
       // Send the first login code through the same Resend HTTP path as the
-      // document invitation and await acceptance before reporting success.
+      // document invitation and await acceptance before issuing agreements.
       try {
         const otp = storage.createOtp(application.email);
         const welcome = await sendOnboardingWelcome({
@@ -4464,6 +4490,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           origin: onboardingAppOrigin(req),
         });
         welcomeEmailId = welcome.id;
+        if (recruitingInvite) markInviteLoginSent(recruitingInvite.id, welcome.id);
         storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.sent", "rep_application", application.id, {
           candidateEmail: application.email.toLowerCase(),
           emailProvider: "resend",
@@ -4477,6 +4504,29 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           reason: welcomeWarning,
         }, req.ip);
       }
+
+      // Account + team profile now exist and the first login code has been
+      // attempted, so issue exactly the complete four-agreement pack.
+      if (tenantId != null && teamMemberId != null) {
+        try {
+          onboardingDocuments = await issueOnboardingDocuments({
+            tenantId,
+            repId: teamMemberId,
+            sentBy: reviewer?.id ?? null,
+            actorIp: String(req.ip || req.socket.remoteAddress || "unknown").slice(0, 100),
+            actorUserAgent: String(req.headers["user-agent"] ?? "unknown").slice(0, 500),
+            origin: onboardingAppOrigin(req),
+          });
+          const failedCount = onboardingDocuments.results.filter((result: any) => result.failed).length;
+          if (failedCount) onboardingWarning = `Account created, but ${failedCount} onboarding document${failedCount === 1 ? "" : "s"} could not be emailed.`;
+          else if (recruitingInvite) markInviteAgreementsIssued(recruitingInvite.id);
+        } catch (e: any) {
+          onboardingWarning = e?.message || "Account created, but onboarding documents could not be issued.";
+          console.error("Automatic onboarding document issuance failed:", e?.message);
+        }
+      } else {
+        onboardingWarning = "Account created, but the rep profile was not linked, so onboarding documents were not issued.";
+      }
     }
 
     const updated = storage.updateRepApplication(id, {
@@ -4485,6 +4535,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       reviewedBy: reviewer?.id ?? null,
       userId: userId ?? null,
     });
+    if (recruitingInvite && status === "rejected") markInviteRejected(recruitingInvite.id);
+    storage.logActivity(reviewer?.id ?? null, `onboarding.application.${status}`, "rep_application", application.id, {
+      tenantId,
+      inviteId: recruitingInvite?.id ?? null,
+      userId: userId ?? null,
+      repId: teamMemberId,
+      loginCodeSent: Boolean(welcomeEmailId),
+      agreementsCreated: onboardingDocuments?.createdCount ?? 0,
+      agreementsFailed: onboardingDocuments?.results?.filter((result: any) => result.failed).length ?? 0,
+    }, req.ip);
 
     res.json({
       ...updated,
