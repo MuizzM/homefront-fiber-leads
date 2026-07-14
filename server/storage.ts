@@ -1365,6 +1365,8 @@ export function runMigrations() {
        UNIQUE(job_id, canonical_address_id)
      )`,
     `CREATE INDEX IF NOT EXISTS idx_qualification_checks_job ON qualification_checks(job_id, state)`,
+    `ALTER TABLE qualification_checks ADD COLUMN map_announced_at TEXT`,
+    `ALTER TABLE qualification_checks ADD COLUMN map_result_reported_at TEXT`,
     `CREATE TABLE IF NOT EXISTS discovery_qualification_cache (
        tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
        canonical_key TEXT NOT NULL,

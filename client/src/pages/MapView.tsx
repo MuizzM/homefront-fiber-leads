@@ -46,6 +46,7 @@ import {
   type DiscoveryEvent,
   type DiscoveryJob,
 } from "@/lib/discoveryApi";
+import { applyDiscoveryMapPointBatch } from "@/lib/discoveryMapFeatures";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -309,6 +310,10 @@ function ensureTransientMapLayers(map: any): void {
       cluster: true,
       clusterRadius: 48,
       clusterMaxZoom: 14,
+      clusterProperties: {
+        confirmed: ["+", ["case", ["==", ["get", "scanStatus"], "fresh_confirmed"], 1, 0]],
+        candidates: ["+", ["case", ["==", ["get", "scanStatus"], "fresh_candidate"], 1, 0]],
+      },
     });
   }
   if (!map.getLayer(SCAN_RESULTS_CLUSTER_LAYER)) {
@@ -319,7 +324,11 @@ function ensureTransientMapLayers(map: any): void {
       filter: ["has", "point_count"],
       paint: {
         "circle-radius": ["step", ["get", "point_count"], 16, 20, 22, 100, 29],
-        "circle-color": "#16a34a",
+        "circle-color": ["case",
+          [">", ["coalesce", ["get", "confirmed"], 0], 0], "#16a34a",
+          [">", ["coalesce", ["get", "candidates"], 0], 0], "#8b5cf6",
+          "#0ea5e9",
+        ],
         "circle-opacity": 0.9,
         "circle-opacity-transition": { duration: 180, delay: 0 },
         "circle-stroke-width": 2,
@@ -353,13 +362,34 @@ function ensureTransientMapLayers(map: any): void {
       source: SCAN_RESULTS_SOURCE,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        "circle-radius": 7,
-        "circle-opacity": 0.96,
-        "circle-color": "#22c55e",
+        "circle-radius": ["match", ["get", "scanStatus"],
+          "fresh_confirmed", 8,
+          "fresh_candidate", 7,
+          "checking", 5,
+          6,
+        ],
+        "circle-opacity": ["match", ["get", "scanStatus"], "checking", 0.72, "not_fresh", 0.58, 0.94],
+        "circle-color": ["match", ["get", "scanStatus"],
+          "fresh_confirmed", "#22c55e",
+          "fresh_candidate", "#8b5cf6",
+          "checking", "#0ea5e9",
+          "no_service", "#64748b",
+          "not_fresh", "#94a3b8",
+          "unsupported", "#475569",
+          "unverified", "#ef4444",
+          "#0ea5e9",
+        ],
         "circle-stroke-width": 2,
-        "circle-stroke-color": "#dcfce7",
+        "circle-stroke-color": ["match", ["get", "scanStatus"],
+          "fresh_confirmed", "#dcfce7",
+          "fresh_candidate", "#ede9fe",
+          "unverified", "#fee2e2",
+          "#e0f2fe",
+        ],
         "circle-blur": 0.08,
         "circle-opacity-transition": { duration: 180, delay: 0 },
+        "circle-radius-transition": { duration: 220, delay: 0 },
+        "circle-color-transition": { duration: 220, delay: 0 },
       },
     });
   }
@@ -487,6 +517,16 @@ export default function MapView() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const canSubmitScan = useCan("scan.submit");
+  const { data: scanProviderStatus } = useQuery<{
+    automationAuthorized: boolean; hasToken: boolean; expiresIn: number | null;
+  }>({
+    queryKey: ["/api/token-status"],
+    queryFn: () => apiRequest("GET", "/api/token-status").then((response) => response.json()),
+    enabled: !!user && canSubmitScan,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  const scanProviderReady = scanProviderStatus?.automationAuthorized === true && scanProviderStatus?.hasToken === true;
   const discovery = useDiscoveryJobs(!!user && canSubmitScan);
   const activeDiscoveryJobs = discovery.activeJobs;
   const scanning = activeDiscoveryJobs.length > 0;
@@ -2006,9 +2046,13 @@ export default function MapView() {
     if (scanFlushRafRef.current != null) cancelAnimationFrame(scanFlushRafRef.current);
   }, []);
 
-  const addDiscoveryLead = useCallback((event: DiscoveryEvent) => {
+  const addDiscoveryMapEvent = useCallback((event: DiscoveryEvent) => {
     const type = event.eventType.toLowerCase();
     const payload = event.payload ?? {};
+    if ((type === "map.candidates" || type === "map.results") && Array.isArray(payload.points)) {
+      if (applyDiscoveryMapPointBatch(scanFeatureMapRef.current, event.jobId, payload.points) > 0) scheduleScanFeatureFlush();
+      return;
+    }
     // During a rolling deploy the server may publish either a normalized lead
     // object or a ready-to-render GeoJSON feature. Accept both wire shapes, but
     // never infer a lead from an unrelated progress event.
@@ -2042,6 +2086,7 @@ export default function MapView() {
         leadId: row.leadId ?? row.lead_id ?? (row.leadTag === "fresh_fiber_confirmed" ? row.id ?? null : null),
         canonicalAddressId: String(canonicalId),
         receivedAt: Date.now(),
+        scanStatus: "fresh_confirmed",
         address: String(row.address ?? row.addressLine1 ?? "Address"),
         city: String(row.city ?? ""),
         state: String(row.state ?? ""),
@@ -2062,7 +2107,7 @@ export default function MapView() {
     scheduleScanFeatureFlush();
   }, [scheduleScanFeatureFlush]);
 
-  useEffect(() => discovery.subscribe(addDiscoveryLead), [discovery.subscribe, addDiscoveryLead]);
+  useEffect(() => discovery.subscribe(addDiscoveryMapEvent), [discovery.subscribe, addDiscoveryMapEvent]);
 
   // Incremental SSE pins are an instant visual bridge, not a second durable
   // lead layer. As soon as the normal tenant lead feed contains an id, remove
@@ -2707,6 +2752,12 @@ export default function MapView() {
         );
         return (
         <div className={`glass-surface px-3.5 py-3 flex flex-col gap-2.5 ${borderClass}`} data-testid="scan-panel">
+          {scanProviderStatus && !scanProviderReady && (
+            <div className="flex items-start gap-2 rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[10.5px] leading-snug text-amber-100" role="status">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
+              <span>Address discovery will run and place rooftop pins, but Kinetic verification is unavailable until an authorized provider session is configured. Unverified addresses stay red and never become leads.</span>
+            </div>
+          )}
           {/* ── Status row (icon + primary line) ─────────────────────────── */}
           <div className="flex items-start gap-2">
             <span className="flex-1 min-w-0 text-[12.5px] leading-snug flex items-start gap-1.5 text-white/85">
@@ -2800,11 +2851,22 @@ export default function MapView() {
             </div>
           )}
 
-          {/* ── Legend — what the dots mean (green = knock this) ──────────── */}
-          {(scanning || (freshSameBox && scanOutcome?.kind === "success" && scanOutcome.found > 0)) && (
-            <div className="flex items-center gap-1.5 text-[10.5px] text-white/55">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_5px_rgba(34,197,94,0.9)] shrink-0" aria-hidden="true" />
-              Green dot = fresh-fiber lead — knock these first
+          {/* The transient scan layer is intentionally honest: every rooftop is
+              visible while it is checked, but only cross-verified opportunities
+              turn green and enter the durable lead feed. */}
+          {(scanning || scanFeatureMapRef.current.size > 0) && (
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] text-white/60" aria-label="Scan result legend">
+              {[
+                ["bg-sky-500", "Checking"],
+                ["bg-violet-500", "Provider candidate"],
+                ["bg-emerald-500", "Confirmed lead"],
+                ["bg-slate-400", "Not fresh / no service"],
+                ["bg-red-500", "Needs recheck"],
+              ].map(([color, label]) => (
+                <span key={label} className="flex items-center gap-1.5">
+                  <span className={`h-2 w-2 shrink-0 rounded-full ${color}`} aria-hidden="true" />{label}
+                </span>
+              ))}
             </div>
           )}
 

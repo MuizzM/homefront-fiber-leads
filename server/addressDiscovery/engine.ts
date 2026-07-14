@@ -17,7 +17,8 @@ import {
   claimBoundaryJob, claimNextTile, completeTile, createQualificationCheck, discoveryReadyForQualification,
   failTile, getDiscoveryJob, getQualificationCache, jobsReadyForQualification, mapDiscoveryRun,
   markBoundaryRetry, mergeAddressEvidence, planDiscoveryTiles as persistTiles, qualificationCandidates,
-  markQualificationDispatchComplete, reconcileQualificationJob, recordHandoffCollision, setJobQualification, setResolvedBoundary, setResolvedLocality,
+  markQualificationDispatchComplete, publishQualificationMapCandidates, publishQualificationMapResults,
+  reconcileQualificationJob, recordHandoffCollision, setJobQualification, setResolvedBoundary, setResolvedLocality,
   touchTileLease, updateSourceHealth, updateTileCheckpoint, type DiscoveryJobRow, type DiscoveryTileRow,
 } from "./store";
 
@@ -267,6 +268,7 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
       void runScanWorker(runId, job.tenantId);
     }
     markQualificationDispatchComplete(job.id);
+    while (publishQualificationMapCandidates(job) > 0) { /* bounded event batches */ }
     appendDiscoveryEvent(job.tenantId, job.id, "qualification.started", {
       observedCandidates: candidates.length, queued: queued.length, cacheReused: reused, runs: sequence,
       handoffCollisions: getDiscoveryJob(job.tenantId, job.id)?.handoffCollisions ?? 0,
@@ -288,6 +290,7 @@ function reconcile(): void {
         continue;
       }
       const result = reconcileQualificationJob(job);
+      while (publishQualificationMapResults(job) > 0) { /* bounded event batches */ }
       if (result.terminal) structuredLog("address_discovery.completed", {
         jobId: job.id, tenantId: job.tenantId, status: result.status,
       });

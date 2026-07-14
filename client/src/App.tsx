@@ -160,7 +160,7 @@ function AppRoutes() {
         <Suspense fallback={<PageLoader />}>
         {/* Keyed by route → each page fades/slides in for a smooth tab switch.
             Also the single scroll container for tall pages (map pages fill it). */}
-        <div key={location} className="app-canvas flex-1 flex flex-col min-h-0 overflow-y-auto animate-in fade-in duration-150">
+        <div key={location} className="app-canvas app-route-stage flex-1 flex flex-col min-h-0 overflow-y-auto">
         <Switch>
           {/* ── All roles ── */}
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
