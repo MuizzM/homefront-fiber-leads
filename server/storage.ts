@@ -364,7 +364,7 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS provider_address_locks (dedupe_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS provider_shared_result_cache (dedupe_key TEXT PRIMARY KEY,payload TEXT NOT NULL,expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL)`,
     `CREATE INDEX IF NOT EXISTS idx_provider_shared_cache_expiry ON provider_shared_result_cache(expires_at)`,
-    `CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),halted INTEGER NOT NULL DEFAULT 0,halt_reason TEXT,paused_until INTEGER,updated_at INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),halted INTEGER NOT NULL DEFAULT 0,halt_reason TEXT,paused_until INTEGER,next_start_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)`,
     `INSERT OR IGNORE INTO provider_global_control (id,updated_at) VALUES (1,0)`,
     // Speed up knock lookups (leaderboard, territory progress, knock history)
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead ON knock_log(lead_id)`,

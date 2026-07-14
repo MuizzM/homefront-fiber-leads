@@ -1,82 +1,164 @@
-import { rawDb } from "../server/db";
-import { DistributedProviderCoordinator } from "../server/distributedProviderCoordinator";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const levels = [10, 25, 40, 50];
-const checks = bounded(process.env.LOAD_TEST_CHECKS, 50, 5_000, 200);
-const providerLatencyMs = bounded(process.env.LOAD_TEST_PROVIDER_LATENCY_MS, 5, 10_000, 60);
-const maxP95Ms = bounded(process.env.LOAD_TEST_MAX_P95_MS, 50, 60_000, 2_000);
-const proxyConnections = bounded(process.env.PROXY_POOL_CONNECTIONS, 1, 100, 50);
-const proxyPipelining = bounded(process.env.PROXY_PIPELINING, 1, 2, 1);
-const proxyCapacity = proxyConnections * proxyPipelining;
+// Never benchmark against the developer or production database. DATA_DIR must
+// be set before importing the database-backed coordinator.
+const explicitDataDir = process.env.LOAD_TEST_DATA_DIR?.trim();
+const loadTestDataDir = explicitDataDir
+  ? path.resolve(explicitDataDir)
+  : fs.mkdtempSync(path.join(os.tmpdir(), "homefront-scanner-load-"));
+fs.mkdirSync(loadTestDataDir, { recursive: true });
+process.env.DATA_DIR = loadTestDataDir;
 
-interface Result {
-  concurrency: number;
-  elapsedMs: number;
-  checksPerSecond: number;
-  p95Ms: number;
-  failures: number;
-  rate429: number;
-  peakProviderConcurrency: number;
-  withinProxyCapacity: boolean;
-}
+const [{ rawDb }, { AuthorizedTokenPool }, coordinatorModule] = await Promise.all([
+  import("../server/db"),
+  import("../server/authorizedTokenPool"),
+  import("../server/distributedProviderCoordinator"),
+]);
+const { DistributedProviderCoordinator, ensureSchema } = coordinatorModule;
 
-const results: Result[] = [];
-for (const level of levels) {
-  rawDb.exec(`DELETE FROM provider_rate_events; DELETE FROM provider_admission_queue;
-    DELETE FROM provider_address_locks; DELETE FROM provider_shared_result_cache;
-    UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL WHERE id=1;`);
-  const coordinator = new DistributedProviderCoordinator<{ ok: true }>({
-    maxConcurrency: level,
-    maxRequestsPerSecond: 10_000,
-    resultCacheTtlMs: 0,
-  });
-  let active = 0, peak = 0, failures = 0, rate429 = 0;
-  const latencies: number[] = [];
-  const suiteStarted = performance.now();
-  await Promise.all(Array.from({ length: checks }, async (_, index) => {
-    const started = performance.now();
+const quotaPerMinute = 100;
+const simulatedMinuteMs = bounded(process.env.LOAD_TEST_RATE_WINDOW_MS, 250, 60_000, 6_000);
+const uniqueChecks = bounded(process.env.LOAD_TEST_CHECKS, 101, 5_000, 200);
+const duplicateCalls = bounded(process.env.LOAD_TEST_DUPLICATES, 1, uniqueChecks, 50);
+const providerLatencyMs = bounded(process.env.LOAD_TEST_PROVIDER_LATENCY_MS, 1, 10_000, 8);
+// The production pool intentionally clamps the early-refresh margin to at least
+// one second. Keep synthetic tokens valid beyond that margin while making them
+// refresh-due during the compressed multi-minute run.
+const refreshMarginMs = 1_000;
+const tokenLifetimeMs = simulatedMinuteMs + refreshMarginMs + 25;
+
+ensureSchema();
+rawDb.exec(`DELETE FROM provider_rate_events; DELETE FROM provider_admission_queue;
+  DELETE FROM provider_address_locks; DELETE FROM provider_shared_result_cache;
+  UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL,next_start_at=0 WHERE id=1;`);
+
+let activeMints = 0;
+let peakMints = 0;
+let mintedTokens = 0;
+const tokenPool = new AuthorizedTokenPool({
+  maxSize: 20,
+  warmMinimum: 4,
+  refreshMarginMs,
+  maxLeasesPerToken: 10,
+  maxConcurrentRefreshes: 2,
+  maintenanceIntervalMs: 1_000,
+  mint: async slotId => {
+    activeMints++;
+    peakMints = Math.max(peakMints, activeMints);
+    await delay(2);
+    activeMints--;
+    mintedTokens++;
+    return {
+      token: `load-test-token-${slotId}-${mintedTokens}`,
+      expiresAt: Date.now() + tokenLifetimeMs,
+    };
+  },
+});
+
+const coordinator = new DistributedProviderCoordinator<{ key: string }>({
+  maxConcurrency: 50,
+  maxRequestsPerMinute: quotaPerMinute,
+  resultCacheTtlMs: simulatedMinuteMs * 3,
+  rateWindowMs: simulatedMinuteMs,
+  pollMs: 10,
+});
+
+const keys = Array.from({ length: uniqueChecks }, (_, index) => `load-${index}`);
+const calls = [
+  ...keys.map((key, index) => ({ key, source: index % 10 === 0 ? "manual" as const : "city" as const })),
+  ...keys.slice(0, duplicateCalls).map(key => ({ key, source: "lasso" as const })),
+];
+let providerCalls = 0;
+let activeSearches = 0;
+let peakSearches = 0;
+const providerStarts: number[] = [];
+const latencies: number[] = [];
+const suiteStarted = performance.now();
+
+await Promise.all(calls.map(async ({ key, source }) => {
+  const started = performance.now();
+  await coordinator.execute(key, source, async () => {
+    providerCalls++;
+    providerStarts.push(Date.now());
+    activeSearches++;
+    peakSearches = Math.max(peakSearches, activeSearches);
+    const lease = await tokenPool.lease();
     try {
-      await coordinator.execute(`load-${level}-${index}`, index % 10 === 0 ? "manual" : "city", async () => {
-        active++; peak = Math.max(peak, active);
-        try {
-          const jitter = (index * 17) % Math.max(1, Math.floor(providerLatencyMs / 2));
-          await new Promise(resolve => setTimeout(resolve, providerLatencyMs + jitter));
-          return { ok: true as const };
-        } finally { active--; }
-      }, { cacheable: () => false, serialize: JSON.stringify, deserialize: JSON.parse });
-    } catch (error: any) {
-      failures++;
-      if (String(error?.message ?? error).includes("429")) rate429++;
-    } finally { latencies.push(performance.now() - started); }
-  }));
-  const elapsedMs = performance.now() - suiteStarted;
-  latencies.sort((a, b) => a - b);
-  results.push({
-    concurrency: level,
-    elapsedMs: Math.round(elapsedMs),
-    checksPerSecond: Number((checks / (elapsedMs / 1_000)).toFixed(1)),
-    p95Ms: Math.round(latencies[Math.min(latencies.length - 1, Math.ceil(latencies.length * 0.95) - 1)] ?? 0),
-    failures,
-    rate429: checks ? Number((rate429 / checks).toFixed(4)) : 0,
-    peakProviderConcurrency: peak,
-    withinProxyCapacity: level <= proxyCapacity,
+      await delay(providerLatencyMs);
+      return { key };
+    } finally {
+      lease.release();
+      activeSearches--;
+    }
+  }, {
+    cacheable: () => true,
+    serialize: JSON.stringify,
+    deserialize: value => JSON.parse(value) as { key: string },
   });
+  latencies.push(performance.now() - started);
+}));
+
+tokenPool.stop();
+latencies.sort((a, b) => a - b);
+const maxStartsInWindow = maximumStartsInWindow(providerStarts, simulatedMinuteMs);
+const elapsedMs = Math.round(performance.now() - suiteStarted);
+const equivalentChecksPerMinute = Number((providerCalls / (elapsedMs / simulatedMinuteMs)).toFixed(1));
+const assertions = {
+  noQuotaViolations: maxStartsInWindow <= quotaPerMinute,
+  sustainedAtLeast95Percent: maxStartsInWindow >= quotaPerMinute * 0.95,
+  noDuplicateProviderRequests: providerCalls === uniqueChecks,
+  noLostJobs: calls.length === uniqueChecks + duplicateCalls,
+  noRefreshStorm: peakMints <= 2,
+  poolRedacted: tokenPool.snapshot().states.DISABLED > 0,
+};
+
+console.log(JSON.stringify({
+  mode: "local-authorized-scanner-load-test",
+  note: "No external provider, proxy, bearer token, or resident address is used. The rolling minute is time-compressed for deterministic CI execution.",
+  configuredQuotaPerMinute: quotaPerMinute,
+  simulatedMinuteMs,
+  uniqueChecks,
+  totalCallers: calls.length,
+  duplicateCalls,
+  providerCalls,
+  deduplicatedCalls: calls.length - providerCalls,
+  elapsedMs,
+  p95Ms: percentile(latencies, 0.95),
+  peakSearches,
+  maxStartsInRollingWindow: maxStartsInWindow,
+  equivalentChecksPerMinute,
+  mintedTokens,
+  peakConcurrentTokenRefreshes: peakMints,
+  assertions,
+}, null, 2));
+
+const failed = Object.values(assertions).some(value => !value);
+rawDb.close();
+if (!explicitDataDir) fs.rmSync(loadTestDataDir, { recursive: true, force: true });
+if (failed) process.exitCode = 1;
+
+function maximumStartsInWindow(starts: number[], windowMs: number): number {
+  const sorted = [...starts].sort((a, b) => a - b);
+  let left = 0, maximum = 0;
+  for (let right = 0; right < sorted.length; right++) {
+    while (sorted[left] <= sorted[right] - windowMs) left++;
+    maximum = Math.max(maximum, right - left + 1);
+  }
+  return maximum;
 }
 
-const sustainable = results.filter(result =>
-  result.failures === 0 && result.rate429 <= 0.01 && result.p95Ms <= maxP95Ms && result.withinProxyCapacity);
-console.log(JSON.stringify({
-  mode: "local-coordinator-load-test",
-  note: "No external provider calls or bearer tokens are used by this test.",
-  checksPerLevel: checks,
-  simulatedProviderLatencyMs: providerLatencyMs,
-  proxyCapacity,
-  maxAcceptedP95Ms: maxP95Ms,
-  results,
-  selectedConcurrency: sustainable.at(-1)?.concurrency ?? null,
-}, null, 2));
+function percentile(values: number[], ratio: number): number {
+  if (!values.length) return 0;
+  return Math.round(values[Math.min(values.length - 1, Math.ceil(values.length * ratio) - 1)]);
+}
 
 function bounded(value: string | undefined, min: number, max: number, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.floor(parsed))) : fallback;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }

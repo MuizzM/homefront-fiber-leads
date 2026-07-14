@@ -25,12 +25,15 @@ average wait, duration, and errors.
 cached. A timeout, authentication failure, throttle, challenge, malformed
 response, or unknown status remains `RECHECK` and can never become a cached No.
 
-`SCAN_PROVIDER_RPS` is the database-backed aggregate rolling one-second request
-start ceiling. `KFS_TOKEN_POOL_MAX` enables up to 300 server-memory token slots;
+`SCAN_PROVIDER_REQUESTS_PER_MINUTE` is the database-backed aggregate rolling
+minute request-start ceiling and defaults to 100. `KFS_TOKEN_POOL_MAX` enables
+up to 300 server-memory token slots;
 `KFS_TOKEN_POOL_WARM_MIN` defaults to two, so the server does not mint hundreds
 of unused tokens. READY tokens are leased least-loaded round-robin and refreshed
-60 seconds before expiry with per-slot single-flight locks. Manual checks have
-the highest priority, followed by lasso, Coming Soon/recheck, market, and city.
+60 seconds before expiry with per-slot single-flight locks. A pool-wide refresh
+semaphore (default two) also prevents simultaneous slot expirations from
+stampeding the token endpoint. Manual checks have the highest priority, followed
+by lasso, Coming Soon/recheck, market, and city.
 A 429 writes a global pause until `Retry-After` while retaining work. A 403
 globally halts provider work and requires the explicit admin recovery action.
 
@@ -128,8 +131,9 @@ change. Review the agreement attached to the credentials in use:
 The field scanner implements the confirmed token → address-search contract in
 `server/scanner.ts`. With `KFS_AUTOMATION_AUTHORIZED=true`, it obtains a
 short-lived token from `/_internal/precisely/token`, caches it in server memory,
-refreshes 60 seconds before expiry, and sends address-search requests through
-the configured server-side transport. The authorization gate remains off by
+refreshes 60 seconds before expiry, and sends bearer-authenticated requests to
+`/api/v1/address/search` through the configured server-side transport. The
+authorization gate remains off by
 default, and failed/denied requests remain inconclusive rather than becoming a
 fiber verdict.
 
