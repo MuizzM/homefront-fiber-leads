@@ -209,6 +209,12 @@ export const leads = sqliteTable("leads", {
   // ── Lead Scoring ──────────────────────────────────────────────────────────
   leadTag: text("lead_tag"),   // "hot_lead" | "coming_soon" | "upgrade_target" | null
   leadScore: integer("lead_score").default(0), // 0–100 priority score
+  // Confirmed-fresh provenance. These fields are only stamped by the
+  // independent-evidence projector, never directly by a primary scan.
+  sourceScanTargetId: integer("source_scan_target_id"),
+  freshConfirmedAt: text("fresh_confirmed_at"),
+  freshConfidence: text("fresh_confidence"),
+  freshSources: text("fresh_sources"),
   // ── Lead Enrichment ───────────────────────────────────────────────────────
   ownerName: text("owner_name"),
   ownerPhone: text("owner_phone"),
@@ -464,6 +470,11 @@ export type ComingSoonAddress = typeof comingSoonAddresses.$inferSelect;
 export const scanTargets = sqliteTable("scan_targets", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   address: text("address").notNull().unique(),
+  // Discovery's collision-safe identity. The legacy address-only UNIQUE
+  // constraint remains for backward compatibility until the pool-v2 migration;
+  // durable discovery surfaces any cross-city handoff collision instead of
+  // attaching it to the wrong target.
+  canonicalKey: text("canonical_key"),
   city: text("city").notNull(),
   state: text("state").notNull().default("NC"),
   zip: text("zip").notNull(),

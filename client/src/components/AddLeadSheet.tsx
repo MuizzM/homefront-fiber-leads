@@ -23,7 +23,6 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
   const [state, setState] = useState("NC");
   const [zip, setZip] = useState("");
   const [ownerName, setOwnerName] = useState("");
-  const [ownerPhone, setOwnerPhone] = useState("");
   const [saving, setSaving] = useState(false);
 
   // Re-seed the form whenever a new source property opens the sheet.
@@ -33,7 +32,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
     setCity(initial.city ?? "");
     setState(initial.state ?? "NC");
     setZip(initial.zip ?? "");
-    setOwnerName(""); setOwnerPhone("");
+    setOwnerName("");
   }, [initial]);
 
   const open = !!initial;
@@ -57,7 +56,6 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
         competitorName: initial?.competitorName ?? null,
       };
       if (ownerName.trim()) body.ownerName = ownerName.trim();
-      if (ownerPhone.trim()) body.ownerPhone = ownerPhone.trim();
       const res = await apiRequest("POST", "/api/leads", body);
       const lead = await res.json();
       toast({ title: "Lead added", description: address.trim() });
@@ -94,7 +92,9 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
               <Field label="ZIP" value={zip} onChange={(v) => setZip(v.replace(/\D/g, "").slice(0, 5))} placeholder="29349" inputMode="numeric" testid="add-lead-zip" />
             </div>
             <Field label="Owner name (optional)" value={ownerName} onChange={setOwnerName} placeholder="—" testid="add-lead-owner" />
-            <Field label="Phone (optional)" value={ownerPhone} onChange={setOwnerPhone} placeholder="—" inputMode="tel" testid="add-lead-phone" />
+            <p className="rounded-xl border border-border bg-secondary/50 px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+              Phone data is added only through the licensed, compliance-gated Calling workspace.
+            </p>
           </div>
 
           <button type="button" onClick={submit} disabled={!canSave} data-testid="add-lead-submit"
@@ -109,7 +109,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
 
 function Field({ label, value, onChange, placeholder, inputMode, autoFocus, testid }: {
   label: string; value: string; onChange: (v: string) => void; placeholder?: string;
-  inputMode?: "text" | "numeric" | "tel"; autoFocus?: boolean; testid?: string;
+  inputMode?: "text" | "numeric"; autoFocus?: boolean; testid?: string;
 }) {
   return (
     <label className="block">

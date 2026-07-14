@@ -10,9 +10,9 @@ export interface MarketAggregate {
   state: string;
   poolSize: number;          // harvested addresses we could verify
   verified: number;          // addresses ever Kinetic-checked (pool.scan_count>0)
-  verifiedNewFiber: number;  // verified NEW FIBER + billing N (real opportunity)
-  newlyLive: number;         // provable unavailable->live flips (freshest signal)
-  leads: number;             // leads on the board in this city
+  verifiedNewFiber: number;  // cross-verified fresh-fiber + no-account doors
+  newlyLive: number;         // cross-verified flips confirmed within 7 days
+  leads: number;             // confirmed fresh leads on the board in this city
   unworkedLeads: number;     // leads with zero knocks (opportunity still on the table)
   workedLeads: number;       // leads with >=1 knock
   soldLeads: number;         // converted
@@ -66,7 +66,7 @@ export function scoreMarket(m: MarketAggregate, nowMs: number): MarketCard {
   const freshnessDays = lastKnownMs != null ? Math.max(0, (nowMs - lastKnownMs) / DAY_MS) : null;
 
   // ── THE SUBSTANCE: unworked new-fiber doors already verified + on the board ──
-  // Leads in this product are all provider-verified new fiber; an UNWORKED lead
+  // These aggregates include only cross-verified fresh fiber; an UNWORKED lead
   // is a real, assignable, still-on-the-table opportunity. That is the number
   // the whole product exists to surface. On top of the confirmed doors, the
   // still-unverified pool likely hides more — at the rate we've observed if we

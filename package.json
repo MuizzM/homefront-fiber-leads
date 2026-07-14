@@ -16,6 +16,7 @@
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "check:fast": "tsgo --noEmit",
+    "calling:dnc:sign": "tsx script/sign-dnc-import.ts",
     "markets:refresh": "tsx script/build-state-markets.ts"
   },
   "dependencies": {

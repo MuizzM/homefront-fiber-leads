@@ -41,7 +41,7 @@ export interface OpenCallback {
   address: string; city: string; state: string | null; zip: string | null;
   lat: number | null; lng: number | null;
   leadStatus: string; leadTag: string | null; leadScore: number | null;
-  contactName: string | null; contactPhone: string | null;
+  contactName: string | null;
   assignedRepId: number | null;
   repId: number;                 // the rep who scheduled the callback
   callbackDate: string;          // "YYYY-MM-DD"
@@ -74,6 +74,8 @@ export interface MapPinRow {
   fiberStatus: string | null;
   assignedRepId: number | null;
   leadScore: number | null;
+  leadTag: string | null;
+  freshConfidence: string | null;
   knockCount: number | null;
   lastOutcome: string | null;
   lastKnockedAt: string | null;
@@ -196,7 +198,7 @@ export interface IStorage {
   upsertComingSoonByDfAddressId(addr: InsertComingSoon & { dfAddressId?: string | null; householdSegmentType?: string | null; buildStatus?: string | null }): ComingSoonAddress;
   getComingSoonWithDfId(limit?: number): ComingSoonAddress[];
   // ── Scan targets (persistent address pool) ───────────────────────────────────
-  upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null; dfAddressId?: string | null; scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null }>): number;
+  upsertScanTargets(addrs: Array<{ address: string; city?: string; state?: string; zip?: string; lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null; canonicalKey?: string | null; dfAddressId?: string | null; scannedNow?: boolean; fiberStatus?: string | null; isNewFiber?: boolean; billingStatus?: string | null }>): number;
   getScanTargetsToRescan(limit: number): any[];
   getScanTargetsByCity(city: string, state: string): any[];
   getCnsCoverageRows(): Array<{ dfAddressId: string | null; city: string | null; state: string | null; isNewFiber: boolean }>;
@@ -275,6 +277,10 @@ export function runMigrations() {
     // Lead scoring columns (safe to run on existing DB)
     `ALTER TABLE leads ADD COLUMN lead_tag TEXT`,
     `ALTER TABLE leads ADD COLUMN lead_score INTEGER DEFAULT 0`,
+    `ALTER TABLE leads ADD COLUMN source_scan_target_id INTEGER`,
+    `ALTER TABLE leads ADD COLUMN fresh_confirmed_at TEXT`,
+    `ALTER TABLE leads ADD COLUMN fresh_confidence TEXT`,
+    `ALTER TABLE leads ADD COLUMN fresh_sources TEXT`,
     // tenant_id support for multi-tenant tables (safe — duplicate column errors are swallowed)
     `ALTER TABLE team_members ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE territories ADD COLUMN tenant_id INTEGER`,
@@ -289,6 +295,7 @@ export function runMigrations() {
     // a migrations-only DB (tests, fresh installs) match.
     `ALTER TABLE users ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE leads ADD COLUMN tenant_id INTEGER`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_confirmed_scan_target ON leads(tenant_id, source_scan_target_id) WHERE source_scan_target_id IS NOT NULL`,
     // Full drizzle-parity for migrations-only DBs (verified by schema diff):
     // lead-enrichment columns + fiber_checks.billing_status + tenant branding/
     // billing columns all originally came from drizzle-kit push.
@@ -722,7 +729,7 @@ export function runMigrations() {
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        tenant_id INTEGER NOT NULL,
        dedupe_key TEXT NOT NULL UNIQUE,     -- exactly-once
-       kind TEXT NOT NULL,                  -- candidate_new | verified_new | regression
+       kind TEXT NOT NULL,                  -- primary_candidate_new | primary_reconfirmed_new | fresh_fiber
        target_id INTEGER,
        episode_id INTEGER,
        payload TEXT,                        -- JSON
@@ -981,6 +988,32 @@ export function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_state_markets_due ON state_fiber_markets(next_scan_at, priority_score DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_state_markets_state_priority ON state_fiber_markets(state, priority_class, priority_score DESC)`,
+    // Market eligibility is evidence-backed. The Census place inventory remains
+    // useful for discovery/planning, but it may not spend provider checks until
+    // an official Kinetic directory or expansion source verifies the market.
+    `ALTER TABLE state_fiber_markets ADD COLUMN kinetic_status TEXT NOT NULL DEFAULT 'unverified'`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN auto_scan_eligible INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN directory_url TEXT`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN evidence_checked_at TEXT`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN directory_last_seen_at TEXT`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN coverage_gap TEXT`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN inventory_status TEXT NOT NULL DEFAULT 'pending'`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN inventory_attempted_at TEXT`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN inventory_retry_at TEXT`,
+    `ALTER TABLE state_fiber_markets ADD COLUMN inventory_failures INTEGER NOT NULL DEFAULT 0`,
+    `CREATE INDEX IF NOT EXISTS idx_state_markets_eligible_due ON state_fiber_markets(auto_scan_eligible, next_scan_at, priority_score DESC)`,
+    `CREATE TABLE IF NOT EXISTS market_evidence (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       market_id INTEGER NOT NULL REFERENCES state_fiber_markets(id) ON DELETE CASCADE,
+       evidence_type TEXT NOT NULL CHECK(evidence_type IN ('official_directory','official_announcement','grant_award','licensed_import')),
+       source_url TEXT NOT NULL,
+       source_title TEXT,
+       observed_at TEXT NOT NULL,
+       content_hash TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(market_id, evidence_type, source_url)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_market_evidence_market ON market_evidence(market_id, observed_at DESC)`,
 
     // Independent/licensed verification evidence. A Kinetic result is only
     // cross-verified when a distinct source records address-level availability.
@@ -1059,6 +1092,40 @@ export function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_target ON availability_snapshots(scan_target_id, checked_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_run ON availability_snapshots(run_id, checked_at)`,
+    `ALTER TABLE availability_snapshots ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE availability_snapshots ADD COLUMN latency_ms INTEGER`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_availability_snapshots_attempt ON availability_snapshots(tenant_id, run_id, scan_target_id) WHERE run_id IS NOT NULL`,
+    // Defense in depth: even a future scanner or overlooked route cannot insert
+    // a provider-fresh lead without the projector's complete provenance. Legacy
+    // rows are left untouched; the UPDATE trigger fires only when a protected
+    // classification/provenance column is explicitly changed.
+    `CREATE TRIGGER IF NOT EXISTS trg_leads_fresh_insert_guard
+       BEFORE INSERT ON leads
+       WHEN (COALESCE(NEW.is_new_fiber,0)=1 OR lower(COALESCE(NEW.fiber_status,''))='new_fiber')
+        AND NOT (
+          NEW.source_scan_target_id IS NOT NULL AND NEW.fresh_confirmed_at IS NOT NULL
+          AND NEW.fresh_confidence='cross_verified' AND NEW.lead_tag='fresh_fiber_confirmed'
+          AND COALESCE(json_array_length(NEW.fresh_sources),0)>=2
+        )
+       BEGIN SELECT RAISE(ABORT,'fresh_fiber_requires_cross_verification'); END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_leads_fresh_update_guard
+       BEFORE UPDATE OF is_new_fiber,fiber_status,source_scan_target_id,fresh_confirmed_at,fresh_confidence,fresh_sources,lead_tag ON leads
+       WHEN (COALESCE(NEW.is_new_fiber,0)=1 OR lower(COALESCE(NEW.fiber_status,''))='new_fiber')
+        AND NOT (
+          NEW.source_scan_target_id IS NOT NULL AND NEW.fresh_confirmed_at IS NOT NULL
+          AND NEW.fresh_confidence='cross_verified' AND NEW.lead_tag='fresh_fiber_confirmed'
+          AND COALESCE(json_array_length(NEW.fresh_sources),0)>=2
+        )
+       BEGIN SELECT RAISE(ABORT,'fresh_fiber_requires_cross_verification'); END`,
+    `ALTER TABLE notification_outbox ADD COLUMN next_attempt_at TEXT`,
+    `ALTER TABLE notification_outbox ADD COLUMN last_error TEXT`,
+    `ALTER TABLE notification_outbox ADD COLUMN lease_owner TEXT`,
+    `ALTER TABLE notification_outbox ADD COLUMN lease_expires_at TEXT`,
+    // Rename historical Radar-only kinds so no UI or worker can mistake
+    // repeated observations from one provider for independent verification.
+    `UPDATE notification_outbox SET kind='primary_candidate_new' WHERE kind='candidate_new'`,
+    `UPDATE notification_outbox SET kind='primary_reconfirmed_new' WHERE kind='verified_new'`,
+    `CREATE INDEX IF NOT EXISTS idx_outbox_delivery_due ON notification_outbox(kind, status, next_attempt_at, created_at)`,
     `CREATE TABLE IF NOT EXISTS sweep_jobs (
        id TEXT PRIMARY KEY,
        tenant_id INTEGER NOT NULL,
@@ -1095,6 +1162,331 @@ export function runMigrations() {
        PRIMARY KEY(sweep_job_id, target_id)
      )`,
     `CREATE INDEX IF NOT EXISTS idx_sweep_targets_queue ON sweep_job_targets(sweep_job_id, state, seq)`,
+
+    // ── ADDRESS DISCOVERY — durable, tenant-scoped enumeration before qualification ──
+    // Discovery is deliberately separate from scan_runs. These tables answer
+    // "which physical addresses exist here and how do we know?"; scan_runs then
+    // perform paid fiber qualification, and freshFiberProjector remains the only
+    // component allowed to publish a rep-facing fresh-fiber lead.
+    `CREATE TABLE IF NOT EXISTS town_boundaries (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       boundary_key TEXT NOT NULL,
+       name TEXT NOT NULL,
+       state TEXT NOT NULL,
+       country_code TEXT NOT NULL DEFAULT 'US',
+       geometry_json TEXT NOT NULL,
+       bbox_json TEXT NOT NULL,
+       centroid_json TEXT,
+       source TEXT NOT NULL,
+       source_ref TEXT,
+       source_metadata_json TEXT NOT NULL DEFAULT '{}',
+       fetched_at TEXT NOT NULL,
+       expires_at TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, boundary_key)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_town_boundaries_expiry ON town_boundaries(tenant_id, expires_at)`,
+    `CREATE TABLE IF NOT EXISTS discovery_jobs (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       idempotency_key TEXT NOT NULL,
+       request_hash TEXT NOT NULL DEFAULT '',
+       requested_area_json TEXT,
+       area_json TEXT,
+       bbox_json TEXT,
+       town_name TEXT,
+       state TEXT NOT NULL DEFAULT 'NC',
+       status TEXT NOT NULL DEFAULT 'queued',
+       phase TEXT NOT NULL DEFAULT 'boundary',
+       source_config_json TEXT NOT NULL DEFAULT '{}',
+       total_tiles INTEGER NOT NULL DEFAULT 0,
+       completed_tiles INTEGER NOT NULL DEFAULT 0,
+       partial_tiles INTEGER NOT NULL DEFAULT 0,
+       failed_tiles INTEGER NOT NULL DEFAULT 0,
+       addresses_observed INTEGER NOT NULL DEFAULT 0,
+       addresses_inferred INTEGER NOT NULL DEFAULT 0,
+       addresses_qualified INTEGER NOT NULL DEFAULT 0,
+       qualification_checked INTEGER NOT NULL DEFAULT 0,
+       qualification_failed INTEGER NOT NULL DEFAULT 0,
+       qualification_dispatch_completed_at TEXT,
+       fresh_found INTEGER NOT NULL DEFAULT 0,
+       no_service_found INTEGER NOT NULL DEFAULT 0,
+       handoff_collisions INTEGER NOT NULL DEFAULT 0,
+       cache_hits INTEGER NOT NULL DEFAULT 0,
+       cache_misses INTEGER NOT NULL DEFAULT 0,
+       last_scheduled_at TEXT,
+       boundary_next_attempt_at TEXT,
+       heartbeat_at TEXT,
+       error_summary TEXT,
+       cancelled_at TEXT,
+       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       started_at TEXT,
+       completed_at TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, idempotency_key)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_jobs_tenant ON discovery_jobs(tenant_id, created_at DESC)`,
+    `ALTER TABLE discovery_jobs ADD COLUMN qualification_dispatch_completed_at TEXT`,
+    `ALTER TABLE discovery_jobs ADD COLUMN request_hash TEXT NOT NULL DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_jobs_schedule ON discovery_jobs(status, phase, last_scheduled_at, created_at)`,
+    `ALTER TABLE discovery_jobs ADD COLUMN boundary_next_attempt_at TEXT`,
+    `CREATE TABLE IF NOT EXISTS discovery_tiles (
+       id TEXT PRIMARY KEY,
+       job_id TEXT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+       tile_key TEXT NOT NULL,
+       sequence INTEGER NOT NULL,
+       geometry_json TEXT NOT NULL,
+       bbox_json TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'queued',
+       attempt_count INTEGER NOT NULL DEFAULT 0,
+       max_attempts INTEGER NOT NULL DEFAULT 3,
+       next_attempt_at TEXT,
+       lease_owner TEXT,
+       lease_expires_at TEXT,
+       source_checkpoint_json TEXT NOT NULL DEFAULT '{}',
+       source_errors_json TEXT NOT NULL DEFAULT '{}',
+       observed_count INTEGER NOT NULL DEFAULT 0,
+       inferred_count INTEGER NOT NULL DEFAULT 0,
+       duplicate_count INTEGER NOT NULL DEFAULT 0,
+       coverage_ratio REAL,
+       coverage_class TEXT NOT NULL DEFAULT 'unknown',
+       error TEXT,
+       started_at TEXT,
+       completed_at TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(job_id, tile_key)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_tiles_claim ON discovery_tiles(status, next_attempt_at, lease_expires_at, sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_tiles_job ON discovery_tiles(job_id, status, sequence)`,
+    `CREATE TABLE IF NOT EXISTS canonical_addresses (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       canonical_key TEXT NOT NULL,
+       full_address TEXT NOT NULL,
+       house_number TEXT,
+       street TEXT,
+       unit TEXT,
+       city TEXT NOT NULL,
+       state TEXT NOT NULL,
+       postal_code TEXT,
+       lat REAL,
+       lng REAL,
+       coordinate_quality TEXT NOT NULL DEFAULT 'unknown',
+       validation_status TEXT NOT NULL DEFAULT 'observed',
+       confidence REAL NOT NULL DEFAULT 0.5,
+       inferred_only INTEGER NOT NULL DEFAULT 0,
+       authoritative_sources INTEGER NOT NULL DEFAULT 0,
+       independent_sources INTEGER NOT NULL DEFAULT 1,
+       first_observed_at TEXT NOT NULL DEFAULT (datetime('now')),
+       last_observed_at TEXT NOT NULL DEFAULT (datetime('now')),
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, canonical_key)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_canonical_addresses_city ON canonical_addresses(tenant_id, state, city)`,
+    `CREATE INDEX IF NOT EXISTS idx_canonical_addresses_point ON canonical_addresses(tenant_id, lat, lng)`,
+    `CREATE INDEX IF NOT EXISTS idx_canonical_addresses_validation ON canonical_addresses(tenant_id, validation_status, inferred_only)`,
+    `CREATE TABLE IF NOT EXISTS address_evidence (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       canonical_address_id INTEGER NOT NULL REFERENCES canonical_addresses(id) ON DELETE CASCADE,
+       source_id TEXT NOT NULL,
+       source_record_id TEXT NOT NULL,
+       evidence_kind TEXT NOT NULL DEFAULT 'address_point',
+       authoritative INTEGER NOT NULL DEFAULT 0,
+       observed INTEGER NOT NULL DEFAULT 1,
+       inferred INTEGER NOT NULL DEFAULT 0,
+       confidence REAL NOT NULL DEFAULT 0.5,
+       license_name TEXT,
+       license_url TEXT,
+       raw_json TEXT NOT NULL,
+       content_hash TEXT NOT NULL,
+       observed_at TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, source_id, source_record_id, content_hash)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_address_evidence_canonical ON address_evidence(canonical_address_id, source_id)`,
+    `CREATE TABLE IF NOT EXISTS coverage_evidence (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       job_id TEXT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+       tile_id TEXT NOT NULL REFERENCES discovery_tiles(id) ON DELETE CASCADE,
+       source_id TEXT NOT NULL,
+       source_record_id TEXT NOT NULL,
+       evidence_kind TEXT NOT NULL,
+       lat REAL,
+       lng REAL,
+       confidence REAL NOT NULL DEFAULT 0.5,
+       license_name TEXT,
+       license_url TEXT,
+       raw_json TEXT NOT NULL,
+       content_hash TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id,source_id,source_record_id,content_hash)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_coverage_evidence_tile ON coverage_evidence(job_id,tile_id,evidence_kind)`,
+    `CREATE TABLE IF NOT EXISTS address_aliases (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       canonical_address_id INTEGER NOT NULL REFERENCES canonical_addresses(id) ON DELETE CASCADE,
+       alias_key TEXT NOT NULL,
+       alias_text TEXT NOT NULL,
+       source_id TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, alias_key, canonical_address_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_address_alias_lookup ON address_aliases(tenant_id, alias_key)`,
+    `CREATE TABLE IF NOT EXISTS address_units (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       canonical_address_id INTEGER NOT NULL REFERENCES canonical_addresses(id) ON DELETE CASCADE,
+       unit_key TEXT NOT NULL,
+       unit_label TEXT NOT NULL,
+       source_id TEXT NOT NULL,
+       observed_at TEXT NOT NULL,
+       UNIQUE(tenant_id, canonical_address_id, unit_key)
+     )`,
+    `CREATE TABLE IF NOT EXISTS address_coordinates (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       canonical_address_id INTEGER NOT NULL REFERENCES canonical_addresses(id) ON DELETE CASCADE,
+       source_id TEXT NOT NULL,
+       lat REAL NOT NULL,
+       lng REAL NOT NULL,
+       quality TEXT NOT NULL,
+       confidence REAL NOT NULL DEFAULT 0.5,
+       observed_at TEXT NOT NULL,
+       UNIQUE(tenant_id, canonical_address_id, source_id, lat, lng)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_address_coordinates_point ON address_coordinates(tenant_id, lat, lng)`,
+    `CREATE TABLE IF NOT EXISTS discovery_job_addresses (
+       job_id TEXT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+       canonical_address_id INTEGER NOT NULL REFERENCES canonical_addresses(id) ON DELETE CASCADE,
+       first_tile_id TEXT REFERENCES discovery_tiles(id) ON DELETE SET NULL,
+       scan_target_id INTEGER REFERENCES scan_targets(id) ON DELETE SET NULL,
+       first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY(job_id, canonical_address_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_job_addresses_target ON discovery_job_addresses(job_id, scan_target_id)`,
+    `CREATE TABLE IF NOT EXISTS discovery_job_runs (
+       job_id TEXT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+       run_id TEXT NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+       sequence INTEGER NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY(job_id, run_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_job_runs_job ON discovery_job_runs(job_id, sequence)`,
+    `CREATE TABLE IF NOT EXISTS qualification_checks (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       job_id TEXT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+       canonical_address_id INTEGER NOT NULL REFERENCES canonical_addresses(id) ON DELETE CASCADE,
+       scan_target_id INTEGER REFERENCES scan_targets(id) ON DELETE SET NULL,
+       run_id TEXT REFERENCES scan_runs(id) ON DELETE SET NULL,
+       state TEXT NOT NULL DEFAULT 'queued',
+       result TEXT,
+       cache_reused INTEGER NOT NULL DEFAULT 0,
+       lead_id INTEGER REFERENCES leads(id) ON DELETE SET NULL,
+       checked_at TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(job_id, canonical_address_id)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_qualification_checks_job ON qualification_checks(job_id, state)`,
+    `CREATE TABLE IF NOT EXISTS discovery_qualification_cache (
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       canonical_key TEXT NOT NULL,
+       scan_target_id INTEGER REFERENCES scan_targets(id) ON DELETE SET NULL,
+       result TEXT NOT NULL,
+       conclusive INTEGER NOT NULL DEFAULT 0,
+       checked_at TEXT NOT NULL,
+       expires_at TEXT NOT NULL,
+       evidence_hash TEXT,
+       PRIMARY KEY(tenant_id, canonical_key)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_qualification_cache_expiry ON discovery_qualification_cache(tenant_id, expires_at)`,
+    `CREATE TABLE IF NOT EXISTS discovery_events (
+       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       job_id TEXT NOT NULL REFERENCES discovery_jobs(id) ON DELETE CASCADE,
+       event_type TEXT NOT NULL,
+       payload_json TEXT NOT NULL DEFAULT '{}',
+       created_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_events_stream ON discovery_events(tenant_id, sequence)`,
+    `CREATE INDEX IF NOT EXISTS idx_discovery_events_job ON discovery_events(job_id, sequence)`,
+    `CREATE TABLE IF NOT EXISTS address_source_health (
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       source_id TEXT NOT NULL,
+       enabled INTEGER NOT NULL DEFAULT 1,
+       priority INTEGER NOT NULL DEFAULT 100,
+       health_status TEXT NOT NULL DEFAULT 'unknown',
+       consecutive_failures INTEGER NOT NULL DEFAULT 0,
+       last_success_at TEXT,
+       last_failure_at TEXT,
+       last_error TEXT,
+       circuit_open_until TEXT,
+       requests INTEGER NOT NULL DEFAULT 0,
+       records INTEGER NOT NULL DEFAULT 0,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+       PRIMARY KEY(tenant_id, source_id)
+     )`,
+    `CREATE TABLE IF NOT EXISTS address_source_cache (
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       source_id TEXT NOT NULL,
+       cache_key TEXT NOT NULL,
+       payload_json TEXT NOT NULL,
+       partial INTEGER NOT NULL DEFAULT 0,
+       created_at TEXT NOT NULL,
+       expires_at TEXT NOT NULL,
+       PRIMARY KEY(tenant_id, source_id, cache_key)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_address_source_cache_expiry ON address_source_cache(expires_at)`,
+    `CREATE TABLE IF NOT EXISTS address_source_uploads (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       source_id TEXT NOT NULL,
+       filename TEXT NOT NULL,
+       format TEXT NOT NULL,
+       content_hash TEXT NOT NULL,
+       license_name TEXT,
+       license_url TEXT,
+       authoritative INTEGER NOT NULL DEFAULT 0,
+       record_count INTEGER NOT NULL DEFAULT 0,
+       rejected_count INTEGER NOT NULL DEFAULT 0,
+       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(tenant_id, content_hash)
+     )`,
+    `CREATE TABLE IF NOT EXISTS uploaded_address_records (
+       id TEXT PRIMARY KEY,
+       upload_id TEXT NOT NULL REFERENCES address_source_uploads(id) ON DELETE CASCADE,
+       tenant_id INTEGER NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+       source_id TEXT NOT NULL,
+       source_record_id TEXT NOT NULL,
+       authoritative INTEGER NOT NULL DEFAULT 0,
+       full_address TEXT NOT NULL,
+       city TEXT,
+       state TEXT,
+       postal_code TEXT,
+       lat REAL,
+       lng REAL,
+       raw_json TEXT NOT NULL,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       UNIQUE(upload_id, source_record_id)
+     )`,
+    `ALTER TABLE address_source_uploads ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE uploaded_address_records ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 0`,
+    `CREATE INDEX IF NOT EXISTS idx_uploaded_addresses_point ON uploaded_address_records(tenant_id, lat, lng)`,
+    // Legacy scan_targets still has a historical UNIQUE(address) constraint.
+    // canonical_key documents the collision-safe identity used by discovery; a
+    // handoff collision is surfaced as partial instead of attaching the wrong
+    // city's address to a qualification run.
+    `ALTER TABLE scan_targets ADD COLUMN canonical_key TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`,
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -1289,7 +1681,8 @@ export class Storage implements IStorage {
         SELECT
           l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
           l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
-          l.assigned_rep_id AS assignedRepId, l.lead_score AS leadScore
+          l.assigned_rep_id AS assignedRepId, l.lead_score AS leadScore,
+          l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence
         FROM leads l
         WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
       ), ranked_visits AS (
@@ -1307,6 +1700,7 @@ export class Storage implements IStorage {
       SELECT
         s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
         s.leadStatus, s.fiberStatus, s.assignedRepId, s.leadScore,
+        s.leadTag, s.freshConfidence,
         rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
       FROM scoped s
       LEFT JOIN ranked_visits rv ON rv.leadId = s.id AND rv.rowNumber = 1
@@ -1324,7 +1718,13 @@ export class Storage implements IStorage {
   ): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }> {
     const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(Math.floor(opts.days), 365) : 30;
     const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
-    const conditions: any[] = [sql`${leads.createdAt} >= ${cutoff}`];
+    const conditions: any[] = [
+      sql`${leads.createdAt} >= ${cutoff}`,
+      eq(leads.leadTag, "fresh_fiber_confirmed"),
+      eq(leads.freshConfidence, "cross_verified"),
+      isNotNull(leads.sourceScanTargetId),
+      isNotNull(leads.freshConfirmedAt),
+    ];
     if (tenantId != null) conditions.push(eq(leads.tenantId, tenantId));
     if (Array.isArray(assignedRep)) {
       conditions.push(assignedRep.length ? inArray(leads.assignedRepId, assignedRep) : eq(leads.assignedRepId, -1));
@@ -1341,7 +1741,7 @@ export class Storage implements IStorage {
       competitorName: leads.competitorName, address: leads.address, city: leads.city,
       state: leads.state, createdAt: leads.createdAt,
     }).from(leads)
-      .where(conditions.length === 1 ? conditions[0] : and(...conditions))
+      .where(and(...conditions))
       .orderBy(sql`${leads.createdAt} DESC`)
       .limit(2000)
       .all();
@@ -1596,7 +1996,7 @@ export class Storage implements IStorage {
       SELECT
         l.id AS leadId, l.address AS address, l.city AS city, l.state AS state, l.zip AS zip,
         l.lat AS lat, l.lng AS lng, l.lead_status AS leadStatus, l.lead_tag AS leadTag,
-        l.lead_score AS leadScore, l.contact_name AS contactName, l.contact_phone AS contactPhone,
+        l.lead_score AS leadScore, l.contact_name AS contactName,
         l.assigned_rep_id AS assignedRepId,
         k.rep_id AS repId, k.callback_date AS callbackDate, k.callback_time AS callbackTime,
         k.notes AS notes, k.knocked_at AS setAt
@@ -2113,6 +2513,7 @@ export class Storage implements IStorage {
   upsertScanTargets(addrs: Array<{
     address: string; city?: string; state?: string; zip?: string;
     lat?: number | null; lng?: number | null; source?: string; tenantId?: number | null;
+    canonicalKey?: string | null;
     dfAddressId?: string | null;
     // When the row came from an actual Kinetic probe, pass its result so the row
     // lands already-scanned (baseline) rather than needing a follow-up check.
@@ -2121,9 +2522,9 @@ export class Storage implements IStorage {
     if (!addrs.length) return 0;
     const insertStmt = rawDb.prepare(
       `INSERT OR IGNORE INTO scan_targets
-         (address, city, state, zip, lat, lng, source, tenant_id, df_address_id,
+         (address, city, state, zip, lat, lng, source, tenant_id, canonical_key, df_address_id,
           last_fiber_status, last_is_new_fiber, last_billing_status, last_scanned_at, scan_count, created_at)
-       VALUES (@address,@city,@state,@zip,@lat,@lng,@source,@tenantId,@df,
+       VALUES (@address,@city,@state,@zip,@lat,@lng,@source,@tenantId,@canonicalKey,@df,
                @fs,@nf,@bs,@scannedAt,@scanCount,datetime('now'))`
     );
     // Enrichment backfills identity fields ONLY when the stored value is absent —
@@ -2133,6 +2534,7 @@ export class Storage implements IStorage {
     const enrichStmt = rawDb.prepare(
       `UPDATE scan_targets SET
          df_address_id = COALESCE(df_address_id, @df),
+         canonical_key = COALESCE(canonical_key, @canonicalKey),
          lat = COALESCE(lat, @lat),
          lng = COALESCE(lng, @lng),
          zip = CASE WHEN (zip IS NULL OR zip='') THEN @zip ELSE zip END
@@ -2158,6 +2560,7 @@ export class Storage implements IStorage {
         const params = {
           address: r.address, city: r.city ?? "", state: r.state ?? "NC", zip: r.zip ?? "",
           lat: r.lat ?? null, lng: r.lng ?? null, source: r.source ?? null, tenantId: r.tenantId ?? null,
+          canonicalKey: r.canonicalKey ?? null,
           df: r.dfAddressId ?? null,
           fs: scanned ? (r.fiberStatus ?? null) : null,
           nf: scanned && r.isNewFiber ? 1 : 0,
@@ -2171,7 +2574,8 @@ export class Storage implements IStorage {
           const key = { address: r.address, city: r.city ?? "", state: r.state ?? "NC" };
           // Backfill identity (df/coords/zip) — same-city only.
           if (r.dfAddressId || r.lat != null || r.lng != null || r.zip) {
-            enrichStmt.run({ ...key, df: r.dfAddressId ?? null, lat: r.lat ?? null, lng: r.lng ?? null, zip: r.zip ?? "" });
+            enrichStmt.run({ ...key, canonicalKey: r.canonicalKey ?? null, df: r.dfAddressId ?? null,
+              lat: r.lat ?? null, lng: r.lng ?? null, zip: r.zip ?? "" });
           }
           // Record a baseline status for a never-scanned existing row.
           if (scanned) {
@@ -2241,8 +2645,8 @@ export class Storage implements IStorage {
     const r = rawDb.prepare(`SELECT MAX(cns) m FROM cns_probes WHERE env = ? AND result = 'hit'`).get(env.toUpperCase()) as any;
     return r?.m ?? null;
   }
-  // Record a fresh scan result. Returns the PREVIOUS is_new_fiber so the caller
-  // can detect a change (was not new fiber → now new fiber = new hot lead).
+  // Record a primary-provider scan result. Returns the previous classification so
+  // callers can detect a change; publication still requires independent evidence.
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean } {
     const prev = rawDb.prepare("SELECT last_is_new_fiber FROM scan_targets WHERE id = ?").get(id) as any;
     rawDb.prepare(
@@ -2306,10 +2710,10 @@ export class Storage implements IStorage {
   }
   // First-to-market feed: addresses that FLIPPED live within the window, newest
   // first. Indexed scan on first_seen_live_at; capped. Tenant-scoped when a
-  // tenantId is given (shared platform-pool rows have tenant_id NULL and are
-  // visible to all) so one org never sees another's flips/converted leads.
+  // tenantId is given. Legacy unowned pool rows are deliberately excluded;
+  // shared mutable scan state is never a safe multi-tenant read model.
   getFirstSeenLive(sinceHours: number, limit = 200, tenantId?: number): any[] {
-    const scope = tenantId != null ? "AND (tenant_id = ? OR tenant_id IS NULL)" : "";
+    const scope = tenantId != null ? "AND tenant_id = ?" : "";
     const args: any[] = [`-${Math.max(1, Math.floor(sinceHours))} hours`];
     if (tenantId != null) args.push(tenantId);
     args.push(limit);

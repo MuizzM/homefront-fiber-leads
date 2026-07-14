@@ -12,3 +12,7 @@ data.db-shm
 data.db-wal
 data.db-journal
 uploads
+backups
+.deployed-tag
+.previous-tag
+.backup-age-recipient

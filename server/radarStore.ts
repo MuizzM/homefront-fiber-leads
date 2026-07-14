@@ -18,7 +18,15 @@ export function radarOverview(tenantId: number) {
     `SELECT status, COUNT(*) c FROM transition_episodes WHERE tenant_id=? GROUP BY status`, tenantId);
   const epMap: Record<string, number> = {};
   for (const e of episodes) epMap[e.status] = e.c;
-  const pendingAlerts = g<{ c: number }>(`SELECT COUNT(*) c FROM notification_outbox WHERE tenant_id=? AND status='pending'`, tenantId).c;
+  // Radar is an analyst-only same-provider signal. Do not blend the operational
+  // cross-verified `fresh_fiber` queue into this counter (or expose that queue
+  // to Radar delivery workers).
+  const pendingAlerts = g<{ c: number }>(
+    `SELECT COUNT(*) c FROM notification_outbox
+      WHERE tenant_id=? AND status='pending'
+        AND kind IN ('primary_candidate_new','primary_reconfirmed_new')`,
+    tenantId,
+  ).c;
   const schemaDrift = g<{ c: number }>(`SELECT COUNT(*) c FROM target_observations WHERE tenant_id=? AND schema_drift=1`, tenantId).c;
   // Freshness: targets whose last successful observation is within 7 days.
   // Wrap the stored ISO ('…T…Z') value in datetime() so it is compared in the
@@ -36,6 +44,9 @@ export function radarOverview(tenantId: number) {
     baselineNew: stateMap["BASELINE_NEW"] ?? 0,
     candidateNew: stateMap["CANDIDATE_NEW"] ?? 0,
     verifiedNew: stateMap["VERIFIED_NEW"] ?? 0,
+    primaryReconfirmed: stateMap["VERIFIED_NEW"] ?? 0,
+    confirmationScope: "same_provider_reconfirmation",
+    operationalLeadEligible: false,
     regressed: stateMap["REGRESSED"] ?? 0,
     openCandidateEpisodes: epMap["candidate"] ?? 0,
     verifiedEpisodes: epMap["verified"] ?? 0,
@@ -67,6 +78,8 @@ export function radarTransitions(tenantId: number, opts: { status?: string; limi
   ).map(r => ({
     ...r,
     verificationRule: safeParse(r.verificationRule),
+    confidence: r.status === "verified" ? "primary_reconfirmed" : "single_source_provisional",
+    operationalLeadEligible: false,
     // The defensible claim — never "market first".
     claim: "First observed by HomeFront",
   }));
@@ -90,6 +103,8 @@ export function radarTransition(tenantId: number, id: number) {
     confirmations: ep.confirmation_count, verificationRule: safeParse(ep.verification_rule),
     detectionWindow: { from: ep.detection_from, to: ep.detection_to },
     location: { city: ep.city, state: ep.state, zip: ep.zip, lat: ep.lat, lng: ep.lng, address: ep.address },
+    confidence: ep.status === "verified" ? "primary_reconfirmed" : "single_source_provisional",
+    operationalLeadEligible: false,
     claim: "First observed by HomeFront",
     evidence,
   };

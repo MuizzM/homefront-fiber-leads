@@ -1,17 +1,18 @@
 // ── Property Detail — the deep rep view of one door ───────────────────────────
 // Open a property → see everything that matters instantly (fiber, competitor,
 // score, contact), the full knock timeline with location verification, and act:
-// Navigate · Call · Log (the same shared OutcomeSheet + offline logger). Wired to
+// Navigate · open the separate gated Calling workspace · Log. Wired to
 // GET /api/leads/:id and /api/leads/:id/history — real data, real states.
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRoute, useLocation } from "wouter";
+import { Link, useRoute, useLocation } from "wouter";
 import { apiRequest, apiUpload } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
 import { OUTCOME_META, STATE_COLORS, pinDisplayState, type KnockOutcome } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useCan } from "@/lib/capabilities";
 import {
   ChevronLeft, Navigation, Phone, Zap, Wifi, Building2, Trophy, User as UserIcon,
   ShieldCheck, AlertTriangle, ShieldX, StickyNote, UserPlus, RefreshCw, MapPin,
@@ -25,7 +26,7 @@ interface Lead {
   speedTier?: string | null; maxDownloadMbps?: number | null; techType?: string | null;
   competitorName?: string | null; competitorSpeedMbps?: number | null; inCompetitorArea?: boolean | null;
   leadTag?: string | null; leadScore?: number | null;
-  contactName?: string | null; contactPhone?: string | null; contactEmail?: string | null;
+  contactName?: string | null; contactEmail?: string | null;
   visited?: boolean | null; lastOutcome?: string | null;
 }
 interface HistoryRow {
@@ -60,6 +61,7 @@ export default function PropertyDetail() {
   const [, navigate] = useLocation();
   const id = Number(params?.id);
   const { log, snap } = useKnockLogger();
+  const canOpenCalling = useCan("calling.lead.read");
   const [sheetOpen, setSheetOpen] = useState(false);
 
   const leadQ = useQuery<Lead>({
@@ -114,9 +116,9 @@ export default function PropertyDetail() {
               {/* Quick actions */}
               <div className="grid grid-cols-3 gap-2 mt-4">
                 <a href={directionsUrl(lead)} target="_blank" rel="noreferrer" data-testid="detail-navigate" className="h-11 rounded-xl bg-secondary border border-border flex items-center justify-center gap-1.5 text-[13px] font-semibold text-foreground active:scale-95 transition-transform"><Navigation className="w-4 h-4 text-primary" />Navigate</a>
-                {lead.contactPhone
-                  ? <a href={`tel:${lead.contactPhone}`} data-testid="detail-call" className="h-11 rounded-xl bg-secondary border border-border flex items-center justify-center gap-1.5 text-[13px] font-semibold text-foreground active:scale-95 transition-transform"><Phone className="w-4 h-4 text-primary" />Call</a>
-                  : <div className="h-11 rounded-xl bg-secondary/50 border border-border flex items-center justify-center gap-1.5 text-[13px] font-semibold text-muted-foreground opacity-60"><Phone className="w-4 h-4" />No phone</div>}
+                {canOpenCalling
+                  ? <Link href={`/calling/lead/${lead.id}`} data-testid="detail-open-calling" className="h-11 rounded-xl bg-secondary border border-border flex items-center justify-center gap-1.5 text-[13px] font-semibold text-foreground active:scale-95 transition-transform"><Phone className="w-4 h-4 text-primary" />Calling</Link>
+                  : <div className="h-11 rounded-xl bg-secondary/50 border border-border flex items-center justify-center gap-1.5 text-[13px] font-semibold text-muted-foreground opacity-60"><Phone className="w-4 h-4" />Protected</div>}
                 <button onClick={() => setSheetOpen(true)} data-testid="detail-log" className="h-11 rounded-xl bg-primary text-primary-foreground flex items-center justify-center gap-1.5 text-[13px] font-semibold active:scale-95 transition-transform"><StickyNote className="w-4 h-4" />Log</button>
               </div>
             </div>
@@ -128,7 +130,7 @@ export default function PropertyDetail() {
               {lead.competitorName && <Fact icon={Building2} tone="text-amber-400" label="Current provider" value={`${lead.competitorName}${lead.competitorSpeedMbps ? ` · ${lead.competitorSpeedMbps} Mbps` : ""}`} />}
               {lead.householdSegmentType && <Fact icon={UserIcon} tone="text-violet-400" label="Segment" value={lead.householdSegmentType} />}
               {lead.leadScore != null && <Fact icon={Trophy} tone="text-emerald-400" label="Lead score" value={`${lead.leadScore}/100`} />}
-              {(lead.contactName || lead.contactPhone) && <Fact icon={Phone} tone="text-muted-foreground" label="Contact" value={[lead.contactName, lead.contactPhone].filter(Boolean).join(" · ") || "—"} />}
+              {lead.contactName && <Fact icon={UserIcon} tone="text-muted-foreground" label="Contact name" value={lead.contactName} />}
             </div>
 
             {/* Photos — field evidence on this door */}

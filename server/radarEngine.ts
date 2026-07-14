@@ -176,8 +176,8 @@ export function ingestObservation(
       });
       episodeId = Number(ep.lastInsertRowid); episodeSequence = nextSeq;
       alertKind = verifyOnOpen
-        ? enqueue(target.tenantId, `verified:${target.tenantId}:${target.id}:${nextSeq}`, "verified_new", target.id, episodeId, { detectionWindow: d.detectionWindow })
-        : enqueue(target.tenantId, `candidate:${target.tenantId}:${target.id}:${nextSeq}`, "candidate_new", target.id, episodeId, { detectionWindow: d.detectionWindow });
+        ? enqueue(target.tenantId, `primary-reconfirmed:${target.tenantId}:${target.id}:${nextSeq}`, "primary_reconfirmed_new", target.id, episodeId, { detectionWindow: d.detectionWindow, operational: false })
+        : enqueue(target.tenantId, `primary-candidate:${target.tenantId}:${target.id}:${nextSeq}`, "primary_candidate_new", target.id, episodeId, { detectionWindow: d.detectionWindow, operational: false });
     } else if (advancesEpisode(d.action) && openEp) {
       episodeId = openEp.id; episodeSequence = openEp.episode_sequence;
       if (d.action === "VERIFY_EPISODE") {
@@ -186,8 +186,8 @@ export function ingestObservation(
         // which would overstate how long the address had been live.
         rawDb.prepare(`UPDATE transition_episodes SET status='verified', confirmation_count=confirmation_count+1, verified_observation_id=?, verified_at=?, updated_at=datetime('now') WHERE id=?`)
           .run(observationId, iso(obs.providerObservedAtMs), openEp.id);
-        alertKind = enqueue(target.tenantId, `verified:${target.tenantId}:${target.id}:${openEp.episode_sequence}`, "verified_new", target.id, openEp.id,
-          { detectionWindow: { fromMs: parseIso(openEp.detection_from), toMs: parseIso(openEp.detection_to) ?? obs.providerObservedAtMs } });
+        alertKind = enqueue(target.tenantId, `primary-reconfirmed:${target.tenantId}:${target.id}:${openEp.episode_sequence}`, "primary_reconfirmed_new", target.id, openEp.id,
+          { detectionWindow: { fromMs: parseIso(openEp.detection_from), toMs: parseIso(openEp.detection_to) ?? obs.providerObservedAtMs }, operational: false });
       } else {
         rawDb.prepare(`UPDATE transition_episodes SET confirmation_count=confirmation_count+1, updated_at=datetime('now') WHERE id=?`).run(openEp.id);
       }
@@ -235,14 +235,20 @@ function enqueue(tenantId: number, dedupeKey: string, kind: string, targetId: nu
 // bumps attempts and, past maxAttempts, parks the row as 'failed' (no infinite
 // poison-retry). Returns how many were newly marked sent.
 export async function drainOutbox(limit = 100, deliver?: (row: any) => void | Promise<void>, maxAttempts = 8): Promise<number> {
-  const pending = rawDb.prepare(`SELECT * FROM notification_outbox WHERE status='pending' ORDER BY created_at LIMIT ?`).all(limit) as any[];
+  if (!deliver) throw new Error("RADAR_DELIVERY_HANDLER_REQUIRED");
+  // Radar confirmations are repeated observations from one provider. Keep them
+  // analyst-only and isolated from the independently confirmed fresh_fiber
+  // outbox; this function must never consume the field-dispatch queue.
+  const pending = rawDb.prepare(`SELECT * FROM notification_outbox
+    WHERE status='pending' AND kind IN ('primary_candidate_new','primary_reconfirmed_new')
+    ORDER BY created_at LIMIT ?`).all(limit) as any[];
   const markSent = rawDb.prepare(`UPDATE notification_outbox SET status='sent', attempts=attempts+1, sent_at=datetime('now') WHERE id=? AND status='pending'`);
   const bump = rawDb.prepare(`UPDATE notification_outbox SET attempts=attempts+1 WHERE id=?`);
   const park = rawDb.prepare(`UPDATE notification_outbox SET status='failed', attempts=attempts+1 WHERE id=?`);
   let sent = 0;
   for (const row of pending) {
     try {
-      await deliver?.(row);
+      await deliver(row);
       if (markSent.run(row.id).changes > 0) sent++;
     } catch {
       if (row.attempts + 1 >= maxAttempts) park.run(row.id);

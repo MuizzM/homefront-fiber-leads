@@ -7,7 +7,8 @@
 //
 // v3 layout (Mobbin-grounded): status-dot header (address hero + copy + close)
 // → status line (label · relative time, in the status color) → compact action
-// pills (Directions / Call / Copy) → a FLEX-WRAP grid of all 7 status pills, no
+// pills (Directions / optional link to the separate Calling workspace / Copy) →
+// a FLEX-WRAP grid of all 7 status pills, no
 // horizontal scroll, fixed order so a pill never moves under the finger →
 // recent-activity line → collapsible Notes composer → History timeline.
 // Tapping a status saves immediately (one tap, no confirm); the dot, status
@@ -15,6 +16,7 @@
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "wouter";
 import {
   Navigation, Phone, Copy, Check, Plus, X,
   DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle,
@@ -37,9 +39,9 @@ export interface SheetLead {
   id: number; lat?: number | null; lng?: number | null;
   address: string; city?: string | null; state?: string | null; zip?: string | null;
   leadStatus: string;
-  contactPhone?: string | null;   // drives the Call action (tel: link) when present
   assignedRepId?: number | null;  // shown/edited only for lead.assign holders
   visited?: boolean; lastOutcome?: string | null; lastKnockedAt?: string | null;
+  leadTag?: string | null; freshConfidence?: string | null;
 }
 
 export interface LeadKnockSheetProps {
@@ -170,7 +172,6 @@ interface LeadDetail {
   id: number;
   notes?: string | null;
   updatedAt?: string | null;
-  contactPhone?: string | null;
 }
 
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
@@ -365,6 +366,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
 
   // ── Assignment (capability-gated; team list fetched only when permitted) ────
   const canAssignLead = useCan("lead.assign");
+  const canOpenCalling = useCan("calling.lead.read");
   const qc = useQueryClient();
   const teamQuery = useQuery<{ id: number; name: string; active: boolean }[]>({
     queryKey: ["/api/team"],
@@ -454,7 +456,6 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   };
 
   if (!renderedLead) return null;
-  const callPhone = detailQuery.data?.contactPhone ?? renderedLead.contactPhone;
 
   // ── Derived display values ───────────────────────────────────────────────────
   const ds = pinDisplayState(renderedLead);
@@ -606,6 +607,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1" style={{ color: statusColor }}>
                 {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
               </div>
+              {renderedLead.leadTag === "fresh_fiber_confirmed" && renderedLead.freshConfidence === "cross_verified" && (
+                <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
+                  Confirmed fresh fiber
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -633,8 +639,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             crossfades (opacity only) when the card swaps to another door. Also
             the measured half of the peek height. */}
         <div key={renderedLead.id} ref={peekBodyRef} className="card-swap-in">
-          {/* Action row: compact ghost pills. Directions keeps the Google Maps
-              static deep link; Call is a tel: link only when a phone exists. */}
+          {/* Field Map never receives or renders a phone. Authorized callers
+              enter the separate Calling workspace, where server gates run. */}
           <div data-testid="knock-action-row" className="flex items-center gap-2 pt-1">
             <a
               data-testid="action-directions"
@@ -646,15 +652,15 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               <Navigation className="w-4 h-4 opacity-80" />
               Directions
             </a>
-            {callPhone && (
-              <a
-                data-testid="action-call"
-                href={`tel:${callPhone}`}
+            {canOpenCalling && (
+              <Link
+                data-testid="action-open-calling"
+                href={`/calling/lead/${renderedLead.id}`}
                 className={`${ghostPill} flex-1 min-w-0`}
               >
                 <Phone className="w-4 h-4 opacity-80" />
-                Call
-              </a>
+                Calling
+              </Link>
             )}
             <button
               type="button"

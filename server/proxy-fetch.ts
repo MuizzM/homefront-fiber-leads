@@ -1,26 +1,21 @@
-/**
- * Proxy-aware fetch wrapper — MAXIMUM PERFORMANCE build
- *
- * Key tuning vs previous version:
- *  - 200 connections (was 50)       → 4x more parallel proxy slots
- *  - pipelining = 2 (was 1)         → 2 in-flight requests per socket
- *  - connect timeout = 5s (was 8s)  → fail fast, recycle slots faster
- *  - request timeout = 5s (was 7s)  → same
- *  - keepAliveTimeout = 60s (was 30s) → fewer reconnects under load
- *
- * Effective throughput: 200 sockets × 2 pipeline = ~400 simultaneous checks
- * At 200ms avg Kinetic API response = ~2,000 checks/sec theoretical max
- */
+/** Shared transport for an authorized fixed egress proxy. The application-level
+ * provider queue remains the true concurrency control; this pool only reuses
+ * sockets and never rotates identities or bypasses an upstream denial. */
 
 let _ProxyAgent: any = null;
 let _undiciFetch: any = null;
 let _proxyLoaded = false;
 let _sharedDispatcher: any = null;
 
-const POOL_SIZE = 200;          // 200 sockets — 4x previous
-const PIPELINE  = 2;            // 2 requests in-flight per socket
+const POOL_SIZE = boundedInt(process.env.PROXY_POOL_CONNECTIONS, 16, 1, 64);
+const PIPELINE = boundedInt(process.env.PROXY_PIPELINING, 1, 1, 2);
 const CONN_TIMEOUT = 5_000;     // 5s connect timeout — fail fast
 const KEEP_ALIVE  = 60_000;     // 60s keepalive — fewer reconnects under load
+
+function boundedInt(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(min, Math.min(max, Math.floor(parsed))) : fallback;
+}
 
 function buildAgent(proxyUrl: string) {
   return new _ProxyAgent({
@@ -64,13 +59,11 @@ loadUndici();
 export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<Response> {
   const proxyUrl = process.env.PROXY_URL;
 
-  // When a proxy is configured it is REQUIRED: we must never silently fall back
-  // to a direct request. A direct call would de-anonymize the origin IP (getting
-  // it blocked) and break the "authorized outbound transport only" guarantee. So
-  // if the proxy path fails we retry once (on a socket reset) and otherwise THROW
-  // — fail closed — rather than leaking the request out our own IP.
+  // When an authorized proxy is configured it is required for that deployment:
+  // never silently change egress after a transport failure. Retry one broken
+  // socket pool, then fail closed and let the caller surface a non-answer.
   if (proxyUrl) {
-    if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing a direct (de-anonymized) request");
+    if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing an unconfigured direct request");
     if (!_sharedDispatcher) _sharedDispatcher = buildAgent(proxyUrl);
     try {
       return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;

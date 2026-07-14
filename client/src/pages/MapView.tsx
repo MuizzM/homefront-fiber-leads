@@ -7,7 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { LeadCard, type CardProperty } from "@/components/LeadCard";
 import { AddLeadSheet } from "@/components/AddLeadSheet";
@@ -36,6 +36,16 @@ import { selectPointsInPolygon, pointInRing, bboxOfRing, type BBox2 } from "@/li
 import { registerPinImages, iconImageConcatExpression, spriteDataUrl, type StatusIconKey } from "@/lib/statusIcons";
 import { reconcileLeadFeatures, type LeadFeatureCache } from "@/lib/leadGeoJson";
 import { unpackMapPins } from "@shared/mapPinsWire";
+import { useCan } from "@/lib/capabilities";
+import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
+import {
+  bboxPolygon,
+  discoveryIdempotencyKey,
+  discoveryStageLabel,
+  isTerminalDiscoveryJob,
+  type DiscoveryEvent,
+  type DiscoveryJob,
+} from "@/lib/discoveryApi";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -50,6 +60,8 @@ interface MapPin {
   fiberStatus: string;
   assignedRepId: number | null;
   leadScore: number;
+  leadTag?: string | null;
+  freshConfidence?: string | null;
   visited?: boolean;
   knockCount?: number;
   lastOutcome?: string | null;
@@ -162,6 +174,7 @@ interface MapPerf {
   fps(): number;
   p95(): number;
   samples(): number[];
+  reset(): void;
 }
 function startMapPerf(map: any): void {
   let enabled = false;
@@ -212,6 +225,7 @@ function startMapPerf(map: any): void {
     fps() { if (!buf.length) return 0; const avg = buf.reduce((a, b) => a + b, 0) / buf.length; return avg > 0 ? 1000 / avg : 0; },
     p95,
     samples() { return [...buf]; },
+    reset() { buf.length = 0; last = performance.now(); lastWarn = 0; },
   };
   (window as any).__mapPerf = api;
 
@@ -243,22 +257,6 @@ function parseScanError(raw: string): { reason?: string; message: string } {
   return { message: stripped || "Something went wrong. Try again." };
 }
 
-interface ScanRow {
-  address: string; city: string; state: string; zip: string;
-  fiberStatus: string; isNewFiber: boolean; billingStatus: string | null;
-  householdSegmentType: string | null; techType: string | null;
-  chipSetType: string | null; placement: string | null;
-  maxDownloadMbps: number | null;
-  competitorName: string | null; competitorSpeedMbps: number | null;
-  lat: number | null; lng: number | null;
-}
-interface ScanJobStatus {
-  id: string; status: "running" | "done" | "error";
-  total: number; done: number; results: ScanRow[];
-  summary: { new_fiber: number; scanned: number; remaining: number };
-}
-
-const POLL_MS = 400; // 400ms — scan dots appear almost instantly
 const SEARCH_RESULT_SOURCE = "search-result";
 const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
 const SEARCH_RESULT_POINT_LAYER = "search-result-point";
@@ -323,6 +321,7 @@ function ensureTransientMapLayers(map: any): void {
         "circle-radius": ["step", ["get", "point_count"], 16, 20, 22, 100, 29],
         "circle-color": "#16a34a",
         "circle-opacity": 0.9,
+        "circle-opacity-transition": { duration: 180, delay: 0 },
         "circle-stroke-width": 2,
         "circle-stroke-color": "#dcfce7",
       },
@@ -340,7 +339,11 @@ function ensureTransientMapLayers(map: any): void {
         "text-size": 12,
         "text-allow-overlap": true,
       },
-      paint: { "text-color": "#ffffff" },
+      paint: {
+        "text-color": "#ffffff",
+        "text-opacity": 1,
+        "text-opacity-transition": { duration: 180, delay: 0 },
+      },
     });
   }
   if (!map.getLayer(SCAN_RESULTS_POINT_LAYER)) {
@@ -350,13 +353,12 @@ function ensureTransientMapLayers(map: any): void {
       source: SCAN_RESULTS_SOURCE,
       filter: ["!", ["has", "point_count"]],
       paint: {
-        "circle-radius": ["case", ["boolean", ["feature-state", "visible"], false], 7, 0],
-        "circle-opacity": ["case", ["boolean", ["feature-state", "visible"], false], 0.96, 0],
+        "circle-radius": 7,
+        "circle-opacity": 0.96,
         "circle-color": "#22c55e",
         "circle-stroke-width": 2,
         "circle-stroke-color": "#dcfce7",
         "circle-blur": 0.08,
-        "circle-radius-transition": { duration: 220, delay: 0 },
         "circle-opacity-transition": { duration: 180, delay: 0 },
       },
     });
@@ -375,33 +377,31 @@ export default function MapView() {
   const geolocateRef = useRef<any>(null);
   const suspendFollowCameraRef = useRef<() => void>(() => {});
   const scanGeoJsonRef = useRef<any>(emptyFeatureCollection());
-  const scanFeatureSeqRef = useRef(0);
+  const scanFeatureMapRef = useRef(new Map<string, any>());
+  const scanFlushRafRef = useRef<number | null>(null);
   const searchGeoJsonRef = useRef<any>(emptyFeatureCollection());
-  const lastRenderedCount = useRef(0);
-  const pollTickRef = useRef(0);      // counts scan polls, to throttle live lead refreshes
   const didAutoFitRef = useRef(false); // fit the map to leads once on first load
+  // Any user/programmatic camera ownership change invalidates delayed GPS work.
+  // The generation is read by the first-fix and iOS fallback callbacks, closing
+  // the race where a late location fix could overwrite a search or zoom.
+  const cameraGenerationRef = useRef(0);
 
   const [mapReady, setMapReady] = useState(false);
-  const [scanning, setScanning] = useState(false);
-  const [total, setTotal] = useState(0);
-  const [done, setDone] = useState(0);
-  const [newFound, setNewFound] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [jobId, setJobId] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scanStartInFlightRef = useRef(false);
+  const [scanSubmitting, setScanSubmitting] = useState(false);
+  const terminalJobsHandledRef = useRef(new Set<string>());
 
   // ── Scan lifecycle — a completed scan is a first-class RESULT, not just the
   // absence of a spinner. `scanOutcome` drives the control's success / empty /
   // error / cancelled / stale states and the same-scope rescan guard.
   const [scanOutcome, setScanOutcome] = useState<{
-    kind: "success" | "empty" | "error" | "cancelled" | "known";
+    kind: "success" | "empty" | "unverified" | "error" | "cancelled" | "known";
     found: number; at: number;                 // epoch ms when the scan ended
     boxKey: string | null;                     // scope identity for dedupe/stale
     checked?: number;                          // addresses resolved + qualified (honest empty copy)
+    unverified?: number;                       // non-answers: never misreported as "no"
     detail?: string;                           // friendly error/empty explanation
-    canDeep?: boolean;                          // recovery: offer Deep scan (new-construction gap)
   } | null>(null);
-  const foundTotalRef = useRef(0);             // authoritative found-count across polls
   const boxKeyOf = (b: BBox | null) => b
     ? [b.minLat, b.maxLat, b.minLng, b.maxLng].map(v => v.toFixed(5)).join(",")
     : null;
@@ -435,8 +435,10 @@ export default function MapView() {
   // Draw mode
   const [drawMode, setDrawMode] = useState(false);
   const [drawnBBox, setDrawnBBox] = useState<BBox | null>(null);
-  // Deep-scan (Mapbox grid) cost preview for the drawn box
-  const [areaEstimate, setAreaEstimate] = useState<{ gridPoints: number; estAddresses: number; estCostUsd: number; withinFreeTier: boolean; overCap: boolean } | null>(null);
+  // Idempotency guard for the draw-complete -> automatic scan handoff. React
+  // StrictMode and unrelated renders must never start the same box twice.
+  const autoStartedBoxKeyRef = useRef<string | null>(null);
+  const scanSubmissionRef = useRef<{ boxKey: string; nonce: string } | null>(null);
   const drawingRef = useRef(false);
   const drawStartRef = useRef<any>(null);
 
@@ -484,6 +486,14 @@ export default function MapView() {
   const { toast } = useToast();
   const qc = useQueryClient();
   const { user } = useAuth();
+  const canSubmitScan = useCan("scan.submit");
+  const discovery = useDiscoveryJobs(!!user && canSubmitScan);
+  const activeDiscoveryJobs = discovery.activeJobs;
+  const scanning = activeDiscoveryJobs.length > 0;
+  const total = activeDiscoveryJobs.reduce((sum, job) => sum + job.uniqueCandidateCount, 0);
+  const done = activeDiscoveryJobs.reduce((sum, job) => sum + job.checkedCount + job.failedCount, 0);
+  const newFound = activeDiscoveryJobs.reduce((sum, job) => sum + job.qualifiedCount, 0);
+  const scanConnectionIssue = scanning && !discovery.connected;
   const isAdmin = user?.role === "admin";
   const isRep = user?.role === "rep";
   const canManage = user?.role === "admin" || user?.role === "manager";
@@ -731,6 +741,70 @@ export default function MapView() {
       refetchOnWindowFocus: !isRep,
     }
   );
+
+  // Server-pushed invalidation keeps confirmed fresh-fiber territory leads from
+  // waiting for the 60s safety poll. The stream contains no lead data; the
+  // subsequent role-scoped GET remains the only source of map rows.
+  useEffect(() => {
+    if (!user) return;
+    let stopped = false;
+    let controller: AbortController | null = null;
+    let reconnect: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let attempts = 0;
+    const connect = async () => {
+      const sessionId = getStoredSessionId();
+      if (stopped || !sessionId) return;
+      controller = new AbortController();
+      try {
+        const response = await fetch("/api/leads/events", {
+          headers: { "x-session-id": sessionId },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) throw new Error(`lead event stream ${response.status}`);
+        attempts = 0;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (!stopped) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+          for (;;) {
+            const boundary = buffer.indexOf("\n\n");
+            if (boundary < 0) break;
+            const event = buffer.slice(0, boundary);
+            buffer = buffer.slice(boundary + 2);
+            if (event.includes("event: map-changed")) {
+              // Coalesce a burst of lead-created events into one durable-source
+              // reconciliation. Discovery SSE already paints each new qualified
+              // lead immediately, so a town scan never downloads the full map
+              // once per address.
+              if (refreshTimer) clearTimeout(refreshTimer);
+              refreshTimer = setTimeout(() => {
+                refreshTimer = null;
+                void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+              }, 1_000);
+            }
+          }
+        }
+      } catch (error: any) {
+        if (stopped || error?.name === "AbortError") return;
+      }
+      if (!stopped) {
+        const delay = Math.min(30_000, 1_000 * 2 ** Math.min(5, attempts++));
+        reconnect = setTimeout(() => void connect(), delay);
+      }
+    };
+    void connect();
+    return () => {
+      stopped = true;
+      controller?.abort();
+      if (reconnect) clearTimeout(reconnect);
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
+  }, [user?.id, qc]);
   const leads: MapPin[] = mapPinData?.pins ?? [];
   // O(1) id→lead map — the hot paths (pin tap, knock, card swap) never scan the
   // array. Declared HERE, above the effects that reference it (dep arrays are
@@ -876,6 +950,7 @@ export default function MapView() {
     // Follow state + lifecycle (all imperative — zero React renders per frame).
     const M = createFollowState();
     let following = false, interacting = false, rafId = 0;
+    let locateGeneration = -1;
     let reduced = false;
     try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch {}
     if (import.meta.env.DEV) {
@@ -905,6 +980,7 @@ export default function MapView() {
     // Search, lead selection, pan and zoom call this before moving so a pending
     // GPS frame can never overwrite the viewport on the next animation frame.
     const suspendFollow = () => {
+      cameraGenerationRef.current += 1;
       following = false;
       interacting = false;
       stopLoop();
@@ -927,7 +1003,7 @@ export default function MapView() {
         firstFixSeenRef.current = true;     // the control engaged → FAB fallback stays off
         puckEl.classList.remove("hf-nav-puck-stale");
         const ll = filteredLngLat(M);
-        if (firstFix && !didInitZoomRef.current && ll) {
+        if (firstFix && following && locateGeneration === cameraGenerationRef.current && !didInitZoomRef.current && ll) {
           map.jumpTo({ center: ll, zoom: STREET_ZOOM }, { geolocateSource: true }); // one-time zoom-to-street
           didInitZoomRef.current = true;
         }
@@ -958,7 +1034,12 @@ export default function MapView() {
     // Every user camera gesture means "I'm exploring". Follow remains off until
     // the user explicitly taps Locate again; zoom/rotate/pitch must never snap the
     // center back to GPS when the gesture ends.
-    const onFollowStart = () => { following = true; ensureLoop(); };
+    const onFollowStart = () => {
+      locateGeneration = cameraGenerationRef.current + 1;
+      cameraGenerationRef.current = locateGeneration;
+      following = true;
+      ensureLoop();
+    };
     const onFollowEnd = () => { following = false; stopLoop(); };
     geolocate.on("trackuserlocationstart", onFollowStart);
     geolocate.on("trackuserlocationend", onFollowEnd);
@@ -995,7 +1076,7 @@ export default function MapView() {
       // Draw bbox layers
       map.addSource("draw-bbox", {
         type: "geojson",
-        data: { type: "Feature", geometry: { type: "Polygon", coordinates: [[]] }, properties: {} }
+        data: emptyFeatureCollection()
       });
       map.addLayer({ id: "draw-bbox-fill", type: "fill", source: "draw-bbox",
         paint: { "fill-color": "#f97316", "fill-opacity": 0.1 } });
@@ -1013,6 +1094,7 @@ export default function MapView() {
         cluster: true,
         clusterMaxZoom: 13,   // collapse clusters below zoom 13
         clusterRadius: 50,    // px radius to cluster within
+        clusterProperties: { fresh_count: ["+", ["get", "fresh"]] },
       });
 
       // Cluster outer glow ring (behind main circle)
@@ -1027,6 +1109,24 @@ export default function MapView() {
           "circle-radius": ["step",["get","point_count"],26,10,33,30,42],
           "circle-opacity": 0.25,
           "circle-stroke-width": 0,
+        },
+      });
+
+      // A confirmed-fresh ring makes the money layer visible without changing
+      // the disposition color inside the cluster. The count is aggregated in
+      // the Mapbox worker, so this remains one GeoJSON source and zero DOM pins.
+      map.addLayer({
+        id: "lead-fresh-cluster-ring",
+        type: "circle",
+        source: "leads-cluster",
+        filter: ["all", ["has", "point_count"], [">", ["get", "fresh_count"], 0]],
+        maxzoom: 13.5,
+        paint: {
+          "circle-radius": ["+", ["step", ["get", "point_count"], 18, 10, 24, 30, 32], 6],
+          "circle-color": "rgba(0,0,0,0)",
+          "circle-stroke-width": 3,
+          "circle-stroke-color": "#22c55e",
+          "circle-opacity": 0.95,
         },
       });
 
@@ -1107,6 +1207,20 @@ export default function MapView() {
         paint: UNCLUSTERED_PAINT,
       });
 
+      map.addLayer({
+        id: "lead-fresh-confirmed-halo",
+        type: "circle",
+        source: "leads-cluster",
+        filter: ["all", ["!", ["has", "point_count"]], ["==", ["get", "fresh"], 1]],
+        minzoom: 12,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 10, 18, 16],
+          "circle-color": "rgba(34,197,94,0.16)",
+          "circle-stroke-width": 2.5,
+          "circle-stroke-color": "#22c55e",
+        },
+      }, "lead-unclustered");
+
       // Worked-vs-unworked is color-only: knocked doors render in their status
       // hue (terminal states pre-dimmed) with a thicker white stroke — no glyph
       // badges on pins, per the field design language. (The per-pin glow layer
@@ -1170,7 +1284,7 @@ export default function MapView() {
           competitorName: p.competitorName || null,
           techType: p.techType || null, placement: p.placement || null,
           householdSegmentType: p.householdSegmentType || null,
-          leadTag: p.leadTag || null,
+          leadTag: p.leadTag || null, freshConfidence: p.freshConfidence || null,
           leadScore: p.leadScore == null ? null : Number(p.leadScore),
           source: "scan",
         });
@@ -1520,7 +1634,7 @@ export default function MapView() {
     if (!map || !mapReady) return;
     const vis = showLeads ? "visible" : "none";
     const fieldMap = newFieldMap();
-    for (const id of ["lead-clusters", "lead-clusters-glow", "lead-cluster-count", "lead-unclustered", "lead-unclustered-glow", "lead-visited-check", STATUS_ICON_LAYER]) {
+    for (const id of ["lead-clusters", "lead-clusters-glow", "lead-fresh-cluster-ring", "lead-cluster-count", "lead-unclustered", "lead-fresh-confirmed-halo", "lead-unclustered-glow", "lead-visited-check", STATUS_ICON_LAYER]) {
       if (!map.getLayer(id)) continue;
       // NEW_FIELD_MAP swaps circle pins for status icons: the circle layer stays
       // hidden and the icon layer follows the show-leads toggle. Flag off → the
@@ -1553,12 +1667,18 @@ export default function MapView() {
           type: "geojson",
           data: { type: "FeatureCollection", features: [] },
           cluster: true, clusterMaxZoom: 13, clusterRadius: 50,
+          clusterProperties: { fresh_count: ["+", ["get", "fresh"]] },
         });
         // Cluster glow
         map.addLayer({ id: "lead-clusters-glow", type: "circle", source: "leads-cluster",
           filter: ["has", "point_count"], maxzoom: 13.5,
           paint: { "circle-color": ["step",["get","point_count"],"#0d9488",10,"#0f766e",30,"#115e59"],
             "circle-radius": ["step",["get","point_count"],26,10,33,30,42], "circle-opacity": 0.25 },
+        });
+        map.addLayer({ id: "lead-fresh-cluster-ring", type: "circle", source: "leads-cluster",
+          filter: ["all",["has","point_count"],[">",["get","fresh_count"],0]], maxzoom: 13.5,
+          paint: { "circle-radius": ["+",["step",["get","point_count"],18,10,24,30,32],6],
+            "circle-color":"rgba(0,0,0,0)","circle-stroke-width":3,"circle-stroke-color":"#22c55e","circle-opacity":0.95 },
         });
         map.addLayer({
           id: "lead-clusters", type: "circle", source: "leads-cluster",
@@ -1581,6 +1701,11 @@ export default function MapView() {
           filter: ["!", ["has", "point_count"]], minzoom: 12,
           paint: UNCLUSTERED_PAINT,
         });
+        map.addLayer({ id: "lead-fresh-confirmed-halo", type: "circle", source: "leads-cluster",
+          filter: ["all",["!",["has","point_count"]],["==",["get","fresh"],1]], minzoom: 12,
+          paint: { "circle-radius":["interpolate",["linear"],["zoom"],12,10,18,16],
+            "circle-color":"rgba(34,197,94,0.16)","circle-stroke-width":2.5,"circle-stroke-color":"#22c55e" },
+        }, "lead-unclustered");
         // Selected-pin ring — its filter is re-applied by the selection effect
         // (styleEpoch dep) right after this block bumps the epoch.
         map.addLayer(SELECTED_RING_SPEC);
@@ -1594,7 +1719,7 @@ export default function MapView() {
       if (!map.getSource("draw-bbox")) {
         map.addSource("draw-bbox", {
           type: "geojson",
-          data: { type: "Feature", geometry: { type: "Polygon", coordinates: [[]] }, properties: {} }
+          data: emptyFeatureCollection()
         });
         map.addLayer({ id: "draw-bbox-fill", type: "fill", source: "draw-bbox",
           paint: { "fill-color": "#f97316", "fill-opacity": 0.1 } });
@@ -1604,12 +1729,6 @@ export default function MapView() {
       ensureTransientMapLayers(map);
       (map.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(searchGeoJsonRef.current);
       (map.getSource(SCAN_RESULTS_SOURCE) as any)?.setData(scanGeoJsonRef.current);
-      requestAnimationFrame(() => {
-        for (const feature of scanGeoJsonRef.current.features) {
-          if (feature.id == null) continue;
-          try { map.setFeatureState({ source: SCAN_RESULTS_SOURCE, id: feature.id }, { visible: true }); } catch {}
-        }
-      });
       lassoLayerRef.current = false;
       // House numbers are style layers too — re-enable on the fresh style with
       // the palette that suits it (white-on-imagery vs ink-on-streets).
@@ -1798,7 +1917,7 @@ export default function MapView() {
 
   const clearDrawLayer = useCallback(() => {
     const src = mapRef.current?.getSource("draw-bbox") as any;
-    src?.setData({ type: "Feature", geometry: { type: "Polygon", coordinates: [[]] }, properties: {} });
+    src?.setData(emptyFeatureCollection());
   }, []);
 
   // Keep React's committed bbox and the Mapbox draw source synchronized. This
@@ -1865,166 +1984,199 @@ export default function MapView() {
     };
   }, [drawMode, mapReady, updateDrawLayer, clearDrawLayer, styleEpoch]);
 
-  // ── Scan helpers ──────────────────────────────────────────────────────────
-  const stopPolling = useCallback(() => {
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-  }, []);
-
-  // Belt-and-suspenders: kill the scan poll interval on unmount so a scan in
-  // flight when the user navigates away can't keep firing setState/apiRequest
-  // (and, if the job 404s post-GC, poll forever).
-  useEffect(() => () => stopPolling(), [stopPolling]);
-
-  // Append a whole polling batch to ONE GeoJSON source. Mapbox clusters and
-  // paints it in its worker/WebGL pipeline, so 5,000 scan hits do not create
-  // 5,000 DOM nodes or 5,000 per-frame layout writes.
-  const addScanRows = useCallback((rows: Array<ScanRow & { leadTag?: string | null; leadScore?: number }>) => {
-    const map = mapRef.current;
-    const src = map?.getSource(SCAN_RESULTS_SOURCE) as any;
-    if (!map || !src || rows.length === 0) return;
-
-    const newIds: number[] = [];
-    const additions = rows.flatMap(row => {
-      if (row.lat == null || row.lng == null) return [];
-      const id = ++scanFeatureSeqRef.current;
-      newIds.push(id);
-      return [{
-        type: "Feature" as const,
-        id,
-        geometry: { type: "Point" as const, coordinates: [row.lng, row.lat] },
-        properties: {
-          address: row.address, city: row.city, state: row.state, zip: row.zip,
-          fiberStatus: row.fiberStatus, isNewFiber: row.isNewFiber,
-          billingStatus: row.billingStatus,
-          householdSegmentType: row.householdSegmentType,
-          techType: row.techType, placement: row.placement,
-          maxDownloadMbps: row.maxDownloadMbps,
-          competitorName: row.competitorName,
-          leadTag: row.leadTag ?? null,
-          leadScore: row.leadScore ?? null,
-        },
-      }];
+  // ── Discovery jobs + live lead batches ────────────────────────────────────
+  // Events mutate a key-indexed feature map. One requestAnimationFrame flush
+  // publishes the whole collection to Mapbox no matter how many SSE messages
+  // arrived in that frame; replayed events replace their stable feature rather
+  // than creating a duplicate dot or inflating the displayed lead count.
+  const scheduleScanFeatureFlush = useCallback(() => {
+    if (scanFlushRafRef.current != null) return;
+    scanFlushRafRef.current = requestAnimationFrame(() => {
+      scanFlushRafRef.current = null;
+      scanGeoJsonRef.current = {
+        type: "FeatureCollection",
+        features: Array.from(scanFeatureMapRef.current.values()),
+      };
+      const source = mapRef.current?.getSource(SCAN_RESULTS_SOURCE) as any;
+      source?.setData(scanGeoJsonRef.current);
     });
-    if (!additions.length) return;
-    scanGeoJsonRef.current = {
-      type: "FeatureCollection",
-      features: [...scanGeoJsonRef.current.features, ...additions],
-    };
-    src.setData(scanGeoJsonRef.current);
-
-    // Start new points at radius/opacity zero, then reveal them together on the
-    // next frame. Paint transitions provide a short scale/fade without React
-    // renders or per-point animation loops. Reduced-motion reveals immediately.
-    const reveal = () => {
-      for (const id of newIds) {
-        try { map.setFeatureState({ source: SCAN_RESULTS_SOURCE, id }, { visible: true }); } catch {}
-      }
-    };
-    let reduced = false;
-    try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch {}
-    if (reduced) reveal();
-    else requestAnimationFrame(() => requestAnimationFrame(reveal));
   }, []);
 
-  const pollJob = useCallback(async (id: string, bbox?: BBox) => {
-    try {
-      // ?since cursor: the server returns only rows we haven't rendered yet —
-      // a long scan no longer re-downloads its whole cumulative result set
-      // every 400ms (was O(total²) bytes + re-parse over the scan's lifetime).
-      const res = await apiRequest("GET", `/api/scan/${id}?since=${lastRenderedCount.current}`);
-      const status: ScanJobStatus & { resultCount?: number } = await res.json();
-      setDone(status.done);
-      setTotal(status.total);
-      const newRows = status.results ?? [];
-      lastRenderedCount.current = status.resultCount ?? (lastRenderedCount.current + newRows.length);
-      const freshRows: Array<ScanRow & { leadTag?: string | null; leadScore?: number }> = [];
-      for (const r of newRows as Array<ScanRow & { leadTag?: string | null; leadScore?: number }>) {
-        if (!r.lat || !r.lng) continue;
-        if (bbox && !inBBox(r.lat, r.lng, bbox)) continue;
-        // Only surface NEW FIBER with no current subscriber — the green hot-lead
-        // pins. Everything else (tenured, copper, coming soon, upgrades) is skipped.
-        if (!(r.isNewFiber && r.billingStatus === "N")) continue;
-        freshRows.push(r);
-      }
-      addScanRows(freshRows);
-      const found = freshRows.length;
-      if (found > 0) { foundTotalRef.current += found; setNewFound(p => p + found); }
+  useEffect(() => () => {
+    if (scanFlushRafRef.current != null) cancelAnimationFrame(scanFlushRafRef.current);
+  }, []);
 
-      // Live lead refresh: pull newly-saved leads onto the map every ~25 polls
-      // (~10s) while scanning. Found addresses already appear INSTANTLY as scan
-      // circles (addScanRows above) — this refresh only converts them to assignable
-      // pins, so 10s is invisible to the operator, while each refresh at 50k
-      // leads costs a full payload + GeoJSON rebuild + re-cluster (was every ~3s).
-      pollTickRef.current += 1;
-      if (found > 0 && pollTickRef.current % 25 === 0) {
-        qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-      }
+  const addDiscoveryLead = useCallback((event: DiscoveryEvent) => {
+    const type = event.eventType.toLowerCase();
+    const payload = event.payload ?? {};
+    // During a rolling deploy the server may publish either a normalized lead
+    // object or a ready-to-render GeoJSON feature. Accept both wire shapes, but
+    // never infer a lead from an unrelated progress event.
+    const feature = payload.feature?.type === "Feature" ? payload.feature : null;
+    const row = payload.lead ?? payload.result?.lead ?? payload.result
+      ?? payload.candidate ?? feature?.properties ?? payload;
+    const eventCreatesLead = type.includes("lead")
+      && (type.includes("created") || type.includes("qualified") || type.includes("published"));
+    const explicitlyQualified = row.qualified === true
+      || row.fresh === true
+      || row.isFreshFiber === true && row.freshFiberVerdict === "fresh"
+      || row.leadTag === "fresh_fiber_confirmed" && row.freshConfidence === "cross_verified";
+    if (!eventCreatesLead && !explicitlyQualified) return;
 
-      if (status.status === "done") {
-        stopPolling(); setScanning(false);
-        setScanOutcome({
-          kind: foundTotalRef.current > 0 ? "success" : "empty",
-          found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null),
-          checked: status.total ?? status.done, // homes WERE checked — empty ≠ "no homes"
-        });
-        // The scan scope is no longer an editing affordance. Clear both React
-        // state and the Mapbox source immediately so the completed lead circles
-        // are the only geometry left on the map.
-        setDrawnBBox(null);
-        clearDrawLayer();
-        qc.invalidateQueries({ queryKey: ["/api/leads"] }); qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-      } else if (status.status === "error") {
-        // Previously unhandled: an errored job kept polling forever with the
-        // control stuck on "scanning". Now it lands as an explicit error state.
-        stopPolling(); setScanning(false);
-        setScanOutcome({ kind: "error", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null), detail: "The scan hit an error partway through. Try again." });
-      }
-    } catch { /* transient fetch hiccup — keep polling */ }
-  }, [addScanRows, clearDrawLayer, stopPolling, qc]);
+    const featureCoordinates = Array.isArray(feature?.geometry?.coordinates)
+      ? feature.geometry.coordinates
+      : [];
+    const lat = Number(row.lat ?? row.latitude ?? featureCoordinates[1]);
+    const lng = Number(row.lng ?? row.longitude ?? featureCoordinates[0]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const canonicalId = row.canonicalAddressId ?? row.canonical_address_id
+      ?? row.leadId ?? row.lead_id ?? row.id
+      ?? `${String(row.address ?? "unknown").trim().toLowerCase()}|${lat.toFixed(6)}|${lng.toFixed(6)}`;
+    const key = `${event.jobId}:${canonicalId}`;
+    scanFeatureMapRef.current.set(key, {
+      type: "Feature",
+      id: key,
+      geometry: { type: "Point", coordinates: [lng, lat] },
+      properties: {
+        jobId: event.jobId,
+        leadId: row.leadId ?? row.lead_id ?? (row.leadTag === "fresh_fiber_confirmed" ? row.id ?? null : null),
+        canonicalAddressId: String(canonicalId),
+        receivedAt: Date.now(),
+        address: String(row.address ?? row.addressLine1 ?? "Address"),
+        city: String(row.city ?? ""),
+        state: String(row.state ?? ""),
+        zip: String(row.zip ?? row.postalCode ?? ""),
+        fiberStatus: String(row.fiberStatus ?? row.fiber_status ?? "new_fiber"),
+        isNewFiber: true,
+        billingStatus: row.billingStatus ?? row.billing_status ?? null,
+        householdSegmentType: row.householdSegmentType ?? null,
+        techType: row.techType ?? row.tech ?? "fiber",
+        placement: row.placement ?? null,
+        maxDownloadMbps: row.maxDownloadMbps ?? row.max_mbps ?? null,
+        competitorName: row.competitorName ?? row.competitor ?? null,
+        leadTag: row.leadTag ?? "fresh_fiber_confirmed",
+        freshConfidence: row.freshConfidence ?? "cross_verified",
+        leadScore: row.leadScore ?? row.confidenceScore ?? null,
+      },
+    });
+    scheduleScanFeatureFlush();
+  }, [scheduleScanFeatureFlush]);
 
-  const startScan = useCallback(async (endpoint: string, body: object) => {
-    if (!mapReady) return;
-    const wasDeep = (body as any)?.deep === true;
-    scanGeoJsonRef.current = emptyFeatureCollection();
-    scanFeatureSeqRef.current = 0;
-    (mapRef.current?.getSource(SCAN_RESULTS_SOURCE) as any)?.setData(scanGeoJsonRef.current);
-    lastRenderedCount.current = 0; pollTickRef.current = 0;
-    foundTotalRef.current = 0;
-    setNewFound(0); setDone(0); setTotal(0); setError(null); setScanOutcome(null);
-    stopPolling(); setScanning(true);
-    try {
-      const res = await apiRequest("POST", endpoint, body);
-      const data = await res.json();
-      // Homes ARE here, but every address is already a known lead — a real,
-      // non-error state (server returns jobId:null, reason:"all_known").
-      if (data?.reason === "all_known" || !data?.jobId) {
-        setScanning(false);
-        setScanOutcome({ kind: "known", found: 0, checked: data?.harvested ?? 0, at: Date.now(), boxKey: boxKeyOf(drawnBBox) });
-        setDrawnBBox(null);
-        clearDrawLayer();
-        return;
+  useEffect(() => discovery.subscribe(addDiscoveryLead), [discovery.subscribe, addDiscoveryLead]);
+
+  // Incremental SSE pins are an instant visual bridge, not a second durable
+  // lead layer. As soon as the normal tenant lead feed contains an id, remove
+  // its temporary scan feature so the same rooftop is never painted twice.
+  // Bound orphaned bridge features as a final guard during long field sessions.
+  useEffect(() => {
+    const durableIds = new Set(leads.map((lead) => Number(lead.id)));
+    let changed = false;
+    for (const [key, feature] of scanFeatureMapRef.current) {
+      const leadId = Number(feature?.properties?.leadId);
+      if (Number.isSafeInteger(leadId) && durableIds.has(leadId)) {
+        scanFeatureMapRef.current.delete(key);
+        changed = true;
       }
-      setJobId(data.jobId); setTotal(data.total ?? 0);
-      pollRef.current = setInterval(() => pollJob(data.jobId, drawnBBox ?? undefined), POLL_MS);
-    } catch (e: any) {
-      // Never surface a raw "400: {…}" blob — parse it into a friendly line and,
-      // when the free scan found no MAPPED addresses, offer Deep scan as recovery.
-      const { reason, message } = parseScanError(e?.message ?? String(e));
-      setScanning(false); setError(null);
-      setScanOutcome({
-        kind: "error", found: 0, at: Date.now(), boxKey: boxKeyOf(drawnBBox),
-        detail: message, canDeep: reason === "no_addresses" && !wasDeep,
-      });
     }
-  }, [mapReady, stopPolling, pollJob, drawnBBox, clearDrawLayer]);
+    if (scanFeatureMapRef.current.size > 5_000) {
+      const oldest = [...scanFeatureMapRef.current.entries()]
+        .sort((a, b) => Number(a[1]?.properties?.receivedAt ?? 0) - Number(b[1]?.properties?.receivedAt ?? 0))
+        .slice(0, scanFeatureMapRef.current.size - 5_000);
+      for (const [key] of oldest) scanFeatureMapRef.current.delete(key);
+      changed = true;
+    }
+    if (changed) scheduleScanFeatureFlush();
+  }, [leads, scheduleScanFeatureFlush]);
 
-  const stopScan = useCallback(async () => {
-    stopPolling();
-    if (jobId) { try { await apiRequest("DELETE", `/api/scan/${jobId}`); } catch {} }
-    setScanning(false);
-    // Deliberate stop: keep whatever was found so far, say so explicitly.
-    setScanOutcome({ kind: "cancelled", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(drawnBBox) });
-  }, [stopPolling, jobId, drawnBBox]);
+  // Terminal jobs stay visible as honest outcomes while active jobs keep going.
+  // No full-map refetch is triggered for every discovery event: the SSE lead
+  // payload already paints immediately, and the normal map stream/safety poll
+  // eventually reconciles the durable main lead source.
+  useEffect(() => {
+    for (const job of discovery.jobs) {
+      if (!isTerminalDiscoveryJob(job) || terminalJobsHandledRef.current.has(job.id)) continue;
+      terminalJobsHandledRef.current.add(job.id);
+      const checked = job.checkedCount + job.failedCount;
+      if (job.status === "cancelled") {
+        setScanOutcome({ kind: "cancelled", found: job.qualifiedCount, checked, at: Date.now(), boxKey: null });
+      } else if (job.status === "failed") {
+        setScanOutcome({ kind: "error", found: job.qualifiedCount, checked, at: Date.now(), boxKey: null, detail: job.error || "The scan failed. Its completed work was preserved." });
+      } else if (job.qualifiedCount > 0) {
+        setScanOutcome({ kind: "success", found: job.qualifiedCount, checked, unverified: job.failedCount, at: Date.now(), boxKey: null });
+      } else if (job.status === "partial" || job.failedCount > 0) {
+        setScanOutcome({ kind: "unverified", found: 0, checked, unverified: job.failedCount, at: Date.now(), boxKey: null });
+      } else {
+        setScanOutcome({ kind: "empty", found: 0, checked, at: Date.now(), boxKey: null });
+      }
+    }
+  }, [discovery.jobs]);
+
+  const startAreaScan = useCallback(async (bbox: BBox) => {
+    if (!mapReady || scanStartInFlightRef.current || !canSubmitScan) return;
+    scanStartInFlightRef.current = true;
+    setScanSubmitting(true);
+    const scopeKey = boxKeyOf(bbox)!;
+    const geometry = bboxPolygon(bbox);
+    const existingSubmission = scanSubmissionRef.current?.boxKey === scopeKey
+      ? scanSubmissionRef.current
+      : null;
+    const nonce = existingSubmission?.nonce
+      ?? (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+    scanSubmissionRef.current = { boxKey: scopeKey, nonce };
+    setScanOutcome(null);
+    let accepted = false;
+    try {
+      const job = await discovery.submit({
+        geometry,
+        idempotencyKey: discoveryIdempotencyKey(geometry, user?.tenantId, nonce),
+      });
+      accepted = true;
+      // Acceptance is the geometry lifecycle boundary. The durable server job now
+      // owns the scope, so the temporary draw can disappear immediately and the
+      // rep can submit another area while this one is queued/running.
+      setDrawnBBox(null);
+      setDrawMode(false);
+      clearDrawLayer();
+      toast({ title: "Area queued", description: `${discoveryStageLabel(job.status)} — you can draw another area now.` });
+    } catch (error: any) {
+      const parsed = parseScanError(error?.message ?? String(error));
+      // Submission failed before the server acknowledged ownership. Preserve the
+      // exact geometry and nonce so an explicit retry is both convenient and
+      // idempotent (a lost 202 response cannot create a duplicate job).
+      setDrawMode(false);
+      setScanOutcome({ kind: "error", found: 0, at: Date.now(), boxKey: scopeKey, detail: parsed.message });
+    } finally {
+      if (accepted) scanSubmissionRef.current = null;
+      scanStartInFlightRef.current = false;
+      setScanSubmitting(false);
+    }
+  }, [mapReady, canSubmitScan, discovery.submit, user?.tenantId, clearDrawLayer, toast]);
+
+  // Draw-complete is the sole trigger. The ref suppresses StrictMode/re-render
+  // duplicate POSTs for this submission without blocking a later intentional
+  // rescan of the same geometry.
+  useEffect(() => {
+    if (!drawnBBox) {
+      autoStartedBoxKeyRef.current = null;
+      return;
+    }
+    if (!canSubmitScan || scanStartInFlightRef.current) return;
+    const key = boxKeyOf(drawnBBox);
+    if (autoStartedBoxKeyRef.current === key) return;
+    autoStartedBoxKeyRef.current = key;
+    void startAreaScan(drawnBBox);
+  }, [drawnBBox, canSubmitScan, startAreaScan]);
+
+  const cancelDiscoveryJob = useCallback(async (job: DiscoveryJob) => {
+    try {
+      await discovery.cancel(job.id);
+      toast({ title: "Scan cancelled", description: "Completed addresses and leads were kept." });
+    } catch (error: any) {
+      toast({ title: "Could not cancel scan", description: parseScanError(error?.message ?? String(error)).message, variant: "destructive" });
+    }
+  }, [discovery.cancel, toast]);
 
   // ── Escape hatch — one keyboard path out of every map tool, in priority
   // order: open panel → armed lasso → armed/boxed scan. Search close returns
@@ -2046,12 +2198,13 @@ export default function MapView() {
         exitLasso();
       } else if (drawMode || drawnBBox) {
         setDrawMode(false); setDrawnBBox(null);
-        if (scanning) void stopScan();
+        scanSubmissionRef.current = null; autoStartedBoxKeyRef.current = null;
+        clearDrawLayer();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [searchOpen, layersOpen, leadsOpen, lassoMode, drawMode, drawnBBox, scanning, exitLasso, stopScan]);
+  }, [searchOpen, layersOpen, leadsOpen, lassoMode, drawMode, drawnBBox, exitLasso, clearDrawLayer]);
 
   // Auto-focus the search field the instant the panel opens (next frame, after
   // the element mounts) — the magnifier is a search affordance, not a toggle.
@@ -2060,22 +2213,6 @@ export default function MapView() {
     const r = requestAnimationFrame(() => searchInputRef.current?.focus());
     return () => cancelAnimationFrame(r);
   }, [searchOpen]);
-
-  // When a box is drawn, fetch the deep-scan cost preview (grid points → $).
-  useEffect(() => {
-    if (!drawnBBox || !isAdmin) { setAreaEstimate(null); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await apiRequest("POST", "/api/scan/area-estimate", {
-          minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng,
-        });
-        const data = await res.json();
-        if (!cancelled) setAreaEstimate(data);
-      } catch { if (!cancelled) setAreaEstimate(null); }
-    })();
-    return () => { cancelled = true; };
-  }, [drawnBBox, isAdmin]);
 
   // ── Legend items ──────────────────────────────────────────────────────────
   // When glyph mode is on, draw the EXACT map glyph beside each legend row (built
@@ -2131,13 +2268,13 @@ export default function MapView() {
       }
       setSidebarSearch("");
       setSearchOpen(false);
-      toast({ title: `Jumped to ${data.placeName}`, description: isAdmin ? "Draw a Scan-Area box here, then scan for new fiber." : undefined });
+      toast({ title: `Jumped to ${data.placeName}`, description: canSubmitScan ? "Draw a Scan-Area box here, then scan for new fiber." : undefined });
     } catch (e: any) {
       toast({ title: "Address lookup failed", variant: "destructive" });
     } finally {
       setGeocoding(false);
     }
-  }, [geocoding, toast, isAdmin]);
+  }, [geocoding, toast, canSubmitScan]);
 
   const flyToLead = useCallback((lead: MapPin) => {
     const map = mapRef.current;
@@ -2488,8 +2625,9 @@ export default function MapView() {
           never the per-poll progress ticks that would spam a screen reader. */}
       <div className="sr-only" role="status" aria-live="polite" data-testid="scan-sr">
         {scanning ? "Scanning the selected area." : scanOutcome && !scanStale ? (
-          scanOutcome.kind === "success" ? `Scan complete. ${scanOutcome.found} new-fiber lead${scanOutcome.found === 1 ? "" : "s"} found.`
+          scanOutcome.kind === "success" ? `Scan complete. Yes—${scanOutcome.found} fresh-fiber lead${scanOutcome.found === 1 ? "" : "s"} found.`
           : scanOutcome.kind === "empty" ? `Scan complete. No new fiber found${scanOutcome.checked ? ` across ${scanOutcome.checked} homes` : ""}.`
+          : scanOutcome.kind === "unverified" ? `Scan complete, but ${scanOutcome.unverified ?? 0} homes could not be verified and need a recheck.`
           : scanOutcome.kind === "known" ? "Every home in this box is already in your leads."
           : scanOutcome.kind === "error" ? (scanOutcome.detail || "Scan failed.")
           : scanOutcome.kind === "cancelled" ? `Scan stopped. ${scanOutcome.found} found so far.` : ""
@@ -2545,24 +2683,25 @@ export default function MapView() {
           in the top-right corner. On desktop: centered. */}
       <div style={{ top: "calc(env(safe-area-inset-top) + 6.75rem)" }} className="absolute left-3 right-[68px] md:top-16 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[min(620px,calc(100vw-24px))] z-30 space-y-1.5 pointer-events-none [&>*]:pointer-events-auto">
 
-      {/* ── Scan panel — the scan tool's full state surface. Scope is always the
-             DRAWN BOX. Communicates: drawing → box drawn → scanning → a result
-             (found / empty / error / cancelled) that goes stale if the box
-             changes. A fresh same-box result offers Rescan, never auto-repeats
-             the expensive scan. ── */}
-      {(drawMode || drawnBBox || scanning || (scanOutcome && !scanStale)) && isAdmin && (() => {
+      {/* Draw-complete starts one durable job. Accepted geometry clears at once;
+          active jobs remain compact and independently cancellable while another
+          area can be drawn. */}
+      {(drawMode || drawnBBox || scanSubmitting || scanning || (scanOutcome && !scanStale)) && canSubmitScan && (() => {
         const freshSameBox = !!scanOutcome && !scanStale
           && (!drawnBBox || scanOutcome.boxKey === boxKeyOf(drawnBBox));
-        const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
-        const borderClass = scanning ? "border-orange-500/40"
+        const borderClass = scanning || scanSubmitting ? "border-orange-500/40"
           : freshSameBox && scanOutcome?.kind === "success" ? "border-emerald-500/40"
+          : freshSameBox && scanOutcome?.kind === "unverified" ? "border-amber-500/45"
           : freshSameBox && scanOutcome?.kind === "error" ? "border-red-500/50"
           : freshSameBox && scanOutcome?.kind === "known" ? "border-sky-500/40"
           : "border-white/12";
         const closeBtn = (
           <button type="button" aria-label="Close scan"
             className="shrink-0 w-8 h-8 -mr-1 -mt-0.5 grid place-items-center rounded-lg text-white/55 hover:text-white hover:bg-white/10 transition-colors"
-            onClick={() => { setDrawMode(false); setDrawnBBox(null); setScanOutcome(null); if (scanning) stopScan(); }}>
+            onClick={() => {
+              setDrawMode(false); setDrawnBBox(null); setScanOutcome(null); clearDrawLayer();
+              scanSubmissionRef.current = null; autoStartedBoxKeyRef.current = null;
+            }}>
             <X className="w-4 h-4" />
           </button>
         );
@@ -2571,15 +2710,24 @@ export default function MapView() {
           {/* ── Status row (icon + primary line) ─────────────────────────── */}
           <div className="flex items-start gap-2">
             <span className="flex-1 min-w-0 text-[12.5px] leading-snug flex items-start gap-1.5 text-white/85">
-              {scanning ? (
+              {scanSubmitting ? (
                 <><Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400 mt-px shrink-0" />
-                  <span>Scanning… <span className="tabular-nums font-semibold text-white">{done}{total ? ` of ${total}` : ""}</span> address{total === 1 ? "" : "es"}{newFound > 0 && <> · <span className="text-emerald-400 font-semibold">{newFound} new fiber</span></>}</span></>
+                  <span>Submitting this area securely…</span></>
+              ) : scanning ? (
+                <><Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400 mt-px shrink-0" />
+                  <span><span className="font-semibold text-white">{activeDiscoveryJobs.length}</span> area{activeDiscoveryJobs.length === 1 ? "" : "s"} running
+                    {total > 0 ? <> · <span className="tabular-nums">{done}/{total}</span> checked</> : null}
+                    {newFound > 0 ? <> · <span className="text-emerald-400 font-semibold">{newFound} fresh</span></> : null}
+                  </span></>
               ) : freshSameBox && scanOutcome?.kind === "success" ? (
                 <><CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-px shrink-0" />
-                  <span><span className="font-semibold text-white">{scanOutcome.found}</span> new-fiber lead{scanOutcome.found === 1 ? "" : "s"} found{scanOutcome.checked ? <span className="text-white/45"> · {scanOutcome.checked} checked</span> : null}</span></>
+                  <span><span className="font-semibold text-emerald-300">YES</span> · <span className="font-semibold text-white">{scanOutcome.found}</span> fresh-fiber lead{scanOutcome.found === 1 ? "" : "s"} found{scanOutcome.checked ? <span className="text-white/45"> · {scanOutcome.checked} checked</span> : null}</span></>
               ) : freshSameBox && scanOutcome?.kind === "empty" ? (
                 <><Radar className="w-3.5 h-3.5 text-white/40 mt-px shrink-0" />
-                  <span>No new fiber yet{scanOutcome.checked ? <> — checked <span className="tabular-nums">{scanOutcome.checked}</span> home{scanOutcome.checked === 1 ? "" : "s"}</> : ""}. Every home here still reads as existing service — worth another pass later.</span></>
+                  <span><span className="font-semibold text-white">NO fresh fiber</span>{scanOutcome.checked ? <> — <span className="tabular-nums">{scanOutcome.checked}</span> home{scanOutcome.checked === 1 ? "" : "s"} checked</> : ""}.</span></>
+              ) : freshSameBox && scanOutcome?.kind === "unverified" ? (
+                <><AlertCircle className="w-3.5 h-3.5 text-amber-400 mt-px shrink-0" />
+                  <span><span className="font-semibold text-amber-300">Couldn’t verify</span> {scanOutcome.unverified ?? 0} home{scanOutcome.unverified === 1 ? "" : "s"}. This is not a “No”—recheck when the provider is available.</span></>
               ) : freshSameBox && scanOutcome?.kind === "known" ? (
                 <><CheckCircle2 className="w-3.5 h-3.5 text-sky-400 mt-px shrink-0" />
                   <span>All {scanOutcome.checked ? <span className="tabular-nums">{scanOutcome.checked}</span> : ""} home{scanOutcome.checked === 1 ? "" : "s"} here are already in your leads.</span></>
@@ -2591,20 +2739,64 @@ export default function MapView() {
               ) : scanStale ? (
                 <><RefreshCw className="w-3.5 h-3.5 text-white/40 mt-px shrink-0" /><span>Area changed — rescan for current results.</span></>
               ) : drawnBBox ? (
-                <><Radar className="w-3.5 h-3.5 text-orange-400 mt-px shrink-0" /><span>Box drawn — choose a scan below.</span></>
+                <><Loader2 className="w-3.5 h-3.5 animate-spin text-orange-400 mt-px shrink-0" /><span>Box captured — starting automatically…</span></>
               ) : (
-                <span>Drag a box over the homes, then scan for new fiber.</span>
+                <span>Drag a box over the homes. Scanning starts automatically.</span>
               )}
             </span>
-            {closeBtn}
+            {!scanning && !scanSubmitting && closeBtn}
           </div>
 
-          {/* ── Progress bar (scanning) ──────────────────────────────────── */}
+          {freshSameBox && scanOutcome?.kind === "error" && drawnBBox && (
+            <button type="button" disabled={scanSubmitting} onClick={() => void startAreaScan(drawnBBox)}
+              className="min-h-11 w-full rounded-xl bg-orange-500 px-4 text-[12px] font-bold text-slate-950 hover:bg-orange-400 disabled:opacity-50">
+              Retry this exact area
+            </button>
+          )}
+
+          {/* Per-job progress: no fake precision during address discovery. */}
           {scanning && (
-            <div className="h-1.5 rounded-full bg-white/10 overflow-hidden"
-              role="progressbar" aria-label="Scan progress" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
-              <div className={`h-full bg-orange-500 rounded-full transition-[width] duration-300 ${total ? "" : "animate-pulse"}`}
-                style={{ width: total ? `${Math.max(4, pct)}%` : "35%" }} />
+            <div className="space-y-2">
+              {activeDiscoveryJobs.map(job => {
+                const resolved = job.checkedCount + job.failedCount;
+                const hasDenominator = job.uniqueCandidateCount > 0 && job.status === "qualifying";
+                const pct = hasDenominator ? Math.min(100, Math.round((resolved / job.uniqueCandidateCount) * 100)) : 0;
+                const duplicates = Math.max(0, job.discoveredCount - job.uniqueCandidateCount);
+                return (
+                  <div key={job.id} className="rounded-xl border border-white/10 bg-black/15 px-2.5 py-2" data-testid={`discovery-job-${job.id}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[11.5px] font-semibold text-white">{job.city ? `${job.city}${job.state ? `, ${job.state}` : ""}` : `Area ${job.id.slice(0, 8)}`}</span>
+                        <span className="block text-[10px] text-white/55">{discoveryStageLabel(job.status)} · {job.coverageStatus || "processing"}</span>
+                      </span>
+                      <span className="text-[10px] tabular-nums text-white/70">{job.checkedCount} checked · <b className="text-emerald-300">{job.qualifiedCount} leads</b></span>
+                      <button type="button" aria-label={`Cancel scan ${job.id.slice(0, 8)}`} onClick={() => void cancelDiscoveryJob(job)}
+                        className="min-h-11 min-w-11 rounded-lg text-red-300 hover:bg-red-500/10 grid place-items-center">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden" role="progressbar" aria-label={`Progress for scan ${job.id}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={hasDenominator ? pct : undefined}>
+                      <div className={`h-full bg-orange-500 rounded-full transition-[width] duration-300 ${hasDenominator ? "" : "animate-pulse"}`}
+                        style={{ width: hasDenominator ? `${Math.max(4, pct)}%` : "35%" }} />
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-2 text-[9.5px] tabular-nums text-white/45">
+                      <span>{job.discoveredCount} raw</span><span>{job.uniqueCandidateCount} unique</span>
+                      {duplicates > 0 && <span>{duplicates} duplicates skipped</span>}
+                      {job.cachedCount > 0 && <span>{job.cachedCount} cached</span>}
+                      {job.failedCount > 0 && <span className="text-amber-300">{job.failedCount} recheck</span>}
+                    </div>
+                    {job.sourceWarnings?.slice(0, 2).map((warning, index) => (
+                      <div key={index} className="mt-1 text-[9.5px] leading-snug text-amber-300">{warning}</div>
+                    ))}
+                  </div>
+                );
+              })}
+              {scanConnectionIssue && (
+                <div className="flex items-start gap-1.5 text-[10.5px] leading-snug text-amber-300" role="status">
+                  <AlertCircle className="mt-px h-3 w-3 shrink-0" />
+                  Connection interrupted. The server scan is still running; reconnecting automatically.
+                </div>
+              )}
             </div>
           )}
 
@@ -2612,69 +2804,15 @@ export default function MapView() {
           {(scanning || (freshSameBox && scanOutcome?.kind === "success" && scanOutcome.found > 0)) && (
             <div className="flex items-center gap-1.5 text-[10.5px] text-white/55">
               <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_5px_rgba(34,197,94,0.9)] shrink-0" aria-hidden="true" />
-              Green dot = new-fiber lead — knock these first
+              Green dot = fresh-fiber lead — knock these first
             </div>
           )}
 
-          {/* ── Action row ───────────────────────────────────────────────── */}
-          {(( drawnBBox && !scanning && !freshSameBox ) || (freshSameBox && drawnBBox) || scanning) && (
-          <div className="flex flex-wrap items-center gap-2">
-            {drawnBBox && !scanning && !freshSameBox && (
-              <>
-                <Button size="sm" variant="outline"
-                  className="border-orange-500/40 text-orange-300 hover:bg-orange-500/10 h-11 text-[12px] px-3 rounded-xl"
-                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
-                  <Radar className="w-3.5 h-3.5 mr-1.5" /> Quick scan · free
-                </Button>
-                <Button size="sm"
-                  disabled={!areaEstimate || areaEstimate.overCap}
-                  className="bg-orange-500 hover:bg-orange-600 text-white h-11 text-[12px] px-3 rounded-xl disabled:opacity-50"
-                  title={areaEstimate?.overCap ? "Box too big — draw a smaller box" : "Full coverage — sweeps the box for brand-new streets"}
-                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true })}>
-                  <Radar className="w-3.5 h-3.5 mr-1.5" />
-                  {areaEstimate ? `Deep · ~${areaEstimate.estAddresses.toLocaleString()} · ${areaEstimate.withinFreeTier ? "free" : "$" + areaEstimate.estCostUsd}` : "Deep scan…"}
-                </Button>
-                {areaEstimate?.overCap && <span className="text-[10px] text-orange-400/70">box too big — draw smaller</span>}
-              </>
-            )}
-            {/* Error recovery: new-construction gap → Deep scan; otherwise Retry */}
-            {freshSameBox && drawnBBox && scanOutcome?.kind === "error" && (
-              scanOutcome.canDeep ? (
-                <Button size="sm" className="bg-orange-500 hover:bg-orange-600 text-white h-11 text-[12px] px-3 rounded-xl"
-                  data-testid="scan-deep-recover"
-                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng, deep: true })}>
-                  <Radar className="w-3.5 h-3.5 mr-1.5" /> Deep scan
-                </Button>
-              ) : (
-                <Button size="sm" variant="outline" className="border-white/20 text-white/80 hover:bg-white/10 h-11 text-[12px] px-3 rounded-xl"
-                  onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
-                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Try again
-                </Button>
-              )
-            )}
-            {/* Fresh non-error result for THIS box → deliberate Rescan only */}
-            {freshSameBox && drawnBBox && scanOutcome?.kind !== "error" && (
-              <Button size="sm" variant="outline" className="border-white/20 text-white/80 hover:bg-white/10 h-11 text-[12px] px-3 rounded-xl"
-                data-testid="scan-rescan"
-                onClick={() => startScan("/api/scan/area", { minLat: drawnBBox.minLat, maxLat: drawnBBox.maxLat, minLng: drawnBBox.minLng, maxLng: drawnBBox.maxLng })}>
-                <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Rescan
-              </Button>
-            )}
-            {scanning && (
-              <Button size="sm" variant="ghost" className="text-red-300 hover:text-red-200 hover:bg-red-500/10 h-11 text-[12px] px-3 rounded-xl ml-auto" onClick={() => stopScan()}>Cancel scan</Button>
-            )}
-          </div>
-          )}
         </div>
         );
       })()}
       {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
 
-      {error && (
-        <div className="glass-surface glass-opaque px-3 py-2 border-red-500/40 text-[11px] text-red-400 flex items-center gap-2">
-          <AlertCircle className="w-3 h-3" /> {error}
-        </div>
-      )}
       {canManage && pendingRequests.length > 0 && (
         <div className="glass-surface glass-opaque border-amber-500/40 overflow-hidden">
           <button className="w-full flex items-center gap-2 px-3 min-h-[44px] text-[11px] font-medium text-amber-400 hover:bg-amber-500/10" onClick={() => setShowTerritoryRequests(v => !v)}>
@@ -2750,7 +2888,7 @@ export default function MapView() {
               not a blank map over a random town. */}
           {mapReady && !isRep && leads.length === 0 && (
             <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6">
-              <div className="glass-surface pointer-events-auto max-w-xs text-center p-6">
+              <div className="glass-surface pointer-events-none max-w-xs text-center p-6">
                 <div className="w-12 h-12 rounded-2xl bg-primary/15 border border-primary/25 flex items-center justify-center mx-auto mb-3">
                   <MapIcon className="w-6 h-6 text-primary" />
                 </div>
@@ -2789,7 +2927,7 @@ export default function MapView() {
                  already loads (server tenant-filters it); admin street "go to"
                  uses the existing geocode fallback. Esc / × / backdrop close it
                  and return focus to the magnifier. ── */}
-          {mapReady && !isRep && searchOpen && (
+          {mapReady && searchOpen && (
             <>
               <div className="absolute inset-0 z-20" onClick={() => { setSearchOpen(false); setSidebarSearch(""); searchBtnRef.current?.focus(); }} />
               <div
@@ -2807,7 +2945,7 @@ export default function MapView() {
                     value={sidebarSearch}
                     onChange={e => setSidebarSearch(e.target.value)}
                     onKeyDown={e => {
-                      if (e.key === "Enter" && isAdmin && sidebarSearch.trim().length >= 3 && searchMatches.length === 0) {
+                      if (e.key === "Enter" && canSubmitScan && sidebarSearch.trim().length >= 3 && searchMatches.length === 0) {
                         e.preventDefault();
                         void jumpToAddress(sidebarSearch);
                       }
@@ -2860,7 +2998,7 @@ export default function MapView() {
                 {sidebarSearch.trim().length >= 3 && searchMatches.length === 0 && (
                   <div className="glass-surface glass-opaque mt-1.5 overflow-hidden">
                     <div className="px-3 py-2.5 text-[12px] text-white/50">No lead in your org matches “{sidebarSearch}”</div>
-                    {isAdmin && (
+                    {canSubmitScan && (
                       <button
                         onClick={() => jumpToAddress(sidebarSearch)}
                         disabled={geocoding}
@@ -3065,7 +3203,7 @@ export default function MapView() {
                   {/* Inline reclaim 3-mode chooser (reuses the same mutation) */}
                   {reclaimMenuId === t.id && !isPool && (
                     <div className="mt-2 w-72 rounded-xl border border-border bg-card p-2 flex flex-col gap-1" data-testid={`panel-reclaim-menu-${t.id}`}>
-                      <button onClick={() => reclaimMutation.mutate({ id: t.id, mode: "return_to_pool" })} className="text-left text-xs text-foreground hover:bg-secondary rounded px-2 py-1.5">↩ Return leads to pool <span className="text-muted-foreground">(default)</span></button>
+                      <button data-testid="reclaim-mode-return_to_pool" onClick={() => reclaimMutation.mutate({ id: t.id, mode: "return_to_pool" })} className="text-left text-xs text-foreground hover:bg-secondary rounded px-2 py-1.5">↩ Return leads to pool <span className="text-muted-foreground">(default)</span></button>
                       <button onClick={() => reclaimMutation.mutate({ id: t.id, mode: "keep_leads" })} className="text-left text-xs text-foreground hover:bg-secondary rounded px-2 py-1.5">Reclaim area only <span className="text-muted-foreground">(keep leads)</span></button>
                       <select defaultValue="" onChange={e => { if (e.target.value) reclaimMutation.mutate({ id: t.id, mode: "reassign", newRepId: Number(e.target.value) }); }} className="bg-secondary border border-border rounded px-2 py-1.5 text-xs text-foreground">
                         <option value="">Reassign to rep…</option>
@@ -3087,7 +3225,7 @@ export default function MapView() {
                  is icon-only while inactive: magnifier · lasso · scan · layers.
                  44px targets, tooltips, aria, keyboard, active/disabled states.
                  The map stays uncluttered; panels open on demand. ── */}
-          {mapReady && !isRep && (
+          {mapReady && (
             <div
               className="absolute top-3 right-3 z-30 flex flex-col items-end"
               style={{ paddingTop: "env(safe-area-inset-top)" }}
@@ -3118,34 +3256,38 @@ export default function MapView() {
                   }}
                 />
               )}
-              {isAdmin && (
+              {canSubmitScan && (
                 <MapIconBtn
                   icon={
-                    scanning ? <Loader2 className="w-5 h-5 animate-spin" />
+                    scanSubmitting ? <Loader2 className="w-5 h-5 animate-spin" />
                     : scanOutcome && !scanStale ? (scanOutcome.kind === "error" ? <AlertCircle className="w-5 h-5" /> : <Radar className="w-5 h-5" />)
                     : <Radar className="w-5 h-5" />
                   }
                   label={
-                    scanning ? "Scanning — tap to stop"
+                    scanSubmitting ? "Submitting scan area"
                     : drawMode ? "Cancel scan-area drawing"
+                    : scanning ? `Draw another scan area — ${activeDiscoveryJobs.length} running`
                     : "Scan an area for new fiber"
                   }
                   testid="ctl-scan"
-                  active={drawMode || scanning || !!drawnBBox}
+                  active={drawMode || scanSubmitting || !!drawnBBox}
                   tone={scanOutcome?.kind === "error" ? "red" : "orange"}
-                  badge={scanning ? "…" : scanOutcome && !scanStale && scanOutcome.kind === "success" ? String(scanOutcome.found) : undefined}
+                  badge={scanning ? String(activeDiscoveryJobs.length) : scanOutcome && !scanStale && scanOutcome.kind === "success" ? String(scanOutcome.found) : undefined}
                   onClick={() => {
-                    if (scanning) { void stopScan(); return; }
+                    if (scanSubmitting) return;
+                    scanSubmissionRef.current = null; autoStartedBoxKeyRef.current = null;
                     setDrawMode(v => !v); setDrawnBBox(null); setScanOutcome(null); clearDrawLayer(); exitLasso(); setSearchOpen(false); setLayersOpen(false);
                   }}
                 />
               )}
-              <div className="glass-hairline mx-1 my-0.5" aria-hidden="true" />
-              <MapIconBtn
-                icon={<Layers className="w-5 h-5" />} label="Map layers & style"
-                testid="ctl-layers" active={layersOpen} btnRef={layersBtnRef} disclosure="menu"
-                onClick={() => { setLayersOpen(o => !o); setSearchOpen(false); }}
-              />
+              {!isRep && <>
+                <div className="glass-hairline mx-1 my-0.5" aria-hidden="true" />
+                <MapIconBtn
+                  icon={<Layers className="w-5 h-5" />} label="Map layers & style"
+                  testid="ctl-layers" active={layersOpen} btnRef={layersBtnRef} disclosure="menu"
+                  onClick={() => { setLayersOpen(o => !o); setSearchOpen(false); }}
+                />
+              </>}
              </div>
 
               {/* Layers popover — a group of switches + basemap radios (NOT a
@@ -3187,6 +3329,11 @@ export default function MapView() {
           {mapReady && (
             <button
               onClick={() => {
+                // This explicit user action starts a new camera intent. Any
+                // search/pan/zoom that follows increments the generation and
+                // invalidates the delayed iOS fallback below.
+                const locateRequestGeneration = cameraGenerationRef.current + 1;
+                cameraGenerationRef.current = locateRequestGeneration;
                 // Primary path: the GeolocateControl enters ACTIVE_LOCK (blue dot +
                 // live follow); each fix then drives the smooth follow-camera in the
                 // geolocate handler, so the map tracks the rep like Apple/Google Maps.
@@ -3208,7 +3355,7 @@ export default function MapView() {
                     // A real fix means the control engaged (we draw our own puck now, so
                     // there is no ".mapboxgl-user-location-dot" to probe). Only recenter
                     // ourselves when it truly stalled — never yank an engaged follow.
-                    if (!m || firstFixSeenRef.current) return;
+                    if (!m || firstFixSeenRef.current || cameraGenerationRef.current !== locateRequestGeneration) return;
                     moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 900, essential: true });
                   }, 1200);
                 }).catch(() => {});
@@ -3353,10 +3500,18 @@ export default function MapView() {
                     return (
                     <div key={t.id} className="mb-1.5 group">
                       <div className="flex items-center gap-2">
-                        <div className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-white/20" style={{ background: color }} />
-                        <span className="text-[11px] truncate text-white/85">{repName}</span>
-                        {status !== "active" && <span className="text-[9px] uppercase tracking-wide text-white/40">{status}</span>}
-                        {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total}</span>}
+                        <button
+                          type="button"
+                          data-testid={`territory-row-${t.id}`}
+                          aria-label={`Open ${t.name} territory details`}
+                          onClick={() => setSelectedTerritoryId(t.id)}
+                          className="flex min-w-0 min-h-11 flex-1 items-center gap-2 rounded-lg px-1 text-left hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400"
+                        >
+                          <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-white/20" style={{ background: color }} />
+                          <span className="text-[11px] truncate text-white/85">{repName}</span>
+                          {status !== "active" && <span className="text-[9px] uppercase tracking-wide text-white/40">{status}</span>}
+                          {prog && <span className="ml-auto text-[10px] text-white/50 tabular-nums">{prog.knocked}/{prog.total}</span>}
+                        </button>
                         {canAssign && isUnassigned && (
                           <button onClick={() => setReclaimMenuId(reclaimMenuId === t.id ? null : t.id)} aria-label={`Assign ${repName}'s area to a rep`}
                             className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-teal-400 w-7 h-7 inline-flex items-center justify-center rounded hover:bg-white/10" data-testid={`assign-${t.id}`}>＋</button>

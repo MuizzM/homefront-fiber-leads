@@ -20,7 +20,7 @@ describe("packed map-pin wire format", () => {
 
   it("rejects unknown versions and malformed rows", () => {
     expect(() => unpackMapPins({ v: 99, total: 0, rows: [] })).toThrow(/Unsupported/);
-    expect(() => unpackMapPins({ v: 1, total: 1, rows: [[1]] })).toThrow(/Invalid map row 0/);
+    expect(() => unpackMapPins({ v: MAP_PINS_WIRE_VERSION, total: 1, rows: [[1]] })).toThrow(/Invalid map row 0/);
   });
 
   it("cuts repeated-key JSON substantially at 5,000 leads", () => {

@@ -18,6 +18,14 @@ export async function mintSession(
   const code = "424242";
   const db = new Database(DB_PATH);
   try {
+    // Keep every E2E spec runnable against a genuinely fresh migrated database.
+    // Production never auto-provisions users; this fixture writes directly to
+    // the isolated test DB before exercising the real OTP verification route.
+    db.prepare(
+      `INSERT INTO users (name, email, role, active, tenant_id, created_at)
+       VALUES (?, ?, 'admin', 1, 1, ?)
+       ON CONFLICT(email) DO UPDATE SET role='admin', active=1, tenant_id=1`
+    ).run("E2E Admin", email.toLowerCase(), new Date().toISOString());
     db.prepare(
       `INSERT INTO otp_codes (email, code, expires_at, used, created_at)
        VALUES (?, ?, ?, 0, ?)`

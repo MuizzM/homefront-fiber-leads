@@ -6,6 +6,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Suspense, lazy, useEffect } from "react";
+import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
 
 // Eager: the shell + the unauthenticated entry point + tiny 404.
 import Layout from "@/pages/Layout";
@@ -41,6 +42,9 @@ const Diagnostics = lazy(() => import("@/pages/Diagnostics"));
 const Governance = lazy(() => import("@/pages/Governance"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
+const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
+const CallingLead = lazy(() => import("@/pages/CallingLead"));
+const CallingCompliance = lazy(() => import("@/pages/CallingCompliance"));
 
 // On-brand fallback shown in the content area (the sidebar shell stays put)
 // while a page chunk loads — never a blank screen.
@@ -66,8 +70,6 @@ function PageLoader() {
   );
 }
 
-type AppRole = "admin" | "manager" | "team_lead" | "rep";
-
 // Super-admin (SaaS tenant management) is gated by identity, not just role.
 // Mirrors the server's SUPER_ADMIN_EMAILS check and the sidebar nav gate.
 const SUPER_ADMIN_EMAIL = "muizzm21@gmail.com";
@@ -85,6 +87,15 @@ function Guard({ role, allowed, children }: {
   return <>{children}</>;
 }
 
+function CapabilityGuard({ role, capability, children }: {
+  role: string | undefined;
+  capability: Capability;
+  children: React.ReactNode;
+}) {
+  if (!can(role, capability)) return <Redirect to="/" />;
+  return <>{children}</>;
+}
+
 function AppRoutes() {
   const { user, isFirstRun, loading } = useAuth();
   const [location] = useHashLocation();
@@ -99,14 +110,19 @@ function AppRoutes() {
       connection?: { saveData?: boolean; effectiveType?: string };
       deviceMemory?: number;
     }).connection;
+    const fieldRole = ["rep", "team_lead", "manager", "admin", "super_admin"].includes(user.role);
     const canWarmMap = !connection?.saveData
       && !["slow-2g", "2g", "3g"].includes(connection?.effectiveType ?? "")
       && ((navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 4) >= 4;
     const warm = () => {
-      import("@/pages/Leads");
-      if (user.role === "rep") import("@/pages/Today");
-      else import("@/pages/Dashboard");
-      if (canWarmMap) import("@/pages/MapView");
+      if (user.role === "calling_rep" || user.role === "calling_manager") import("@/pages/CallingQueue");
+      else if (user.role === "compliance_admin" || user.role === "auditor") import("@/pages/CallingCompliance");
+      else {
+        import("@/pages/Leads");
+        if (user.role === "rep") import("@/pages/Today");
+        else import("@/pages/Dashboard");
+      }
+      if (canWarmMap && fieldRole) import("@/pages/MapView");
     };
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
@@ -149,25 +165,37 @@ function AppRoutes() {
         <Switch>
           {/* ── All roles ── */}
           {/* Reps land on Today (the rep-first home); managers keep the ops Dashboard. */}
-          <Route path="/">{role === "rep" ? <Redirect to="/today" /> : <Dashboard />}</Route>
-          <Route path="/today" component={Today} />
-          <Route path="/followups" component={FollowUps} />
-          <Route path="/lead/:id" component={PropertyDetail} />
-          <Route path="/map" component={MapView} />
-          <Route path="/leads" component={Leads} />
-          <Route path="/leaderboard" component={Leaderboard} />
+          <Route path="/">{role === "rep" ? <Redirect to="/today" />
+            : role === "calling_rep" || role === "calling_manager" ? <Redirect to="/calling" />
+            : role === "compliance_admin" || role === "auditor" ? <Redirect to="/calling/compliance" />
+            : <Dashboard />}</Route>
+          <Route path="/calling/lead/:id">
+            <CapabilityGuard role={role} capability="calling.lead.read"><CallingLead /></CapabilityGuard>
+          </Route>
+          <Route path="/calling/compliance">
+            <CapabilityGuard role={role} capability="calling.compliance.read"><CallingCompliance /></CapabilityGuard>
+          </Route>
+          <Route path="/calling">
+            <CapabilityGuard role={role} capability="calling.queue.read"><CallingQueue /></CapabilityGuard>
+          </Route>
+          <Route path="/today"><CapabilityGuard role={role} capability="field.app.use"><Today /></CapabilityGuard></Route>
+          <Route path="/followups"><CapabilityGuard role={role} capability="field.app.use"><FollowUps /></CapabilityGuard></Route>
+          <Route path="/lead/:id"><CapabilityGuard role={role} capability="field.app.use"><PropertyDetail /></CapabilityGuard></Route>
+          <Route path="/map"><CapabilityGuard role={role} capability="field.app.use"><MapView /></CapabilityGuard></Route>
+          <Route path="/leads"><CapabilityGuard role={role} capability="field.app.use"><Leads /></CapabilityGuard></Route>
+          <Route path="/leaderboard"><CapabilityGuard role={role} capability="field.app.use"><Leaderboard /></CapabilityGuard></Route>
           {/* My Territory removed — everyone knocks + manages via Field Map & Leads */}
           <Route path="/my-territory">
             <Redirect to="/map" />
           </Route>
-          <Route path="/clock" component={ClockIn} />
+          <Route path="/clock"><CapabilityGuard role={role} capability="field.app.use"><ClockIn /></CapabilityGuard></Route>
           {/* Legacy commission bookmarks now land in the role-appropriate,
               authoritative commission workspace. */}
           <Route path="/commissions">
             {role === "rep" ? <Redirect to="/my-commission" /> : <Redirect to="/commission-console" />}
           </Route>
-          <Route path="/my-commission" component={MyCommission} />
-          <Route path="/my-documents" component={MyDocuments} />
+          <Route path="/my-commission"><CapabilityGuard role={role} capability="commission.read.self"><MyCommission /></CapabilityGuard></Route>
+          <Route path="/my-documents"><CapabilityGuard role={role} capability="onboarding.documents.read.self"><MyDocuments /></CapabilityGuard></Route>
           <Route path="/commission-console">
             <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
               <CommissionConsole />

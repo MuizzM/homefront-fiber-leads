@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/lib/auth";
+import { useCan } from "@/lib/capabilities";
 import { useToast } from "@/hooks/use-toast";
 import {
   scanApi, BAND_TINT, usdCompact, freshnessLabel,
@@ -8,9 +9,23 @@ import {
 } from "@/lib/scanApi";
 import {
   Radar, TrendingUp, Activity, X, ChevronRight, Loader2, Pause, Play, Square,
-  Zap, Search, Gauge, CircleDollarSign, Sparkles, MapPinned,
+  Zap, Search, Gauge, CircleDollarSign, Sparkles, MapPinned, Database, RefreshCw,
+  AlertTriangle, CheckCircle2, Upload, SlidersHorizontal, FileSearch, ShieldCheck,
+  Eye, Map as MapIcon, RotateCcw,
 } from "lucide-react";
 import { OpportunityMap } from "@/components/scan/OpportunityMap";
+import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
+import {
+  discoveryApi,
+  discoveryIdempotencyKey,
+  discoveryStageLabel,
+  isActiveDiscoveryJob,
+  type DiscoveryAddressExplanation,
+  type DiscoveryCoverage,
+  type DiscoveryJob,
+  type DiscoverySource,
+  type DiscoveryUpload,
+} from "@/lib/discoveryApi";
 
 // ── Scan Intelligence — the market-discovery cockpit ──────────────────────────
 // One place to answer: where is fresh, unworked fiber opportunity, how confident
@@ -18,11 +33,12 @@ import { OpportunityMap } from "@/components/scan/OpportunityMap";
 // are free (pure DB); a budgeted scan is the ONLY spend and is admin-gated. The
 // product should make an operator feel it sees the market before they do.
 
-type View = "markets" | "opportunity" | "activity";
+type View = "markets" | "opportunity" | "activity" | "discovery";
 
 export default function ScanIntel() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const canManageDiscovery = useCan("scan.manage");
   const [view, setView] = useState<View>("markets");
   const [selected, setSelected] = useState<{ city: string; state: string } | null>(null);
 
@@ -33,7 +49,7 @@ export default function ScanIntel() {
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden bg-background">
-      <ScanHeader view={view} setView={setView} isAdmin={isAdmin} />
+      <ScanHeader view={view} setView={setView} isAdmin={isAdmin} canManageDiscovery={canManageDiscovery} />
       {activeRun && <ActiveRunBanner run={activeRun} isAdmin={isAdmin} onOpen={() => setView("opportunity")} />}
 
       <div className="flex-1 min-h-0 overflow-hidden">
@@ -42,6 +58,7 @@ export default function ScanIntel() {
         )}
         {view === "opportunity" && <OpportunityMap focusCity={selected} onBack={() => setView("markets")} />}
         {view === "activity" && <ActivityView />}
+        {view === "discovery" && canManageDiscovery && <DiscoveryOperations />}
       </div>
 
       {/* Run panel — opens over any view when a market is chosen to scan. */}
@@ -57,11 +74,12 @@ export default function ScanIntel() {
 }
 
 // ── Header + saved-view tabs ──────────────────────────────────────────────────
-function ScanHeader({ view, setView, isAdmin }: { view: View; setView: (v: View) => void; isAdmin: boolean }) {
+function ScanHeader({ view, setView, isAdmin, canManageDiscovery }: { view: View; setView: (v: View) => void; isAdmin: boolean; canManageDiscovery: boolean }) {
   const tabs: Array<{ id: View; label: string; Icon: React.ElementType }> = [
     { id: "markets", label: "Markets", Icon: TrendingUp },
     { id: "opportunity", label: "Opportunity Map", Icon: MapPinned },
     { id: "activity", label: "Activity", Icon: Activity },
+    ...(canManageDiscovery ? [{ id: "discovery" as View, label: "Discovery Ops", Icon: Database }] : []),
   ];
   return (
     <header className="flex-shrink-0 border-b border-border bg-card">
@@ -120,8 +138,8 @@ function ActiveRunBanner({ run, isAdmin, onOpen }: { run: ScanRun; isAdmin: bool
         <div className="flex items-center gap-2 text-[13px]">
           <span className="font-semibold text-foreground truncate">{r.label}</span>
           <span className="text-muted-foreground tabular-nums">{r.verified + r.failed}/{r.budget}</span>
-          <span className="text-primary font-semibold tabular-nums">{r.newFiber} new-fiber</span>
-          {r.newlyLive > 0 && <span className="text-orange-500 font-semibold tabular-nums">· {r.newlyLive} just live</span>}
+          <span className="text-primary font-semibold tabular-nums">{r.newFiber} primary matches</span>
+          {r.newlyLive > 0 && <span className="text-orange-500 font-semibold tabular-nums">· {r.newlyLive} provisional flips</span>}
           <span className="text-muted-foreground tabular-nums ml-auto sm:ml-0">{usdCompact(r.costUsd)}</span>
         </div>
         <div className="h-1.5 rounded-full bg-primary/15 mt-1 overflow-hidden">
@@ -160,7 +178,7 @@ function MarketsView({ isAdmin, onScan, onOpportunity }: { isAdmin: boolean; onS
         <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-5">
           <div className="flex items-stretch rounded-xl border border-border bg-card divide-x divide-border overflow-hidden">
             <MetricCell label="Markets" value={markets.length.toLocaleString()} />
-            <MetricCell label="New fiber" value={totalNewFiber.toLocaleString()} tone="text-emerald-500" />
+            <MetricCell label="Confirmed fresh" value={totalNewFiber.toLocaleString()} tone="text-emerald-500" />
             <MetricCell label="To verify" value={unverified.toLocaleString()} />
             <MetricCell label="Est. opportunity" value={totalOpp.toLocaleString()} />
           </div>
@@ -210,7 +228,7 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
           {/* New-fiber highlight — the whole point of the hunt. */}
           {(m.verifiedNewFiber > 0 || m.newlyLive > 0) && (
             <div className="mt-1.5 inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-semibold text-emerald-500" data-testid={`scan-market-newfiber-${m.city}`}>
-              <Zap className="w-3 h-3" /> {m.verifiedNewFiber.toLocaleString()} new fiber{m.newlyLive > 0 ? ` · ${m.newlyLive} just live` : ""}
+              <Zap className="w-3 h-3" /> {m.verifiedNewFiber.toLocaleString()} confirmed fresh{m.newlyLive > 0 ? ` · ${m.newlyLive} this week` : ""}
             </div>
           )}
         </div>
@@ -389,6 +407,566 @@ function MarketRunPanel({ city, state, isAdmin, onClose, onViewOpportunity }: { 
   );
 }
 
+// ── Discovery operations — durable area-job control plane ───────────────────
+function DiscoveryOperations() {
+  const { user } = useAuth();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const live = useDiscoveryJobs(true);
+  const [section, setSection] = useState<"jobs" | "sources" | "upload">("jobs");
+  const [status, setStatus] = useState("all");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [inspectJobId, setInspectJobId] = useState<string | null>(null);
+  const { data: stored = [], isLoading, refetch } = useQuery({
+    queryKey: ["/api/discovery/jobs"],
+    queryFn: () => discoveryApi.list(),
+    refetchInterval: live.connected ? 15_000 : 5_000,
+    staleTime: 2_000,
+  });
+  const jobs = useMemo(() => {
+    const merged = new Map(stored.map(job => [job.id, job] as const));
+    for (const job of live.jobs) merged.set(job.id, { ...(merged.get(job.id) ?? {}), ...job });
+    return Array.from(merged.values()).sort((a, b) =>
+      Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? ""));
+  }, [stored, live.jobs]);
+  const visible = status === "all" ? jobs : jobs.filter(job => job.status === status);
+  const active = jobs.filter(isActiveDiscoveryJob);
+  const partial = jobs.filter(job => job.status === "partial").length;
+  const failed = jobs.filter(job => job.status === "failed").length;
+  const qualified = jobs.reduce((sum, job) => sum + job.qualifiedCount, 0);
+  const inspectJob = inspectJobId ? jobs.find(job => job.id === inspectJobId) ?? null : null;
+
+  const sourceHealth = useMemo(() => {
+    const sources = new Map<string, { name: string; healthy: number; warning: number; records: number; error?: string | null }>();
+    for (const job of jobs) {
+      for (const source of job.sources ?? []) {
+        const row = sources.get(source.name) ?? { name: source.name, healthy: 0, warning: 0, records: 0 };
+        const healthy = ["healthy", "complete", "running", "ok"].includes(String(source.status).toLowerCase());
+        if (healthy) row.healthy += 1; else row.warning += 1;
+        row.records += Number(source.records) || 0;
+        if (source.errorCode) row.error = source.errorCode;
+        sources.set(source.name, row);
+      }
+    }
+    return Array.from(sources.values()).sort((a, b) => b.records - a.records || a.name.localeCompare(b.name));
+  }, [jobs]);
+
+  const cancel = async (job: DiscoveryJob) => {
+    setBusyId(job.id);
+    try {
+      await live.cancel(job.id);
+      await refetch();
+      toast({ title: "Discovery job cancelled", description: "Completed tiles and leads were preserved." });
+    } catch (error: any) {
+      toast({ title: "Cancel failed", description: String(error?.message ?? error), variant: "destructive" });
+    } finally { setBusyId(null); }
+  };
+
+  const retry = async (job: DiscoveryJob) => {
+    if (!job.geometry) {
+      toast({ title: "This job has no reusable geometry", variant: "destructive" });
+      return;
+    }
+    setBusyId(job.id);
+    try {
+      await live.submit({
+        geometry: job.geometry,
+        city: job.city ?? undefined,
+        state: job.state ?? undefined,
+        // A retry is a new intentional submission, while retries of this POST
+        // remain protected by the one generated request key.
+        idempotencyKey: discoveryIdempotencyKey(job.geometry, user?.tenantId),
+      });
+      await Promise.all([refetch(), qc.invalidateQueries({ queryKey: ["/api/discovery/jobs"] })]);
+      toast({ title: "Retry queued", description: "The same authorized boundary is running as a new job." });
+    } catch (error: any) {
+      toast({ title: "Retry failed", description: String(error?.message ?? error), variant: "destructive" });
+    } finally { setBusyId(null); }
+  };
+
+  return (
+    <div className="h-full overflow-y-auto" data-testid="discovery-operations">
+      <div className="mx-auto max-w-7xl space-y-4 px-3 py-4 sm:px-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold tracking-tight">Address discovery operations</h2>
+            <p className="text-xs text-muted-foreground">Durable jobs, coverage confidence, source health, and safe recovery.</p>
+          </div>
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${live.connected ? "bg-emerald-500/10 text-emerald-500" : "bg-amber-500/10 text-amber-500"}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${live.connected ? "bg-emerald-500" : "bg-amber-500 animate-pulse"}`} />
+            {live.connected ? "Live stream" : "Polling fallback"}
+          </span>
+          <button onClick={() => void Promise.all([live.hydrate(), refetch()])} aria-label="Refresh discovery jobs"
+            className="grid h-11 w-11 place-items-center rounded-xl border border-border hover:bg-secondary">
+            <RefreshCw className={`h-4 w-4 ${live.hydrating || isLoading ? "animate-spin" : ""}`} />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <DiscoveryMetric label="Active / queued" value={active.length} tone="text-primary" />
+          <DiscoveryMetric label="Qualified leads" value={qualified} tone="text-emerald-500" />
+          <DiscoveryMetric label="Partial" value={partial} tone={partial ? "text-amber-500" : undefined} />
+          <DiscoveryMetric label="Failed" value={failed} tone={failed ? "text-rose-500" : undefined} />
+        </div>
+
+        <div className="grid grid-cols-3 rounded-xl bg-secondary/60 p-1" role="tablist" aria-label="Discovery administration">
+          {([
+            ["jobs", "Jobs", Database],
+            ["sources", "Sources", SlidersHorizontal],
+            ["upload", "Import", Upload],
+          ] as const).map(([id, label, Icon]) => (
+            <button key={id} type="button" role="tab" aria-selected={section === id} onClick={() => setSection(id)}
+              className={`flex h-10 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition ${section === id ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}>
+              <Icon className="h-3.5 w-3.5" /> {label}
+            </button>
+          ))}
+        </div>
+
+        {section === "jobs" ? (
+          <>
+            {sourceHealth.length > 0 && (
+              <section className="rounded-xl border border-border bg-card p-3">
+                <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Recent job source health</div>
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {sourceHealth.map(source => (
+                    <div key={source.name} className="min-w-[170px] rounded-xl bg-secondary/50 p-3">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold">
+                        {source.warning ? <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> : <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500" />}
+                        <span className="truncate">{source.name}</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-muted-foreground tabular-nums">{source.records.toLocaleString()} records · {source.warning ? `${source.warning} warning` : "healthy"}</div>
+                      {source.error && <div className="mt-1 truncate text-[10px] text-amber-500">{source.error}</div>}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <div className="flex gap-1.5 overflow-x-auto" role="tablist" aria-label="Filter discovery jobs">
+              {["all", "queued", "discovering", "qualifying", "partial", "completed", "failed", "cancelled"].map(value => (
+                <button key={value} onClick={() => setStatus(value)} role="tab" aria-selected={status === value}
+                  className={`h-9 shrink-0 rounded-full px-3 text-xs font-medium capitalize ${status === value ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}>
+                  {value}
+                </button>
+              ))}
+            </div>
+
+            {visible.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">No discovery jobs in this view.</div>
+            ) : (
+              <div className="space-y-2">
+                {visible.map(job => <DiscoveryJobCard key={job.id} job={job} busy={busyId === job.id}
+                  onInspect={() => setInspectJobId(job.id)} onCancel={() => void cancel(job)} onRetry={() => void retry(job)} />)}
+              </div>
+            )}
+          </>
+        ) : section === "sources" ? (
+          <DiscoverySourcesPanel />
+        ) : (
+          <DiscoveryUploadPanel isAdmin={user?.role === "admin" || user?.role === "super_admin"} />
+        )}
+
+        {inspectJob && (
+          <DiscoveryJobInspector job={inspectJob} onClose={() => setInspectJobId(null)} onChanged={() => void Promise.all([live.hydrate(), refetch()])} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DiscoveryMetric({ label, value, tone }: { label: string; value: number; tone?: string }) {
+  return <div className="rounded-xl border border-border bg-card p-3"><div className={`text-2xl font-bold tabular-nums ${tone ?? "text-foreground"}`}>{value.toLocaleString()}</div><div className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div></div>;
+}
+
+function DiscoveryJobCard({ job, busy, onCancel, onRetry, onInspect }: { job: DiscoveryJob; busy: boolean; onCancel: () => void; onRetry: () => void; onInspect: () => void }) {
+  const active = isActiveDiscoveryJob(job);
+  const resolved = job.checkedCount + job.failedCount;
+  const denominator = Math.max(job.uniqueCandidateCount, resolved);
+  const pct = denominator > 0 ? Math.min(100, Math.round((resolved / denominator) * 100)) : 0;
+  const duplicates = Math.max(0, job.discoveredCount - job.uniqueCandidateCount);
+  const statusTone = job.status === "completed" ? "bg-emerald-500/10 text-emerald-500"
+    : job.status === "partial" ? "bg-amber-500/10 text-amber-500"
+    : job.status === "failed" ? "bg-rose-500/10 text-rose-500"
+    : job.status === "cancelled" ? "bg-secondary text-muted-foreground"
+    : "bg-primary/10 text-primary";
+  return (
+    <article className="rounded-xl border border-border bg-card p-3" data-testid={`discovery-ops-job-${job.id}`}>
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusTone}`}>{discoveryStageLabel(job.status)}</span>
+            <span className="truncate text-sm font-semibold">{job.city ? `${job.city}${job.state ? `, ${job.state}` : ""}` : `Drawn area · ${job.id.slice(0, 8)}`}</span>
+            <span className="text-[10px] text-muted-foreground">{job.coverageStatus || "processing"}</span>
+          </div>
+          <div className="mt-2 grid grid-cols-4 gap-1.5 sm:grid-cols-8">
+            {[
+              ["Raw", job.discoveredCount], ["Unique", job.uniqueCandidateCount], ["Validated", job.validatedCount],
+              ["Checked", job.checkedCount], ["Qualified", job.qualifiedCount], ["Cached", job.cachedCount],
+              ["Duplicates", duplicates], ["Failed", job.failedCount],
+            ].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-secondary/50 px-2 py-1.5"><div className="text-xs font-semibold tabular-nums">{Number(value).toLocaleString()}</div><div className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div></div>)}
+          </div>
+        </div>
+        <div className="flex shrink-0 flex-col gap-1.5">
+          <button onClick={onInspect} className="grid h-11 w-11 place-items-center rounded-lg border border-border hover:bg-secondary" aria-label={`Inspect discovery job ${job.id.slice(0, 8)}`}>
+            <Eye className="h-4 w-4" />
+          </button>
+          {active ? (
+            <button onClick={onCancel} disabled={busy} className="h-9 rounded-lg border border-rose-500/25 px-2 text-[10px] font-semibold text-rose-500 disabled:opacity-50">Cancel</button>
+          ) : (job.status === "partial" || job.status === "failed") && (
+            <button onClick={onRetry} disabled={busy || !job.geometry} className="h-9 rounded-lg border border-border px-2 text-[10px] font-semibold disabled:opacity-50">Retry</button>
+          )}
+        </div>
+      </div>
+      {active && <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-secondary"><div className={`h-full rounded-full bg-primary transition-[width] ${job.status === "discovering" || !denominator ? "w-1/3 animate-pulse" : ""}`} style={job.status === "discovering" || !denominator ? undefined : { width: `${Math.max(3, pct)}%` }} /></div>}
+      {(job.sourceWarnings?.length ?? 0) > 0 && <div className="mt-2 rounded-lg bg-amber-500/5 px-2.5 py-2 text-[11px] text-amber-500">{job.sourceWarnings!.slice(0, 3).join(" · ")}</div>}
+      {job.error && <div className="mt-2 rounded-lg bg-rose-500/5 px-2.5 py-2 text-[11px] text-rose-500">{job.error}</div>}
+    </article>
+  );
+}
+
+function DiscoverySourcesPanel() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [drafts, setDrafts] = useState<Record<string, { enabled: boolean; priority: number }>>({});
+  const [saving, setSaving] = useState<string | null>(null);
+  const { data: sources = [], isLoading, error, refetch } = useQuery({
+    queryKey: ["/api/discovery/sources"],
+    queryFn: discoveryApi.sources,
+    staleTime: 10_000,
+    retry: false,
+  });
+  useEffect(() => {
+    setDrafts(Object.fromEntries(sources.map(source => [source.id, { enabled: source.enabled, priority: source.priority }])));
+  }, [sources]);
+
+  const save = async (source: DiscoverySource) => {
+    const draft = drafts[source.id];
+    if (!draft) return;
+    setSaving(source.id);
+    try {
+      await discoveryApi.configureSource(source.id, draft);
+      await Promise.all([refetch(), qc.invalidateQueries({ queryKey: ["/api/discovery/jobs"] })]);
+      toast({ title: `${source.label} updated`, description: draft.enabled ? `Priority ${draft.priority}` : "Disabled for future jobs" });
+    } catch (saveError: any) {
+      toast({ title: "Source update failed", description: String(saveError?.message ?? saveError), variant: "destructive" });
+    } finally { setSaving(null); }
+  };
+
+  if (isLoading) return <div className="grid min-h-40 place-items-center rounded-xl border border-border bg-card"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>;
+  if (error) return <UnavailablePanel title="Source controls unavailable" error={error} />;
+  if (!sources.length) return <UnavailablePanel title="No address sources are configured" />;
+
+  return (
+    <section className="space-y-2" data-testid="discovery-sources">
+      <div className="rounded-xl border border-border bg-card p-3 text-xs text-muted-foreground">
+        Lower priority numbers run first. Disabling a source affects new jobs only; existing evidence and attribution remain intact.
+      </div>
+      {sources.map(source => {
+        const draft = drafts[source.id] ?? { enabled: source.enabled, priority: source.priority };
+        const changed = draft.enabled !== source.enabled || draft.priority !== source.priority;
+        const degraded = !source.available || source.healthStatus === "degraded" || Boolean(source.circuitOpenUntil);
+        return (
+          <article key={source.id} className="rounded-xl border border-border bg-card p-3">
+            <div className="flex items-start gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="truncate text-sm font-semibold">{source.label}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${source.authoritative ? "bg-sky-500/10 text-sky-500" : source.evidenceOnly ? "bg-violet-500/10 text-violet-500" : "bg-secondary text-muted-foreground"}`}>{source.coverageClass.replaceAll("_", " ")}</span>
+                  <span className={`inline-flex items-center gap-1 text-[10px] ${degraded ? "text-amber-500" : "text-emerald-500"}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${degraded ? "bg-amber-500" : "bg-emerald-500"}`} />
+                    {!source.available ? "not configured" : source.healthStatus}
+                  </span>
+                </div>
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  <span className="tabular-nums">{source.records.toLocaleString()} records · {source.requests.toLocaleString()} requests</span>
+                  {source.licenseUrl ? <> · <a href={source.licenseUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">{source.licenseName}</a></> : <> · {source.licenseName}</>}
+                </div>
+                {source.lastError && <div className="mt-1 text-[10px] text-amber-500">{source.lastError}</div>}
+              </div>
+              <label className="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-xs font-medium">
+                <span>{draft.enabled ? "On" : "Off"}</span>
+                <input type="checkbox" checked={draft.enabled} onChange={event => setDrafts(current => ({ ...current, [source.id]: { ...draft, enabled: event.target.checked } }))}
+                  className="h-5 w-5 accent-primary" aria-label={`Enable ${source.label}`} />
+              </label>
+            </div>
+            <div className="mt-3 flex items-end gap-2">
+              <label className="min-w-0 flex-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Priority
+                <input type="number" min={1} max={999} value={draft.priority}
+                  onChange={event => setDrafts(current => ({ ...current, [source.id]: { ...draft, priority: Math.max(1, Math.min(999, Number(event.target.value) || 1)) } }))}
+                  className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground outline-none focus:ring-2 focus:ring-primary/30" />
+              </label>
+              <button type="button" disabled={!changed || saving === source.id} onClick={() => void save(source)}
+                className="h-11 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-40">
+                {saving === source.id ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
+function DiscoveryUploadPanel({ isAdmin }: { isAdmin: boolean }) {
+  const { toast } = useToast();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [licenseName, setLicenseName] = useState("");
+  const [licenseUrl, setLicenseUrl] = useState("");
+  const [authoritative, setAuthoritative] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [result, setResult] = useState<DiscoveryUpload | null>(null);
+  const [endpointUnavailable, setEndpointUnavailable] = useState(false);
+
+  const selectFile = (next: File | null) => {
+    setResult(null);
+    if (!next) { setFile(null); return; }
+    if (!/\.(csv|json|geojson)$/i.test(next.name)) {
+      toast({ title: "Unsupported file", description: "Choose an authorized CSV, JSON, or GeoJSON address dataset.", variant: "destructive" });
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
+    if (next.size > 10 * 1024 * 1024) {
+      toast({ title: "File is larger than 10 MB", description: "Split it into smaller jurisdiction or county files before importing.", variant: "destructive" });
+      if (inputRef.current) inputRef.current.value = "";
+      return;
+    }
+    setFile(next);
+  };
+
+  const uploadFile = async () => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const upload = await discoveryApi.upload({ file, licenseName: licenseName.trim() || undefined, licenseUrl: licenseUrl.trim() || undefined, authoritative: isAdmin && authoritative });
+      setResult(upload);
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = "";
+      toast({ title: "Address dataset imported", description: `${upload.recordCount.toLocaleString()} records accepted; ${upload.rejectedCount.toLocaleString()} rejected.` });
+    } catch (uploadError: any) {
+      if (uploadError?.status === 404) setEndpointUnavailable(true);
+      toast({ title: "Import failed", description: String(uploadError?.message ?? uploadError), variant: "destructive" });
+    } finally { setUploading(false); }
+  };
+
+  if (endpointUnavailable) return <UnavailablePanel title="Address imports are unavailable in this deployment" />;
+
+  return (
+    <section className="space-y-3" data-testid="discovery-upload">
+      <div className="rounded-xl border border-border bg-card p-4">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary"><Upload className="h-4 w-4" /></div>
+          <div><h3 className="text-sm font-semibold">Import authorized address data</h3><p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">CSV rows and GeoJSON points become source evidence. Importing candidates never creates leads until the normal validation and fiber qualification gates pass.</p></div>
+        </div>
+        <input ref={inputRef} type="file" accept=".csv,.json,.geojson,application/json,text/csv,application/geo+json" onChange={event => selectFile(event.target.files?.[0] ?? null)} className="sr-only" />
+        <button type="button" onClick={() => inputRef.current?.click()} className="mt-4 flex min-h-14 w-full items-center gap-3 rounded-xl border border-dashed border-border px-3 text-left hover:bg-secondary/50">
+          <FileSearch className="h-5 w-5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{file?.name ?? "Choose CSV or GeoJSON"}</span><span className="block text-[10px] text-muted-foreground">UTF-8 · 10 MB maximum · stored per organization</span></span>
+          {file && <span className="text-[10px] tabular-nums text-muted-foreground">{(file.size / 1024).toFixed(0)} KB</span>}
+        </button>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+          <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">License / permission name
+            <input value={licenseName} onChange={event => setLicenseName(event.target.value)} maxLength={120} placeholder="County open-data license"
+              className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-sm normal-case tracking-normal text-foreground outline-none focus:ring-2 focus:ring-primary/30" />
+          </label>
+          <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">License URL
+            <input value={licenseUrl} onChange={event => setLicenseUrl(event.target.value)} maxLength={500} inputMode="url" placeholder="https://data.example.gov/license"
+              className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-sm normal-case tracking-normal text-foreground outline-none focus:ring-2 focus:ring-primary/30" />
+          </label>
+        </div>
+
+        {isAdmin && (
+          <label className="mt-3 flex min-h-11 items-start gap-2 rounded-lg bg-secondary/50 p-3 text-xs">
+            <input type="checkbox" checked={authoritative} onChange={event => setAuthoritative(event.target.checked)} className="mt-0.5 h-4 w-4 accent-primary" />
+            <span><b className="font-semibold">Mark as authoritative</b><span className="mt-0.5 block text-[10px] leading-relaxed text-muted-foreground">Use only for a licensed government address-point, parcel, or E911 source whose coverage and terms you verified.</span></span>
+          </label>
+        )}
+
+        <button type="button" disabled={!file || uploading} onClick={() => void uploadFile()}
+          className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-40">
+          {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ShieldCheck className="h-4 w-4" />} {uploading ? "Validating import…" : "Validate and import"}
+        </button>
+      </div>
+
+      {result && (
+        <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3 text-xs" role="status">
+          <div className="flex items-center gap-2 font-semibold text-emerald-500"><CheckCircle2 className="h-4 w-4" /> Import complete</div>
+          <div className="mt-1 text-muted-foreground"><b className="text-foreground">{result.recordCount.toLocaleString()}</b> accepted · <b className="text-foreground">{result.rejectedCount.toLocaleString()}</b> rejected · {result.filename}</div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DiscoveryJobInspector({ job, onClose, onChanged }: { job: DiscoveryJob; onClose: () => void; onChanged: () => void }) {
+  const { toast } = useToast();
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [evidenceId, setEvidenceId] = useState("");
+  const [evidence, setEvidence] = useState<DiscoveryAddressExplanation | null>(null);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [evidenceLoading, setEvidenceLoading] = useState(false);
+  const { data: coverage, isLoading, error, refetch } = useQuery({
+    queryKey: ["/api/discovery/jobs", job.id, "coverage"],
+    queryFn: () => discoveryApi.coverage(job.id),
+    staleTime: isActiveDiscoveryJob(job) ? 2_000 : 60_000,
+    refetchInterval: isActiveDiscoveryJob(job) ? 5_000 : false,
+    retry: false,
+  });
+  useEffect(() => {
+    closeRef.current?.focus();
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [onClose]);
+
+  const lowCoverage = (coverage?.features ?? []).filter(feature => {
+    const props = feature.properties ?? {};
+    const ratio = props.coverageRatio;
+    return props.status === "failed" || props.status === "partial" || ratio != null && ratio < 0.8
+      || ["partial", "partial_coverage", "sparse", "sparse_source_data", "none", "source_unavailable", "verification_required"].includes(String(props.coverageClass));
+  });
+  const retryIds = lowCoverage.map(feature => String(feature.properties?.tileId ?? feature.id ?? "")).filter(Boolean);
+
+  const retryLowCoverage = async () => {
+    if (!retryIds.length) return;
+    setRetrying(true);
+    try {
+      await discoveryApi.retryTiles(job.id, retryIds);
+      await refetch();
+      onChanged();
+      toast({ title: "Low-coverage tiles queued", description: `${retryIds.length} tile${retryIds.length === 1 ? "" : "s"} will resume without redoing completed tiles.` });
+    } catch (retryError: any) {
+      toast({ title: "Tile retry failed", description: String(retryError?.message ?? retryError), variant: "destructive" });
+    } finally { setRetrying(false); }
+  };
+
+  const loadEvidence = async () => {
+    const id = evidenceId.trim();
+    if (!/^\d+$/.test(id)) { setEvidenceError("Enter a numeric canonical address ID from a discovery or lead event."); return; }
+    setEvidenceLoading(true); setEvidenceError(null); setEvidence(null);
+    try { setEvidence(await discoveryApi.explainAddress(id)); }
+    catch (loadError: any) { setEvidenceError(String(loadError?.message ?? loadError)); }
+    finally { setEvidenceLoading(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[80] bg-black/55 sm:flex sm:items-center sm:justify-center sm:p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
+      <aside role="dialog" aria-modal="true" aria-label={`Discovery job ${job.id}`} className="absolute inset-x-0 bottom-0 flex max-h-[88dvh] flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-2xl sm:relative sm:inset-auto sm:max-h-[85vh] sm:w-full sm:max-w-3xl sm:rounded-2xl">
+        <header className="flex items-start gap-2 border-b border-border px-4 py-3">
+          <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">Coverage & evidence</span><span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">{discoveryStageLabel(job.status)}</span></div><div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{job.id}</div></div>
+          <button ref={closeRef} type="button" onClick={onClose} aria-label="Close job inspector" className="grid h-11 w-11 place-items-center rounded-xl hover:bg-secondary"><X className="h-4 w-4" /></button>
+        </header>
+
+        <div className="space-y-4 overflow-y-auto p-3 sm:p-4">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+            <DiscoveryMetric label="Raw" value={job.discoveredCount} />
+            <DiscoveryMetric label="Unique" value={job.uniqueCandidateCount} />
+            <DiscoveryMetric label="Validated" value={job.validatedCount} />
+            <DiscoveryMetric label="Checked" value={job.checkedCount} />
+            <DiscoveryMetric label="Qualified" value={job.qualifiedCount} tone="text-emerald-500" />
+            <DiscoveryMetric label="Failed" value={job.failedCount} tone={job.failedCount ? "text-amber-500" : undefined} />
+          </div>
+
+          <section className="rounded-xl border border-border bg-card p-3">
+            <div className="mb-2 flex items-center gap-2"><MapIcon className="h-4 w-4 text-primary" /><h3 className="flex-1 text-xs font-semibold uppercase tracking-wide">Coverage by tile</h3>{coverage && <span className="text-[10px] text-muted-foreground">{lowCoverage.length}/{coverage.features.length} need attention</span>}</div>
+            {isLoading ? <div className="grid h-36 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
+              : error ? <UnavailablePanel title="Coverage detail unavailable" error={error} />
+              : coverage && coverage.features.length ? (
+                <>
+                  <CoverageMiniMap coverage={coverage} />
+                  <div className="mt-3 max-h-48 space-y-1.5 overflow-y-auto">
+                    {coverage.features.map(feature => {
+                      const props = feature.properties ?? {};
+                      const ratio = props.coverageRatio;
+                      const attention = lowCoverage.includes(feature);
+                      return <div key={String(feature.id ?? props.tileId)} className={`flex items-center gap-2 rounded-lg px-2.5 py-2 text-[11px] ${attention ? "bg-amber-500/7" : "bg-secondary/50"}`}>
+                        <span className={`h-2 w-2 rounded-full ${attention ? "bg-amber-500" : "bg-emerald-500"}`} />
+                        <span className="min-w-0 flex-1 truncate font-mono">{String(props.tileId ?? feature.id ?? "tile")}</span>
+                        <span className="text-muted-foreground">{props.coverageClass ?? "unknown"}</span>
+                        <span className="w-10 text-right tabular-nums">{ratio == null ? "—" : `${Math.round(ratio * 100)}%`}</span>
+                      </div>;
+                    })}
+                  </div>
+                  {retryIds.length > 0 && !isActiveDiscoveryJob(job) && (
+                    <button type="button" disabled={retrying} onClick={() => void retryLowCoverage()} className="mt-3 flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-amber-500/25 text-xs font-semibold text-amber-500 disabled:opacity-40">
+                      {retrying ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />} Retry {retryIds.length} low-coverage tile{retryIds.length === 1 ? "" : "s"}
+                    </button>
+                  )}
+                </>
+              ) : <div className="rounded-lg bg-secondary/50 p-4 text-center text-xs text-muted-foreground">No tile geometry has been recorded yet.</div>}
+          </section>
+
+          <section className="rounded-xl border border-border bg-card p-3">
+            <div className="flex items-center gap-2"><FileSearch className="h-4 w-4 text-primary" /><h3 className="text-xs font-semibold uppercase tracking-wide">Address provenance</h3></div>
+            <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">Use the canonical address ID shown in a discovery event or lead audit record to inspect every source, coordinate, qualification membership, and license.</p>
+            <div className="mt-2 flex gap-2"><input value={evidenceId} onChange={event => setEvidenceId(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void loadEvidence(); }} inputMode="numeric" placeholder="Canonical address ID" className="h-11 min-w-0 flex-1 rounded-lg border border-border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30" /><button type="button" disabled={evidenceLoading} onClick={() => void loadEvidence()} className="h-11 rounded-lg bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-50">{evidenceLoading ? "Loading…" : "Inspect"}</button></div>
+            {evidenceError && <div className="mt-2 rounded-lg bg-rose-500/5 px-3 py-2 text-[11px] text-rose-500">{evidenceError}</div>}
+            {evidence && <AddressEvidence evidence={evidence} />}
+          </section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function CoverageMiniMap({ coverage }: { coverage: DiscoveryCoverage }) {
+  const polygons = coverage.features.flatMap(feature => {
+    const geometry = feature.geometry;
+    if (!geometry || (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon")) return [];
+    const rings = geometry.type === "Polygon" ? [geometry.coordinates[0]] : geometry.coordinates.map(polygon => polygon[0]);
+    return rings.map(ring => ({ ring, properties: feature.properties }));
+  }).filter(item => item.ring.length > 2);
+  const points = polygons.flatMap(item => item.ring);
+  if (!points.length) return null;
+  const lngs = points.map(point => point[0]);
+  const lats = points.map(point => point[1]);
+  const minLng = Math.min(...lngs), maxLng = Math.max(...lngs), minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const width = Math.max(0.000001, maxLng - minLng), height = Math.max(0.000001, maxLat - minLat);
+  const path = (ring: number[][]) => ring.map((point, index) => {
+    const x = 8 + ((point[0] - minLng) / width) * 304;
+    const y = 8 + ((maxLat - point[1]) / height) * 144;
+    return `${index ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`;
+  }).join(" ") + " Z";
+  const color = (properties: Record<string, any>) => {
+    if (properties.status === "failed" || properties.coverageRatio != null && properties.coverageRatio < 0.5) return "#ef4444";
+    if (properties.status === "partial" || properties.coverageRatio != null && properties.coverageRatio < 0.8) return "#f59e0b";
+    if (properties.coverageRatio == null) return "#64748b";
+    return "#22c55e";
+  };
+  return (
+    <svg viewBox="0 0 320 160" role="img" aria-label="Coverage tile map; green is high coverage, amber is partial, red is sparse or failed" className="h-40 w-full rounded-xl bg-slate-950/95">
+      {polygons.map((item, index) => <path key={index} d={path(item.ring)} fill={color(item.properties)} fillOpacity={0.45} stroke={color(item.properties)} strokeWidth={1.25} vectorEffect="non-scaling-stroke" />)}
+    </svg>
+  );
+}
+
+function AddressEvidence({ evidence }: { evidence: DiscoveryAddressExplanation }) {
+  const address = evidence.address ?? {};
+  const label = address.full_address ?? address.fullAddress ?? address.canonical_address ?? address.canonicalAddress ?? `Address ${address.id ?? ""}`;
+  return (
+    <div className="mt-3 space-y-2" data-testid="address-evidence">
+      <div className="rounded-lg bg-secondary/50 p-3"><div className="text-sm font-semibold">{String(label)}</div><div className="mt-0.5 text-[10px] text-muted-foreground">Coordinate quality: {String(address.coordinate_quality ?? address.coordinateQuality ?? "unknown")} · Confidence: {Number(address.confidence ?? 0).toFixed(2)}</div></div>
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{evidence.evidence.length} source record{evidence.evidence.length === 1 ? "" : "s"}</div>
+      {evidence.evidence.map((item, index) => (
+        <div key={String(item.id ?? index)} className="rounded-lg border border-border px-3 py-2 text-[11px]">
+          <div className="flex items-center gap-2"><b className="min-w-0 flex-1 truncate">{String(item.sourceId ?? item.source ?? "source")}</b>{item.authoritative ? <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[9px] font-semibold text-sky-500">authoritative</span> : null}<span className="tabular-nums text-muted-foreground">{Number(item.confidence ?? 0).toFixed(2)}</span></div>
+          <div className="mt-1 text-[10px] text-muted-foreground">{String(item.evidenceKind ?? item.method ?? (item.inferred ? "inferred" : "observed"))}{item.licenseName ? ` · ${item.licenseName}` : ""}</div>
+        </div>
+      ))}
+      {!evidence.evidence.length && <div className="rounded-lg bg-amber-500/5 p-3 text-[11px] text-amber-500">No retained source evidence was returned for this address.</div>}
+      <div className="grid grid-cols-2 gap-2 text-[10px] text-muted-foreground"><div className="rounded-lg bg-secondary/50 p-2"><b className="block text-xs text-foreground">{evidence.coordinates.length}</b>coordinate observations</div><div className="rounded-lg bg-secondary/50 p-2"><b className="block text-xs text-foreground">{evidence.memberships.length}</b>job / qualification records</div></div>
+    </div>
+  );
+}
+
+function UnavailablePanel({ title, error }: { title: string; error?: unknown }) {
+  const message = error instanceof Error ? error.message : error ? String(error) : null;
+  return <div className="rounded-xl border border-dashed border-border bg-card p-6 text-center"><AlertTriangle className="mx-auto h-5 w-5 text-amber-500" /><div className="mt-2 text-sm font-semibold">{title}</div>{message && <div className="mt-1 break-words text-[11px] text-muted-foreground">{message}</div>}</div>;
+}
+
 // ── Activity view (change feed + run history) ─────────────────────────────────
 function ActivityView() {
   const { data: changes } = useQuery({ queryKey: ["/api/scan/changes"], queryFn: () => scanApi.changes(72), refetchInterval: 20000 });
@@ -402,12 +980,12 @@ function ActivityView() {
           <h2 className="text-[11px] uppercase tracking-wide font-semibold text-muted-foreground flex items-center gap-1.5 mb-2"><Sparkles className="w-3.5 h-3.5 text-orange-500" /> What changed — last 72h</h2>
           {changes && changes.newlyLive.count > 0 ? (
             <div className="rounded-xl border border-orange-500/30 bg-orange-500/5 p-3">
-              <div className="text-[14px] font-semibold text-foreground tabular-nums">{changes.newlyLive.count} addresses just went live</div>
-              <div className="text-[12px] text-muted-foreground"><span className="tabular-nums">{changes.newlyLive.readyToAssign}</span> already turned into leads and ready to assign.</div>
+              <div className="text-[14px] font-semibold text-foreground tabular-nums">{changes.newlyLive.count} current address-level fiber flips</div>
+              <div className="text-[12px] text-muted-foreground"><span className="tabular-nums">{changes.newlyLive.confirmed ?? changes.newlyLive.readyToAssign}</span> cross-verified · <span className="tabular-nums">{changes.newlyLive.provisional ?? 0}</span> provisional.</div>
             </div>
           ) : (
             <div className="rounded-xl border border-border bg-secondary/40 p-4 text-[13px] text-muted-foreground text-center">
-              No new-fiber flips detected yet. Run a rescan on a verified market to hunt for change — newly-live opportunities first observed by HomeFront show up here.
+              No address-level fiber changes detected yet. Rescan a verified market to collect changes; only independently confirmed transitions become operational leads.
             </div>
           )}
         </section>
@@ -449,8 +1027,8 @@ function RunRow({ run }: { run: ScanRun }) {
         </div>
         <div className="text-[11px] text-muted-foreground flex items-center gap-2 flex-wrap mt-1">
           <span className="tabular-nums">{run.verified.toLocaleString()} verified</span>
-          <span className="tabular-nums text-primary font-semibold">{run.newFiber} new-fiber</span>
-          {run.newlyLive > 0 && <span className="tabular-nums text-orange-500">{run.newlyLive} newly live</span>}
+          <span className="tabular-nums text-primary font-semibold">{run.newFiber} primary matches</span>
+          {run.newlyLive > 0 && <span className="tabular-nums text-orange-500">{run.newlyLive} provisional flips</span>}
           {run.failed > 0 && <span className="tabular-nums text-amber-500">{run.failed} failed</span>}
         </div>
       </div>

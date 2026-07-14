@@ -7,8 +7,8 @@ import { join } from "node:path";
  * Zero-Mapbox city discovery — verified against a REAL SQLite DB with a MOCK
  * Kinetic probe (no network, no proxy, no Mapbox, never a real scan). Proves:
  * harvest-as-you-scan grows the pool with df ids; the city↔CNS index targets a
- * city's frontier; every hit is pooled and NEW-FIBER+billing-N hits become
- * tenant-stamped leads; a provider failure is never recorded as a miss; and the
+ * city's frontier; raw NEW-FIBER hits remain evidence rather than becoming
+ * unverified leads; a provider failure is never recorded as a miss; and the
  * adaptive stop halts when we walk out of the city's locality.
  */
 
@@ -67,6 +67,18 @@ beforeAll(async () => {
 beforeEach(() => { rawDb.exec("DELETE FROM scan_targets; DELETE FROM leads; DELETE FROM cns_probes;"); });
 
 describe("upsertScanTargets — Kinetic-native pool", () => {
+  it("fails closed before a CNS provider request when automation is not authorized", async () => {
+    const prior = process.env.KFS_AUTOMATION_AUTHORIZED;
+    delete process.env.KFS_AUTOMATION_AUTHORIZED;
+    try {
+      await expect(cns.probeKineticDfId("MS0000001", "token-that-must-not-be-used"))
+        .resolves.toEqual({ kind: "fail", reason: "unauthorized" });
+    } finally {
+      if (prior == null) delete process.env.KFS_AUTOMATION_AUTHORIZED;
+      else process.env.KFS_AUTOMATION_AUTHORIZED = prior;
+    }
+  });
+
   it("persists df_address_id + provider coords + status on a fresh Kinetic discovery", () => {
     storage.upsertScanTargets([{ address: "1 A St", city: "Charlotte", state: "NC", zip: "28100", lat: 35, lng: -80, source: "kinetic-cns", dfAddressId: "MS0002000", scannedNow: true, fiberStatus: "new_fiber", isNewFiber: true, billingStatus: "N" }]);
     const r = rawDb.prepare("SELECT * FROM scan_targets WHERE address='1 A St'").get() as any;
@@ -97,7 +109,7 @@ describe("planCityDiscovery + runCityDiscovery — zero Mapbox", () => {
     expect(plan.probeDfIds).toHaveLength(0);
   });
 
-  it("targets the city's CNS frontier and pools every hit + creates new-fiber leads (tenant-stamped)", async () => {
+  it("targets the city's CNS frontier and pools every hit without promoting first-seen live baselines", async () => {
     // Band ends at 1999 → frontier starts at 2000, which is the mock's "live" range.
     seedCity("MS", "Charlotte", [1997, 1998, 1999]);
     const before = poolCount();
@@ -112,10 +124,11 @@ describe("planCityDiscovery + runCityDiscovery — zero Mapbox", () => {
     expect(res.newFiber).toBe(res.hits);
     expect(poolCount()).toBeGreaterThan(before);  // pool grew from Kinetic, zero Mapbox
     expect(leadCount("Charlotte")).toBe(res.leadsCreated);
-    expect(res.leadsCreated).toBeGreaterThan(0);
-    // Leads carry the caller's tenant, not the default org.
-    const lead = rawDb.prepare("SELECT tenant_id FROM leads WHERE lower(city)='charlotte' LIMIT 1").get() as any;
-    expect(lead.tenant_id).toBe(TEN);
+    expect(res.leadsCreated).toBe(0);              // no unavailable baseline / no independent evidence
+    const snapshots = rawDb.prepare(`SELECT transition_status,fresh FROM availability_snapshots
+      WHERE tenant_id=? AND transition_status='baseline_available'`).all(TEN) as any[];
+    expect(snapshots.length).toBe(res.hits);
+    expect(snapshots.every((row) => row.fresh === 0)).toBe(true);
   });
 
   it("a provider FAILURE is never recorded as a miss — no pool row, no lead, counted as failure", async () => {

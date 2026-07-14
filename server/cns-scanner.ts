@@ -5,22 +5,25 @@
  *   ENV  — a region code (e.g. "MS" = IN/MI/NC/SC, "PA" = Pennsylvania)
  *   CNS  — a sequential integer control number (their internal address ID)
  *
- * By iterating CNS values for an ENV we can discover addresses that Kinetic
- * just added to its fabric — NEW FIBER builds — before any FCC map, ISP
- * database, or door-to-door operation knows they exist.
+ * With written authorization, bounded CNS probes can collect primary-provider
+ * address observations. A provider NEW FIBER label is evidence, not proof that
+ * an address became serviceable recently.
  *
  * Endpoint used:
  *   POST https://buy.gokinetic.com/api/v2/address/search
  *   Body: { dfAddressId: "<ENV><CNS_ZERO_PADDED>" }
  *
- * When a CNS returns addressCatalogDt within the last 90 days AND
- * householdSegmentType = "NEW FIBER" → this is a brand-new build.
+ * A CNS NEW FIBER response is a primary-source candidate. It becomes a rep lead
+ * only after a persisted unavailable→available transition and independent
+ * address-level fiber evidence pass the shared projector.
  */
 
-import { storage } from "./storage";
 import { proxyFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { canonicalizeAddress } from "@shared/cnsIndex";
+import { persistKineticObservation } from "./kineticObservation";
+import { structuredLog } from "./structuredLog";
+import { assertAutomationAuthorized, providerHeaders } from "./scanner";
 
 // ── ENV Registry — all known Kinetic ENV codes from FiberFocus bundle ─────────
 export interface KineticEnv {
@@ -56,7 +59,8 @@ export interface CnsJob {
   found: CnsResult[];
   scanned: number;
   hits: number;           // addresses found in Kinetic fabric
-  newFiberHits: number;   // NEW FIBER specifically
+  newFiberHits: number;   // raw primary-source NEW FIBER matches
+  confirmedLeads: number; // independently confirmed projector publications
   startedAt: string;
   completedAt?: string;
   estimatedMinutes?: number;
@@ -119,7 +123,7 @@ export function resumeCnsJob(id: string) {
 export type CnsProbe =
   | { kind: "hit"; result: CnsResult }
   | { kind: "miss" }
-  | { kind: "fail"; reason: "token_expired" | "blocked" | "http" | "network" | "malformed" };
+  | { kind: "fail"; reason: "unauthorized" | "token_expired" | "blocked" | "http" | "network" | "malformed" };
 
 export async function probeKineticDfId(dfAddressId: string, token: string, timeoutMs = 8000): Promise<CnsProbe> {
   const parsed = /^([A-Za-z]+)(\d+)$/.exec(dfAddressId);
@@ -128,21 +132,23 @@ export async function probeKineticDfId(dfAddressId: string, token: string, timeo
 
   let res: Response;
   try {
+    assertAutomationAuthorized();
     res = await proxyFetch(KFS_SCAN_URL, {
       method: "POST",
-      headers: {
+      headers: providerHeaders({
         "Content-Type": "application/json",
         "Accept": "application/json",
         "Authorization": `Bearer ${token}`,
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "device-id": "698ca1e5-f077-4a62-a1e7-e97f484c7231",
         "Referer": KFS_REFERER,
         "Origin": KFS_ORIGIN,
-      },
+      }),
       body: JSON.stringify({ dfAddressId }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("KFS_AUTOMATION_NOT_AUTHORIZED")) {
+      return { kind: "fail", reason: "unauthorized" };
+    }
     return { kind: "fail", reason: "network" };
   }
 
@@ -271,41 +277,27 @@ export async function runCnsScan(
         job.hits++;
         job.found.push(result);
 
-        // HARVEST-AS-YOU-SCAN: Kinetic just handed us the full canonical address,
-        // coords, and its df id for free — persist EVERY discovery into the pool
-        // (not just NEW FIBER). This is what makes the pool self-growing from
-        // Kinetic itself, so a city we've CNS-scanned never needs a Mapbox harvest.
+        // HARVEST-AS-YOU-SCAN: persist every CNS hit into the durable observation
+        // model. A raw NEW FIBER hit is not itself a lead: only a proven flip plus
+        // independent evidence can be projected to the rep map.
         try {
-          storage.upsertScanTargets([{
-            address: result.address, city: result.city, state: result.state, zip: result.zip,
-            lat: result.lat, lng: result.lng, source: "kinetic-cns", tenantId: job.tenantId ?? null,
-            dfAddressId: result.dfAddressId, scannedNow: true,
-            fiberStatus: result.isNewFiber ? "new_fiber" : "other",
-            isNewFiber: result.isNewFiber, billingStatus: result.billingStatus,
-          }]);
-        } catch { /* pool write is best-effort — never fail the scan on it */ }
-
-        // A NEW FIBER address with NO current subscriber (billing "N") is the
-        // door-knock target. upsertLeadByAddress DEDUPES by normalized address, so
-        // re-scanning an overlapping range never spawns duplicate leads.
-        if (result.isNewFiber && result.billingStatus === "N") {
-          job.newFiberHits++;
-          try {
-            storage.upsertLeadByAddress({
-              tenantId: job.tenantId ?? undefined,
-              address: result.address, city: result.city, state: result.state, zip: result.zip,
-              lat: result.lat ?? undefined, lng: result.lng ?? undefined,
-              fiberStatus: "new_fiber", isNewFiber: true, isTenured: false,
-              billingStatus: result.billingStatus, householdSegmentType: result.householdSegmentType,
-              techType: result.techType, speedTier: result.speedTier, maxDownloadMbps: result.maxDownloadMbps,
-              competitorName: result.competitorName, addressCatalogDate: result.addressCatalogDate,
-              dfAddressId: result.dfAddressId, leadStatus: "prospect",
-              deploymentNotes: `CNS scan: ENV=${env} CNS=${cns}. Discovered ${result.discoveredAt}.`,
-            } as any);
-          } catch { /* dedup/constraint — skip */ }
-        } else if (result.isNewFiber) {
-          job.newFiberHits++; // counted, but an existing subscriber isn't a lead
+          const persisted = persistKineticObservation({
+            tenantId: job.tenantId,
+            source: "cns-range",
+            observation: {
+              ...result,
+              fiberStatus: result.isNewFiber ? "new_fiber" : "other",
+            },
+          });
+          job.confirmedLeads += persisted.projection.published;
+        } catch (error: any) {
+          structuredLog("cns_range.observation_failed", {
+            tenantId: job.tenantId ?? null,
+            dfAddressId: result.dfAddressId,
+            error: String(error?.message ?? error),
+          }, "warn");
         }
+        if (result.isNewFiber) job.newFiberHits++; // raw primary-source hit only
 
         // Brief pause after a hit (live address found — be respectful)
         await new Promise(r => setTimeout(r, 200));
@@ -377,6 +369,7 @@ export function createCnsJob(
     scanned: 0,
     hits: 0,
     newFiberHits: 0,
+    confirmedLeads: 0,
     startedAt: new Date().toISOString(),
     ratePerMin: 0,
   };

@@ -129,7 +129,7 @@ export function OpportunityMap({ focusCity, onBack }: { focusCity?: { city: stri
             <div className="max-w-xs text-center rounded-2xl bg-black/80 border border-white/10 p-6 text-white">
               <Sparkles className="w-6 h-6 mx-auto mb-2 text-orange-400" />
               <p className="text-sm font-semibold">No opportunity clusters yet</p>
-              <p className="text-xs text-white/60 mt-1.5">Run a scan on a market to verify new fiber — concentrations appear here as deployable areas.</p>
+              <p className="text-xs text-white/60 mt-1.5">Run a market scan to collect evidence — independently confirmed fresh-fiber concentrations appear here as deployable areas.</p>
             </div>
           </div>
         )}

@@ -10,8 +10,8 @@ import { FIELD_OUTCOMES } from "@shared/knock";
  * CONTRACT (v3 lead card, client/src/components/LeadKnockSheet.tsx).
  * Props: { lead, onKnock, onSaveNote, onClose, onPeekHeight? }
  * The card is PHASE-FREE: status-dot header (address hero + copy + ✕ close) →
- * status line (label · relative time) → compact action pills (Directions /
- * Call / Copy) → a FLEX-WRAP grid of current status pills in FIXED order (no
+ * status line (label · relative time) → compact field actions (Directions /
+ * Copy) → a FLEX-WRAP grid of current status pills in FIXED order (no
  * horizontal scroll, no reshuffle) → recent-activity line → collapsible Notes
  * composer → History timeline.
  * Requirements exercised here (testids are the API):
@@ -25,7 +25,7 @@ import { FIELD_OUTCOMES } from "@shared/knock";
  *   - a [knock-status-line] shows the current STATE_LABELS status + relative
  *     time in the status color; a [knock-sheet-close] ✕ fires onClose
  *   - [action-directions] links to Google Maps turn-by-turn (NEVER mapbox —
- *     geocoding billing guardrail); [action-call] renders ONLY with a phone
+ *     geocoding billing guardrail); raw phone data and tel: links never render
  *   - Notes default to a [note-add-chip] that expands to a [knock-note-input]
  *     COMPOSER: starts empty (saved notes live in History), commits on blur or
  *     the Add button, and CLEARS after commit
@@ -210,14 +210,11 @@ describe("<LeadKnockSheet /> — actions, notes, history", () => {
     expect(screen.queryByTestId("action-text")).not.toBeInTheDocument();
   });
 
-  it("Call renders ONLY when the lead has a contactPhone (tel: deep link)", () => {
-    const { unmount } = renderSheet(); // no phone on baseLead
+  it("never renders a raw phone or tel: link in the Field Map card", () => {
+    const { container } = renderSheet({ lead: baseLead({ contactPhone: "+1 555 867 5309" }) });
     expect(screen.queryByTestId("action-call")).not.toBeInTheDocument();
-    unmount();
-
-    renderSheet({ lead: baseLead({ contactPhone: "+1 555 867 5309" }) });
-    const call = screen.getByTestId("action-call");
-    expect(call).toHaveAttribute("href", "tel:+1 555 867 5309");
+    expect(container.querySelector('a[href^="tel:"]')).not.toBeInTheDocument();
+    expect(container).not.toHaveTextContent("555 867 5309");
   });
 
   // Notes default to a slim "+ Add note" chip; the textarea appears on focus.

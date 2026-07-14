@@ -18,13 +18,16 @@ describe("capability matrix — hard permission rules", () => {
   });
 
   it("reps CAN work assigned leads, disposition, note, and read their own results", () => {
-    for (const cap of ["lead.read.assigned", "lead.disposition.update", "lead.note.write",
+    for (const cap of ["field.app.use", "lead.read.assigned", "lead.disposition.update", "lead.note.write",
                         "commission.read.self", "dashboard.read.self"] as Capability[]) {
       expect(can("rep", cap)).toBe(true);
     }
     // ...but NOT the whole org's leads or others' commissions.
     expect(can("rep", "lead.read.all")).toBe(false);
     expect(can("rep", "commission.read.team")).toBe(false);
+    // Field discovery is a normal rep workflow; operational source controls are not.
+    expect(can("rep", "scan.submit")).toBe(true);
+    expect(can("rep", "scan.manage")).toBe(false);
   });
 
   it("team lead CAN assign leads and manage commission structures", () => {
@@ -42,6 +45,7 @@ describe("capability matrix — hard permission rules", () => {
     expect(can("manager", "dashboard.read.org")).toBe(true);
     expect(can("manager", "settings.manage.org")).toBe(false);
     expect(can("manager", "onboarding.documents.manage")).toBe(true);
+    expect(can("manager", "scan.manage")).toBe(true);
     expect(can("team_lead", "onboarding.documents.manage")).toBe(false);
     expect(can("rep", "onboarding.documents.read.self")).toBe(true);
     expect(can("admin", "settings.manage.org")).toBe(true);
@@ -62,6 +66,14 @@ describe("capability matrix — hard permission rules", () => {
     expect(can("intern", "lead.read.assigned" as Capability)).toBe(false);
     expect(capabilitiesFor("nope")).toEqual([]);
   });
+
+  it("keeps calling and oversight identities outside the field application", () => {
+    for (const role of ["calling_rep", "calling_manager", "compliance_admin", "auditor"] as const) {
+      expect(can(role, "field.app.use")).toBe(false);
+      expect(can(role, "lead.note.write")).toBe(false);
+      expect(can(role, "commission.read.self")).toBe(false);
+    }
+  });
 });
 
 describe("capability governance metadata", () => {
@@ -72,6 +84,7 @@ describe("capability governance metadata", () => {
     expect(flat.slice().sort()).toEqual(all.slice().sort());
     expect(new Set(flat).size).toBe(flat.length); // each cap in exactly one group
     expect(groups.map(g => g.domain)).toContain("commissions");
+    expect(groups.map(g => g.domain)).toContain("scanning");
   });
 
   it("'who can do this' returns the right roles for a governed capability", () => {
