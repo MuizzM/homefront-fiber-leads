@@ -1,9 +1,51 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 
-export type KineticLookupKey =
-  | { sequentialId: number; kineticAddressId?: never }
-  | { kineticAddressId: string; sequentialId?: never };
+export const kineticEvidenceModes = [
+  "approved_api",
+  "authorized_public_lookup",
+  "authorized_import",
+  "manual_verification",
+  "offline",
+] as const;
+export type KineticEvidenceMode = (typeof kineticEvidenceModes)[number];
+
+export const kineticPostalAddressSchema = z
+  .object({
+    address: z.string().trim().min(3).max(180),
+    city: z.string().trim().min(1).max(100),
+    state: z
+      .string()
+      .trim()
+      .length(2)
+      .transform((value) => value.toUpperCase()),
+    zip: z
+      .string()
+      .trim()
+      .regex(/^\d{5}(?:-\d{4})?$/),
+    unit: z.string().trim().max(40).nullable().optional(),
+  })
+  .strict();
+export type KineticPostalAddress = z.infer<typeof kineticPostalAddressSchema>;
+
+export const importedKineticEvidenceSchema = kineticPostalAddressSchema
+  .extend({
+    evidenceId: z.string().trim().min(1).max(180).optional(),
+    sourceReference: z.string().trim().min(1).max(240).optional(),
+    observedAt: z.string().datetime({ offset: true }),
+    latitude: z.number().min(-90).max(90).nullable().optional(),
+    longitude: z.number().min(-180).max(180).nullable().optional(),
+    technologyType: z.string().trim().max(100).nullable(),
+    maximumQualification: z.number().nonnegative().nullable().optional(),
+    isLive: z.boolean().nullable(),
+    isComingSoon: z.boolean().nullable().optional(),
+    isCopperUpgradeCandidate: z.boolean().nullable().optional(),
+    sourceName: z.string().trim().min(2).max(100),
+  })
+  .strict();
+export type ImportedKineticEvidence = z.infer<
+  typeof importedKineticEvidenceSchema
+>;
 
 export interface NormalizedKineticAddress {
   kineticAddressId: string | null;
@@ -21,189 +63,266 @@ export interface NormalizedKineticAddress {
   isLive: boolean | null;
   isComingSoon: boolean | null;
   isCopperUpgradeCandidate: boolean | null;
+  evidenceMode: KineticEvidenceMode;
+  evidenceSource: string;
+  evidenceId: string;
+  observedAt: string;
+  parserVersion: string;
   rawResponse: unknown;
   responseHash: string;
 }
 
-export interface KineticProviderAdapter {
-  readonly name: string;
-  ping(signal?: AbortSignal): Promise<{ ok: boolean; latencyMs: number; message: string }>;
-  healthCheck(signal?: AbortSignal): Promise<{ ok: boolean; latencyMs: number; message: string }>;
-  searchAddresses(input: KineticAddressSearchInput, signal?: AbortSignal): Promise<NormalizedKineticAddress[]>;
-  qualifyAddress(key: KineticLookupKey, signal?: AbortSignal): Promise<NormalizedKineticAddress | null>;
-  lookup(key: KineticLookupKey, signal?: AbortSignal): Promise<NormalizedKineticAddress | null>;
+export type KineticAccessOutcome =
+  "ok" | "not_found" | "denied" | "rate_limited" | "challenge" | "error";
+export interface KineticEvidenceResponse {
+  outcome: KineticAccessOutcome;
+  record: NormalizedKineticAddress | null;
+  statusCode?: number;
+  retryAfterMs?: number;
+  message?: string;
 }
 
-export const kineticAddressSearchSchema=z.object({
-  address:z.string().trim().min(3).max(160),city:z.string().trim().min(1).max(100),state:z.string().trim().length(2).transform(value=>value.toUpperCase()),zip:z.string().trim().regex(/^\d{5}(?:-\d{4})?$/).optional(),limit:z.number().int().min(1).max(50).default(10),
-}).strict();
-export type KineticAddressSearchInput=z.infer<typeof kineticAddressSearchSchema>;
-
-const mappingSchema = z.object({
-  root: z.string().default(""),
-  kineticAddressId: z.string().default("kineticAddressId"),
-  sequentialId: z.string().default("sequentialId"),
-  address: z.string().default("address"),
-  city: z.string().default("city"),
-  state: z.string().default("state"),
-  zip: z.string().default("zip"),
-  latitude: z.string().default("latitude"),
-  longitude: z.string().default("longitude"),
-  exchangeId: z.string().default("exchangeId"),
-  technologyType: z.string().default("techType"),
-  maximumQualification: z.string().default("maxQual"),
-  estimatedCompletionDate: z.string().default("estimatedCompletionDate"),
-  isLive: z.string().default("isLive"),
-  isComingSoon: z.string().default("isComingSoon"),
-  isCopperUpgradeCandidate: z.string().default("copperUpgradeCandidate"),
-}).strict();
-
-type Mapping = z.infer<typeof mappingSchema>;
-
-function readPath(input: unknown, path: string): unknown {
-  if (!path) return input;
-  return path.split(".").reduce<unknown>((value, part) => {
-    if (!value || typeof value !== "object") return undefined;
-    return (value as Record<string, unknown>)[part];
-  }, input);
+export interface KineticEvidenceSourceAdapter {
+  readonly id: string;
+  readonly mode: "approved_api" | "authorized_public_lookup";
+  readonly contractVersion: string;
+  healthCheck(
+    signal?: AbortSignal,
+  ): Promise<{ ok: boolean; latencyMs: number; message: string }>;
+  qualifyAddress(
+    address: KineticPostalAddress,
+    signal?: AbortSignal,
+  ): Promise<KineticEvidenceResponse>;
 }
 
-function text(value: unknown): string | null {
-  if (typeof value !== "string" && typeof value !== "number") return null;
-  const normalized = String(value).trim();
-  return normalized || null;
+export class KineticEvidenceUnavailableError extends Error {
+  constructor(
+    public readonly code:
+      | "OFFLINE"
+      | "SOURCE_NOT_REGISTERED"
+      | "CIRCUIT_OPEN"
+      | "ACCESS_DENIED"
+      | "CHALLENGE"
+      | "RATE_LIMITED",
+    message: string,
+  ) {
+    super(message);
+    this.name = "KineticEvidenceUnavailableError";
+  }
 }
 
-function integer(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+export function hashKineticEvidence(value: unknown): string {
+  return crypto
+    .createHash("sha256")
+    .update(JSON.stringify(value) ?? "null")
+    .digest("hex");
 }
 
-function finite(value: unknown): number | null {
-  const parsed = typeof value === "number" ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function directBoolean(value: unknown): boolean | null {
-  if (typeof value === "boolean") return value;
-  if (value === 1 || value === "1" || value === "true") return true;
-  if (value === 0 || value === "0" || value === "false") return false;
-  return null;
-}
-
-function stableHash(value: unknown): string {
-  return crypto.createHash("sha256").update(JSON.stringify(value) ?? "null").digest("hex");
-}
-
-export function normalizeKineticResponse(rawResponse: unknown, mappingInput?: Partial<Mapping>): NormalizedKineticAddress {
-  const mapping = mappingSchema.parse(mappingInput ?? {});
-  const root = readPath(rawResponse, mapping.root);
+export function normalizeImportedKineticEvidence(
+  raw: unknown,
+  mode: "authorized_import" | "manual_verification",
+  parserVersion = "kinetic-evidence-v1",
+): NormalizedKineticAddress {
+  const value = importedKineticEvidenceSchema.parse(raw),
+    responseHash = hashKineticEvidence(raw);
   return {
-    kineticAddressId: text(readPath(root, mapping.kineticAddressId)),
-    sequentialId: integer(readPath(root, mapping.sequentialId)),
-    address: text(readPath(root, mapping.address)),
-    city: text(readPath(root, mapping.city)),
-    state: text(readPath(root, mapping.state))?.toUpperCase() ?? null,
-    zip: text(readPath(root, mapping.zip)),
-    latitude: finite(readPath(root, mapping.latitude)),
-    longitude: finite(readPath(root, mapping.longitude)),
-    exchangeId: text(readPath(root, mapping.exchangeId)),
-    technologyType: text(readPath(root, mapping.technologyType)),
-    maximumQualification: finite(readPath(root, mapping.maximumQualification)),
-    estimatedCompletionDate: text(readPath(root, mapping.estimatedCompletionDate)),
-    isLive: directBoolean(readPath(root, mapping.isLive)),
-    isComingSoon: directBoolean(readPath(root, mapping.isComingSoon)),
-    isCopperUpgradeCandidate: directBoolean(readPath(root, mapping.isCopperUpgradeCandidate)),
-    rawResponse,
-    responseHash: stableHash(rawResponse),
+    kineticAddressId: null,
+    sequentialId: null,
+    address: value.unit ? `${value.address} ${value.unit}` : value.address,
+    city: value.city,
+    state: value.state,
+    zip: value.zip,
+    latitude: value.latitude ?? null,
+    longitude: value.longitude ?? null,
+    exchangeId: null,
+    technologyType: value.technologyType,
+    maximumQualification: value.maximumQualification ?? null,
+    estimatedCompletionDate: null,
+    isLive: value.isLive,
+    isComingSoon: value.isComingSoon ?? null,
+    isCopperUpgradeCandidate: value.isCopperUpgradeCandidate ?? null,
+    evidenceMode: mode,
+    evidenceSource: value.sourceName,
+    evidenceId: value.evidenceId ?? responseHash,
+    observedAt: value.observedAt,
+    parserVersion,
+    rawResponse: raw,
+    responseHash,
   };
 }
 
-function configuredMapping(): Mapping {
-  if (!process.env.KINETIC_RESPONSE_MAPPING_JSON) return mappingSchema.parse({});
-  try {
-    return mappingSchema.parse(JSON.parse(process.env.KINETIC_RESPONSE_MAPPING_JSON));
-  } catch (error) {
-    throw new Error(`KINETIC_RESPONSE_MAPPING_JSON is invalid: ${error instanceof Error ? error.message : String(error)}`);
+interface Circuit {
+  openedUntil: number;
+  rateLimitCount: number;
+  reason: string | null;
+}
+class KineticEvidenceGateway {
+  private adapter: KineticEvidenceSourceAdapter | null = null;
+  private circuit: Circuit = {
+    openedUntil: 0,
+    rateLimitCount: 0,
+    reason: null,
+  };
+  private active = false;
+  private readonly inflight = new Map<
+    string,
+    Promise<KineticEvidenceResponse>
+  >();
+  private readonly cache = new Map<
+    string,
+    { expiresAt: number; value: KineticEvidenceResponse }
+  >();
+
+  register(adapter: KineticEvidenceSourceAdapter): void {
+    this.adapter = adapter;
+    this.reset();
   }
-}
+  clear(): void {
+    this.adapter = null;
+    this.reset();
+  }
+  mode(): KineticEvidenceMode {
+    return this.adapter?.mode ?? "offline";
+  }
+  source(): string {
+    return this.adapter?.id ?? "offline";
+  }
+  supportsLiveQualification(): boolean {
+    return this.adapter != null;
+  }
+  status() {
+    return {
+      mode: this.mode(),
+      source: this.source(),
+      contractVersion: this.adapter?.contractVersion ?? null,
+      supportsLiveQualification: this.supportsLiveQualification(),
+      circuitOpen: this.circuit.openedUntil > Date.now(),
+      circuitReason: this.circuit.reason,
+      circuitReopensAt: this.circuit.openedUntil
+        ? new Date(this.circuit.openedUntil).toISOString()
+        : null,
+      concurrency: 1,
+    };
+  }
+  async healthCheck(signal?: AbortSignal) {
+    if (!this.adapter)
+      return {
+        ok: false,
+        latencyMs: 0,
+        message: "Offline: no permitted live evidence source is registered",
+      };
+    return this.adapter.healthCheck(signal);
+  }
 
-export function normalizeConfiguredKineticResponse(rawResponse: unknown): NormalizedKineticAddress {
-  return normalizeKineticResponse(rawResponse, configuredMapping());
-}
+  async qualifyAddress(
+    input: KineticPostalAddress,
+    signal?: AbortSignal,
+  ): Promise<KineticEvidenceResponse> {
+    const address = kineticPostalAddressSchema.parse(input),
+      key = hashKineticEvidence(address),
+      now = Date.now();
+    if (!this.adapter)
+      throw new KineticEvidenceUnavailableError(
+        "OFFLINE",
+        "No permitted live Kinetic evidence source is registered.",
+      );
+    if (this.circuit.openedUntil > now)
+      throw new KineticEvidenceUnavailableError(
+        "CIRCUIT_OPEN",
+        `Evidence source stopped: ${this.circuit.reason ?? "circuit open"}.`,
+      );
+    const cached = this.cache.get(key);
+    if (cached && cached.expiresAt > now) return cached.value;
+    const pending = this.inflight.get(key);
+    if (pending) return pending;
+    const task = this.runControlled(address, signal).finally(() =>
+      this.inflight.delete(key),
+    );
+    this.inflight.set(key, task);
+    return task;
+  }
 
-function endpointFor(key: KineticLookupKey): string {
-  const template = "sequentialId" in key
-    ? process.env.KINETIC_SEQUENTIAL_ENDPOINT
-    : process.env.KINETIC_ADDRESS_ENDPOINT;
-  if (!template) throw new Error("Kinetic provider endpoint is not configured");
-  const encoded = encodeURIComponent(String("sequentialId" in key ? key.sequentialId : key.kineticAddressId));
-  return template.replace("{id}", encoded).replace("{sequentialId}", encoded).replace("{kineticAddressId}", encoded);
-}
-
-function headers(): Record<string, string> {
-  const result: Record<string, string> = { Accept: "application/json" };
-  if (process.env.KINETIC_API_KEY) result[process.env.KINETIC_API_KEY_HEADER || "Authorization"] =
-    process.env.KINETIC_API_KEY_HEADER ? process.env.KINETIC_API_KEY : `Bearer ${process.env.KINETIC_API_KEY}`;
-  return result;
-}
-
-export class HttpKineticProviderAdapter implements KineticProviderAdapter {
-  readonly name = "kinetic-authorized-http";
-  private readonly mapping = configuredMapping();
-
-  async ping(signal?: AbortSignal): Promise<{ ok: boolean; latencyMs: number; message: string }> {
-    const started = performance.now();
-    const url = process.env.KINETIC_PING_ENDPOINT || process.env.KINETIC_SEQUENTIAL_ENDPOINT;
-    if (!url) return { ok: false, latencyMs: 0, message: "Kinetic provider endpoint is not configured" };
+  private async runControlled(
+    address: KineticPostalAddress,
+    signal?: AbortSignal,
+  ): Promise<KineticEvidenceResponse> {
+    while (this.active) await new Promise((resolve) => setTimeout(resolve, 25));
+    this.active = true;
     try {
-      const response = await fetch(url.replace("{id}", "1").replace("{sequentialId}", "1"), { method: "HEAD", headers: headers(), signal });
-      return { ok: response.ok || response.status === 405, latencyMs: Math.round(performance.now() - started), message: `HTTP ${response.status}` };
-    } catch (error) {
-      return { ok: false, latencyMs: Math.round(performance.now() - started), message: error instanceof Error ? error.message : String(error) };
+      const result = await this.adapter!.qualifyAddress(address, signal);
+      if (result.outcome === "denied") {
+        this.trip("access denied (401/403)", 60 * 60_000);
+        throw new KineticEvidenceUnavailableError(
+          "ACCESS_DENIED",
+          "Evidence source denied automated access; scanning stopped.",
+        );
+      }
+      if (result.outcome === "challenge") {
+        this.trip("challenge or CAPTCHA", 24 * 60 * 60_000);
+        throw new KineticEvidenceUnavailableError(
+          "CHALLENGE",
+          "Challenge/CAPTCHA detected; scanning stopped without interpreting the page.",
+        );
+      }
+      if (result.outcome === "rate_limited") {
+        this.circuit.rateLimitCount++;
+        if (this.circuit.rateLimitCount >= 3)
+          this.trip(
+            "repeated rate limits",
+            Math.max(result.retryAfterMs ?? 0, 30 * 60_000),
+          );
+        throw new KineticEvidenceUnavailableError(
+          "RATE_LIMITED",
+          "Evidence source rate limit respected; no availability result recorded.",
+        );
+      }
+      this.circuit.rateLimitCount = 0;
+      if (result.outcome === "ok" || result.outcome === "not_found")
+        this.cache.set(hashKineticEvidence(address), {
+          expiresAt:
+            Date.now() +
+            Math.max(
+              30_000,
+              Number(process.env.KINETIC_EVIDENCE_CACHE_MS) || 300_000,
+            ),
+          value: result,
+        });
+      return result;
+    } finally {
+      this.active = false;
     }
   }
-
-  healthCheck(signal?:AbortSignal):Promise<{ok:boolean;latencyMs:number;message:string}>{return this.ping(signal);}
-
-  async searchAddresses(input:KineticAddressSearchInput,signal?:AbortSignal):Promise<NormalizedKineticAddress[]>{
-    const parsed=kineticAddressSearchSchema.parse(input),url=process.env.KINETIC_SEARCH_ENDPOINT;
-    if(!url)throw new Error("Kinetic address-search endpoint is not configured");
-    const method=(process.env.KINETIC_SEARCH_METHOD||"POST").toUpperCase();
-    const requestUrl=method==="GET"?`${url}${url.includes("?")?"&":"?"}${new URLSearchParams({address:parsed.address,city:parsed.city,state:parsed.state,...(parsed.zip?{zip:parsed.zip}:{}),limit:String(parsed.limit)})}`:url;
-    const response=await fetch(requestUrl,{method,headers:{...headers(),...(method==="GET"?{}:{"Content-Type":"application/json"})},body:method==="GET"?undefined:JSON.stringify(parsed),signal});
-    if(!response.ok)throw new Error(`Kinetic address search returned HTTP ${response.status}`);
-    const raw=await response.json(),rootPath=process.env.KINETIC_SEARCH_RESULTS_PATH||"results",root=readPath(raw,rootPath);
-    if(!Array.isArray(root))throw new Error(`Kinetic address search response is missing array path ${rootPath}`);
-    return root.slice(0,parsed.limit).map(item=>normalizeKineticResponse(item,this.mapping));
+  private trip(reason: string, durationMs: number) {
+    this.circuit = {
+      openedUntil: Date.now() + durationMs,
+      rateLimitCount: this.circuit.rateLimitCount,
+      reason,
+    };
   }
-
-  qualifyAddress(key:KineticLookupKey,signal?:AbortSignal):Promise<NormalizedKineticAddress|null>{return this.lookup(key,signal);}
-
-  async lookup(key: KineticLookupKey, signal?: AbortSignal): Promise<NormalizedKineticAddress | null> {
-    const url = endpointFor(key);
-    const field = "sequentialId" in key ? (process.env.KINETIC_SEQUENTIAL_REQUEST_FIELD || "sequentialId") : (process.env.KINETIC_ADDRESS_REQUEST_FIELD || "kineticAddressId");
-    const value = "sequentialId" in key ? key.sequentialId : key.kineticAddressId;
-    const method = (process.env.KINETIC_PROVIDER_METHOD || "POST").toUpperCase();
-    const response = await fetch(url, {
-      method,
-      headers: { ...headers(), ...(method === "GET" ? {} : { "Content-Type": "application/json" }) },
-      body: method === "GET" ? undefined : JSON.stringify({ [field]: value }),
-      signal,
-    });
-    if (response.status === 404 || response.status === 204) return null;
-    if (!response.ok) throw new Error(`Kinetic provider returned HTTP ${response.status}`);
-    const raw = await response.json();
-    const normalized = normalizeKineticResponse(raw, this.mapping);
-    if ("sequentialId" in key && normalized.sequentialId == null) normalized.sequentialId = key.sequentialId ?? null;
-    if ("kineticAddressId" in key && normalized.kineticAddressId == null) normalized.kineticAddressId = key.kineticAddressId ?? null;
-    return normalized;
+  private reset() {
+    this.circuit = { openedUntil: 0, rateLimitCount: 0, reason: null };
+    this.inflight.clear();
+    this.cache.clear();
+    this.active = false;
   }
 }
 
-let adapter: KineticProviderAdapter = new HttpKineticProviderAdapter();
-export function getKineticProviderAdapter(): KineticProviderAdapter { return adapter; }
-export function setKineticProviderAdapterForTest(value: KineticProviderAdapter): void {
-  if (process.env.NODE_ENV !== "test") throw new Error("Kinetic provider overrides are test-only");
-  adapter = value;
+const gateway = new KineticEvidenceGateway();
+export function getKineticEvidenceGateway(): KineticEvidenceGateway {
+  return gateway;
+}
+export function registerKineticEvidenceSource(
+  adapter: KineticEvidenceSourceAdapter,
+): void {
+  gateway.register(adapter);
+}
+export function clearKineticEvidenceSource(): void {
+  gateway.clear();
+}
+export function setKineticEvidenceSourceForTest(
+  adapter: KineticEvidenceSourceAdapter | null,
+): void {
+  if (process.env.NODE_ENV !== "test")
+    throw new Error("Kinetic evidence source overrides are test-only");
+  adapter ? gateway.register(adapter) : gateway.clear();
 }

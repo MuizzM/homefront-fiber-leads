@@ -7,20 +7,46 @@ import KineticScanner from "./KineticScanner";
 // One Scanner hub — City / USA / Nightly tabs replace three separate nav pages.
 export type ScannerTab = "city" | "usa" | "kinetic";
 
-const TABS: { id: ScannerTab; label: string; hint: string; Icon: React.ElementType }[] = [
-  { id: "city", label: "City Scan",    hint: "Fresh fiber: Yes, No, or Recheck",   Icon: Radar },
-  { id: "usa",  label: "USA Batch",    hint: "Run the same verdict across cities", Icon: Globe },
-  { id: "kinetic", label: "Kinetic Scanner", hint: "Sequential Kinetic operations command center", Icon: ScanSearch },
+const TABS: {
+  id: ScannerTab;
+  label: string;
+  hint: string;
+  Icon: React.ElementType;
+}[] = [
+  {
+    id: "city",
+    label: "City Scan",
+    hint: "Fresh fiber: Yes, No, or Recheck",
+    Icon: Radar,
+  },
+  {
+    id: "usa",
+    label: "USA Batch",
+    hint: "Run the same verdict across cities",
+    Icon: Globe,
+  },
+  {
+    id: "kinetic",
+    label: "Kinetic Scanner",
+    hint: "Evidence-backed availability command center",
+    Icon: ScanSearch,
+  },
 ];
 
-export default function Scanners({ initialTab = "city" }: { initialTab?: ScannerTab }) {
+export default function Scanners({
+  initialTab = "city",
+}: {
+  initialTab?: ScannerTab;
+}) {
   const [tab, setTab] = useState<ScannerTab>(initialTab);
 
   return (
     <div className="flex flex-col h-full min-h-0 overflow-hidden">
       {/* Launcher — entry cards for each scan tool */}
       <div className="flex-shrink-0 border-b border-border bg-card px-4 pt-5 pb-4 sm:px-6">
-        <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Scanners</div>
+        <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
+          Scanners
+        </div>
         <h1 className="mt-1 text-lg font-semibold tracking-tight text-foreground">
           Choose a scan tool
         </h1>

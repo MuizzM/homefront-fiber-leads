@@ -1,42 +1,1105 @@
-import { useMemo,useState } from "react";
-import { useMutation,useQuery,useQueryClient } from "@tanstack/react-query";
-import { Activity,AlertTriangle,Database,Download,Gauge,History,Loader2,Map as MapIcon,Pause,Play,Radio,RefreshCw,Search,Square,Users,Zap } from "lucide-react";
-import { kineticScannerApi,type KineticAddress } from "@/lib/kineticScannerApi";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  Activity,
+  AlertTriangle,
+  Database,
+  Download,
+  FileCheck2,
+  Gauge,
+  History,
+  Loader2,
+  Map as MapIcon,
+  Radio,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Upload,
+  Users,
+  Zap,
+} from "lucide-react";
+import {
+  kineticScannerApi,
+  type KineticAddress,
+} from "@/lib/kineticScannerApi";
 import { KineticScannerMap } from "@/components/kinetic/KineticScannerMap";
 import { useToast } from "@/hooks/use-toast";
 
-type Tab="dashboard"|"addresses"|"map"|"hotspots"|"changes"|"jobs";
-const tabs:[Tab,string,React.ElementType][]=[["dashboard","Dashboard",Gauge],["addresses","Addresses",Database],["map","Map",MapIcon],["hotspots","Hotspots",Zap],["changes","Changes",History],["jobs","Scan Jobs",Activity]];
-const fmt=(value:unknown)=>Number(value??0).toLocaleString();
-function staleSeconds(value?:string|null){if(!value)return null;return Math.max(0,Math.floor((Date.now()-new Date(value).getTime())/1000));}
-function badge(address:KineticAddress){if(address.discoveryState==="VERIFIED_FRESH")return["Verified Fresh","bg-emerald-400/20 text-emerald-200"];if(address.discoveryState==="CANDIDATE_FRESH")return["Fresh Candidate","bg-violet-500/15 text-violet-300"];if(address.discoveryState==="BASELINE_FIBER")return["Fiber Baseline","bg-sky-500/15 text-sky-300"];if(address.discoveryState==="REGRESSED")return["Regressed","bg-red-500/15 text-red-300"];if(address.isLive)return["Live Fiber","bg-[#00A94F]/15 text-[#35d77e]"];if(address.isComingSoon)return["Coming Soon","bg-violet-500/15 text-violet-300"];if(address.isCopperUpgradeCandidate)return["Copper Upgrade","bg-amber-500/15 text-amber-300"];return["Observed","bg-slate-500/15 text-slate-300"];}
-
-export default function KineticScanner(){
-  const[tab,setTab]=useState<Tab>("dashboard"),[selected,setSelected]=useState<number|null>(null);
-  const{data:ping}=useQuery({queryKey:["kinetic-ping"],queryFn:kineticScannerApi.ping,refetchInterval:30_000});
-  return <div className="min-h-full bg-[radial-gradient(circle_at_top_right,rgba(0,169,79,.13),transparent_38%)] px-3 py-4 sm:px-6">
-    <div className="mx-auto max-w-7xl space-y-4">
-      <header className="overflow-hidden rounded-2xl border border-emerald-900/60 bg-[#071A11] text-white shadow-xl shadow-emerald-950/10">
-        <div className="flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6"><div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#00A94F]"><Radio className="h-5 w-5"/></div><div><h1 className="text-xl font-semibold tracking-tight">Kinetic Scanner</h1><p className="text-xs text-emerald-100/60">Sequential address intelligence · Kinetic by Windstream</p></div><div className={`ml-auto flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-semibold ${ping?.ok?"border-emerald-400/20 bg-emerald-400/10 text-emerald-300":"border-red-400/20 bg-red-400/10 text-red-300"}`}><i className={`h-2 w-2 rounded-full ${ping?.ok?"bg-[#00A94F]":"bg-red-500"}`}/>{ping?.ok?`Provider online · ${ping.latencyMs}ms`:"Provider not configured"}</div></div>
-        <nav className="flex overflow-x-auto border-t border-emerald-900/50 px-2" aria-label="Kinetic Scanner sections">{tabs.map(([id,label,Icon])=><button key={id} onClick={()=>setTab(id)} className={`flex h-12 shrink-0 items-center gap-2 border-b-2 px-3 text-xs font-semibold ${tab===id?"border-[#00A94F] text-white":"border-transparent text-emerald-100/55 hover:text-white"}`}><Icon className="h-3.5 w-3.5"/>{label}</button>)}</nav>
-      </header>
-      {tab==="dashboard"&&<Dashboard onAddresses={()=>setTab("addresses")}/>} {tab==="addresses"&&<Addresses onOpen={setSelected}/>} {tab==="map"&&<KineticScannerMap onOpen={setSelected}/>} {tab==="hotspots"&&<Hotspots/>} {tab==="changes"&&<Changes/>} {tab==="jobs"&&<Jobs/>}
-    </div>{selected!=null&&<AddressDrawer id={selected} onClose={()=>setSelected(null)}/>}</div>;
+type Tab =
+  | "dashboard"
+  | "evidence"
+  | "addresses"
+  | "map"
+  | "hotspots"
+  | "changes"
+  | "jobs";
+const tabs: [Tab, string, React.ElementType][] = [
+  ["dashboard", "Dashboard", Gauge],
+  ["evidence", "Evidence", ShieldCheck],
+  ["addresses", "Addresses", Database],
+  ["map", "Map", MapIcon],
+  ["hotspots", "Hotspots", Zap],
+  ["changes", "Changes", History],
+  ["jobs", "Jobs", Activity],
+];
+const fmt = (value: unknown) => Number(value ?? 0).toLocaleString();
+function staleSeconds(value?: string | null) {
+  if (!value) return null;
+  return Math.max(
+    0,
+    Math.floor((Date.now() - new Date(value).getTime()) / 1000),
+  );
+}
+function badge(address: KineticAddress) {
+  if (address.discoveryState === "VERIFIED_FRESH")
+    return ["Verified Fresh", "bg-emerald-400/20 text-emerald-200"];
+  if (address.discoveryState === "CANDIDATE_FRESH")
+    return ["Fresh Candidate", "bg-violet-500/15 text-violet-300"];
+  if (address.discoveryState === "BASELINE_FIBER")
+    return ["Fiber Baseline", "bg-sky-500/15 text-sky-300"];
+  if (address.discoveryState === "REGRESSED")
+    return ["Regressed", "bg-red-500/15 text-red-300"];
+  if (address.isLive) return ["Live Fiber", "bg-[#00A94F]/15 text-[#35d77e]"];
+  if (address.isComingSoon)
+    return ["Coming Soon", "bg-violet-500/15 text-violet-300"];
+  if (address.isCopperUpgradeCandidate)
+    return ["Copper Upgrade", "bg-amber-500/15 text-amber-300"];
+  return ["Observed", "bg-slate-500/15 text-slate-300"];
 }
 
-function Dashboard({onAddresses}:{onAddresses:()=>void}){const qc=useQueryClient(),{toast}=useToast();const{data:state}=useQuery({queryKey:["kinetic-state"],queryFn:kineticScannerApi.state,refetchInterval:5_000});const{data:stats}=useQuery({queryKey:["kinetic-stats"],queryFn:kineticScannerApi.stats,refetchInterval:15_000});const[start,setStart]=useState(1),[end,setEnd]=useState(1000);const run=useMutation({mutationFn:()=>kineticScannerApi.startScan(start,end),onSuccess:()=>{qc.invalidateQueries({queryKey:["kinetic-state"]});toast({title:"Kinetic scan started",description:`Sequential IDs ${start.toLocaleString()}–${end.toLocaleString()}`})},onError:(e:any)=>toast({title:"Scan could not start",description:e.message,variant:"destructive"})});const control=async(action:"pause"|"resume"|"stop"|"start")=>{if(action==="start")return;await kineticScannerApi.controlScan(action);qc.invalidateQueries({queryKey:["kinetic-state"]})};const scan=state?.scanWorker,recheck=state?.recheckWorker,stale=staleSeconds(scan?.lastHeartbeat);
-  return <div className="space-y-4">{scan?.status==="running"&&stale!=null&&stale>120&&<div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0"/>Scanner may have stalled. Last heartbeat was {stale} seconds ago.</div>}
-    <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">{[["Total Addresses",stats?.totalAddresses,Database],["Verified Fresh",stats?.verifiedFresh,Zap],["Fresh Candidates",stats?.candidateFresh,RefreshCw],["Errors This Cycle",stats?.errorsThisCycle,AlertTriangle]].map(([label,value,Icon]:any)=><button key={label} onClick={label==="Total Addresses"?onAddresses:undefined} className="rounded-2xl border border-border bg-card p-4 text-left shadow-sm"><div className="flex items-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground"><Icon className="mr-2 h-3.5 w-3.5 text-[#00A94F]"/>{label}</div><div className="mt-3 text-2xl font-bold tabular-nums">{fmt(value)}</div>{label==="Verified Fresh"&&<div className="mt-1 text-[9px] text-muted-foreground">Repeat-confirmed transition</div>}</button>)}</section>
-    <section className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]"><Worker title="Scan Worker" worker={scan} current={state?.currentSequentialId} upper={state?.upperLimit} onControl={control}/><Worker title="Recheck Worker" worker={recheck} onControl={async action=>{if(action==="stop")await kineticScannerApi.stopRecheck();else if(!recheck||["stopped","completed","failed"].includes(recheck.status))await kineticScannerApi.startRecheck();qc.invalidateQueries({queryKey:["kinetic-state"]})}}/></section>
-    <section className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center gap-2"><Play className="h-4 w-4 text-[#00A94F]"/><h2 className="text-sm font-semibold">Start Sequential Scan</h2></div><p className="mt-1 text-xs text-muted-foreground">Run one bounded inclusive range. Checkpoints are durable and resume after process restarts.</p><div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]"><NumberField label="Start Sequential ID" value={start} set={setStart}/><NumberField label="End Sequential ID" value={end} set={setEnd}/><button onClick={()=>run.mutate()} disabled={run.isPending||scan?.status==="running"} className="mt-auto h-11 rounded-xl bg-[#00A94F] px-5 text-xs font-bold text-white disabled:opacity-50">{run.isPending?<Loader2 className="mx-auto h-4 w-4 animate-spin"/>:"Start Scan"}</button></div></section>
-    <Diagnostics state={state}/></div>;
+export default function KineticScanner() {
+  const [tab, setTab] = useState<Tab>("dashboard"),
+    [selected, setSelected] = useState<number | null>(null);
+  const { data: ping } = useQuery({
+    queryKey: ["kinetic-ping"],
+    queryFn: kineticScannerApi.ping,
+    refetchInterval: 30_000,
+  });
+  return (
+    <div className="min-h-full bg-[radial-gradient(circle_at_top_right,rgba(0,169,79,.13),transparent_38%)] px-3 py-4 sm:px-6">
+      <div className="mx-auto max-w-7xl space-y-4">
+        <header className="overflow-hidden rounded-2xl border border-emerald-900/60 bg-[#071A11] text-white shadow-xl shadow-emerald-950/10">
+          <div className="flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
+            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#00A94F]">
+              <Radio className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold tracking-tight">
+                Kinetic Evidence Scanner
+              </h1>
+              <p className="text-xs text-emerald-100/60">
+                Evidence-backed serviceability intelligence · no assumed private
+                API
+              </p>
+            </div>
+            <div
+              className={`ml-auto flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-semibold ${ping?.ok ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-amber-400/20 bg-amber-400/10 text-amber-200"}`}
+            >
+              <i
+                className={`h-2 w-2 rounded-full ${ping?.ok ? "bg-[#00A94F]" : "bg-amber-400"}`}
+              />
+              {ping?.ok
+                ? `${ping.source} · ${ping.latencyMs}ms`
+                : `${String(ping?.mode ?? "offline").replaceAll("_", " ")} · safe`}
+            </div>
+          </div>
+          <nav
+            className="flex overflow-x-auto border-t border-emerald-900/50 px-2"
+            aria-label="Kinetic Scanner sections"
+          >
+            {tabs.map(([id, label, Icon]) => (
+              <button
+                key={id}
+                onClick={() => setTab(id)}
+                className={`flex h-12 shrink-0 items-center gap-2 border-b-2 px-3 text-xs font-semibold ${tab === id ? "border-[#00A94F] text-white" : "border-transparent text-emerald-100/55 hover:text-white"}`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </button>
+            ))}
+          </nav>
+        </header>
+        {tab === "dashboard" && (
+          <Dashboard
+            onAddresses={() => setTab("addresses")}
+            onEvidence={() => setTab("evidence")}
+          />
+        )}{" "}
+        {tab === "evidence" && <EvidenceCenter />}{" "}
+        {tab === "addresses" && <Addresses onOpen={setSelected} />}{" "}
+        {tab === "map" && <KineticScannerMap onOpen={setSelected} />}{" "}
+        {tab === "hotspots" && <Hotspots />} {tab === "changes" && <Changes />}{" "}
+        {tab === "jobs" && <Jobs />}
+      </div>
+      {selected != null && (
+        <AddressDrawer id={selected} onClose={() => setSelected(null)} />
+      )}
+    </div>
+  );
 }
-function NumberField({label,value,set}:{label:string;value:number;set:(n:number)=>void}){return <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}<input type="number" min={0} value={value} onChange={e=>set(Math.max(0,Number(e.target.value)||0))} className="mt-1.5 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono text-sm text-foreground outline-none focus:border-[#00A94F]"/></label>}
-function Worker({title,worker,current,upper,onControl}:{title:string;worker:any;current?:number;upper?:number;onControl:(a:"pause"|"resume"|"stop"|"start")=>void}){const running=worker?.status==="running",paused=worker?.status==="paused",progress=worker?.endSequentialId==null?0:Math.min(100,Math.round(100*worker.checked/Math.max(1,worker.endSequentialId-worker.startSequentialId+1)));return <article className="rounded-2xl border border-emerald-900/50 bg-[#071A11] p-4 text-white"><div className="flex items-center"><Radio className={`h-4 w-4 ${running?"animate-pulse text-amber-400":"text-emerald-400"}`}/><h2 className="ml-2 text-sm font-semibold">{title}</h2><span className={`ml-auto rounded-full px-2 py-1 text-[9px] font-bold uppercase ${running?"bg-amber-500/15 text-amber-300":paused?"bg-violet-500/15 text-violet-300":"bg-white/5 text-white/50"}`}>{worker?.status??"stopped"}</span></div><div className="mt-4 text-[9px] uppercase tracking-wider text-emerald-100/50">{title==="Scan Worker"?"Current Sequential ID":"Recheck Checked"}</div><div className="mt-1 font-mono text-2xl font-bold text-[#35d77e]">{fmt(title==="Scan Worker"?(worker?.currentSequentialId??current):(worker?.checked??0))}</div>{upper!=null&&<div className="mt-1 text-[10px] text-white/45">Upper Limit <span className="font-mono">{fmt(upper)}</span></div>}<div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10"><div className="h-full rounded-full bg-[#00A94F] transition-all" style={{width:`${Math.max(running?2:0,progress)}%`}}/></div><div className="mt-4 grid grid-cols-4 gap-1">{[["Checked",worker?.checked],["Found",worker?.found],["Live",worker?.live],["Errors",worker?.errors]].map(([label,value])=><div key={label as string} className="rounded-lg bg-white/5 p-2"><div className="text-sm font-bold">{fmt(value)}</div><div className="text-[8px] uppercase text-white/40">{label}</div></div>)}</div><div className="mt-4 flex gap-2">{title==="Scan Worker"?(<><button onClick={()=>onControl(paused?"resume":"pause")} disabled={!running&&!paused} className="h-10 flex-1 rounded-xl border border-white/10 text-xs font-semibold disabled:opacity-30">{paused?<Play className="mr-1 inline h-3.5 w-3.5"/>:<Pause className="mr-1 inline h-3.5 w-3.5"/>}{paused?"Resume":"Pause"}</button><button onClick={()=>onControl("stop")} disabled={!running&&!paused} className="h-10 rounded-xl border border-red-500/20 px-4 text-xs font-semibold text-red-300 disabled:opacity-30"><Square className="mr-1 inline h-3.5 w-3.5"/>Stop</button></>):(<button onClick={()=>onControl(running?"stop":"start")} className={`h-10 w-full rounded-xl text-xs font-bold ${running?"border border-red-500/20 text-red-300":"bg-[#00A94F] text-white"}`}>{running?"Stop Recheck":"Start Recheck"}</button>)}</div></article>}
-function Diagnostics({state}:{state:any}){const values=[["Checks per Second",state?.checksPerSecond??0],["Concurrency",state?.concurrency??1],["Heap Usage",state?.memory?.heapUsedMb!=null?`${state.memory.heapUsedMb} MB`:"—"],["RSS Memory",state?.memory?.rssMb!=null?`${state.memory.rssMb} MB`:"—"],["Last Heartbeat",state?.scanWorker?.lastHeartbeat?new Date(state.scanWorker.lastHeartbeat).toLocaleTimeString():"—"]];return <section className="rounded-2xl border border-border bg-card p-4"><h2 className="text-sm font-semibold">Runtime diagnostics</h2><div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">{values.map(([label,value])=><div key={label as string} className="rounded-xl bg-secondary/50 p-3"><div className="text-sm font-bold tabular-nums">{value}</div><div className="mt-1 text-[8px] uppercase tracking-wider text-muted-foreground">{label}</div></div>)}</div></section>}
 
-function Addresses({onOpen}:{onOpen:(id:number)=>void}){const[search,setSearch]=useState(""),[state,setState]=useState(""),[filter,setFilter]=useState("all"),[page,setPage]=useState(1);const params=useMemo(()=>{const p=new URLSearchParams({page:String(page),limit:"50"});if(search)p.set("search",search);if(state)p.set("state",state);if(filter==="live")p.set("liveOnly","true");if(filter==="coming")p.set("comingSoonOnly","true");if(filter==="copper")p.set("copperUpgradeCandidateOnly","true");return p},[search,state,filter,page]);const{data,isLoading}=useQuery({queryKey:["kinetic-addresses",params.toString()],queryFn:()=>kineticScannerApi.addresses(params)});return <section className="overflow-hidden rounded-2xl border border-border bg-card"><div className="flex flex-wrap gap-2 border-b border-border p-3"><label className="relative min-w-48 flex-1"><Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"/><input value={search} onChange={e=>{setSearch(e.target.value);setPage(1)}} placeholder="Address or Kinetic Address ID" className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-xs"/></label><input value={state} maxLength={2} onChange={e=>{setState(e.target.value.toUpperCase());setPage(1)}} placeholder="State" className="h-10 w-20 rounded-xl border border-border bg-background px-3 text-xs uppercase"/><select value={filter} onChange={e=>{setFilter(e.target.value);setPage(1)}} className="h-10 rounded-xl border border-border bg-background px-3 text-xs"><option value="all">All statuses</option><option value="live">Live only</option><option value="coming">Coming Soon only</option><option value="copper">Copper Upgrade Candidate only</option></select><button onClick={()=>void kineticScannerApi.downloadExport()} className="h-10 rounded-xl border border-border px-3 text-xs font-semibold"><Download className="mr-1 inline h-3.5 w-3.5"/>Export</button></div>{isLoading?<div className="grid h-64 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-[#00A94F]"/></div>:<><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-left text-xs"><thead className="bg-secondary/50 text-[9px] uppercase tracking-wider text-muted-foreground"><tr>{["Sequential ID","Kinetic Address ID","Address","Technology","Qualification","Status","Last checked",""].map(h=><th key={h} className="px-3 py-3">{h}</th>)}</tr></thead><tbody>{data?.items.map(a=>{const[label,tone]=badge(a);return <tr key={a.id} className="border-t border-border hover:bg-secondary/25"><td className="px-3 py-3 font-mono font-semibold">{a.sequentialId??"—"}</td><td className="px-3 py-3 font-mono text-[10px]">{a.kineticAddressId??"—"}</td><td className="px-3 py-3"><div className="font-semibold">{a.address??"Address unavailable"}</div><div className="text-[10px] text-muted-foreground">{[a.city,a.state,a.zip].filter(Boolean).join(", ")}</div></td><td className="px-3 py-3">{a.technologyType??"—"}</td><td className="px-3 py-3">{a.maximumQualification??"—"}</td><td className="px-3 py-3"><span className={`rounded-full px-2 py-1 text-[9px] font-bold ${tone}`}>{label}</span></td><td className="px-3 py-3 text-[10px] text-muted-foreground">{a.lastChecked?new Date(a.lastChecked).toLocaleString():"—"}</td><td className="px-3 py-3"><button onClick={()=>onOpen(a.id)} className="h-9 rounded-lg border border-border px-3 font-semibold">Details</button></td></tr>})}</tbody></table></div><div className="flex items-center justify-between border-t border-border p-3 text-xs text-muted-foreground"><span>{fmt(data?.total)} addresses · 50 per page</span><div className="flex gap-2"><button disabled={page<=1} onClick={()=>setPage(p=>p-1)} className="h-9 rounded-lg border border-border px-3 disabled:opacity-30">Previous</button><span className="grid h-9 place-items-center px-2">{page} / {data?.pages??1}</span><button disabled={page>=(data?.pages??1)} onClick={()=>setPage(p=>p+1)} className="h-9 rounded-lg border border-border px-3 disabled:opacity-30">Next</button></div></div></>}</section>}
-function Hotspots(){const{data,isLoading}=useQuery({queryKey:["kinetic-hotspots"],queryFn:kineticScannerApi.hotspots});if(isLoading)return <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin"/>;return <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">{data?.hotspots?.map((h:any,i:number)=><article key={`${h.city}-${h.zip}-${i}`} className="rounded-2xl border border-border bg-card p-4"><div className="text-sm font-semibold">{h.city||"Unknown city"}, {h.state} {h.zip}</div><div className="mt-3 grid grid-cols-3 gap-2">{[["Addresses",h.addressCount],["Live",h.liveCount],["Copper",h.copperUpgradeCount]].map(([l,v])=><div key={l as string} className="rounded-lg bg-secondary/50 p-2"><b>{fmt(v)}</b><div className="text-[8px] uppercase text-muted-foreground">{l}</div></div>)}</div></article>)}</div>}
-function Changes(){const{data,isLoading}=useQuery({queryKey:["kinetic-changes"],queryFn:kineticScannerApi.changes,refetchInterval:15_000});if(isLoading)return <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin"/>;return <section className="space-y-2">{data?.items?.map((c:any)=><article key={c.id} className="rounded-xl border border-border bg-card p-3"><div className="flex items-center gap-2"><span className="rounded-full bg-[#00A94F]/10 px-2 py-1 text-[9px] font-bold text-[#00A94F]">{c.fieldName}</span><span className="ml-auto text-[9px] text-muted-foreground">{new Date(c.changedAt).toLocaleString()}</span></div><div className="mt-2 text-xs font-semibold">{c.address||c.kineticAddressId}</div><div className="mt-1 font-mono text-[10px] text-muted-foreground">{c.previousValue??"unknown"} → {c.currentValue??"unknown"}</div></article>)}</section>}
-function Jobs(){const{data}=useQuery({queryKey:["kinetic-state"],queryFn:kineticScannerApi.state,refetchInterval:5000});return <section className="space-y-2">{data?.jobs?.map((j:any)=><article key={j.id} className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center gap-2"><span className="rounded-full bg-[#00A94F]/10 px-2 py-1 text-[9px] font-bold uppercase text-[#00A94F]">{j.workerType}</span><code className="text-[10px]">{j.id}</code><span className="ml-auto text-xs capitalize">{j.status}</span></div><div className="mt-3 font-mono text-sm">{j.workerType==="scan"?`${fmt(j.startSequentialId)} → ${fmt(j.endSequentialId)}`:`${fmt(j.checked)} addresses rechecked`}</div><div className="mt-2 text-[10px] text-muted-foreground">{fmt(j.checked)} checked · {fmt(j.found)} found · {fmt(j.errors)} errors</div></article>)}</section>}
-function AddressDrawer({id,onClose}:{id:number;onClose:()=>void}){const qc=useQueryClient(),{toast}=useToast(),{data,isLoading}=useQuery({queryKey:["kinetic-detail",id],queryFn:()=>kineticScannerApi.detail(id)});const act=async(type:"recheck"|"contacts"|"convert")=>{try{if(type==="recheck")await kineticScannerApi.recheck(id);if(type==="contacts")await kineticScannerApi.refreshContacts(id);if(type==="convert")await kineticScannerApi.convert(id);await qc.invalidateQueries({queryKey:["kinetic-detail",id]});toast({title:type==="convert"?"Converted to lead":type==="contacts"?"Contacts refreshed":"Recheck queued"})}catch(e:any){toast({title:"Action failed",description:e.message,variant:"destructive"})}};return <div className="fixed inset-0 z-50 bg-black/60" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><aside className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-emerald-900/60 bg-[#071A11] p-4 text-white shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none"><div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20 sm:hidden"/><button onClick={onClose} className="float-right h-10 rounded-xl border border-white/10 px-3 text-xs">Close</button>{isLoading?<Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin text-[#00A94F]"/>:<><div className="pr-16"><div className="text-[9px] uppercase tracking-wider text-emerald-200/50">Kinetic Address ID</div><div className="mt-1 break-all font-mono text-sm text-[#35d77e]">{data?.address?.kineticAddressId??"Not returned"}</div><h2 className="mt-4 text-xl font-semibold">{data?.address?.address??"Address unavailable"}</h2><p className="text-xs text-white/50">{[data?.address?.city,data?.address?.state,data?.address?.zip].filter(Boolean).join(", ")}</p></div><div className="mt-5 grid grid-cols-2 gap-2">{[["Sequential ID",data?.address?.sequentialId],["Exchange ID",data?.address?.exchangeId],["Technology",data?.address?.technologyType],["Max qualification",data?.address?.maximumQualification]].map(([l,v])=><div key={l as string} className="rounded-xl bg-white/5 p-3"><div className="text-[8px] uppercase text-white/40">{l}</div><div className="mt-1 font-mono text-xs font-semibold">{v??"—"}</div></div>)}</div><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={()=>void act("recheck")} className="h-11 rounded-xl border border-white/10 text-xs font-bold">Queue recheck</button><button onClick={()=>void act("contacts")} className="h-11 rounded-xl border border-white/10 text-xs font-bold"><Users className="mr-1 inline h-3.5 w-3.5"/>Refresh contacts</button><button onClick={()=>void act("convert")} className="col-span-2 h-11 rounded-xl bg-[#00A94F] text-xs font-bold">Convert to lead</button></div><h3 className="mt-6 text-xs font-semibold uppercase tracking-wider text-white/50">Evidence</h3><div className="mt-2 space-y-2">{data?.observations?.map((o:any)=><details key={o.id} className="rounded-xl border border-white/10 bg-white/5 p-3"><summary className="cursor-pointer text-xs">{new Date(o.observedAt).toLocaleString()} · <span className="font-mono text-[9px]">{o.responseHash.slice(0,12)}</span></summary><pre className="mt-3 max-h-60 overflow-auto whitespace-pre-wrap break-all text-[9px] text-white/55">{JSON.stringify(o.rawResponse,null,2)}</pre></details>)}</div></>}</aside></div>}
+function Dashboard({
+  onAddresses,
+  onEvidence,
+}: {
+  onAddresses: () => void;
+  onEvidence: () => void;
+}) {
+  const qc = useQueryClient(),
+    { toast } = useToast();
+  const { data: state } = useQuery({
+    queryKey: ["kinetic-state"],
+    queryFn: kineticScannerApi.state,
+    refetchInterval: 5_000,
+  });
+  const { data: stats } = useQuery({
+    queryKey: ["kinetic-stats"],
+    queryFn: kineticScannerApi.stats,
+    refetchInterval: 15_000,
+  });
+  const { data: evidence } = useQuery({
+    queryKey: ["kinetic-evidence-config"],
+    queryFn: kineticScannerApi.evidenceConfig,
+  });
+  const recheck = state?.recheckWorker,
+    stale = staleSeconds(recheck?.lastHeartbeat);
+  return (
+    <div className="space-y-4">
+      {recheck?.status === "running" && stale != null && stale > 120 && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          Recheck worker may have stalled. Last heartbeat was {stale} seconds
+          ago.
+        </div>
+      )}
+      <section className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        {[
+          ["Total Addresses", stats?.totalAddresses, Database],
+          ["Verified Fresh", stats?.verifiedFresh, Zap],
+          ["Fresh Candidates", stats?.candidateFresh, RefreshCw],
+          ["Errors This Cycle", stats?.errorsThisCycle, AlertTriangle],
+        ].map(([label, value, Icon]: any) => (
+          <button
+            key={label}
+            onClick={label === "Total Addresses" ? onAddresses : undefined}
+            className="rounded-2xl border border-border bg-card p-4 text-left shadow-sm"
+          >
+            <div className="flex items-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <Icon className="mr-2 h-3.5 w-3.5 text-[#00A94F]" />
+              {label}
+            </div>
+            <div className="mt-3 text-2xl font-bold tabular-nums">
+              {fmt(value)}
+            </div>
+            {label === "Verified Fresh" && (
+              <div className="mt-1 text-[9px] text-muted-foreground">
+                Repeat-confirmed transition
+              </div>
+            )}
+          </button>
+        ))}
+      </section>
+      <section className="grid gap-4 lg:grid-cols-[1fr_.8fr]">
+        <article className="rounded-2xl border border-emerald-900/50 bg-[#071A11] p-5 text-white">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-[#35d77e]" />
+            <h2 className="text-sm font-semibold">Evidence posture</h2>
+            <span className="ml-auto rounded-full bg-amber-400/10 px-2 py-1 text-[9px] font-bold uppercase text-amber-200">
+              {String(evidence?.configured?.mode ?? "offline").replaceAll(
+                "_",
+                " ",
+              )}
+            </span>
+          </div>
+          <p className="mt-3 text-xs leading-5 text-emerald-100/60">
+            No private Kinetic API is assumed. Import approved evidence or
+            record a manual verification. Live qualification remains off until a
+            permitted adapter and exact contract are registered.
+          </p>
+          <button
+            onClick={onEvidence}
+            className="mt-4 h-11 w-full rounded-xl bg-[#00A94F] text-xs font-bold"
+          >
+            Manage evidence sources
+          </button>
+        </article>
+        <Worker
+          title="Recheck Worker"
+          worker={recheck}
+          onControl={async (action) => {
+            try {
+              if (action === "stop") await kineticScannerApi.stopRecheck();
+              else if (
+                !recheck ||
+                ["stopped", "completed", "failed"].includes(recheck.status)
+              )
+                await kineticScannerApi.startRecheck();
+              qc.invalidateQueries({ queryKey: ["kinetic-state"] });
+            } catch (error: any) {
+              toast({
+                title: "Recheck unavailable",
+                description: error.message,
+                variant: "destructive",
+              });
+            }
+          }}
+        />
+      </section>
+      <Diagnostics state={state} />
+    </div>
+  );
+}
+function Worker({
+  title,
+  worker,
+  onControl,
+}: {
+  title: string;
+  worker: any;
+  onControl: (a: "stop" | "start") => void;
+}) {
+  const running = worker?.status === "running";
+  return (
+    <article className="rounded-2xl border border-emerald-900/50 bg-[#071A11] p-4 text-white">
+      <div className="flex items-center">
+        <Radio
+          className={`h-4 w-4 ${running ? "animate-pulse text-amber-400" : "text-emerald-400"}`}
+        />
+        <h2 className="ml-2 text-sm font-semibold">{title}</h2>
+        <span
+          className={`ml-auto rounded-full px-2 py-1 text-[9px] font-bold uppercase ${running ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-white/50"}`}
+        >
+          {worker?.status ?? "stopped"}
+        </span>
+      </div>
+      <div className="mt-4 text-[9px] uppercase tracking-wider text-emerald-100/50">
+        Recheck Checked
+      </div>
+      <div className="mt-1 font-mono text-2xl font-bold text-[#35d77e]">
+        {fmt(worker?.checked ?? 0)}
+      </div>
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div
+          className={`h-full rounded-full bg-[#00A94F] ${running ? "w-full animate-pulse" : "w-0"}`}
+        />
+      </div>
+      <div className="mt-4 grid grid-cols-4 gap-1">
+        {[
+          ["Checked", worker?.checked],
+          ["Found", worker?.found],
+          ["Live", worker?.live],
+          ["Errors", worker?.errors],
+        ].map(([label, value]) => (
+          <div key={label as string} className="rounded-lg bg-white/5 p-2">
+            <div className="text-sm font-bold">{fmt(value)}</div>
+            <div className="text-[8px] uppercase text-white/40">{label}</div>
+          </div>
+        ))}
+      </div>
+      <div className="mt-4 flex gap-2">
+        <button
+          onClick={() => onControl(running ? "stop" : "start")}
+          className={`h-10 w-full rounded-xl text-xs font-bold ${running ? "border border-red-500/20 text-red-300" : "bg-[#00A94F] text-white"}`}
+        >
+          {running ? "Stop Recheck" : "Start Recheck"}
+        </button>
+      </div>
+    </article>
+  );
+}
+function Diagnostics({ state }: { state: any }) {
+  const values = [
+    ["Checks per Second", state?.checksPerSecond ?? 0],
+    ["Concurrency", state?.concurrency ?? 1],
+    [
+      "Heap Usage",
+      state?.memory?.heapUsedMb != null ? `${state.memory.heapUsedMb} MB` : "—",
+    ],
+    [
+      "RSS Memory",
+      state?.memory?.rssMb != null ? `${state.memory.rssMb} MB` : "—",
+    ],
+    [
+      "Last Heartbeat",
+      state?.recheckWorker?.lastHeartbeat
+        ? new Date(state.recheckWorker.lastHeartbeat).toLocaleTimeString()
+        : "—",
+    ],
+  ];
+  return (
+    <section className="rounded-2xl border border-border bg-card p-4">
+      <h2 className="text-sm font-semibold">Runtime diagnostics</h2>
+      <div className="mt-3 grid grid-cols-2 gap-2 md:grid-cols-5">
+        {values.map(([label, value]) => (
+          <div key={label as string} className="rounded-xl bg-secondary/50 p-3">
+            <div className="text-sm font-bold tabular-nums">{value}</div>
+            <div className="mt-1 text-[8px] uppercase tracking-wider text-muted-foreground">
+              {label}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function EvidenceCenter() {
+  const qc = useQueryClient(),
+    { toast } = useToast(),
+    [mode, setMode] = useState("offline"),
+    [confirmed, setConfirmed] = useState(false),
+    [sourceName, setSourceName] = useState(""),
+    [format, setFormat] = useState<"json" | "csv">("json"),
+    [content, setContent] = useState(""),
+    [manual, setManual] = useState({
+      address: "",
+      city: "",
+      state: "NC",
+      zip: "",
+      technologyType: "",
+      isLive: "unknown",
+      reviewerNote: "",
+    });
+  const { data: config } = useQuery({
+    queryKey: ["kinetic-evidence-config"],
+    queryFn: kineticScannerApi.evidenceConfig,
+  });
+  const { data: imports } = useQuery({
+    queryKey: ["kinetic-imports"],
+    queryFn: kineticScannerApi.imports,
+  });
+  useEffect(() => {
+    const configured = config?.configured;
+    if (!configured) return;
+    setMode(configured.mode ?? "offline");
+    setSourceName(configured.sourceName ?? "");
+    setConfirmed(Boolean(configured.publicUseConfirmed));
+  }, [config?.configured]);
+  const save = useMutation({
+    mutationFn: () =>
+      kineticScannerApi.setEvidenceConfig({
+        mode,
+        sourceName: sourceName || null,
+        publicUseConfirmed: mode === "authorized_public_lookup" && confirmed,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["kinetic-evidence-config"] });
+      toast({ title: "Evidence mode updated" });
+    },
+    onError: (error: any) =>
+      toast({
+        title: "Mode not updated",
+        description: error.message,
+        variant: "destructive",
+      }),
+  });
+  const upload = useMutation({
+    mutationFn: () => {
+      if (!sourceName.trim())
+        throw new Error("Approved source name is required");
+      if (format === "json") {
+        const records = JSON.parse(content);
+        if (!Array.isArray(records))
+          throw new Error("JSON import must be an array");
+        return kineticScannerApi.importEvidence({
+          format,
+          sourceName: sourceName.trim(),
+          records,
+        });
+      }
+      return kineticScannerApi.importEvidence({
+        format,
+        sourceName: sourceName.trim(),
+        content,
+      });
+    },
+    onSuccess: (summary: any) => {
+      qc.invalidateQueries({ queryKey: ["kinetic-imports"] });
+      qc.invalidateQueries({ queryKey: ["kinetic-addresses"] });
+      qc.invalidateQueries({ queryKey: ["kinetic-scanner-map"] });
+      setContent("");
+      toast({
+        title: "Evidence import complete",
+        description: `${summary.accepted} accepted · ${summary.rejected} rejected · ${summary.replays} replayed`,
+      });
+    },
+    onError: (error: any) =>
+      toast({
+        title: "Import rejected",
+        description: error.message,
+        variant: "destructive",
+      }),
+  });
+  const verify = useMutation({
+    mutationFn: () =>
+      kineticScannerApi.manualVerification({
+        address: manual.address,
+        city: manual.city,
+        state: manual.state,
+        zip: manual.zip,
+        unit: null,
+        observedAt: new Date().toISOString(),
+        latitude: null,
+        longitude: null,
+        technologyType: manual.technologyType || null,
+        maximumQualification: null,
+        isLive: manual.isLive === "unknown" ? null : manual.isLive === "true",
+        isComingSoon: null,
+        isCopperUpgradeCandidate: null,
+        reviewerNote: manual.reviewerNote,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["kinetic-addresses"] });
+      qc.invalidateQueries({ queryKey: ["kinetic-scanner-map"] });
+      setManual({
+        address: "",
+        city: "",
+        state: "NC",
+        zip: "",
+        technologyType: "",
+        isLive: "unknown",
+        reviewerNote: "",
+      });
+      toast({ title: "Manual evidence recorded" });
+    },
+    onError: (error: any) =>
+      toast({
+        title: "Verification rejected",
+        description: error.message,
+        variant: "destructive",
+      }),
+  });
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <section className="rounded-2xl border border-border bg-card p-4 lg:col-span-2">
+        <div className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4 text-[#00A94F]" />
+          <h2 className="text-sm font-semibold">Evidence source policy</h2>
+          <span className="ml-auto rounded-full bg-secondary px-2 py-1 text-[9px] font-bold uppercase">
+            Active:{" "}
+            {String(config?.configured?.mode ?? "offline").replaceAll("_", " ")}
+          </span>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-muted-foreground">
+          A mode is policy, not proof that a source exists. Approved API and
+          public lookup remain inactive unless a reviewed adapter is registered
+          server-side. Public lookup additionally requires explicit
+          administrator confirmation.
+        </p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+          <select
+            value={mode}
+            onChange={(event) => setMode(event.target.value)}
+            className="h-11 rounded-xl border border-border bg-background px-3 text-xs"
+          >
+            <option value="offline">Offline</option>
+            <option value="authorized_import">Authorized import</option>
+            <option value="manual_verification">Manual verification</option>
+            <option value="approved_api">Approved API</option>
+            <option value="authorized_public_lookup">
+              Authorized public lookup
+            </option>
+          </select>
+          <input
+            value={sourceName}
+            onChange={(event) => setSourceName(event.target.value)}
+            aria-label="Evidence source name"
+            placeholder="Approved source name"
+            className="h-11 rounded-xl border border-border bg-background px-3 text-xs"
+          />
+          <button
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            className="h-11 rounded-xl bg-[#00A94F] px-5 text-xs font-bold text-white disabled:opacity-50"
+          >
+            Save mode
+          </button>
+        </div>
+        {mode === "authorized_public_lookup" && (
+          <label className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs">
+            <input
+              type="checkbox"
+              checked={confirmed}
+              onChange={(event) => setConfirmed(event.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              I confirm the exact public request contract and intended automated
+              use have been reviewed and are permitted. The scanner must stop on
+              denial, CAPTCHA, challenge, or repeated rate limits.
+            </span>
+          </label>
+        )}
+      </section>
+      <section className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center gap-2">
+          <Upload className="h-4 w-4 text-[#00A94F]" />
+          <h2 className="text-sm font-semibold">Approved evidence import</h2>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Upload explicit CSV or JSON evidence. Unknown fields and malformed
+          records are rejected; valid records are hashed and deduplicated.
+        </p>
+        <div className="mt-4 grid grid-cols-[1fr_auto] gap-2">
+          <input
+            value={sourceName}
+            onChange={(event) => setSourceName(event.target.value)}
+            aria-label="Import source name"
+            placeholder="Approved source name"
+            className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          />
+          <select
+            value={format}
+            onChange={(event) =>
+              setFormat(event.target.value as "json" | "csv")
+            }
+            className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          >
+            <option value="json">JSON</option>
+            <option value="csv">CSV</option>
+          </select>
+        </div>
+        <textarea
+          value={content}
+          onChange={(event) => setContent(event.target.value)}
+          aria-label="Evidence import content"
+          rows={9}
+          className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-[10px]"
+        />
+        <button
+          onClick={() => upload.mutate()}
+          disabled={upload.isPending || !content.trim()}
+          className="mt-2 h-11 w-full rounded-xl bg-[#00A94F] text-xs font-bold text-white disabled:opacity-40"
+        >
+          Validate and import
+        </button>
+      </section>
+      <section className="rounded-2xl border border-border bg-card p-4">
+        <div className="flex items-center gap-2">
+          <FileCheck2 className="h-4 w-4 text-[#00A94F]" />
+          <h2 className="text-sm font-semibold">Manual verification</h2>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Record what an authorized reviewer observed. Unknown remains
+          inconclusive and never changes serviceability truth.
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-2">
+          <input
+            value={manual.address}
+            onChange={(event) =>
+              setManual({ ...manual, address: event.target.value })
+            }
+            aria-label="Street address"
+            placeholder="Street address"
+            className="col-span-2 h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          />
+          <input
+            value={manual.city}
+            onChange={(event) =>
+              setManual({ ...manual, city: event.target.value })
+            }
+            aria-label="City"
+            placeholder="City"
+            className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          />
+          <input
+            value={manual.state}
+            onChange={(event) =>
+              setManual({
+                ...manual,
+                state: event.target.value.toUpperCase().slice(0, 2),
+              })
+            }
+            aria-label="State"
+            className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          />
+          <input
+            value={manual.zip}
+            onChange={(event) =>
+              setManual({ ...manual, zip: event.target.value })
+            }
+            aria-label="ZIP code"
+            placeholder="ZIP"
+            className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          />
+          <select
+            value={manual.isLive}
+            onChange={(event) =>
+              setManual({ ...manual, isLive: event.target.value })
+            }
+            aria-label="Serviceability"
+            className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          >
+            <option value="unknown">Inconclusive</option>
+            <option value="true">Live</option>
+            <option value="false">Not live</option>
+          </select>
+          <input
+            value={manual.technologyType}
+            onChange={(event) =>
+              setManual({ ...manual, technologyType: event.target.value })
+            }
+            aria-label="Technology type"
+            placeholder="Technology returned"
+            className="col-span-2 h-10 rounded-xl border border-border bg-background px-3 text-xs"
+          />
+          <textarea
+            value={manual.reviewerNote}
+            onChange={(event) =>
+              setManual({ ...manual, reviewerNote: event.target.value })
+            }
+            aria-label="Reviewer note"
+            placeholder="Describe the permitted verification source and result"
+            rows={4}
+            className="col-span-2 rounded-xl border border-border bg-background p-3 text-xs"
+          />
+        </div>
+        <button
+          onClick={() => verify.mutate()}
+          disabled={verify.isPending}
+          className="mt-2 h-11 w-full rounded-xl bg-[#00A94F] text-xs font-bold text-white disabled:opacity-40"
+        >
+          Record signed-in review
+        </button>
+      </section>
+      <section className="rounded-2xl border border-border bg-card p-4 lg:col-span-2">
+        <h2 className="text-sm font-semibold">Recent import ledger</h2>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          {imports?.items?.map((item: any) => (
+            <div key={item.id} className="rounded-xl bg-secondary/50 p-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold">{item.sourceName}</span>
+                <span className="ml-auto text-[9px] uppercase text-muted-foreground">
+                  {item.format}
+                </span>
+              </div>
+              <div className="mt-1 text-[10px] text-muted-foreground">
+                {item.acceptedCount} accepted · {item.rejectedCount} rejected ·{" "}
+                {new Date(item.createdAt).toLocaleString()}
+              </div>
+            </div>
+          ))}
+          {!imports?.items?.length && (
+            <p className="text-xs text-muted-foreground">
+              No evidence imports recorded.
+            </p>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
+  const [search, setSearch] = useState(""),
+    [state, setState] = useState(""),
+    [filter, setFilter] = useState("all"),
+    [page, setPage] = useState(1);
+  const params = useMemo(() => {
+    const p = new URLSearchParams({ page: String(page), limit: "50" });
+    if (search) p.set("search", search);
+    if (state) p.set("state", state);
+    if (filter === "live") p.set("liveOnly", "true");
+    if (filter === "coming") p.set("comingSoonOnly", "true");
+    if (filter === "copper") p.set("copperUpgradeCandidateOnly", "true");
+    return p;
+  }, [search, state, filter, page]);
+  const { data, isLoading } = useQuery({
+    queryKey: ["kinetic-addresses", params.toString()],
+    queryFn: () => kineticScannerApi.addresses(params),
+  });
+  return (
+    <section className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="flex flex-wrap gap-2 border-b border-border p-3">
+        <label className="relative min-w-48 flex-1">
+          <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+          <input
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            placeholder="Address or Kinetic Address ID"
+            className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-xs"
+          />
+        </label>
+        <input
+          value={state}
+          maxLength={2}
+          onChange={(e) => {
+            setState(e.target.value.toUpperCase());
+            setPage(1);
+          }}
+          placeholder="State"
+          className="h-10 w-20 rounded-xl border border-border bg-background px-3 text-xs uppercase"
+        />
+        <select
+          value={filter}
+          onChange={(e) => {
+            setFilter(e.target.value);
+            setPage(1);
+          }}
+          className="h-10 rounded-xl border border-border bg-background px-3 text-xs"
+        >
+          <option value="all">All statuses</option>
+          <option value="live">Live only</option>
+          <option value="coming">Coming Soon only</option>
+          <option value="copper">Copper Upgrade Candidate only</option>
+        </select>
+        <button
+          onClick={() => void kineticScannerApi.downloadExport()}
+          className="h-10 rounded-xl border border-border px-3 text-xs font-semibold"
+        >
+          <Download className="mr-1 inline h-3.5 w-3.5" />
+          Export
+        </button>
+      </div>
+      {isLoading ? (
+        <div className="grid h-64 place-items-center">
+          <Loader2 className="h-5 w-5 animate-spin text-[#00A94F]" />
+        </div>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[900px] text-left text-xs">
+              <thead className="bg-secondary/50 text-[9px] uppercase tracking-wider text-muted-foreground">
+                <tr>
+                  {[
+                    "Sequential ID",
+                    "Kinetic Address ID",
+                    "Address",
+                    "Technology",
+                    "Qualification",
+                    "Status",
+                    "Last checked",
+                    "",
+                  ].map((h) => (
+                    <th key={h} className="px-3 py-3">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data?.items.map((a) => {
+                  const [label, tone] = badge(a);
+                  return (
+                    <tr
+                      key={a.id}
+                      className="border-t border-border hover:bg-secondary/25"
+                    >
+                      <td className="px-3 py-3 font-mono font-semibold">
+                        {a.sequentialId ?? "—"}
+                      </td>
+                      <td className="px-3 py-3 font-mono text-[10px]">
+                        {a.kineticAddressId ?? "—"}
+                      </td>
+                      <td className="px-3 py-3">
+                        <div className="font-semibold">
+                          {a.address ?? "Address unavailable"}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          {[a.city, a.state, a.zip].filter(Boolean).join(", ")}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3">{a.technologyType ?? "—"}</td>
+                      <td className="px-3 py-3">
+                        {a.maximumQualification ?? "—"}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span
+                          className={`rounded-full px-2 py-1 text-[9px] font-bold ${tone}`}
+                        >
+                          {label}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-[10px] text-muted-foreground">
+                        {a.lastChecked
+                          ? new Date(a.lastChecked).toLocaleString()
+                          : "—"}
+                      </td>
+                      <td className="px-3 py-3">
+                        <button
+                          onClick={() => onOpen(a.id)}
+                          className="h-9 rounded-lg border border-border px-3 font-semibold"
+                        >
+                          Details
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-between border-t border-border p-3 text-xs text-muted-foreground">
+            <span>{fmt(data?.total)} addresses · 50 per page</span>
+            <div className="flex gap-2">
+              <button
+                disabled={page <= 1}
+                onClick={() => setPage((p) => p - 1)}
+                className="h-9 rounded-lg border border-border px-3 disabled:opacity-30"
+              >
+                Previous
+              </button>
+              <span className="grid h-9 place-items-center px-2">
+                {page} / {data?.pages ?? 1}
+              </span>
+              <button
+                disabled={page >= (data?.pages ?? 1)}
+                onClick={() => setPage((p) => p + 1)}
+                className="h-9 rounded-lg border border-border px-3 disabled:opacity-30"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+function Hotspots() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["kinetic-hotspots"],
+    queryFn: kineticScannerApi.hotspots,
+  });
+  if (isLoading)
+    return <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin" />;
+  return (
+    <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+      {data?.hotspots?.map((h: any, i: number) => (
+        <article
+          key={`${h.city}-${h.zip}-${i}`}
+          className="rounded-2xl border border-border bg-card p-4"
+        >
+          <div className="text-sm font-semibold">
+            {h.city || "Unknown city"}, {h.state} {h.zip}
+          </div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            {[
+              ["Addresses", h.addressCount],
+              ["Live", h.liveCount],
+              ["Copper", h.copperUpgradeCount],
+            ].map(([l, v]) => (
+              <div key={l as string} className="rounded-lg bg-secondary/50 p-2">
+                <b>{fmt(v)}</b>
+                <div className="text-[8px] uppercase text-muted-foreground">
+                  {l}
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+function Changes() {
+  const { data, isLoading } = useQuery({
+    queryKey: ["kinetic-changes"],
+    queryFn: kineticScannerApi.changes,
+    refetchInterval: 15_000,
+  });
+  if (isLoading)
+    return <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin" />;
+  return (
+    <section className="space-y-2">
+      {data?.items?.map((c: any) => (
+        <article
+          key={c.id}
+          className="rounded-xl border border-border bg-card p-3"
+        >
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-[#00A94F]/10 px-2 py-1 text-[9px] font-bold text-[#00A94F]">
+              {c.fieldName}
+            </span>
+            <span className="ml-auto text-[9px] text-muted-foreground">
+              {new Date(c.changedAt).toLocaleString()}
+            </span>
+          </div>
+          <div className="mt-2 text-xs font-semibold">
+            {c.address || c.kineticAddressId}
+          </div>
+          <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+            {c.previousValue ?? "unknown"} → {c.currentValue ?? "unknown"}
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+function Jobs() {
+  const { data } = useQuery({
+    queryKey: ["kinetic-state"],
+    queryFn: kineticScannerApi.state,
+    refetchInterval: 5000,
+  });
+  return (
+    <section className="space-y-2">
+      {data?.jobs?.map((j: any) => (
+        <article
+          key={j.id}
+          className="rounded-2xl border border-border bg-card p-4"
+        >
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-[#00A94F]/10 px-2 py-1 text-[9px] font-bold uppercase text-[#00A94F]">
+              {j.workerType}
+            </span>
+            <code className="text-[10px]">{j.id}</code>
+            <span className="ml-auto text-xs capitalize">{j.status}</span>
+          </div>
+          <div className="mt-3 font-mono text-sm">
+            {j.workerType === "scan"
+              ? `${fmt(j.startSequentialId)} → ${fmt(j.endSequentialId)}`
+              : `${fmt(j.checked)} addresses rechecked`}
+          </div>
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            {fmt(j.checked)} checked · {fmt(j.found)} found · {fmt(j.errors)}{" "}
+            errors
+          </div>
+        </article>
+      ))}
+    </section>
+  );
+}
+function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
+  const qc = useQueryClient(),
+    { toast } = useToast(),
+    { data, isLoading } = useQuery({
+      queryKey: ["kinetic-detail", id],
+      queryFn: () => kineticScannerApi.detail(id),
+    });
+  const act = async (type: "recheck" | "contacts" | "convert") => {
+    try {
+      if (type === "recheck") await kineticScannerApi.recheck(id);
+      if (type === "contacts") await kineticScannerApi.refreshContacts(id);
+      if (type === "convert") await kineticScannerApi.convert(id);
+      await qc.invalidateQueries({ queryKey: ["kinetic-detail", id] });
+      toast({
+        title:
+          type === "convert"
+            ? "Converted to lead"
+            : type === "contacts"
+              ? "Contacts refreshed"
+              : "Recheck queued",
+      });
+    } catch (e: any) {
+      toast({
+        title: "Action failed",
+        description: e.message,
+        variant: "destructive",
+      });
+    }
+  };
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/60"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <aside className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-emerald-900/60 bg-[#071A11] p-4 text-white shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none">
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
+        <button
+          onClick={onClose}
+          className="float-right h-10 rounded-xl border border-white/10 px-3 text-xs"
+        >
+          Close
+        </button>
+        {isLoading ? (
+          <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin text-[#00A94F]" />
+        ) : (
+          <>
+            <div className="pr-16">
+              <div className="text-[9px] uppercase tracking-wider text-emerald-200/50">
+                Kinetic Address ID
+              </div>
+              <div className="mt-1 break-all font-mono text-sm text-[#35d77e]">
+                {data?.address?.kineticAddressId ?? "Not returned"}
+              </div>
+              <h2 className="mt-4 text-xl font-semibold">
+                {data?.address?.address ?? "Address unavailable"}
+              </h2>
+              <p className="text-xs text-white/50">
+                {[data?.address?.city, data?.address?.state, data?.address?.zip]
+                  .filter(Boolean)
+                  .join(", ")}
+              </p>
+            </div>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              {[
+                ["Sequential ID", data?.address?.sequentialId],
+                ["Exchange ID", data?.address?.exchangeId],
+                ["Technology", data?.address?.technologyType],
+                ["Max qualification", data?.address?.maximumQualification],
+              ].map(([l, v]) => (
+                <div key={l as string} className="rounded-xl bg-white/5 p-3">
+                  <div className="text-[8px] uppercase text-white/40">{l}</div>
+                  <div className="mt-1 font-mono text-xs font-semibold">
+                    {v ?? "—"}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 grid grid-cols-2 gap-2">
+              <button
+                onClick={() => void act("recheck")}
+                className="h-11 rounded-xl border border-white/10 text-xs font-bold"
+              >
+                Queue recheck
+              </button>
+              <button
+                onClick={() => void act("contacts")}
+                className="h-11 rounded-xl border border-white/10 text-xs font-bold"
+              >
+                <Users className="mr-1 inline h-3.5 w-3.5" />
+                Refresh contacts
+              </button>
+              <button
+                onClick={() => void act("convert")}
+                className="col-span-2 h-11 rounded-xl bg-[#00A94F] text-xs font-bold"
+              >
+                Convert to lead
+              </button>
+            </div>
+            <h3 className="mt-6 text-xs font-semibold uppercase tracking-wider text-white/50">
+              Evidence
+            </h3>
+            <div className="mt-2 space-y-2">
+              {data?.evidence?.map((o: any) => (
+                <div
+                  key={o.id}
+                  className="rounded-xl border border-white/10 bg-white/5 p-3"
+                >
+                  <div className="text-xs">
+                    {new Date(o.observedAt).toLocaleString()} ·{" "}
+                    <span className="font-mono text-[9px]">
+                      {o.responseHash.slice(0, 12)}
+                    </span>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] text-white/55">
+                    <span className="rounded-full bg-white/5 px-2 py-1">
+                      {String(o.evidenceMode).replaceAll("_", " ")}
+                    </span>
+                    <span className="rounded-full bg-white/5 px-2 py-1">
+                      {o.sourceName}
+                    </span>
+                    <span className="rounded-full bg-white/5 px-2 py-1 font-mono">
+                      parser {o.parserVersion}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              {!data?.evidence?.length && (
+                <p className="rounded-xl bg-white/5 p-3 text-xs text-white/45">
+                  No evidence records are available for this address.
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
