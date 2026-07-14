@@ -28,11 +28,12 @@ import {
   CreditCard,
   FileSignature,
 } from "lucide-react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@/lib/utils";
 import { BottomTabs } from "@/components/BottomTabs";
 import { PaywallBanner } from "@/components/PaywallBanner";
+import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
 import { useTheme } from "@/hooks/use-theme";
 
@@ -113,6 +114,9 @@ function avatarBg(role: string) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreSheetRef = useRef<HTMLDivElement | null>(null);
+  const moreTriggerRef = useRef<HTMLButtonElement | null>(null);
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const role = (user?.role ?? "rep") as AppRole;
@@ -120,11 +124,41 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   // tabs, no padding — the map itself carries a floating menu button that
   // fires "hfs:open-menu" to open the sidebar drawer.
   const onMap = location === "/map";
+  const closeMore = useCallback(() => {
+    setMoreOpen(false);
+    requestAnimationFrame(() => moreTriggerRef.current?.focus());
+  }, []);
   useEffect(() => {
     const open = () => setMobileOpen(true);
     window.addEventListener("hfs:open-menu", open);
     return () => window.removeEventListener("hfs:open-menu", open);
   }, []);
+  useEffect(() => { setMoreOpen(false); }, [location]);
+
+  // Mobile More is a real modal bottom sheet: initial focus, Escape, and a
+  // contained Tab loop. The desktop sidebar remains available from the header.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const sheet = moreSheetRef.current;
+    const first = sheet?.querySelector<HTMLElement>("a,button");
+    requestAnimationFrame(() => first?.focus());
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { closeMore(); return; }
+      if (event.key !== "Tab" || !sheet) return;
+      const focusable = [...sheet.querySelectorAll<HTMLElement>("a,button")].filter(el => !el.hasAttribute("disabled"));
+      if (!focusable.length) return;
+      const head = focusable[0], tail = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === head) { event.preventDefault(); tail.focus(); }
+      else if (!event.shiftKey && document.activeElement === tail) { event.preventDefault(); head.focus(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [moreOpen, closeMore]);
 
   // Territory request pending count (admin/manager only)
   const canManage = hasRole(role, "admin", "manager");
@@ -302,14 +336,70 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Billing status — renders only when a provisioned tenant has a problem
             (past_due / suspended / low credits); invisible otherwise. */}
         <PaywallBanner />
+        <FieldStatusBar overlay={onMap} />
 
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
         <main className={`flex-1 overflow-hidden ${onMap ? "" : "pb-[calc(64px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
-        {!onMap && <BottomTabs />}
+        {!onMap && <BottomTabs moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
       </div>
+
+      {moreOpen && !onMap && (
+        <div className="fixed inset-0 z-[60] md:hidden" role="presentation">
+          <button type="button" aria-label="Close more menu" className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={closeMore} />
+          <div
+            id="mobile-more-sheet"
+            ref={moreSheetRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="More navigation"
+            className="absolute inset-x-0 bottom-0 max-h-[86dvh] overflow-y-auto rounded-t-[28px] border-t border-border bg-card shadow-2xl animate-in slide-in-from-bottom duration-200"
+            style={{ paddingBottom: "max(1rem,env(safe-area-inset-bottom))" }}
+          >
+            <div className="sticky top-0 z-10 bg-card/95 px-4 pb-3 pt-2 backdrop-blur-xl">
+              <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-muted-foreground/25" aria-hidden="true" />
+              <div className="flex items-center gap-3">
+                <div className={`grid h-11 w-11 place-items-center rounded-full text-sm font-bold text-white ${avatarBg(role)}`}>{user?.name?.slice(0, 2).toUpperCase()}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[15px] font-semibold text-foreground">{user?.name}</div>
+                  <div className="truncate text-[12px] text-muted-foreground">{orgName} · {role.replace("_", " ")}</div>
+                </div>
+                <button type="button" onClick={closeMore} aria-label="Close more menu" className="grid h-11 w-11 place-items-center rounded-full bg-secondary text-muted-foreground hover:text-foreground">
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="px-4 pb-4">
+              <div className="grid grid-cols-2 gap-2">
+                {visibleNav
+                  .filter(item => !["/", "/today", "/leads", "/map", "/my-commission"].includes(item.href))
+                  .map(({ href, label, icon: Icon }) => (
+                    <Link key={href} href={href} onClick={() => setMoreOpen(false)} className="flex min-h-[68px] items-center gap-3 rounded-2xl border border-border bg-background/55 px-3.5 py-3 text-left active:scale-[.98] transition hover:border-primary/25">
+                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-secondary text-primary"><Icon className="h-[19px] w-[19px]" /></span>
+                      <span className="min-w-0 text-[13px] font-semibold leading-tight text-foreground">{label}</span>
+                    </Link>
+                  ))}
+              </div>
+
+              <div className="mt-3 overflow-hidden rounded-2xl border border-border bg-background/45">
+                <Link href="/profile" onClick={() => setMoreOpen(false)} className="flex min-h-12 items-center gap-3 px-4 text-[13px] font-medium text-foreground hover:bg-secondary/60">
+                  <UserIcon className="h-4 w-4 text-muted-foreground" /><span className="flex-1">Profile and account</span>
+                </Link>
+                <button type="button" onClick={toggle} className="flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-[13px] font-medium text-foreground hover:bg-secondary/60">
+                  {theme === "dark" ? <Sun className="h-4 w-4 text-muted-foreground" /> : <Moon className="h-4 w-4 text-muted-foreground" />}
+                  <span className="flex-1">Switch to {theme === "dark" ? "light" : "dark"} mode</span>
+                </button>
+                <button type="button" onClick={() => { setMoreOpen(false); void logout(); }} className="flex min-h-12 w-full items-center gap-3 border-t border-border px-4 text-left text-[13px] font-medium text-red-500 hover:bg-red-500/5">
+                  <LogOut className="h-4 w-4" /><span className="flex-1">Sign out</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

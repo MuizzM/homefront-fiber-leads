@@ -127,6 +127,91 @@ describe("onboarding approval route", () => {
     expect(rawDb.prepare("SELECT COUNT(*) count FROM team_members WHERE email = ?").get(email)).toMatchObject({ count: 1 });
   });
 
+  it("repairs a login linked to another tenant without moving that tenant's rep history", async () => {
+    const email = "stale-cross-tenant-link@approval-flow.example.com";
+    const foreignProfile = storage.createTeamMember({
+      name: "Legacy Foreign Profile",
+      email,
+      phone: "3365550199",
+      role: "rep",
+      active: true,
+      tenantId: 2,
+    } as any);
+    const account = storage.createUser({
+      name: "Approval Flow Candidate",
+      email,
+      role: "rep",
+      active: false,
+      tenantId: 1,
+      teamMemberId: foreignProfile.id,
+    } as any);
+    const application = createCareersApplication(email);
+
+    const response = await review(application.id, adminSession, { status: "approved" });
+    const body = await response.json() as any;
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("approved");
+
+    const repairedAccount = storage.getUserByEmail(email)!;
+    expect(repairedAccount).toMatchObject({ id: account.id, tenantId: 1, active: true });
+    expect(repairedAccount.teamMemberId).not.toBe(foreignProfile.id);
+    expect(storage.getTeamMemberById(repairedAccount.teamMemberId!)).toMatchObject({
+      email,
+      tenantId: 1,
+      active: false,
+    });
+    expect(storage.getTeamMemberById(foreignProfile.id)).toMatchObject({
+      tenantId: 2,
+      active: true,
+    });
+
+    const repair = rawDb.prepare(
+      "SELECT action, tenant_id tenantId, details FROM activity_log WHERE action = 'onboarding.rep_profile_link_repaired' ORDER BY id DESC LIMIT 1",
+    ).get() as any;
+    expect(repair).toMatchObject({ action: "onboarding.rep_profile_link_repaired", tenantId: 1 });
+    expect(JSON.parse(repair.details)).toMatchObject({
+      applicationId: application.id,
+      detachedRepId: foreignProfile.id,
+      linkedRepId: repairedAccount.teamMemberId,
+      reason: "foreign_tenant_profile",
+    });
+  });
+
+  it("does not let an unowned login be claimed when its linked profile proves another tenant owns it", async () => {
+    const email = "foreign-owned-account@approval-flow.example.com";
+    const foreignProfile = storage.createTeamMember({
+      name: "Foreign Owned Account",
+      email,
+      role: "rep",
+      active: true,
+      tenantId: 2,
+    } as any);
+    const account = storage.createUser({
+      name: "Foreign Owned Account",
+      email,
+      role: "rep",
+      active: true,
+      tenantId: null,
+      teamMemberId: foreignProfile.id,
+    } as any);
+    // Model a legacy/corrupted row. Normal createUser correctly inherits tenant
+    // 2 from the linked profile, so only an old direct DB write can produce this.
+    rawDb.prepare("UPDATE users SET tenant_id = NULL WHERE id = ?").run(account.id);
+    const application = createCareersApplication(email);
+
+    const response = await review(application.id, adminSession, { status: "approved" });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "That email is linked to a rep profile in another organization.",
+    });
+    expect(storage.getUserByEmail(email)).toMatchObject({
+      id: account.id,
+      tenantId: null,
+      teamMemberId: foreignProfile.id,
+    });
+    expect(storage.getRepApplicationById(application.id)).toMatchObject({ status: "pending" });
+  });
+
   it("allows only the owning admin and creates one account, login email, rep profile, and agreement pack across retries", async () => {
     const email = "approved-candidate@approval-flow.example.com";
     const application = createCareersApplication(email);

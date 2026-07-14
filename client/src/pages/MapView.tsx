@@ -259,6 +259,109 @@ interface ScanJobStatus {
 }
 
 const POLL_MS = 400; // 400ms — scan dots appear almost instantly
+const SEARCH_RESULT_SOURCE = "search-result";
+const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
+const SEARCH_RESULT_POINT_LAYER = "search-result-point";
+const SCAN_RESULTS_SOURCE = "scan-results";
+const SCAN_RESULTS_CLUSTER_LAYER = "scan-results-clusters";
+const SCAN_RESULTS_COUNT_LAYER = "scan-results-count";
+const SCAN_RESULTS_POINT_LAYER = "scan-results-points";
+
+const emptyFeatureCollection = () => ({ type: "FeatureCollection" as const, features: [] as any[] });
+
+/**
+ * Transient search + live-scan visuals share Mapbox's worker/WebGL pipeline.
+ * This is intentionally idempotent because setStyle() removes custom sources.
+ */
+function ensureTransientMapLayers(map: any): void {
+  if (!map.getSource(SEARCH_RESULT_SOURCE)) {
+    map.addSource(SEARCH_RESULT_SOURCE, { type: "geojson", data: emptyFeatureCollection() });
+  }
+  if (!map.getLayer(SEARCH_RESULT_HALO_LAYER)) {
+    map.addLayer({
+      id: SEARCH_RESULT_HALO_LAYER,
+      type: "circle",
+      source: SEARCH_RESULT_SOURCE,
+      paint: {
+        "circle-radius": 18,
+        "circle-color": "rgba(20,184,166,0.18)",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "rgba(94,234,212,0.8)",
+      },
+    });
+  }
+  if (!map.getLayer(SEARCH_RESULT_POINT_LAYER)) {
+    map.addLayer({
+      id: SEARCH_RESULT_POINT_LAYER,
+      type: "circle",
+      source: SEARCH_RESULT_SOURCE,
+      paint: {
+        "circle-radius": 7,
+        "circle-color": "#14b8a6",
+        "circle-stroke-width": 3,
+        "circle-stroke-color": "#ffffff",
+      },
+    });
+  }
+
+  if (!map.getSource(SCAN_RESULTS_SOURCE)) {
+    map.addSource(SCAN_RESULTS_SOURCE, {
+      type: "geojson",
+      data: emptyFeatureCollection(),
+      cluster: true,
+      clusterRadius: 48,
+      clusterMaxZoom: 14,
+    });
+  }
+  if (!map.getLayer(SCAN_RESULTS_CLUSTER_LAYER)) {
+    map.addLayer({
+      id: SCAN_RESULTS_CLUSTER_LAYER,
+      type: "circle",
+      source: SCAN_RESULTS_SOURCE,
+      filter: ["has", "point_count"],
+      paint: {
+        "circle-radius": ["step", ["get", "point_count"], 16, 20, 22, 100, 29],
+        "circle-color": "#16a34a",
+        "circle-opacity": 0.9,
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#dcfce7",
+      },
+    });
+  }
+  if (!map.getLayer(SCAN_RESULTS_COUNT_LAYER)) {
+    map.addLayer({
+      id: SCAN_RESULTS_COUNT_LAYER,
+      type: "symbol",
+      source: SCAN_RESULTS_SOURCE,
+      filter: ["has", "point_count"],
+      layout: {
+        "text-field": "{point_count_abbreviated}",
+        "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+        "text-size": 12,
+        "text-allow-overlap": true,
+      },
+      paint: { "text-color": "#ffffff" },
+    });
+  }
+  if (!map.getLayer(SCAN_RESULTS_POINT_LAYER)) {
+    map.addLayer({
+      id: SCAN_RESULTS_POINT_LAYER,
+      type: "circle",
+      source: SCAN_RESULTS_SOURCE,
+      filter: ["!", ["has", "point_count"]],
+      paint: {
+        "circle-radius": ["case", ["boolean", ["feature-state", "visible"], false], 7, 0],
+        "circle-opacity": ["case", ["boolean", ["feature-state", "visible"], false], 0.96, 0],
+        "circle-color": "#22c55e",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#dcfce7",
+        "circle-blur": 0.08,
+        "circle-radius-transition": { duration: 220, delay: 0 },
+        "circle-opacity-transition": { duration: 180, delay: 0 },
+      },
+    });
+  }
+}
 
 // Stable empty snapshot for useSyncExternalStore before the queue exists —
 // a fresh object per call would loop the store subscription forever.
@@ -270,7 +373,10 @@ export default function MapView() {
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<any>(null);
   const geolocateRef = useRef<any>(null);
-  const scanMarkersRef = useRef<any[]>([]);
+  const suspendFollowCameraRef = useRef<() => void>(() => {});
+  const scanGeoJsonRef = useRef<any>(emptyFeatureCollection());
+  const scanFeatureSeqRef = useRef(0);
+  const searchGeoJsonRef = useRef<any>(emptyFeatureCollection());
   const lastRenderedCount = useRef(0);
   const pollTickRef = useRef(0);      // counts scan polls, to throttle live lead refreshes
   const didAutoFitRef = useRef(false); // fit the map to leads once on first load
@@ -418,7 +524,6 @@ export default function MapView() {
   const gpsCenteredRef = useRef(false);      // a live fix has positioned the camera — startup fallbacks stand down
   const firstFixSeenRef = useRef(false);     // a real GPS fix has arrived (the follow control engaged) — gates the FAB fallback
   const didInitZoomRef = useRef(false);      // the one-time zoom-to-street on the first fix has happened
-  const geoAutoStartedRef = useRef(false);   // auto-trigger fired once for this rep session
   const recentIdsRef = useRef<number[]>([]);   // ring buffer (10) — just-knocked doors exempt from the "unvisited" lens
   // One-shot "confirm pop" for the selected pin's ring, set on knock and consumed
   // by the selected-ring rAF below — the map twin of the card pill's tap-flash so
@@ -770,7 +875,7 @@ export default function MapView() {
 
     // Follow state + lifecycle (all imperative — zero React renders per frame).
     const M = createFollowState();
-    let following = false, interacting = false, sawPan = false, rafId = 0;
+    let following = false, interacting = false, rafId = 0;
     let reduced = false;
     try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch {}
     if (import.meta.env.DEV) {
@@ -796,6 +901,15 @@ export default function MapView() {
     };
     const ensureLoop = () => { if (following && !reduced && !rafId) { M.lastFrame = 0; rafId = requestAnimationFrame(frame); } };
     const stopLoop = () => { if (rafId) { cancelAnimationFrame(rafId); rafId = 0; } };
+    // Any camera move that is not an explicit Locate action must own the camera.
+    // Search, lead selection, pan and zoom call this before moving so a pending
+    // GPS frame can never overwrite the viewport on the next animation frame.
+    const suspendFollow = () => {
+      following = false;
+      interacting = false;
+      stopLoop();
+    };
+    suspendFollowCameraRef.current = suspendFollow;
 
     // Each fix mutates the estimator ONLY; the loop integrates. Persist the fix
     // (throttled) so the NEXT launch opens on last-known location instantly.
@@ -841,19 +955,26 @@ export default function MapView() {
     });
 
     // ── Interaction: lean on the control's native ACTIVE_LOCK/BACKGROUND machine. ──
-    // A real PAN = "I'm looking around" → follow stays off until the FAB is re-tapped
-    // (SalesRabbit behaviour). A pinch/rotate/pitch is a keep-following gesture →
-    // re-engage jump-free via trigger() (safe now that _updateCamera is neutralised).
-    const onFollowStart = () => { following = true; sawPan = false; ensureLoop(); };
+    // Every user camera gesture means "I'm exploring". Follow remains off until
+    // the user explicitly taps Locate again; zoom/rotate/pitch must never snap the
+    // center back to GPS when the gesture ends.
+    const onFollowStart = () => { following = true; ensureLoop(); };
     const onFollowEnd = () => { following = false; stopLoop(); };
     geolocate.on("trackuserlocationstart", onFollowStart);
     geolocate.on("trackuserlocationend", onFollowEnd);
-    const onDragStart = (ev: any) => { if (!ev?.geolocateSource) { sawPan = true; interacting = true; } };
-    const onGestureStart = (ev: any) => { if (!ev?.geolocateSource) interacting = true; };
+    const onDragStart = (ev: any) => {
+      if (ev?.geolocateSource) return;
+      didAutoFitRef.current = true;
+      suspendFollow();
+    };
+    const onGestureStart = (ev: any) => {
+      if (ev?.geolocateSource) return;
+      didAutoFitRef.current = true;
+      suspendFollow();
+    };
     const onGestureEnd = (ev: any) => {
       if (ev?.geolocateSource) return;
       interacting = false;
-      if (!sawPan && firstFixSeenRef.current) { try { geolocate.trigger(); } catch {} }
     };
     map.on("dragstart", onDragStart);
     const gestureStarts = ["zoomstart", "rotatestart", "pitchstart"];
@@ -880,6 +1001,10 @@ export default function MapView() {
         paint: { "fill-color": "#f97316", "fill-opacity": 0.1 } });
       map.addLayer({ id: "draw-bbox-outline", type: "line", source: "draw-bbox",
         paint: { "line-color": "#f97316", "line-width": 2, "line-dasharray": [3, 2] } });
+
+      // Search highlight + incremental scan hits stay in Mapbox's worker/WebGL
+      // pipeline. No per-address DOM markers are created.
+      ensureTransientMapLayers(map);
 
       // ── Lead cluster source (GeoJSON) — shows count bubbles when zoomed out ──
       map.addSource("leads-cluster", {
@@ -954,6 +1079,7 @@ export default function MapView() {
       // Click cluster → zoom in
       map.on("click", "lead-clusters", (e: any) => {
         if (drawToolActive()) return;
+        suspendFollow();
         const features = map.queryRenderedFeatures(e.point, { layers: ["lead-clusters"] });
         const clusterId = features[0]?.properties?.cluster_id;
         if (!clusterId) return;
@@ -1020,6 +1146,39 @@ export default function MapView() {
       map.on("mouseleave", "lead-unclustered", () => hoverCursor(""));
       map.on("mouseenter", STATUS_ICON_LAYER, () => hoverCursor("pointer"));
       map.on("mouseleave", STATUS_ICON_LAYER, () => hoverCursor(""));
+      map.on("click", SCAN_RESULTS_CLUSTER_LAYER, (e: any) => {
+        if (drawToolActive()) return;
+        suspendFollow();
+        const feature = e.features?.[0];
+        const clusterId = feature?.properties?.cluster_id;
+        if (clusterId == null) return;
+        (map.getSource(SCAN_RESULTS_SOURCE) as any).getClusterExpansionZoom(clusterId, (err: any, zoom: number) => {
+          if (!err) map.easeTo({ center: feature.geometry.coordinates, zoom });
+        });
+      });
+      map.on("click", SCAN_RESULTS_POINT_LAYER, (e: any) => {
+        if (drawToolActive()) return;
+        const p = e.features?.[0]?.properties;
+        const coordinates = e.features?.[0]?.geometry?.coordinates;
+        if (!p || !coordinates) return;
+        setCardProperty({
+          address: p.address, city: p.city, state: p.state, zip: p.zip,
+          lat: coordinates[1], lng: coordinates[0],
+          fiberStatus: p.fiberStatus, isNewFiber: p.isNewFiber === true || p.isNewFiber === "true",
+          billingStatus: p.billingStatus || null,
+          maxDownloadMbps: p.maxDownloadMbps == null ? null : Number(p.maxDownloadMbps),
+          competitorName: p.competitorName || null,
+          techType: p.techType || null, placement: p.placement || null,
+          householdSegmentType: p.householdSegmentType || null,
+          leadTag: p.leadTag || null,
+          leadScore: p.leadScore == null ? null : Number(p.leadScore),
+          source: "scan",
+        });
+      });
+      map.on("mouseenter", SCAN_RESULTS_CLUSTER_LAYER, () => hoverCursor("pointer"));
+      map.on("mouseleave", SCAN_RESULTS_CLUSTER_LAYER, () => hoverCursor(""));
+      map.on("mouseenter", SCAN_RESULTS_POINT_LAYER, () => hoverCursor("pointer"));
+      map.on("mouseleave", SCAN_RESULTS_POINT_LAYER, () => hoverCursor(""));
 
       // Tap a territory region → open its detail panel. Lead pins win over the
       // region beneath them; draw tools suppress it entirely.
@@ -1082,6 +1241,7 @@ export default function MapView() {
 
     return () => {
       stopLoop();                                                    // cancel the follow rAF
+      suspendFollowCameraRef.current = () => {};
       try { if (mmRM && onRM) mmRM.removeEventListener("change", onRM); } catch {} // window-level, survives map.remove
       try { puck.remove(); } catch {}
       ro?.disconnect(); map.remove(); mapRef.current = null;         // map.remove() tears down its own listeners + control
@@ -1260,28 +1420,6 @@ export default function MapView() {
       didAutoFitRef.current = true;
     } catch {}
   }, [leads, mapReady, isRep, user]);
-
-  // ── Auto-start live location on open — EVERY role (Apple/Google-Maps launch) ──
-  // One trigger per session: prompts for permission if needed, shows the big blue
-  // location dot immediately, centers at street zoom on the first fix, and follows
-  // as the user moves (trackUserLocation). The Locate FAB re-triggers the same
-  // control, so one tap always snaps back to current location.
-  useEffect(() => {
-    if (!mapReady || geoAutoStartedRef.current) return;
-    geoAutoStartedRef.current = true;
-    try { geolocateRef.current?.trigger(); } catch { /* control not ready — FAB still works */ }
-    // Robust default-to-current-location: even if the GeolocateControl doesn't
-    // center (deferred permission, iOS standalone stall), a direct fix opens the
-    // map on the user. No-ops if the live control already centered, or if location
-    // isn't granted yet (then last-known/lead-bounds from the effect above stands).
-    captureFieldFix(8000).then(fix => {
-      const m = mapRef.current;
-      if (m && !gpsCenteredRef.current && fix.repLat != null && fix.repLng != null) {
-        writeCachedFix(fix.repLat, fix.repLng, Date.now());
-        moveCamera(m, { center: [fix.repLng, fix.repLat], zoom: STREET_ZOOM, duration: 600, essential: true });
-      }
-    }).catch(() => {});
-  }, [mapReady]);
 
   // ── Render color-coded territory regions (area name + owner label) ─────────
   // Managers/team leads see EVERY area: rep-colored fill + a two-line centroid
@@ -1463,8 +1601,16 @@ export default function MapView() {
         map.addLayer({ id: "draw-bbox-outline", type: "line", source: "draw-bbox",
           paint: { "line-color": "#f97316", "line-width": 2, "line-dasharray": [3, 2] } });
       }
+      ensureTransientMapLayers(map);
+      (map.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(searchGeoJsonRef.current);
+      (map.getSource(SCAN_RESULTS_SOURCE) as any)?.setData(scanGeoJsonRef.current);
+      requestAnimationFrame(() => {
+        for (const feature of scanGeoJsonRef.current.features) {
+          if (feature.id == null) continue;
+          try { map.setFeatureState({ source: SCAN_RESULTS_SOURCE, id: feature.id }, { visible: true }); } catch {}
+        }
+      });
       lassoLayerRef.current = false;
-      lastRenderedCount.current = 0;
       // House numbers are style layers too — re-enable on the fresh style with
       // the palette that suits it (white-on-imagery vs ink-on-streets).
       ensureHousenumLayer(map, mapStyleMode);
@@ -1655,6 +1801,15 @@ export default function MapView() {
     src?.setData({ type: "Feature", geometry: { type: "Polygon", coordinates: [[]] }, properties: {} });
   }, []);
 
+  // Keep React's committed bbox and the Mapbox draw source synchronized. This
+  // also handles Escape/close/style changes, so a cleared selection can never
+  // leave stale geometry behind.
+  useEffect(() => {
+    if (!mapReady) return;
+    if (drawnBBox) updateDrawLayer(drawnBBox);
+    else if (!drawMode) clearDrawLayer();
+  }, [drawnBBox, drawMode, mapReady, styleEpoch, updateDrawLayer, clearDrawLayer]);
+
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !drawMode) return;
@@ -1720,96 +1875,55 @@ export default function MapView() {
   // (and, if the job 404s post-GC, poll forever).
   useEffect(() => () => stopPolling(), [stopPolling]);
 
-  // Transient scan dots are DOM markers (Mapbox repositions each on every map
-  // move) — cap the count so a large fresh-build scan can't turn panning into
-  // O(n) main-thread work. Found leads still land as GPU pins via the live
-  // refresh; the dots are just an at-a-glance "found here" hint.
-  const MAX_SCAN_DOTS = 400;
-  const addScanDot = useCallback((row: ScanRow & { leadTag?: string | null; leadScore?: number }) => {
+  // Append a whole polling batch to ONE GeoJSON source. Mapbox clusters and
+  // paints it in its worker/WebGL pipeline, so 5,000 scan hits do not create
+  // 5,000 DOM nodes or 5,000 per-frame layout writes.
+  const addScanRows = useCallback((rows: Array<ScanRow & { leadTag?: string | null; leadScore?: number }>) => {
     const map = mapRef.current;
-    if (!map || !row.lat || !row.lng) return;
-    if (scanMarkersRef.current.length >= MAX_SCAN_DOTS) return; // bounded marker budget
+    const src = map?.getSource(SCAN_RESULTS_SOURCE) as any;
+    if (!map || !src || rows.length === 0) return;
 
-    // Dot color + size logic based on fiber status + lead tag
-    // 🟢 Green pulsing = HOT LEAD (NEW FIBER + billingStatus N, no subscriber)
-    // 🟡 Yellow = COMING SOON (NEW FIBER + billingStatus Y, has subscriber)
-    // 🔵 Blue = TENURED non-subscriber (upgrade target)
-    // 🔴 Red = copper/no service
-    // ⚪ Gray = unknown/tenured+subscriber
-    const isHotLead = row.leadTag === "hot_lead" || (row.isNewFiber && row.billingStatus === "N");
-    const isFiberSoon = row.householdSegmentType === "COMING_SOON"; // tracked by CNS scanner
-    const isComingSoon = !isFiberSoon && (row.leadTag === "coming_soon" || (row.isNewFiber && row.billingStatus === "Y"));
-    const isUpgradeTarget = row.leadTag === "upgrade_target";
-    const isCopper = row.fiberStatus === "copper" || row.fiberStatus === "no_service";
-
-    let bg: string, border: string, glow: string, size = 10, label: string;
-    if (isHotLead) {
-      bg = "#22c55e"; border = "#86efac"; glow = "rgba(34,197,94,0.8)"; size = 12; label = "HOT LEAD";
-    } else if (isFiberSoon) {
-      bg = "#a855f7"; border = "#d8b4fe"; glow = "rgba(168,85,247,0.7)"; size = 11; label = "📡 FIBER SOON";
-    } else if (isComingSoon) {
-      bg = "#f59e0b"; border = "#fcd34d"; glow = "rgba(245,158,11,0.7)"; size = 10; label = "⏳ COMING SOON";
-    } else if (isUpgradeTarget) {
-      bg = "#3b82f6"; border = "#93c5fd"; glow = "rgba(59,130,246,0.6)"; size = 9; label = "⬆️ UPGRADE TARGET";
-    } else if (isCopper) {
-      bg = "#ef4444"; border = "#fca5a5"; glow = "rgba(239,68,68,0.4)"; size = 7; label = "❌ No Fiber";
-    } else {
-      bg = "#94a3b8"; border = "#cbd5e1"; glow = "rgba(148,163,184,0.4)"; size = 8; label = row.fiberStatus;
-    }
-
-    // Determine if this is a new hit — pulse animation
-    const isNew = isHotLead || isComingSoon || isFiberSoon;
-
-    const el = document.createElement("div");
-    el.style.cssText = [
-      `width:${size}px;height:${size}px;border-radius:50%;`,
-      `background:${bg};border:2px solid ${border};`,
-      `box-shadow:0 0 ${isHotLead ? 10 : 6}px ${glow};`,
-      `cursor:pointer;position:relative;transition:transform 0.15s;`,
-    ].join("");
-
-    // Pulse ring for hot leads
-    if (isNew) {
-      const ring = document.createElement("div");
-      ring.style.cssText = [
-        `position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);`,
-        `width:${size + 8}px;height:${size + 8}px;border-radius:50%;`,
-        `border:2px solid ${bg};opacity:0.6;`,
-        `animation:hf-pulse 1.5s ease-out infinite;`,
-      ].join("");
-      el.appendChild(ring);
-      // Inject pulse animation once
-      if (!document.getElementById("hf-pulse-style")) {
-        const style = document.createElement("style");
-        style.id = "hf-pulse-style";
-        style.textContent = `@keyframes hf-pulse{0%{transform:translate(-50%,-50%) scale(1);opacity:0.6}100%{transform:translate(-50%,-50%) scale(2.5);opacity:0}}`;
-        document.head.appendChild(style);
-      }
-    }
-
-    el.addEventListener("mouseenter", () => { el.style.transform = "scale(1.4)"; });
-    el.addEventListener("mouseleave", () => { el.style.transform = "scale(1)"; });
-
-    // Persistently tappable: a scanned dot is a real target, not a hover hint —
-    // tapping it opens the rich property card (address, fiber, speed, competitor
-    // + Add-as-lead / Copy). Native title gives a quick hover label on desktop.
-    el.title = `${row.address} — ${label}`;
-    el.addEventListener("click", (ev) => {
-      ev.stopPropagation();
-      setCardProperty({
-        address: row.address, city: row.city, state: row.state, zip: row.zip,
-        lat: row.lat, lng: row.lng,
-        fiberStatus: row.fiberStatus, isNewFiber: row.isNewFiber, billingStatus: row.billingStatus,
-        maxDownloadMbps: (row as any).maxDownloadMbps ?? null, speedTier: (row as any).speedTier ?? null,
-        competitorName: (row as any).competitorName ?? null,
-        techType: (row as any).techType ?? null, placement: (row as any).placement ?? null,
-        householdSegmentType: (row as any).householdSegmentType ?? null,
-        leadTag: row.leadTag ?? null, leadScore: row.leadScore ?? null,
-        source: "scan",
-      });
+    const newIds: number[] = [];
+    const additions = rows.flatMap(row => {
+      if (row.lat == null || row.lng == null) return [];
+      const id = ++scanFeatureSeqRef.current;
+      newIds.push(id);
+      return [{
+        type: "Feature" as const,
+        id,
+        geometry: { type: "Point" as const, coordinates: [row.lng, row.lat] },
+        properties: {
+          address: row.address, city: row.city, state: row.state, zip: row.zip,
+          fiberStatus: row.fiberStatus, isNewFiber: row.isNewFiber,
+          billingStatus: row.billingStatus,
+          householdSegmentType: row.householdSegmentType,
+          techType: row.techType, placement: row.placement,
+          maxDownloadMbps: row.maxDownloadMbps,
+          competitorName: row.competitorName,
+          leadTag: row.leadTag ?? null,
+          leadScore: row.leadScore ?? null,
+        },
+      }];
     });
-    const m = new (window as any).mapboxgl.Marker({ element: el }).setLngLat([row.lng, row.lat]).addTo(map);
-    scanMarkersRef.current.push(m);
+    if (!additions.length) return;
+    scanGeoJsonRef.current = {
+      type: "FeatureCollection",
+      features: [...scanGeoJsonRef.current.features, ...additions],
+    };
+    src.setData(scanGeoJsonRef.current);
+
+    // Start new points at radius/opacity zero, then reveal them together on the
+    // next frame. Paint transitions provide a short scale/fade without React
+    // renders or per-point animation loops. Reduced-motion reveals immediately.
+    const reveal = () => {
+      for (const id of newIds) {
+        try { map.setFeatureState({ source: SCAN_RESULTS_SOURCE, id }, { visible: true }); } catch {}
+      }
+    };
+    let reduced = false;
+    try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch {}
+    if (reduced) reveal();
+    else requestAnimationFrame(() => requestAnimationFrame(reveal));
   }, []);
 
   const pollJob = useCallback(async (id: string, bbox?: BBox) => {
@@ -1823,21 +1937,22 @@ export default function MapView() {
       setTotal(status.total);
       const newRows = status.results ?? [];
       lastRenderedCount.current = status.resultCount ?? (lastRenderedCount.current + newRows.length);
-      let found = 0;
-      for (const r of newRows) {
+      const freshRows: Array<ScanRow & { leadTag?: string | null; leadScore?: number }> = [];
+      for (const r of newRows as Array<ScanRow & { leadTag?: string | null; leadScore?: number }>) {
         if (!r.lat || !r.lng) continue;
         if (bbox && !inBBox(r.lat, r.lng, bbox)) continue;
         // Only surface NEW FIBER with no current subscriber — the green hot-lead
         // pins. Everything else (tenured, copper, coming soon, upgrades) is skipped.
         if (!(r.isNewFiber && r.billingStatus === "N")) continue;
-        addScanDot(r);
-        found++;
+        freshRows.push(r);
       }
+      addScanRows(freshRows);
+      const found = freshRows.length;
       if (found > 0) { foundTotalRef.current += found; setNewFound(p => p + found); }
 
       // Live lead refresh: pull newly-saved leads onto the map every ~25 polls
       // (~10s) while scanning. Found addresses already appear INSTANTLY as scan
-      // dots (addScanDot above) — this refresh only converts them to assignable
+      // circles (addScanRows above) — this refresh only converts them to assignable
       // pins, so 10s is invisible to the operator, while each refresh at 50k
       // leads costs a full payload + GeoJSON rebuild + re-cluster (was every ~3s).
       pollTickRef.current += 1;
@@ -1852,6 +1967,11 @@ export default function MapView() {
           found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null),
           checked: status.total ?? status.done, // homes WERE checked — empty ≠ "no homes"
         });
+        // The scan scope is no longer an editing affordance. Clear both React
+        // state and the Mapbox source immediately so the completed lead circles
+        // are the only geometry left on the map.
+        setDrawnBBox(null);
+        clearDrawLayer();
         qc.invalidateQueries({ queryKey: ["/api/leads"] }); qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       } else if (status.status === "error") {
         // Previously unhandled: an errored job kept polling forever with the
@@ -1860,13 +1980,15 @@ export default function MapView() {
         setScanOutcome({ kind: "error", found: foundTotalRef.current, at: Date.now(), boxKey: boxKeyOf(bbox ?? null), detail: "The scan hit an error partway through. Try again." });
       }
     } catch { /* transient fetch hiccup — keep polling */ }
-  }, [addScanDot, stopPolling, qc]);
+  }, [addScanRows, clearDrawLayer, stopPolling, qc]);
 
   const startScan = useCallback(async (endpoint: string, body: object) => {
     if (!mapReady) return;
     const wasDeep = (body as any)?.deep === true;
-    scanMarkersRef.current.forEach(m => m.remove());
-    scanMarkersRef.current = []; lastRenderedCount.current = 0; pollTickRef.current = 0;
+    scanGeoJsonRef.current = emptyFeatureCollection();
+    scanFeatureSeqRef.current = 0;
+    (mapRef.current?.getSource(SCAN_RESULTS_SOURCE) as any)?.setData(scanGeoJsonRef.current);
+    lastRenderedCount.current = 0; pollTickRef.current = 0;
     foundTotalRef.current = 0;
     setNewFound(0); setDone(0); setTotal(0); setError(null); setScanOutcome(null);
     stopPolling(); setScanning(true);
@@ -1878,6 +2000,8 @@ export default function MapView() {
       if (data?.reason === "all_known" || !data?.jobId) {
         setScanning(false);
         setScanOutcome({ kind: "known", found: 0, checked: data?.harvested ?? 0, at: Date.now(), boxKey: boxKeyOf(drawnBBox) });
+        setDrawnBBox(null);
+        clearDrawLayer();
         return;
       }
       setJobId(data.jobId); setTotal(data.total ?? 0);
@@ -1892,7 +2016,7 @@ export default function MapView() {
         detail: message, canDeep: reason === "no_addresses" && !wasDeep,
       });
     }
-  }, [mapReady, stopPolling, pollJob, drawnBBox]);
+  }, [mapReady, stopPolling, pollJob, drawnBBox, clearDrawLayer]);
 
   const stopScan = useCallback(async () => {
     stopPolling();
@@ -1983,13 +2107,30 @@ export default function MapView() {
       if (!res.ok || data.lng == null) { toast({ title: data.error || "Address not found", variant: "destructive" }); return; }
       const map = mapRef.current;
       if (map) {
-        map.flyTo({ center: [data.lng, data.lat], zoom: 16, duration: 900, essential: true });
-        setTimeout(() => {
-          const m = mapRef.current;
-          if (m && (Math.abs(m.getCenter().lng - data.lng) > 0.001)) m.jumpTo({ center: [data.lng, data.lat], zoom: 16 });
-        }, 950);
+        suspendFollowCameraRef.current();
+        didAutoFitRef.current = true;
+        map.stop();
+        searchGeoJsonRef.current = {
+          type: "FeatureCollection",
+          features: [{
+            type: "Feature",
+            id: "address-search",
+            geometry: { type: "Point", coordinates: [data.lng, data.lat] },
+            properties: { placeName: data.placeName ?? query },
+          }],
+        };
+        (map.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(searchGeoJsonRef.current);
+        map.flyTo({
+          center: [data.lng, data.lat],
+          zoom: 17.25,
+          bearing: map.getBearing(),
+          pitch: map.getPitch(),
+          duration: 850,
+          essential: true,
+        });
       }
       setSidebarSearch("");
+      setSearchOpen(false);
       toast({ title: `Jumped to ${data.placeName}`, description: isAdmin ? "Draw a Scan-Area box here, then scan for new fiber." : undefined });
     } catch (e: any) {
       toast({ title: "Address lookup failed", variant: "destructive" });
@@ -2002,6 +2143,10 @@ export default function MapView() {
     const map = mapRef.current;
     if (!map || !lead.lat || !lead.lng) return;
     const target: [number, number] = [lead.lng, lead.lat];
+    suspendFollowCameraRef.current();
+    didAutoFitRef.current = true;
+    searchGeoJsonRef.current = emptyFeatureCollection();
+    (map.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(searchGeoJsonRef.current);
     setSelectedLeadId(lead.id);
     // The card opens via selectedLeadId; camera padding keeps the pin visible
     // beside/above it (docked panel or bottom sheet).
@@ -2328,10 +2473,9 @@ export default function MapView() {
   // noToken is true only after we confirmed the token is unavailable (never during load)
   const noToken = mapTokenFailed;
 
-  // A completed scan goes STALE when its box scope is cleared or redrawn — the
-  // result no longer describes what's on the map. Drives the control's stale
-  // state + the "rescan" affordance, and blocks a redundant same-box rescan.
-  const scanStale = !!scanOutcome && scanOutcome.boxKey !== boxKeyOf(drawnBBox);
+  // A completed result remains visible after its rectangle is automatically
+  // cleared. It becomes stale only after the user commits a different box.
+  const scanStale = !!scanOutcome && !!drawnBBox && scanOutcome.boxKey !== boxKeyOf(drawnBBox);
 
   return (
     <div className="flex flex-col relative" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
@@ -2407,7 +2551,8 @@ export default function MapView() {
              changes. A fresh same-box result offers Rescan, never auto-repeats
              the expensive scan. ── */}
       {(drawMode || drawnBBox || scanning || (scanOutcome && !scanStale)) && isAdmin && (() => {
-        const freshSameBox = !!scanOutcome && !scanStale && scanOutcome.boxKey === boxKeyOf(drawnBBox);
+        const freshSameBox = !!scanOutcome && !scanStale
+          && (!drawnBBox || scanOutcome.boxKey === boxKeyOf(drawnBBox));
         const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
         const borderClass = scanning ? "border-orange-500/40"
           : freshSameBox && scanOutcome?.kind === "success" ? "border-emerald-500/40"
@@ -2661,6 +2806,12 @@ export default function MapView() {
                     ref={searchInputRef}
                     value={sidebarSearch}
                     onChange={e => setSidebarSearch(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === "Enter" && isAdmin && sidebarSearch.trim().length >= 3 && searchMatches.length === 0) {
+                        e.preventDefault();
+                        void jumpToAddress(sidebarSearch);
+                      }
+                    }}
                     placeholder="Search a street or address…"
                     aria-label="Search a street or address"
                     data-testid="map-search"
@@ -2985,7 +3136,7 @@ export default function MapView() {
                   badge={scanning ? "…" : scanOutcome && !scanStale && scanOutcome.kind === "success" ? String(scanOutcome.found) : undefined}
                   onClick={() => {
                     if (scanning) { void stopScan(); return; }
-                    setDrawMode(v => !v); setDrawnBBox(null); exitLasso(); setSearchOpen(false); setLayersOpen(false);
+                    setDrawMode(v => !v); setDrawnBBox(null); setScanOutcome(null); clearDrawLayer(); exitLasso(); setSearchOpen(false); setLayersOpen(false);
                   }}
                 />
               )}

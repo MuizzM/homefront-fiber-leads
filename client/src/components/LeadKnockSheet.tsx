@@ -534,9 +534,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         docked
           ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
           : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[24px] border-t border-white/10",
-        dragging ? "" : "transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+        dragging ? "" : "transition-transform duration-300",
       ].join(" ")}
-      style={{ transform, ...(docked && dockOffsetPx ? { right: dockOffsetPx } : null) }}
+      style={{
+        transform,
+        transitionTimingFunction: dragging ? undefined : "cubic-bezier(0.32,0.72,0,1)",
+        ...(docked && dockOffsetPx ? { right: dockOffsetPx } : null),
+      }}
     >
       {/* Drag region: handle + header only. touchAction none so the browser
           never steals the gesture for page scroll. Also the measured "header"

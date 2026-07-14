@@ -4625,11 +4625,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(409).json({ error: "That email already belongs to a staff account and cannot be converted into a rep account." });
     }
     const existingLinkedRep = existingAccount?.teamMemberId ? storage.getTeamMemberById(existingAccount.teamMemberId) : undefined;
-    if (existingAccount?.teamMemberId) {
-      if (!existingLinkedRep || (existingLinkedRep.tenantId != null && existingLinkedRep.tenantId !== tenantId)) {
-        return res.status(409).json({ error: "The existing rep profile is not part of this organization." });
-      }
+    const linkedRepBelongsToAnotherTenant = Boolean(
+      existingLinkedRep?.tenantId != null && existingLinkedRep.tenantId !== tenantId,
+    );
+    // A tenant-less login that still points at a real foreign profile is not an
+    // orphan: that profile is ownership evidence. Do not let a public
+    // application claim it. The safe auto-repair below is limited to a login
+    // already owned by this tenant (or a dangling profile id with no owner).
+    if (existingAccount?.tenantId == null && linkedRepBelongsToAnotherTenant) {
+      return res.status(409).json({ error: "That email is linked to a rep profile in another organization." });
     }
+    // A legacy login can be correctly assigned to this tenant while its stale
+    // team_member_id points at a deleted profile or a profile in another tenant.
+    // Never move that foreign profile (it may own knocks, sales, and payouts).
+    // Detach only the bad login link below, then reuse/create a clean profile in
+    // the approving tenant. This repairs the account without crossing history.
+    const linkedRepNeedsRepair = Boolean(existingAccount?.teamMemberId && (
+      !existingLinkedRep || linkedRepBelongsToAnotherTenant
+    ));
+    const repairedFromRepId = linkedRepNeedsRepair ? existingAccount?.teamMemberId ?? null : null;
 
     let userId: number | undefined;
     let teamMemberId: number | null = null;
@@ -4648,8 +4662,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (existing) {
         userId = existing.id;
         // Claim only an unassigned pre-membership login; never move an account
-        // from another tenant. Keep login active so the applicant can sign.
-        storage.updateUser(existing.id, { active: true, tenantId } as any);
+        // from another tenant. A stale/foreign rep link is detached, not moved.
+        // Keep login active so the applicant can sign.
+        storage.updateUser(existing.id, {
+          active: true,
+          tenantId,
+          ...(linkedRepNeedsRepair ? { teamMemberId: null } : {}),
+        } as any);
         if (existingLinkedRep && existingLinkedRep.tenantId == null) {
           storage.updateTeamMember(existingLinkedRep.id, { tenantId } as any);
         }
@@ -4688,6 +4707,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           if (userId != null) storage.updateUser(userId, { teamMemberId } as any);
         }
         if (teamMemberId != null) storage.updateTeamMember(teamMemberId, { active: false }, tenantId ?? undefined);
+
+        if (linkedRepNeedsRepair && userId != null && teamMemberId != null) {
+          storage.logActivity(reviewer?.id ?? null, "onboarding.rep_profile_link_repaired", "user", userId, {
+            applicationId: application.id,
+            detachedRepId: repairedFromRepId,
+            linkedRepId: teamMemberId,
+            reason: existingLinkedRep ? "foreign_tenant_profile" : "missing_profile",
+          }, req.ip, tenantId);
+        }
 
         if (commission && tenantId != null && teamMemberId != null) {
           const structure = commission.structure === "FLAT" ? "FLAT" : "TIERED";

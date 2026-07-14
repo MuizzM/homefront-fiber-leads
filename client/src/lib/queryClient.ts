@@ -19,6 +19,39 @@ function notifyIfSessionExpired(status: number) {
   if (status === 401 && _sessionId) _onUnauthorized?.();
 }
 
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+    public readonly requestId: string | null,
+    public readonly retryAfterMs: number | null,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+function retryAfterMs(res: Response): number | null {
+  const raw = res.headers.get("retry-after");
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - Date.now()) : null;
+}
+
+function responseMessage(status: number, raw: string, fallback: string): string {
+  let detail = raw.trim();
+  try {
+    const parsed = JSON.parse(detail);
+    if (parsed && typeof parsed === "object") detail = String(parsed.error || parsed.message || fallback);
+  } catch { /* plain-text API error */ }
+  // Never let an upstream HTML page or accidentally-large diagnostic flood a
+  // toast/error surface. The request id remains available for support tracing.
+  detail = detail.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().slice(0, 320) || fallback;
+  return `${status}: ${detail}`;
+}
+
 function authHeaders(extra?: Record<string, string>, includeCsrf = false): Record<string, string> {
   const h: Record<string, string> = { ...extra };
   if (_sessionId) {
@@ -33,9 +66,29 @@ function authHeaders(extra?: Record<string, string>, includeCsrf = false): Recor
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    const text = await res.text();
+    throw new ApiError(
+      res.status,
+      responseMessage(res.status, text, res.statusText || "Request failed"),
+      res.headers.get("x-request-id"),
+      retryAfterMs(res),
+    );
   }
+}
+
+/** Safe GET retry policy for flaky field connections; mutations remain one-shot. */
+export function shouldRetryQuery(failureCount: number, error: unknown): boolean {
+  if (failureCount >= 2) return false;
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return true;
+  if (!(error instanceof ApiError)) return failureCount < 1;
+  return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+}
+
+export function queryRetryDelay(attempt: number, error: unknown): number {
+  if (error instanceof ApiError && error.retryAfterMs != null) {
+    return Math.min(30_000, Math.max(250, error.retryAfterMs));
+  }
+  return Math.min(8_000, 600 * 2 ** attempt);
 }
 
 // In-flight GET de-dupe: when several callers (multiple queries/components, or a
@@ -128,7 +181,8 @@ export const queryClient = new QueryClient({
       // refetches in the background so other reps' knocks/assignments appear.
       // (Was Infinity — data never refreshed unless this tab mutated it.)
       staleTime: 60_000,
-      retry: false,
+      retry: shouldRetryQuery,
+      retryDelay: queryRetryDelay,
     },
     mutations: {
       retry: false,
