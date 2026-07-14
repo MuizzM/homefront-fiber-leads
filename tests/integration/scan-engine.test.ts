@@ -131,9 +131,9 @@ beforeAll(async () => {
 });
 
 describe("budgeted scan engine (replay — zero proxy)", () => {
-  it("fails closed without a registered evidence adapter and never records a false negative", async () => {
-    const evidence = await import("../../server/kineticProviderAdapter");
-    evidence.setKineticEvidenceSourceForTest(null);
+  it("fails closed without an authorized provider session and never records a false negative", async () => {
+    const priorAuthorization = process.env.KFS_AUTOMATION_AUTHORIZED;
+    delete process.env.KFS_AUTOMATION_AUTHORIZED;
     const inserted = rawDb
       .prepare(
         `INSERT INTO scan_targets
@@ -153,7 +153,13 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     });
     store.enqueueRunTargets(runId, [{ id: targetId, seq: 0 }]);
 
-    await engine.runScanWorker(runId, TENANT);
+    try {
+      await engine.runScanWorker(runId, TENANT);
+    } finally {
+      if (priorAuthorization === undefined)
+        delete process.env.KFS_AUTOMATION_AUTHORIZED;
+      else process.env.KFS_AUTOMATION_AUTHORIZED = priorAuthorization;
+    }
 
     expect(store.getRun(runId, TENANT)).toMatchObject({
       status: "done",

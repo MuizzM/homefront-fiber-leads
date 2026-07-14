@@ -10,7 +10,11 @@
 // → transition → lead creation → resume) is verifiable by REPLAYING real
 // recorded responses, with zero proxy bandwidth spent. Rep-facing leads are
 // projected later, only after independent fiber evidence.
-import type { ScanResult } from "./scanner";
+import {
+  refreshTokenFromApi,
+  scanAddress,
+  type ScanResult,
+} from "./scanner";
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import { rawDb } from "./db";
@@ -22,6 +26,7 @@ import {
 import {
   initController,
   observeRound,
+  onSessionRefreshed,
   DEFAULT_RATE_CFG,
   type RateState,
 } from "./rateController";
@@ -40,7 +45,6 @@ import {
 import { projectConfirmedFreshLeads } from "./freshFiberProjector";
 import { structuredLog } from "./structuredLog";
 import { calculateFiberFreshness } from "@shared/fiberFreshness";
-import { getKineticEvidenceGateway } from "./kineticProviderAdapter";
 import {
   appendFiberEvent,
   beginFiberWorker,
@@ -64,93 +68,12 @@ export type Checker = (a: {
   zip: string;
 }) => Promise<CheckResult>;
 
-function inconclusiveEvidenceResult(
-  address: { address: string; city: string; state: string; zip: string },
-  notes: string,
-): ScanResult {
-  return {
-    ...address,
-    lat: null,
-    lng: null,
-    fiberStatus: "unknown",
-    isNewFiber: false,
-    isTenured: false,
-    fiberAvailable: false,
-    maxDownloadKbps: null,
-    maxDownloadMbps: null,
-    speedTier: null,
-    techType: null,
-    chipSetType: null,
-    placement: null,
-    maxQual: null,
-    competitorName: null,
-    competitorSpeedMbps: null,
-    competitorTech: null,
-    inCompetitorArea: false,
-    addressCatalogDate: null,
-    householdSegmentType: null,
-    billingStatus: null,
-    exchangeId: null,
-    dfAddressId: null,
-    accessId: null,
-    confidence: "LOW",
-    apiSource: "failed",
-    blocked: false,
-    notes,
-    leadTag: null,
-    leadScore: 0,
-  };
-}
-
-// Default checker — only a registered, reviewed evidence adapter may make a
-// live request. Decodo remains transport inside such an adapter; it never
-// creates authorization or a provider contract.
+// Default checker — the existing authorized Kinetic path through the stable
+// Decodo transport. scanner.ts owns authentication, request dedupe/caching,
+// upstream-denial handling, and the provider concurrency ceiling.
 const liveChecker: Checker = async (a) => {
-  const response = await getKineticEvidenceGateway().qualifyAddress(a);
-  if (response.outcome === "not_found") {
-    const result = {
-      ...inconclusiveEvidenceResult(
-        a,
-        "Approved evidence source returned an explicit not-found result.",
-      ),
-      fiberStatus: "no_service" as const,
-      apiSource: "kinetic_live" as const,
-      confidence: "HIGH" as const,
-      rawResponse: { outcome: "not_found" },
-    };
-    return { result, bytes: DEFAULT_BYTES_PER_CHECK, checkFailed: false };
-  }
-  const record = response.outcome === "ok" ? response.record : null;
-  if (!record || record.isLive == null) {
-    const result = inconclusiveEvidenceResult(
-      a,
-      response.message ||
-        "Evidence source returned no conclusive availability result.",
-    );
-    return { result, bytes: DEFAULT_BYTES_PER_CHECK, checkFailed: true };
-  }
-  const isLive = record.isLive === true;
-  const result: ScanResult = {
-    ...inconclusiveEvidenceResult(
-      a,
-      `Evidence from ${record.evidenceSource} (${record.parserVersion}).`,
-    ),
-    address: record.address ?? a.address,
-    city: record.city ?? a.city,
-    state: record.state ?? a.state,
-    zip: record.zip ?? a.zip,
-    lat: record.latitude,
-    lng: record.longitude,
-    fiberStatus: isLive ? "existing_fiber" : "no_service",
-    fiberAvailable: isLive,
-    techType: record.technologyType,
-    exchangeId: record.exchangeId,
-    dfAddressId: record.kineticAddressId,
-    confidence: "HIGH",
-    apiSource: "kinetic_live",
-    rawResponse: record.rawResponse,
-  };
-  const checkFailed = false;
+  const result = await scanAddress(a.address, a.city, a.state, a.zip);
+  const checkFailed = result.apiSource === "failed";
   // Estimate bytes from the serialized raw response when present (the proxy bills
   // request + response); fall back to the flat estimate. Under-counting cost is
   // never acceptable, so failures still cost their request bytes.
@@ -335,7 +258,14 @@ export async function runScanWorker(
         DEFAULT_RATE_CFG,
       );
       ctrl = d.state;
-      if (d.action === "refresh_session" || d.action === "hard_backoff")
+      if (d.action === "refresh_session") {
+        try {
+          await refreshTokenFromApi();
+        } catch {
+          // The controller remains throttled and retries only after backoff.
+        }
+        ctrl = onSessionRefreshed(ctrl);
+      } else if (d.action === "hard_backoff")
         await sleep(d.backoffMs);
       else if (d.recoveryPauseMs > 0) await sleep(d.recoveryPauseMs);
     }

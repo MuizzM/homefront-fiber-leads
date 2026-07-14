@@ -4141,9 +4141,9 @@ export default function MapView() {
                     <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-300" />
                     <span>
                       Address discovery will run and place rooftop pins, but
-                      Kinetic verification is unavailable until an approved
-                      evidence adapter is active. Unverified addresses stay red
-                      and never become leads.
+                      Kinetic verification will start automatically when the
+                      authorized provider token is active. Until then,
+                      unverified addresses stay red and never become leads.
                     </span>
                   </div>
                 )}

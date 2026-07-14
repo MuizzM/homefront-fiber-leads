@@ -12,7 +12,6 @@ import { createScanRun, enqueueRunTargets, getRun } from "../scanIntelStore";
 import { runScanWorker } from "../scanEngine";
 import { projectConfirmedFreshLeads } from "../freshFiberProjector";
 import { structuredLog } from "../structuredLog";
-import { getKineticEvidenceGateway } from "../kineticProviderAdapter";
 import { resolvePointLocality, resolveTownBoundary } from "./boundary";
 import { addressSources, stableSourceCacheKey } from "./sources";
 import type { SourcePage } from "./types";
@@ -547,43 +546,6 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
       job.tenantId,
       reusedTargets.map((row) => Number(row.id)),
     );
-  }
-  const evidenceStatus = getKineticEvidenceGateway().status();
-  if (!evidenceStatus.supportsLiveQualification || evidenceStatus.circuitOpen) {
-    const reason = evidenceStatus.circuitOpen
-      ? `Availability verification paused: ${evidenceStatus.circuitReason ?? "evidence-source circuit open"}.`
-      : "Addresses found. Availability verification requires an approved live evidence adapter or an authorized evidence import.";
-    rawDb
-      .prepare(
-        `UPDATE qualification_checks SET state='failed',result='verification_required',
-      checked_at=datetime('now'),updated_at=datetime('now') WHERE job_id=? AND state='queued'`,
-      )
-      .run(job.id);
-    rawDb
-      .prepare(
-        `UPDATE discovery_jobs SET error_summary=?,updated_at=datetime('now') WHERE id=?`,
-      )
-      .run(reason, job.id);
-    markQualificationDispatchComplete(job.id);
-    while (publishQualificationMapCandidates(job) > 0) {
-      /* bounded event batches */
-    }
-    while (publishQualificationMapResults(job) > 0) {
-      /* bounded event batches */
-    }
-    appendDiscoveryEvent(
-      job.tenantId,
-      job.id,
-      "qualification.verification_required",
-      {
-        reason,
-        evidenceMode: evidenceStatus.mode,
-        evidenceSource: evidenceStatus.source,
-        candidates: candidates.length,
-      },
-    );
-    reconcileQualificationJob(getDiscoveryJob(job.tenantId, job.id)!);
-    return;
   }
   try {
     const queued = rawDb
