@@ -57,10 +57,13 @@ describe("DistributedProviderCoordinator", () => {
     const active = coordinator.execute("active", "market", async () => { await gate; return { value: 0 }; }, codec);
     await new Promise(resolve => setTimeout(resolve, 20));
     const city = coordinator.execute("city", "city", async () => { order.push("city"); return { value: 1 }; }, codec);
-    const manual = coordinator.execute("manual", "manual", async () => { order.push("manual"); return { value: 2 }; }, codec);
+    const nightly = coordinator.execute("nightly", "nightly", async () => { order.push("nightly"); return { value: 2 }; }, codec);
+    const comingSoon = coordinator.execute("coming", "coming_soon", async () => { order.push("coming"); return { value: 3 }; }, codec);
+    const lasso = coordinator.execute("lasso", "lasso", async () => { order.push("lasso"); return { value: 4 }; }, codec);
+    const manual = coordinator.execute("manual", "manual", async () => { order.push("manual"); return { value: 5 }; }, codec);
     release();
-    await Promise.all([active, city, manual]);
-    expect(order).toEqual(["manual", "city"]);
+    await Promise.all([active, city, nightly, comingSoon, lasso, manual]);
+    expect(order).toEqual(["manual", "lasso", "coming", "nightly", "city"]);
     coordinator.halt("403 denied");
     await expect(coordinator.execute("future", "manual", async () => ({ value: 3 }), codec)).rejects.toThrow("403 denied");
     expect(coordinator.snapshot()).toMatchObject({ halted: true, haltReason: "403 denied" });

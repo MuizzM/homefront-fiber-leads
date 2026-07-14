@@ -29,7 +29,7 @@ import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from
 // uqualProvisioningResult.finalPlacement → "BUR" (buried) | "AER" (aerial)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 300);
+const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 100);
 const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 2);
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
@@ -112,12 +112,13 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
 }
 
 const authorizedTokenPool = new AuthorizedTokenPool({
-  maxSize: Number.isFinite(configuredTokenPoolSize) ? configuredTokenPoolSize : 300,
+  maxSize: Number.isFinite(configuredTokenPoolSize) ? configuredTokenPoolSize : 100,
   warmMinimum: Number.isFinite(configuredWarmTokens) ? configuredWarmTokens : 2,
   refreshMarginMs: TOKEN_REFRESH_MARGIN_MS,
   maintenanceIntervalMs: Number(process.env.KFS_TOKEN_MAINTENANCE_MS ?? 15_000),
   maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 10),
   maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 2),
+  maxChecksPerToken: Number(process.env.KFS_TOKEN_MAX_CHECKS ?? 100),
   mint: () => mintAuthorizedToken(),
 });
 
@@ -470,7 +471,10 @@ async function scanAddressDirect(
 
   let tokenLease: AuthorizedTokenLease | null = null;
   try {
-    tokenLease = await authorizedTokenPool.lease();
+    const tokenAddressKey = crypto.createHash("sha256")
+      .update(normalizeKineticAddressKey(address, city, state, zip))
+      .digest("hex");
+    tokenLease = await authorizedTokenPool.lease(tokenAddressKey);
     let authRefreshes = 0;
     let rateLimitAttempts = 0;
     let res: Response;

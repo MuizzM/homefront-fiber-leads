@@ -34,6 +34,46 @@ rawDb.exec(`DELETE FROM provider_rate_events; DELETE FROM provider_admission_que
   DELETE FROM provider_address_locks; DELETE FROM provider_shared_result_cache;
   UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL,next_start_at=0 WHERE id=1;`);
 
+// Capacity phase: 100 anonymous token slots × 100 distinct addresses each.
+let distributionActiveMints = 0;
+let distributionPeakMints = 0;
+let distributionMintedTokens = 0;
+const distributionPool = new AuthorizedTokenPool({
+  maxSize: 100,
+  warmMinimum: 100,
+  maxChecksPerToken: 100,
+  maxLeasesPerToken: 1_000,
+  maxConcurrentRefreshes: 2,
+  refreshMarginMs: 1_000,
+  mint: async slotId => {
+    distributionActiveMints++;
+    distributionPeakMints = Math.max(distributionPeakMints, distributionActiveMints);
+    await delay(1);
+    distributionActiveMints--;
+    distributionMintedTokens++;
+    return {
+      token: `distribution-token-${slotId}`,
+      expiresAt: Date.now() + 60_000,
+    };
+  },
+});
+const distributionCounts = Array.from({ length: 100 }, () => 0);
+const distributionStarted = performance.now();
+await Promise.all(Array.from({ length: 10_000 }, async (_, index) => {
+  const lease = await distributionPool.lease(`unique-address-${index}`);
+  distributionCounts[lease.slotId]++;
+  lease.release();
+}));
+const distributionSnapshot = distributionPool.snapshot();
+let capacityRejected = false;
+try {
+  await distributionPool.lease("unique-address-over-capacity");
+} catch (error) {
+  capacityRejected = String((error as Error).message).includes("BATCH_CAPACITY_EXHAUSTED");
+}
+const distributionElapsedMs = Math.round(performance.now() - distributionStarted);
+distributionPool.stop();
+
 let activeMints = 0;
 let peakMints = 0;
 let mintedTokens = 0;
@@ -43,6 +83,7 @@ const tokenPool = new AuthorizedTokenPool({
   refreshMarginMs,
   maxLeasesPerToken: 10,
   maxConcurrentRefreshes: 2,
+  maxChecksPerToken: 100,
   maintenanceIntervalMs: 1_000,
   mint: async slotId => {
     activeMints++;
@@ -84,7 +125,7 @@ await Promise.all(calls.map(async ({ key, source }) => {
     providerStarts.push(Date.now());
     activeSearches++;
     peakSearches = Math.max(peakSearches, activeSearches);
-    const lease = await tokenPool.lease();
+    const lease = await tokenPool.lease(key);
     try {
       await delay(providerLatencyMs);
       return { key };
@@ -106,11 +147,14 @@ const maxStartsInWindow = maximumStartsInWindow(providerStarts, simulatedMinuteM
 const elapsedMs = Math.round(performance.now() - suiteStarted);
 const equivalentChecksPerMinute = Number((providerCalls / (elapsedMs / simulatedMinuteMs)).toFixed(1));
 const assertions = {
+  distributedAllTenThousand: distributionSnapshot.checksUsed === 10_000,
+  exactlyOneHundredPerToken: distributionCounts.every(count => count === 100),
+  capacityEnforced: capacityRejected,
   noQuotaViolations: maxStartsInWindow <= quotaPerMinute,
   sustainedAtLeast95Percent: maxStartsInWindow >= quotaPerMinute * 0.95,
   noDuplicateProviderRequests: providerCalls === uniqueChecks,
   noLostJobs: calls.length === uniqueChecks + duplicateCalls,
-  noRefreshStorm: peakMints <= 2,
+  noRefreshStorm: peakMints <= 2 && distributionPeakMints <= 2,
   poolRedacted: tokenPool.snapshot().states.DISABLED > 0,
 };
 
@@ -119,6 +163,17 @@ console.log(JSON.stringify({
   note: "No external provider, proxy, bearer token, or resident address is used. The rolling minute is time-compressed for deterministic CI execution.",
   configuredQuotaPerMinute: quotaPerMinute,
   simulatedMinuteMs,
+  tokenCapacity: {
+    configuredTokens: 100,
+    checksPerToken: 100,
+    uniqueAddresses: distributionSnapshot.checksUsed,
+    minimumPerToken: Math.min(...distributionCounts),
+    maximumPerToken: Math.max(...distributionCounts),
+    elapsedMs: distributionElapsedMs,
+    mintedTokens: distributionMintedTokens,
+    peakConcurrentRefreshes: distributionPeakMints,
+    capacityRejected,
+  },
   uniqueChecks,
   totalCallers: calls.length,
   duplicateCalls,
