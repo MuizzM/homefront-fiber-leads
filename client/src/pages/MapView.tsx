@@ -737,6 +737,9 @@ export default function MapView() {
       stillFresh: j.stillFreshCount || 0,
       serviceActive: j.serviceActiveCount || 0, // former fresh lead that bought service
       comingSoon: j.comingSoonCount || 0,
+      // Unresolved = failed attempts at addresses with NO confirmed lead. A
+      // failed re-check of a known lead stays in the fresh buckets above.
+      unresolved: j.unresolvedCount || 0,
       failed: j.failedCount || 0,
       coverage: j.coverageStatus || null,
     };
@@ -4016,7 +4019,7 @@ export default function MapView() {
                   { label: "Still fresh", value: scanSummary.stillFresh, tone: "text-emerald-300" },
                   { label: "Now active", value: scanSummary.serviceActive, tone: "text-sky-400" },
                   { label: "Coming soon", value: scanSummary.comingSoon, tone: "text-amber-400" },
-                  { label: "Unresolved", value: scanSummary.failed, tone: "text-white/45" },
+                  { label: "Unresolved", value: scanSummary.unresolved, tone: "text-white/45" },
                 ].map((c) => (
                   <div
                     key={c.label}
@@ -4039,14 +4042,14 @@ export default function MapView() {
               {!scanning &&
                 !scanSubmitting &&
                 scanSummary.coverage &&
-                ["partial", "sparse", "verification_required", "source_unavailable"].includes(
+                ["partial_coverage", "sparse_source_data", "verification_required", "source_unavailable"].includes(
                   String(scanSummary.coverage),
                 ) && (
                   <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-300/90" data-testid="scan-coverage-gap">
                     <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
                     <span>
                       OpenStreetMap coverage looks{" "}
-                      {String(scanSummary.coverage) === "sparse" || String(scanSummary.coverage) === "source_unavailable"
+                      {String(scanSummary.coverage) === "sparse_source_data" || String(scanSummary.coverage) === "source_unavailable"
                         ? "sparse"
                         : "partial"}{" "}
                       here — some properties may not be mapped yet, so this isn't guaranteed to be every address.

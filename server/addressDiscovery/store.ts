@@ -1230,12 +1230,17 @@ export function reconcileQualificationJob(job: DiscoveryJobRow): {
     SUM(CASE WHEN result='no_service' THEN 1 ELSE 0 END) AS noService FROM qualification_checks WHERE job_id=?`,
     )
     .get(job.id) as any;
+  // Any confirmed fresh lead counts — cross_verified (independent corroboration)
+  // AND kinetic_new_fiber (the authoritative NEW FIBER + billing N publish rule).
+  // Filtering on cross_verified alone made every authoritative lead invisible to
+  // fresh_found, so the Field Map strip showed 0 fresh even as leads published.
   const projectedLeads = rawDb
     .prepare(
       `SELECT l.id,l.lat,l.lng,l.lead_status AS status,l.address,l.city,l.state,l.zip,
+    l.fresh_confidence AS freshConfidence,
     q.id AS checkId,q.lead_id AS priorLeadId,q.canonical_address_id AS canonicalAddressId
     FROM qualification_checks q JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id
-    WHERE q.job_id=? AND l.lead_tag='fresh_fiber_confirmed' AND l.fresh_confidence='cross_verified'`,
+    WHERE q.job_id=? AND l.lead_tag='fresh_fiber_confirmed'`,
     )
     .all(job.id) as any[];
   for (const lead of projectedLeads) {
@@ -1258,7 +1263,7 @@ export function reconcileQualificationJob(job: DiscoveryJobRow): {
         lng: lead.lng,
         status: lead.status,
         leadTag: "fresh_fiber_confirmed",
-        freshConfidence: "cross_verified",
+        freshConfidence: lead.freshConfidence,
         isFreshFiber: true,
         qualified: true,
       },
@@ -1274,7 +1279,7 @@ export function reconcileQualificationJob(job: DiscoveryJobRow): {
           zip: lead.zip,
           status: lead.status,
           leadTag: "fresh_fiber_confirmed",
-          freshConfidence: "cross_verified",
+          freshConfidence: lead.freshConfidence,
           isFreshFiber: true,
           qualified: true,
         },

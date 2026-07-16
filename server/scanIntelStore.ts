@@ -25,13 +25,13 @@ export function getMarketAggregates(tenantId: number): MarketAggregate[] {
             MAX(s.last_scanned_at) AS lastVerifiedAt
        FROM scan_targets s
        LEFT JOIN leads fl ON fl.tenant_id=? AND fl.source_scan_target_id=s.id
-         AND fl.lead_tag='fresh_fiber_confirmed' AND fl.fresh_confidence='cross_verified'
+         AND fl.lead_tag='fresh_fiber_confirmed'
       GROUP BY lower(s.city), lower(s.state)`,
     tenantId,
   );
 
-  // Lead operational rollup per city (tenant-scoped). Only independently
-  // confirmed fresh-fiber leads count as knockable market opportunity.
+  // Lead operational rollup per city (tenant-scoped). Every projector-stamped
+  // fresh-fiber lead counts — cross-verified OR authoritative NEW FIBER + billing N.
   const leadAgg = all<{ city: string; state: string; leads: number; worked: number; unworked: number; sold: number; lastLeadAt: string | null }>(
     `SELECT l.city AS city, l.state AS state,
             COUNT(*) AS leads,
@@ -42,7 +42,7 @@ export function getMarketAggregates(tenantId: number): MarketAggregate[] {
        FROM leads l
        LEFT JOIN (SELECT lead_id, COUNT(*) c FROM knock_log GROUP BY lead_id) k ON k.lead_id = l.id
       WHERE l.tenant_id = ? AND l.city IS NOT NULL
-        AND l.lead_tag='fresh_fiber_confirmed' AND l.fresh_confidence='cross_verified'
+        AND l.lead_tag='fresh_fiber_confirmed'
         AND l.source_scan_target_id IS NOT NULL AND l.fresh_confirmed_at IS NOT NULL
       GROUP BY lower(l.city), lower(l.state)`,
     tenantId,
@@ -92,13 +92,13 @@ export function getKnownNewFiberPoints(tenantId: number, city?: string, state = 
         `SELECT lat, lng FROM scan_targets WHERE last_is_new_fiber = 1 AND last_billing_status='N' AND lat IS NOT NULL AND lower(city)=lower(?) AND lower(state)=lower(?)
          UNION ALL
          SELECT lat, lng FROM leads WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed'
-           AND fresh_confidence='cross_verified' AND source_scan_target_id IS NOT NULL
+           AND source_scan_target_id IS NOT NULL
            AND lat IS NOT NULL AND lower(city)=lower(?)`,
         city, state, tenantId, city,
       )
     : all<{ lat: number; lng: number }>(
         `SELECT lat, lng FROM leads WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed'
-           AND fresh_confidence='cross_verified' AND source_scan_target_id IS NOT NULL AND lat IS NOT NULL`, tenantId);
+           AND source_scan_target_id IS NOT NULL AND lat IS NOT NULL`, tenantId);
   return rows.filter(r => Number.isFinite(r.lat) && Number.isFinite(r.lng));
 }
 
@@ -124,8 +124,9 @@ export function getPoolTargetsForCity(city: string, state: string, cap = 60_000)
   }));
 }
 
-// Independently confirmed fresh-fiber points for the map/clustering. Source is
-// the projector-stamped leads board; legacy single-source rows are excluded,
+// Confirmed fresh-fiber points for the map/clustering (cross-verified or
+// authoritative). Source is the projector-stamped leads board; legacy
+// unstamped rows are excluded,
 // carrying the operational signal (worked/sold via knocks, competitor, score)
 // AND real freshness: created_at is when we verified this door as new fiber, so
 // cluster freshness is data-driven, not a hardcoded null. Optional city scope
@@ -148,7 +149,7 @@ export function getOpportunityPoints(
        FROM leads l
        LEFT JOIN (SELECT lead_id, COUNT(*) c FROM knock_log GROUP BY lead_id) k ON k.lead_id = l.id
       WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-        AND l.fresh_confidence='cross_verified' AND l.source_scan_target_id IS NOT NULL
+        AND l.source_scan_target_id IS NOT NULL
         AND l.fresh_confirmed_at IS NOT NULL AND l.lat IS NOT NULL ${cityFilter} ${box}`,
     ...args,
   );

@@ -10,11 +10,13 @@ export type DiscoveryJobStatus =
   | "failed"
   | "cancelled";
 
+// Values the server's coverageStatus(job) actually emits (routes.ts).
 export type CoverageStatus =
-  | "high"
-  | "partial"
-  | "sparse"
+  | "high_coverage"
+  | "partial_coverage"
+  | "sparse_source_data"
   | "source_unavailable"
+  | "still_processing"
   | "processing"
   | "verification_required"
   | string;
@@ -50,6 +52,8 @@ export interface DiscoveryJob {
   stillFreshCount: number;
   serviceActiveCount: number;
   comingSoonCount: number;
+  /** Failed attempts at addresses with NO confirmed lead (true unknowns). */
+  unresolvedCount: number;
   failedCount: number;
   cachedCount: number;
   coverageStatus: CoverageStatus | null;
@@ -209,6 +213,9 @@ export function normalizeDiscoveryJob(input: Partial<DiscoveryJob> & { id: strin
     stillFreshCount: finiteCount(input.stillFreshCount),
     serviceActiveCount: finiteCount(input.serviceActiveCount),
     comingSoonCount: finiteCount(input.comingSoonCount),
+    // Older server payloads had no unresolvedCount — fall back to failedCount
+    // so the tile stays populated rather than silently reading 0.
+    unresolvedCount: finiteCount(input.unresolvedCount ?? input.failedCount),
     failedCount: finiteCount(input.failedCount),
     cachedCount: finiteCount(input.cachedCount),
     coverageStatus: input.coverageStatus ?? "processing",

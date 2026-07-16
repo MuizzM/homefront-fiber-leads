@@ -145,7 +145,9 @@ function coverageStatus(job: DiscoveryJobRow): string {
   return "still_processing";
 }
 
-function publicJob(
+// Exported for the strip-count regression tests (the sole serializer for every
+// discovery job payload — REST list/detail and SSE alike).
+export function publicJob(
   job: DiscoveryJobRow,
   includeDiagnostics = false,
 ): Record<string, unknown> {
@@ -173,11 +175,16 @@ function publicJob(
   // NEW FIBER at an address that already has active billing.
   const startedAt = job.startedAt || job.createdAt;
   // Only run the (indexed) transition-count queries once the job has actually
-  // checked something — a job still discovering has all-zero transitions anyway,
-  // so a busy job LIST never pays for them.
-  const t = includeDiagnostics && (job.qualificationChecked > 0 || job.freshFound > 0)
+  // attempted something — a job still discovering has all-zero transitions anyway,
+  // so a busy job LIST never pays for them. Failed attempts DO open the gate:
+  // a failure at an already-confirmed lead must still report "still fresh",
+  // never sink the address into "unresolved".
+  const t = includeDiagnostics &&
+    (job.qualificationChecked > 0 || job.freshFound > 0 || job.qualificationFailed > 0)
     ? (() => {
-        const latest = `a.id=(SELECT MAX(a2.id) FROM availability_snapshots a2 WHERE a2.scan_target_id=q.scan_target_id)`;
+        // Latest snapshot by CANONICAL order (checked_at_epoch DESC, id DESC) —
+        // the only sanctioned chronological ordering for availability_snapshots.
+        const latest = `a.id=(SELECT a2.id FROM availability_snapshots a2 WHERE a2.scan_target_id=q.scan_target_id ORDER BY a2.checked_at_epoch DESC, a2.id DESC LIMIT 1)`;
         const coming = rawDb.prepare(
           `SELECT COUNT(*) n FROM qualification_checks q JOIN availability_snapshots a ON ${latest}
            WHERE q.job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND COALESCE(a.billing_status,'')='Y'`,
@@ -194,14 +201,24 @@ function publicJob(
            FROM qualification_checks q JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id AND l.lead_tag='fresh_fiber_confirmed'
            WHERE q.job_id=?`,
         ).get(startedAt, startedAt, job.id) as any;
+        // Truly unresolved = a failed/collision attempt at an address with NO
+        // confirmed fresh lead, plus tiles that never enumerated. A failure at a
+        // known lead is already counted in the fresh buckets — the failed attempt
+        // is retry history, not an unknown.
+        const unresolved = rawDb.prepare(
+          `SELECT COUNT(*) n FROM qualification_checks q
+           LEFT JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id AND l.lead_tag='fresh_fiber_confirmed'
+           WHERE q.job_id=? AND q.state IN ('failed','collision') AND l.id IS NULL`,
+        ).get(job.id) as any;
         return {
           comingSoonCount: Number(coming?.n ?? 0),
           serviceActiveCount: Number(active?.n ?? 0),
           newLeadsCount: Number(fresh?.newLeads ?? 0),
           stillFreshCount: Number(fresh?.stillFresh ?? 0),
+          unresolvedCount: Number(unresolved?.n ?? 0) + job.failedTiles,
         };
       })()
-    : { comingSoonCount: 0, serviceActiveCount: 0, newLeadsCount: 0, stillFreshCount: 0 };
+    : { comingSoonCount: 0, serviceActiveCount: 0, newLeadsCount: 0, stillFreshCount: 0, unresolvedCount: 0 };
   return {
     id: job.id,
     organizationId: job.tenantId,
@@ -223,6 +240,7 @@ function publicJob(
     stillFreshCount: t.stillFreshCount,
     serviceActiveCount: t.serviceActiveCount,
     comingSoonCount: t.comingSoonCount,
+    unresolvedCount: t.unresolvedCount,
     failedCount: includeDiagnostics ? job.qualificationFailed + job.failedTiles : 0,
     cachedCount: job.cacheHits,
     noServiceCount: includeDiagnostics ? job.noServiceFound : 0,

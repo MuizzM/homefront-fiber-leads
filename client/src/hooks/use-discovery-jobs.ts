@@ -32,7 +32,7 @@ const JOB_KEYS = new Set([
   "status", "city", "state", "geometry", "boundarySource", "idempotencyKey",
   "discoveredCount", "uniqueCandidateCount", "validatedCount", "checkedCount",
   "qualifiedCount", "newLeadsCount", "stillFreshCount", "serviceActiveCount",
-  "comingSoonCount", "failedCount", "cachedCount", "coverageStatus", "sourceWarnings",
+  "comingSoonCount", "unresolvedCount", "failedCount", "cachedCount", "coverageStatus", "sourceWarnings",
   "sources", "createdAt", "startedAt", "completedAt", "cancelledAt", "error",
 ]);
 
