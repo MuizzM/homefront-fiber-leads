@@ -287,7 +287,7 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
       rawDb.prepare(`INSERT INTO availability_snapshots
         (tenant_id,scan_target_id,run_id,checked_at,conclusive,fiber_available,fiber_status,
          customer_segment,customer_confidence,customer_signals,transition_status,fresh,api_source,evidence_hash,error,blocked,latency_ms)
-        VALUES (?,?,NULL,?,1,?,?, 'unknown','low','[]',?,0,?,?,NULL,0,NULL)`).run(
+        VALUES (?,?,NULL,datetime(?),1,?,?, 'unknown','low','[]',?,0,?,?,NULL,0,NULL)`).run(
         tenantId, targetId, previous.observedAt, previous.fiberAvailable ? 1 : 0,
         previous.fiberAvailable ? "available" : "no_service",
         previous.fiberAvailable ? "baseline_available" : "unavailable",
@@ -321,7 +321,7 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
       (tenant_id,scan_target_id,run_id,checked_at,conclusive,fiber_available,fiber_status,max_download_mbps,
        service_status,household_segment_type,billing_status,customer_segment,customer_confidence,customer_signals,
        transition_status,fresh,api_source,evidence_hash,fiber_check_id,error,blocked,latency_ms)
-      VALUES (?,?,NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)`).run(
+      VALUES (?,?,NULL,datetime(?),?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)`).run(
       tenantId, targetId, observedAt, conclusive ? 1 : 0, fiberAvailable == null ? null : (fiberAvailable ? 1 : 0),
       fiberStatus, observation.maxDownloadMbps ?? null, observation.serviceStatus ?? null,
       observation.householdSegmentType ?? null, observation.billingStatus ?? null,

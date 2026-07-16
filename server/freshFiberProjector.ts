@@ -15,6 +15,7 @@ interface ProjectionCandidate {
   first_seen_fiber_at: string | null;
   last_fiber_available: number | null;
   last_fiber_status: string | null;
+  last_billing_status: string | null;
   last_customer_segment: "new_opportunity" | "existing_customer" | "unknown";
   converted_to_lead_id: number | null;
   proven_flip: number;
@@ -62,12 +63,17 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const filter = ids.length ? `AND s.id IN (${ids.map(() => "?").join(",")})` : "";
   const candidates = rawDb.prepare(`
     SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,s.last_fiber_available,
-           s.last_fiber_status,s.last_customer_segment,s.converted_to_lead_id,
+           s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,
            EXISTS(SELECT 1 FROM availability_snapshots f WHERE f.scan_target_id=s.id AND f.tenant_id=? AND f.fresh=1 AND f.conclusive=1) AS proven_flip,
            latest.max_download_mbps,latest.household_segment_type,latest.billing_status
       FROM scan_targets s
+      -- Latest CONCLUSIVE snapshot, ordered by real datetime. checked_at is stored
+      -- in mixed formats (ISO "…T…Z" from the observation path vs SQLite "… …" from
+      -- the worker); a raw string sort put "T" (0x54) after " " (0x20) and could
+      -- pick an OLDER failed (null-segment) snapshot, sinking a genuine Fresh Lead.
       LEFT JOIN availability_snapshots latest ON latest.id=(
-        SELECT a.id FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.tenant_id=? ORDER BY a.checked_at DESC,a.id DESC LIMIT 1
+        SELECT a.id FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.tenant_id=? AND a.conclusive=1
+        ORDER BY datetime(a.checked_at) DESC,a.id DESC LIMIT 1
       )
      WHERE s.first_seen_fiber_at IS NOT NULL AND s.state IN ('NC','SC')
        AND s.tenant_id=? ${filter}
@@ -109,10 +115,11 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         evidence,
       });
       // AUTHORITATIVE LEAD RULE: householdSegmentType = NEW FIBER AND billing = N →
-      // publish a Fresh Lead on Kinetic's own new-build signal, without waiting for
-      // a prior flip or independent corroboration. Cross-verification still WINS
-      // when it exists (higher confidence); the corroboration gate governs every
-      // other transition. billing = Y is active service / Coming Soon, never a lead.
+      // publish a Fresh Lead on Kinetic's own new-build signal, no flip/corroboration
+      // wait. Cross-verification still WINS when it exists; the gate governs every
+      // other transition. The `latest` join above now selects the latest CONCLUSIVE
+      // snapshot by real datetime, so a null-segment failed snapshot can never mask a
+      // genuine NEW FIBER answer (the discovery↔Manual-Check divergence).
       const seg = String(candidate.household_segment_type ?? "").toUpperCase();
       const billing = String(candidate.billing_status ?? "").toUpperCase();
       const fiberAvail = candidate.last_fiber_available == null ? null : !!candidate.last_fiber_available;
@@ -150,10 +157,15 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       }
       const wasUnassigned = !found?.assigned_rep_id;
       if (!leadId) {
+        // Persist segment/billing that satisfy the DB fresh-lead guard even when the
+        // latest snapshot join is null — fall back to the target's last-conclusive
+        // signal so an authoritative lead is never blocked by a null-segment row.
+        const leadSegment = candidate.household_segment_type ?? (authoritativeFresh ? "NEW FIBER" : candidate.last_fiber_status);
+        const leadBilling = candidate.billing_status ?? candidate.last_billing_status ?? (authoritativeFresh ? "N" : null);
         const created = insert.run(
           candidate.address, candidate.city, candidate.state, candidate.zip ?? "", candidate.lat, candidate.lng,
           candidate.last_fiber_status ?? "new_fiber", candidate.max_download_mbps,
-          candidate.household_segment_type, candidate.billing_status,
+          leadSegment, leadBilling,
           "Confirmed fresh Kinetic fiber with no active-service signal.",
           decision.sources.length >= 2
             ? `Unavailable-to-fiber flip; independently confirmed by ${decision.sources.slice(1).join(", ")}.`
