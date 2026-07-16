@@ -34,11 +34,6 @@ const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 2);
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 
-export function assertAutomationAuthorized(): void {
-  if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true") {
-    throw new Error("KFS_AUTOMATION_NOT_AUTHORIZED: enable only for a licensed API, partner integration, or written authorization");
-  }
-}
 
 export function providerHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const headers: Record<string, string> = {
@@ -181,10 +176,6 @@ export function getTokenStatus(): {
   };
 }
 
-// Start keepalive on boot if credentials are present
-if (process.env.KFS_AUTOMATION_AUTHORIZED === "true") {
-  authorizedTokenPool.start();
-}
 
 export interface KineticAddressResponse {
   // Top-level
