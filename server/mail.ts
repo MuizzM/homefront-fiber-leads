@@ -4,8 +4,9 @@
 //
 // Works with any SMTP provider. For RESEND (the production default):
 //   SMTP_HOST=smtp.resend.com  SMTP_PORT=587  SMTP_USER=resend  SMTP_PASS=<Resend API key>
-//   Use 587 (STARTTLS), NOT 465 — many cloud hosts (incl. Hetzner) block outbound
-//   465, which makes every send hang until timeout. 587 is the safe default.
+//   SMTP_PORT is only the FIRST port tried — sendMailResilient fails over
+//   between 587 (STARTTLS) and 465 (implicit TLS) on connection-class errors,
+//   because either port can be blocked by a host or dropped by the provider.
 //   MAIL_FROM="HomeFront Fiber <noreply@homefrontsolutionsllc.com>"   (a Resend-verified sender)
 // For Gmail/other, SMTP_USER is the address, so MAIL_FROM is optional.
 
@@ -35,18 +36,47 @@ export function smtpSecure(): boolean {
   return Number(process.env.SMTP_PORT ?? 587) === 465;
 }
 
-// One configured transporter for every mail path. Timeouts fail fast so a stuck
-// SMTP connection never freezes a request (e.g. a blocked port hanging 30s).
-export function mailTransport(): nodemailer.Transporter {
+function transportFor(port: number): nodemailer.Transporter {
   return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT ?? 587),
-    secure: smtpSecure(),
+    port,
+    secure: port === 465,
     auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
     connectionTimeout: 8000,
     greetingTimeout: 8000,
     socketTimeout: 10_000,
   });
+}
+
+// One configured transporter for every mail path. Timeouts fail fast so a stuck
+// SMTP connection never freezes a request (e.g. a blocked port hanging 30s).
+export function mailTransport(): nodemailer.Transporter {
+  return transportFor(Number(process.env.SMTP_PORT ?? 587));
+}
+
+// Connection-class failures only — auth/recipient errors must NOT retry on the
+// other port (same creds, same verdict; a blind resend could double-deliver).
+const CONNECTION_FAILURE =
+  /greeting|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ESOCKET|EHOSTUNREACH|ENETUNREACH|connection.*(closed|timeout)|timed?\s*out/i;
+
+/** Send with automatic SMTP-port failover (587↔465).
+ *
+ * 2026-07-16 outage: Resend's port-587 STARTTLS endpoint stopped answering
+ * (no greeting, from Hetzner AND residential vantage points) while 465
+ * implicit-TLS kept working — prod OTP login went down because the transport
+ * was pinned to one port. Every send now tries the configured port first and,
+ * on a connection-class failure, retries once on the alternate port. */
+export async function sendMailResilient(options: nodemailer.SendMailOptions): Promise<void> {
+  const primary = Number(process.env.SMTP_PORT ?? 587);
+  const fallback = primary === 465 ? 587 : 465;
+  try {
+    await transportFor(primary).sendMail(options);
+  } catch (error: any) {
+    const message = String(error?.message ?? error);
+    if (!CONNECTION_FAILURE.test(message)) throw error;
+    console.warn(`[mail] SMTP port ${primary} unreachable (${message.slice(0, 120)}) — failing over to ${fallback}`);
+    await transportFor(fallback).sendMail(options);
+  }
 }
 
 // The visible sender. With Resend, SMTP_USER is literally "resend", so the from

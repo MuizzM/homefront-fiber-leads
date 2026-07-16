@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { getDefaultTenantId, storage } from "./storage";
-import { mailTransport, mailFrom, adminInbox } from "./mail";
+import { sendMailResilient, mailFrom, adminInbox } from "./mail";
 import { rawDb } from "./db";
 import { scanBlockReason } from "./billingStore";
 import * as scanService from "./scanService";
@@ -233,7 +233,7 @@ async function drainFreshAlerts(tenantId: number): Promise<number> {
       }
       if (emailReady) {
         const addresses = cluster.addresses.slice(0, 15).map((p: any) => `<li>${escapeHtml(p.address)}, ${escapeHtml(p.city)}, ${escapeHtml(p.state)} — ${escapeHtml(p.confidence)}</li>`).join("");
-        await mailTransport().sendMail({
+        await sendMailResilient({
           from: mailFrom(), to: email,
           subject: `Fresh Kinetic fiber: ${cluster.density} doors in ${cluster.city}, ${cluster.state}`,
           html: `<h2>Fresh fiber cluster detected</h2><p>Score ${cluster.score}/100 · ${cluster.confirmed} cross-verified · ${cluster.provisional} provisional</p><ul>${addresses}</ul><p><a href="${cluster.mapUrl}">Open cluster map</a></p>`,

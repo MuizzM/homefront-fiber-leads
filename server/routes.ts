@@ -2,8 +2,7 @@ import path from "path";
 import fs from "fs";
 import multer from "multer";
 import crypto from "crypto";
-import nodemailer from "nodemailer";
-import { mailTransport, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
+import { sendMailResilient, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
 import { storage, getDefaultTenantId } from "./storage";
@@ -196,9 +195,8 @@ function normalizeAddrForDedup(addr: string): string {
 async function sendOtpEmail(to: string, code: string, name: string): Promise<"email" | "console"> {
   // If SMTP env vars set, use them; otherwise log to console (dev mode)
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-    const transporter = mailTransport();
     try {
-      await sendViaTransport(transporter, to, code, name);
+      await sendOtpViaSmtp(to, code, name);
       return "email";
     } catch (e: any) {
       if (process.env.NODE_ENV !== "production") {
@@ -217,10 +215,11 @@ async function sendOtpEmail(to: string, code: string, name: string): Promise<"em
   }
 }
 
-async function sendViaTransport(transporter: nodemailer.Transporter, to: string, code: string, name: string) {
+async function sendOtpViaSmtp(to: string, code: string, name: string) {
   const first = escapeHtml((name || "").trim().split(" ")[0] || "there");
   const logo = logoAttachment();
-  await transporter.sendMail({
+  // Port-failover sender: survives one SMTP port (587 or 465) going dark.
+  await sendMailResilient({
       from: mailFrom(),
       to,
       subject: "Your Home Front Solutions sign-in code",
@@ -4462,8 +4461,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // Email admin
     if (process.env.SMTP_USER && adminInbox()) {
-      const transporter = mailTransport();
-      transporter.sendMail({
+      sendMailResilient({
         from: mailFrom(),
         to: adminInbox()!,
         subject: `Territory Request — ${member.name}`,
@@ -4799,7 +4797,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               tags: [{ name: "category", value: "application_admin_notice" }],
             })
           : process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS
-            ? mailTransport().sendMail({ from: mailFrom(), to: adminEmail, subject, html })
+            ? sendMailResilient({ from: mailFrom(), to: adminEmail, subject, html })
             : null;
         delivery?.catch((e: any) => console.error("Email error:", e));
       }
