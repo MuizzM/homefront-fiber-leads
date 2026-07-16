@@ -192,11 +192,50 @@ function normalizeAddrForDedup(addr: string): string {
 }
 
 // ── Email (Resend/SMTP via env — see server/mail.ts; dev console fallback) ──
+function otpMessage(to: string, code: string, name: string) {
+  const first = escapeHtml((name || "").trim().split(" ")[0] || "there");
+  return {
+    to,
+    subject: "Your Home Front Solutions sign-in code",
+    text: `Hi ${(name || "").split(" ")[0] || "there"}, your Home Front Solutions sign-in code is ${code}. It expires in 10 minutes. Never share this code — we will never ask for it.`,
+    html: emailShell({
+      preheader: `Your sign-in code is ${code} — expires in 10 minutes`,
+      heading: "Your sign-in code",
+      bodyHtml:
+        emailParagraph(`Hi ${first}, use this one-time code to sign in:`) +
+        emailCodeBox(code) +
+        emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. Never share it — Home Front Solutions will never ask you for it.`),
+    }),
+  };
+}
+
 async function sendOtpEmail(to: string, code: string, name: string): Promise<"email" | "console"> {
-  // If SMTP env vars set, use them; otherwise log to console (dev mode)
+  const message = otpMessage(to, code, name);
+  // 1) Resend HTTPS API (port 443), PRODUCTION ONLY. Hosts routinely block
+  //    outbound SMTP (25/465/587) — 2026-07-16 both ports were refused from the
+  //    prod box — but 443 egress always works. apiKey() reuses SMTP_PASS when
+  //    SMTP_HOST is smtp.resend.com, so this needs no new env. Dev keeps the
+  //    SMTP-then-console path so developmentCode logins still work offline.
+  if (process.env.NODE_ENV === "production" && resendConfigured()) {
+    try {
+      const logoPath = logoAttachment();
+      await sendResendEmail({
+        ...message,
+        idempotencyKey: `otp-${to.toLowerCase()}-${code}`,
+        tags: [{ name: "category", value: "otp_login" }],
+        attachments: logoPath
+          ? [{ filename: logoPath.filename, content: fs.readFileSync(logoPath.path), contentId: logoPath.cid }]
+          : [],
+      });
+      return "email";
+    } catch (e: any) {
+      console.warn(`[otp] Resend API send failed (${String(e?.message ?? e).slice(0, 140)}) — trying SMTP`);
+    }
+  }
+  // 2) SMTP with 587↔465 port failover.
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
-      await sendOtpViaSmtp(to, code, name);
+      await sendOtpViaSmtp(message);
       return "email";
     } catch (e: any) {
       if (process.env.NODE_ENV !== "production") {
@@ -208,6 +247,9 @@ async function sendOtpEmail(to: string, code: string, name: string): Promise<"em
       }
       throw new Error("email_send_failed");
     }
+  } else if (process.env.NODE_ENV === "production") {
+    // API failed and no SMTP configured — a prod login cannot silently no-op.
+    throw new Error("email_send_failed");
   } else {
     // Dev fallback — print to server console so you can test without SMTP
     console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
@@ -215,23 +257,12 @@ async function sendOtpEmail(to: string, code: string, name: string): Promise<"em
   }
 }
 
-async function sendOtpViaSmtp(to: string, code: string, name: string) {
-  const first = escapeHtml((name || "").trim().split(" ")[0] || "there");
+async function sendOtpViaSmtp(message: ReturnType<typeof otpMessage>) {
   const logo = logoAttachment();
   // Port-failover sender: survives one SMTP port (587 or 465) going dark.
   await sendMailResilient({
       from: mailFrom(),
-      to,
-      subject: "Your Home Front Solutions sign-in code",
-      text: `Hi ${(name || "").split(" ")[0] || "there"}, your Home Front Solutions sign-in code is ${code}. It expires in 10 minutes. Never share this code — we will never ask for it.`,
-      html: emailShell({
-        preheader: `Your sign-in code is ${code} — expires in 10 minutes`,
-        heading: "Your sign-in code",
-        bodyHtml:
-          emailParagraph(`Hi ${first}, use this one-time code to sign in:`) +
-          emailCodeBox(code) +
-          emailNote(`This code expires in <strong style="color:#4a5a68;">10 minutes</strong>. Never share it — Home Front Solutions will never ask you for it.`),
-      }),
+      ...message,
       attachments: logo ? [logo] : [],
   });
 }

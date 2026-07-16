@@ -1,6 +1,8 @@
 interface ResendAttachment {
   filename: string;
   content: Buffer;
+  /** Set to render inline via <img src="cid:..."> instead of as a download. */
+  contentId?: string;
 }
 
 interface ResendMessage {
@@ -60,6 +62,7 @@ export async function sendResendEmail(message: ResendMessage): Promise<{ id: str
       attachments: message.attachments?.map(attachment => ({
         filename: attachment.filename,
         content: attachment.content.toString("base64"),
+        ...(attachment.contentId ? { content_id: attachment.contentId } : {}),
       })),
       tags: message.tags,
     }),
