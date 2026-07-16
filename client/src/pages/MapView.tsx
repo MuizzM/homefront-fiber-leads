@@ -639,6 +639,30 @@ export default function MapView() {
     null,
   );
 
+  // ── Live Test — trace ONE address through the full field-scanner pipeline
+  // (fresh mint, no cache), right here on the map. Sanitized: never shows the
+  // bearer token or proxy password. ──
+  const [liveTestOpen, setLiveTestOpen] = useState(false);
+  const [ltAddr, setLtAddr] = useState({ address: "", city: "", state: "NC", zip: "" });
+  const [ltResult, setLtResult] = useState<any>(null);
+  const [ltRunning, setLtRunning] = useState(false);
+  const runLiveTest = useCallback(async () => {
+    if (ltRunning || ltAddr.address.trim().length < 3) return;
+    setLtRunning(true);
+    setLtResult(null);
+    try {
+      const res = await apiRequest("POST", "/api/scan/live-test", {
+        address: ltAddr.address.trim(), city: ltAddr.city.trim(),
+        state: ltAddr.state.trim().toUpperCase() || "NC", zip: ltAddr.zip.trim(),
+      });
+      setLtResult(await res.json());
+    } catch (e: any) {
+      setLtResult({ error: String(e?.message ?? e) });
+    } finally {
+      setLtRunning(false);
+    }
+  }, [ltRunning, ltAddr]);
+
   // Filter
   const [filterStatus, setFilterStatus] = useState<string>("all");
 
@@ -3803,10 +3827,10 @@ export default function MapView() {
              this area" pattern). Tap to arm, then drag a box over the houses to
              scan exactly inside it. Hidden while a scan/summary sheet is up and
              during Assign Area, so nothing collides. ── */}
-      {canSubmitScan && !scanDrawMode && !scanning && !scanSubmitting && !scanOutcome && !lassoMode && (
+      {canSubmitScan && !scanDrawMode && !scanning && !scanSubmitting && !scanOutcome && !lassoMode && !liveTestOpen && (
         <div
           style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
-          className="absolute left-1/2 z-30 -translate-x-1/2"
+          className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2"
         >
           <button
             type="button"
@@ -3821,6 +3845,56 @@ export default function MapView() {
             <Radar className="h-[18px] w-[18px]" />
             Scan Map
           </button>
+          <button
+            type="button"
+            onClick={() => { exitLasso(); setLiveTestOpen(true); }}
+            data-testid="live-test-open"
+            aria-label="Live Test one address"
+            title="Live Test one address"
+            className="grid h-[52px] w-[52px] place-items-center rounded-full border border-white/15 bg-slate-950/90 text-white/80 shadow-xl backdrop-blur-xl transition hover:text-white active:scale-95"
+          >
+            <Crosshair className="h-[18px] w-[18px]" />
+          </button>
+        </div>
+      )}
+
+      {/* Live Test panel — trace one address, right on the field scanner. */}
+      {liveTestOpen && canSubmitScan && (
+        <div
+          style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
+          className="absolute left-1/2 z-30 w-[min(456px,calc(100vw-24px))] -translate-x-1/2"
+        >
+          <div className="glass-surface flex flex-col gap-2 rounded-2xl border-teal-300/40 p-3" data-testid="live-test-panel">
+            <div className="flex items-center gap-2">
+              <Crosshair className="h-4 w-4 text-emerald-400" />
+              <span className="text-[13px] font-semibold text-white">Live Test — trace one address</span>
+              <button onClick={() => { setLiveTestOpen(false); setLtResult(null); }} className="ml-auto grid h-8 w-8 place-items-center rounded-full text-white/60 hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="grid grid-cols-[1fr_1fr_44px_72px] gap-1.5">
+              <input value={ltAddr.address} onChange={e => setLtAddr({ ...ltAddr, address: e.target.value })} placeholder="123 Main St" className="h-10 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input value={ltAddr.city} onChange={e => setLtAddr({ ...ltAddr, city: e.target.value })} placeholder="City" className="h-10 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input value={ltAddr.state} onChange={e => setLtAddr({ ...ltAddr, state: e.target.value.toUpperCase().slice(0, 2) })} placeholder="NC" className="h-10 rounded-lg bg-white/10 px-1 text-center text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input value={ltAddr.zip} onChange={e => setLtAddr({ ...ltAddr, zip: e.target.value })} placeholder="ZIP" className="h-10 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+            </div>
+            <button disabled={ltRunning || ltAddr.address.trim().length < 3} onClick={() => void runLiveTest()} data-testid="live-test-run" className="h-10 rounded-lg bg-emerald-500 text-[13px] font-bold text-[#04241f] transition hover:bg-emerald-400 disabled:opacity-50">
+              {ltRunning ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "Run Live Test (fresh mint · no cache)"}
+            </button>
+            {ltResult && (ltResult.stages ? (
+              <div className="max-h-[42vh] space-y-1 overflow-y-auto">
+                {ltResult.stages.map((s: any, i: number) => (
+                  <div key={i} className="rounded-lg bg-white/[0.05] p-2">
+                    <div className="flex items-center gap-1.5"><span className={`h-1.5 w-1.5 shrink-0 rounded-full ${s.ok ? "bg-emerald-400" : "bg-red-400"}`} /><span className="text-[11px] font-semibold text-white">{s.stage}</span></div>
+                    <div className="mt-0.5 break-words font-mono text-[10px] text-white/55">{s.detail}</div>
+                  </div>
+                ))}
+                <div className={`rounded-lg p-2 text-[11px] font-semibold ${ltResult.checked ? (ltResult.wouldSaveLead ? "bg-emerald-500/15 text-emerald-300" : "bg-sky-500/15 text-sky-300") : "bg-red-500/15 text-red-300"}`}>
+                  {ltResult.checked ? `Checked ✓ — ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : "Not checked — failed at the red stage (infra error, not a no-service verdict)."}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-lg bg-red-500/15 p-2 text-[11px] text-red-300">{ltResult.error || "Failed"}</div>
+            ))}
+          </div>
         </div>
       )}
 

@@ -128,6 +128,10 @@ export async function runScanWorker(
   const workerId = `scan:${runId}`;
   let terminalError: string | null = null;
   beginFiberWorker(tenantId, runId);
+  // Mint a fresh token before this run starts — Scan Map, city, and nightly scans
+  // all pass through here. Best-effort: a mint hiccup is non-fatal (the pool and
+  // the per-401 remint below still recover), but a stale token never starts a run.
+  try { await refreshTokenFromApi(); } catch { /* pool + per-address remint recover */ }
   heartbeatWorker({
     workerId,
     tenantId,
