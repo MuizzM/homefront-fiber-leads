@@ -3,7 +3,7 @@ import { rawDb } from "./db";
 
 export type FiberEventType =
   | "job.started" | "job.progress" | "job.paused" | "job.resumed" | "job.cancelled"
-  | "job.completed" | "job.failed" | "address.completed" | "address.failed"
+  | "job.completed" | "job.failed" | "address.completed" | "address.failed" | "address.requeued"
   | "worker.heartbeat" | "dead_letter.retried";
 
 export function correlationId(runId: string): string {

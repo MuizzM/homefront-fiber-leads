@@ -233,6 +233,15 @@ export function resetInflightTargets(runId: string): number {
   return rawDb.prepare(`UPDATE scan_run_targets SET state='queued' WHERE run_id=? AND state='inflight'`).run(runId).changes;
 }
 
+// Requeue ONE target after a TRANSIENT provider error (token/throttle/network) so
+// it is retried later in the SAME run. It is neither verified nor failed — no
+// progress is lost, no address is skipped, and there is no retry-count limit. The
+// attempt_count already incremented at claim time is kept for observability.
+const _requeueTarget = rawDb.prepare(`UPDATE scan_run_targets SET state='queued', next_attempt_at=NULL WHERE run_id=? AND target_id=? AND state='inflight'`);
+export function requeueRunTarget(runId: string, targetId: number): void {
+  _requeueTarget.run(runId, targetId);
+}
+
 // Just move the heartbeat forward (worker liveness) without changing counters.
 export function touchRun(runId: string): void {
   rawDb.prepare(`UPDATE scan_runs SET heartbeat_at=datetime('now'),updated_at=datetime('now') WHERE id=?`).run(runId);

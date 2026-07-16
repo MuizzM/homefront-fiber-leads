@@ -63,44 +63,46 @@ describe("Kinetic scanner transport hardening", () => {
       .toBe(scanner.normalizeKineticAddressKey("101 N. Main St", "LEXINGTON", "NC", "27292"));
   });
 
-  it("refreshes the assigned token session up to three times on 401 and retries with Bearer auth", async () => {
-    let searches = 0, refreshes = 0;
+  it("on 401 invalidates the token and returns a blocked result (one attempt) for the worker to requeue", async () => {
+    let searches = 0;
     proxyFetch.mockImplementation(async (url: string, init: RequestInit) => {
-      if (url.includes("/_internal/precisely/token")) {
-        refreshes++;
-        return json(200, { access_token: `refreshed-token-${refreshes}`, expires_in: 2_100 });
-      }
+      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
       expect(url).toBe("https://buy.gokinetic.com/api/v1/address/search");
       searches++;
       expect(new Headers(init.headers).get("authorization")).toMatch(/^Bearer /);
-      return searches <= 3 ? json(401, {}) : json(200, noService);
+      return json(401, {});
     });
-
-    await expect(scanner.scanAddress("401 Retry Road", "Lexington", "NC", "27292", { source: "manual" }))
-      .resolves.toMatchObject({ fiberStatus: "no_service", apiSource: "kinetic_live" });
-    expect(searches).toBe(4);
-    expect(refreshes).toBe(3);
+    // ONE attempt — no in-loop retry-count. A 401 is a token/session error → the
+    // token is invalidated and the address returned blocked so the worker requeues
+    // it (and re-mints). Never a no-fiber.
+    const result = await scanner.scanAddress("401 Retry Road", "Lexington", "NC", "27292", { source: "manual" });
+    expect(result).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
+    expect(searches).toBe(1);
   });
 
-  it("honors Retry-After on 429 and keeps the same address work alive", async () => {
+  it("on 429 returns a blocked result (one attempt) for the worker to requeue — no in-loop wait", async () => {
     let searches = 0;
     proxyFetch.mockImplementation(async (url: string) => {
-      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "refreshed", expires_in: 2_100 });
+      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
       searches++;
-      return searches === 1 ? json(429, {}, { "retry-after": "0" }) : json(200, noService);
+      return json(429, {}, { "retry-after": "0" });
     });
-    await expect(scanner.scanAddress("429 Resume Lane", "Lexington", "NC", "27292", { source: "lasso" }))
-      .resolves.toMatchObject({ fiberStatus: "no_service" });
-    expect(searches).toBe(2);
+    const result = await scanner.scanAddress("429 Resume Lane", "Lexington", "NC", "27292", { source: "lasso" });
+    expect(result).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
+    expect(searches).toBe(1);
   });
 
-  it("treats a 403 as a transient block (no halt), keeps scanning, never a no-fiber", async () => {
-    proxyFetch.mockResolvedValue(json(403, {}));
-    // A 403 resolves to a blocked/failed result — NOT a throw, NOT a no-service.
+  it("treats a 403 as a transient block (no halt): invalidates token, re-mints, keeps scanning, never a no-fiber", async () => {
+    // Mint succeeds; the search always 403s. A 403 invalidates the leased token,
+    // so the next address re-mints a fresh one and tries again — never wedged.
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
+      return json(403, {});
+    });
     const first = await scanner.scanAddress("403 Stop Court", "Lexington", "NC", "27292", { source: "manual" });
     expect(first).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
-    // The scanner is not wedged: the next address actually calls the provider
-    // again (no operator reset required) and also comes back blocked, not no-fiber.
+    // Not wedged: the next address re-mints + calls the provider again (no operator
+    // reset needed) and also comes back blocked, not no-fiber.
     const before = proxyFetch.mock.calls.length;
     const second = await scanner.scanAddress("404 Queued Court", "Lexington", "NC", "27292", { source: "city" });
     expect(second).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });

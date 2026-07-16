@@ -24,17 +24,11 @@ import {
   classifyFiberAvailabilityTransition,
 } from "@shared/opportunitySegment";
 import {
-  initController,
-  observeRound,
-  onSessionRefreshed,
-  DEFAULT_RATE_CFG,
-  type RateState,
-} from "./rateController";
-import {
   getRun,
   setRunStatus,
   claimRunTargets,
   finalizeRunTarget,
+  requeueRunTarget,
   touchRun,
   getTargetSnapshot,
   countQueued,
@@ -138,33 +132,29 @@ export async function runScanWorker(
     status: "running",
     concurrency: 1,
   });
-  // Batch size is the AIMD congestion window, not a fixed 25 — it self-tunes to
-  // Kinetic's 403 push-back so a budgeted market run obeys the same one-bucket
-  // discipline as every other scan (measures blocked per batch, shrinks/refreshes).
-  let ctrl: RateState = initController();
-  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  // Fixed batch size. There is NO AIMD/backoff/cooldown: the shared distributed
+  // coordinator's steady concurrency + requests-per-minute cap is the only pacing.
+  const BATCH = Math.max(1, Number(process.env.SCAN_BATCH_CONCURRENCY) || 25);
   try {
     for (;;) {
       const run = getRun(runId, tenantId);
       if (!run) return;
-      if (run.status !== "running") return; // paused / cancelled / done
+      if (run.status !== "running") return; // paused / cancelled / done — stops the pump
       if (run.verified + run.failed >= run.budget) {
         finish(run, "done");
         return;
       }
 
       const remainingBudget = run.budget - (run.verified + run.failed);
-      // Atomically CLAIM the batch (marks them inflight) so a racing dispatch
-      // can't grab the same targets and double-spend the proxy.
-      const conc = Math.max(
-        1,
-        Math.min(Math.floor(ctrl.cwnd), remainingBudget),
-      );
-      const batch = claimRunTargets(runId, conc);
+      // Atomically CLAIM the batch (marks them inflight) so a racing dispatch can't
+      // grab the same targets and double-spend the proxy. Requeued (transient-error)
+      // targets are 'queued' again, so the queue only drains once every address has
+      // a conclusive or unresolved answer.
+      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget));
       if (batch.length === 0) {
         finish(run, "done");
         return;
-      } // queue drained
+      } // queue drained — every address conclusively resolved
       touchRun(runId); // heartbeat before a batch of slow network calls
       heartbeatWorker({
         workerId,
@@ -175,15 +165,10 @@ export async function runScanWorker(
         metadata: { completed: run.verified + run.failed, budget: run.budget },
       });
 
-      const t0 = Date.now();
-      let ok = 0,
-        blocked = 0,
-        neutral = 0;
       await Promise.all(
         batch.map(async (t) => {
           // Re-check status mid-batch so a cancel takes effect promptly. A claimed
-          // target on a now-cancelled run is left 'inflight' — resume/reaper resets
-          // it — and no check (no spend) is made.
+          // target on a now-cancelled run is left 'inflight' — resume/reaper resets it.
           const live = getRun(runId, tenantId);
           if (!live || live.status !== "running") return;
           const checkStartedAt = Date.now();
@@ -195,47 +180,42 @@ export async function runScanWorker(
               zip: t.zip,
               source: providerPriorityForRun(run.kind),
             });
-            applyCheck(
-              runId,
-              tenantId,
-              t,
-              result,
-              bytes,
-              checkFailed,
-              Date.now() - checkStartedAt,
-            );
-            if (result.blocked) blocked++;
-            else if (checkFailed) neutral++;
-            else ok++;
+            if (result.blocked) {
+              // TRANSIENT provider error — REQUEUE the address and retry it later
+              // with a fresh token. Never finalized, never counted as failed, never
+              // a no-fiber. No retry-count limit: it recurs until it gets a valid
+              // response or the run is explicitly cancelled.
+              requeueRunTarget(runId, t.targetId);
+              const attempt = targetAttempt(runId, t.targetId);
+              recordFiberFailure({
+                tenantId, runId, targetId: t.targetId, category: "provider_blocked",
+                message: result.notes || "transient provider error", attempt, retryable: true,
+              });
+              recordProviderOutcome(tenantId, false, result.notes);
+              appendFiberEvent({
+                tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
+                payload: { category: "provider_blocked", attempt },
+              });
+            } else {
+              // Conclusive answer OR unresolved (malformed / other 4xx). applyCheck
+              // records it and finalizes the target; unresolved is never a no-fiber.
+              applyCheck(runId, tenantId, t, result, bytes, checkFailed, Date.now() - checkStartedAt);
+            }
           } catch (err: any) {
-            // Any throw is a FAILED check — never a negative, and it NEVER aborts
-            // the run. The target stays pending (retryable) for the next pass.
-            finalizeRunTarget(runId, t.targetId, "failed", "failed", {
-              failed: 1,
-              estBytes: DEFAULT_BYTES_PER_CHECK,
-            });
-            const message = String(
-              err?.message ?? err ?? "Provider check failed",
-            );
+            // An unexpected throw is TRANSIENT — requeue (never lose the address,
+            // never a no-fiber, never abort the run).
+            requeueRunTarget(runId, t.targetId);
+            const message = String(err?.message ?? err ?? "Provider check failed");
             const attempt = targetAttempt(runId, t.targetId);
             recordFiberFailure({
-              tenantId,
-              runId,
-              targetId: t.targetId,
-              category: "provider_exception",
-              message,
-              attempt,
-              retryable: true,
+              tenantId, runId, targetId: t.targetId, category: "provider_exception",
+              message, attempt, retryable: true,
             });
             recordProviderOutcome(tenantId, false, message);
             appendFiberEvent({
-              tenantId,
-              runId,
-              eventType: "address.failed",
-              targetId: t.targetId,
+              tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
               payload: { category: "provider_exception", attempt },
             });
-            neutral++;
           }
         }),
       );
@@ -275,26 +255,6 @@ export async function runScanWorker(
           });
         }
       }
-
-      // Feed the round to the controller; act on its verdict (grow / shrink+pause /
-      // refresh the session at the floor / wall-clock backoff when truly drained).
-      const meanRttMs = (Date.now() - t0) / Math.max(1, batch.length);
-      const d = observeRound(
-        ctrl,
-        { ok, blocked, neutral, meanRttMs },
-        DEFAULT_RATE_CFG,
-      );
-      ctrl = d.state;
-      if (d.action === "refresh_session") {
-        try {
-          await refreshTokenFromApi();
-        } catch {
-          // The controller remains throttled and retries only after backoff.
-        }
-        ctrl = onSessionRefreshed(ctrl);
-      } else if (d.action === "hard_backoff")
-        await sleep(d.backoffMs);
-      else if (d.recoveryPauseMs > 0) await sleep(d.recoveryPauseMs);
     }
   } catch (err: any) {
     const message = String(err?.message ?? err).slice(0, 300);

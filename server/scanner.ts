@@ -404,18 +404,6 @@ export interface AddressScanOptions {
   source?: ProviderRequestPriority;
 }
 
-function retryAfterMs(response: Response, attempt: number): number {
-  const value = response.headers.get("retry-after")?.trim();
-  if (value) {
-    const seconds = Number(value);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(15 * 60_000, Math.max(0, Math.ceil(seconds * 1_000)));
-    const date = Date.parse(value);
-    if (Number.isFinite(date)) return Math.min(15 * 60_000, Math.max(0, date - Date.now()));
-  }
-  return Math.min(30_000, 1_000 * Math.pow(2, Math.min(attempt, 5)));
-}
-
-const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, Math.max(0, ms)));
 
 function kbpsToMbps(kbps: string | number | null | undefined): number | null {
   if (!kbps) return null;
@@ -549,82 +537,74 @@ async function scanAddressDirect(
   };
 
   let tokenLease: AuthorizedTokenLease | null = null;
+  const tokenAddressKey = crypto.createHash("sha256")
+    .update(normalizeKineticAddressKey(address, city, state, zip))
+    .digest("hex");
   try {
-    const tokenAddressKey = crypto.createHash("sha256")
-      .update(normalizeKineticAddressKey(address, city, state, zip))
-      .digest("hex");
     tokenLease = await authorizedTokenPool.lease(tokenAddressKey);
-    let authRefreshes = 0;
-    let rateLimitAttempts = 0;
-    let res: Response;
-    for (;;) {
-      const token = tokenLease.token;
-      res = await proxyFetch(KFS_SCAN_URL, {
-        method: "POST",
-        headers: providerHeaders({
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "Authorization": `Bearer ${token}`,
-          "Referer": KFS_REFERER,
-          "Origin": KFS_ORIGIN,
-        }),
-        body: JSON.stringify({ addressLine1: address, addressLine2: "", city, state, postalCode: zip }),
-        signal: AbortSignal.timeout(5_000),
-      });
+  } catch (err: any) {
+    // No authorized session/token could be obtained — this is NOT a Search-API
+    // error, so we fail CLOSED (unresolved), never requeue-loop with no session.
+    // The address is never marked no-fiber and never marked scanned; the next
+    // run / daily recheck revisits it.
+    base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
+    base.notes = `No authorized session — ${String(err?.message ?? err)} (unresolved, recheck)`;
+    return base;
+  }
+  try {
+    const res = await proxyFetch(KFS_SCAN_URL, {
+      method: "POST",
+      headers: providerHeaders({
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Authorization": `Bearer ${tokenLease.token}`,
+        "Referer": KFS_REFERER,
+        "Origin": KFS_ORIGIN,
+      }),
+      body: JSON.stringify({ addressLine1: address, addressLine2: "", city, state, postalCode: zip }),
+      signal: AbortSignal.timeout(5_000),
+    });
 
-      if (res.status === 401) {
-        // Auth/token error: mint a FRESH token, replace the lease, and retry the
-        // SAME address immediately. Nothing is disabled or halted. If it still
-        // fails after a few remints, leave the address pending (failed = retryable)
-        // so the worker requeues it — an auth error is NEVER a "no fiber".
-        if (authRefreshes >= 3) {
-          base.notes = "Auth still failing (401) after three fresh-token remints";
-          return base;
-        }
-        authRefreshes++;
-        try {
-          const refreshed = await authorizedTokenPool.refreshLease(tokenLease);
-          tokenLease = { ...tokenLease, token: refreshed };
-        }
-        catch { base.notes = `Fresh-token remint ${authRefreshes}/3 failed after 401`; return base; }
-        continue;
-      }
+    // ── One shared error contract — NO in-loop retry, cooldown, backoff, or halt.
+    //    TRANSIENT errors return a `blocked` result so the worker requeues the
+    //    address and retries it later with a fresh token (no retry-count limit). A
+    //    token/session error (401/403) also invalidates the leased token so the
+    //    pool re-mints. A non-answer is NEVER recorded as "no fiber".
+    if (res.status === 401 || res.status === 403) {
+      authorizedTokenPool.invalidate(tokenLease.token);
+      base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.notes = `Upstream ${res.status} (token/session) — token invalidated, address requeued`;
       if (res.status === 403) {
-        // Transient rolling-window throttle — NOT a halt. Return a `blocked`
-        // result: the worker's AIMD controller reads it as back-pressure (shrinks
-        // the window, refreshes the session, paces), and the address stays pending
-        // for retry. Never disables the queue/coordinator/pool; persists nothing.
-        base.blocked = true;
-        base.apiSource = "failed";
-        base.fiberStatus = "unknown";
-        base.confidence = "LOW";
-        base.notes = "Upstream 403 (transient throttle) — paced and retried, not a no-service answer";
-        structuredLog("scan.provider.access_denied", {
-          status: 403, source, active: providerQueue.snapshot().active,
-          queued: providerQueue.snapshot().queued,
-        }, "warn");
+        structuredLog("scan.provider.access_denied", { status: 403, source }, "warn");
         const alertHook = (globalThis as any).__alertProviderAccessDenied;
         if (typeof alertHook === "function") void Promise.resolve(alertHook({ provider: "kinetic", status: 403 })).catch(() => {});
-        return base;
       }
-      if (res.status === 429) {
-        // Honor an explicit upstream Retry-After with an in-memory pause + retry of
-        // the same address. Transient only — no persisted/permanent application state.
-        const waitMs = retryAfterMs(res, rateLimitAttempts++);
-        providerQueue.pauseFor(waitMs, source);
-        structuredLog("scan.provider.rate_limited", { source, waitMs, attempt: rateLimitAttempts }, "warn");
-        await delay(waitMs);
-        continue;
-      }
-      break;
+      return base;
+    }
+    if (res.status === 429 || res.status >= 500) {
+      // Rate limit / transient server error — requeue (the coordinator paces admission).
+      base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.notes = `Upstream ${res.status} (transient) — address requeued`;
+      structuredLog("scan.provider.rate_limited", { status: res.status, source }, "warn");
+      return base;
     }
     if (!res.ok) {
-      base.notes = `API returned ${res.status}`;
-      base.apiSource = "failed";
+      // Other non-2xx (e.g. 400/404) — a definite non-answer a retry won't fix →
+      // unresolved (rechecked daily), NEVER a no-service answer.
+      base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.notes = `API returned ${res.status} (unresolved)`;
       return base;
     }
 
-    const data: KineticAddressResponse = await res.json();
+    let data: KineticAddressResponse;
+    try {
+      data = (await res.json()) as KineticAddressResponse;
+    } catch {
+      // 200 with an unparseable body = malformed → unresolved (recheck), not no-fiber.
+      base.fiberStatus = "unknown"; base.confidence = "LOW";
+      base.notes = "Malformed 200 response (unparseable) — unresolved, recheck";
+      return base;
+    }
     base.rawResponse = data;
 
     // CONCLUSIVE not-serviceable verdicts — Kinetic definitively says this address
@@ -765,15 +745,17 @@ async function scanAddressDirect(
     base.leadScore = score.leadScore;
 
   } catch (err: any) {
-    // PRODUCT LAW: a failed check (timeout/error/no-token/throttle) carries NO
-    // availability signal, and it NEVER aborts the run. We do NOT fabricate a
-    // result — a non-answer is not a "yes" and not a "no": return an explicit
-    // failure so the caller keeps the address pending for retry and never records
-    // or counts it as availability data.
+    // PRODUCT LAW: a failed check (timeout / network / no-token) carries NO
+    // availability signal and NEVER aborts the run or becomes a "no fiber". These
+    // are TRANSIENT — mark blocked so the worker requeues the address and retries
+    // it with a fresh token. A stale/errored lease token is invalidated so the
+    // pool re-mints on the next attempt.
+    if (tokenLease?.token) authorizedTokenPool.invalidate(tokenLease.token);
     base.apiSource = "failed";
     base.fiberStatus = "unknown";
     base.confidence = "LOW";
-    base.notes = `Check failed — no signal: ${err.message}`;
+    base.blocked = true;
+    base.notes = `Check failed (transient) — ${err.message}`;
   } finally {
     tokenLease?.release();
   }
