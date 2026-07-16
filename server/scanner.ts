@@ -97,12 +97,34 @@ export function parseKineticTokenPayload(
 }
 
 async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
-  const response = await proxyFetch(
-    kineticTokenUrl(),
-    kineticTokenRequestInit(AbortSignal.timeout(5_000)),
-  );
+  // The gokinetic token endpoint is a POST that authenticates with the client
+  // Basic credential (KFS_AUTH_BASIC, which already carries its "Basic " prefix)
+  // and a braze device body, and returns { token } (a JWT). Some other token
+  // services return { access_token, expires_in } — handle both.
+  const basic = process.env.KFS_AUTH_BASIC?.trim();
+  const response = await proxyFetch(kineticTokenUrl(), {
+    method: "POST",
+    headers: providerHeaders({
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      ...(basic ? { "Authorization": basic } : {}),
+      "Origin": KFS_ORIGIN,
+      "Referer": KFS_REFERER,
+    }),
+    body: JSON.stringify({ brazeDeviceId: "" }),
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!response.ok) throw new Error(`Auto-auth blocked (${response.status})`);
-  return parseKineticTokenPayload(await response.json());
+  const data = (await response.json()) as Record<string, unknown>;
+  const token = typeof data.token === "string" ? data.token.trim()
+    : typeof data.access_token === "string" ? data.access_token.trim() : "";
+  if (!token) throw new Error("No token in mint response");
+  const now = Date.now();
+  const expiresIn = Number(data.expires_in);
+  const expiresAt = jwtExpiryMs(token)
+    ?? (Number.isFinite(expiresIn) && expiresIn > 0 ? now + Math.floor(expiresIn * 1000) : now + 28 * 60 * 1000);
+  if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS) throw new Error("Minted token expires too soon");
+  return { token, expiresAt };
 }
 
 const authorizedTokenPool = new AuthorizedTokenPool({
@@ -416,6 +438,86 @@ function speedTierFromMbps(mbps: number | null): string | null {
   if (mbps >= 300) return "300mbps";
   if (mbps >= 100) return "100mbps";
   return "sub100mbps";
+}
+
+export interface LiveTestStage { stage: string; ok: boolean; detail: string; data?: Record<string, unknown>; }
+export interface LiveTestResult {
+  input: { address: string; city: string; state: string; zip: string };
+  stages: LiveTestStage[];
+  checked: boolean;
+  classification: string;
+  wouldSaveLead: boolean;
+}
+
+// Diagnostic — run ONE address through the full live pipeline with a FRESH mint
+// (no cache, not through the shared pool, so a disabled pool can't hide the real
+// error). Every stage is captured sanitized: the bearer token and proxy password
+// are NEVER emitted — only the token's length/expiry. Powers the Live Test panel.
+export async function liveTestAddress(
+  address: string, city: string, state: string, zip: string,
+): Promise<LiveTestResult> {
+  const stages: LiveTestStage[] = [];
+  const out: LiveTestResult = { input: { address, city, state, zip }, stages, checked: false, classification: "unresolved", wouldSaveLead: false };
+
+  stages.push({ stage: "OSM found", ok: true, detail: `${address}, ${city}, ${state} ${zip}` });
+  stages.push({ stage: "Normalized address", ok: true, detail: normalizeKineticAddressKey(address, city, state, zip) });
+
+  let token = "";
+  try {
+    const minted = await mintAuthorizedToken();
+    token = minted.token;
+    stages.push({ stage: "Token minted", ok: true, detail: `fresh JWT · ${token.length} chars · expires ${new Date(minted.expiresAt).toISOString()}` });
+  } catch (e: any) {
+    stages.push({ stage: "Token minted", ok: false, detail: `MINT FAILED: ${String(e?.message ?? e)}` });
+    return out;
+  }
+
+  const reqBody = { addressLine1: address, addressLine2: "", city, state, postalCode: zip };
+  stages.push({ stage: "Kinetic search called", ok: true, detail: `POST ${KFS_SCAN_URL}`, data: { request: reqBody, authorization: "Bearer <redacted>" } });
+
+  let res: Response;
+  try {
+    res = await proxyFetch(KFS_SCAN_URL, {
+      method: "POST",
+      headers: providerHeaders({ "Content-Type": "application/json", "Accept": "application/json", "Authorization": `Bearer ${token}`, "Referer": KFS_REFERER, "Origin": KFS_ORIGIN }),
+      body: JSON.stringify(reqBody),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e: any) {
+    stages.push({ stage: "HTTP result", ok: false, detail: `NETWORK/TIMEOUT (not a no-service): ${String(e?.message ?? e)}` });
+    return out;
+  }
+  stages.push({ stage: "HTTP result", ok: res.ok, detail: `HTTP ${res.status} ${res.statusText || ""}`.trim() });
+
+  const rawText = await res.text();
+  let data: any = null;
+  try { data = JSON.parse(rawText); } catch { /* not JSON */ }
+  const addr = data?.address ?? {};
+  stages.push({
+    stage: "Response", ok: res.ok,
+    detail: res.ok ? "parsed" : `body: ${rawText.slice(0, 400)}`,
+    data: data ? { validationResult: data.validationResult, techType: data.techType, maxQual: data.maxQual, householdSegmentType: addr.householdSegmentType, maxQualTechnologyType: addr.maxQualTechnologyType, billingStatus: addr.billingStatus, dfAddressId: addr.dfAddressId } : undefined,
+  });
+
+  if (!res.ok || !data) {
+    stages.push({ stage: "Classification", ok: false, detail: `unresolved (infra) — ${res.ok ? "unparseable response" : "HTTP " + res.status}; NOT a no-service verdict` });
+    return out;
+  }
+
+  out.checked = true;
+  const tech = String(data.techType ?? addr.maxQualTechnologyType ?? "").toUpperCase();
+  const isFiber = tech.includes("FIBER") || tech === "FTTP" || tech === "FTTH";
+  const segment = String(addr.householdSegmentType ?? "").toUpperCase();
+  const billing = String(addr.billingStatus ?? "").toUpperCase();
+  const activeBilling = billing === "Y";
+  const classification = !isFiber ? "no_service"
+    : activeBilling ? (segment.includes("NEW FIBER") ? "coming_soon" : "service_active")
+    : "fresh_fiber";
+  out.classification = classification;
+  out.wouldSaveLead = isFiber && !activeBilling;
+  stages.push({ stage: "Classification", ok: true, detail: `${classification} · fiber=${isFiber} · segment=${segment || "?"} · billing=${billing || "?"}` });
+  stages.push({ stage: "Lead saved", ok: out.wouldSaveLead, detail: out.wouldSaveLead ? "YES — fresh fiber, no active billing" : `no — ${classification}` });
+  return out;
 }
 
 export async function scanAddress(

@@ -146,7 +146,7 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { ProviderAccessDeniedError, scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, resumeAddressScanQueue, getAddressScanQueueStatus, type ScanResult } from "./scanner";
+import { ProviderAccessDeniedError, scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, resumeAddressScanQueue, getAddressScanQueueStatus, liveTestAddress, type ScanResult } from "./scanner";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
 import {
@@ -1550,6 +1550,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Token status — auth required (sidebar uses this)
   app.get("/api/token-status", requireAuth, (_req, res) => {
     res.json(getTokenStatus());
+  });
+
+  // Live Test — trace ONE address through the full pipeline (fresh mint, no
+  // cache) and return each stage sanitized (never the bearer token or proxy
+  // password). Admin-only; for diagnosing the live checker.
+  app.post("/api/scan/live-test", requireAdmin, async (req, res) => {
+    const parsed = z.object({
+      address: z.string().trim().min(3).max(200),
+      city: z.string().trim().max(120).default(""),
+      state: z.string().trim().regex(/^[A-Za-z]{2}$/).default("NC"),
+      zip: z.string().trim().max(10).default(""),
+    }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid address", issues: parsed.error.issues });
+    try {
+      const { address, city, state, zip } = parsed.data;
+      res.json(await liveTestAddress(address, city, state.toUpperCase(), zip));
+    } catch (e: any) {
+      res.status(500).json({ error: String(e?.message ?? e) });
+    }
   });
 
   // Internal use only — not exposed to frontend

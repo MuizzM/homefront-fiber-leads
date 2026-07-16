@@ -4,6 +4,8 @@ export interface SweepJob { id:string; kind:"city"|"address"; query:string; city
 export interface SweepResult { id:number; address:string; city:string; state:string; zip:string; lat:number|null; lng:number|null; fiberStatus:string|null; fiberAvailable:boolean|null; firstSeenFiberAt:string|null; customerSegment:"new_opportunity"|"existing_customer"|"unknown"; customerConfidence:"medium"|"low"; customerSignals:string[]; checkedAt:string|null; transitionStatus:string|null; maxDownloadMbps:number|null; billingStatus:string|null; crossVerified:boolean; conclusive:number|null; error:string|null }
 export interface StateSweepCity { city:string; status:string; checked:number; freshLeads:number; comingSoon:number; unresolved:number }
 export interface StateSweep { id:string; state:"NC"|"SC"; status:string; phase:string; citiesTotal:number; citiesCompleted:number; currentCity:string|null; checked:number; freshLeads:number; comingSoon:number; retrying:number; unresolved:number; report:any|null; error:string|null; startedAt:string; completedAt:string|null; cities:StateSweepCity[] }
+export interface LiveTestStage { stage:string; ok:boolean; detail:string; data?:Record<string,unknown> }
+export interface LiveTest { input:{address:string;city:string;state:string;zip:string}; stages:LiveTestStage[]; checked:boolean; classification:string; wouldSaveLead:boolean }
 const json = async <T>(method:string,url:string,body?:unknown):Promise<T> => (await apiRequest(method,url,body)).json();
 export const sweepApi = {
   list: () => json<{sweeps:SweepJob[]}>("GET","/api/sweeps"),
@@ -14,6 +16,7 @@ export const sweepApi = {
   getState: (id:string) => json<StateSweep>("GET",`/api/sweeps/state/${id}`),
   listState: () => json<{sweeps:StateSweep[]}>("GET","/api/sweeps/state"),
   cancelState: (id:string) => json<{cancelled:boolean}>("POST",`/api/sweeps/state/${id}/cancel`),
+  liveTest: (body:{address:string;city?:string;state?:string;zip?:string}) => json<LiveTest>("POST","/api/scan/live-test",body),
   startAddress: (body:{query:string;radiusMeters:number;maxChecks:number}) => json<SweepJob>("POST","/api/sweeps/address",body),
   results: (id:string,filters?:{stage?:string;customer?:string}) => {
     const q=new URLSearchParams(); if(filters?.stage)q.set("stage",filters.stage); if(filters?.customer)q.set("customer",filters.customer);

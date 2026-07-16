@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Loader2, MapPinned, Radar, Search, ShieldCheck, Sparkles, XCircle, Zap } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
-import { sweepApi, type SweepResult } from "@/lib/sweepApi";
+import { sweepApi, type SweepResult, type LiveTest } from "@/lib/sweepApi";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 
@@ -32,6 +32,9 @@ export default function SweepCommand(){
   const {data:stateSweeps}=useQuery({queryKey:["/api/sweeps/state"],queryFn:sweepApi.listState,refetchInterval:3000});
   const activeState=stateSweeps?.sweeps?.find(s=>s.status==="running")??stateSweeps?.sweeps?.find(s=>s.id===stateSweepId)??stateSweeps?.sweeps?.[0]??null;
   const startState=useMutation({mutationFn:()=>sweepApi.startState({state}),onSuccess:(j)=>{setStateSweepId(j.id);qc.invalidateQueries({queryKey:["/api/sweeps/state"]});toast({title:`${j.state} statewide scan started — ${j.citiesTotal} cities`});},onError:(e:any)=>toast({title:e.message||"Could not start statewide scan",variant:"destructive"})});
+  const [lt,setLt]=useState({address:"",city:"",state:"NC",zip:""});
+  const [ltResult,setLtResult]=useState<LiveTest|null>(null);
+  const liveTest=useMutation({mutationFn:()=>sweepApi.liveTest(lt),onSuccess:setLtResult,onError:(e:any)=>{setLtResult(null);toast({title:e.message||"Live test failed",variant:"destructive"})}});
   const exportCsv=async()=>{if(!activeId)return;const r=await apiRequest("GET",`/api/sweeps/${activeId}/knock-list.csv`);const blob=await r.blob();const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`fresh-fiber-knock-list-${activeId}.csv`;a.click();URL.revokeObjectURL(a.href)};
   const pct=job?.queued?Math.round(job.checked/job.queued*100):0;
   return <div className="h-full min-h-0 overflow-y-auto bg-background pb-24">
@@ -76,6 +79,31 @@ export default function SweepCommand(){
         </>}
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">Runs immediately as the active priority job — never deferred or nightly. Each city is discovered, ZIP-normalized, deduped, and checked with a fresh authorized token; a single-city failure never stops the sweep. Continues until every city is checked, or an admin cancels.</p>
       </section>
+
+      {/* ── Live Test — trace ONE address through the full pipeline (fresh mint,
+             no cache). Sanitized: never shows the bearer token or proxy password. ── */}
+      <section className="rounded-2xl border border-border bg-card p-4" data-testid="live-test">
+        <div className="flex items-center gap-2 mb-1"><Radar className="h-4 w-4 text-primary"/><h2 className="text-sm font-semibold">Live Test — trace one address</h2></div>
+        <p className="text-[11px] text-muted-foreground mb-3">Enter a known-fiber address and watch OSM → normalize → mint → Kinetic search → HTTP → response → classify → lead, live. Fresh mint, no cache.</p>
+        <div className="grid grid-cols-[1fr_1fr_56px_84px] gap-2">
+          <input value={lt.address} onChange={e=>setLt({...lt,address:e.target.value})} placeholder="123 Main St" className="h-11 rounded-xl border border-border bg-background px-3 text-sm"/>
+          <input value={lt.city} onChange={e=>setLt({...lt,city:e.target.value})} placeholder="City" className="h-11 rounded-xl border border-border bg-background px-3 text-sm"/>
+          <input value={lt.state} onChange={e=>setLt({...lt,state:e.target.value.toUpperCase().slice(0,2)})} placeholder="NC" className="h-11 rounded-xl border border-border bg-background px-2 text-sm text-center"/>
+          <input value={lt.zip} onChange={e=>setLt({...lt,zip:e.target.value})} placeholder="ZIP" className="h-11 rounded-xl border border-border bg-background px-2 text-sm"/>
+        </div>
+        <button disabled={!isAdmin||liveTest.isPending||lt.address.trim().length<3} onClick={()=>liveTest.mutate()} data-testid="live-test-run" className="mt-2 h-11 w-full rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50">{liveTest.isPending?<Loader2 className="mx-auto h-4 w-4 animate-spin"/>:"Run Live Test (fresh mint · no cache)"}</button>
+        {ltResult&&<div className="mt-3 space-y-1.5" data-testid="live-test-result">
+          {ltResult.stages.map((s,i)=><div key={i} className="rounded-lg bg-secondary/50 p-2.5">
+            <div className="flex items-center gap-2"><span className={`h-2 w-2 shrink-0 rounded-full ${s.ok?"bg-emerald-500":"bg-red-500"}`}/><span className="text-xs font-semibold">{s.stage}</span></div>
+            <div className="mt-1 break-words font-mono text-[11px] text-muted-foreground">{s.detail}</div>
+            {s.data&&<pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[10px] text-muted-foreground/80">{JSON.stringify(s.data,null,1)}</pre>}
+          </div>)}
+          <div className={`rounded-lg p-2.5 text-xs font-semibold ${ltResult.checked?(ltResult.wouldSaveLead?"bg-emerald-500/15 text-emerald-500":"bg-blue-500/10 text-blue-600 dark:text-blue-400"):"bg-red-500/10 text-red-500"}`}>
+            {ltResult.checked?`Checked ✓ — ${ltResult.classification}${ltResult.wouldSaveLead?" → saves as fresh lead":""}`:"Not checked — the pipeline failed at the red stage above. That's an infrastructure failure, NOT a no-service result."}
+          </div>
+        </div>}
+      </section>
+
       {job&&<><section className="rounded-2xl border border-border bg-card overflow-hidden"><div className="p-4 flex items-start gap-3"><div className="min-w-0 flex-1"><div className="font-semibold truncate">{job.city?`${job.city}, ${job.state}`:job.query}</div><div className="text-xs text-muted-foreground">{job.source??"Preparing inventory"} · started {new Date(job.startedAt).toLocaleString()}</div></div>{job.status==="error"&&<span className="text-xs text-red-500">{job.error}</span>}{job.status==="running"&&isAdmin&&<button onClick={()=>sweepApi.cancel(job.id).then(()=>qc.invalidateQueries())} className="h-9 px-3 rounded-lg border border-border text-xs"><XCircle className="inline h-3.5 w-3.5 mr-1"/>Cancel</button>}</div><div className="grid grid-cols-2 sm:grid-cols-5 border-t border-border divide-x divide-border"><Metric label="Harvested" value={job.harvested}/><Metric label="Checked" value={job.checked}/><Metric label="Fresh" value={job.freshFound} hot/><Metric label="New opportunities" value={job.opportunitiesFound} hot/><Metric label="Failures" value={job.failed}/></div>{job.status==="running"&&<div className="h-1.5 bg-secondary"><div className="h-full bg-primary transition-all" style={{width:`${pct}%`}}/></div>}</section>
       <section className="grid gap-4 lg:grid-cols-[1.2fr_.8fr]"><SweepMap rows={results?.results??[]}/><div className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold">First-mover knock list</h2><p className="text-xs text-muted-foreground">Confirmed fresh fiber + no active-service signal</p></div><button disabled={!knock?.count} onClick={exportCsv} className="h-10 rounded-xl border border-border px-3 text-xs font-semibold disabled:opacity-40"><Download className="inline h-4 w-4 mr-1"/>CSV</button></div><div className="mt-4 text-4xl font-bold text-emerald-500 tabular-nums">{knock?.count??0}</div><div className="mt-3 space-y-2">{knock?.rows?.slice(0,5).map((r:any)=><a key={r.address} href={r.map_url} target="_blank" rel="noreferrer" className="block rounded-xl bg-secondary/50 p-3"><div className="flex justify-between gap-2"><span className="text-sm font-medium truncate">{r.address}</span><span className="text-xs font-bold text-emerald-500">{r.opportunity_score}</span></div><div className="mt-1 text-[11px] text-muted-foreground">Cluster {r.cluster_density} · cross verified</div></a>)}</div></div></section>
       <section className="rounded-2xl border border-border bg-card"><div className="p-3 flex gap-2 overflow-x-auto"><Filter label="All" active={stage==="all"&&customer==="all"} onClick={()=>{setStage("all");setCustomer("all")}}/><Filter label="Fresh" active={stage==="fresh"} onClick={()=>setStage("fresh")}/><Filter label="Available" active={stage==="available"} onClick={()=>setStage("available")}/><Filter label="Unavailable" active={stage==="unavailable"} onClick={()=>setStage("unavailable")}/><Filter label="New opportunity" active={customer==="new_opportunity"} onClick={()=>setCustomer("new_opportunity")}/><Filter label="Existing" active={customer==="existing_customer"} onClick={()=>setCustomer("existing_customer")}/></div><div className="divide-y divide-border">{isLoading?<div className="p-8 text-center"><Loader2 className="mx-auto h-5 w-5 animate-spin"/></div>:results?.results?.slice(0,100).map(r=><ResultRow key={r.id} row={r}/>)}{!isLoading&&!results?.results.length&&<div className="p-8 text-center text-sm text-muted-foreground">No results in this view yet.</div>}</div></section></>}
