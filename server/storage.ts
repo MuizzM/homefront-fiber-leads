@@ -1222,6 +1222,9 @@ export function runMigrations() {
        PRIMARY KEY(state_sweep_id, city)
      )`,
     `CREATE INDEX IF NOT EXISTS idx_state_sweep_cities_queue ON state_sweep_cities(state_sweep_id, status, seq)`,
+    // Per-city retry counter: a harvest timeout is TEMPORARY — the sweep retries
+    // the city (bounded) instead of silently dropping a whole town's coverage.
+    `ALTER TABLE state_sweep_cities ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`,
 
     // ── ADDRESS DISCOVERY — durable, tenant-scoped enumeration before qualification ──
     // Discovery is deliberately separate from scan_runs. These tables answer

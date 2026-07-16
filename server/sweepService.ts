@@ -191,7 +191,24 @@ async function runStateSweep(id: string) {
       const next = rawDb.prepare(
         `SELECT * FROM state_sweep_cities WHERE state_sweep_id=? AND status='pending' ORDER BY seq LIMIT 1`,
       ).get(id) as any;
-      if (!next) { finishStateSweep(id); return; }
+      if (!next) {
+        // TEMPORARY city failures (OSM harvest timeout, transient enumeration
+        // errors) are retried before the state is declared complete — a skipped
+        // city is silently-lost coverage. Bounded at 3 passes per city so one
+        // permanently broken town can never spin the sweep forever; a city that
+        // exhausts its retries stays 'failed' with its recorded error (a
+        // terminal data error, visible in the report).
+        const revived = rawDb.prepare(
+          `UPDATE state_sweep_cities SET status='pending', error=NULL, attempts=attempts+1, sweep_job_id=NULL
+           WHERE state_sweep_id=? AND status='failed' AND attempts < 3`,
+        ).run(id).changes;
+        if (revived) {
+          bumpCityDone(id); // recount completed now that failed cities re-queued
+          structuredLog("state_sweep.retrying_failed_cities", { stateSweepId: id, revived });
+          continue;
+        }
+        finishStateSweep(id); return;
+      }
 
       updateState(id, { current_city: next.city, heartbeat_at: now() });
       updateCity(id, next.city, { status: "running", started_at: now() });
