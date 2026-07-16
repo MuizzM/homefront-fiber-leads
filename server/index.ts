@@ -21,6 +21,17 @@ if (typeof (crypto as any).hash !== "function") {
     crypto.createHash(algorithm).update(data).digest(outputEncoding);
 }
 
+// ── Never die on a stray async failure ───────────────────────────────────────
+// Node's default kills the process on an unhandled rejection; for a field app
+// a background transient (token mint, proxy hiccup) must never take the whole
+// server down. Log loudly instead — the failed work already surfaced its own
+// error to its caller. (uncaughtException still exits: state is unknown.)
+process.on("unhandledRejection", (reason) => {
+  structuredLog("process.unhandled_rejection", {
+    error: String((reason as any)?.stack ?? reason).slice(0, 600),
+  }, "error");
+});
+
 const app = express();
 const httpServer = createServer(app);
 

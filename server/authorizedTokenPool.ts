@@ -112,7 +112,10 @@ export class AuthorizedTokenPool {
   start(): void {
     if (this.maintenanceTimer) return;
     void this.ensureWarm().catch(() => {});
-    this.maintenanceTimer = setInterval(() => void this.maintain(), this.maintenanceIntervalMs);
+    // A failed mint during maintenance is an expected transient — the pool
+    // self-heals on the next tick. Swallow it: an uncaught rejection from a
+    // timer is a process-killer in Node (this crashed the prod container).
+    this.maintenanceTimer = setInterval(() => { this.maintain().catch(() => {}); }, this.maintenanceIntervalMs);
     if (typeof (this.maintenanceTimer as any).unref === "function") (this.maintenanceTimer as any).unref();
   }
 

@@ -76,7 +76,11 @@ async function loadUndici() {
   }
 }
 
-loadUndici();
+// Keep the load promise: early callers AWAIT it instead of racing it. In the
+// compiled CJS bundle the token pool's boot-time warm-up mint reached
+// proxyFetch before this async import settled, threw "undici unavailable",
+// and (via an uncaught maintenance-timer rejection) killed the prod process.
+const undiciReady = loadUndici();
 
 export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<Response> {
   const proxyUrl = configuredProxyUrl();
@@ -85,6 +89,9 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
   // never silently change egress after a transport failure. Retry one broken
   // socket pool, then fail closed and let the caller surface a non-answer.
   if (proxyUrl) {
+    if (!_proxyLoaded) await undiciReady;
+    // Still unavailable after a completed load = undici truly missing: fail
+    // closed rather than ever sending an unproxied direct request.
     if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing an unconfigured direct request");
     if (!_sharedDispatcher) _sharedDispatcher = buildAgent(proxyUrl);
     try {
