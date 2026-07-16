@@ -3019,18 +3019,15 @@ export default function MapView() {
         (type.includes("created") ||
           type.includes("qualified") ||
           type.includes("published"));
+      // Any projector-stamped confirmed lead paints live — cross_verified OR
+      // the authoritative kinetic_new_fiber (NEW FIBER + billing N) publish.
       const explicitlyQualified =
         row.qualified === true ||
         row.fresh === true ||
         (row.isFreshFiber === true && row.freshFiberVerdict === "fresh") ||
-        (row.leadTag === "fresh_fiber_confirmed" &&
-          row.freshConfidence === "cross_verified");
+        row.leadTag === "fresh_fiber_confirmed";
       if (!eventCreatesLead && !explicitlyQualified) return;
-      if (
-        row.leadTag !== "fresh_fiber_confirmed" ||
-        row.freshConfidence !== "cross_verified"
-      )
-        return;
+      if (row.leadTag !== "fresh_fiber_confirmed") return;
 
       const featureCoordinates = Array.isArray(feature?.geometry?.coordinates)
         ? feature.geometry.coordinates

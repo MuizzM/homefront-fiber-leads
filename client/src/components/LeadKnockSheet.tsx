@@ -607,7 +607,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1" style={{ color: statusColor }}>
                 {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
               </div>
-              {renderedLead.leadTag === "fresh_fiber_confirmed" && renderedLead.freshConfidence === "cross_verified" && (
+              {renderedLead.leadTag === "fresh_fiber_confirmed" && (
                 <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
                   Confirmed fresh fiber
                 </div>

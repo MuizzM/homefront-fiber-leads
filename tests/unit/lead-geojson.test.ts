@@ -41,13 +41,14 @@ describe("lead GeoJSON reconciliation", () => {
     expect(cache.has(5_000)).toBe(false);
   });
 
-  it("marks only cross-verified fresh-fiber leads for the field-map halo", () => {
+  it("marks every confirmed fresh-fiber lead for the field-map halo (cross-verified or authoritative)", () => {
     const cache: LeadFeatureCache = new Map();
     const [base] = leads(1);
     const result = reconcileLeadFeatures([
       { ...base, leadTag: "fresh_fiber_confirmed", freshConfidence: "cross_verified" },
-      { ...base, id: 2, lng: base.lng - 0.001, leadTag: "fresh_fiber_confirmed", freshConfidence: "single_source_provisional" },
+      { ...base, id: 2, lng: base.lng - 0.001, leadTag: "fresh_fiber_confirmed", freshConfidence: "kinetic_new_fiber" },
+      { ...base, id: 3, lng: base.lng - 0.002, leadTag: "standard" },
     ], cache);
-    expect(result.data.features.map((feature) => feature.properties.fresh)).toEqual([1, 0]);
+    expect(result.data.features.map((feature) => feature.properties.fresh)).toEqual([1, 1, 0]);
   });
 });

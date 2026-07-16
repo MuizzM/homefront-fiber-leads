@@ -28,7 +28,7 @@ function speedLabel(mbps?: number | null): string | null {
 }
 
 function statusBadge(p: CardProperty): { text: string; cls: string } {
-  if (p.leadTag === "fresh_fiber_confirmed" && p.freshConfidence === "cross_verified") return { text: "Confirmed fresh fiber", cls: "bg-emerald-500/15 text-emerald-500 ring-emerald-500/30" };
+  if (p.leadTag === "fresh_fiber_confirmed") return { text: "Confirmed fresh fiber", cls: "bg-emerald-500/15 text-emerald-500 ring-emerald-500/30" };
   if (p.isNewFiber && p.billingStatus === "N") return { text: "New-fiber lead", cls: "bg-emerald-500/15 text-emerald-500 ring-emerald-500/30" };
   if (p.isNewFiber) return { text: "New fiber here", cls: "bg-teal-500/15 text-teal-500 ring-teal-500/30" };
   if (p.leadTag === "coming_soon") return { text: "Fiber coming soon", cls: "bg-amber-500/15 text-amber-500 ring-amber-500/30" };
@@ -56,6 +56,7 @@ function buildFacts(p: CardProperty): Array<{ label: string; value: string; tone
   if (p.householdSegmentType) f.push({ label: "Segment", value: p.householdSegmentType });
   if (typeof p.leadScore === "number" && p.leadScore > 0) f.push({ label: "Lead score", value: String(p.leadScore), tone: "text-emerald-500" });
   if (p.freshConfidence === "cross_verified") f.push({ label: "Evidence", value: "Cross-verified", tone: "text-emerald-500" });
+  else if (p.freshConfidence === "kinetic_new_fiber") f.push({ label: "Evidence", value: "Kinetic new fiber (billing N)", tone: "text-emerald-500" });
   return f;
 }
 

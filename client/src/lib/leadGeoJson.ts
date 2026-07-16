@@ -36,7 +36,7 @@ export type LeadFeatureCache = Map<number, CachedLeadFeature>;
 
 export function leadFeatureSignature(lead: GeoJsonLead): string {
   const ds = pinDisplayState(lead);
-  const fresh = lead.leadTag === "fresh_fiber_confirmed" && lead.freshConfidence === "cross_verified" ? 1 : 0;
+  const fresh = lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0;
   return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh].join("\u001f");
 }
 
@@ -79,7 +79,7 @@ export function reconcileLeadFeatures(
             address: lead.address,
             visited: lead.visited ? 1 : 0,
             ds,
-            fresh: lead.leadTag === "fresh_fiber_confirmed" && lead.freshConfidence === "cross_verified" ? 1 : 0,
+            fresh: lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0,
           },
         },
       };

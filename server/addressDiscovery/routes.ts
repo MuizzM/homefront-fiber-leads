@@ -180,7 +180,8 @@ export function publicJob(
   // a failure at an already-confirmed lead must still report "still fresh",
   // never sink the address into "unresolved".
   const t = includeDiagnostics &&
-    (job.qualificationChecked > 0 || job.freshFound > 0 || job.qualificationFailed > 0)
+    (job.qualificationChecked > 0 || job.freshFound > 0 ||
+      job.qualificationFailed > 0 || job.failedTiles > 0)
     ? (() => {
         // Latest snapshot by CANONICAL order (checked_at_epoch DESC, id DESC) —
         // the only sanctioned chronological ordering for availability_snapshots.
