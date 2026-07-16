@@ -29,6 +29,7 @@ import {
   failTile,
   getDiscoveryJob,
   jobsReadyForQualification,
+  streamingDiscoveryJobs,
   mapDiscoveryRun,
   markBoundaryRetry,
   mergeAddressEvidence,
@@ -419,7 +420,15 @@ function beginQualification(job: DiscoveryJobRow): void {
   prepareAndDispatchQualification(getDiscoveryJob(job.tenantId, job.id)!);
 }
 
-function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
+/**
+ * Dispatch provider checks for every candidate discovered SO FAR. Idempotent:
+ * check rows dedupe per (job, canonical address) and only never-dispatched
+ * checks (run_id IS NULL) enter a new run — so this streams safely per tile
+ * while discovery is still running (finalize=false) and once more at the
+ * discovery→qualification phase flip (finalize=true), which stamps
+ * dispatch-complete and emits the qualification.started event.
+ */
+function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true): void {
   const candidates = qualificationCandidates(job.id);
   // EVERY unique discovered address gets a live provider check — no reuse of
   // cached results, scan history, existing targets, or existing Leads. The only
@@ -518,14 +527,19 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
     });
   }
   try {
+    // Only never-dispatched checks: streaming passes stamp run_id via
+    // mapDiscoveryRun, so an address can never enter two runs / be checked twice.
     const queued = rawDb
       .prepare(
         `SELECT canonical_address_id AS canonicalAddressId,scan_target_id AS targetId
-      FROM qualification_checks WHERE job_id=? AND state='queued' AND scan_target_id IS NOT NULL
+      FROM qualification_checks WHERE job_id=? AND state='queued' AND run_id IS NULL AND scan_target_id IS NOT NULL
       ORDER BY canonical_address_id`,
       )
       .all(job.id) as Array<{ canonicalAddressId: number; targetId: number }>;
-    let sequence = 0;
+    // Run ids continue from prior streaming passes.
+    let sequence = Number(
+      (rawDb.prepare(`SELECT COALESCE(MAX(sequence),-1)+1 AS next FROM discovery_job_runs WHERE job_id=?`).get(job.id) as any)?.next ?? 0,
+    );
     for (let offset = 0; offset < queued.length; offset += MAX_CHECKS_PER_RUN) {
       const batch = queued.slice(offset, offset + MAX_CHECKS_PER_RUN);
       const runId = `discovery_${job.id.replace(/-/g, "")}_${sequence}`;
@@ -547,6 +561,14 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
       );
       mapDiscoveryRun(job.id, runId, sequence++);
       void runScanWorker(runId, job.tenantId);
+    }
+    if (!finalize) {
+      // Streaming pass mid-discovery: dispatched what exists so far; the phase
+      // flip finalizes later. Publish map candidates so pins/coverage stream too.
+      while (publishQualificationMapCandidates(job) > 0) {
+        /* bounded event batches */
+      }
+      return;
     }
     markQualificationDispatchComplete(job.id);
     while (publishQualificationMapCandidates(job) > 0) {
@@ -581,6 +603,18 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
 
 function reconcile(): void {
   try {
+    // STREAMING: addresses enter provider checks as tiles complete — never
+    // waiting for the whole OSM discovery to finish. Idempotent per pass
+    // (only run_id IS NULL checks dispatch), finalized at the phase flip.
+    for (const job of streamingDiscoveryJobs()) {
+      try {
+        prepareAndDispatchQualification(job, false);
+      } catch (error: any) {
+        structuredLog("address_discovery.streaming_dispatch_failed", {
+          jobId: job.id, error: String(error?.message ?? error).slice(0, 200),
+        }, "warn");
+      }
+    }
     for (const job of jobsReadyForQualification()) beginQualification(job);
     for (const job of activeQualificationJobs()) {
       if (!job.qualificationDispatchCompletedAt) {

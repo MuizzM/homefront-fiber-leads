@@ -740,6 +740,10 @@ export default function MapView() {
       // Unresolved = failed attempts at addresses with NO confirmed lead. A
       // failed re-check of a known lead stays in the fresh buckets above.
       unresolved: j.unresolvedCount || 0,
+      // Pending = discovered but not yet conclusively processed (queued or
+      // retrying). NEVER shown as unresolved; the job cannot complete while
+      // any remain (server terminal gate enforces discovered = checked + 0).
+      pending: Math.max(0, (j.discoveredCount || j.uniqueCandidateCount || 0) - (j.checkedCount || 0) - (j.unresolvedCount || 0)),
       failed: j.failedCount || 0,
       coverage: j.coverageStatus || null,
     };
@@ -3955,7 +3959,7 @@ export default function MapView() {
                   </div>
                   <div className="text-[11px] leading-tight tabular-nums text-white/55">
                     {scanSummary.discovered > 0
-                      ? `${scanSummary.discovered.toLocaleString()} OSM addresses · ${scanSummary.checked.toLocaleString()} checked`
+                      ? `${scanSummary.discovered.toLocaleString()} found · ${scanSummary.checked.toLocaleString()} checked · ${scanSummary.pending.toLocaleString()} pending`
                       : scanning || scanSubmitting
                         ? "Finding addresses via OpenStreetMap…"
                         : "No mapped addresses found here"}
@@ -4014,7 +4018,7 @@ export default function MapView() {
                 {[
                   { label: "New", value: scanSummary.newLeads, tone: "text-emerald-400" },
                   { label: "Still fresh", value: scanSummary.stillFresh, tone: "text-emerald-300" },
-                  { label: "Now active", value: scanSummary.serviceActive, tone: "text-sky-400" },
+                  { label: "Already customers", value: scanSummary.serviceActive, tone: "text-sky-400" },
                   { label: "Coming soon", value: scanSummary.comingSoon, tone: "text-amber-400" },
                   { label: "Unresolved", value: scanSummary.unresolved, tone: "text-white/45" },
                 ].map((c) => (

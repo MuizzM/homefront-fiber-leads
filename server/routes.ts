@@ -232,29 +232,24 @@ async function sendOtpEmail(to: string, code: string, name: string): Promise<"em
       console.warn(`[otp] Resend API send failed (${String(e?.message ?? e).slice(0, 140)}) — trying SMTP`);
     }
   }
-  // 2) SMTP with 587↔465 port failover.
+  // 2) SMTP with 587↔465 port failover (production only). Development NEVER
+  //    sends real mail: local logins use the console code (developmentCode in
+  //    the response) — deterministic, offline-friendly, and no test codes in
+  //    real inboxes.
+  if (process.env.NODE_ENV !== "production") {
+    console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
+    return "console";
+  }
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
       await sendOtpViaSmtp(message);
       return "email";
-    } catch (e: any) {
-      if (process.env.NODE_ENV !== "production") {
-        // Dev machines often can't reach the prod SMTP host — never block a
-        // local login on mail. (Prod NEVER logs codes; it rethrows below.)
-        console.warn(`[otp] SMTP send failed (${e?.message ?? e}) — dev fallback:`);
-        console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
-        return "console";
-      }
+    } catch {
       throw new Error("email_send_failed");
     }
-  } else if (process.env.NODE_ENV === "production") {
-    // API failed and no SMTP configured — a prod login cannot silently no-op.
-    throw new Error("email_send_failed");
-  } else {
-    // Dev fallback — print to server console so you can test without SMTP
-    console.log(`\n══ OTP for ${to} (${name}): ${code} ══\n`);
-    return "console";
   }
+  // API failed and no SMTP configured — a prod login cannot silently no-op.
+  throw new Error("email_send_failed");
 }
 
 async function sendOtpViaSmtp(message: ReturnType<typeof otpMessage>) {

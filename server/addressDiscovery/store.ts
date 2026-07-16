@@ -1006,6 +1006,18 @@ export function jobsReadyForQualification(limit = 10): DiscoveryJobRow[] {
     .all(limit) as DiscoveryJobRow[];
 }
 
+/** Discovery-phase jobs with tiles already completed — candidates for a
+ *  STREAMING qualification pass while remaining tiles are still enumerating. */
+export function streamingDiscoveryJobs(limit = 10): DiscoveryJobRow[] {
+  return rawDb
+    .prepare(
+      `${jobSelect} WHERE status IN ('queued','running') AND phase='discovery'
+    AND completed_tiles+partial_tiles > 0
+    AND total_tiles > completed_tiles+partial_tiles+failed_tiles ORDER BY created_at LIMIT ?`,
+    )
+    .all(limit) as DiscoveryJobRow[];
+}
+
 export function setJobQualification(jobId: string): boolean {
   return (
     rawDb
