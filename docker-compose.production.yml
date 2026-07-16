@@ -23,6 +23,15 @@ services:
       NODE_ENV: production
       PORT: "5000"
       DATA_DIR: /data          # data.db + uploads/ both live here (one volume)
+      # ── Outbound mail sender (2026-07-16 OTP outage) ─────────────────────────
+      # The Resend account has exactly ONE verified sending domain:
+      # portal.homefrontsolutionsllc.com. The host .env pointed MAIL_FROM at the
+      # UNVERIFIED apex domain, so Resend rejected every send (403 "domain is
+      # not verified") and OTP login died. Pin the sender to the verified
+      # subdomain here — compose `environment` overrides env_file, so this wins
+      # over the stale host value. If the apex is ever verified on Resend, this
+      # can move back to the host .env.
+      MAIL_FROM: "Home Front Solutions <noreply@portal.homefrontsolutionsllc.com>"
       # ── Nightly auto-scan (2 AM): CNS frontier + Coming-Soon recheck + pool
       #    re-scan, plus a ONE-TIME deep Mapbox-grid seed of the priority NC towns
       #    (new Kinetic fiber lands on new streets OSM lacks — Lexington had ~7,900
