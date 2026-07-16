@@ -1074,7 +1074,10 @@ export function runMigrations() {
        fiber_check_id INTEGER REFERENCES fiber_checks(id),
        error TEXT
      )`,
-    `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_target ON availability_snapshots(scan_target_id, checked_at DESC)`,
+    // Obsolete: the raw-TEXT checked_at index mis-ordered mixed formats and is
+    // fully superseded by idx_availability_snapshots_target_epoch (same leading
+    // column, canonical epoch ordering). Dropped so no query can bind to it.
+    `DROP INDEX IF EXISTS idx_availability_snapshots_target`,
     `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_run ON availability_snapshots(run_id, checked_at)`,
     `ALTER TABLE availability_snapshots ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE availability_snapshots ADD COLUMN latency_ms INTEGER`,
