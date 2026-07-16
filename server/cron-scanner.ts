@@ -14,4 +14,4 @@ export async function triggerManualScan():Promise<void>{
   catch(error){status.lastRunResult=error instanceof Error?error.message:String(error);throw error;}finally{status.isRunning=false;}
 }
 function schedule():void{const next=nextTwoAm();status.nextRunAt=next.toISOString();if(timer)clearTimeout(timer);timer=setTimeout(async()=>{try{await triggerManualScan();}catch(error){structuredLog("kinetic.nightly.failed",{error:error instanceof Error?error.message:String(error)},"error");}schedule();},Math.max(1000,next.getTime()-Date.now()));timer.unref?.();}
-export function startNightlyCron():void{if(process.env.ENABLE_NIGHTLY_SCAN!=="true"){status.nextRunAt=null;return;}schedule();}
+export function startNightlyCron():void{schedule();}
