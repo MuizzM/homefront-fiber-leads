@@ -32,7 +32,7 @@ function makeJob(key: string) {
 }
 
 /** One enumerated address wired end-to-end: canonical → scan_target → check. */
-function makeCheckedAddress(jobId: string, n: number, state: string) {
+function makeCheckedAddress(jobId: string, n: number, state: string, result: string | null = null) {
   const canonicalAddressId = Number(rawDb.prepare(`INSERT INTO canonical_addresses
     (tenant_id,canonical_key,full_address,house_number,street,city,state,postal_code,lat,lng)
     VALUES (?,?,?,?,'Strip St','Inman','SC','29349',35.02,-82.079)`)
@@ -40,8 +40,8 @@ function makeCheckedAddress(jobId: string, n: number, state: string) {
   const targetId = Number(rawDb.prepare(`INSERT INTO scan_targets (address,city,state,zip,lat,lng,tenant_id,source)
     VALUES (?,?,?,?,?,?,?,'osm')`).run(`${n} STRIP ST`, "Inman", "SC", "29349", 35.02, -82.079, TENANT).lastInsertRowid);
   store.createQualificationCheck({ tenantId: TENANT, jobId, canonicalAddressId, targetId });
-  rawDb.prepare(`UPDATE qualification_checks SET state=?,scan_target_id=?,checked_at=datetime('now')
-    WHERE job_id=? AND canonical_address_id=?`).run(state, targetId, jobId, canonicalAddressId);
+  rawDb.prepare(`UPDATE qualification_checks SET state=?,result=?,scan_target_id=?,checked_at=datetime('now')
+    WHERE job_id=? AND canonical_address_id=?`).run(state, result, targetId, jobId, canonicalAddressId);
   return targetId;
 }
 
@@ -56,8 +56,10 @@ function makeExistingLead(targetId: number, address: string, confidence: string)
 describe("Field Map strip counts — authoritative state, not this-run attempts", () => {
   it("fresh_found counts authoritative (kinetic_new_fiber) leads, not only cross_verified", () => {
     const job = makeJob("strip-authoritative");
-    const t1 = makeCheckedAddress(job.id, 101, "verified");
-    const t2 = makeCheckedAddress(job.id, 102, "verified");
+    // Provider results ARE the fresh signal (rule: fresh_found counts
+    // qualification, not the Lead join) — result 'new_fiber' = NEW FIBER + N.
+    const t1 = makeCheckedAddress(job.id, 101, "verified", "new_fiber");
+    const t2 = makeCheckedAddress(job.id, 102, "verified", "new_fiber");
     makeExistingLead(t1, "101 STRIP ST", "kinetic_new_fiber");
     makeExistingLead(t2, "102 STRIP ST", "cross_verified");
     store.reconcileQualificationJob(store.getDiscoveryJob(TENANT, job.id)!);

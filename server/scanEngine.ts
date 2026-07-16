@@ -30,6 +30,7 @@ import {
   claimRunTargets,
   finalizeRunTarget,
   requeueRunTarget,
+  addRunBytes,
   touchRun,
   getTargetSnapshot,
   countQueued,
@@ -181,31 +182,37 @@ export async function runScanWorker(
               zip: t.zip,
               source: providerPriorityForRun(run.kind),
             });
-            if (result.blocked) {
-              // TRANSIENT provider error — REQUEUE the address and retry it later
-              // with a fresh token. Never finalized, never counted as failed, never
-              // a no-fiber. No retry-count limit: it recurs until it gets a valid
-              // response or the run is explicitly cancelled.
+            if (result.blocked || checkFailed) {
+              // TRANSIENT non-answer (throttle, transport error, malformed body,
+              // soft success=false) — REQUEUE and retry later with a fresh token.
+              // Never finalized, never counted failed/unresolved, never a no-fiber.
+              // A conclusive "not serviceable" is NOT this path — the scanner
+              // returns that as a real kinetic_live answer. No retry-count limit:
+              // it recurs until a valid response or an explicit cancel.
               requeueRunTarget(runId, t.targetId);
+              addRunBytes(runId, bytes); // the failed attempt still cost its request bytes
+              const category = result.blocked ? "provider_blocked" : "inconclusive";
               const attempt = targetAttempt(runId, t.targetId);
               recordFiberFailure({
-                tenantId, runId, targetId: t.targetId, category: "provider_blocked",
+                tenantId, runId, targetId: t.targetId, category,
                 message: result.notes || "transient provider error", attempt, retryable: true,
               });
               recordProviderOutcome(tenantId, false, result.notes);
               appendFiberEvent({
                 tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
-                payload: { category: "provider_blocked", attempt },
+                payload: { category, attempt },
               });
             } else {
-              // Conclusive answer OR unresolved (malformed / other 4xx). applyCheck
-              // records it and finalizes the target; unresolved is never a no-fiber.
-              applyCheck(runId, tenantId, t, result, bytes, checkFailed, Date.now() - checkStartedAt);
+              // VALID provider response — a conclusive serviceability answer
+              // (fiber, NEW FIBER, no-service, out-of-territory…). Record it,
+              // finalize the target, and publish a Fresh Lead when it qualifies.
+              applyCheck(runId, tenantId, t, result, bytes, Date.now() - checkStartedAt);
             }
           } catch (err: any) {
             // An unexpected throw is TRANSIENT — requeue (never lose the address,
             // never a no-fiber, never abort the run).
             requeueRunTarget(runId, t.targetId);
+            addRunBytes(runId, DEFAULT_BYTES_PER_CHECK); // request bytes were still spent
             const message = String(err?.message ?? err ?? "Provider check failed");
             const attempt = targetAttempt(runId, t.targetId);
             recordFiberFailure({
@@ -302,9 +309,12 @@ function applyCheck(
   },
   result: ScanResult,
   bytes: number,
-  checkFailed: boolean,
   latencyMs: number,
 ): void {
+  // applyCheck is only ever called with a VALID provider response. Transient
+  // non-answers (blocked / apiSource='failed') are requeued by the worker and
+  // never reach here — a temporary failure is retry history, never a finalized
+  // "unresolved" and never a "no".
   const snapshot = getTargetSnapshot(t.targetId);
   const customer = classifyCustomerOpportunity(result);
   const fiberTransition = classifyFiberAvailabilityTransition(
@@ -312,57 +322,18 @@ function applyCheck(
       everObserved: snapshot.everScanned,
       fiberAvailable: snapshot.fiberAvailable,
     },
-    { conclusive: !checkFailed, fiberAvailable: result.fiberAvailable },
+    { conclusive: true, fiberAvailable: result.fiberAvailable },
   );
   persistSnapshot(
     runId,
     tenantId,
     t,
     result,
-    checkFailed,
+    false,
     customer,
     fiberTransition,
     latencyMs,
   );
-
-  // FAILED CHECK: record nothing about availability, keep it in the recheck
-  // queue conceptually (marked failed on THIS run so we don't re-dispatch it),
-  // count it against budget + cost. Product law: a non-answer is not a "no".
-  if (checkFailed) {
-    finalizeRunTarget(runId, t.targetId, "failed", "failed", {
-      failed: 1,
-      estBytes: bytes,
-    });
-    const attempt = targetAttempt(runId, t.targetId);
-    recordFiberFailure({
-      tenantId,
-      runId,
-      targetId: t.targetId,
-      category: result.blocked ? "provider_blocked" : "inconclusive",
-      message:
-        result.notes || "Provider returned no conclusive availability answer",
-      attempt,
-      retryable: true,
-    });
-    recordProviderOutcome(tenantId, false, result.notes);
-    const freshness = calculateFiberFreshness({
-      serviceability: "unknown",
-      conclusive: false,
-      checkedAtMs: Date.now(),
-    });
-    persistFreshness({ tenantId, targetId: t.targetId, ...freshness });
-    appendFiberEvent({
-      tenantId,
-      runId,
-      eventType: "address.failed",
-      targetId: t.targetId,
-      payload: {
-        category: result.blocked ? "provider_blocked" : "inconclusive",
-        attempt,
-      },
-    });
-    return;
-  }
 
   // Persist per-target scan memory + availability status + first-seen-live stamp.
   storage.recordScanTargetResult(t.targetId, {
@@ -430,9 +401,11 @@ function applyCheck(
     }
   }
 
-  // This is the primary-source opportunity signal. It remains provisional here:
-  // scan workers NEVER publish a rep-facing lead. The independent-evidence gate
-  // in freshFiberProjector is the sole lead projection path.
+  // THE Fresh Lead rule, applied to the provider's current answer: NEW FIBER
+  // segment + billing N + fiber qualified. The worker's post-batch
+  // projectConfirmedFreshLeads call publishes it as a Lead immediately —
+  // projector = the one shared idempotent publisher (same as Manual Check),
+  // not a gate that can hold an authoritative answer back.
   const isTarget =
     result.isNewFiber && result.billingStatus === "N" && result.fiberAvailable;
 

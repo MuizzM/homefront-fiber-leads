@@ -114,8 +114,15 @@ function fixtureFor(address: string): any {
 }
 
 // Replay checker — the injectable seam. Returns a real-shaped result, NO proxy.
+// FAIL addresses fail on their FIRST attempt only, then answer normally: a
+// transient failure is PENDING and retried (never finalized as unresolved),
+// so the fixture must eventually give the conclusive answer the retry gets.
+const failedOnce = new Set<string>();
 const replay: import("../../server/scanEngine").Checker = async (a) => {
-  const result = fixtureFor(a.address);
+  const isTransient = a.address.startsWith("FAIL") && !failedOnce.has(a.address);
+  if (isTransient) failedOnce.add(a.address);
+  const result = fixtureFor(isTransient ? a.address : a.address.replace(/^FAIL /, ""));
+  if (isTransient === false && a.address.startsWith("FAIL")) result.address = a.address;
   return { result, bytes: 12000, checkFailed: result.apiSource === "failed" };
 };
 
@@ -186,19 +193,41 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     });
     store.enqueueRunTargets(runId, [{ id: targetId, seq: 0 }]);
 
+    // A failed provider session is TRANSIENT: the address stays PENDING and
+    // retries forever — the run never drains on its own. Let it record at
+    // least one attempt, then cancel (the only sanctioned way to stop retries).
+    const worker = engine.runScanWorker(runId, TENANT);
     try {
-      await engine.runScanWorker(runId, TENANT);
+      const deadline = Date.now() + 15_000;
+      for (;;) {
+        const attempts = (rawDb
+          .prepare(`SELECT COUNT(*) AS n FROM fiber_job_failures WHERE run_id=?`)
+          .get(runId) as any).n;
+        if (attempts >= 1) break;
+        if (Date.now() > deadline) throw new Error("no retry attempt recorded within 15s");
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      rawDb.prepare(`UPDATE scan_runs SET status='cancelled' WHERE id=?`).run(runId);
+      await worker;
     } finally {
+      rawDb.prepare(`UPDATE scan_runs SET status='cancelled' WHERE id=?`).run(runId);
+      await worker.catch(() => {});
       if (priorAuthorization === undefined)
         delete process.env.KFS_AUTOMATION_AUTHORIZED;
       else process.env.KFS_AUTOMATION_AUTHORIZED = priorAuthorization;
     }
 
+    // Never a false negative, never a false completion: nothing verified,
+    // nothing finalized as failed — the address is still pending retry.
     expect(store.getRun(runId, TENANT)).toMatchObject({
-      status: "done",
+      status: "cancelled",
       verified: 0,
-      failed: 1,
+      failed: 0,
     });
+    const pending = rawDb
+      .prepare(`SELECT state FROM scan_run_targets WHERE run_id=? AND target_id=?`)
+      .get(runId, targetId) as any;
+    expect(["queued", "inflight"]).toContain(pending.state);
     const target = rawDb
       .prepare(
         `SELECT last_scanned_at AS lastScannedAt,last_availability_status AS status
@@ -233,11 +262,14 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     await engine.runScanWorker(runId, TENANT, replay); // awaited → deterministic
 
     const run = store.getRun(runId, TENANT)!;
+    // Transient failure semantics: FAIL 300 fails once, is REQUEUED (pending,
+    // never finalized), and the retry gets the conclusive answer — the run
+    // drains with every address resolved and zero finalized failures.
     expect(run.status).toBe("done");
-    expect(run.verified).toBe(7); // 8 checked, 1 failed → 7 verified
-    expect(run.failed).toBe(1);
-    expect(run.newFiber).toBe(6); // 6 NEW FIBER targets (8 - 1 nosvc - 1 fail)
-    expect(run.estBytes).toBe(8 * 12000); // every check (incl. failed) costs bytes
+    expect(run.verified).toBe(8);
+    expect(run.failed).toBe(0);
+    expect(run.newFiber).toBe(7); // 8 - 1 nosvc (the recovered FAIL address is NEW FIBER)
+    expect(run.estBytes).toBe(9 * 12000); // 9 attempts: 8 conclusive + 1 retried failure
 
     // First observations establish a baseline. They are not proven fresh flips
     // and must never leak into the rep-facing lead table.
@@ -246,22 +278,24 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
       .filter((l: any) => l.city === "Testburg");
     expect(leads.length).toBe(0);
 
-    // FAILED address: pool row was NOT touched (no availability recorded), and no
-    // lead exists for it. Product law — a non-answer is not a "no".
+    // TRANSIENTLY-FAILED address: the failed attempt touched NOTHING (a
+    // non-answer is not a "no"), and the retry recorded the real conclusive
+    // answer. It must never have been written as unavailable.
     const failRow: any = rawDb
       .prepare(
         `SELECT last_scanned_at, last_availability_status, scan_count FROM scan_targets WHERE address = ?`,
       )
       .get("FAIL 300 Timeout Ave");
-    expect(failRow.last_scanned_at).toBeNull();
-    expect(failRow.last_availability_status).toBeNull();
-    expect(failRow.scan_count).toBe(0);
+    expect(failRow.last_scanned_at).not.toBeNull();
+    expect(failRow.last_availability_status).not.toBe("checked_unavailable");
+    expect(failRow.scan_count).toBe(1); // ONE conclusive scan recorded, not two
     const failTarget: any = rawDb
       .prepare(
-        `SELECT t.target_id, t.state AS state FROM scan_run_targets t JOIN scan_targets s ON s.id=t.target_id WHERE s.address=? AND t.run_id=?`,
+        `SELECT t.target_id, t.state AS state, t.result AS result FROM scan_run_targets t JOIN scan_targets s ON s.id=t.target_id WHERE s.address=? AND t.run_id=?`,
       )
       .get("FAIL 300 Timeout Ave", runId);
-    expect(failTarget.state).toBe("failed");
+    expect(failTarget.state).toBe("verified");
+    expect(failTarget.result).toBe("new_fiber");
 
     // No-service address: pool row WAS recorded (a real negative), no lead.
     const noSvc: any = rawDb
@@ -283,14 +317,13 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     const snapshots: any = rawDb
       .prepare(`SELECT COUNT(*) c FROM availability_snapshots WHERE run_id=?`)
       .get(runId);
-    expect(snapshots.c).toBe(8);
-    const failedSnapshot: any = rawDb
-      .prepare(
-        `SELECT conclusive, error FROM availability_snapshots WHERE run_id=? AND scan_target_id=?`,
-      )
-      .get(runId, failTarget.target_id);
-    expect(failedSnapshot.conclusive).toBe(0);
-    expect(failedSnapshot.error).toBeTruthy();
+    expect(snapshots.c).toBe(8); // one CONCLUSIVE snapshot per address
+    // A transient failure writes NO snapshot (nothing can ever outrank the
+    // conclusive answer) — its history lives in fiber_job_failures instead.
+    const inconclusive: any = rawDb
+      .prepare(`SELECT COUNT(*) c FROM availability_snapshots WHERE run_id=? AND conclusive=0`)
+      .get(runId);
+    expect(inconclusive.c).toBe(0);
 
     // The canonical operations stream is durable and replayable. It records
     // lifecycle + per-address outcomes without exposing raw provider payloads.
@@ -302,10 +335,13 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     expect(events[0].event_type).toBe("job.started");
     expect(
       events.filter((event) => event.event_type === "address.completed"),
-    ).toHaveLength(7);
+    ).toHaveLength(8);
+    expect(
+      events.filter((event) => event.event_type === "address.requeued"),
+    ).toHaveLength(1);
     expect(
       events.filter((event) => event.event_type === "address.failed"),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
     expect(events.at(-1)?.event_type).toBe("job.completed");
     const freshness: any = rawDb
       .prepare(

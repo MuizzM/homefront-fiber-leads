@@ -243,6 +243,14 @@ export function requeueRunTarget(runId: string, targetId: number): void {
   _requeueTarget.run(runId, targetId);
 }
 
+// Cost honesty for retried attempts: a transient failure still burned proxy
+// bytes for its request. Under-counting cost is never acceptable.
+export function addRunBytes(runId: string, bytes: number): void {
+  const amount = Math.max(0, Math.floor(Number(bytes) || 0));
+  if (!amount) return;
+  rawDb.prepare(`UPDATE scan_runs SET est_bytes=est_bytes+?,updated_at=datetime('now') WHERE id=?`).run(amount, runId);
+}
+
 // Just move the heartbeat forward (worker liveness) without changing counters.
 export function touchRun(runId: string): void {
   rawDb.prepare(`UPDATE scan_runs SET heartbeat_at=datetime('now'),updated_at=datetime('now') WHERE id=?`).run(runId);

@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 import { rawDb } from "../db";
+import { structuredLog } from "../structuredLog";
+import { projectConfirmedFreshLeads } from "../freshFiberProjector";
 import { normalizeAddress } from "@shared/addressDiscovery";
 import type {
   DiscoveryBBox,
@@ -1188,18 +1190,6 @@ export function mapDiscoveryRun(
     .run(runId, jobId, runId);
 }
 
-export function getQualificationCache(
-  tenantId: number,
-  canonicalKey: string,
-): any | undefined {
-  return rawDb
-    .prepare(
-      `SELECT scan_target_id AS scanTargetId,result,conclusive,checked_at AS checkedAt,evidence_hash AS evidenceHash
-    FROM discovery_qualification_cache WHERE tenant_id=? AND canonical_key=? AND expires_at>datetime('now')`,
-    )
-    .get(tenantId, canonicalKey) as any;
-}
-
 export function reconcileQualificationJob(job: DiscoveryJobRow): {
   terminal: boolean;
   status: string;
@@ -1226,14 +1216,34 @@ export function reconcileQualificationJob(job: DiscoveryJobRow): {
       `SELECT COUNT(*) AS total,
     SUM(CASE WHEN state IN ('verified','cached') THEN 1 ELSE 0 END) AS checked,
     SUM(CASE WHEN state IN ('failed','collision') THEN 1 ELSE 0 END) AS failed,
-    SUM(CASE WHEN state NOT IN ('verified','cached','failed','collision','skipped') THEN 1 ELSE 0 END) AS pending,
+    SUM(CASE WHEN state NOT IN ('verified','cached','collision','skipped') THEN 1 ELSE 0 END) AS pending,
+    SUM(CASE WHEN state IN ('verified','cached') AND result='new_fiber' THEN 1 ELSE 0 END) AS fresh,
     SUM(CASE WHEN result='no_service' THEN 1 ELSE 0 END) AS noService FROM qualification_checks WHERE job_id=?`,
     )
     .get(job.id) as any;
+  // PUBLICATION RETRY: any provider-verified Fresh answer (NEW FIBER + billing N
+  // = result 'new_fiber') that has no Lead yet gets re-published every reconcile
+  // tick until the upsert sticks. A failed Lead write can delay publication —
+  // it can never relabel the successful provider result.
+  const unpublished = rawDb
+    .prepare(
+      `SELECT DISTINCT q.scan_target_id AS id FROM qualification_checks q
+    LEFT JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id AND l.lead_tag='fresh_fiber_confirmed'
+    WHERE q.job_id=? AND q.state IN ('verified','cached') AND q.result='new_fiber' AND q.scan_target_id IS NOT NULL AND l.id IS NULL`,
+    )
+    .all(job.id) as any[];
+  if (unpublished.length) {
+    try {
+      projectConfirmedFreshLeads(job.tenantId, unpublished.map((row) => Number(row.id)));
+    } catch (error: any) {
+      structuredLog("discovery.lead_publication_retry_failed", {
+        jobId: job.id, tenantId: job.tenantId, targets: unpublished.length,
+        error: String(error?.message ?? error).slice(0, 200),
+      }, "warn");
+    }
+  }
   // Any confirmed fresh lead counts — cross_verified (independent corroboration)
   // AND kinetic_new_fiber (the authoritative NEW FIBER + billing N publish rule).
-  // Filtering on cross_verified alone made every authoritative lead invisible to
-  // fresh_found, so the Field Map strip showed 0 fresh even as leads published.
   const projectedLeads = rawDb
     .prepare(
       `SELECT l.id,l.lat,l.lng,l.lead_status AS status,l.address,l.city,l.state,l.zip,
@@ -1288,10 +1298,23 @@ export function reconcileQualificationJob(job: DiscoveryJobRow): {
   }
   const totalRuns = Number(runCounts.total || 0);
   const terminalRuns = Number(runCounts.terminal || 0);
+  // Awaiting-publication: provider said Fresh, Lead row not written yet (the
+  // retry above republishes each tick). The job may NOT complete while any
+  // discovered address is unattempted, pending retry, or awaiting its Lead.
+  const awaitingPublication = Number(
+    (rawDb
+      .prepare(
+        `SELECT COUNT(DISTINCT q.scan_target_id) AS n FROM qualification_checks q
+      LEFT JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id AND l.lead_tag='fresh_fiber_confirmed'
+      WHERE q.job_id=? AND q.state IN ('verified','cached') AND q.result='new_fiber' AND q.scan_target_id IS NOT NULL AND l.id IS NULL`,
+      )
+      .get(job.id) as any)?.n ?? 0,
+  );
   const terminal =
     Boolean(job.qualificationDispatchCompletedAt) &&
     (totalRuns === 0 || terminalRuns === totalRuns) &&
-    Number(checkCounts.pending || 0) === 0;
+    Number(checkCounts.pending || 0) === 0 &&
+    awaitingPublication === 0;
   const tileProblems =
     job.partialTiles + job.failedTiles + job.handoffCollisions;
   const status = terminal
@@ -1310,7 +1333,10 @@ export function reconcileQualificationJob(job: DiscoveryJobRow): {
       Number(checkCounts.total || 0),
       Number(checkCounts.checked || 0),
       Number(checkCounts.failed || 0),
-      projectedLeads.length,
+      // Rule: fresh_found counts PROVIDER results (state verified + result
+      // new_fiber = NEW FIBER + billing N), not the Lead join. Publication is
+      // tracked separately (lead_id stamps / awaitingPublication).
+      Number(checkCounts.fresh || 0),
       Number(checkCounts.noService || 0),
       status,
       terminal ? 1 : 0,
@@ -1321,7 +1347,8 @@ export function reconcileQualificationJob(job: DiscoveryJobRow): {
       status,
       checked: Number(checkCounts.checked || 0),
       failed: Number(checkCounts.failed || 0),
-      freshFound: projectedLeads.length,
+      freshFound: Number(checkCounts.fresh || 0),
+      leadsPublished: projectedLeads.length,
       noServiceFound: Number(checkCounts.noService || 0),
       partialTiles: job.partialTiles,
       failedTiles: job.failedTiles,

@@ -74,8 +74,14 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         SELECT a.id FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.tenant_id=? AND a.conclusive=1
         ORDER BY a.checked_at_epoch DESC,a.id DESC LIMIT 1
       )
-     WHERE s.first_seen_fiber_at IS NOT NULL AND s.state IN ('NC','SC')
-       AND s.tenant_id=? ${filter}
+     WHERE s.state IN ('NC','SC') AND s.tenant_id=?
+       -- No historical requirement: a target qualifies on its flip stamp OR on
+       -- the CURRENT conclusive answer alone (NEW FIBER + billing N is a Fresh
+       -- Lead now — no first_seen_fiber_at, detected flip, or corroboration
+       -- needed to be considered).
+       AND (s.first_seen_fiber_at IS NOT NULL
+            OR (upper(COALESCE(latest.household_segment_type,''))='NEW FIBER'
+                AND upper(COALESCE(latest.billing_status,''))='N')) ${filter}
      ORDER BY s.id`).all(tenantId, tenantId, tenantId, ...ids) as ProjectionCandidate[];
 
   const evidenceStmt = rawDb.prepare(`SELECT source,observed_at AS observedAt,availability,technology
@@ -137,7 +143,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       const decision: FreshFiberConfirmationDecision = evidenceDecision.confirmed
         ? evidenceDecision
         : authoritativeFresh
-          ? { status: "confirmed", confirmed: true, reasons: ["NEW FIBER + billing N (authoritative Fresh Lead rule)."], sources: ["kinetic"], confirmedAt: candidate.first_seen_fiber_at }
+          ? { status: "confirmed", confirmed: true, reasons: ["NEW FIBER + billing N (authoritative Fresh Lead rule)."], sources: ["kinetic"], confirmedAt: candidate.first_seen_fiber_at ?? new Date().toISOString() }
           : evidenceDecision;
       if (decision.status === "provisional") { result.provisional++; continue; }
       if (!decision.confirmed || !decision.confirmedAt) { result.rejected++; continue; }

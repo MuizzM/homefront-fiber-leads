@@ -10,7 +10,6 @@ import { rawDb } from "../db";
 import { storage } from "../storage";
 import { createScanRun, enqueueRunTargets, getRun } from "../scanIntelStore";
 import { runScanWorker } from "../scanEngine";
-import { projectConfirmedFreshLeads } from "../freshFiberProjector";
 import { structuredLog } from "../structuredLog";
 import { resolvePointLocality, resolveTownBoundary } from "./boundary";
 import { addressSources, stableSourceCacheKey } from "./sources";
@@ -29,7 +28,6 @@ import {
   discoveryReadyForQualification,
   failTile,
   getDiscoveryJob,
-  getQualificationCache,
   jobsReadyForQualification,
   mapDiscoveryRun,
   markBoundaryRetry,
@@ -423,11 +421,10 @@ function beginQualification(job: DiscoveryJobRow): void {
 
 function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
   const candidates = qualificationCandidates(job.id);
-  // rescan=true forces a fresh check on EVERY discovered address (incl. existing
-  // leads) by ignoring the conclusive-result cache — that's what catches a lead
-  // that has since bought service, or a coming-soon that just went live.
-  const forceRescan = parseJson<Record<string, any>>(job.sourceConfigJson, {}).rescan === true;
-  let reused = 0;
+  // EVERY unique discovered address gets a live provider check — no reuse of
+  // cached results, scan history, existing targets, or existing Leads. The only
+  // per-job dedupe below is dispatch idempotency (a check row already created
+  // for THIS job), never a reason to skip the live check itself.
   const existingChecks = new Set(
     (
       rawDb
@@ -513,45 +510,12 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
       continue;
     }
     attachScanTarget(job.id, candidate.id, Number(target.id));
-    const cached = forceRescan
-      ? null
-      : getQualificationCache(job.tenantId, candidate.canonicalKey);
-    if (
-      cached?.conclusive &&
-      Number(cached.scanTargetId) === Number(target.id)
-    ) {
-      createQualificationCheck({
-        tenantId: job.tenantId,
-        jobId: job.id,
-        canonicalAddressId: candidate.id,
-        targetId: target.id,
-        cacheReused: true,
-        state: "cached",
-        result: cached.result,
-      });
-      reused++;
-    } else {
-      createQualificationCheck({
-        tenantId: job.tenantId,
-        jobId: job.id,
-        canonicalAddressId: candidate.id,
-        targetId: target.id,
-      });
-    }
-  }
-  if (reused) {
-    rawDb
-      .prepare(`UPDATE discovery_jobs SET cache_hits=cache_hits+? WHERE id=?`)
-      .run(reused, job.id);
-    const reusedTargets = rawDb
-      .prepare(
-        `SELECT scan_target_id AS id FROM qualification_checks WHERE job_id=? AND state='cached'`,
-      )
-      .all(job.id) as any[];
-    projectConfirmedFreshLeads(
-      job.tenantId,
-      reusedTargets.map((row) => Number(row.id)),
-    );
+    createQualificationCheck({
+      tenantId: job.tenantId,
+      jobId: job.id,
+      canonicalAddressId: candidate.id,
+      targetId: target.id,
+    });
   }
   try {
     const queued = rawDb
@@ -591,7 +555,6 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
     appendDiscoveryEvent(job.tenantId, job.id, "qualification.started", {
       observedCandidates: candidates.length,
       queued: queued.length,
-      cacheReused: reused,
       runs: sequence,
       handoffCollisions:
         getDiscoveryJob(job.tenantId, job.id)?.handoffCollisions ?? 0,
@@ -624,6 +587,23 @@ function reconcile(): void {
         prepareAndDispatchQualification(job);
         continue;
       }
+      // A temporary failure is never final. Resurrect any targets a previous
+      // pass finalized as 'failed' (old code / crash mid-retry): requeue them,
+      // give the budget back, reopen the run, and kick its worker. They stay
+      // pending until Kinetic gives a conclusive answer or the job is cancelled.
+      const jobRuns = rawDb
+        .prepare(`SELECT run_id AS runId FROM discovery_job_runs WHERE job_id=?`)
+        .all(job.id) as Array<{ runId: string }>;
+      for (const { runId } of jobRuns) {
+        const revived = rawDb
+          .prepare(`UPDATE scan_run_targets SET state='queued', next_attempt_at=NULL WHERE run_id=? AND state='failed'`)
+          .run(runId).changes;
+        if (!revived) continue;
+        rawDb
+          .prepare(`UPDATE scan_runs SET failed=MAX(0,failed-?), status='running', completed_at=NULL WHERE id=? AND tenant_id=?`)
+          .run(revived, runId, job.tenantId);
+        void runScanWorker(runId, job.tenantId);
+      }
       const result = reconcileQualificationJob(job);
       while (publishQualificationMapResults(job) > 0) {
         /* bounded event batches */
@@ -635,24 +615,8 @@ function reconcile(): void {
           status: result.status,
         });
     }
-    // Persist a short qualification-result cache only after conclusive terminal
-    // checks. Failed/unknown results are never cached as a negative.
-    const cacheTtlSeconds = Math.max(
-      60,
-      Number(process.env.QUALIFICATION_CACHE_TTL_SECONDS) || 86_400,
-    );
-    rawDb
-      .prepare(
-        `INSERT INTO discovery_qualification_cache
-      (tenant_id,canonical_key,scan_target_id,result,conclusive,checked_at,expires_at,evidence_hash)
-      SELECT q.tenant_id,c.canonical_key,q.scan_target_id,q.result,1,COALESCE(q.checked_at,datetime('now')),
-             datetime(COALESCE(q.checked_at,datetime('now')),?),NULL
-      FROM qualification_checks q JOIN canonical_addresses c ON c.id=q.canonical_address_id
-      WHERE q.state='verified' AND q.result IS NOT NULL
-      ON CONFLICT(tenant_id,canonical_key) DO UPDATE SET scan_target_id=excluded.scan_target_id,result=excluded.result,
-        conclusive=excluded.conclusive,checked_at=excluded.checked_at,expires_at=excluded.expires_at`,
-      )
-      .run(`+${cacheTtlSeconds} seconds`);
+    // No qualification-result cache: every discovered address always gets a
+    // live provider check. Current truth comes from Kinetic, never a replay.
   } catch (error: any) {
     structuredLog("address_discovery.reconcile_failed", {
       error: String(error?.message ?? error),
