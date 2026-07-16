@@ -67,13 +67,12 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
            EXISTS(SELECT 1 FROM availability_snapshots f WHERE f.scan_target_id=s.id AND f.tenant_id=? AND f.fresh=1 AND f.conclusive=1) AS proven_flip,
            latest.max_download_mbps,latest.household_segment_type,latest.billing_status
       FROM scan_targets s
-      -- Latest CONCLUSIVE snapshot, ordered by real datetime. checked_at is stored
-      -- in mixed formats (ISO "…T…Z" from the observation path vs SQLite "… …" from
-      -- the worker); a raw string sort put "T" (0x54) after " " (0x20) and could
-      -- pick an OLDER failed (null-segment) snapshot, sinking a genuine Fresh Lead.
+      -- Latest CONCLUSIVE snapshot, ordered by the canonical epoch (never raw text).
+      -- A failed/inconclusive attempt is excluded, so it can never outrank or mask a
+      -- genuine NEW FIBER answer (the discovery↔Manual-Check divergence).
       LEFT JOIN availability_snapshots latest ON latest.id=(
         SELECT a.id FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.tenant_id=? AND a.conclusive=1
-        ORDER BY datetime(a.checked_at) DESC,a.id DESC LIMIT 1
+        ORDER BY a.checked_at_epoch DESC,a.id DESC LIMIT 1
       )
      WHERE s.first_seen_fiber_at IS NOT NULL AND s.state IN ('NC','SC')
        AND s.tenant_id=? ${filter}
@@ -123,6 +122,17 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       const seg = String(candidate.household_segment_type ?? "").toUpperCase();
       const billing = String(candidate.billing_status ?? "").toUpperCase();
       const fiberAvail = candidate.last_fiber_available == null ? null : !!candidate.last_fiber_available;
+      // NOW ACTIVE transition: a genuinely newer CONCLUSIVE NEW FIBER + billing Y
+      // (the `latest` join is conclusive-only, epoch-ordered) means the prospect
+      // signed up. Move the existing Fresh Lead to now_active — never delete it.
+      // Only lead_status changes (not a fresh-guard-watched column), so the guard
+      // trigger is untouched.
+      if (candidate.converted_to_lead_id != null && seg === "NEW FIBER" && billing === "Y") {
+        const changed = rawDb.prepare(`UPDATE leads SET lead_status='now_active', updated_at=datetime('now')
+          WHERE id=? AND tenant_id=? AND lead_status<>'now_active'`).run(candidate.converted_to_lead_id, tenantId).changes;
+        if (changed) result.leadIds.push(candidate.converted_to_lead_id);
+        continue;
+      }
       const authoritativeFresh = seg === "NEW FIBER" && billing === "N" && fiberAvail !== false;
       const decision: FreshFiberConfirmationDecision = evidenceDecision.confirmed
         ? evidenceDecision

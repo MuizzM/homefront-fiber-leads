@@ -22,8 +22,8 @@ beforeAll(async () => {
     VALUES (?,?,?,?,?,?,?,1,datetime('now'),datetime('now'),datetime('now'),1,'test','new_opportunity','medium')`);
   freshId = Number(insert.run("100 Fresh St", "Lexington", "NC", "27292", 35.8240, -80.2534, TENANT).lastInsertRowid);
   rawDb.prepare(`INSERT INTO availability_snapshots
-    (tenant_id,scan_target_id,run_id,conclusive,fiber_available,customer_segment,customer_confidence,transition_status,fresh,api_source,evidence_hash)
-    VALUES (?,?,?,1,1,'new_opportunity','medium','freshly_available',1,'kinetic_live','fresh-test')`)
+    (tenant_id,scan_target_id,run_id,checked_at_epoch,conclusive,fiber_available,customer_segment,customer_confidence,transition_status,fresh,api_source,evidence_hash)
+    VALUES (?,?,?,1784000000000,1,1,'new_opportunity','medium','freshly_available',1,'kinetic_live','fresh-test')`)
     .run(TENANT, freshId, "state-monitor-test");
   // A baseline-live record is not fresh without a proven flip timestamp.
   rawDb.prepare(`INSERT INTO scan_targets

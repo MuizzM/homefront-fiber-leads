@@ -1078,6 +1078,21 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_run ON availability_snapshots(run_id, checked_at)`,
     `ALTER TABLE availability_snapshots ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE availability_snapshots ADD COLUMN latency_ms INTEGER`,
+    // ── Canonical timestamp: epoch milliseconds (INTEGER). This is the ONLY column
+    //    used for chronological ordering. The legacy TEXT checked_at was written in
+    //    two formats (ISO 'T…Z' vs SQLite '… …'), and a raw text sort mis-ranked an
+    //    older failed snapshot ahead of a newer conclusive one — sinking Fresh Leads.
+    `ALTER TABLE availability_snapshots ADD COLUMN checked_at_epoch INTEGER`,
+    // Backfill from the legacy TEXT (strftime handles both formats). Second precision
+    // is sufficient — id DESC breaks any same-second tie.
+    `UPDATE availability_snapshots SET checked_at_epoch = CAST(strftime('%s', checked_at) AS INTEGER)*1000 WHERE checked_at_epoch IS NULL AND checked_at IS NOT NULL`,
+    // Constraint: no writer may EVER store a non-integer epoch — this is what makes a
+    // mixed/text format impossible to reintroduce.
+    `DROP TRIGGER IF EXISTS trg_availability_epoch_integer`,
+    `CREATE TRIGGER IF NOT EXISTS trg_availability_epoch_integer BEFORE INSERT ON availability_snapshots
+       WHEN NEW.checked_at_epoch IS NULL OR typeof(NEW.checked_at_epoch)<>'integer'
+       BEGIN SELECT RAISE(ABORT,'availability_snapshot_checked_at_epoch_must_be_integer'); END`,
+    `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_target_epoch ON availability_snapshots(scan_target_id, checked_at_epoch DESC, id DESC)`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_availability_snapshots_attempt ON availability_snapshots(tenant_id, run_id, scan_target_id) WHERE run_id IS NOT NULL`,
     // Defense in depth: even a future scanner or overlooked route cannot insert
     // a provider-fresh lead without the projector's complete provenance. Legacy

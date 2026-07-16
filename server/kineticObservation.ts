@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { rawDb } from "./db";
+import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { getDefaultTenantId, storage } from "./storage";
 import { projectConfirmedFreshLeads, type ProjectionResult } from "./freshFiberProjector";
 import { classifyCustomerOpportunity, classifyFiberAvailabilityTransition } from "@shared/opportunitySegment";
@@ -244,15 +245,13 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
         observation.lat ?? null, observation.lng ?? null, zip, targetId, tenantId);
     }
 
-    const latest = (rawDb.prepare(`SELECT fiber_available,checked_at,api_source,evidence_hash
+    // The newest CONCLUSIVE prior snapshot, strictly before this observation, by the
+    // canonical epoch (never raw text). A failed/inconclusive attempt is excluded.
+    const latest = rawDb.prepare(`SELECT fiber_available,checked_at,api_source,evidence_hash
       FROM availability_snapshots
       WHERE tenant_id=? AND scan_target_id=? AND conclusive=1 AND fiber_available IS NOT NULL
-      ORDER BY id DESC LIMIT 100`).all(tenantId, targetId) as any[])
-      .filter((row) => {
-        const at = validDate(row.checked_at);
-        return at != null && at < observedMs;
-      })
-      .sort((a, b) => (validDate(b.checked_at) ?? 0) - (validDate(a.checked_at) ?? 0))[0];
+        AND checked_at_epoch < ?
+      ORDER BY checked_at_epoch DESC, id DESC LIMIT 1`).get(tenantId, targetId, observedMs) as any;
     let previous: PreviousState | null = latest ? {
       fiberAvailable: !!latest.fiber_available,
       observedAt: latest.checked_at,
@@ -284,15 +283,15 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
         fiberAvailable: previous.fiberAvailable, source: previous.source,
         evidenceId: previous.evidenceId ?? null,
       };
-      rawDb.prepare(`INSERT INTO availability_snapshots
-        (tenant_id,scan_target_id,run_id,checked_at,conclusive,fiber_available,fiber_status,
-         customer_segment,customer_confidence,customer_signals,transition_status,fresh,api_source,evidence_hash,error,blocked,latency_ms)
-        VALUES (?,?,NULL,datetime(?),1,?,?, 'unknown','low','[]',?,0,?,?,NULL,0,NULL)`).run(
-        tenantId, targetId, previous.observedAt, previous.fiberAvailable ? 1 : 0,
-        previous.fiberAvailable ? "available" : "no_service",
-        previous.fiberAvailable ? "baseline_available" : "unavailable",
-        previous.source, evidenceHash(priorPayload),
-      );
+      recordAvailabilitySnapshot({
+        tenantId: Number(tenantId), scanTargetId: targetId, runId: null, checkedAt: previous.observedAt,
+        conclusive: true,
+        fiberAvailable: previous.fiberAvailable,
+        fiberStatus: previous.fiberAvailable ? "available" : "no_service",
+        transitionStatus: previous.fiberAvailable ? "baseline_available" : "unavailable",
+        apiSource: previous.source,
+        evidenceHash: evidenceHash(priorPayload),
+      });
     }
 
     transition = classifyFiberAvailabilityTransition(
@@ -317,21 +316,26 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
       apiSource, blocked: observation.blocked === true,
       rawResponse: observation.rawResponse ?? null,
     };
-    rawDb.prepare(`INSERT INTO availability_snapshots
-      (tenant_id,scan_target_id,run_id,checked_at,conclusive,fiber_available,fiber_status,max_download_mbps,
-       service_status,household_segment_type,billing_status,customer_segment,customer_confidence,customer_signals,
-       transition_status,fresh,api_source,evidence_hash,fiber_check_id,error,blocked,latency_ms)
-      VALUES (?,?,NULL,datetime(?),?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?)`).run(
-      tenantId, targetId, observedAt, conclusive ? 1 : 0, fiberAvailable == null ? null : (fiberAvailable ? 1 : 0),
-      fiberStatus, observation.maxDownloadMbps ?? null, observation.serviceStatus ?? null,
-      observation.householdSegmentType ?? null, observation.billingStatus ?? null,
-      conclusive ? customer.segment : "unknown", conclusive ? customer.confidence : "low",
-      JSON.stringify(conclusive ? customer.signals : ["provider_answer_inconclusive"]),
-      transition.status, transition.fresh ? 1 : 0, apiSource, evidenceHash(normalizedEvidence),
-      conclusive ? null : "Provider result was inconclusive; prior state preserved.",
-      observation.blocked === true ? 1 : 0,
-      input.latencyMs == null ? null : Math.max(0, Math.round(input.latencyMs)),
-    );
+    recordAvailabilitySnapshot({
+      tenantId: Number(tenantId), scanTargetId: targetId, runId: null, checkedAt: observedAt,
+      conclusive,
+      fiberAvailable,
+      fiberStatus,
+      maxDownloadMbps: observation.maxDownloadMbps ?? null,
+      serviceStatus: observation.serviceStatus ?? null,
+      householdSegmentType: observation.householdSegmentType ?? null,
+      billingStatus: observation.billingStatus ?? null,
+      customerSegment: conclusive ? customer.segment : "unknown",
+      customerConfidence: conclusive ? customer.confidence : "low",
+      customerSignals: conclusive ? customer.signals : ["provider_answer_inconclusive"],
+      transitionStatus: transition.status,
+      fresh: transition.fresh,
+      apiSource,
+      evidenceHash: evidenceHash(normalizedEvidence),
+      error: conclusive ? null : "Provider result was inconclusive; prior state preserved.",
+      blocked: observation.blocked === true,
+      latencyMs: input.latencyMs ?? null,
+    });
 
     if (conclusive) {
       storage.recordScanTargetResult(targetId, {

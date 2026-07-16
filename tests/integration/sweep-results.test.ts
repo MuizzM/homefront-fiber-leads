@@ -22,8 +22,8 @@ beforeAll(async () => {
   const id = TARGET_ID = Number(target.lastInsertRowid);
   rawDb.prepare(`INSERT INTO sweep_job_targets (sweep_job_id,target_id,seq,state) VALUES (?,?,0,'done')`).run(JOB,id);
   rawDb.prepare(`INSERT INTO availability_snapshots
-    (tenant_id,scan_target_id,run_id,conclusive,fiber_available,fiber_status,max_download_mbps,billing_status,customer_segment,customer_confidence,customer_signals,transition_status,fresh,api_source,evidence_hash)
-    VALUES (?,?,?,1,1,'new_fiber',2000,'N','new_opportunity','medium','[]','freshly_available',1,'fixture','hash')`).run(TENANT,id,"run_fixture");
+    (tenant_id,scan_target_id,run_id,checked_at_epoch,conclusive,fiber_available,fiber_status,max_download_mbps,billing_status,customer_segment,customer_confidence,customer_signals,transition_status,fresh,api_source,evidence_hash)
+    VALUES (?,?,?,1784000000000,1,1,'new_fiber',2000,'N','new_opportunity','medium','[]','freshly_available',1,'fixture','hash')`).run(TENANT,id,"run_fixture");
 });
 
 describe("persistent city-sweep results", () => {

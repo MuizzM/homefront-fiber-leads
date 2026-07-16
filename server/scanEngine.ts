@@ -18,6 +18,7 @@ import {
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import { rawDb } from "./db";
+import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { DEFAULT_BYTES_PER_CHECK } from "@shared/scanEconomics";
 import {
   classifyCustomerOpportunity,
@@ -548,37 +549,35 @@ function persistSnapshot(
   } catch {
     /* append the normalized snapshot even if the legacy evidence row fails */
   }
-  rawDb
-    .prepare(
-      `INSERT OR IGNORE INTO availability_snapshots
-    (tenant_id,scan_target_id,run_id,conclusive,fiber_available,fiber_status,max_download_mbps,service_status,
-     household_segment_type,billing_status,customer_segment,customer_confidence,customer_signals,
-     transition_status,fresh,api_source,evidence_hash,fiber_check_id,error,blocked,latency_ms)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    )
-    .run(
-      tenantId,
-      t.targetId,
-      runId,
-      checkFailed ? 0 : 1,
-      checkFailed ? null : result.fiberAvailable ? 1 : 0,
-      result.fiberStatus,
-      result.maxDownloadMbps,
-      result.notes,
-      result.householdSegmentType,
-      result.billingStatus,
-      customer.segment,
-      customer.confidence,
-      JSON.stringify(customer.signals),
-      transition.status,
-      transition.fresh ? 1 : 0,
-      result.apiSource,
-      evidenceHash,
-      fiberCheckId,
-      checkFailed ? result.notes : null,
-      result.blocked ? 1 : 0,
-      Math.max(0, Math.round(latencyMs)),
-    );
+  // ONE shared writer (crash-idempotent on the run/target attempt key). A failed
+  // attempt is retained here for diagnostics but conclusive=0, so it never becomes
+  // the current serviceability state (recordScanTargetResult, called only on a
+  // conclusive answer, owns that).
+  recordAvailabilitySnapshot({
+    tenantId,
+    scanTargetId: t.targetId,
+    runId,
+    checkedAt: Date.now(),
+    conclusive: !checkFailed,
+    fiberAvailable: checkFailed ? null : result.fiberAvailable,
+    fiberStatus: result.fiberStatus,
+    maxDownloadMbps: result.maxDownloadMbps,
+    serviceStatus: result.notes,
+    householdSegmentType: result.householdSegmentType,
+    billingStatus: result.billingStatus,
+    customerSegment: customer.segment,
+    customerConfidence: customer.confidence,
+    customerSignals: customer.signals,
+    transitionStatus: transition.status,
+    fresh: transition.fresh,
+    apiSource: result.apiSource,
+    evidenceHash,
+    fiberCheckId,
+    error: checkFailed ? result.notes : null,
+    blocked: result.blocked,
+    latencyMs,
+    orIgnore: true,
+  });
 }
 
 function finish(run: ScanRunRow, status: string): void {
