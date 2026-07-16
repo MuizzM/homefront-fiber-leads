@@ -4,7 +4,7 @@
 import { proxyFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
-import { isKineticFiber } from "@shared/fiberDetect";
+import { parseKineticResponse } from "./kineticResponseParser";
 import {
   ProviderRequestQueue,
   type ProviderQueueSnapshot,
@@ -294,6 +294,7 @@ export interface ScanResult {
   exchangeId: string | null;
   dfAddressId: string | null;
   accessId: string | null;
+  serviceKey: string | null; // miror.svcKey from the nested provisioning payload
 
   // Meta
   confidence: "HIGH" | "MEDIUM" | "LOW";
@@ -531,7 +532,7 @@ async function scanAddressDirect(
     techType: null, chipSetType: null, placement: null, maxQual: null,
     competitorName: null, competitorSpeedMbps: null, competitorTech: null, inCompetitorArea: false,
     addressCatalogDate: null, householdSegmentType: null, billingStatus: null,
-    exchangeId: null, dfAddressId: null, accessId: null,
+    exchangeId: null, dfAddressId: null, accessId: null, serviceKey: null,
     confidence: "LOW", apiSource: "failed", blocked: false, notes: "",
     leadTag: null, leadScore: 0,
   };
@@ -654,23 +655,30 @@ async function scanAddressDirect(
       }
     }
 
+    // ── Canonical parse — ONE parser shared by Manual Check, Field Map, city
+    //    scans, and rechecks. Reads the real field paths AND the stringified
+    //    uqualProvisioningResult, and keeps FIBER qualified INDEPENDENTLY of any
+    //    COPPER "NO QUAL / REMOVE FIBER AREA" override (that override disqualifies
+    //    copper only, never fiber).
+    const parsed = parseKineticResponse(data);
+
     // Core fields
-    base.dfAddressId = data.dfAddressId ?? null;
-    base.accessId = data.accessId ?? null;
+    base.dfAddressId = parsed.dfAddressId;
+    base.accessId = parsed.accessId;
     base.exchangeId = data.exchangeId ?? data.address?.exchangeId ?? null;
-    base.techType = data.techType ?? data.address?.maxQualTechnologyType ?? null;
-    base.maxQual = data.maxQual ?? null;
+    base.techType = parsed.technology;
+    base.maxQual = parsed.maxQual;
+    base.serviceKey = parsed.serviceKey;
     base.apiSource = "kinetic_live";
 
-    // Speed
-    const kbps = data.broadbandService?.finalQualSpeed;
-    base.maxDownloadKbps = kbps ? parseInt(kbps) : null;
-    base.maxDownloadMbps = kbpsToMbps(kbps);
+    // Speed (top-level broadband, supplemented by the nested fiber service)
+    base.maxDownloadKbps = parsed.finalQualSpeedKbps;
+    base.maxDownloadMbps = kbpsToMbps(parsed.finalQualSpeedKbps ?? undefined);
     base.speedTier = speedTierFromMbps(base.maxDownloadMbps);
 
     // Technology detail
-    base.chipSetType = data.uqualProvisioningResult?.chipSetType ?? null;
-    base.placement = data.uqualProvisioningResult?.finalPlacement ?? null;
+    base.chipSetType = parsed.chipSetType;
+    base.placement = null;
 
     // Competitor intel
     if (data.address?.competitorCompanyName) {
@@ -684,21 +692,14 @@ async function scanAddressDirect(
 
     // Address history
     base.addressCatalogDate = data.address?.addressCatalogDt ?? null;
-    base.billingStatus = data.address?.billingStatus ?? null;
+    base.billingStatus = parsed.billingStatus;
 
     // THE KEY FIELD — household segment type
-    const segment = data.address?.householdSegmentType ?? "";
-    base.householdSegmentType = segment;
+    const segment = (parsed.householdSegmentType ?? "").toUpperCase();
+    base.householdSegmentType = parsed.householdSegmentType ?? "";
 
-    // Fiber is a technology, not a speed: Kinetic's VDSL2/FTTN/G.fast bonded copper
-    // reaches 300–500 Mbps, so the old `maxDownloadMbps >= 300` clause mislabelled
-    // copper as fiber (bogus fiber leads). Gate on the real fiber signals only.
-    const isFiber = isKineticFiber({
-      techType: data.techType,
-      maxQualTechnologyType: data.address?.maxQualTechnologyType,
-      chipSetType: base.chipSetType,
-    });
-
+    // Fiber qualification is copper-override-safe (see kineticResponseParser).
+    const isFiber = parsed.fiberQualified;
     base.fiberAvailable = isFiber;
 
     if (segment === "NEW FIBER") {

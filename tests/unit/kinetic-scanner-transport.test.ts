@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
 const { proxyFetch } = vi.hoisted(() => ({ proxyFetch: vi.fn() }));
 vi.mock("../../server/proxy-fetch", () => ({
@@ -108,5 +109,31 @@ describe("Kinetic scanner transport hardening", () => {
     expect(second).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
     expect(proxyFetch.mock.calls.length).toBeGreaterThan(before);
     expect(scanner.getAddressScanQueueStatus()).not.toHaveProperty("halted");
+  });
+
+  it("345 James Allgood Dr flows through the SHARED scanAddress path as fresh fiber (copper override ignored)", async () => {
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
+      return json(200, FIX);
+    });
+    // scanAddress is the ONE path Manual Check + Field Map + city + recheck share,
+    // so an identical classification here means all surfaces classify identically.
+    const r = await scanner.scanAddress("345 James Allgood Dr", "Inman", "SC", "29349", { source: "manual" });
+    expect(r).toMatchObject({
+      apiSource: "kinetic_live",
+      fiberStatus: "new_fiber",
+      isNewFiber: true,
+      fiberAvailable: true, // the COPPER "remove fiber area" override did NOT sink it
+      techType: "FIBER",
+      householdSegmentType: "NEW FIBER",
+      billingStatus: "N",
+      chipSetType: "FTTP",
+      serviceKey: "SVC-345JA-FTTP",
+      dfAddressId: "DF-345-JAMES-ALLGOOD",
+      accessId: "ACC-345-JA-0001",
+    });
+    expect(r.maxDownloadMbps).toBe(2000);
+    expect(r.lat).toBeCloseTo(35.020537, 5);
+    expect(r.lng).toBeCloseTo(-82.078668, 5);
   });
 });
