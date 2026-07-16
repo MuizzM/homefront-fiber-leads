@@ -46,6 +46,10 @@ export interface DiscoveryJob {
   validatedCount: number;
   checkedCount: number;
   qualifiedCount: number;
+  newLeadsCount: number;
+  stillFreshCount: number;
+  serviceActiveCount: number;
+  comingSoonCount: number;
   failedCount: number;
   cachedCount: number;
   coverageStatus: CoverageStatus | null;
@@ -201,6 +205,10 @@ export function normalizeDiscoveryJob(input: Partial<DiscoveryJob> & { id: strin
     validatedCount: finiteCount(input.validatedCount),
     checkedCount: finiteCount(input.checkedCount),
     qualifiedCount: finiteCount(input.qualifiedCount),
+    newLeadsCount: finiteCount(input.newLeadsCount),
+    stillFreshCount: finiteCount(input.stillFreshCount),
+    serviceActiveCount: finiteCount(input.serviceActiveCount),
+    comingSoonCount: finiteCount(input.comingSoonCount),
     failedCount: finiteCount(input.failedCount),
     cachedCount: finiteCount(input.cachedCount),
     coverageStatus: input.coverageStatus ?? "processing",
@@ -264,6 +272,9 @@ export const discoveryApi = {
     city?: string;
     state?: string;
     idempotencyKey: string;
+    // Force a fresh fiber/billing check on every discovered address, including
+    // existing leads (bypasses the server's conclusive-result cache).
+    rescan?: boolean;
   }): Promise<DiscoveryJob> {
     const response = await apiRequest("POST", "/api/discovery/jobs", input);
     const body = await response.json();

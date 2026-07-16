@@ -132,6 +132,238 @@ export function resumeSweepJobs() {
   for (const job of jobs) void runSweep(job.id).catch((error) => failSweep(job.id, error));
 }
 
+// ── Statewide sweep ──────────────────────────────────────────────────────────
+// Runs NOW, as the active priority job — never deferred/scheduled/nightly. It
+// drives ONE city sweep at a time across every scan-eligible market in the state
+// until every discoverable address is checked, aggregating live progress and
+// producing a final report. A single-city failure never stops the state sweep;
+// the underlying scan engine mints fresh tokens and retries per address, and this
+// loop simply moves on. Checkpoints (state_sweeps/state_sweep_cities) exist ONLY
+// for crash recovery — resumeStateSweeps() picks a running sweep back up on boot.
+const activeState = new Set<string>();
+
+export interface StartStateSweepInput { tenantId: number; state: "NC" | "SC"; createdBy?: number | null; maxChecksPerCity?: number; }
+
+/** Every scan-eligible market in the state's catalog, de-duped case-insensitively. */
+function stateCities(state: "NC" | "SC"): string[] {
+  const rows = rawDb.prepare(
+    `SELECT city FROM state_fiber_markets WHERE state=? AND auto_scan_eligible=1 ORDER BY city`,
+  ).all(state) as Array<{ city: string }>;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const r of rows) {
+    const key = String(r.city ?? "").trim().toLowerCase();
+    if (key && !seen.has(key)) { seen.add(key); out.push(String(r.city).trim()); }
+  }
+  return out;
+}
+
+export function startStateSweep(input: StartStateSweepInput) {
+  // One active statewide sweep per (tenant,state) — reuse the running one rather
+  // than stacking duplicate firehoses at the provider.
+  const existing = rawDb.prepare(
+    `SELECT id FROM state_sweeps WHERE tenant_id=? AND state=? AND status='running' ORDER BY started_at DESC LIMIT 1`,
+  ).get(input.tenantId, input.state) as { id: string } | undefined;
+  if (existing) return getStateSweep(existing.id, input.tenantId)!;
+
+  const cities = stateCities(input.state);
+  const id = `statesweep_${input.tenantId}_${Date.now().toString(36)}_${crypto.randomBytes(3).toString("hex")}`;
+  rawDb.prepare(
+    `INSERT INTO state_sweeps (id,tenant_id,state,status,phase,cities_total,max_checks_per_city,created_by,heartbeat_at)
+     VALUES (?,?,?,'running','running',?,?,?,datetime('now'))`,
+  ).run(id, input.tenantId, input.state, cities.length, input.maxChecksPerCity ?? null, input.createdBy ?? null);
+  const addCity = rawDb.prepare(`INSERT OR IGNORE INTO state_sweep_cities (state_sweep_id,city,state,seq) VALUES (?,?,?,?)`);
+  rawDb.transaction(() => cities.forEach((city, seq) => addCity.run(id, city, input.state, seq)))();
+  // Fire immediately — active priority, NOT queued/deferred.
+  void runStateSweep(id).catch((error) => failStateSweep(id, error));
+  structuredLog("state_sweep.started", { stateSweepId: id, state: input.state, cities: cities.length });
+  return getStateSweep(id, input.tenantId)!;
+}
+
+async function runStateSweep(id: string) {
+  if (activeState.has(id)) return; activeState.add(id);
+  try {
+    for (;;) {
+      const parent = rawDb.prepare(`SELECT * FROM state_sweeps WHERE id=?`).get(id) as any;
+      if (!parent || parent.status !== "running") return;
+      const next = rawDb.prepare(
+        `SELECT * FROM state_sweep_cities WHERE state_sweep_id=? AND status='pending' ORDER BY seq LIMIT 1`,
+      ).get(id) as any;
+      if (!next) { finishStateSweep(id); return; }
+
+      updateState(id, { current_city: next.city, heartbeat_at: now() });
+      updateCity(id, next.city, { status: "running", started_at: now() });
+
+      // Start this city's sweep immediately, then drive it to completion before
+      // the next city. A city that errors is logged and skipped — never fatal.
+      let child: any = null;
+      try {
+        child = startCitySweep({
+          tenantId: parent.tenant_id, city: next.city, state: parent.state,
+          createdBy: parent.created_by, maxChecks: parent.max_checks_per_city ?? undefined,
+        });
+        updateCity(id, next.city, { sweep_job_id: child.id });
+      } catch (error) {
+        updateCity(id, next.city, { status: "failed", error: String((error as any)?.message ?? error).slice(0, 300), completed_at: now() });
+        bumpCityDone(id);
+        continue;
+      }
+
+      for (;;) {
+        const p = rawDb.prepare(`SELECT status FROM state_sweeps WHERE id=?`).get(id) as any;
+        if (!p || p.status !== "running") { cancelSweep(child.id, parent.tenant_id); return; }
+        const c = getSweep(child.id, parent.tenant_id);
+        aggregateState(id);
+        if (!c || ["done", "error", "cancelled"].includes(c.status)) {
+          updateCity(id, next.city, {
+            status: c?.status === "done" ? "done" : "failed",
+            checked: c?.checked ?? 0, fresh: c?.opportunitiesFound ?? 0,
+            coming_soon: comingSoonCount(child.id), failed: c?.failed ?? 0,
+            error: c?.error ?? null, completed_at: now(),
+          });
+          bumpCityDone(id);
+          break;
+        }
+        await sleep(2_000);
+      }
+    }
+  } finally { activeState.delete(id); }
+}
+
+function bumpCityDone(id: string) {
+  rawDb.prepare(
+    `UPDATE state_sweeps SET cities_completed=(SELECT COUNT(*) FROM state_sweep_cities WHERE state_sweep_id=? AND status IN ('done','failed')),updated_at=datetime('now') WHERE id=?`,
+  ).run(id, id);
+  aggregateState(id);
+}
+
+// Live statewide counts: completed cities' stored totals + the running city's
+// in-flight progress, so every number moves in real time.
+function aggregateState(id: string) {
+  const parent = rawDb.prepare(`SELECT tenant_id FROM state_sweeps WHERE id=?`).get(id) as any;
+  if (!parent) return;
+  const done = rawDb.prepare(
+    `SELECT COALESCE(SUM(checked),0) checked, COALESCE(SUM(fresh),0) fresh, COALESCE(SUM(coming_soon),0) coming_soon, COALESCE(SUM(failed),0) failed
+     FROM state_sweep_cities WHERE state_sweep_id=? AND status IN ('done','failed')`,
+  ).get(id) as any;
+  const running = rawDb.prepare(
+    `SELECT sweep_job_id FROM state_sweep_cities WHERE state_sweep_id=? AND status='running' AND sweep_job_id IS NOT NULL LIMIT 1`,
+  ).get(id) as any;
+  let liveChecked = 0, liveFresh = 0, liveComing = 0, liveFailed = 0, retrying = 0;
+  if (running?.sweep_job_id) {
+    const c = getSweep(running.sweep_job_id, parent.tenant_id);
+    if (c) {
+      liveChecked = c.checked ?? 0; liveFresh = c.opportunitiesFound ?? 0; liveFailed = c.failed ?? 0;
+      liveComing = comingSoonCount(running.sweep_job_id);
+      retrying = Math.max(0, (c.queued ?? 0) - (c.checked ?? 0)); // still being worked/retried
+    }
+  }
+  updateState(id, {
+    checked: Number(done.checked) + liveChecked, fresh_found: Number(done.fresh) + liveFresh,
+    coming_soon: Number(done.coming_soon) + liveComing, unresolved: Number(done.failed) + liveFailed,
+    retrying, heartbeat_at: now(),
+  });
+}
+
+// Coming Soon = Kinetic reports NEW FIBER at an address that already has an active
+// account (billing_status='Y') — a planned/soon build to watch, stored separately
+// in kinetic_addresses (is_coming_soon) by the scan engine and rechecked nightly.
+function comingSoonCount(sweepId: string): number {
+  const row = rawDb.prepare(
+    `SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id
+     JOIN availability_snapshots a ON a.id=(SELECT MAX(a2.id) FROM availability_snapshots a2 WHERE a2.scan_target_id=s.id)
+     WHERE j.sweep_job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND COALESCE(a.billing_status,'')='Y'`,
+  ).get(sweepId) as any;
+  return Number(row?.n ?? 0);
+}
+
+function finishStateSweep(id: string) {
+  aggregateState(id);
+  const parent = rawDb.prepare(`SELECT * FROM state_sweeps WHERE id=?`).get(id) as any;
+  if (!parent) return;
+  const report = buildStateReport(id);
+  rawDb.prepare(
+    `UPDATE state_sweeps SET status='done',phase='complete',report_json=?,completed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status='running'`,
+  ).run(JSON.stringify(report), id);
+  structuredLog("state_sweep.completed", { stateSweepId: id, state: parent.state, ...report.totals });
+}
+
+function buildStateReport(id: string) {
+  const parent = rawDb.prepare(`SELECT * FROM state_sweeps WHERE id=?`).get(id) as any;
+  const cities = rawDb.prepare(
+    `SELECT city,status,checked,fresh,coming_soon,failed,error FROM state_sweep_cities WHERE state_sweep_id=? ORDER BY seq`,
+  ).all(id) as any[];
+  const totals = cities.reduce(
+    (t, c) => ({ checked: t.checked + c.checked, fresh: t.fresh + c.fresh, comingSoon: t.comingSoon + c.coming_soon, unresolved: t.unresolved + c.failed }),
+    { checked: 0, fresh: 0, comingSoon: 0, unresolved: 0 },
+  );
+  return {
+    state: parent.state, citiesTotal: parent.cities_total,
+    citiesCompleted: cities.filter((c) => c.status === "done").length,
+    citiesFailed: cities.filter((c) => c.status === "failed").length,
+    totals,
+    cities: cities.map((c) => ({ city: c.city, status: c.status, checked: c.checked, freshLeads: c.fresh, comingSoon: c.coming_soon, unresolved: c.failed, error: c.error })),
+  };
+}
+
+export function getStateSweep(id: string, tenantId: number): any | null {
+  const row = rawDb.prepare(`SELECT * FROM state_sweeps WHERE id=? AND tenant_id=?`).get(id, tenantId) as any;
+  if (!row) return null;
+  const cities = rawDb.prepare(
+    `SELECT city,status,checked,fresh,coming_soon,failed FROM state_sweep_cities WHERE state_sweep_id=? ORDER BY seq`,
+  ).all(id) as any[];
+  return mapStateSweep(row, cities);
+}
+
+export function listStateSweeps(tenantId: number, limit = 10): any[] {
+  return (rawDb.prepare(`SELECT * FROM state_sweeps WHERE tenant_id=? ORDER BY started_at DESC LIMIT ?`).all(tenantId, Math.min(50, limit)) as any[])
+    .map((r) => mapStateSweep(r, []));
+}
+
+export function cancelStateSweep(id: string, tenantId: number): boolean {
+  const parent = getStateSweep(id, tenantId);
+  if (!parent) return false;
+  const running = rawDb.prepare(
+    `SELECT sweep_job_id FROM state_sweep_cities WHERE state_sweep_id=? AND status='running' AND sweep_job_id IS NOT NULL`,
+  ).get(id) as any;
+  if (running?.sweep_job_id) cancelSweep(running.sweep_job_id, tenantId);
+  return rawDb.prepare(
+    `UPDATE state_sweeps SET status='cancelled',phase='cancelled',completed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND tenant_id=? AND status='running'`,
+  ).run(id, tenantId).changes > 0;
+}
+
+export function resumeStateSweeps() {
+  const rows = rawDb.prepare(`SELECT id FROM state_sweeps WHERE status='running'`).all() as Array<{ id: string }>;
+  for (const r of rows) void runStateSweep(r.id).catch((error) => failStateSweep(r.id, error));
+}
+
+function updateState(id: string, values: Record<string, unknown>) {
+  const allowed = ["status","phase","cities_completed","current_city","checked","fresh_found","coming_soon","retrying","unresolved","report_json","error","heartbeat_at","completed_at"];
+  const entries = Object.entries(values).filter(([key]) => allowed.includes(key));
+  if (!entries.length) return;
+  rawDb.prepare(`UPDATE state_sweeps SET ${entries.map(([key]) => `${key}=?`).join(",")},updated_at=datetime('now') WHERE id=?`).run(...entries.map(([, value]) => value), id);
+}
+function updateCity(id: string, city: string, values: Record<string, unknown>) {
+  const allowed = ["status","sweep_job_id","checked","fresh","coming_soon","failed","error","started_at","completed_at"];
+  const entries = Object.entries(values).filter(([key]) => allowed.includes(key));
+  if (!entries.length) return;
+  rawDb.prepare(`UPDATE state_sweep_cities SET ${entries.map(([key]) => `${key}=?`).join(",")} WHERE state_sweep_id=? AND city=?`).run(...entries.map(([, value]) => value), id, city);
+}
+function failStateSweep(id: string, error: any) {
+  updateState(id, { status: "error", phase: "error", error: String(error?.message ?? error).slice(0, 500), completed_at: now() });
+  structuredLog("state_sweep.failed", { stateSweepId: id, error: String(error?.message ?? error) });
+}
+function mapStateSweep(r: any, cities: any[]) {
+  return {
+    id: r.id, tenantId: r.tenant_id, state: r.state, status: r.status, phase: r.phase,
+    citiesTotal: r.cities_total, citiesCompleted: r.cities_completed, currentCity: r.current_city,
+    checked: r.checked, freshLeads: r.fresh_found, comingSoon: r.coming_soon, retrying: r.retrying, unresolved: r.unresolved,
+    maxChecksPerCity: r.max_checks_per_city, report: r.report_json ? safeJson(r.report_json, null) : null,
+    error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at,
+    cities: cities.map((c) => ({ city: c.city, status: c.status, checked: c.checked, freshLeads: c.fresh, comingSoon: c.coming_soon, unresolved: c.failed })),
+  };
+}
+
 async function runSweep(id: string) {
   if (active.has(id)) return; active.add(id);
   try {

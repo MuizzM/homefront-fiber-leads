@@ -423,6 +423,10 @@ function beginQualification(job: DiscoveryJobRow): void {
 
 function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
   const candidates = qualificationCandidates(job.id);
+  // rescan=true forces a fresh check on EVERY discovered address (incl. existing
+  // leads) by ignoring the conclusive-result cache — that's what catches a lead
+  // that has since bought service, or a coming-soon that just went live.
+  const forceRescan = parseJson<Record<string, any>>(job.sourceConfigJson, {}).rescan === true;
   let reused = 0;
   const existingChecks = new Set(
     (
@@ -509,7 +513,9 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow): void {
       continue;
     }
     attachScanTarget(job.id, candidate.id, Number(target.id));
-    const cached = getQualificationCache(job.tenantId, candidate.canonicalKey);
+    const cached = forceRescan
+      ? null
+      : getQualificationCache(job.tenantId, candidate.canonicalKey);
     if (
       cached?.conclusive &&
       Number(cached.scanTargetId) === Number(target.id)

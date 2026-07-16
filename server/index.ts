@@ -427,8 +427,9 @@ app.use((req, res, next) => {
     startScanReaper(); // periodic reaper: pick up runs whose worker died sans restart
   } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
   try {
-    const { resumeSweepJobs } = await import("./sweepService");
+    const { resumeSweepJobs, resumeStateSweeps } = await import("./sweepService");
     resumeSweepJobs();
+    resumeStateSweeps(); // crash-recovery only — picks a running statewide sweep back up
   } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
   try {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");

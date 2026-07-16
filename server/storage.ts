@@ -1145,6 +1145,52 @@ export function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_sweep_targets_queue ON sweep_job_targets(sweep_job_id, state, seq)`,
 
+    // ── STATEWIDE SWEEP — an active-priority, run-now orchestration that drives
+    // one city sweep at a time across every scan-eligible market in a state until
+    // every discoverable address is checked. The checkpoints below exist ONLY for
+    // crash recovery (resume a running sweep on boot); they never defer the work. ──
+    `CREATE TABLE IF NOT EXISTS state_sweeps (
+       id TEXT PRIMARY KEY,
+       tenant_id INTEGER NOT NULL,
+       state TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'running',
+       phase TEXT NOT NULL DEFAULT 'running',
+       cities_total INTEGER NOT NULL DEFAULT 0,
+       cities_completed INTEGER NOT NULL DEFAULT 0,
+       current_city TEXT,
+       checked INTEGER NOT NULL DEFAULT 0,
+       fresh_found INTEGER NOT NULL DEFAULT 0,
+       coming_soon INTEGER NOT NULL DEFAULT 0,
+       retrying INTEGER NOT NULL DEFAULT 0,
+       unresolved INTEGER NOT NULL DEFAULT 0,
+       max_checks_per_city INTEGER,
+       report_json TEXT,
+       error TEXT,
+       created_by INTEGER,
+       started_at TEXT NOT NULL DEFAULT (datetime('now')),
+       heartbeat_at TEXT,
+       completed_at TEXT,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_state_sweeps_tenant ON state_sweeps(tenant_id, started_at DESC)`,
+    `CREATE TABLE IF NOT EXISTS state_sweep_cities (
+       state_sweep_id TEXT NOT NULL REFERENCES state_sweeps(id) ON DELETE CASCADE,
+       city TEXT NOT NULL,
+       state TEXT NOT NULL,
+       seq INTEGER NOT NULL,
+       status TEXT NOT NULL DEFAULT 'pending',
+       sweep_job_id TEXT,
+       checked INTEGER NOT NULL DEFAULT 0,
+       fresh INTEGER NOT NULL DEFAULT 0,
+       coming_soon INTEGER NOT NULL DEFAULT 0,
+       failed INTEGER NOT NULL DEFAULT 0,
+       error TEXT,
+       started_at TEXT,
+       completed_at TEXT,
+       PRIMARY KEY(state_sweep_id, city)
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_state_sweep_cities_queue ON state_sweep_cities(state_sweep_id, status, seq)`,
+
     // ── ADDRESS DISCOVERY — durable, tenant-scoped enumeration before qualification ──
     // Discovery is deliberately separate from scan_runs. These tables answer
     // "which physical addresses exist here and how do we know?"; scan_runs then

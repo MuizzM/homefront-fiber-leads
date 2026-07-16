@@ -23,6 +23,7 @@ import {
   Loader2,
   Layers,
   CheckCircle2,
+  AlertCircle,
   List,
   Navigation,
   Plus,
@@ -107,7 +108,6 @@ import { unpackMapPins } from "@shared/mapPinsWire";
 import { useCan } from "@/lib/capabilities";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
-  bboxPolygon,
   discoveryIdempotencyKey,
   isTerminalDiscoveryJob,
   type DiscoveryEvent,
@@ -628,17 +628,16 @@ export default function MapView() {
   // fresh style (setStyle wipes all sources/layers).
   const [styleEpoch, setStyleEpoch] = useState(0);
 
-  // Draw mode
-  const [drawMode, setDrawMode] = useState(false);
-  const [drawnBBox, setDrawnBBox] = useState<BBox | null>(null);
-  // Idempotency guard for the draw-complete -> automatic scan handoff. React
-  // StrictMode and unrelated renders must never start the same box twice.
-  const autoStartedBoxKeyRef = useRef<string | null>(null);
+  // Scan Map — tap the floating button to ARM a box selection, then drag a
+  // rectangle over the houses to scan EXACTLY inside it. This is a simple two-
+  // corner box, wholly separate from Assign Area's freehand lasso (untouched).
+  // scanSubmissionRef pins a single in-flight submission (double-tap safe).
+  const [scanDrawMode, setScanDrawMode] = useState(false);
+  const scanBoxDrawingRef = useRef(false);
+  const scanBoxStartRef = useRef<{ lng: number; lat: number } | null>(null);
   const scanSubmissionRef = useRef<{ boxKey: string; nonce: string } | null>(
     null,
   );
-  const drawingRef = useRef(false);
-  const drawStartRef = useRef<any>(null);
 
   // Filter
   const [filterStatus, setFilterStatus] = useState<string>("all");
@@ -695,14 +694,29 @@ export default function MapView() {
   const discovery = useDiscoveryJobs(!!user && canSubmitScan);
   const activeDiscoveryJobs = discovery.activeJobs;
   const scanning = activeDiscoveryJobs.length > 0;
-  const total = activeDiscoveryJobs.reduce(
-    (sum, job) => sum + job.uniqueCandidateCount,
-    0,
-  );
-  const done = activeDiscoveryJobs.reduce(
-    (sum, job) => sum + job.checkedCount + job.failedCount,
-    0,
-  );
+  // The scan whose summary the compact sheet shows: the live job while running,
+  // else the most-recent job (its terminal counts) until the sheet dismisses.
+  const scanSummaryJob = activeDiscoveryJobs[0] ?? discovery.jobs[0] ?? null;
+  // Six-number field summary. discovered/checked/fresh/failed come straight off
+  // the durable job; serviceActive/comingSoon are optional server-provided counts
+  // (present once the job payload carries them) and default to 0 meanwhile.
+  const scanSummary = useMemo(() => {
+    const j = scanSummaryJob;
+    if (!j) return null;
+    return {
+      // "OSM addresses" — every mapped address discovered inside the box.
+      discovered: j.discoveredCount || j.uniqueCandidateCount || 0,
+      checked: j.checkedCount || 0,
+      // fresh = all confirmed fresh leads; split into brand-new vs re-confirmed.
+      fresh: j.qualifiedCount || 0,
+      newLeads: j.newLeadsCount || 0,
+      stillFresh: j.stillFreshCount || 0,
+      serviceActive: j.serviceActiveCount || 0, // former fresh lead that bought service
+      comingSoon: j.comingSoonCount || 0,
+      failed: j.failedCount || 0,
+      coverage: j.coverageStatus || null,
+    };
+  }, [scanSummaryJob]);
   const isAdmin = user?.role === "admin";
   const isRep = user?.role === "rep";
   const canManage = user?.role === "admin" || user?.role === "manager";
@@ -2763,107 +2777,133 @@ export default function MapView() {
     };
   }, []);
 
-  // ── Draw bbox helpers ─────────────────────────────────────────────────────
-  const updateDrawLayer = useCallback((bbox: BBox) => {
+  // ── Scan Map box selection ────────────────────────────────────────────────
+  // Render / clear the in-progress selection rectangle in the draw-bbox source.
+  const updateDrawBox = useCallback((b: BBox) => {
     const src = mapRef.current?.getSource("draw-bbox") as any;
     src?.setData({
       type: "Feature",
       geometry: {
         type: "Polygon",
-        coordinates: [
-          [
-            [bbox.minLng, bbox.minLat],
-            [bbox.maxLng, bbox.minLat],
-            [bbox.maxLng, bbox.maxLat],
-            [bbox.minLng, bbox.maxLat],
-            [bbox.minLng, bbox.minLat],
-          ],
-        ],
+        coordinates: [[
+          [b.minLng, b.minLat],
+          [b.maxLng, b.minLat],
+          [b.maxLng, b.maxLat],
+          [b.minLng, b.maxLat],
+          [b.minLng, b.minLat],
+        ]],
       },
       properties: {},
     });
   }, []);
-
-  const clearDrawLayer = useCallback(() => {
+  const clearDrawBox = useCallback(() => {
     const src = mapRef.current?.getSource("draw-bbox") as any;
     src?.setData(emptyFeatureCollection());
   }, []);
 
-  // Keep React's committed bbox and the Mapbox draw source synchronized. This
-  // also handles Escape/close/style changes, so a cleared selection can never
-  // leave stale geometry behind.
-  useEffect(() => {
-    if (!mapReady) return;
-    if (drawnBBox) updateDrawLayer(drawnBBox);
-    else if (!drawMode) clearDrawLayer();
-  }, [
-    drawnBBox,
-    drawMode,
-    mapReady,
-    styleEpoch,
-    updateDrawLayer,
-    clearDrawLayer,
-  ]);
+  // Submit ONE Complete Scan of the SELECTED BOX. The server discovers every
+  // address inside it (multi-source, ZIP-normalized, deduped), mints a fresh
+  // authorized token, and qualifies each through the durable queue. The in-flight
+  // ref + the active-scan check make a double-submit a guaranteed no-op.
+  const startBoxScan = useCallback(
+    async (bbox: BBox) => {
+      if (!mapReady || scanStartInFlightRef.current || scanning || !canSubmitScan) return;
+      scanStartInFlightRef.current = true;
+      setScanSubmitting(true);
+      const scopeKey = boxKeyOf(bbox)!;
+      const geometry = {
+        type: "Polygon" as const,
+        coordinates: [[
+          [bbox.minLng, bbox.minLat],
+          [bbox.maxLng, bbox.minLat],
+          [bbox.maxLng, bbox.maxLat],
+          [bbox.minLng, bbox.maxLat],
+          [bbox.minLng, bbox.minLat],
+        ]],
+      };
+      const existingSubmission =
+        scanSubmissionRef.current?.boxKey === scopeKey
+          ? scanSubmissionRef.current
+          : null;
+      const nonce =
+        existingSubmission?.nonce ??
+        (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
+      scanSubmissionRef.current = { boxKey: scopeKey, nonce };
+      setScanOutcome(null);
+      let accepted = false;
+      try {
+        await discovery.submit({
+          geometry,
+          // Re-check every discovered address, including existing leads, so a
+          // fresh lead that has since bought service (→ now active) or a
+          // coming-soon that just went live is caught on this pass.
+          rescan: true,
+          idempotencyKey: discoveryIdempotencyKey(geometry, user?.tenantId, nonce),
+        });
+        accepted = true;
+      } catch {
+        setScanOutcome({ kind: "complete", found: 0, at: Date.now(), boxKey: null });
+      } finally {
+        if (accepted) scanSubmissionRef.current = null;
+        scanStartInFlightRef.current = false;
+        setScanSubmitting(false);
+      }
+    },
+    [mapReady, scanning, canSubmitScan, discovery.submit, user?.tenantId],
+  );
 
+  // Box-draw capture — active only while Scan Map is armed. Drag two corners; on
+  // release, scan exactly inside the rectangle. Pan/zoom are suspended during the
+  // drag so the box tracks the pointer, then restored on teardown.
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady || !drawMode) return;
-    // Fresh session: clear any stale drag state from a mode toggled off mid-drag
-    drawingRef.current = false;
-    drawStartRef.current = null;
-    (window as any).__drawModeActive = true;
+    if (!map || !mapReady || !scanDrawMode) return;
+    scanBoxDrawingRef.current = false;
+    scanBoxStartRef.current = null;
+    (window as any).__scanDrawActive = true;
     try {
       map.getCanvas().style.cursor = "crosshair";
       map.dragPan.disable();
       map.touchZoomRotate.disable();
     } catch {}
-
     let startPx: { x: number; y: number } | null = null;
-
     const down = (lngLat: any, point: any) => {
-      drawingRef.current = true;
-      drawStartRef.current = lngLat;
+      scanBoxDrawingRef.current = true;
+      scanBoxStartRef.current = { lng: lngLat.lng, lat: lngLat.lat };
       startPx = { x: point.x, y: point.y };
     };
     const moveTo = (lngLat: any) => {
-      if (!drawingRef.current || !drawStartRef.current) return;
-      const s = drawStartRef.current,
-        c = lngLat;
-      updateDrawLayer({
-        minLng: Math.min(s.lng, c.lng),
-        maxLng: Math.max(s.lng, c.lng),
-        minLat: Math.min(s.lat, c.lat),
-        maxLat: Math.max(s.lat, c.lat),
+      const s = scanBoxStartRef.current;
+      if (!scanBoxDrawingRef.current || !s) return;
+      updateDrawBox({
+        minLng: Math.min(s.lng, lngLat.lng),
+        maxLng: Math.max(s.lng, lngLat.lng),
+        minLat: Math.min(s.lat, lngLat.lat),
+        maxLat: Math.max(s.lat, lngLat.lat),
       });
     };
     const up = (lngLat: any, point: any) => {
-      if (!drawingRef.current || !drawStartRef.current) return;
-      drawingRef.current = false;
-      // A stray tap (<6px drag) is not a box — ignore instead of committing a
-      // degenerate zero-area bbox and bouncing the user out of the mode.
+      const s = scanBoxStartRef.current;
+      if (!scanBoxDrawingRef.current || !s) return;
+      scanBoxDrawingRef.current = false;
+      scanBoxStartRef.current = null;
+      // A stray tap (<6px) is not a box — stay armed rather than scan a dot.
       if (startPx && Math.hypot(point.x - startPx.x, point.y - startPx.y) < 6) {
-        drawStartRef.current = null;
-        clearDrawLayer();
+        clearDrawBox();
         return;
       }
-      const s = drawStartRef.current,
-        c = lngLat;
-      setDrawnBBox({
-        minLng: Math.min(s.lng, c.lng),
-        maxLng: Math.max(s.lng, c.lng),
-        minLat: Math.min(s.lat, c.lat),
-        maxLat: Math.max(s.lat, c.lat),
-      });
-      drawStartRef.current = null;
-      setDrawMode(false);
-      try {
-        map.getCanvas().style.cursor = "";
-        map.dragPan.enable();
-        map.touchZoomRotate.enable();
-      } catch {}
+      const bbox: BBox = {
+        minLng: Math.min(s.lng, lngLat.lng),
+        maxLng: Math.max(s.lng, lngLat.lng),
+        minLat: Math.min(s.lat, lngLat.lat),
+        maxLat: Math.max(s.lat, lngLat.lat),
+      };
+      setScanDrawMode(false);
+      clearDrawBox();
+      void startBoxScan(bbox);
     };
-
-    // Mouse + touch (single finger draws the box; multi-touch ignored)
     const onDown = (e: any) => down(e.lngLat, e.point);
     const onMove = (e: any) => moveTo(e.lngLat);
     const onUp = (e: any) => up(e.lngLat, e.point);
@@ -2876,7 +2916,6 @@ export default function MapView() {
       moveTo(e.lngLat);
     };
     const onTUp = (e: any) => up(e.lngLat, e.point);
-
     map.on("mousedown", onDown);
     map.on("mousemove", onMove);
     map.on("mouseup", onUp);
@@ -2884,10 +2923,9 @@ export default function MapView() {
     map.on("touchmove", onTMove);
     map.on("touchend", onTUp);
     return () => {
-      (window as any).__drawModeActive = false;
-      drawingRef.current = false;
-      drawStartRef.current = null;
-      // Defensive: on unmount the map may already be removed (getCanvas → undefined)
+      (window as any).__scanDrawActive = false;
+      scanBoxDrawingRef.current = false;
+      scanBoxStartRef.current = null;
       try {
         map.off("mousedown", onDown);
         map.off("mousemove", onMove);
@@ -2902,7 +2940,7 @@ export default function MapView() {
         map.touchZoomRotate.enable();
       } catch {}
     };
-  }, [drawMode, mapReady, updateDrawLayer, clearDrawLayer, styleEpoch]);
+  }, [scanDrawMode, mapReady, updateDrawBox, clearDrawBox, startBoxScan]);
 
   // ── Discovery jobs + live lead batches ────────────────────────────────────
   // Events mutate a key-indexed feature map. One requestAnimationFrame flush
@@ -3092,89 +3130,13 @@ export default function MapView() {
     }
   }, [discovery.jobs]);
 
+  // Keep the finished summary up long enough to actually read the five counts,
+  // then auto-clear so the Scan Map button returns (the sheet's X dismisses sooner).
   useEffect(() => {
     if (!scanOutcome || scanning) return;
-    const timer = window.setTimeout(() => setScanOutcome(null), 4_000);
+    const timer = window.setTimeout(() => setScanOutcome(null), 30_000);
     return () => window.clearTimeout(timer);
   }, [scanOutcome, scanning]);
-
-  const startAreaScan = useCallback(
-    async (bbox: BBox) => {
-      if (!mapReady || scanStartInFlightRef.current || !canSubmitScan) return;
-      scanStartInFlightRef.current = true;
-      setScanSubmitting(true);
-      const scopeKey = boxKeyOf(bbox)!;
-      const geometry = bboxPolygon(bbox);
-      const existingSubmission =
-        scanSubmissionRef.current?.boxKey === scopeKey
-          ? scanSubmissionRef.current
-          : null;
-      const nonce =
-        existingSubmission?.nonce ??
-        (typeof crypto !== "undefined" &&
-        typeof crypto.randomUUID === "function"
-          ? crypto.randomUUID()
-          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`);
-      scanSubmissionRef.current = { boxKey: scopeKey, nonce };
-      setScanOutcome(null);
-      let accepted = false;
-      try {
-        await discovery.submit({
-          geometry,
-          idempotencyKey: discoveryIdempotencyKey(
-            geometry,
-            user?.tenantId,
-            nonce,
-          ),
-        });
-        accepted = true;
-        // Acceptance is the geometry lifecycle boundary. The durable server job now
-        // owns the scope, so the temporary draw can disappear immediately and the
-        // rep can submit another area while this one is queued/running.
-        setDrawnBBox(null);
-        setDrawMode(false);
-        clearDrawLayer();
-      } catch {
-        // Technical failures are intentionally absent from the rep UI. The
-        // authenticated server route records the request and its diagnostic.
-        setDrawMode(false);
-        setDrawnBBox(null);
-        clearDrawLayer();
-        setScanOutcome({
-          kind: "complete",
-          found: 0,
-          at: Date.now(),
-          boxKey: null,
-        });
-      } finally {
-        if (accepted) scanSubmissionRef.current = null;
-        scanStartInFlightRef.current = false;
-        setScanSubmitting(false);
-      }
-    },
-    [
-      mapReady,
-      canSubmitScan,
-      discovery.submit,
-      user?.tenantId,
-      clearDrawLayer,
-    ],
-  );
-
-  // Draw-complete is the sole trigger. The ref suppresses StrictMode/re-render
-  // duplicate POSTs for this submission without blocking a later intentional
-  // rescan of the same geometry.
-  useEffect(() => {
-    if (!drawnBBox) {
-      autoStartedBoxKeyRef.current = null;
-      return;
-    }
-    if (!canSubmitScan || scanStartInFlightRef.current) return;
-    const key = boxKeyOf(drawnBBox);
-    if (autoStartedBoxKeyRef.current === key) return;
-    autoStartedBoxKeyRef.current = key;
-    void startAreaScan(drawnBBox);
-  }, [drawnBBox, canSubmitScan, startAreaScan]);
 
   // ── Escape hatch — one keyboard path out of every map tool, in priority
   // order: open panel → armed lasso → armed/boxed scan. Search close returns
@@ -3195,12 +3157,9 @@ export default function MapView() {
         leadsBtnRef.current?.focus();
       } else if (lassoMode) {
         exitLasso();
-      } else if (drawMode || drawnBBox) {
-        setDrawMode(false);
-        setDrawnBBox(null);
-        scanSubmissionRef.current = null;
-        autoStartedBoxKeyRef.current = null;
-        clearDrawLayer();
+      } else if (scanDrawMode) {
+        setScanDrawMode(false);
+        clearDrawBox();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -3210,10 +3169,9 @@ export default function MapView() {
     layersOpen,
     leadsOpen,
     lassoMode,
-    drawMode,
-    drawnBBox,
+    scanDrawMode,
+    clearDrawBox,
     exitLasso,
-    clearDrawLayer,
   ]);
 
   // Auto-focus the search field the instant the panel opens (next frame, after
@@ -3811,10 +3769,9 @@ export default function MapView() {
   // noToken is true only after we confirmed the token is unavailable (never during load)
   const noToken = mapTokenFailed;
 
-  // A completed result remains visible after its rectangle is automatically
-  // cleared. It becomes stale only after the user commits a different box.
-  const scanStale =
-    !!scanOutcome && !!drawnBBox && scanOutcome.boxKey !== boxKeyOf(drawnBBox);
+  // A viewport scan has no persisted drawn box, so a result is never "stale" —
+  // it stays until the operator dismisses it (or the auto-clear timer fires).
+  const scanStale = false;
 
   return (
     <div
@@ -3842,6 +3799,190 @@ export default function MapView() {
             : ""}
       </div>
 
+      {/* ── Scan Map — a clear, floating, thumb-reachable control (Mobbin "search
+             this area" pattern). Tap to arm, then drag a box over the houses to
+             scan exactly inside it. Hidden while a scan/summary sheet is up and
+             during Assign Area, so nothing collides. ── */}
+      {canSubmitScan && !scanDrawMode && !scanning && !scanSubmitting && !scanOutcome && !lassoMode && (
+        <div
+          style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
+          className="absolute left-1/2 z-30 -translate-x-1/2"
+        >
+          <button
+            type="button"
+            onClick={() => {
+              exitLasso();
+              setScanDrawMode(true);
+            }}
+            data-testid="scan-map-btn"
+            aria-label="Scan an area of the map for new fiber"
+            className="flex items-center gap-2 rounded-full border border-emerald-300/50 bg-emerald-500 px-6 py-3.5 text-[15px] font-bold text-[#04241f] shadow-xl shadow-emerald-950/40 backdrop-blur-xl transition hover:bg-emerald-400 active:scale-95"
+          >
+            <Radar className="h-[18px] w-[18px]" />
+            Scan Map
+          </button>
+        </div>
+      )}
+
+      {/* Armed: drag-a-box hint + cancel, in the same bottom-center spot. */}
+      {canSubmitScan && scanDrawMode && !lassoMode && (
+        <div
+          style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
+          className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2"
+        >
+          <div
+            className="flex items-center gap-2 rounded-full border border-emerald-300/40 bg-slate-950/90 px-4 py-3 text-[13.5px] font-semibold text-white shadow-xl backdrop-blur-xl"
+            data-testid="scan-map-hint"
+          >
+            <Radar className="h-4 w-4 shrink-0 text-emerald-400" />
+            Drag a box over the houses
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              setScanDrawMode(false);
+              clearDrawBox();
+            }}
+            data-testid="scan-map-cancel"
+            aria-label="Cancel scan-area selection"
+            className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-slate-950/90 text-white/70 shadow-xl backdrop-blur-xl transition hover:text-white"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+
+      {/* ── Compact scan sheet (Mobbin pattern) — a bottom-center card that shows
+             live progress then the summary. Never a full-screen takeover; the
+             map stays visible behind it. ── */}
+      {(scanSubmitting || scanning || (scanOutcome && !scanStale)) &&
+        canSubmitScan &&
+        scanSummary && (
+          <div
+            style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
+            className="absolute left-1/2 z-30 w-[min(456px,calc(100vw-24px))] -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 duration-200"
+            data-testid="scan-sheet"
+          >
+            <div className="glass-surface rounded-2xl border border-white/12 px-3.5 py-3 shadow-xl shadow-black/35">
+              {/* Header: state + primary control */}
+              <div className="flex items-center gap-2.5">
+                {scanning || scanSubmitting ? (
+                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-emerald-400" />
+                ) : (
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-semibold leading-tight text-white">
+                    {scanSubmitting
+                      ? "Starting scan…"
+                      : scanning
+                        ? "Scanning fiber"
+                        : "Scan complete"}
+                  </div>
+                  <div className="text-[11px] leading-tight tabular-nums text-white/55">
+                    {scanSummary.discovered > 0
+                      ? `${scanSummary.discovered.toLocaleString()} OSM addresses · ${scanSummary.checked.toLocaleString()} checked`
+                      : scanning || scanSubmitting
+                        ? "Finding addresses via OpenStreetMap…"
+                        : "No mapped addresses found here"}
+                  </div>
+                </div>
+                {scanning || scanSubmitting ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const id = activeDiscoveryJobs[0]?.id;
+                      if (id) void discovery.cancel(id);
+                    }}
+                    className="h-8 shrink-0 rounded-full px-3 text-[12px] font-semibold text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+                    data-testid="scan-stop"
+                  >
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setScanOutcome(null)}
+                    aria-label="Dismiss scan summary"
+                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
+                    data-testid="scan-dismiss"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Progress bar while running */}
+              {(scanning || scanSubmitting) && (
+                <div
+                  className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/10"
+                  role="progressbar"
+                  aria-label="Scan progress"
+                >
+                  <div
+                    className={`h-full rounded-full bg-emerald-500 transition-[width] duration-500 ${scanSummary.discovered > 0 ? "" : "animate-pulse"}`}
+                    style={{
+                      width:
+                        scanSummary.discovered > 0
+                          ? `${Math.max(4, Math.min(100, Math.round((scanSummary.checked / scanSummary.discovered) * 100)))}%`
+                          : "30%",
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Outcome counts (OSM addresses + checked are in the line above):
+                  new · still fresh · now active · coming soon · unresolved. */}
+              <div
+                className="mt-2.5 grid grid-cols-5 gap-1"
+                data-testid="scan-summary"
+              >
+                {[
+                  { label: "New", value: scanSummary.newLeads, tone: "text-emerald-400" },
+                  { label: "Still fresh", value: scanSummary.stillFresh, tone: "text-emerald-300" },
+                  { label: "Now active", value: scanSummary.serviceActive, tone: "text-sky-400" },
+                  { label: "Coming soon", value: scanSummary.comingSoon, tone: "text-amber-400" },
+                  { label: "Unresolved", value: scanSummary.failed, tone: "text-white/45" },
+                ].map((c) => (
+                  <div
+                    key={c.label}
+                    className="rounded-lg bg-white/[0.05] px-1.5 py-1.5 text-center"
+                  >
+                    <div
+                      className={`text-[14px] font-bold leading-none tabular-nums ${c.tone}`}
+                    >
+                      {c.value.toLocaleString()}
+                    </div>
+                    <div className="mt-0.5 text-[9px] uppercase leading-tight tracking-wide text-white/45">
+                      {c.label}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Coverage honesty — if OSM data was thin here, say so rather than
+                  imply every property was found. */}
+              {!scanning &&
+                !scanSubmitting &&
+                scanSummary.coverage &&
+                ["partial", "sparse", "verification_required", "source_unavailable"].includes(
+                  String(scanSummary.coverage),
+                ) && (
+                  <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-300/90" data-testid="scan-coverage-gap">
+                    <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      OpenStreetMap coverage looks{" "}
+                      {String(scanSummary.coverage) === "sparse" || String(scanSummary.coverage) === "source_unavailable"
+                        ? "sparse"
+                        : "partial"}{" "}
+                      here — some properties may not be mapped yet, so this isn't guaranteed to be every address.
+                    </span>
+                  </div>
+                )}
+            </div>
+          </div>
+        )}
+
       {/* ── SalesRabbit-style disposition filter bar ─────────────────────────
              A horizontal, scrollable row of status chips over the top of the
              map — "All" + one colored chip per disposition with its live count.
@@ -3849,7 +3990,7 @@ export default function MapView() {
              The right inset clears the top-right control cluster on manager
              roles. This is the canvasser's at-a-glance board of where the
              territory stands. ── */}
-      {mapReady && leads.length > 0 && !lassoMode && !drawMode && (
+      {mapReady && leads.length > 0 && !lassoMode && (
         <div
           style={{
             top: "calc(env(safe-area-inset-top) + 0.6rem)",
@@ -3926,42 +4067,8 @@ export default function MapView() {
         style={{ top: "calc(env(safe-area-inset-top) + 6.75rem)" }}
         className="absolute left-3 right-[68px] md:top-16 md:left-1/2 md:right-auto md:-translate-x-1/2 md:w-[min(620px,calc(100vw-24px))] z-30 space-y-1.5 pointer-events-none [&>*]:pointer-events-auto"
       >
-        {/* One compact, non-blocking field status. Draw completion starts the
-            single scan automatically; only published lead counts reach this UI. */}
-        {(drawMode || drawnBBox || scanSubmitting || scanning || (scanOutcome && !scanStale)) &&
-          canSubmitScan && (
-            <div
-              className="pointer-events-auto inline-flex min-h-10 max-w-full items-center gap-2 rounded-full border border-white/15 bg-slate-950/88 px-3.5 py-2 text-[12.5px] font-semibold text-white shadow-xl shadow-black/25 backdrop-blur-xl"
-              data-testid="scan-panel"
-              role="status"
-              aria-live="polite"
-            >
-              {scanSubmitting || scanning ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-emerald-400" />
-                  <span className="truncate tabular-nums" data-testid="scan-progress">
-                    {total > 0
-                      ? `Scanning ${Math.min(done, total)} of ${total}`
-                      : "Starting scan…"}
-                  </span>
-                </>
-              ) : scanOutcome && !scanStale ? (
-                <>
-                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                  <span data-testid="scan-result">
-                    {scanOutcome.found > 0
-                      ? `${scanOutcome.found} new lead${scanOutcome.found === 1 ? "" : "s"} added`
-                      : "Scan complete"}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <Radar className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                  <span>Draw around homes to scan</span>
-                </>
-              )}
-            </div>
-          )}
+        {/* Scan Map is a floating button (below) — no armed/drawing hint here.
+            Live progress + the summary live in the compact bottom sheet. */}
         {/* Lasso UI moved to a floating bottom action bar inside the map (below) */}
 
         {canManage && pendingRequests.length > 0 && (
@@ -4795,58 +4902,14 @@ export default function MapView() {
                       } else {
                         exitLasso();
                         setLassoMode(true);
-                        setDrawMode(false);
-                        setDrawnBBox(null);
                         setSearchOpen(false);
                         setLayersOpen(false);
                       }
                     }}
                   />
                 )}
-                {canSubmitScan && (
-                  <MapIconBtn
-                    icon={
-                      scanSubmitting ? (
-                        <Loader2 className="w-5 h-5 animate-spin" />
-                      ) : (
-                        <Radar className="w-5 h-5" />
-                      )
-                    }
-                    label={
-                      scanSubmitting
-                        ? "Submitting scan area"
-                        : drawMode
-                          ? "Cancel scan-area drawing"
-                          : scanning
-                            ? `Draw another scan area — ${activeDiscoveryJobs.length} running`
-                            : "Scan an area for new fiber"
-                    }
-                    testid="ctl-scan"
-                    active={drawMode || scanSubmitting || !!drawnBBox}
-                    tone="orange"
-                    badge={
-                      scanning
-                        ? String(activeDiscoveryJobs.length)
-                        : scanOutcome &&
-                            !scanStale &&
-                            scanOutcome.kind === "success"
-                          ? String(scanOutcome.found)
-                          : undefined
-                    }
-                    onClick={() => {
-                      if (scanSubmitting) return;
-                      scanSubmissionRef.current = null;
-                      autoStartedBoxKeyRef.current = null;
-                      setDrawMode((v) => !v);
-                      setDrawnBBox(null);
-                      setScanOutcome(null);
-                      clearDrawLayer();
-                      exitLasso();
-                      setSearchOpen(false);
-                      setLayersOpen(false);
-                    }}
-                  />
-                )}
+                {/* Scan Map is a dedicated floating button (bottom-center),
+                    not a control-cluster icon — see the Scan Map FAB below. */}
                 {!isRep && (
                   <>
                     <div

@@ -31,7 +31,8 @@ function reducer(state: JobMap, action:
 const JOB_KEYS = new Set([
   "status", "city", "state", "geometry", "boundarySource", "idempotencyKey",
   "discoveredCount", "uniqueCandidateCount", "validatedCount", "checkedCount",
-  "qualifiedCount", "failedCount", "cachedCount", "coverageStatus", "sourceWarnings",
+  "qualifiedCount", "newLeadsCount", "stillFreshCount", "serviceActiveCount",
+  "comingSoonCount", "failedCount", "cachedCount", "coverageStatus", "sourceWarnings",
   "sources", "createdAt", "startedAt", "completedAt", "cancelledAt", "error",
 ]);
 

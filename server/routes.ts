@@ -2238,6 +2238,39 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.status(202).json(job);
   });
 
+  // ── Statewide sweep — run NOW, city by city, until the whole state is checked.
+  // These MUST be registered before GET /api/sweeps/:id so "/state" isn't parsed
+  // as a sweep id. Active-priority only: no deferral/nightly path exists here. ──
+  const stateSweepSchema = z.object({
+    state: z.enum(["NC", "SC"]),
+    maxChecksPerCity: z.coerce.number().int().min(1).max(100_000).optional(),
+  });
+
+  app.post("/api/sweeps/state", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
+    const parsed = stateSweepSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid state sweep", issues: parsed.error.issues });
+    const job = sweepService.startStateSweep({ tenantId: tid(req), createdBy: req.user?.id, ...parsed.data });
+    storage.logActivity(req.user?.id ?? null, "sweep.state_started", "state_sweep", undefined, { stateSweepId: job.id, state: job.state, cities: job.citiesTotal });
+    res.status(202).json(job);
+  });
+
+  app.get("/api/sweeps/state", requireManager, (req: any, res) => {
+    res.json({ sweeps: sweepService.listStateSweeps(tid(req), Number(req.query.limit) || 10) });
+  });
+
+  app.get("/api/sweeps/state/:id", requireManager, (req: any, res) => {
+    const job = sweepService.getStateSweep(qstr(req.params.id), tid(req));
+    if (!job) return res.status(404).json({ error: "State sweep not found" });
+    res.json(job);
+  });
+
+  app.post("/api/sweeps/state/:id/cancel", requireAdmin, (req: any, res) => {
+    const ok = sweepService.cancelStateSweep(qstr(req.params.id), tid(req));
+    if (!ok) return res.status(404).json({ error: "State sweep not found or already finished" });
+    storage.logActivity(req.user?.id ?? null, "sweep.state_cancelled", "state_sweep", undefined, { stateSweepId: qstr(req.params.id) });
+    res.json({ cancelled: true });
+  });
+
   app.get("/api/sweeps/address-search", requireManager, async (req: any, res) => {
     const parsed = addressSearchSchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ error: "Invalid address search", issues: parsed.error.issues });

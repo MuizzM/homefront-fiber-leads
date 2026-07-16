@@ -66,6 +66,11 @@ const createSchema = z
       .regex(/^[A-Za-z0-9._:-]+$/)
       .optional(),
     sources: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+    // rescan=true forces a FRESH fiber/billing check on every discovered address
+    // — including ones already qualified or already leads — by bypassing the
+    // conclusive-result cache. This is how a field re-scan catches a fresh lead
+    // that has since bought service, or a coming-soon that just went live.
+    rescan: z.boolean().optional(),
   })
   .superRefine((value, context) => {
     if (!value.geometry && !(value.town || value.townName || value.city)) {
@@ -160,6 +165,43 @@ function publicJob(
     .map((row: any) => String(row.error));
   if (job.errorSummary && !warnings.includes(job.errorSummary))
     warnings.unshift(job.errorSummary);
+  // Transition counts for the rescan summary. Read-only, scoped to this job's
+  // checks + latest snapshot per address; admin-only (diagnostics) so the job
+  // LIST stays cheap. `new` vs `still fresh` splits confirmed fresh leads by
+  // whether the lead was created during this scan; `now active` = a fresh lead
+  // whose latest check shows active billing (bought service); `coming soon` =
+  // NEW FIBER at an address that already has active billing.
+  const startedAt = job.startedAt || job.createdAt;
+  // Only run the (indexed) transition-count queries once the job has actually
+  // checked something — a job still discovering has all-zero transitions anyway,
+  // so a busy job LIST never pays for them.
+  const t = includeDiagnostics && (job.qualificationChecked > 0 || job.freshFound > 0)
+    ? (() => {
+        const latest = `a.id=(SELECT MAX(a2.id) FROM availability_snapshots a2 WHERE a2.scan_target_id=q.scan_target_id)`;
+        const coming = rawDb.prepare(
+          `SELECT COUNT(*) n FROM qualification_checks q JOIN availability_snapshots a ON ${latest}
+           WHERE q.job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND COALESCE(a.billing_status,'')='Y'`,
+        ).get(job.id) as any;
+        const active = rawDb.prepare(
+          `SELECT COUNT(*) n FROM qualification_checks q
+           JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id AND l.lead_tag='fresh_fiber_confirmed'
+           JOIN availability_snapshots a ON ${latest}
+           WHERE q.job_id=? AND COALESCE(a.billing_status,'')='Y'`,
+        ).get(job.id) as any;
+        const fresh = rawDb.prepare(
+          `SELECT SUM(CASE WHEN datetime(l.created_at)>=datetime(?) THEN 1 ELSE 0 END) newLeads,
+                  SUM(CASE WHEN datetime(l.created_at)<datetime(?) THEN 1 ELSE 0 END) stillFresh
+           FROM qualification_checks q JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id AND l.lead_tag='fresh_fiber_confirmed'
+           WHERE q.job_id=?`,
+        ).get(startedAt, startedAt, job.id) as any;
+        return {
+          comingSoonCount: Number(coming?.n ?? 0),
+          serviceActiveCount: Number(active?.n ?? 0),
+          newLeadsCount: Number(fresh?.newLeads ?? 0),
+          stillFreshCount: Number(fresh?.stillFresh ?? 0),
+        };
+      })()
+    : { comingSoonCount: 0, serviceActiveCount: 0, newLeadsCount: 0, stillFreshCount: 0 };
   return {
     id: job.id,
     organizationId: job.tenantId,
@@ -177,6 +219,10 @@ function publicJob(
       ? job.qualificationChecked
       : job.qualificationChecked + job.qualificationFailed + job.failedTiles,
     qualifiedCount: job.freshFound,
+    newLeadsCount: t.newLeadsCount,
+    stillFreshCount: t.stillFreshCount,
+    serviceActiveCount: t.serviceActiveCount,
+    comingSoonCount: t.comingSoonCount,
     failedCount: includeDiagnostics ? job.qualificationFailed + job.failedTiles : 0,
     cachedCount: job.cacheHits,
     noServiceCount: includeDiagnostics ? job.noServiceFound : 0,
@@ -317,6 +363,7 @@ export function registerAddressDiscoveryRoutes(
           sourceConfig: {
             requestedSources: parsed.data.sources ?? null,
             sourceSnapshot,
+            rescan: parsed.data.rescan === true,
           },
         });
         if (
