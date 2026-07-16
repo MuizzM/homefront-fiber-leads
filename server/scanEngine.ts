@@ -11,7 +11,6 @@
 // recorded responses, with zero proxy bandwidth spent. Rep-facing leads are
 // projected later, only after independent fiber evidence.
 import {
-  ProviderAccessDeniedError,
   refreshTokenFromApi,
   scanAddress,
   type ScanResult,
@@ -209,8 +208,8 @@ export async function runScanWorker(
             else if (checkFailed) neutral++;
             else ok++;
           } catch (err: any) {
-            if (err instanceof ProviderAccessDeniedError) throw err;
-            // An unexpected throw is still a FAILED check — never a negative.
+            // Any throw is a FAILED check — never a negative, and it NEVER aborts
+            // the run. The target stays pending (retryable) for the next pass.
             finalizeRunTarget(runId, t.targetId, "failed", "failed", {
               failed: 1,
               estBytes: DEFAULT_BYTES_PER_CHECK,

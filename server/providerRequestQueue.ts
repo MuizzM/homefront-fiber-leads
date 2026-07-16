@@ -17,8 +17,7 @@ export type QueueEvent =
   | { type: "failed"; key: string; queued: number; active: number; waitMs: number; durationMs: number; source: ProviderRequestPriority }
   | { type: "cache_hit"; key: string; queued: number; active: number; source: ProviderRequestPriority }
   | { type: "deduped"; key: string; queued: number; active: number; source: ProviderRequestPriority }
-  | { type: "paused"; key: string; queued: number; active: number; retryAt: number; source: ProviderRequestPriority }
-  | { type: "halted"; key: string; queued: number; active: number; reason: string; source: ProviderRequestPriority };
+  | { type: "paused"; key: string; queued: number; active: number; retryAt: number; source: ProviderRequestPriority };
 
 export interface ProviderQueueSnapshot {
   active: number;
@@ -34,8 +33,6 @@ export interface ProviderQueueSnapshot {
   averageDurationMs: number;
   lastActivityAt: number;
   pausedUntil: number | null;
-  halted: boolean;
-  haltReason: string | null;
   queuedBySource: Record<ProviderRequestPriority, number>;
 }
 
@@ -103,7 +100,6 @@ export class ProviderRequestQueue<T> {
   private totalDurationMs = 0;
   private lastActivityAt = 0;
   private pausedUntil = 0;
-  private haltError: Error | null = null;
   private sequence = 0;
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -128,7 +124,6 @@ export class ProviderRequestQueue<T> {
     const normalizedKey = key.trim().toLowerCase();
     const source = options.source ?? "market";
     const priority = Number.isFinite(options.priority) ? Number(options.priority) : PROVIDER_PRIORITY[source];
-    if (this.haltError) return Promise.reject(this.haltError);
     const cached = this.readCache(normalizedKey);
     if (cached !== undefined) {
       this.cacheHits++;
@@ -172,21 +167,8 @@ export class ProviderRequestQueue<T> {
     return this.pausedUntil;
   }
 
-  /** Fail queued and future work after a provider access denial. */
-  halt(error: Error, source: ProviderRequestPriority = "market"): void {
-    if (this.haltError) return;
-    this.haltError = error;
-    const queued = this.pending.splice(0);
-    for (const item of queued) {
-      this.inFlight.delete(item.key);
-      item.reject(error);
-    }
-    this.emit({ type: "halted", key: "global", queued: 0, active: this.active, reason: error.message, source });
-  }
-
-  /** Explicit operator recovery after the upstream denial has been resolved. */
+  /** Clear a transient Retry-After pause and resume dispatching immediately. */
   resume(): void {
-    this.haltError = null;
     this.pausedUntil = 0;
     this.pump();
   }
@@ -211,8 +193,6 @@ export class ProviderRequestQueue<T> {
       averageDurationMs: attempts ? Math.round(this.totalDurationMs / attempts) : 0,
       lastActivityAt: this.lastActivityAt,
       pausedUntil: this.pausedUntil > now ? this.pausedUntil : null,
-      halted: this.haltError != null,
-      haltReason: this.haltError?.message ?? null,
       queuedBySource,
     };
   }
@@ -224,7 +204,7 @@ export class ProviderRequestQueue<T> {
   }
 
   private pump(): void {
-    if (this.haltError || this.pending.length === 0) return;
+    if (this.pending.length === 0) return;
     const now = this.now();
     if (this.pausedUntil > now) {
       this.scheduleWake(this.pausedUntil - now);

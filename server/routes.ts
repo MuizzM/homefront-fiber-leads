@@ -146,7 +146,7 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { ProviderAccessDeniedError, scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, resumeAddressScanQueue, getAddressScanQueueStatus, liveTestAddress, type ScanResult } from "./scanner";
+import { scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, type ScanResult } from "./scanner";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
@@ -747,10 +747,7 @@ async function qualifyAddressesViaKinetic(
     let result: ScanResult | null = null;
     for (let attempt = 0; attempt <= 2; attempt++) {
       try { result = await addressScanner(a.address, a.city, a.state, a.zip || "", { source: priority }); }
-      catch (error) {
-        if (error instanceof ProviderAccessDeniedError) throw error;
-        result = null;
-      }
+      catch { result = null; }
       const throttled = !result || (result.apiSource === "failed" && result.blocked);
       if (!throttled) break;
       if (attempt < 2) await new Promise((r) => setTimeout(r, backoffDelayMs(attempt, { baseMs: 400, capMs: 3000 })));
@@ -1586,11 +1583,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Token is stored server-side; never returned to client
   app.post("/api/internal/refresh-token", requireAdmin, async (_req, res) => {
     try {
-      // Uses the configured authorized transport and stable provider identity.
+      // Mint a fresh Braze token on demand. There is no halt/wedge to clear —
+      // scanning self-heals via per-run mint + per-401 remint + AIMD pacing.
       await refreshTokenFromApi();
-      // This admin-only action is the explicit recovery boundary after a 403;
-      // background token refreshes never clear a halted provider queue.
-      resumeAddressScanQueue();
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: `Refresh failed: ${e.message}` });

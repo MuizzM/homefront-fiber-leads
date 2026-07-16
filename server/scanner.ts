@@ -144,14 +144,14 @@ export function setManualToken(token: string) {
   providerQueue.resume();
 }
 
+/** Mint/lease a fresh Braze token. Called at the start of every scan run. */
 export async function refreshTokenFromApi(): Promise<string> {
   const beforeRefresh = authorizedTokenPool.snapshot();
-  if (beforeRefresh.disabled) authorizedTokenPool.resume();
   const lease = await authorizedTokenPool.lease();
   try {
-    // lease() already minted a fresh token when the pool was empty or disabled.
-    // Avoid immediately replacing that token during explicit administrator recovery.
-    if (beforeRefresh.disabled || beforeRefresh.ready === 0) return lease.token;
+    // lease() already minted a fresh token when the pool was empty. Avoid
+    // immediately replacing a just-minted token.
+    if (beforeRefresh.ready === 0) return lease.token;
     return await authorizedTokenPool.refreshLease(lease);
   }
   finally { lease.release(); }
@@ -385,22 +385,17 @@ export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {
     maxRequestsPerMinute: distributed.maxRequestsPerMinute,
     startsLastMinute: distributed.startsLastMinute,
     pausedUntil: distributed.pausedUntil,
-    halted: distributed.halted || local.halted,
-    haltReason: distributed.haltReason ?? local.haltReason,
     distributed,
   };
 }
 
-/** Explicit operator recovery after investigating an upstream 403. */
-export function resumeAddressScanQueue(): void {
-  authorizedTokenPool.resume();
-  providerQueue.resume();
-  distributedProviderCoordinator.resume();
-}
-
+// A transient upstream access-denial (403). It is NOT a halt: the scan worker's
+// AIMD controller treats a `blocked` result as back-pressure (shrinks the window,
+// refreshes the session, paces), and the address is left pending for retry. No
+// queue/coordinator/pool is ever disabled and nothing is persisted.
 export class ProviderAccessDeniedError extends Error {
   readonly code = "KINETIC_ACCESS_DENIED";
-  constructor(message = "Kinetic address search returned 403; all provider work has been stopped.") {
+  constructor(message = "Kinetic address search returned 403 (transient throttle).") {
     super(message);
     this.name = "ProviderAccessDeniedError";
   }
@@ -449,10 +444,11 @@ export interface LiveTestResult {
   wouldSaveLead: boolean;
 }
 
-// Diagnostic — run ONE address through the full live pipeline with a FRESH mint
-// (no cache, not through the shared pool, so a disabled pool can't hide the real
-// error). Every stage is captured sanitized: the bearer token and proxy password
-// are NEVER emitted — only the token's length/expiry. Powers the Live Test panel.
+// Diagnostic — runs ONE address through the SAME shared check path the Field Map,
+// city, and nightly scans use (scanAddressDirect), after minting a fresh Braze
+// token. There is no separate Live Test code path: the classification you see here
+// is exactly what a scan would record. Sanitized — the bearer token and proxy
+// password are NEVER emitted, only the token length. Powers the Live Test panel.
 export async function liveTestAddress(
   address: string, city: string, state: string, zip: string,
 ): Promise<LiveTestResult> {
@@ -462,60 +458,51 @@ export async function liveTestAddress(
   stages.push({ stage: "OSM found", ok: true, detail: `${address}, ${city}, ${state} ${zip}` });
   stages.push({ stage: "Normalized address", ok: true, detail: normalizeKineticAddressKey(address, city, state, zip) });
 
-  let token = "";
+  // Fresh Braze token — the identical mint every scan run performs at its start.
   try {
-    const minted = await mintAuthorizedToken();
-    token = minted.token;
-    stages.push({ stage: "Token minted", ok: true, detail: `fresh JWT · ${token.length} chars · expires ${new Date(minted.expiresAt).toISOString()}` });
+    const token = await refreshTokenFromApi();
+    stages.push({ stage: "Token minted", ok: true, detail: `fresh token · ${token.length} chars` });
   } catch (e: any) {
     stages.push({ stage: "Token minted", ok: false, detail: `MINT FAILED: ${String(e?.message ?? e)}` });
     return out;
   }
 
-  const reqBody = { addressLine1: address, addressLine2: "", city, state, postalCode: zip };
-  stages.push({ stage: "Kinetic search called", ok: true, detail: `POST ${KFS_SCAN_URL}`, data: { request: reqBody, authorization: "Bearer <redacted>" } });
+  stages.push({ stage: "Kinetic search called", ok: true, detail: `POST ${KFS_SCAN_URL}`, data: { request: { addressLine1: address, addressLine2: "", city, state, postalCode: zip }, authorization: "Bearer <redacted>" } });
 
-  let res: Response;
-  try {
-    res = await proxyFetch(KFS_SCAN_URL, {
-      method: "POST",
-      headers: providerHeaders({ "Content-Type": "application/json", "Accept": "application/json", "Authorization": `Bearer ${token}`, "Referer": KFS_REFERER, "Origin": KFS_ORIGIN }),
-      body: JSON.stringify(reqBody),
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch (e: any) {
-    stages.push({ stage: "HTTP result", ok: false, detail: `NETWORK/TIMEOUT (not a no-service): ${String(e?.message ?? e)}` });
-    return out;
-  }
-  stages.push({ stage: "HTTP result", ok: res.ok, detail: `HTTP ${res.status} ${res.statusText || ""}`.trim() });
+  // THE one shared check path — same code the field/city/nightly workers run.
+  const result = await scanAddressDirect(address, city, state, zip, "manual");
 
-  const rawText = await res.text();
-  let data: any = null;
-  try { data = JSON.parse(rawText); } catch { /* not JSON */ }
-  const addr = data?.address ?? {};
+  const httpOk = result.apiSource === "kinetic_live";
   stages.push({
-    stage: "Response", ok: res.ok,
-    detail: res.ok ? "parsed" : `body: ${rawText.slice(0, 400)}`,
-    data: data ? { validationResult: data.validationResult, techType: data.techType, maxQual: data.maxQual, householdSegmentType: addr.householdSegmentType, maxQualTechnologyType: addr.maxQualTechnologyType, billingStatus: addr.billingStatus, dfAddressId: addr.dfAddressId } : undefined,
+    stage: "HTTP result", ok: httpOk,
+    detail: httpOk ? "HTTP 200 OK"
+      : result.blocked ? "throttled (403) — transient, address kept pending for retry"
+      : `no conclusive answer — ${result.notes || "infra error"} (NOT a no-service verdict)`,
   });
 
-  if (!res.ok || !data) {
-    stages.push({ stage: "Classification", ok: false, detail: `unresolved (infra) — ${res.ok ? "unparseable response" : "HTTP " + res.status}; NOT a no-service verdict` });
+  if (!httpOk) {
+    stages.push({ stage: "Response", ok: false, detail: result.notes || "non-conclusive response" });
+    stages.push({ stage: "Classification", ok: false, detail: `unresolved (infra) — ${result.blocked ? "throttled" : "error"}; NOT a no-service verdict` });
     return out;
   }
 
+  stages.push({
+    stage: "Response", ok: true, detail: "parsed",
+    data: { fiberStatus: result.fiberStatus, techType: result.techType, householdSegmentType: result.householdSegmentType, billingStatus: result.billingStatus, dfAddressId: result.dfAddressId },
+  });
+
   out.checked = true;
-  const tech = String(data.techType ?? addr.maxQualTechnologyType ?? "").toUpperCase();
-  const isFiber = tech.includes("FIBER") || tech === "FTTP" || tech === "FTTH";
-  const segment = String(addr.householdSegmentType ?? "").toUpperCase();
-  const billing = String(addr.billingStatus ?? "").toUpperCase();
-  const activeBilling = billing === "Y";
-  const classification = !isFiber ? "no_service"
-    : activeBilling ? (segment.includes("NEW FIBER") ? "coming_soon" : "service_active")
-    : "fresh_fiber";
+  const isFiber = result.fiberAvailable;
+  const billing = String(result.billingStatus ?? "").toUpperCase();
+  // Matches applyCheck's lead gate exactly: NEW FIBER + no active billing + fiber.
+  const isTarget = result.isNewFiber && billing === "N" && isFiber;
+  const classification = result.fiberStatus === "no_service" || !isFiber ? "no_service"
+    : isTarget ? "fresh_fiber"
+    : billing === "Y" && result.isNewFiber ? "coming_soon"
+    : "service_active";
   out.classification = classification;
-  out.wouldSaveLead = isFiber && !activeBilling;
-  stages.push({ stage: "Classification", ok: true, detail: `${classification} · fiber=${isFiber} · segment=${segment || "?"} · billing=${billing || "?"}` });
+  out.wouldSaveLead = isTarget;
+  stages.push({ stage: "Classification", ok: true, detail: `${classification} · fiber=${isFiber} · segment=${result.householdSegmentType || "?"} · billing=${billing || "?"}` });
   stages.push({ stage: "Lead saved", ok: out.wouldSaveLead, detail: out.wouldSaveLead ? "YES — fresh fiber, no active billing" : `no — ${classification}` });
   return out;
 }
@@ -587,8 +574,12 @@ async function scanAddressDirect(
       });
 
       if (res.status === 401) {
+        // Auth/token error: mint a FRESH token, replace the lease, and retry the
+        // SAME address immediately. Nothing is disabled or halted. If it still
+        // fails after a few remints, leave the address pending (failed = retryable)
+        // so the worker requeues it — an auth error is NEVER a "no fiber".
         if (authRefreshes >= 3) {
-          base.notes = "Auth still failing (401) after three token refreshes";
+          base.notes = "Auth still failing (401) after three fresh-token remints";
           return base;
         }
         authRefreshes++;
@@ -596,26 +587,32 @@ async function scanAddressDirect(
           const refreshed = await authorizedTokenPool.refreshLease(tokenLease);
           tokenLease = { ...tokenLease, token: refreshed };
         }
-        catch { base.notes = `Token refresh ${authRefreshes}/3 failed after 401`; return base; }
+        catch { base.notes = `Fresh-token remint ${authRefreshes}/3 failed after 401`; return base; }
         continue;
       }
       if (res.status === 403) {
-        const denied = new ProviderAccessDeniedError();
+        // Transient rolling-window throttle — NOT a halt. Return a `blocked`
+        // result: the worker's AIMD controller reads it as back-pressure (shrinks
+        // the window, refreshes the session, paces), and the address stays pending
+        // for retry. Never disables the queue/coordinator/pool; persists nothing.
+        base.blocked = true;
+        base.apiSource = "failed";
+        base.fiberStatus = "unknown";
+        base.confidence = "LOW";
+        base.notes = "Upstream 403 (transient throttle) — paced and retried, not a no-service answer";
         structuredLog("scan.provider.access_denied", {
           status: 403, source, active: providerQueue.snapshot().active,
           queued: providerQueue.snapshot().queued,
-        }, "error");
-        providerQueue.halt(denied, source);
-        distributedProviderCoordinator.halt(denied.message);
-        authorizedTokenPool.disable();
+        }, "warn");
         const alertHook = (globalThis as any).__alertProviderAccessDenied;
         if (typeof alertHook === "function") void Promise.resolve(alertHook({ provider: "kinetic", status: 403 })).catch(() => {});
-        throw denied;
+        return base;
       }
       if (res.status === 429) {
+        // Honor an explicit upstream Retry-After with an in-memory pause + retry of
+        // the same address. Transient only — no persisted/permanent application state.
         const waitMs = retryAfterMs(res, rateLimitAttempts++);
         providerQueue.pauseFor(waitMs, source);
-        distributedProviderCoordinator.pauseFor(waitMs);
         structuredLog("scan.provider.rate_limited", { source, waitMs, attempt: rateLimitAttempts }, "warn");
         await delay(waitMs);
         continue;
@@ -769,13 +766,11 @@ async function scanAddressDirect(
     base.leadScore = score.leadScore;
 
   } catch (err: any) {
-    if (err instanceof ProviderAccessDeniedError) throw err;
-    // PRODUCT LAW: a failed check (timeout/error/no-token) carries NO
-    // availability signal. We do NOT fabricate a result — the previous code
-    // invented `new_fiber` for any address in a hardcoded ZIP set, which turned
-    // a network timeout into a fake lead. A non-answer is not a "yes" and not a
-    // "no": return an explicit failure so the caller keeps the address in the
-    // recheck queue and never records or counts it as availability data.
+    // PRODUCT LAW: a failed check (timeout/error/no-token/throttle) carries NO
+    // availability signal, and it NEVER aborts the run. We do NOT fabricate a
+    // result — a non-answer is not a "yes" and not a "no": return an explicit
+    // failure so the caller keeps the address pending for retry and never records
+    // or counts it as availability data.
     base.apiSource = "failed";
     base.fiberStatus = "unknown";
     base.confidence = "LOW";

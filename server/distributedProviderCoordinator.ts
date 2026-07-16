@@ -12,11 +12,6 @@ const priorityValue: Record<ProviderRequestPriority, number> = {
   city: 200,
 };
 
-export class DistributedProviderHaltedError extends Error {
-  readonly code = "DISTRIBUTED_PROVIDER_HALTED";
-  constructor(message: string) { super(message); this.name = "DistributedProviderHaltedError"; }
-}
-
 export interface DistributedProviderSnapshot {
   active: number;
   queued: number;
@@ -24,8 +19,6 @@ export interface DistributedProviderSnapshot {
   maxConcurrency: number;
   maxRequestsPerMinute: number;
   pausedUntil: number | null;
-  halted: boolean;
-  haltReason: string | null;
   instanceId: string;
 }
 
@@ -150,16 +143,6 @@ export class DistributedProviderCoordinator<T> {
     return until;
   }
 
-  halt(reason: string): void {
-    rawDb.prepare(`UPDATE provider_global_control SET halted=1,halt_reason=?,updated_at=? WHERE id=1`)
-      .run(reason.slice(0, 180), this.now());
-  }
-
-  resume(): void {
-    rawDb.prepare(`UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL,updated_at=? WHERE id=1`)
-      .run(this.now());
-  }
-
   snapshot(): DistributedProviderSnapshot {
     this.cleanup();
     const now = this.now();
@@ -173,7 +156,7 @@ export class DistributedProviderCoordinator<T> {
       active: Number(counts?.active ?? 0), queued: Number(counts?.queued ?? 0), startsLastMinute: starts,
       maxConcurrency: this.maxConcurrency, maxRequestsPerMinute: this.maxRequestsPerMinute,
       pausedUntil: Number(control.paused_until ?? 0) > now ? Number(control.paused_until) : null,
-      halted: !!control.halted, haltReason: control.halt_reason ?? null, instanceId: this.instanceId,
+      instanceId: this.instanceId,
     };
   }
 
@@ -183,7 +166,6 @@ export class DistributedProviderCoordinator<T> {
         this.cleanup();
         const now = this.now();
         const control = this.control();
-        if (control.halted) throw new DistributedProviderHaltedError(control.halt_reason || "Provider work halted");
         const pausedUntil = Number(control.paused_until ?? 0);
         if (pausedUntil > now) return { admitted: false, waitMs: Math.min(1_000, pausedUntil - now) };
         const nextStartAt = Number(control.next_start_at ?? 0);
@@ -248,7 +230,7 @@ export class DistributedProviderCoordinator<T> {
   }
 
   private control(): any {
-    return rawDb.prepare(`SELECT halted,halt_reason,paused_until,next_start_at FROM provider_global_control WHERE id=1`).get() as any;
+    return rawDb.prepare(`SELECT paused_until,next_start_at FROM provider_global_control WHERE id=1`).get() as any;
   }
 }
 
@@ -268,6 +250,9 @@ export function ensureSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_provider_shared_cache_expiry ON provider_shared_result_cache(expires_at);
     CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),halted INTEGER NOT NULL DEFAULT 0,halt_reason TEXT,paused_until INTEGER,next_start_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);
     INSERT OR IGNORE INTO provider_global_control (id,updated_at) VALUES (1,0);
+    -- Scanning has no persistent halt state. Wipe any legacy halt on boot so a
+    -- previous 403 can NEVER survive a restart and wedge scanning at "0 checked".
+    UPDATE provider_global_control SET halted=0, halt_reason=NULL WHERE halted<>0;
   `);
   const controlColumns = rawDb.prepare(`PRAGMA table_info(provider_global_control)`).all() as Array<{ name: string }>;
   if (!controlColumns.some(column => column.name === "next_start_at")) {
