@@ -1,0 +1,65 @@
+# Read-only production proof of the deploy-triggered NC+SC statewide scan.
+# USER-APPROVED 2026-07-16. SQL SELECTs + log greps only; no secrets printed.
+# Delete after the proof is captured.
+name: Diagnose scan (read-only)
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Read scan proof over pinned SSH host key
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Collect statewide-scan counters and lead rows
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            bash -s <<'REMOTE'
+          set -euo pipefail
+          echo "── deploy auto-start + sweep log lines ──"
+          docker logs --tail 4000 homefront-app-1 2>&1 | grep -E "state_sweep|serving on port" | tail -12
+          echo ""
+          echo "── statewide sweeps (state_sweeps) ──"
+          docker exec homefront-app-1 node -e '
+            const D = require("better-sqlite3");
+            const db = new D(process.env.DATA_DIR + "/data.db", { readonly: true });
+            const q = (label, sql, ...a) => { try { console.log(label + ":", JSON.stringify(db.prepare(sql).all(...a))); } catch (e) { console.log(label + ": ERR " + String(e.message).slice(0, 120)); } };
+            q("sweeps", "SELECT state,status,phase,cities_total,cities_completed,current_city,checked,fresh_found,coming_soon,retrying,unresolved FROM state_sweeps ORDER BY started_at DESC LIMIT 4");
+            q("cities_active", "SELECT city,state,status,checked,fresh FROM state_sweep_cities WHERE status IN (\"running\",\"done\") ORDER BY rowid DESC LIMIT 6");
+            q("jobs", "SELECT city,phase,status,harvested,queued,checked,fresh_found FROM sweep_jobs ORDER BY started_at DESC LIMIT 4");
+            q("runs", "SELECT kind,status,verified,new_fiber,failed,budget FROM scan_runs ORDER BY started_at DESC LIMIT 4");
+            q("snapshots_since_deploy", "SELECT COUNT(*) AS n, SUM(CASE WHEN typeof(checked_at_epoch)!=\"integer\" THEN 1 ELSE 0 END) AS badEpoch FROM availability_snapshots WHERE checked_at >= datetime(\"now\",\"-30 minutes\")");
+            q("fresh_leads_since_deploy", "SELECT COUNT(*) AS n FROM leads WHERE lead_tag=\"fresh_fiber_confirmed\" AND datetime(created_at) >= datetime(\"now\",\"-30 minutes\")");
+            q("fresh_leads_total_pins", "SELECT COUNT(*) AS n FROM leads WHERE lead_tag=\"fresh_fiber_confirmed\" AND lat IS NOT NULL AND lng IS NOT NULL");
+            q("newest_fresh_leads", "SELECT id,address,city,state,lat,lng,household_segment_type,billing_status FROM leads WHERE lead_tag=\"fresh_fiber_confirmed\" ORDER BY id DESC LIMIT 5");
+          '
+          REMOTE
