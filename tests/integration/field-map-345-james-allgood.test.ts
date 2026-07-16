@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseKineticResponse } from "../../server/kineticResponseParser";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
+let persist: typeof import("../../server/kineticObservation").persistKineticObservation;
 
 let rawDb: import("better-sqlite3").Database;
 let engine: typeof import("../../server/scanEngine");
@@ -40,6 +41,7 @@ beforeAll(async () => {
   appStorage = storage.storage;
   engine = await import("../../server/scanEngine");
   store = await import("../../server/scanIntelStore");
+  persist = (await import("../../server/kineticObservation")).persistKineticObservation;
   // Territory over the address so the fresh lead auto-assigns and shows on the map.
   rawDb.prepare(`INSERT INTO territories (tenant_id,name,rep_id,polygon,status)
     VALUES (?, 'Inman area', ?, ?, 'active')`).run(TENANT, REP, JSON.stringify([
@@ -78,9 +80,33 @@ describe("Field Map — 345 James Allgood Dr end-to-end (production worker path)
     expect(pin).toBeTruthy();
     expect(pin.leadTag).toBe("fresh_fiber_confirmed");
 
-    // The scan target keeps its normalized fields (dfAddressId, billing, segment).
-    const t = rawDb.prepare(`SELECT last_is_new_fiber AS nf, last_billing_status AS billing, last_fiber_status AS fs FROM scan_targets WHERE id=?`).get(tid) as any;
-    expect(t).toMatchObject({ nf: 1, billing: "N", fs: "new_fiber" });
+    // The scan target keeps its normalized fields incl. dfAddressId, access ID, service key.
+    const t = rawDb.prepare(`SELECT last_is_new_fiber AS nf, last_billing_status AS billing, last_fiber_status AS fs, df_address_id AS df, access_id AS acc, service_key AS svc FROM scan_targets WHERE id=?`).get(tid) as any;
+    expect(t).toMatchObject({ nf: 1, billing: "N", fs: "new_fiber", df: "DF-345-JAMES-ALLGOOD", acc: "ACC-345-JA-0001", svc: "SVC-345JA-FTTP" });
+  });
+
+  it("the BOX-scan persistence path (persistKineticObservation) also publishes the fresh lead", () => {
+    const p = parseKineticResponse(FIX);
+    const res = persist({
+      tenantId: TENANT, source: "route-area-scan",
+      observation: {
+        address: "347 James Allgood Dr", city: "Inman", state: "SC", zip: "29349",
+        lat: 35.0206, lng: -82.0787,
+        fiberStatus: "new_fiber", fiberAvailable: p.fiberQualified, isNewFiber: true,
+        billingStatus: p.billingStatus, householdSegmentType: p.householdSegmentType,
+        dfAddressId: p.dfAddressId, accessId: p.accessId, serviceKey: p.serviceKey,
+        maxDownloadMbps: 2_000, techType: p.technology,
+        apiSource: "kinetic_live", blocked: false, checkFailed: false,
+        discoveredAt: new Date().toISOString(), rawResponse: FIX,
+      },
+    });
+    expect(res.conclusive).toBe(true);
+    expect(res.projection.published).toBeGreaterThanOrEqual(1);
+    const lead = rawDb.prepare(`SELECT lead_tag AS tag, billing_status AS billing, household_segment_type AS seg FROM leads WHERE address='347 James Allgood Dr'`).get() as any;
+    expect(lead).toMatchObject({ tag: "fresh_fiber_confirmed", billing: "N", seg: "NEW FIBER" });
+    // dfAddressId, access ID, and service key are persisted on the scan target.
+    const t = rawDb.prepare(`SELECT df_address_id AS df, access_id AS acc, service_key AS svc FROM scan_targets WHERE address='347 James Allgood Dr'`).get() as any;
+    expect(t).toMatchObject({ df: "DF-345-JAMES-ALLGOOD", acc: "ACC-345-JA-0001", svc: "SVC-345JA-FTTP" });
   });
 
   it("re-scanning the SAME address never creates a duplicate lead (New vs Still Fresh)", async () => {
@@ -90,6 +116,6 @@ describe("Field Map — 345 James Allgood Dr end-to-end (production worker path)
     store.createScanRun({ id: runId, tenantId: TENANT, kind: "bbox", label: "rescan", city: "Inman", state: "SC", budget: 1 });
     store.enqueueRunTargets(runId, [{ id: tid, seq: 0 }]);
     await engine.runScanWorker(runId, TENANT, async () => ({ result: freshResult(), bytes: 12_000, checkFailed: false }));
-    expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE tenant_id=?`).get(TENANT) as any).n).toBe(1);
+    expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE tenant_id=? AND address='345 James Allgood Dr'`).get(TENANT) as any).n).toBe(1);
   });
 });

@@ -641,6 +641,8 @@ function persistRouteKineticObservation(
       billingStatus: result.billingStatus,
       householdSegmentType: result.householdSegmentType,
       dfAddressId: result.dfAddressId,
+      accessId: result.accessId,
+      serviceKey: result.serviceKey,
       maxDownloadMbps: result.maxDownloadMbps,
       techType: result.techType,
       speedTier: result.speedTier,

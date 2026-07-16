@@ -1045,6 +1045,8 @@ export function runMigrations() {
      )`,
     `ALTER TABLE scan_targets ADD COLUMN last_fiber_available INTEGER`,
     `ALTER TABLE scan_targets ADD COLUMN first_seen_fiber_at TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN access_id TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN service_key TEXT`,
     `ALTER TABLE scan_targets ADD COLUMN last_customer_segment TEXT NOT NULL DEFAULT 'unknown'`,
     `ALTER TABLE scan_targets ADD COLUMN last_customer_confidence TEXT NOT NULL DEFAULT 'low'`,
     `ALTER TABLE scan_targets ADD COLUMN last_customer_signals TEXT NOT NULL DEFAULT '[]'`,
@@ -2657,10 +2659,11 @@ export class Storage implements IStorage {
   }
   // Record a primary-provider scan result. Returns the previous classification so
   // callers can detect a change; publication still requires independent evidence.
-  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean } {
+  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; accessId?: string | null; serviceKey?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean } {
     const prev = rawDb.prepare("SELECT last_is_new_fiber FROM scan_targets WHERE id = ?").get(id) as any;
     rawDb.prepare(
       `UPDATE scan_targets SET last_fiber_status=@fs, last_is_new_fiber=@nf, last_billing_status=@bs,
+         access_id=COALESCE(@accessId,access_id), service_key=COALESCE(@serviceKey,service_key),
          last_fiber_available=COALESCE(@fiberAvailable,last_fiber_available),
          last_customer_segment=COALESCE(@customerSegment,last_customer_segment),
          last_customer_confidence=COALESCE(@customerConfidence,last_customer_confidence),
@@ -2680,7 +2683,8 @@ export class Storage implements IStorage {
          last_scanned_at=datetime('now'), scan_count=scan_count+1 WHERE id=@id`
     ).run({
       id, fs: r.fiberStatus ?? null, nf: r.isNewFiber ? 1 : 0, bs: r.billingStatus ?? null,
-      df: r.dfAddressId ?? null, lead: r.convertedToLeadId ?? null,
+      df: r.dfAddressId ?? null, accessId: r.accessId ?? null, serviceKey: r.serviceKey ?? null,
+      lead: r.convertedToLeadId ?? null,
       avail: r.availabilityStatus ?? null, newly: r.newlyLive ? 1 : 0,
       fiberAvailable: r.fiberAvailable == null ? null : (r.fiberAvailable ? 1 : 0),
       customerSegment: r.customerSegment ?? null,

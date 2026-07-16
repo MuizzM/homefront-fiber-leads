@@ -20,6 +20,8 @@ export interface KineticObservation {
   householdSegmentType?: string | null;
   serviceStatus?: string | null;
   dfAddressId?: string | null;
+  accessId?: string | null;
+  serviceKey?: string | null;
   maxDownloadMbps?: number | null;
   techType?: string | null;
   speedTier?: string | null;
@@ -220,10 +222,11 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
     }
     if (!target) {
       const inserted = rawDb.prepare(`INSERT INTO scan_targets
-        (address,city,state,zip,lat,lng,tenant_id,source,df_address_id,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`).run(
+        (address,city,state,zip,lat,lng,tenant_id,source,df_address_id,access_id,service_key,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).run(
         address, city, state, zip, observation.lat ?? null, observation.lng ?? null,
         tenantId, `live-${source}`, observation.dfAddressId ?? null,
+        observation.accessId ?? null, observation.serviceKey ?? null,
       );
       targetId = Number(inserted.lastInsertRowid);
       targetCreated = true;
@@ -233,9 +236,12 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
     } else {
       targetId = target.id;
       rawDb.prepare(`UPDATE scan_targets SET
-          df_address_id=COALESCE(df_address_id,?),lat=COALESCE(lat,?),lng=COALESCE(lng,?),
+          df_address_id=COALESCE(df_address_id,?),access_id=COALESCE(access_id,?),service_key=COALESCE(service_key,?),
+          lat=COALESCE(lat,?),lng=COALESCE(lng,?),
           zip=CASE WHEN zip IS NULL OR zip='' THEN ? ELSE zip END
-        WHERE id=? AND tenant_id=?`).run(observation.dfAddressId ?? null, observation.lat ?? null, observation.lng ?? null, zip, targetId, tenantId);
+        WHERE id=? AND tenant_id=?`).run(
+        observation.dfAddressId ?? null, observation.accessId ?? null, observation.serviceKey ?? null,
+        observation.lat ?? null, observation.lng ?? null, zip, targetId, tenantId);
     }
 
     const latest = (rawDb.prepare(`SELECT fiber_available,checked_at,api_source,evidence_hash

@@ -370,6 +370,8 @@ function applyCheck(
     isNewFiber: result.isNewFiber,
     billingStatus: result.billingStatus,
     dfAddressId: result.dfAddressId,
+    accessId: result.accessId,
+    serviceKey: result.serviceKey,
     availabilityStatus: legacyAvailabilityStatus(fiberTransition.status),
     newlyLive: fiberTransition.fresh,
     customerSegment: customer.segment,
