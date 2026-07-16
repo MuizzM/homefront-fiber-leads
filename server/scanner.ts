@@ -384,7 +384,6 @@ export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {
     startsLastSecond: 0,
     maxRequestsPerMinute: distributed.maxRequestsPerMinute,
     startsLastMinute: distributed.startsLastMinute,
-    pausedUntil: distributed.pausedUntil,
     distributed,
   };
 }

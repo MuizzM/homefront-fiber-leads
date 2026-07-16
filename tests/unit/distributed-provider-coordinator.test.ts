@@ -17,7 +17,7 @@ beforeEach(() => {
   ensureSchema();
   rawDb.exec(`DELETE FROM provider_rate_events; DELETE FROM provider_admission_queue;
     DELETE FROM provider_address_locks; DELETE FROM provider_shared_result_cache;
-    UPDATE provider_global_control SET halted=0,halt_reason=NULL,paused_until=NULL,next_start_at=0 WHERE id=1;`);
+    UPDATE provider_global_control SET next_start_at=0 WHERE id=1;`);
 });
 
 describe("DistributedProviderCoordinator", () => {

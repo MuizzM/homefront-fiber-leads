@@ -18,7 +18,6 @@ export interface DistributedProviderSnapshot {
   startsLastMinute: number;
   maxConcurrency: number;
   maxRequestsPerMinute: number;
-  pausedUntil: number | null;
   instanceId: string;
 }
 
@@ -136,13 +135,6 @@ export class DistributedProviderCoordinator<T> {
     }
   }
 
-  pauseFor(ms: number): number {
-    const until = this.now() + Math.max(0, Math.floor(ms));
-    rawDb.prepare(`UPDATE provider_global_control SET paused_until=MAX(COALESCE(paused_until,0),?),updated_at=? WHERE id=1`)
-      .run(until, this.now());
-    return until;
-  }
-
   snapshot(): DistributedProviderSnapshot {
     this.cleanup();
     const now = this.now();
@@ -151,11 +143,9 @@ export class DistributedProviderCoordinator<T> {
       SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END) queued
       FROM provider_admission_queue WHERE state IN ('active','queued')`).get() as any;
     const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any)?.count ?? 0);
-    const control = this.control();
     return {
       active: Number(counts?.active ?? 0), queued: Number(counts?.queued ?? 0), startsLastMinute: starts,
       maxConcurrency: this.maxConcurrency, maxRequestsPerMinute: this.maxRequestsPerMinute,
-      pausedUntil: Number(control.paused_until ?? 0) > now ? Number(control.paused_until) : null,
       instanceId: this.instanceId,
     };
   }
@@ -166,8 +156,6 @@ export class DistributedProviderCoordinator<T> {
         this.cleanup();
         const now = this.now();
         const control = this.control();
-        const pausedUntil = Number(control.paused_until ?? 0);
-        if (pausedUntil > now) return { admitted: false, waitMs: Math.min(1_000, pausedUntil - now) };
         const nextStartAt = Number(control.next_start_at ?? 0);
         if (nextStartAt > now) return { admitted: false, waitMs: Math.max(this.pollMs, nextStartAt - now) };
         const head = rawDb.prepare(`SELECT id FROM provider_admission_queue WHERE state='queued'
@@ -230,7 +218,7 @@ export class DistributedProviderCoordinator<T> {
   }
 
   private control(): any {
-    return rawDb.prepare(`SELECT paused_until,next_start_at FROM provider_global_control WHERE id=1`).get() as any;
+    return rawDb.prepare(`SELECT next_start_at FROM provider_global_control WHERE id=1`).get() as any;
   }
 }
 
@@ -248,16 +236,35 @@ export function ensureSchema(): void {
     CREATE TABLE IF NOT EXISTS provider_address_locks (dedupe_key TEXT PRIMARY KEY,owner_id TEXT NOT NULL,expires_at INTEGER NOT NULL,created_at INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS provider_shared_result_cache (dedupe_key TEXT PRIMARY KEY,payload TEXT NOT NULL,expires_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS idx_provider_shared_cache_expiry ON provider_shared_result_cache(expires_at);
-    CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),halted INTEGER NOT NULL DEFAULT 0,halt_reason TEXT,paused_until INTEGER,next_start_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),next_start_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);
     INSERT OR IGNORE INTO provider_global_control (id,updated_at) VALUES (1,0);
-    -- Scanning has no persistent halt state. Wipe any legacy halt on boot so a
-    -- previous 403 can NEVER survive a restart and wedge scanning at "0 checked".
-    UPDATE provider_global_control SET halted=0, halt_reason=NULL WHERE halted<>0;
   `);
-  const controlColumns = rawDb.prepare(`PRAGMA table_info(provider_global_control)`).all() as Array<{ name: string }>;
-  if (!controlColumns.some(column => column.name === "next_start_at")) {
+  // ── Migration: the scanner has NO persistent halt/pause state. Ensure
+  //    next_start_at exists on older DBs, then DROP the legacy halt/pause columns
+  //    so a prior 403 can never survive a restart and wedge scanning at 0 checked.
+  const controlColumns = new Set(
+    (rawDb.prepare(`PRAGMA table_info(provider_global_control)`).all() as Array<{ name: string }>).map(c => c.name),
+  );
+  if (!controlColumns.has("next_start_at")) {
     rawDb.exec(`ALTER TABLE provider_global_control ADD COLUMN next_start_at INTEGER NOT NULL DEFAULT 0`);
   }
+  for (const legacy of ["halted", "halt_reason", "paused_until"]) {
+    if (controlColumns.has(legacy)) {
+      try { rawDb.exec(`ALTER TABLE provider_global_control DROP COLUMN ${legacy}`); }
+      catch { /* SQLite too old for DROP COLUMN — column is simply left unused */ }
+    }
+  }
+  // ── Clean stale admission state on boot. Admission tickets, address locks, and
+  //    rate events are per-process and in-flight only; nothing here survives a
+  //    restart, so leftover rows are stale and would otherwise pin the admission
+  //    head. Scan progress lives in scan_runs/run_targets, not here — never lost.
+  //    (Single app instance in production; revisit the blanket delete if scaled out.)
+  rawDb.exec(`
+    DELETE FROM provider_admission_queue;
+    DELETE FROM provider_address_locks;
+    DELETE FROM provider_rate_events;
+    UPDATE provider_global_control SET next_start_at=0 WHERE id=1;
+  `);
 }
 
 function bounded(value: number, min: number, max: number, fallback: number): number {
