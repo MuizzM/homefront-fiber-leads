@@ -1,0 +1,78 @@
+# Read-only production diagnostics for the 2026-07-16 OTP mail outage.
+# USER-APPROVED 2026-07-16. Prints env PRESENCE flags (never values) and recent
+# [otp]/[mail] log lines from the running container. Uses the same
+# approval-gated environment as the deploy so no new secrets or access paths
+# are introduced. Delete after the outage is closed.
+name: Diagnose mail (read-only)
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    name: Read mail diagnostics over pinned SSH host key
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: production
+      url: https://portal.homefrontsolutionsllc.com
+    steps:
+      - name: Collect env-presence flags and otp/mail logs
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for required in DEPLOY_KEY DEPLOY_HOST DEPLOY_USER DEPLOY_KNOWN_HOSTS; do
+            if [ -z "${!required:-}" ]; then
+              echo "Required value $required is not configured" >&2
+              exit 1
+            fi
+          done
+          install -d -m 700 "$HOME/.ssh"
+          trap 'rm -f "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"' EXIT
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null
+
+          ssh \
+            -i "$HOME/.ssh/id_ed25519" \
+            -o BatchMode=yes \
+            -o ConnectTimeout=15 \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            "$DEPLOY_USER@$DEPLOY_HOST" \
+            bash -s <<'REMOTE'
+          set -euo pipefail
+          echo "── container env PRESENCE (booleans only — values are never printed) ──"
+          docker exec homefront-app-1 node -e '
+            const p = (k) => {
+              const v = process.env[k];
+              console.log(k + ": " + (v == null || v === "" ? "MISSING" : "set (len " + String(v).length + ")"));
+            };
+            ["NODE_ENV","SMTP_HOST","SMTP_PORT","SMTP_USER","SMTP_PASS","MAIL_FROM","RESEND_FROM","RESEND_API_KEY","RESEND_DELIVERY_MODE"].forEach(p);
+            console.log("SMTP_HOST is smtp.resend.com: " + (String(process.env.SMTP_HOST||"").trim().toLowerCase() === "smtp.resend.com"));
+          '
+          echo ""
+          echo "── outbound reachability from inside the container ──"
+          docker exec homefront-app-1 node -e '
+            const test = (label, fn) => fn().then(r => console.log(label + ": " + r)).catch(e => console.log(label + ": FAIL " + String(e && e.message).slice(0,120)));
+            Promise.all([
+              test("https api.resend.com", async () => { const r = await fetch("https://api.resend.com/domains", { method: "GET", headers: { Authorization: "Bearer " + (process.env.RESEND_API_KEY || process.env.SMTP_PASS || "").trim() }, signal: AbortSignal.timeout(8000) }); return "HTTP " + r.status; }),
+              test("tcp smtp.resend.com:587", () => new Promise((res, rej) => { const s = require("net").connect({ host: "smtp.resend.com", port: 587, timeout: 6000 }, () => { s.end(); res("connected"); }); s.on("error", rej); s.on("timeout", () => { s.destroy(); rej(new Error("timeout")); }); })),
+              test("tcp smtp.resend.com:465", () => new Promise((res, rej) => { const s = require("net").connect({ host: "smtp.resend.com", port: 465, timeout: 6000 }, () => { s.end(); res("connected"); }); s.on("error", rej); s.on("timeout", () => { s.destroy(); rej(new Error("timeout")); }); })),
+            ]).then(() => process.exit(0));
+          '
+          echo ""
+          echo "── recent [otp]/[mail]/unhandled log lines (auth codes are never logged in production) ──"
+          docker logs --tail 2000 homefront-app-1 2>&1 | grep -iE "\[otp\]|\[mail\]|resend|email_send_failed|unhandled_rejection" | tail -30 || echo "(no matching log lines)"
+          REMOTE
