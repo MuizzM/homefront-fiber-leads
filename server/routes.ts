@@ -147,6 +147,7 @@ function isAutoAreaName(name?: string | null): boolean {
   return /'s area$/.test(n) || n === "Unassigned area";
 }
 import { ProviderAccessDeniedError, scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, resumeAddressScanQueue, getAddressScanQueueStatus, liveTestAddress, type ScanResult } from "./scanner";
+import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
 import {
@@ -1569,6 +1570,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });
     }
+  });
+
+  // Daily confirmed-market refresh — OSM diff (new addresses) + live-check the new
+  // ones, across every confirmed NC/SC Kinetic city. Also runs nightly (cron).
+  app.post("/api/scan/daily-refresh", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
+    void runDailyMarketRefresh(tid(req)).catch(() => {});
+    res.status(202).json(getDailyRefreshStatus());
+  });
+  app.get("/api/scan/daily-refresh", requireManager, (_req, res) => {
+    res.json(getDailyRefreshStatus());
   });
 
   // Internal use only — not exposed to frontend

@@ -1,5 +1,6 @@
 import { rawDb } from "./db";
 import { startKineticRecheck } from "./kineticScannerWorkers";
+import { runDailyMarketRefresh } from "./dailyMarketRefresh";
 import { structuredLog } from "./structuredLog";
 
 export interface CronStatus { lastRunAt:string|null;lastRunResult:string|null;nextRunAt:string|null;isRunning:boolean;totalNewFiberFound:number;totalRunCount:number }
@@ -10,7 +11,10 @@ export function getCronStatus():CronStatus{return{...status};}
 export function getEngineStatus():unknown{return{running:status.isRunning,cronRunning:status.isRunning,mode:"kinetic-address-recheck",nextRunAt:status.nextRunAt};}
 export async function triggerManualScan():Promise<void>{
   if(status.isRunning)throw new Error("Kinetic nightly recheck is already running");status.isRunning=true;status.lastRunAt=new Date().toISOString();status.totalRunCount++;
-  try{const tenants=rawDb.prepare(`SELECT id FROM tenants WHERE status='active'`).all()as Array<{id:number}>;let started=0,skipped=0;for(const tenant of tenants){try{startKineticRecheck({tenantId:tenant.id});started++;}catch{skipped++;}}status.lastRunResult=`Started ${started} Kinetic recheck worker(s); ${skipped} already active`;structuredLog("kinetic.nightly.started",{started,skipped});}
+  try{const tenants=rawDb.prepare(`SELECT id FROM tenants WHERE status='active'`).all()as Array<{id:number}>;let started=0,skipped=0;for(const tenant of tenants){try{startKineticRecheck({tenantId:tenant.id});started++;}catch{skipped++;}
+  // Daily OSM discovery diff — find + check NEW addresses per confirmed city.
+  // Fire-and-forget alongside the recheck; the diff never blocks the recheck.
+  void runDailyMarketRefresh(tenant.id).catch((e)=>structuredLog("daily_refresh.failed",{tenantId:tenant.id,error:e instanceof Error?e.message:String(e)},"error"));}status.lastRunResult=`Started ${started} Kinetic recheck worker(s) + daily OSM diff; ${skipped} already active`;structuredLog("kinetic.nightly.started",{started,skipped});}
   catch(error){status.lastRunResult=error instanceof Error?error.message:String(error);throw error;}finally{status.isRunning=false;}
 }
 function schedule():void{const next=nextTwoAm();status.nextRunAt=next.toISOString();if(timer)clearTimeout(timer);timer=setTimeout(async()=>{try{await triggerManualScan();}catch(error){structuredLog("kinetic.nightly.failed",{error:error instanceof Error?error.message:String(error)},"error");}schedule();},Math.max(1000,next.getTime()-Date.now()));timer.unref?.();}
