@@ -1081,22 +1081,34 @@ export function runMigrations() {
     // a provider-fresh lead without the projector's complete provenance. Legacy
     // rows are left untouched; the UPDATE trigger fires only when a protected
     // classification/provenance column is explicitly changed.
+    // A fresh-fiber lead is allowed by EITHER path: (a) cross-verified with >=2
+    // independent sources — unchanged for every non-authoritative lead — OR (b) the
+    // AUTHORITATIVE rule, Kinetic NEW FIBER + billing N, which publishes on Kinetic's
+    // own new-build signal. DROP+CREATE so existing DBs pick up the loosened guard.
+    `DROP TRIGGER IF EXISTS trg_leads_fresh_insert_guard`,
+    `DROP TRIGGER IF EXISTS trg_leads_fresh_update_guard`,
     `CREATE TRIGGER IF NOT EXISTS trg_leads_fresh_insert_guard
        BEFORE INSERT ON leads
        WHEN (COALESCE(NEW.is_new_fiber,0)=1 OR lower(COALESCE(NEW.fiber_status,''))='new_fiber')
         AND NOT (
           NEW.source_scan_target_id IS NOT NULL AND NEW.fresh_confirmed_at IS NOT NULL
-          AND NEW.fresh_confidence='cross_verified' AND NEW.lead_tag='fresh_fiber_confirmed'
-          AND COALESCE(json_array_length(NEW.fresh_sources),0)>=2
+          AND NEW.lead_tag='fresh_fiber_confirmed'
+          AND (
+            (NEW.fresh_confidence='cross_verified' AND COALESCE(json_array_length(NEW.fresh_sources),0)>=2)
+            OR (upper(COALESCE(NEW.household_segment_type,''))='NEW FIBER' AND upper(COALESCE(NEW.billing_status,''))='N')
+          )
         )
        BEGIN SELECT RAISE(ABORT,'fresh_fiber_requires_cross_verification'); END`,
     `CREATE TRIGGER IF NOT EXISTS trg_leads_fresh_update_guard
-       BEFORE UPDATE OF is_new_fiber,fiber_status,source_scan_target_id,fresh_confirmed_at,fresh_confidence,fresh_sources,lead_tag ON leads
+       BEFORE UPDATE OF is_new_fiber,fiber_status,source_scan_target_id,fresh_confirmed_at,fresh_confidence,fresh_sources,lead_tag,household_segment_type,billing_status ON leads
        WHEN (COALESCE(NEW.is_new_fiber,0)=1 OR lower(COALESCE(NEW.fiber_status,''))='new_fiber')
         AND NOT (
           NEW.source_scan_target_id IS NOT NULL AND NEW.fresh_confirmed_at IS NOT NULL
-          AND NEW.fresh_confidence='cross_verified' AND NEW.lead_tag='fresh_fiber_confirmed'
-          AND COALESCE(json_array_length(NEW.fresh_sources),0)>=2
+          AND NEW.lead_tag='fresh_fiber_confirmed'
+          AND (
+            (NEW.fresh_confidence='cross_verified' AND COALESCE(json_array_length(NEW.fresh_sources),0)>=2)
+            OR (upper(COALESCE(NEW.household_segment_type,''))='NEW FIBER' AND upper(COALESCE(NEW.billing_status,''))='N')
+          )
         )
        BEGIN SELECT RAISE(ABORT,'fresh_fiber_requires_cross_verification'); END`,
     `ALTER TABLE notification_outbox ADD COLUMN next_attempt_at TEXT`,
@@ -2656,9 +2668,12 @@ export class Storage implements IStorage {
          df_address_id=COALESCE(@df, df_address_id),
          converted_to_lead_id=COALESCE(@lead, converted_to_lead_id),
          last_availability_status=COALESCE(@avail, last_availability_status),
-         -- first-seen-live is stamped ONCE on the first newly_live flip, never overwritten
+         -- first-seen-LIVE marks a proven unavailable→fiber flip (the "Newly Lit" signal).
          first_seen_live_at=CASE WHEN @newly=1 AND first_seen_live_at IS NULL THEN datetime('now') ELSE first_seen_live_at END,
-         first_seen_fiber_at=CASE WHEN @newly=1 AND first_seen_fiber_at IS NULL THEN datetime('now') ELSE first_seen_fiber_at END,
+         -- first-seen-FIBER is stamped on a flip OR the first time Kinetic reports NEW
+         -- FIBER (its own new-build signal), so NEW FIBER + billing N qualifies as a
+         -- Fresh Lead candidate without waiting for a prior unavailable observation.
+         first_seen_fiber_at=CASE WHEN (@newly=1 OR @nf=1) AND first_seen_fiber_at IS NULL THEN datetime('now') ELSE first_seen_fiber_at END,
          -- a conclusive answer clears the inconclusive streak (belt-and-suspenders:
          -- the row also leaves the never-scanned pool now that last_scanned_at is set)
          inconclusive_attempts=0,

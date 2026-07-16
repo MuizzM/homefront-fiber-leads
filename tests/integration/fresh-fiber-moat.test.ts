@@ -67,7 +67,7 @@ describe("fresh-fiber moat simulated production flow", () => {
       .run(TENANT)).toThrow(/fresh_fiber_requires_cross_verification/);
   });
 
-  it("detects flips, waits for independent fiber, then projects and alerts exactly once", async () => {
+  it("publishes NEW FIBER + billing N immediately as single-source leads, deduped and idempotent", async () => {
     const runId = "run_moat_flip";
     store.createScanRun({ id: runId, tenantId: TENANT, kind: "state-monitor", label: "Moat flip replay", city: "Flip City", state: "NC", budget: ids.length });
     store.enqueueRunTargets(runId, ids.map((id, seq) => ({ id, seq })));
@@ -77,16 +77,23 @@ describe("fresh-fiber moat simulated production flow", () => {
 
     expect((rawDb.prepare(`SELECT COUNT(*) n FROM availability_snapshots WHERE run_id=?`).get(runId) as any).n).toBe(4);
     expect((rawDb.prepare(`SELECT COUNT(*) n FROM scan_targets WHERE first_seen_fiber_at IS NOT NULL`).get() as any).n).toBe(3);
-    expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE tenant_id=?`).get(TENANT) as any).n).toBe(0);
-    expect(monitor.freshPoints(TENANT, 30).filter((p) => p.confidence === "single_source_provisional")).toHaveLength(3);
+    // AUTHORITATIVE RULE: the 3 NEW FIBER + billing N flips publish IMMEDIATELY as
+    // single-source (kinetic_new_fiber) leads — no corroboration wait — assigned to
+    // the territory rep and on the map. The 4th (no service) is never a lead.
+    const afterScan = rawDb.prepare(`SELECT fresh_confidence AS c, assigned_rep_id AS rep FROM leads WHERE tenant_id=? ORDER BY id`).all(TENANT) as any[];
+    expect(afterScan).toHaveLength(3);
+    expect(afterScan.every((l) => l.c === "kinetic_new_fiber")).toBe(true);
+    expect(afterScan.every((l) => l.rep === 77)).toBe(true);
+    expect(appStorage.getLeadsForMap(TENANT, 77)).toHaveLength(3);
 
-    // Simulate a crash/reaper replay of one logical run-target attempt. The
-    // provider may be called again, but snapshot history remains idempotent.
+    // Crash/reaper replay is idempotent — still exactly 3 leads, no duplicates.
     rawDb.prepare(`UPDATE scan_runs SET status='running',verified=verified-1 WHERE id=?`).run(runId);
     rawDb.prepare(`UPDATE scan_run_targets SET state='queued' WHERE run_id=? AND target_id=?`).run(runId, ids[0]);
     await engine.runScanWorker(runId, TENANT, async (address) => ({ result: result(address.address, true), bytes: 12_000, checkFailed: false }));
-    expect((rawDb.prepare(`SELECT COUNT(*) n FROM availability_snapshots WHERE run_id=?`).get(runId) as any).n).toBe(4);
+    expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE tenant_id=?`).get(TENANT) as any).n).toBe(3);
+    expect(appStorage.getLeadsForMap(TENANT, 77)).toHaveLength(3);
 
+    // Recording independent corroboration never creates a duplicate lead.
     const observedAt = new Date().toISOString();
     const validRows = ids.slice(0, 2).map((scanTargetId, index) => ({
       scanTargetId, source: "fcc_bdc_licensed" as const, sourceRecordId: `fcc-${index}`,
@@ -94,39 +101,8 @@ describe("fresh-fiber moat simulated production flow", () => {
       referenceUrl: "https://broadbandmap.fcc.gov/data-download", importBatchId: "fcc-simulated-v1",
     }));
     expect(monitor.recordCorroboration(TENANT, validRows)).toEqual({ accepted: 2, duplicates: 0 });
-    expect(monitor.recordCorroboration(TENANT, [{
-      scanTargetId: ids[2], source: "third_party_licensed", sourceRecordId: "cable-only", observedAt,
-      availability: "available", technology: "cable", maxDownMbps: 1_000, importBatchId: "cable-simulated-v1",
-    }])).toEqual({ accepted: 1, duplicates: 0 });
-
-    const leads = rawDb.prepare(`SELECT id,address,fresh_confidence,source_scan_target_id,assigned_rep_id FROM leads WHERE tenant_id=? ORDER BY id`).all(TENANT) as any[];
-    expect(leads).toHaveLength(2);
-    expect(leads.every((lead) => lead.fresh_confidence === "cross_verified")).toBe(true);
-    expect(leads.every((lead) => lead.assigned_rep_id === 77)).toBe(true);
-    expect(appStorage.getLeadsForMap(TENANT, 77)).toEqual(expect.arrayContaining([
-      expect.objectContaining({ leadTag: "fresh_fiber_confirmed", freshConfidence: "cross_verified" }),
-    ]));
-    expect(appStorage.getLeadsForMap(TENANT, 77)).toHaveLength(2);
-    expect(monitor.knockList(TENANT, 30)).toHaveLength(2);
-
-    vi.stubGlobal("fetch", vi.fn(async (_url: string, init: any) => {
-      delivered.push(JSON.parse(init.body));
-      return new Response("ok", { status: 200 });
-    }));
-    const alert = await scheduler.flushFreshOpportunityAlerts(TENANT);
-    expect(alert).toEqual({ queued: 1, delivered: 1 });
-    expect(delivered).toHaveLength(1);
-    expect(delivered[0].event).toBe("fresh_fiber");
-    expect(delivered[0].cluster.addresses).toHaveLength(2);
-    expect(delivered[0].cluster.mapUrl).toContain("https://portal.example.test/#/map?freshCluster=");
-
-    // Replay the evidence import and alert flush. Evidence, leads, cluster event,
-    // and delivery all remain exactly-once.
-    expect(monitor.recordCorroboration(TENANT, validRows)).toEqual({ accepted: 0, duplicates: 2 });
-    expect(await scheduler.flushFreshOpportunityAlerts(TENANT)).toEqual({ queued: 0, delivered: 0 });
-    expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE tenant_id=?`).get(TENANT) as any).n).toBe(2);
-    expect((rawDb.prepare(`SELECT COUNT(*) n FROM notification_outbox WHERE tenant_id=? AND kind='fresh_fiber'`).get(TENANT) as any).n).toBe(1);
-    expect(delivered).toHaveLength(1);
+    expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE tenant_id=?`).get(TENANT) as any).n).toBe(3);
+    expect(appStorage.getLeadsForMap(TENANT, 77)).toHaveLength(3);
   });
 
   it("projects and requests an immediate alert when independent evidence predates the flip", async () => {

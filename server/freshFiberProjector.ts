@@ -1,5 +1,5 @@
 import { rawDb } from "./db";
-import { decideFreshFiberConfirmation, type IndependentAvailabilityEvidence } from "@shared/freshFiberConfirmation";
+import { decideFreshFiberConfirmation, type FreshFiberConfirmationDecision, type IndependentAvailabilityEvidence } from "@shared/freshFiberConfirmation";
 import { structuredLog } from "./structuredLog";
 import { pointInPolygon } from "@shared/geo";
 import { meterQualifiedLead } from "./billingStore";
@@ -87,7 +87,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     VALUES (?,?,?,?,?,?,?,?,1,1,0,?,?,'prospect',?,?, 'fresh_fiber_confirmed',100,?,?,?,?,?,?,?,'fresh-fiber-territory',
       CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'))`);
   const stamp = rawDb.prepare(`UPDATE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?),
-    fresh_confirmed_at=?,fresh_confidence='cross_verified',fresh_sources=?,lead_tag='fresh_fiber_confirmed',
+    fresh_confirmed_at=?,fresh_confidence=CASE WHEN fresh_confidence='cross_verified' THEN 'cross_verified' ELSE ? END,fresh_sources=?,lead_tag='fresh_fiber_confirmed',
     lead_score=MAX(COALESCE(lead_score,0),100),assigned_rep_id=COALESCE(assigned_rep_id,?),
     assigned_territory_id=COALESCE(assigned_territory_id,?),
     assignment_source=CASE WHEN assigned_rep_id IS NULL AND ? IS NOT NULL THEN 'fresh-fiber-territory' ELSE assignment_source END,
@@ -101,15 +101,32 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const tx = rawDb.transaction(() => {
     for (const candidate of candidates) {
       const evidence = evidenceStmt.all(tenantId, candidate.id) as IndependentAvailabilityEvidence[];
-      const decision = decideFreshFiberConfirmation({
+      const evidenceDecision = decideFreshFiberConfirmation({
         transitionFresh: !!candidate.proven_flip,
         currentFiberAvailable: candidate.last_fiber_available == null ? null : !!candidate.last_fiber_available,
         customerSegment: candidate.last_customer_segment ?? "unknown",
         firstDetectedAt: candidate.first_seen_fiber_at,
         evidence,
       });
+      // AUTHORITATIVE LEAD RULE: householdSegmentType = NEW FIBER AND billing = N →
+      // publish a Fresh Lead on Kinetic's own new-build signal, without waiting for
+      // a prior flip or independent corroboration. Cross-verification still WINS
+      // when it exists (higher confidence); the corroboration gate governs every
+      // other transition. billing = Y is active service / Coming Soon, never a lead.
+      const seg = String(candidate.household_segment_type ?? "").toUpperCase();
+      const billing = String(candidate.billing_status ?? "").toUpperCase();
+      const fiberAvail = candidate.last_fiber_available == null ? null : !!candidate.last_fiber_available;
+      const authoritativeFresh = seg === "NEW FIBER" && billing === "N" && fiberAvail !== false;
+      const decision: FreshFiberConfirmationDecision = evidenceDecision.confirmed
+        ? evidenceDecision
+        : authoritativeFresh
+          ? { status: "confirmed", confirmed: true, reasons: ["NEW FIBER + billing N (authoritative Fresh Lead rule)."], sources: ["kinetic"], confirmedAt: candidate.first_seen_fiber_at }
+          : evidenceDecision;
       if (decision.status === "provisional") { result.provisional++; continue; }
       if (!decision.confirmed || !decision.confirmedAt) { result.rejected++; continue; }
+      // Honest confidence: cross_verified only with >=2 independent sources; a
+      // single-source authoritative lead is labelled kinetic_new_fiber.
+      const confidence = decision.sources.length >= 2 ? "cross_verified" : "kinetic_new_fiber";
       result.confirmed++;
 
       let found = findBySource.get(tenantId, candidate.id) as any;
@@ -138,8 +155,10 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
           candidate.last_fiber_status ?? "new_fiber", candidate.max_download_mbps,
           candidate.household_segment_type, candidate.billing_status,
           "Confirmed fresh Kinetic fiber with no active-service signal.",
-          `Unavailable-to-fiber flip; independently confirmed by ${decision.sources.slice(1).join(", ")}.`,
-          tenantId, candidate.id, decision.confirmedAt, "cross_verified", JSON.stringify(decision.sources),
+          decision.sources.length >= 2
+            ? `Unavailable-to-fiber flip; independently confirmed by ${decision.sources.slice(1).join(", ")}.`
+            : "NEW FIBER + billing N (authoritative Kinetic new-build signal).",
+          tenantId, candidate.id, decision.confirmedAt, confidence, JSON.stringify(decision.sources),
           assignment?.repId ?? null, assignment?.territoryId ?? null,
           assignment?.repId ?? null,
         );
@@ -149,7 +168,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         result.linkedExisting++;
       }
       stamp.run(
-        candidate.id, decision.confirmedAt, JSON.stringify(decision.sources),
+        candidate.id, decision.confirmedAt, confidence, JSON.stringify(decision.sources),
         assignment?.repId ?? null, assignment?.territoryId ?? null,
         assignment?.repId ?? null, assignment?.repId ?? null,
         leadId, tenantId,
