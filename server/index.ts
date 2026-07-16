@@ -442,6 +442,32 @@ app.use((req, res, next) => {
     resumeSweepJobs();
     resumeStateSweeps(); // crash-recovery only — picks a running statewide sweep back up
   } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
+  // ── Statewide NC+SC scan on every production deployment ────────────────────
+  // Business purpose: surface newly serviceable, non-active Kinetic addresses so
+  // reps reach fresh doors first. Every prod boot (deploy = container restart)
+  // starts the full NC+SC sweep IMMEDIATELY — no nightly wait. startStateSweep
+  // is idempotent per (tenant,state): if a sweep is already running it is
+  // reused, and resumeStateSweeps() above already continued its checkpoint, so
+  // a redeploy mid-sweep resumes rather than restarts. OSM discovery only (no
+  // Mapbox spend); the shared provider scheduler paces Kinetic; user-triggered
+  // Field Map scans outrank sweep traffic in the priority queue.
+  // Kill-switch: STATEWIDE_SCAN_ON_DEPLOY=off.
+  if (process.env.NODE_ENV === "production" && process.env.STATEWIDE_SCAN_ON_DEPLOY !== "off") {
+    try {
+      const { startStateSweep } = await import("./sweepService");
+      const { getDefaultTenantId } = await import("./storage");
+      const tenantId = getDefaultTenantId();
+      if (tenantId == null) throw new Error("no default tenant yet");
+      for (const state of ["NC", "SC"] as const) {
+        const sweep = startStateSweep({ tenantId, state });
+        structuredLog("state_sweep.deploy_start", {
+          state, stateSweepId: sweep.id,
+          citiesTotal: sweep.citiesTotal ?? sweep.cities_total ?? null,
+          citiesCompleted: sweep.citiesCompleted ?? sweep.cities_completed ?? null,
+        });
+      }
+    } catch (e: any) { console.warn("[state-sweep] deploy auto-start skipped:", e?.message); }
+  }
   try {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");
     resumeDiscoveryJobs();

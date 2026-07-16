@@ -273,7 +273,7 @@ function aggregateState(id: string) {
 function comingSoonCount(sweepId: string): number {
   const row = rawDb.prepare(
     `SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id
-     JOIN availability_snapshots a ON a.id=(SELECT MAX(a2.id) FROM availability_snapshots a2 WHERE a2.scan_target_id=s.id)
+     JOIN availability_snapshots a ON a.id=(SELECT a2.id FROM availability_snapshots a2 WHERE a2.scan_target_id=s.id ORDER BY a2.checked_at_epoch DESC, a2.id DESC LIMIT 1)
      WHERE j.sweep_job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND COALESCE(a.billing_status,'')='Y'`,
   ).get(sweepId) as any;
   return Number(row?.n ?? 0);
@@ -356,10 +356,44 @@ function failStateSweep(id: string, error: any) {
   structuredLog("state_sweep.failed", { stateSweepId: id, error: String(error?.message ?? error) });
 }
 function mapStateSweep(r: any, cities: any[]) {
+  // The compact live board: Cities complete · Addresses discovered · Checked ·
+  // New Leads · Still Fresh · Coming Soon · Pending · Retried · Unresolved.
+  // The four derived numbers are read-path aggregates over this sweep's city
+  // jobs, so the write path (checkpointing) stays untouched.
+  const jobIds = rawDb.prepare(
+    `SELECT sweep_job_id AS id FROM state_sweep_cities WHERE state_sweep_id=? AND sweep_job_id IS NOT NULL`,
+  ).all(r.id).map((row: any) => String(row.id));
+  const ph = jobIds.map(() => "?").join(",");
+  let discovered = 0, pending = 0, retried = 0, newLeads = 0, stillFresh = 0;
+  if (jobIds.length) {
+    const agg = rawDb.prepare(
+      `SELECT COALESCE(SUM(harvested),0) AS discovered,
+              COALESCE(SUM(CASE WHEN status='running' THEN MAX(0, queued - checked - failed) ELSE 0 END),0) AS pending
+       FROM sweep_jobs WHERE id IN (${ph})`,
+    ).get(...jobIds) as any;
+    discovered = Number(agg?.discovered ?? 0);
+    pending = Number(agg?.pending ?? 0);
+    // Cumulative retry attempts (transient failures re-queued for another try).
+    retried = Number((rawDb.prepare(
+      `SELECT COUNT(*) AS n FROM fiber_job_failures WHERE run_id IN (
+         SELECT current_run_id FROM sweep_jobs WHERE id IN (${ph}) AND current_run_id IS NOT NULL)`,
+    ).get(...jobIds) as any)?.n ?? 0);
+    // Confirmed fresh leads at addresses this sweep touched, split by whether
+    // the Lead was created during this sweep (New) or already existed (Still Fresh).
+    const leadSplit = rawDb.prepare(
+      `SELECT SUM(CASE WHEN datetime(l.created_at) >= datetime(?) THEN 1 ELSE 0 END) AS newLeads,
+              SUM(CASE WHEN datetime(l.created_at) <  datetime(?) THEN 1 ELSE 0 END) AS stillFresh
+       FROM (SELECT DISTINCT t.target_id FROM sweep_job_targets t WHERE t.sweep_job_id IN (${ph})) st
+       JOIN leads l ON l.source_scan_target_id=st.target_id AND l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'`,
+    ).get(r.started_at, r.started_at, ...jobIds, r.tenant_id) as any;
+    newLeads = Number(leadSplit?.newLeads ?? 0);
+    stillFresh = Number(leadSplit?.stillFresh ?? 0);
+  }
   return {
     id: r.id, tenantId: r.tenant_id, state: r.state, status: r.status, phase: r.phase,
     citiesTotal: r.cities_total, citiesCompleted: r.cities_completed, currentCity: r.current_city,
-    checked: r.checked, freshLeads: r.fresh_found, comingSoon: r.coming_soon, retrying: r.retrying, unresolved: r.unresolved,
+    discovered, checked: r.checked, freshLeads: r.fresh_found, newLeads, stillFresh,
+    comingSoon: r.coming_soon, pending, retried, retrying: r.retrying, unresolved: r.unresolved,
     maxChecksPerCity: r.max_checks_per_city, report: r.report_json ? safeJson(r.report_json, null) : null,
     error: r.error, startedAt: r.started_at, heartbeatAt: r.heartbeat_at, completedAt: r.completed_at,
     cities: cities.map((c) => ({ city: c.city, status: c.status, checked: c.checked, freshLeads: c.fresh, comingSoon: c.coming_soon, unresolved: c.failed })),

@@ -67,12 +67,17 @@ export default function SweepCommand(){
           {activeState?.status==="running"&&isAdmin&&<button onClick={()=>sweepApi.cancelState(activeState.id).then(()=>qc.invalidateQueries({queryKey:["/api/sweeps/state"]}))} className="h-11 rounded-xl border border-border px-4 text-xs font-semibold"><XCircle className="inline h-3.5 w-3.5 mr-1"/>Cancel</button>}
         </div>
         {activeState&&<>
-          <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-6" data-testid="state-sweep-progress">
-            <OpsMetric label="Cities completed" value={`${activeState.citiesCompleted}/${activeState.citiesTotal}`}/>
-            <OpsMetric label="Addresses checked" value={activeState.checked.toLocaleString()}/>
-            <OpsMetric label="Fresh leads" value={activeState.freshLeads.toLocaleString()} hot/>
+          {/* The compact live board: Cities complete · Discovered · Checked ·
+              New Leads · Still Fresh · Coming Soon · Pending · Retried · Unresolved. */}
+          <div className="mt-3 grid grid-cols-3 gap-1.5 sm:grid-cols-5 lg:grid-cols-9" data-testid="state-sweep-progress">
+            <OpsMetric label="Cities complete" value={`${activeState.citiesCompleted}/${activeState.citiesTotal}`}/>
+            <OpsMetric label="Discovered" value={(activeState.discovered??0).toLocaleString()}/>
+            <OpsMetric label="Checked" value={activeState.checked.toLocaleString()}/>
+            <OpsMetric label="New leads" value={(activeState.newLeads??0).toLocaleString()} hot/>
+            <OpsMetric label="Still fresh" value={(activeState.stillFresh??0).toLocaleString()} hot/>
             <OpsMetric label="Coming soon" value={activeState.comingSoon.toLocaleString()}/>
-            <OpsMetric label="Retrying" value={activeState.retrying.toLocaleString()} warn={activeState.retrying>0}/>
+            <OpsMetric label="Pending" value={(activeState.pending??activeState.retrying??0).toLocaleString()} warn={(activeState.pending??0)>0}/>
+            <OpsMetric label="Retried" value={(activeState.retried??0).toLocaleString()}/>
             <OpsMetric label="Unresolved" value={activeState.unresolved.toLocaleString()} warn={activeState.unresolved>0}/>
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">{activeState.status==="running"?`Running city by city — no nightly wait.${activeState.currentCity?` Now: ${activeState.currentCity}.`:""}`:activeState.status==="done"?`Statewide scan complete · ${activeState.citiesTotal} cities · ${activeState.checked.toLocaleString()} checked · ${activeState.freshLeads.toLocaleString()} fresh leads · ${activeState.comingSoon.toLocaleString()} coming soon.`:activeState.status==="cancelled"?"Cancelled by an admin.":activeState.status==="error"?`Error: ${activeState.error??"unknown"}`:activeState.status}</p>
