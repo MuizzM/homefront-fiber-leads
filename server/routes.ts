@@ -1542,9 +1542,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Manual token injection — user pastes JWT from their browser
   // Set Kinetic token — admin only
   app.post("/api/set-token", requireAdmin, (req, res) => {
-    if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true") {
-      return res.status(409).json({ error: "Live availability automation is disabled until provider authorization is documented." });
-    }
     const { token } = req.body;
     if (!token || typeof token !== "string" || token.length < 20) {
       return res.status(400).json({ error: "Invalid token" });
