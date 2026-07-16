@@ -11,7 +11,9 @@ import { flushFreshOpportunityAlerts } from "./stateMonitorScheduler";
 
 const active = new Set<string>();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const MAX_SWEEP_CHECKS = () => Math.max(1, Math.min(100_000, Number(process.env.MAX_CITY_SWEEP_CHECKS ?? 50_000)));
+// No hard ceiling — the per-sweep size is env-configurable (default 50k); the
+// outbound provider rate is still governed by the scheduler + 403/429 backoff.
+const MAX_SWEEP_CHECKS = () => Math.max(1, Number(process.env.MAX_CITY_SWEEP_CHECKS ?? 50_000));
 
 export interface StartSweepInput { tenantId: number; city: string; state: "NC" | "SC"; maxChecks?: number; createdBy?: number | null; }
 export interface StartAddressSweepInput { tenantId: number; query: string; radiusMeters: number; maxChecks?: number; createdBy?: number | null; }

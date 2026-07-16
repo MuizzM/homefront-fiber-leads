@@ -281,12 +281,9 @@ function requireManager(req: Request, res: Response, next: NextFunction) {
 // ALWAYS allowed, so the live portal is unaffected. Module-level so it's usable by
 // every route (scan routes, /api/cron/trigger, /api/check-fiber). Runs after an
 // auth middleware that sets req.user.
-function requireScanningAllowed(req: Request, res: Response, next: NextFunction) {
-  const tid = (req as any).user?.tenantId ?? getDefaultTenantId() ?? 1;
-  const block = scanBlockReason(tid);
-  // NOTE: field is `reasonCode`, not `code` — `code` is stripped by the global
-  // response sanitizer (BLOCKED_FIELDS in index.ts), which would hide it.
-  if (block) return res.status(402).json({ error: block.message, reasonCode: block.code, state: block.state });
+function requireScanningAllowed(_req: Request, _res: Response, next: NextFunction) {
+  // Billing paywall removed by owner directive — scanning is never gated on
+  // billing/credit state for any tenant.
   next();
 }
 
