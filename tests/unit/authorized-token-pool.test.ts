@@ -69,28 +69,28 @@ describe("AuthorizedTokenPool", () => {
     pool.stop();
   });
 
-  it("tracks cooldown, expiry, and disabled lifecycle states without returning stale tokens", async () => {
-    let now = 1_000, fail = true;
+  it("self-heals a transient mint failure with no cooldown, expires stale tokens, is never disabled", async () => {
+    let now = 1_000, attempts = 0;
     const pool = new AuthorizedTokenPool({
-      maxSize: 1, warmMinimum: 1, refreshMarginMs: 1_000, cooldownBaseMs: 250, now: () => now,
+      maxSize: 1, warmMinimum: 1, refreshMarginMs: 1_000, now: () => now,
       mint: async () => {
-        if (fail) { fail = false; throw new Error("temporary mint failure"); }
+        attempts++;
+        if (attempts === 1) throw new Error("temporary mint failure");
         return { token: "ready", expiresAt: now + 5_000 };
       },
     });
-    await expect(pool.lease()).rejects.toThrow();
-    expect(pool.snapshot()).toMatchObject({ total: 1, states: { COOLDOWN: 1 } });
-    await expect(pool.lease()).rejects.toThrow();
-    expect(pool.snapshot().total).toBe(1);
-    now += 500;
+    // A transient mint failure is recovered automatically within the same lease —
+    // no cooldown, no wedge — and the lease still returns a valid token.
     const lease = await pool.lease();
     expect(lease.token).toBe("ready");
+    expect(attempts).toBeGreaterThanOrEqual(2); // it re-minted immediately, no wait
     lease.release();
+    // After expiry the slot is EXPIRED and yields no stale token.
     now += 5_001;
     expect(pool.snapshot().states.EXPIRED).toBe(1);
-    pool.disable();
-    expect(pool.snapshot()).toMatchObject({ disabled: true, states: { DISABLED: 1 } });
-    await expect(pool.lease()).rejects.toThrow("AUTHORIZED_TOKEN_POOL_DISABLED");
+    // There is no disable()/disabled state — the pool can never be halted.
+    expect((pool as unknown as { disable?: unknown }).disable).toBeUndefined();
+    expect(pool.snapshot()).not.toHaveProperty("disabled");
   });
 
   it("distributes unique addresses evenly and enforces per-token batch capacity", async () => {

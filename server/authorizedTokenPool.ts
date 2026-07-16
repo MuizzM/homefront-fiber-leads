@@ -1,4 +1,4 @@
-export type AuthorizedTokenState = "EMPTY" | "READY" | "REFRESHING" | "COOLDOWN" | "EXPIRED" | "DISABLED";
+export type AuthorizedTokenState = "EMPTY" | "READY" | "REFRESHING" | "EXPIRED";
 export type AuthorizedTokenHealth = "HEALTHY" | "DEGRADED" | "UNHEALTHY";
 
 export interface MintedAuthorizedToken {
@@ -11,7 +11,6 @@ interface TokenSlot {
   state: AuthorizedTokenState;
   token: string | null;
   expiresAt: number;
-  cooldownUntil: number;
   leases: number;
   addressKeys: Set<string>;
   health: AuthorizedTokenHealth;
@@ -56,7 +55,6 @@ export interface AuthorizedTokenPoolSnapshot {
   unhealthy: number;
   states: Record<AuthorizedTokenState, number>;
   nextExpiryAt: number | null;
-  disabled: boolean;
   slots: AuthorizedTokenSlotSnapshot[];
 }
 
@@ -64,7 +62,6 @@ export interface AuthorizedTokenPoolOptions {
   maxSize: number;
   warmMinimum: number;
   refreshMarginMs: number;
-  cooldownBaseMs?: number;
   maintenanceIntervalMs?: number;
   maxLeasesPerToken?: number;
   maxConcurrentRefreshes?: number;
@@ -75,14 +72,18 @@ export interface AuthorizedTokenPoolOptions {
 
 /**
  * In-process bearer-token lifecycle manager shared by every scanner producer.
- * Tokens never leave this server-side object. A distributed provider admission
- * gate separately constrains aggregate search traffic across app instances.
+ * Tokens never leave this server-side object. There is NO cooldown, backoff, or
+ * disabled state: a token is only ever replaced when it is expired or invalid.
+ * On any failure a slot returns to EMPTY and is re-minted on demand — the scanner
+ * can never be wedged by token state. Per-slot single-flight refresh + a bounded
+ * refresh permit are the sole stampede guards ("one shared refresh operation").
+ * A distributed provider admission gate separately constrains aggregate search
+ * traffic across app instances.
  */
 export class AuthorizedTokenPool {
   private readonly maxSize: number;
   private readonly warmMinimum: number;
   private readonly refreshMarginMs: number;
-  private readonly cooldownBaseMs: number;
   private readonly maintenanceIntervalMs: number;
   private readonly maxLeasesPerToken: number;
   private readonly maxConcurrentRefreshes: number;
@@ -95,13 +96,11 @@ export class AuthorizedTokenPool {
   private leaseSequence = 0;
   private activeRefreshes = 0;
   private readonly refreshWaiters: Array<() => void> = [];
-  private disabled = false;
 
   constructor(options: AuthorizedTokenPoolOptions) {
     this.maxSize = boundedInt(options.maxSize, 1, 100, 1);
     this.warmMinimum = boundedInt(options.warmMinimum, 1, this.maxSize, 1);
     this.refreshMarginMs = Math.max(1_000, Math.floor(options.refreshMarginMs));
-    this.cooldownBaseMs = Math.max(250, Math.floor(options.cooldownBaseMs ?? 2_000));
     this.maintenanceIntervalMs = Math.max(1_000, Math.floor(options.maintenanceIntervalMs ?? 15_000));
     this.maxLeasesPerToken = boundedInt(options.maxLeasesPerToken ?? 10, 1, 1_000, 10);
     this.maxConcurrentRefreshes = boundedInt(options.maxConcurrentRefreshes ?? 2, 1, 20, 2);
@@ -111,8 +110,8 @@ export class AuthorizedTokenPool {
   }
 
   start(): void {
-    if (this.maintenanceTimer || this.disabled) return;
-    void this.ensureWarm();
+    if (this.maintenanceTimer) return;
+    void this.ensureWarm().catch(() => {});
     this.maintenanceTimer = setInterval(() => void this.maintain(), this.maintenanceIntervalMs);
     if (typeof (this.maintenanceTimer as any).unref === "function") (this.maintenanceTimer as any).unref();
   }
@@ -120,24 +119,15 @@ export class AuthorizedTokenPool {
   stop(): void {
     if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
     this.maintenanceTimer = null;
-    this.disabled = true;
     for (const slot of this.slots) {
-      slot.state = "DISABLED";
-      slot.health = "UNHEALTHY";
+      slot.state = "EMPTY";
       slot.token = null;
       slot.expiresAt = 0;
       slot.addressKeys.clear();
     }
   }
 
-  resume(): void {
-    this.disabled = false;
-    for (const slot of this.slots) if (slot.state === "DISABLED") slot.state = "EMPTY";
-    this.start();
-  }
-
   async lease(addressKey?: string): Promise<AuthorizedTokenLease> {
-    if (this.disabled) throw new Error("AUTHORIZED_TOKEN_POOL_DISABLED");
     await this.ensureWarm();
     await this.refreshDueSlots();
     const normalizedAddressKey = addressKey?.trim() || null;
@@ -189,7 +179,6 @@ export class AuthorizedTokenPool {
   async refreshSlot(slotId: number, force = false): Promise<string> {
     const slot = this.slots[slotId];
     if (!slot) throw new Error("AUTHORIZED_TOKEN_SLOT_NOT_FOUND");
-    if (this.disabled || slot.state === "DISABLED") throw new Error("AUTHORIZED_TOKEN_POOL_DISABLED");
     const now = this.now();
     if (!force && slot.token && slot.state === "READY" && now < slot.expiresAt - this.refreshMarginMs) return slot.token;
     if (slot.refreshInFlight) {
@@ -197,13 +186,12 @@ export class AuthorizedTokenPool {
       if (!slot.token) throw new Error(slot.lastError ?? "AUTHORIZED_TOKEN_REFRESH_FAILED");
       return slot.token;
     }
-    if (!force && slot.state === "COOLDOWN" && slot.cooldownUntil > now) throw new Error("AUTHORIZED_TOKEN_SLOT_COOLDOWN");
     slot.state = "REFRESHING";
     slot.refreshInFlight = (async () => {
       try {
         // Per-slot refreshes are single-flight above; this second, pool-wide
         // permit prevents many independently expiring slots from stampeding the
-        // token endpoint at the same instant.
+        // token endpoint at the same instant. This is the ONE shared refresh op.
         const minted = await this.withRefreshPermit(() => this.mint(slot.id));
         if (!minted.token || minted.expiresAt <= this.now() + this.refreshMarginMs) throw new Error("AUTHORIZED_TOKEN_EXPIRES_TOO_SOON");
         slot.token = minted.token;
@@ -212,16 +200,16 @@ export class AuthorizedTokenPool {
         slot.health = "HEALTHY";
         slot.addressKeys.clear();
         slot.failures = 0;
-        slot.cooldownUntil = 0;
         slot.lastError = null;
       } catch (error) {
+        // No cooldown, no backoff — the slot simply becomes EMPTY and is re-minted
+        // on the next lease/maintenance. Failures are tracked for health only.
         slot.token = null;
         slot.expiresAt = 0;
         slot.failures++;
         slot.health = slot.failures >= 3 ? "UNHEALTHY" : "DEGRADED";
         slot.lastError = String((error as any)?.message ?? error).slice(0, 180);
-        slot.cooldownUntil = this.now() + Math.min(60_000, this.cooldownBaseMs * 2 ** Math.min(5, slot.failures - 1));
-        slot.state = "COOLDOWN";
+        slot.state = "EMPTY";
         throw error;
       } finally {
         slot.refreshInFlight = null;
@@ -238,23 +226,40 @@ export class AuthorizedTokenPool {
     return token;
   }
 
+  /**
+   * Drop a token the caller just saw fail against the provider so it is never
+   * reused. The slot returns to EMPTY and is re-minted on the next lease. Safe to
+   * call with a stale/unknown token (no-op). This is the invalidate half of the
+   * "on error: invalidate token → mint fresh → requeue → continue" contract.
+   */
+  invalidate(token: string | null | undefined): void {
+    if (!token) return;
+    for (const slot of this.slots) {
+      if (slot.token === token) {
+        slot.token = null;
+        slot.expiresAt = 0;
+        slot.state = "EMPTY";
+        slot.addressKeys.clear();
+        slot.health = "DEGRADED";
+      }
+    }
+  }
+
   install(token: string, expiresAt: number): void {
-    this.disabled = false;
-    let slot = this.slots[0] ?? this.createSlot();
+    const slot = this.slots[0] ?? this.createSlot();
     slot.token = token;
     slot.expiresAt = expiresAt;
     slot.state = "READY";
     slot.health = "HEALTHY";
     slot.addressKeys.clear();
     slot.failures = 0;
-    slot.cooldownUntil = 0;
     slot.lastError = null;
     this.start();
   }
 
   expire(slotId: number): void {
     const slot = this.slots[slotId];
-    if (!slot || slot.state === "DISABLED") return;
+    if (!slot) return;
     slot.token = null;
     slot.expiresAt = 0;
     slot.state = "EXPIRED";
@@ -262,20 +267,9 @@ export class AuthorizedTokenPool {
     slot.addressKeys.clear();
   }
 
-  disable(): void {
-    this.disabled = true;
-    for (const slot of this.slots) {
-      slot.state = "DISABLED";
-      slot.health = "UNHEALTHY";
-      slot.token = null;
-      slot.expiresAt = 0;
-      slot.addressKeys.clear();
-    }
-  }
-
   snapshot(): AuthorizedTokenPoolSnapshot {
     this.updateStates();
-    const states: Record<AuthorizedTokenState, number> = { EMPTY: 0, READY: 0, REFRESHING: 0, COOLDOWN: 0, EXPIRED: 0, DISABLED: 0 };
+    const states: Record<AuthorizedTokenState, number> = { EMPTY: 0, READY: 0, REFRESHING: 0, EXPIRED: 0 };
     for (const slot of this.slots) states[slot.state]++;
     const expiries = this.slots.filter(slot => slot.state === "READY" && slot.expiresAt > 0).map(slot => slot.expiresAt);
     const slotSnapshots: AuthorizedTokenSlotSnapshot[] = this.slots.map(slot => ({
@@ -304,7 +298,6 @@ export class AuthorizedTokenPool {
       unhealthy: slotSnapshots.filter(slot => slot.health === "UNHEALTHY").length,
       states,
       nextExpiryAt: expiries.length ? Math.min(...expiries) : null,
-      disabled: this.disabled,
       slots: slotSnapshots,
     };
   }
@@ -316,7 +309,6 @@ export class AuthorizedTokenPool {
   }
 
   private async ensureWarm(): Promise<void> {
-    if (this.disabled) throw new Error("AUTHORIZED_TOKEN_POOL_DISABLED");
     if (this.warmInFlight) return this.warmInFlight;
     this.warmInFlight = (async () => {
       this.updateStates();
@@ -324,7 +316,7 @@ export class AuthorizedTokenPool {
       const created = Array.from({ length: needed }, () => this.createSlot());
       await Promise.allSettled(created.map(slot => this.refreshSlot(slot.id, true)));
       if (!this.pickReady()) {
-        const reusable = this.slots.find(slot => slot.state === "EMPTY" || slot.state === "EXPIRED" || (slot.state === "COOLDOWN" && slot.cooldownUntil <= this.now()));
+        const reusable = this.slots.find(slot => slot.state === "EMPTY" || slot.state === "EXPIRED");
         if (reusable) await this.refreshSlot(reusable.id, true);
       }
     })();
@@ -338,15 +330,14 @@ export class AuthorizedTokenPool {
     const due = this.slots.filter(slot =>
       (slot.state === "READY" && slot.expiresAt <= now + this.refreshMarginMs) ||
       slot.state === "EXPIRED" ||
-      (slot.state === "COOLDOWN" && slot.cooldownUntil <= now));
+      slot.state === "EMPTY");
     await Promise.allSettled(due.map(slot => this.refreshSlot(slot.id, true)));
   }
 
   private updateStates(): void {
     const now = this.now();
     for (const slot of this.slots) {
-      if (this.disabled) slot.state = "DISABLED";
-      else if (slot.state === "READY" && slot.expiresAt <= now) {
+      if (slot.state === "READY" && slot.expiresAt <= now) {
         slot.token = null;
         slot.state = "EXPIRED";
         slot.health = "UNHEALTHY";
@@ -359,7 +350,6 @@ export class AuthorizedTokenPool {
     const now = this.now();
     const candidates = this.slots.filter(slot =>
       slot.state === "READY"
-      && slot.health === "HEALTHY"
       && !!slot.token
       && slot.expiresAt > now + this.refreshMarginMs
       && (!addressKey || slot.addressKeys.has(addressKey) || slot.addressKeys.size < this.maxChecksPerToken));
@@ -380,7 +370,7 @@ export class AuthorizedTokenPool {
     if (this.slots.length >= this.maxSize) throw new Error("AUTHORIZED_TOKEN_POOL_CAPACITY");
     const slot: TokenSlot = {
       id: this.slots.length, state: "EMPTY", token: null, expiresAt: 0,
-      cooldownUntil: 0, leases: 0, lastLeaseSequence: 0,
+      leases: 0, lastLeaseSequence: 0,
       refreshInFlight: null, failures: 0, lastError: null,
       addressKeys: new Set<string>(), health: "UNHEALTHY",
     };

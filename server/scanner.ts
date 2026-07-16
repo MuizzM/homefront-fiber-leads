@@ -179,7 +179,7 @@ export function getTokenStatus(): {
   const pool = authorizedTokenPool.snapshot();
   if (pool.ready === 0) return {
     automationAuthorized, hasToken: false, expiresIn: null, source: "none",
-    keepaliveActive: automationAuthorized && !pool.disabled, refreshFailCount: pool.states.COOLDOWN,
+    keepaliveActive: automationAuthorized, refreshFailCount: pool.unhealthy,
     configuredSessions: pool.maxSize, readySessions: pool.ready, pool,
   };
   const remaining = pool.nextExpiryAt == null ? null : Math.max(0, Math.round((pool.nextExpiryAt - Date.now()) / 1000));
@@ -188,8 +188,8 @@ export function getTokenStatus(): {
     hasToken: true,
     expiresIn: remaining == null ? null : remaining > 0 ? remaining : 0,
     source: "authorized_pool",
-    keepaliveActive: automationAuthorized && !pool.disabled,
-    refreshFailCount: pool.states.COOLDOWN,
+    keepaliveActive: automationAuthorized,
+    refreshFailCount: pool.unhealthy,
     configuredSessions: pool.maxSize,
     readySessions: pool.ready,
     pool,
