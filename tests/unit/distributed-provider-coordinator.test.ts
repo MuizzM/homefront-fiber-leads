@@ -49,7 +49,7 @@ describe("DistributedProviderCoordinator", () => {
     expect(provider).toHaveBeenCalledTimes(1);
   });
 
-  it("honors global priority and halt state", async () => {
+  it("honors global priority and has no halt state", async () => {
     const coordinator = new DistributedProviderCoordinator<{ value: number }>({ maxConcurrency: 1, maxRequestsPerMinute: 100, resultCacheTtlMs: 0, rateWindowMs: 100 });
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -64,10 +64,12 @@ describe("DistributedProviderCoordinator", () => {
     release();
     await Promise.all([active, city, nightly, comingSoon, lasso, manual]);
     expect(order).toEqual(["manual", "lasso", "coming", "nightly", "city"]);
-    coordinator.halt("403 denied");
-    await expect(coordinator.execute("future", "manual", async () => ({ value: 3 }), codec)).rejects.toThrow("403 denied");
-    expect(coordinator.snapshot()).toMatchObject({ halted: true, haltReason: "403 denied" });
-    coordinator.resume();
+    // No halt mechanism — a denial never stops the coordinator; future work runs
+    // and the snapshot carries no halted flag.
+    expect((coordinator as unknown as { halt?: unknown }).halt).toBeUndefined();
+    await expect(coordinator.execute("future", "manual", async () => ({ value: 9 }), codec))
+      .resolves.toMatchObject({ value: 9 });
+    expect(coordinator.snapshot()).not.toHaveProperty("halted");
   });
 
   it("enforces one aggregate rolling-minute budget without losing queued jobs", async () => {

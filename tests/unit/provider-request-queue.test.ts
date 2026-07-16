@@ -132,18 +132,19 @@ describe("ProviderRequestQueue", () => {
     expect(queue.snapshot().maxRequestsPerSecond).toBe(2);
   });
 
-  it("halts queued and future work after an access denial", async () => {
+  it("has no halt: an access denial never wedges queued or future work", async () => {
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
     const queue = new ProviderRequestQueue<string>({ maxConcurrency: 1, cacheTtlMs: 0 });
     const active = queue.request("active", async () => { await gate; return "ok"; });
-    const queued = queue.request("queued", async () => "never");
-    const denied = new Error("provider denied");
-    queue.halt(denied);
-    await expect(queued).rejects.toThrow("provider denied");
-    await expect(queue.request("future", async () => "never")).rejects.toThrow("provider denied");
+    const queued = queue.request("queued", async () => "queued-ran");
+    // The queue has no halt mechanism — nothing can put it into a stuck state.
+    expect((queue as unknown as { halt?: unknown }).halt).toBeUndefined();
     release();
     await expect(active).resolves.toBe("ok");
-    expect(queue.snapshot()).toMatchObject({ halted: true, haltReason: "provider denied", queued: 0 });
+    await expect(queued).resolves.toBe("queued-ran");
+    // Future work still runs; the snapshot carries no halted flag anymore.
+    await expect(queue.request("future", async () => "future-ran")).resolves.toBe("future-ran");
+    expect(queue.snapshot()).not.toHaveProperty("halted");
   });
 });

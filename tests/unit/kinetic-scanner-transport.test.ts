@@ -94,15 +94,17 @@ describe("Kinetic scanner transport hardening", () => {
     expect(searches).toBe(2);
   });
 
-  it("halts queued and future provider work on 403 until an operator resets the session", async () => {
+  it("treats a 403 as a transient block (no halt), keeps scanning, never a no-fiber", async () => {
     proxyFetch.mockResolvedValue(json(403, {}));
-    await expect(scanner.scanAddress("403 Stop Court", "Lexington", "NC", "27292", { source: "manual" }))
-      .rejects.toBeInstanceOf(scanner.ProviderAccessDeniedError);
-    const calls = proxyFetch.mock.calls.length;
-    await expect(scanner.scanAddress("404 Queued Court", "Lexington", "NC", "27292", { source: "city" }))
-      .rejects.toBeInstanceOf(scanner.ProviderAccessDeniedError);
-    expect(proxyFetch).toHaveBeenCalledTimes(calls);
-    expect(scanner.getAddressScanQueueStatus()).toMatchObject({ halted: true, queued: 0 });
-    scanner.setManualToken("operator-reset-token-with-a-safe-fallback-expiry");
+    // A 403 resolves to a blocked/failed result — NOT a throw, NOT a no-service.
+    const first = await scanner.scanAddress("403 Stop Court", "Lexington", "NC", "27292", { source: "manual" });
+    expect(first).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
+    // The scanner is not wedged: the next address actually calls the provider
+    // again (no operator reset required) and also comes back blocked, not no-fiber.
+    const before = proxyFetch.mock.calls.length;
+    const second = await scanner.scanAddress("404 Queued Court", "Lexington", "NC", "27292", { source: "city" });
+    expect(second).toMatchObject({ apiSource: "failed", blocked: true, fiberStatus: "unknown" });
+    expect(proxyFetch.mock.calls.length).toBeGreaterThan(before);
+    expect(scanner.getAddressScanQueueStatus()).not.toHaveProperty("halted");
   });
 });
