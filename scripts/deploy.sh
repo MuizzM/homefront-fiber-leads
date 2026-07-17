@@ -112,7 +112,9 @@ fi
 # 5) Health gate.
 echo "[deploy] health check…"
 ok=0
-attempts_left=20
+# ~180s of grace (60 × 3s). The app starts listening before its heavy background
+# startup, so health is normally ready in seconds; this is a wide margin for a large DB.
+attempts_left=60
 while [ "$attempts_left" -gt 0 ]; do
   if APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" exec -T app node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
     ok=1; break

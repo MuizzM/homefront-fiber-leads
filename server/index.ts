@@ -432,6 +432,12 @@ app.use((req, res, next) => {
     const { KineticAuthorizedSearchAdapter } = await import("./kineticAuthorizedSearchAdapter");
     registerKineticEvidenceSource(new KineticAuthorizedSearchAdapter());
   }
+  // Heavy background startup — resuming runs, statewide sweep, radar, expansion,
+  // discovery. This is DEFERRED until AFTER httpServer.listen() so /api/health responds
+  // in seconds (container becomes healthy immediately) instead of waiting out ~120s of
+  // boot work on a large production DB — which exceeded the deploy health-check window
+  // and forced a rollback. None of these need to run before the server is listening.
+  const startBackgroundServices = async () => {
   try {
     // Scan Inspector: begin persisting + relaying per-address pipeline stage events.
     const { startScanEvents } = await import("./scanEvents");
@@ -491,6 +497,7 @@ app.use((req, res, next) => {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");
     resumeDiscoveryJobs();
   } catch (e: any) { console.warn("[address-discovery] resume skipped:", e?.message); }
+  }; // end startBackgroundServices
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────
   setInterval(() => {
@@ -556,6 +563,9 @@ app.use((req, res, next) => {
     },
     () => {
       log(`serving on port ${port}`);
+      // Server is listening → /api/health now responds. Kick off the heavy background
+      // services (resume/sweep/radar/expansion/discovery) without blocking readiness.
+      void startBackgroundServices();
     },
   );
 
