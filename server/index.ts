@@ -480,6 +480,12 @@ app.use((req, res, next) => {
       const { startNewBuildRadar } = await import("./newBuildRadar");
       startNewBuildRadar();
     } catch (e: any) { console.warn("[newbuild-radar] start skipped:", e?.message); }
+    // Lead-triggered CRITICAL cluster expansion — fans out from every confirmed
+    // green FRESH_LEAD. Kill-switch: EXPANSION_ENABLED=off.
+    try {
+      const { startExpansionEngine } = await import("./clusterExpansion");
+      startExpansionEngine();
+    } catch (e: any) { console.warn("[expansion] start skipped:", e?.message); }
   }
   try {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");

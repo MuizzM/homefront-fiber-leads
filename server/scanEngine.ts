@@ -18,6 +18,7 @@ import {
 } from "./scanner";
 import { emitStage } from "./scanStageBus";
 import { isCriticalPriority } from "./distributedProviderCoordinator";
+import { triggerExpansionForTargets } from "./clusterExpansion";
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import { rawDb } from "./db";
@@ -108,8 +109,9 @@ function providerPriorityForRun(kind: string): ProviderRequestPriority {
   const value = String(kind ?? "").toLowerCase();
   if (value.includes("manual") || value === "target_ids") return "manual";
   if (value.includes("lasso") || value.includes("bbox") || value.includes("area")) return "lasso";
-  // Newly-detected construction jumps ahead of the bulk statewide sweep.
-  if (value.includes("new_build")) return "new_build";
+  // Newly-detected construction AND lead-triggered cluster expansion jump ahead of
+  // the bulk statewide sweep (both are CRITICAL revenue work).
+  if (value.includes("new_build") || value.includes("expansion")) return "new_build";
   if (value.includes("city")) return "city";
   if (value.includes("recheck") || value.includes("rescan")) return "recheck";
   if (value.includes("nightly") || value.includes("scheduled")) return "nightly";
@@ -266,6 +268,16 @@ export async function runScanWorker(
               error: String(error?.message ?? error),
             });
           });
+        }
+        // Every address that just became a green FRESH_LEAD immediately seeds a
+        // deduplicated CRITICAL cluster-expansion scan outward from it. The lead
+        // is already published + pinned above; expansion runs independently and
+        // never blocks lead creation.
+        try {
+          const started = triggerExpansionForTargets(tenantId, batch.map((t) => t.targetId));
+          if (started) structuredLog("expansion.seeded", { tenantId, expansions: started }, "info");
+        } catch (e: any) {
+          structuredLog("expansion.seed_failed", { tenantId, error: String(e?.message ?? e).slice(0, 120) }, "warn");
         }
       }
     }

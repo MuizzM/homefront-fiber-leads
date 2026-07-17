@@ -1703,6 +1703,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(getSourceCoverage());
   });
 
+  // ── Lead-triggered cluster expansion ────────────────────────────────────────
+  // Live view of expansions fanning out from confirmed green FRESH_LEADs, with the
+  // origin→cluster chain. Staff-visible.
+  app.get("/api/expansions/live", requireManager, async (_req, res) => {
+    const { getExpansions } = await import("./clusterExpansion");
+    res.json(getExpansions({ limit: 40 }));
+  });
+  // Admin: manually seed an expansion from an existing green lead's scan_target id
+  // (ops + verification). Automatic seeding happens on every confirmed fresh lead.
+  app.post("/api/expansions/trigger", requireAdmin, async (req: any, res) => {
+    try {
+      const { triggerExpansionFromTarget } = await import("./clusterExpansion");
+      const targetId = Number(req.body?.targetId);
+      if (!Number.isInteger(targetId)) return res.status(400).json({ error: "targetId required" });
+      res.json(triggerExpansionFromTarget(targetId));
+    } catch (e: any) { res.status(500).json({ error: String(e?.message ?? e) }); }
+  });
+
   // Admin: run one radar tick right now (advances the round-robin scope), OR force
   // a bounded poll of a specific NC county for its most-recent real addresses.
   app.post("/api/newbuilds/tick", requireAdmin, async (req: any, res) => {

@@ -220,7 +220,16 @@ interface Coverage {
   sources: Array<{ state: string; county: string | null; source: string; scope: string; status: string; recordsSeen: number; newFound: number; lastPollAt: number | null; note: string | null }>;
   summary: { ncCountiesTracked: number; ncCountiesSeeded: number; scTilesTracked: number; gaps: number; staleOverMin: number };
 }
-const SOURCE_LABEL: Record<string, string> = { nc_onemap: "NC OneMap", osm_overpass: "OSM", new_build: "New Build" };
+interface ExpansionFeed {
+  expansions: Array<{
+    id: string; origin: { address: string; city: string; state: string };
+    status: string; ring: number; radiusM: number; emptyStreak: number;
+    addressesChecked: number; freshFound: number;
+    newLeads: Array<{ address: string; distanceM: number; leadId: number | null }>;
+  }>;
+  summary: { active: number; exhausted: number; freshFound: number; addressesChecked: number };
+}
+const SOURCE_LABEL: Record<string, string> = { nc_onemap: "NC OneMap", osm_overpass: "OSM", new_build: "New Build", lead_expansion: "Expansion" };
 function relMs(ms: number): string {
   const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
   if (s < 60) return `${s}s ago`;
@@ -241,6 +250,11 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
     queryKey: ["/api/newbuilds/coverage"],
     queryFn: () => apiRequest("GET", "/api/newbuilds/coverage").then((r) => r.json()),
     refetchInterval: 30000, enabled: isAdmin,
+  });
+  const exp = useQuery<ExpansionFeed>({
+    queryKey: ["/api/expansions/live"],
+    queryFn: () => apiRequest("GET", "/api/expansions/live").then((r) => r.json()),
+    refetchInterval: 8000, enabled: isAdmin,
   });
 
   const rows = (data?.rows ?? []).filter((r) =>
@@ -282,6 +296,28 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
           ))}
         </div>
       </div>
+
+      {/* Admin: live lead-triggered cluster expansions */}
+      {isAdmin && (exp.data?.expansions?.length ?? 0) > 0 && (
+        <div className="rounded-2xl border border-emerald-500/25 bg-card">
+          <div className="flex items-center justify-between border-b border-border px-4 py-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">Lead cluster expansions</div>
+            <div className="text-[11px] text-muted-foreground">{exp.data!.summary.active} active · {exp.data!.summary.freshFound} new leads · {exp.data!.summary.addressesChecked} checked</div>
+          </div>
+          {exp.data!.expansions.slice(0, 6).map((e) => (
+            <div key={e.id} className="border-b border-border/60 px-4 py-2.5 last:border-0" data-testid={`expansion-${e.id}`}>
+              <div className="flex items-center gap-2">
+                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                <span className="truncate text-[13px] font-medium text-foreground">{String(e.origin.address).split(",")[0]}, {e.origin.city}</span>
+                <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${e.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{e.status}</span>
+              </div>
+              <div className="pl-4 text-[11px] text-muted-foreground">
+                radius {(e.radiusM / 1000).toFixed(1)}km · ring {e.ring} · {e.addressesChecked} checked · <span className="font-medium text-emerald-400">{e.newLeads.length} new green leads</span>{e.emptyStreak > 0 ? ` · ${e.emptyStreak} empty ring${e.emptyStreak > 1 ? "s" : ""}` : ""}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Admin: coverage gaps banner */}
       {isAdmin && gaps.length > 0 && (
