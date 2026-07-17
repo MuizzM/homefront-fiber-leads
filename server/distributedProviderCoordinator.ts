@@ -13,12 +13,27 @@ const priorityValue: Record<ProviderRequestPriority, number> = {
   city: 200,
 };
 
+// CRITICAL tier = immediate checks that must never be starved by bulk scanning:
+// new builds, Field Map / lasso, manual, and admin-triggered checks. Everything
+// below (coming_soon/recheck/market/nightly/city — statewide + county sweeps) is
+// NORMAL. Priority ordering alone isn't enough under sustained NORMAL pressure:
+// a CRITICAL head still waits for a NORMAL in-flight slot to free. So NORMAL is
+// held below the concurrency + per-window rate ceilings, leaving reserved capacity
+// only CRITICAL can occupy — bulk work can never consume the last slots.
+export const CRITICAL_PRIORITY_CUTOFF = priorityValue.new_build; // 380
+export function isCriticalPriority(source: ProviderRequestPriority): boolean {
+  return priorityValue[source] >= CRITICAL_PRIORITY_CUTOFF;
+}
+
 export interface DistributedProviderSnapshot {
   active: number;
   queued: number;
+  activeCritical: number;
+  queuedCritical: number;
   startsLastMinute: number;
   maxConcurrency: number;
   maxRequestsPerMinute: number;
+  criticalReservedConcurrency: number;
   instanceId: string;
 }
 
@@ -30,6 +45,10 @@ interface Options {
   pollMs?: number;
   /** Test-only clock window override. Production always uses the default minute. */
   rateWindowMs?: number;
+  /** Concurrency slots held in reserve for CRITICAL work (never usable by NORMAL). */
+  criticalReservedConcurrency?: number;
+  /** Per-window admission starts held in reserve for CRITICAL work. */
+  criticalReservedRate?: number;
   now?: () => number;
 }
 
@@ -49,6 +68,8 @@ export class DistributedProviderCoordinator<T> {
   private readonly rateWindowMs: number;
   private readonly minimumStartSpacingMs: number;
   private readonly rollingAdmissionLimit: number;
+  private readonly criticalReservedConcurrency: number;
+  private readonly criticalReservedRate: number;
   private readonly now: () => number;
   private readonly instanceId = `${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -73,6 +94,11 @@ export class DistributedProviderCoordinator<T> {
     this.rollingAdmissionLimit = this.maxRequestsPerMinute === 1
       ? 1
       : Math.max(1, this.maxRequestsPerMinute - boundaryGuard);
+    // Reserve capacity for CRITICAL. Opt-in (default 0 = no reservation), set
+    // explicitly in production. Bounded so NORMAL always keeps at least one usable
+    // slot (a reservation that starves NORMAL entirely would deadlock it).
+    this.criticalReservedConcurrency = bounded(options.criticalReservedConcurrency ?? 0, 0, Math.max(0, this.maxConcurrency - 1), 0);
+    this.criticalReservedRate = bounded(options.criticalReservedRate ?? 0, 0, Math.max(0, this.rollingAdmissionLimit - 1), 0);
     this.now = options.now ?? Date.now;
     ensureSchema();
   }
@@ -141,12 +167,17 @@ export class DistributedProviderCoordinator<T> {
     const now = this.now();
     const counts = rawDb.prepare(`SELECT
       SUM(CASE WHEN state='active' THEN 1 ELSE 0 END) active,
-      SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END) queued
-      FROM provider_admission_queue WHERE state IN ('active','queued')`).get() as any;
+      SUM(CASE WHEN state='queued' THEN 1 ELSE 0 END) queued,
+      SUM(CASE WHEN state='active' AND priority>=? THEN 1 ELSE 0 END) activeCritical,
+      SUM(CASE WHEN state='queued' AND priority>=? THEN 1 ELSE 0 END) queuedCritical
+      FROM provider_admission_queue WHERE state IN ('active','queued')`).get(CRITICAL_PRIORITY_CUTOFF, CRITICAL_PRIORITY_CUTOFF) as any;
     const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any)?.count ?? 0);
     return {
-      active: Number(counts?.active ?? 0), queued: Number(counts?.queued ?? 0), startsLastMinute: starts,
+      active: Number(counts?.active ?? 0), queued: Number(counts?.queued ?? 0),
+      activeCritical: Number(counts?.activeCritical ?? 0), queuedCritical: Number(counts?.queuedCritical ?? 0),
+      startsLastMinute: starts,
       maxConcurrency: this.maxConcurrency, maxRequestsPerMinute: this.maxRequestsPerMinute,
+      criticalReservedConcurrency: this.criticalReservedConcurrency,
       instanceId: this.instanceId,
     };
   }
@@ -159,14 +190,23 @@ export class DistributedProviderCoordinator<T> {
         const control = this.control();
         const nextStartAt = Number(control.next_start_at ?? 0);
         if (nextStartAt > now) return { admitted: false, waitMs: Math.max(this.pollMs, nextStartAt - now) };
-        const head = rawDb.prepare(`SELECT id FROM provider_admission_queue WHERE state='queued'
+        // Highest-priority queued item is the admission head. Priority DESC already
+        // orders CRITICAL ahead of NORMAL; the reservation below additionally keeps
+        // NORMAL out of the last slots so a CRITICAL item never has to wait for a
+        // NORMAL in-flight request to finish before it can start.
+        const head = rawDb.prepare(`SELECT id,priority FROM provider_admission_queue WHERE state='queued'
           ORDER BY priority DESC,enqueued_at ASC,id ASC LIMIT 1`).get() as any;
         if (!head || head.id !== workId) return { admitted: false, waitMs: this.pollMs };
+        const headIsCritical = Number(head.priority) >= CRITICAL_PRIORITY_CUTOFF;
         const active = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_admission_queue WHERE state='active'`).get() as any).count);
         const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any).count);
-        if (active >= this.maxConcurrency || starts >= this.rollingAdmissionLimit) {
+        // CRITICAL may use every slot; NORMAL is held below the reserved band so the
+        // reserved concurrency + per-window rate stays available for CRITICAL only.
+        const concurrencyCeiling = headIsCritical ? this.maxConcurrency : this.maxConcurrency - this.criticalReservedConcurrency;
+        const rateCeiling = headIsCritical ? this.rollingAdmissionLimit : this.rollingAdmissionLimit - this.criticalReservedRate;
+        if (active >= concurrencyCeiling || starts >= rateCeiling) {
           const oldest = rawDb.prepare(`SELECT MIN(started_at) startedAt FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any;
-          return { admitted: false, waitMs: starts >= this.rollingAdmissionLimit && oldest?.startedAt
+          return { admitted: false, waitMs: starts >= rateCeiling && oldest?.startedAt
             ? Math.max(this.pollMs, Number(oldest.startedAt) + this.rateWindowMs - now) : this.pollMs };
         }
         rawDb.prepare(`UPDATE provider_admission_queue SET state='active',started_at=?,lease_expires_at=?,updated_at=? WHERE id=? AND state='queued'`)

@@ -72,6 +72,56 @@ describe("DistributedProviderCoordinator", () => {
     expect(coordinator.snapshot()).not.toHaveProperty("halted");
   });
 
+  it("reserves concurrency for CRITICAL so a bulk NORMAL sweep can never starve it", async () => {
+    // maxConcurrency 5, reserve 2 for CRITICAL → NORMAL may hold at most 3 active.
+    const c = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 5, maxRequestsPerMinute: 1000, resultCacheTtlMs: 0, rateWindowMs: 100, pollMs: 5,
+      criticalReservedConcurrency: 2, criticalReservedRate: 0,
+    });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const order: string[] = [];
+    // 3 NORMAL (city) checks fill the NORMAL ceiling (5 - 2 reserved) and hold it.
+    const holders = Array.from({ length: 3 }, (_, i) =>
+      c.execute(`hold-${i}`, "city", async () => { await gate; order.push(`hold-${i}`); return { value: i }; }, codec));
+    await new Promise(resolve => setTimeout(resolve, 50)); // let all 3 become active
+    // 3 MORE NORMAL checks queue but CANNOT start — NORMAL is capped at 3 active.
+    const extraNormal = Array.from({ length: 3 }, (_, i) =>
+      c.execute(`extra-${i}`, "city", async () => { order.push(`extra-${i}`); return { value: 10 + i }; }, codec));
+    // A CRITICAL new-build check submitted LAST must STILL start immediately — it
+    // takes a reserved slot the NORMAL sweep can never occupy. Resolves without
+    // releasing the gate that the NORMAL holders are stuck on.
+    const critical = c.execute("crit", "new_build", async () => { order.push("CRITICAL"); return { value: 99 }; }, codec);
+    await critical;
+    expect(order).toContain("CRITICAL");
+    // The bulk NORMAL work is still blocked (gate held) — CRITICAL jumped ahead.
+    expect(order.filter(o => o.startsWith("extra")).length).toBe(0);
+    // Snapshot exposes the reservation + the live critical/normal split.
+    const snap = c.snapshot();
+    expect(snap.criticalReservedConcurrency).toBe(2);
+    release();
+    await Promise.all([...holders, ...extraNormal]);
+    expect(order.indexOf("CRITICAL")).toBeLessThan(order.indexOf("extra-0")); // classified before bulk
+  });
+
+  it("reserves per-window rate headroom for CRITICAL under a full rolling budget", async () => {
+    // 3 starts/window, reserve 1 for CRITICAL → NORMAL may only consume 2/window.
+    const c = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 10, maxRequestsPerMinute: 3, resultCacheTtlMs: 0, rateWindowMs: 300, pollMs: 8,
+      criticalReservedConcurrency: 0, criticalReservedRate: 1,
+    });
+    const order: string[] = [];
+    // Fire 3 NORMAL first; only 2 may start this window (1 rate slot reserved).
+    const normals = Array.from({ length: 3 }, (_, i) =>
+      c.execute(`n-${i}`, "city", async () => { order.push(`n-${i}`); return { value: i }; }, codec));
+    const critical = c.execute("c", "new_build", async () => { order.push("CRITICAL"); return { value: 9 }; }, codec);
+    await critical; // CRITICAL claims the reserved rate slot in the first window
+    expect(order).toContain("CRITICAL");
+    // At most 2 NORMAL got in before CRITICAL used the reserved slot.
+    expect(order.filter(o => o.startsWith("n-")).length).toBeLessThanOrEqual(2);
+    await Promise.all([...normals, critical]);
+  });
+
   it("enforces one aggregate rolling-minute budget without losing queued jobs", async () => {
     const rateWindowMs = 200;
     const a = new DistributedProviderCoordinator<{ value: number }>({

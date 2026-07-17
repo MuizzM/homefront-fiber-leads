@@ -17,6 +17,7 @@ import {
   type ScanResult,
 } from "./scanner";
 import { emitStage } from "./scanStageBus";
+import { isCriticalPriority } from "./distributedProviderCoordinator";
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import { rawDb } from "./db";
@@ -611,6 +612,27 @@ export function resumeInterruptedRuns(): void {
     }
   } catch (err: any) {
     console.warn("[scan-engine] resume failed:", err?.message);
+  }
+}
+
+// On boot: IMMEDIATELY (re)dispatch incomplete CRITICAL-kind runs (new-build /
+// manual / field / lasso / admin) — they must not wait for the 30s staleness
+// window or the 60s reaper, so an immediate check never sits behind the bulk
+// statewide sweep after a deploy. Idempotent: isRunActive + runScanWorker's own
+// guard prevent double-dispatch; resetInflightTargets requeues only crash-orphaned
+// claims (no duplication, no data loss).
+export function resumeCriticalRuns(): void {
+  try {
+    for (const run of getResumableRuns(0)) {
+      if (!isCriticalPriority(providerPriorityForRun(run.kind))) continue;
+      if (isRunActive(run.id)) continue;
+      resetInflightTargets(run.id);
+      if (countQueued(run.id) === 0) { setRunStatus(run.id, "done"); continue; }
+      console.log(`[scan-engine] fast-resuming CRITICAL run ${run.id} kind=${run.kind} (${countQueued(run.id)} pending)`);
+      void runScanWorker(run.id, run.tenantId);
+    }
+  } catch (err: any) {
+    console.warn("[scan-engine] critical resume failed:", err?.message);
   }
 }
 

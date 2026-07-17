@@ -31,7 +31,11 @@ import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from
 // ─────────────────────────────────────────────────────────────────────────────
 
 const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 100);
-const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 2);
+// Keep enough authorized Decodo sessions warm to cover the full concurrent
+// workload (≈maxConcurrency 50 ÷ maxLeasesPerToken 10 = 5, plus headroom so a
+// burst never waits on a mint). Unlimited Decodo budget → mint generously; token
+// scarcity must never stall a priority check.
+const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 8);
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 
@@ -448,6 +452,10 @@ const distributedProviderCoordinator = new DistributedProviderCoordinator<ScanRe
   maxConcurrency: Number.isFinite(configuredGlobalConcurrency) ? configuredGlobalConcurrency : 50,
   maxRequestsPerMinute: Number.isFinite(configuredProviderRpm) ? configuredProviderRpm : 100,
   resultCacheTtlMs: Number.isFinite(configuredCacheTtlMs) ? configuredCacheTtlMs : 5 * 60_000,
+  // Slots + per-window rate held for CRITICAL (new-build / field / manual / admin)
+  // so the bulk statewide sweep can never starve immediate checks.
+  criticalReservedConcurrency: Number(process.env.PROVIDER_CRITICAL_RESERVED ?? 3),
+  criticalReservedRate: Number(process.env.PROVIDER_CRITICAL_RESERVED_RATE ?? 2),
 });
 
 export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {

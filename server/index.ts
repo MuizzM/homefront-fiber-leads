@@ -438,7 +438,8 @@ app.use((req, res, next) => {
     startScanEvents();
   } catch (e: any) { console.warn("[scan-events] start skipped:", e?.message); }
   try {
-    const { resumeInterruptedRuns, startScanReaper } = await import("./scanEngine");
+    const { resumeInterruptedRuns, resumeCriticalRuns, startScanReaper } = await import("./scanEngine");
+    resumeCriticalRuns();    // CRITICAL runs (new-build/manual/field) resume FIRST + immediately
     resumeInterruptedRuns();
     startScanReaper(); // periodic reaper: pick up runs whose worker died sans restart
   } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
