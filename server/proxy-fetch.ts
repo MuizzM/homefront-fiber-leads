@@ -16,6 +16,11 @@ let _sharedDispatcher: any = null;
 let _sessionSeq = 1;
 // Single-flight guard so concurrent auth failures trigger exactly one rotation.
 let _rotateInFlight: Promise<void> | null = null;
+// Proactive rotation cadence: retire the Decodo egress IP set every N proxied
+// requests so it never accumulates enough traffic to hit the per-IP rolling-window
+// throttle. 0 disables. Tunable without redeploy via PROXY_ROTATE_EVERY.
+const PROACTIVE_ROTATE_EVERY = boundedInt(process.env.PROXY_ROTATE_EVERY, 40, 0, 100_000);
+let _reqSinceRotate = 0;
 
 // Sized to support the globally selected 40–50 search window. The distributed
 // coordinator, not this socket pool, remains the authoritative system ceiling.
@@ -104,6 +109,16 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
     // closed rather than ever sending an unproxied direct request.
     if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing an unconfigured direct request");
     if (!_sharedDispatcher) _sharedDispatcher = buildAgent(proxyUrl);
+    // Proactive session rotation: refresh the Decodo egress every N requests so no
+    // single residential IP is driven past Kinetic's rolling-window rate limit
+    // before it is retired. Verified in prod: a fresh dispatcher searches 200 while
+    // a long-lived one 403s. Single-flight rotateProxySession coalesces concurrent
+    // triggers into one rebuild, and this fires only when the counter trips — so it
+    // is cheap. Reactive rotation on 403 (in the scanner) still catches the rest.
+    if (PROACTIVE_ROTATE_EVERY > 0 && ++_reqSinceRotate >= PROACTIVE_ROTATE_EVERY) {
+      _reqSinceRotate = 0;
+      void rotateProxySession("proactive");
+    }
     try {
       return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
     } catch (err: any) {
