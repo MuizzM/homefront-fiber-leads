@@ -549,14 +549,14 @@ app.use((req, res, next) => {
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
           const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('NC','SC')
             AND last_fiber_status='new_fiber' AND last_billing_status='N' AND converted_to_lead_id IS NULL`).all(tid).map((r: any) => Number(r.id));
-          let created = 0, linked = 0;
+          let created = 0, linkedProj = 0;
           // Chunk so each projection transaction is small and the event loop breathes.
           for (let i = 0; i < ids.length; i += 300) {
             const r = projectConfirmedFreshLeads(tid, ids.slice(i, i + 300));
-            created += r.created; linked += r.linkedExisting;
+            created += r.created; linkedProj += r.linkedExisting;
             await sleep(40);
           }
-          structuredLog("fresh_lead.boot_backfill", { tenantId: tid, candidates: ids.length, created, linkedExisting: linked });
+          structuredLog("fresh_lead.boot_backfill", { tenantId: tid, candidates: ids.length, created, linkedExisting: linkedProj });
         }
       } catch (e: any) { console.warn("[fresh-lead-backfill] skipped:", e?.message); }
     })();

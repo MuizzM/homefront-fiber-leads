@@ -2870,10 +2870,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // FLIPPED from unavailable to live within the window (default 24h), newest
   // first, each tagged with whether it's already been turned into a lead.
   // This is the core "New Fiber Today / First Seen Live" manager surface.
-  // GET /api/coming-soon/watchlist — the Coming Soon Program surface: the durable
-  // watchlist with coordinates, first/last seen, expected completion, opportunity
-  // score and next scheduled check, plus watching/promoted/due-now counters.
-  app.get("/api/coming-soon/watchlist", requireManager, (req: any, res) => {
+  // GET /api/coming-soon/program — the Coming Soon PROGRAM surface (opportunity-
+  // weighted worker + counters). The canonical watchlist board lives at
+  // /api/coming-soon/watchlist (comingSoonWatchlist.ts).
+  app.get("/api/coming-soon/program", requireManager, (req: any, res) => {
     try {
       const tenantId = req.user?.tenantId ?? getDefaultTenantId();
       res.json(getComingSoonWatchlist(tenantId));

@@ -220,7 +220,7 @@ export function getComingSoonWatchlist(tenantId: number): {
 // the watchlist can never starve: the coordinator's NEW_BUILD admission class
 // (coming_soon priority) outranks statewide/expansion bulk.
 let timer: ReturnType<typeof setInterval> | null = null;
-export function startComingSoonProgram(getTenantId: () => number | null, intervalMs = 15 * 60_000): void {
+export function startComingSoonProgram(getTenantId: () => number | null, intervalMs = 10 * 60_000): void {
   if (timer) return;
   const tick = () => {
     const tenantId = getTenantId();

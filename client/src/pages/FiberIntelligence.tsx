@@ -229,8 +229,8 @@ interface ComingSoonWatchlist {
 // billing goes inactive. ───────────────────────────────────────────────────────
 function ComingSoon() {
   const { data, isLoading } = useQuery<ComingSoonWatchlist>({
-    queryKey: ["/api/coming-soon/watchlist"],
-    queryFn: () => apiRequest("GET", "/api/coming-soon/watchlist").then((r) => r.json()),
+    queryKey: ["/api/coming-soon/program"],
+    queryFn: () => apiRequest("GET", "/api/coming-soon/program").then((r) => r.json()),
     refetchInterval: 15000,
     staleTime: 10000,
   });

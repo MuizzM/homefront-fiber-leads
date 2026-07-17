@@ -51,9 +51,11 @@ import {
 } from "./store";
 
 const workerId = `${os.hostname()}:${process.pid}:${crypto.randomBytes(3).toString("hex")}`;
+// Unlimited budget → harvest addresses wide open: 6 tile workers by default
+// (bound raised to 16) so city discovery finishes in minutes, not hours.
 const maxWorkers = Math.max(
   1,
-  Math.min(8, Number(process.env.DISCOVERY_WORKER_CONCURRENCY) || 2),
+  Math.min(16, Number(process.env.DISCOVERY_WORKER_CONCURRENCY) || 6),
 );
 let running = 0;
 let scheduler: ReturnType<typeof setInterval> | null = null;
@@ -710,7 +712,7 @@ export function startDiscoveryWorkers(): void {
   if (!scheduler) {
     scheduler = setInterval(
       schedule,
-      Math.max(250, Number(process.env.DISCOVERY_SCHEDULER_MS) || 1_000),
+      Math.max(250, Number(process.env.DISCOVERY_SCHEDULER_MS) || 400),
     );
     if (typeof (scheduler as any).unref === "function")
       (scheduler as any).unref();
@@ -718,7 +720,7 @@ export function startDiscoveryWorkers(): void {
   if (!reconciler) {
     reconciler = setInterval(
       reconcile,
-      Math.max(1_000, Number(process.env.DISCOVERY_RECONCILE_MS) || 2_000),
+      Math.max(1_000, Number(process.env.DISCOVERY_RECONCILE_MS) || 1_000),
     );
     if (typeof (reconciler as any).unref === "function")
       (reconciler as any).unref();
