@@ -497,6 +497,34 @@ app.use((req, res, next) => {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");
     resumeDiscoveryJobs();
   } catch (e: any) { console.warn("[address-discovery] resume skipped:", e?.message); }
+  // FRESH-LEAD BACKFILL INVARIANT: every already-confirmed green address (NEW FIBER +
+  // billing N, per its latest conclusive snapshot) must be an assignable Field-Map lead.
+  // Re-project ALL tenants once on boot from EXISTING data (no re-scan, no Decodo cost,
+  // fully idempotent) so no confirmed fresh fiber sits un-actioned. Kill-switch:
+  // FRESH_LEAD_BOOT_BACKFILL=off.
+  if (process.env.FRESH_LEAD_BOOT_BACKFILL !== "off") {
+    void (async () => {
+      try {
+        const { projectConfirmedFreshLeads } = await import("./freshFiberProjector");
+        const { rawDb } = await import("./db");
+        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+        const tenantIds = rawDb.prepare("SELECT id FROM tenants").all().map((r: any) => Number(r.id));
+        for (const tid of tenantIds) {
+          // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
+          const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('NC','SC')
+            AND last_fiber_status='new_fiber' AND last_billing_status='N' AND converted_to_lead_id IS NULL`).all(tid).map((r: any) => Number(r.id));
+          let created = 0, linked = 0;
+          // Chunk so each projection transaction is small and the event loop breathes.
+          for (let i = 0; i < ids.length; i += 300) {
+            const r = projectConfirmedFreshLeads(tid, ids.slice(i, i + 300));
+            created += r.created; linked += r.linkedExisting;
+            await sleep(40);
+          }
+          structuredLog("fresh_lead.boot_backfill", { tenantId: tid, candidates: ids.length, created, linkedExisting: linked });
+        }
+      } catch (e: any) { console.warn("[fresh-lead-backfill] skipped:", e?.message); }
+    })();
+  }
   }; // end startBackgroundServices
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────

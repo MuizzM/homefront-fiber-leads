@@ -23,6 +23,14 @@ services:
       NODE_ENV: production
       PORT: "5000"
       DATA_DIR: /data          # data.db + uploads/ both live here (one volume)
+      # ── Opportunity-weighted cadence engine (state monitor) ──────────────────
+      # Enable the built-but-dormant per-market cadence loop so verified NC/SC
+      # Kinetic markets recheck on opportunity (Coming-Soon/new-build/expanding =
+      # 24h, served = 168h, low = 336h) rather than only via the statewide sweep.
+      # Unlimited Decodo budget → live spend on; global dedup + the coordinator
+      # address-lock prevent any double-check against the sweep.
+      ENABLE_STATE_MONITORING: "true"
+      STATE_MONITOR_LIVE: "true"
       # ── Outbound mail sender (2026-07-16 OTP outage) ─────────────────────────
       # The Resend account has exactly ONE verified sending domain:
       # portal.homefrontsolutionsllc.com. The host .env pointed MAIL_FROM at the
