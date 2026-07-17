@@ -543,6 +543,12 @@ export function runMigrations() {
        PRIMARY KEY (run_id, target_id)
      )`,
     `CREATE INDEX IF NOT EXISTS idx_srt_run_state ON scan_run_targets(run_id, state, seq)`,
+    // target-first index: powers cross-run dedup (is this address already pending in
+    // another run?) and the claim-time recency-skip, which are keyed by target_id.
+    `CREATE INDEX IF NOT EXISTS idx_srt_target_state ON scan_run_targets(target_id, state)`,
+    // Partial index over ONLY pending rows so the global-backlog count (backpressure
+    // gate) seeks a tiny index instead of full-scanning the never-pruned table.
+    `CREATE INDEX IF NOT EXISTS idx_srt_pending ON scan_run_targets(state) WHERE state IN ('queued','inflight')`,
     // scan_targets learns from the field: an EV signal blended into priority so
     // markets/clusters that converted well get re-verified sooner. Nullable —
     // absence means "no field signal yet", never zero.

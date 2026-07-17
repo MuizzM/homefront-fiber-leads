@@ -181,3 +181,134 @@ function isComingSoon(p: KineticParsed, seg: string): boolean {
     || /COMING\s*SOON|FUTURE|PLANNED/.test(up(p.marketSegmentType))
     || up(p.serviceStatus).includes("PENDING");
 }
+
+// ── Address correction (AddressNeedsFix / AddressSuggestions) ─────────────────
+// When Kinetic returns success=false with validationResult AddressNeedsFix or
+// AddressSuggestions, the payload usually carries a list of SUGGESTED corrected
+// addresses. We extract those candidates and decide whether exactly ONE of them
+// is reliable enough to auto-apply. If 0 or several ambiguous candidates exist,
+// we return null and the caller keeps the existing non-conclusive requeue/backoff
+// behavior — we never guess.
+
+export interface KineticAddressSuggestion {
+  addressLine1: string | null;
+  city: string | null;
+  state: string | null;
+  zip: string | null;
+  score: number | null; // normalized 0..1 confidence if the payload provided one
+  exactMatch: boolean;
+  raw: any;
+}
+
+export interface AddressSuggestionSelection {
+  candidates: KineticAddressSuggestion[];
+  suggestion: KineticAddressSuggestion | null; // the single reliable pick, else null
+  reason: string; // why a pick was / was not made (for notes + telemetry)
+}
+
+// Confidence thresholds for auto-applying a suggestion.
+const SUGGESTION_HIGH_CONFIDENCE = 0.9; // a scored candidate must clear this to win among several
+const SUGGESTION_MIN_GAP = 0.15; // and lead the runner-up by at least this
+const SUGGESTION_LOW_FLOOR = 0.5; // an explicitly low-scored SOLE candidate is not applied
+
+function normalizeSuggestionScore(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw > 1 ? raw / 100 : raw;
+  if (typeof raw === "string") {
+    const s = raw.trim().toUpperCase();
+    if (s === "HIGH" || s === "EXACT") return 0.95;
+    if (s === "MEDIUM" || s === "MED") return 0.6;
+    if (s === "LOW") return 0.3;
+    const n = Number(s.replace(/[^\d.]/g, ""));
+    if (Number.isFinite(n) && n > 0) return n > 1 ? n / 100 : n;
+  }
+  return null;
+}
+
+function normalizeSuggestion(raw: any): KineticAddressSuggestion | null {
+  if (!raw || typeof raw !== "object") return null;
+  // Some payloads nest the address fields under `.address`; others are flat.
+  const a = (raw.address && typeof raw.address === "object") ? raw.address : raw;
+  const addressLine1 = strOr(a.addressLine1 ?? a.addressLine ?? a.line1 ?? a.street ?? raw.addressLine1);
+  if (!addressLine1) return null; // a candidate with no street line is unusable
+  const city = strOr(a.city ?? raw.city);
+  const state = strOr(a.stateProvinceCd ?? a.state ?? a.stateCode ?? raw.state ?? raw.stateProvinceCd);
+  const zip = strOr(a.postalCd ?? a.postalCode ?? a.zip ?? a.zipCode ?? raw.postalCd ?? raw.zip);
+  const score = normalizeSuggestionScore(
+    raw.matchScore ?? raw.score ?? raw.confidence ?? raw.confidenceScore ?? a.matchScore ?? a.score,
+  );
+  const exactMatch = raw.exactMatch === true || a.exactMatch === true
+    || up(raw.matchType ?? raw.matchLevel) === "EXACT";
+  return { addressLine1, city, state, zip, score, exactMatch, raw };
+}
+
+/**
+ * Extract suggested corrected addresses from an AddressNeedsFix / AddressSuggestions
+ * response and pick the single reliable one to auto-apply, if any.
+ *
+ * Selection rules (conservative — never guess):
+ *  - 0 usable candidates                → no pick.
+ *  - exactly 1 candidate                → pick it, unless it carries an explicit
+ *                                          low confidence score (< floor).
+ *  - exactly 1 candidate flagged exact  → pick it; >1 exact = ambiguous, no pick.
+ *  - a scored candidate clearing the high-confidence threshold AND leading the
+ *    runner-up by the min gap → pick it.
+ *  - otherwise (several ambiguous)      → no pick.
+ */
+export function selectReliableAddressSuggestion(data: any): AddressSuggestionSelection {
+  const pools = [
+    data?.addressSuggestions,
+    data?.suggestions,
+    data?.addressCandidates,
+    data?.candidates,
+    data?.candidateAddresses,
+    data?.addressValidation?.candidates,
+    data?.addressValidation?.suggestions,
+    data?.validation?.candidates,
+    data?.validation?.suggestions,
+  ];
+  const seen = new Set<string>();
+  const candidates: KineticAddressSuggestion[] = [];
+  for (const pool of pools) {
+    for (const item of toArray(pool)) {
+      const n = normalizeSuggestion(item);
+      if (!n) continue;
+      const key = [up(n.addressLine1), up(n.city), up(n.state), String(n.zip ?? "").replace(/\D/g, "").slice(0, 5)].join("|");
+      if (seen.has(key)) continue; // de-dupe identical candidates repeated across pools
+      seen.add(key);
+      candidates.push(n);
+    }
+  }
+
+  if (candidates.length === 0) {
+    return { candidates, suggestion: null, reason: "no address suggestions in response" };
+  }
+
+  if (candidates.length === 1) {
+    const only = candidates[0];
+    if (only.score != null && only.score < SUGGESTION_LOW_FLOOR) {
+      return { candidates, suggestion: null, reason: `single low-confidence suggestion (${only.score.toFixed(2)}) — not applied` };
+    }
+    return { candidates, suggestion: only, reason: "single unambiguous suggestion" };
+  }
+
+  // Several candidates: an exact-match flag is the strongest signal, then a clearly
+  // top-ranked score. Anything short of that is ambiguous and left for requeue.
+  const exacts = candidates.filter(c => c.exactMatch);
+  if (exacts.length === 1) {
+    return { candidates, suggestion: exacts[0], reason: "single exact-match suggestion among several" };
+  }
+  if (exacts.length > 1) {
+    return { candidates, suggestion: null, reason: `${exacts.length} exact-match suggestions — ambiguous` };
+  }
+
+  const ranked = [...candidates].sort((x, y) => (y.score ?? -1) - (x.score ?? -1));
+  const [top, second] = ranked;
+  if (
+    top.score != null && top.score >= SUGGESTION_HIGH_CONFIDENCE &&
+    (second.score == null || top.score - second.score >= SUGGESTION_MIN_GAP)
+  ) {
+    return { candidates, suggestion: top, reason: `top suggestion score ${top.score.toFixed(2)} clears threshold` };
+  }
+
+  return { candidates, suggestion: null, reason: `${candidates.length} ambiguous suggestions — none clearly top-ranked` };
+}

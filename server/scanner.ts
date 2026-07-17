@@ -5,7 +5,7 @@ import { proxyFetch, rotateProxySession, getProxySessionId } from "./proxy-fetch
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
-import { parseKineticResponse } from "./kineticResponseParser";
+import { parseKineticResponse, selectReliableAddressSuggestion } from "./kineticResponseParser";
 import {
   ProviderRequestQueue,
   type ProviderQueueSnapshot,
@@ -460,7 +460,13 @@ const distributedProviderCoordinator = new DistributedProviderCoordinator<ScanRe
   // lead-expansion runs) can never deadlock or permanently starve NORMAL work.
   admissionMaxWaitMs: Number(process.env.PROVIDER_ADMISSION_MAX_WAIT_MS ?? 120_000),
   agingRatePerSec: Number(process.env.PROVIDER_ADMISSION_AGING_PER_SEC ?? 4),
-  agingMaxBoost: Number(process.env.PROVIDER_ADMISSION_AGING_MAX_BOOST ?? 150),
+  agingMaxBoost: Number(process.env.PROVIDER_ADMISSION_AGING_MAX_BOOST ?? 15),
+  // Weighted-fair caps: EXPANSION and MAINTENANCE (statewide/stale bulk) may each hold
+  // at most this fraction of concurrency. Their combined headroom is the guaranteed
+  // reserve for the revenue classes (IMMEDIATE/NEW_BUILD/DISCOVERY) — a burst of
+  // expansion OR a 300k maintenance backlog can never occupy every slot.
+  expansionShareFraction: Number(process.env.PROVIDER_EXPANSION_SHARE ?? 0.35),
+  maintenanceShareFraction: Number(process.env.PROVIDER_MAINTENANCE_SHARE ?? 0.5),
 });
 
 export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {
@@ -516,6 +522,8 @@ export class ProviderAccessDeniedError extends Error {
 
 export interface AddressScanOptions {
   source?: ProviderRequestPriority;
+  /** Polled while awaiting coordinator admission — abandon promptly if it returns true. */
+  abort?: () => boolean;
 }
 
 
@@ -534,6 +542,15 @@ function speedTierFromMbps(mbps: number | null): string | null {
   if (mbps >= 300) return "300mbps";
   if (mbps >= 100) return "100mbps";
   return "sub100mbps";
+}
+
+// Mask an applied-correction address for Scan Inspector telemetry: redact the
+// precise house number (a resident's exact door) while keeping the street +
+// locality so the correction stays observable to an admin.
+function maskSuggestedAddress(address: string, city: string, state: string, zip: string): string {
+  const street = address.replace(/^\s*\d+\s*/, "").trim() || address.trim();
+  const zip5 = String(zip).match(/\d{5}/)?.[0] ?? "";
+  return `#•• ${street}, ${city}, ${state} ${zip5}`.replace(/\s+/g, " ").trim();
 }
 
 export interface LiveTestStage { stage: string; ok: boolean; detail: string; data?: Record<string, unknown>; }
@@ -683,6 +700,7 @@ export async function scanAddress(
       cacheable: value => value.apiSource !== "failed" && !value.blocked && value.fiberStatus !== "unknown",
       serialize: value => JSON.stringify(value),
       deserialize: value => JSON.parse(value) as ScanResult,
+      abort: options.abort,
     },
   ), { source });
 }
@@ -693,6 +711,11 @@ async function scanAddressDirect(
   state: string,
   zip: string,
   source: ProviderRequestPriority,
+  // Bounds the AddressNeedsFix/AddressSuggestions correction to ONE retry per
+  // check: the correction re-enters this same function with depth+1, and the
+  // correction block below only fires at depth 0 — so a correction can never
+  // trigger another correction (no correction loops).
+  correctionDepth = 0,
 ): Promise<ScanResult> {
   const base: ScanResult = {
     address, city, state, zip,
@@ -828,6 +851,61 @@ async function scanAddressDirect(
     // confirmed "no service" — treating it as conclusive would let an outage flip
     // the pool unavailable and fabricate "newly live" flips the next healthy night.
     if (!data.success) {
+      // AddressNeedsFix / AddressSuggestions: Kinetic rejected the *request address*
+      // but usually returns SUGGESTED corrected addresses. Rather than re-sending the
+      // same malformed request forever (requeue+backoff), apply ONE reliable
+      // correction and re-run the SAME Decodo search once. Guardrails:
+      //  • only when there is exactly ONE unambiguous / clearly-top-ranked suggestion;
+      //  • bounded to a single correction (depth 0 only — no correction loops);
+      //  • the retry goes through this same authorized-token + proxyFetch path
+      //    (zero direct requests);
+      //  • a correction that does not yield a conclusive *serviceable* answer stays
+      //    non-conclusive — it NEVER becomes a no-service verdict for the original.
+      const needsFixFamily = /addressneedsfix|addresssuggestion|needs\s*fix|suggest/i.test(vr);
+      if (correctionDepth === 0 && needsFixFamily) {
+        const selection = selectReliableAddressSuggestion(data);
+        const pick = selection.suggestion;
+        if (pick) {
+          const cAddress = pick.addressLine1 ?? address;
+          const cCity = pick.city ?? city;
+          const cState = pick.state ?? state;
+          const cZip = pick.zip ?? zip;
+          const origKey = normalizeKineticAddressKey(address, city, state, zip);
+          const corrKey = normalizeKineticAddressKey(cAddress, cCity, cState, cZip);
+          // Never "correct" an address to itself — that would just repeat the request.
+          if (corrKey !== origKey) {
+            emit("searching", {
+              status: "info", httpStatus: 200, latencyMs: searchMs, sessionId: getProxySessionId(),
+              tokenSuffix: tokenLease.token.slice(-4),
+              retryReason: `${vr} — applying one reliable address suggestion and re-searching once`,
+              detail: `applied address suggestion: ${maskSuggestedAddress(cAddress, cCity, cState, cZip)} (${selection.reason})`,
+            });
+            // SAME transport, SAME authorized-token + proxyFetch path; depth+1 bounds it.
+            const corrected = await scanAddressDirect(cAddress, cCity, cState, cZip, source, correctionDepth + 1);
+            // ADOPT the correction ONLY if it produced a conclusive serviceable answer
+            // (fiber/copper/tenured — a real kinetic_live verdict that is not no-service
+            // and not an unresolved non-answer). The corrected/canonical address then
+            // becomes the address of record for this check.
+            if (corrected.apiSource === "kinetic_live" && corrected.fiberStatus !== "no_service" && corrected.fiberStatus !== "unknown") {
+              corrected.notes = `Corrected ${vr || "address"} → ${cAddress} (${selection.reason}). ${corrected.notes}`.trim();
+              return corrected;
+            }
+            // The correction did NOT resolve to a serviceable answer (it came back
+            // no-service, blocked, or non-conclusive). Per product law we do NOT adopt a
+            // no-service verdict from a guessed correction — stay non-conclusive so the
+            // worker requeues + backs off exactly as it did before. The `${vr}` marker is
+            // preserved so the engine's AddressNeedsFix backoff cadence still applies.
+            base.apiSource = "failed";
+            base.confidence = "LOW";
+            base.notes = `Non-conclusive (${vr}); applied suggestion "${cAddress}" but it did not resolve to a serviceable answer — unresolved, recheck (NOT no-service)`;
+            emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `correction did not resolve (${vr}) — unresolved, NOT no-service` });
+            return base;
+          }
+        }
+        // 0 suggestions, ambiguous suggestions, low-confidence sole suggestion, or a
+        // suggestion identical to the query → fall through to the existing
+        // non-conclusive requeue+backoff behavior below. We never guess.
+      }
       base.apiSource = "failed";
       base.confidence = "LOW";
       base.notes = `Non-conclusive response (success=false, ${vr || "no validationResult"})`;

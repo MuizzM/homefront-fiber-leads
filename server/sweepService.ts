@@ -5,7 +5,7 @@ import { getCityAddresses, pullAddressesFromOverpass } from "./overpass";
 import * as scanService from "./scanService";
 import { clusterFreshFiber, type FreshFiberPoint } from "@shared/freshFiberClusters";
 import { opportunityRank } from "@shared/opportunitySegment";
-import { toCsv } from "./stateMonitorStore";
+import { toCsv, syncMarketState } from "./stateMonitorStore";
 import { structuredLog } from "./structuredLog";
 import { flushFreshOpportunityAlerts } from "./stateMonitorScheduler";
 
@@ -144,12 +144,101 @@ export function resumeSweepJobs() {
 // for crash recovery — resumeStateSweeps() picks a running sweep back up on boot.
 const activeState = new Set<string>();
 
+// ── Continuous, self-re-arming cadence ─────────────────────────────────────────
+// A completed pass does NOT terminate the sweep forever. Instead it schedules the
+// next cycle after a configurable pause, so verified NC/SC markets keep cycling.
+// Each new cycle recomputes the opportunity order (stateCities) from the freshly
+// advanced cadence model, so due/expanding markets naturally lead the next pass.
+//
+// Guardrails:
+//  • Kill-switch: STATEWIDE_SCAN_ON_DEPLOY=off disables re-arming (same switch that
+//    gates the deploy auto-start in index.ts).
+//  • One pending re-arm per (tenant,state) — never stack cycles or firehoses.
+//  • startStateSweep() itself is idempotent per (tenant,state); the fired timer
+//    reuses a running sweep rather than starting a duplicate.
+export const DEFAULT_STATEWIDE_CYCLE_PAUSE_MS = 15 * 60_000; // 15 min between full cycles
+
+export interface ReArmPlan { rearm: boolean; pauseMs: number; reason: "scheduled" | "kill_switch_off"; }
+
+/** Pure decision: should a finished pass re-arm, and after how long a pause? */
+export function planStateSweepReArm(env: NodeJS.ProcessEnv = process.env): ReArmPlan {
+  if (env.STATEWIDE_SCAN_ON_DEPLOY === "off") return { rearm: false, pauseMs: 0, reason: "kill_switch_off" };
+  const raw = Number(env.STATEWIDE_CYCLE_PAUSE_MS);
+  const pauseMs = Number.isFinite(raw) && raw >= 0 ? raw : DEFAULT_STATEWIDE_CYCLE_PAUSE_MS;
+  return { rearm: true, pauseMs, reason: "scheduled" };
+}
+
+// Pending re-arm timers keyed by `${tenantId}:${state}` — the single-cycle guard.
+const reArmTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Schedule the next statewide cycle after a completed pass. Honors the kill-switch
+ * and dedupes per (tenant,state). `start` is injectable for tests; production uses
+ * the idempotent startStateSweep. Returns the plan so callers/tests can assert it.
+ */
+export function scheduleStateSweepReArm(
+  parent: { tenant_id: number; state: "NC" | "SC"; created_by: number | null; max_checks_per_city: number | null },
+  start: (input: StartStateSweepInput) => unknown = startStateSweep,
+): ReArmPlan {
+  const plan = planStateSweepReArm();
+  const key = `${parent.tenant_id}:${parent.state}`;
+  if (!plan.rearm) {
+    structuredLog("state_sweep.rearm_skipped", { tenant: parent.tenant_id, state: parent.state, reason: plan.reason });
+    return plan;
+  }
+  if (reArmTimers.has(key)) return plan; // a cycle is already queued for this (tenant,state)
+  const timer = setTimeout(() => {
+    reArmTimers.delete(key);
+    if (!planStateSweepReArm().rearm) return; // kill-switch may have flipped during the pause
+    try {
+      start({ tenantId: parent.tenant_id, state: parent.state, createdBy: parent.created_by, maxChecksPerCity: parent.max_checks_per_city ?? undefined });
+      structuredLog("state_sweep.rearm_fired", { tenant: parent.tenant_id, state: parent.state });
+    } catch (error: any) {
+      structuredLog("state_sweep.rearm_failed", { tenant: parent.tenant_id, state: parent.state, error: String(error?.message ?? error) });
+    }
+  }, plan.pauseMs);
+  if (typeof (timer as any).unref === "function") (timer as any).unref(); // never keep the process alive on the pause
+  reArmTimers.set(key, timer);
+  structuredLog("state_sweep.rearm_scheduled", { tenant: parent.tenant_id, state: parent.state, pauseMs: plan.pauseMs });
+  return plan;
+}
+
+/** Test-only: clear any pending re-arm timers so cycles don't leak across tests. */
+export function __clearReArmTimers() {
+  for (const timer of reArmTimers.values()) clearTimeout(timer);
+  reArmTimers.clear();
+}
+
 export interface StartStateSweepInput { tenantId: number; state: "NC" | "SC"; createdBy?: number | null; maxChecksPerCity?: number; }
 
-/** Every scan-eligible market in the state's catalog, de-duped case-insensitively. */
-function stateCities(state: "NC" | "SC"): string[] {
+/**
+ * Every scan-eligible market in the state's catalog, de-duped case-insensitively
+ * and ordered by OPPORTUNITY (not alphabet). The order drives which cities a full
+ * pass reaches first; a fresh order is recomputed each cycle from the live cadence
+ * model in `state_fiber_markets`, so Coming-Soon / new-build / expanding markets
+ * (24h cadence, priority_score 100) cycle to the front the moment they come due
+ * while stable markets (168h / 336h cadence) wait their turn.
+ *
+ * Ordering keys (each a fallback for the previous):
+ *   1. DUE first          — next_scan_at <= now (the cadence model's "check me now")
+ *   2. priority_score DESC — higher-opportunity markets ahead (expanding=100 …)
+ *   3. cadence_hours ASC   — faster-cycling markets ahead on a priority tie
+ *   4. never-scanned first — markets with no last_scanned_at outrank scanned ones
+ *   5. last_scanned_at ASC — oldest-checked first (the "no cadence signal" fallback)
+ *   6. city ASC            — stable alphabetical tiebreak (fully deterministic)
+ * This mirrors the idx_state_markets_due / idx_state_markets_state_priority indexes.
+ */
+export function stateCities(state: "NC" | "SC"): string[] {
   const rows = rawDb.prepare(
-    `SELECT city FROM state_fiber_markets WHERE state=? AND auto_scan_eligible=1 ORDER BY city`,
+    `SELECT city FROM state_fiber_markets
+      WHERE state=? AND auto_scan_eligible=1
+      ORDER BY
+        (next_scan_at IS NOT NULL AND next_scan_at <= datetime('now')) DESC,
+        priority_score DESC,
+        cadence_hours ASC,
+        (last_scanned_at IS NULL) DESC,
+        last_scanned_at ASC,
+        city ASC`,
   ).all(state) as Array<{ city: string }>;
   const seen = new Set<string>();
   const out: string[] = [];
@@ -241,12 +330,23 @@ async function runStateSweep(id: string) {
             error: c?.error ?? null, completed_at: now(),
           });
           bumpCityDone(id);
+          advanceMarketCadence(); // this city was just swept — advance its cadence bookkeeping
           break;
         }
         await sleep(2_000);
       }
     }
   } finally { activeState.delete(id); }
+}
+
+// After a city is swept, its addresses' last_scanned_at advanced, so recompute the
+// cadence model's next_scan_at across markets (fully-scanned markets defer to
+// oldest-checked + cadence_hours; markets with unscanned inventory stay due). This
+// is the ONE shared cadence helper (stateMonitorStore.syncMarketState) — no parallel
+// bookkeeping. A cadence-sync failure must never abort the statewide sweep.
+function advanceMarketCadence() {
+  try { syncMarketState(); }
+  catch (error: any) { structuredLog("state_sweep.cadence_sync_failed", { error: String(error?.message ?? error) }); }
 }
 
 function bumpCityDone(id: string) {
@@ -301,10 +401,15 @@ function finishStateSweep(id: string) {
   const parent = rawDb.prepare(`SELECT * FROM state_sweeps WHERE id=?`).get(id) as any;
   if (!parent) return;
   const report = buildStateReport(id);
-  rawDb.prepare(
+  const closed = rawDb.prepare(
     `UPDATE state_sweeps SET status='done',phase='complete',report_json=?,completed_at=datetime('now'),updated_at=datetime('now') WHERE id=? AND status='running'`,
-  ).run(JSON.stringify(report), id);
+  ).run(JSON.stringify(report), id).changes;
   structuredLog("state_sweep.completed", { stateSweepId: id, state: parent.state, ...report.totals });
+  // Continuous cadence: schedule the next opportunity-weighted cycle. Only when we
+  // actually closed a running pass (never on a cancelled/already-finished row), so
+  // a re-arm is armed exactly once per completed pass. Kill-switch + single-cycle
+  // dedupe live in scheduleStateSweepReArm.
+  if (closed) scheduleStateSweepReArm(parent);
 }
 
 function buildStateReport(id: string) {

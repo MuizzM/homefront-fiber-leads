@@ -600,4 +600,33 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     expect(store.getStrandedDoneRuns(10).map((r) => r.id)).not.toContain(runId);
     expect(store.claimRunTargets(runId, 1).length).toBe(0); // not claimable until the backoff elapses
   });
+
+  it("suppresses duplicate addresses across runs at 300k scale (global enqueue dedup)", () => {
+    // A 300,000-target backlog with a second run trying to enqueue the SAME addresses:
+    // the global enqueue-dedup must keep each unique address queued exactly ONCE, so
+    // the pipeline never re-spends proxy on 300k duplicate checks.
+    const N = 300_000;
+    const seed = rawDb.prepare(`INSERT INTO scan_targets (id, address, city, state, zip, source) VALUES (?,?,?,?,?, 'test')`);
+    const ids: Array<{ id: number; seq: number }> = [];
+    rawDb.transaction(() => {
+      for (let i = 0; i < N; i++) { const id = 5_000_000 + i; seed.run(id, `${i} Scale Rd`, "Scaleton", "NC", "28000"); ids.push({ id, seq: i }); }
+    })();
+
+    // Run A (a maintenance sweep) enqueues the whole backlog and is RUNNING.
+    store.createScanRun({ id: "run_scale_A", tenantId: TENANT, kind: "market", label: "A", city: "Scaleton", state: "NC", budget: N });
+    store.enqueueRunTargets("run_scale_A", ids);
+    store.setRunStatus("run_scale_A", "running");
+    const pendingA = rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id='run_scale_A' AND state='queued'`).get() as any;
+    expect(pendingA.c).toBe(N); // all unique addresses enqueued once
+
+    // Run B (another sweep) tries to enqueue the SAME 300k addresses → all deduped away.
+    store.createScanRun({ id: "run_scale_B", tenantId: TENANT, kind: "city", label: "B", city: "Scaleton", state: "NC", budget: N });
+    store.enqueueRunTargets("run_scale_B", ids);
+    const pendingB = rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id='run_scale_B' AND state='queued'`).get() as any;
+    expect(pendingB.c).toBe(0); // every duplicate suppressed — no double enqueue
+
+    // Across the two runs, pending is N (unique), not 2N — 300k duplicate checks avoided.
+    const bothPending = rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id IN ('run_scale_A','run_scale_B') AND state='queued'`).get() as any;
+    expect(bothPending.c).toBe(N);
+  }, 30_000);
 });

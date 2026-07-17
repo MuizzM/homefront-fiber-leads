@@ -1,16 +1,25 @@
-export type ProviderRequestPriority = "manual" | "lasso" | "new_build" | "coming_soon" | "recheck" | "market" | "nightly" | "city";
+export type ProviderRequestPriority = "manual" | "lasso" | "new_build" | "coming_soon" | "discovery" | "expansion" | "recheck" | "market" | "nightly" | "city";
 
+// Five weighted-fair admission CLASSES, top to bottom (see admissionClassOf in the
+// coordinator). Reserved capacity is guaranteed for the revenue classes (IMMEDIATE,
+// NEW_BUILD, DISCOVERY) by CAPPING the share of EXPANSION + MAINTENANCE, and priority
+// ordering + aging decide within/across the reserved band.
+//   IMMEDIATE   — manual, lasso/field, admin (a rep's tap must never wait)
+//   NEW_BUILD   — new addresses/permits + Coming Soon rechecks
+//   DISCOVERY   — NC/SC Kinetic-market scans (find fresh leads)
+//   EXPANSION   — nearby scans fanned out from a green lead (share-capped)
+//   MAINTENANCE — stale + statewide baseline rechecks (share-capped)
 export const PROVIDER_PRIORITY: Record<ProviderRequestPriority, number> = {
-  manual: 500,
-  lasso: 400,
-  // Newly-detected construction is revenue-critical — checked immediately, above
-  // the bulk statewide sweep (market/city) but below user-interactive manual/field.
-  new_build: 380,
-  coming_soon: 350,
-  recheck: 300,
-  market: 275,
-  nightly: 250,
-  city: 200,
+  manual: 500,   // IMMEDIATE
+  lasso: 400,    // IMMEDIATE (Field Map)
+  new_build: 380, // NEW_BUILD
+  coming_soon: 375, // NEW_BUILD (Coming Soon recheck — high frequency)
+  discovery: 370, // DISCOVERY (market scan)
+  expansion: 365, // EXPANSION (share-capped)
+  recheck: 300,  // MAINTENANCE
+  market: 275,   // MAINTENANCE
+  nightly: 250,  // MAINTENANCE
+  city: 200,     // MAINTENANCE
 };
 
 export type QueueEvent =
@@ -180,7 +189,7 @@ export class ProviderRequestQueue<T> {
     const now = this.now();
     this.pruneStarts(now);
     const attempts = this.completed + this.failed;
-    const queuedBySource: Record<ProviderRequestPriority, number> = { manual: 0, lasso: 0, new_build: 0, coming_soon: 0, recheck: 0, market: 0, nightly: 0, city: 0 };
+    const queuedBySource: Record<ProviderRequestPriority, number> = { manual: 0, lasso: 0, new_build: 0, coming_soon: 0, discovery: 0, expansion: 0, recheck: 0, market: 0, nightly: 0, city: 0 };
     for (const item of this.pending) queuedBySource[item.source]++;
     return {
       active: this.active,

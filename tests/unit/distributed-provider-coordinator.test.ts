@@ -202,4 +202,127 @@ describe("DistributedProviderCoordinator", () => {
     expect(normal).toEqual({ value: 1 });
     expect(done).toContain("N"); // it ran — never starved
   });
+
+  it("R13: a continuous lead-expansion flood cannot starve a normal 42-address scan (weighted-fair share cap)", async () => {
+    // The real incident shape: lead-cluster expansion outranks the bulk sweep
+    // (expansion=365 > city=200) and, if uncapped, holds every concurrency slot
+    // forever — permanently starving a normal 42-address scan. With aging OFF (so
+    // nothing else rescues the scan) the ONLY thing that lets the 42 finish is the
+    // per-source share cap: expansion may hold at most floor(maxConcurrency*frac)
+    // slots, leaving the rest for everyone else. Without the cap this test times out.
+    const MAXC = 4, FRAC = 0.5, EXP_CAP = Math.floor(MAXC * FRAC); // 2
+    const c = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: MAXC, maxRequestsPerMinute: 100_000, resultCacheTtlMs: 0,
+      rateWindowMs: 50, pollMs: 4,
+      expansionShareFraction: FRAC,
+      criticalReservedConcurrency: 0, criticalReservedRate: 0,
+      admissionMaxWaitMs: 12_000, agingRatePerSec: 0, agingMaxBoost: 0, // aging OFF isolates the cap
+    });
+    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+    let expActive = 0, expPeak = 0, expRan = 0, scanRan = 0;
+    const run = (key: string, source: "expansion" | "city", ms: number) =>
+      c.execute(key, source, async () => {
+        if (source === "expansion") { expActive++; expRan++; expPeak = Math.max(expPeak, expActive); }
+        else scanRan++;
+        await sleep(ms);
+        if (source === "expansion") expActive--;
+        return { value: 1 };
+      }, codec);
+
+    // Continuous expansion flood: always keep MORE than maxConcurrency expansion
+    // requests contending (bounded in-flight, so no event-loop meltdown), so an
+    // uncapped coordinator would hand expansion every slot forever.
+    let stop = false, floodId = 0, live = 0;
+    const pending: Promise<unknown>[] = [];
+    const flood = (async () => {
+      while (!stop) {
+        while (live < MAXC + 2 && !stop) {
+          live++;
+          pending.push(run(`exp-${floodId++}`, "expansion", 8).catch(() => {}).then(() => { live--; }));
+        }
+        await sleep(3);
+      }
+      await Promise.allSettled(pending);
+    })();
+
+    // The normal 42-address scan fired into the teeth of the flood.
+    const scan = Promise.all(Array.from({ length: 42 }, (_, i) => run(`scan-${i}`, "city", 4)));
+    const outcome = await Promise.race([scan.then(() => "OK"), sleep(12_000).then(() => "TIMEOUT")]);
+    stop = true;
+    await flood;
+
+    expect(outcome).toBe("OK");            // all 42 completed despite the flood — not starved
+    expect(scanRan).toBe(42);
+    expect(expRan).toBeGreaterThan(0);     // expansion still made progress (fair, not frozen)
+    expect(expPeak).toBeLessThanOrEqual(EXP_CAP); // expansion never exceeded its concurrency share
+  }, 20_000);
+
+  it("weighted-fair 5-class: an EXPANSION+MAINTENANCE flood can't starve DISCOVERY/IMMEDIATE/NEW_BUILD; every class gets capacity, capped classes stay bounded", async () => {
+    // Models the production shape the spec calls out: a huge EXPANSION + MAINTENANCE
+    // (statewide/stale) backlog running while a 42-address DISCOVERY scan + IMMEDIATE
+    // (manual/Field-Map) + NEW_BUILD (Coming Soon) checks arrive. Revenue classes must
+    // all complete, immediate must start promptly, each class must receive capacity,
+    // and the capped classes must never exceed their share. (A continuous bounded flood
+    // stands in for the 300k backlog — what matters is the admission pressure, not the
+    // literal row count; a separate store test proves dedup at 300k scale.)
+    const MAXC = 6;
+    const EXP_CAP = Math.floor(MAXC * 0.34);   // 2
+    const MAINT_CAP = Math.floor(MAXC * 0.5);  // 3  → revenue always keeps ≥ 6-2-3 = 1
+    const c = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: MAXC, maxRequestsPerMinute: 100_000, resultCacheTtlMs: 0,
+      rateWindowMs: 50, pollMs: 4,
+      expansionShareFraction: 0.34, maintenanceShareFraction: 0.5,
+      criticalReservedConcurrency: 0, criticalReservedRate: 0,
+      admissionMaxWaitMs: 15_000, agingRatePerSec: 0, agingMaxBoost: 0,
+    });
+    const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+    const active: Record<string, number> = { expansion: 0, city: 0 };
+    const peak: Record<string, number> = { expansion: 0, city: 0 };
+    const ran: Record<string, number> = { manual: 0, coming_soon: 0, discovery: 0, expansion: 0, city: 0 };
+    let firstImmediateAdmissions = -1, totalStarts = 0;
+    const run = (key: string, source: "manual" | "coming_soon" | "discovery" | "expansion" | "city", ms: number) =>
+      c.execute(key, source, async () => {
+        totalStarts++;
+        ran[source]++;
+        if (source === "expansion" || source === "city") { active[source]++; peak[source] = Math.max(peak[source], active[source]); }
+        if (source === "manual" && firstImmediateAdmissions < 0) firstImmediateAdmissions = totalStarts;
+        await sleep(ms);
+        if (source === "expansion" || source === "city") active[source]--;
+        return { value: 1 };
+      }, codec);
+
+    // Continuous EXPANSION + MAINTENANCE flood (bounded in-flight).
+    let stop = false, id = 0, liveExp = 0, liveMaint = 0;
+    const pend: Promise<unknown>[] = [];
+    const flood = (async () => {
+      while (!stop) {
+        while (liveExp < MAXC && !stop) { liveExp++; pend.push(run(`exp-${id++}`, "expansion", 8).catch(() => {}).then(() => { liveExp--; })); }
+        while (liveMaint < MAXC && !stop) { liveMaint++; pend.push(run(`mnt-${id++}`, "city", 8).catch(() => {}).then(() => { liveMaint--; })); }
+        await sleep(3);
+      }
+      await Promise.allSettled(pend);
+    })();
+
+    await sleep(30); // let the flood saturate first
+    // Revenue work arrives into the teeth of the flood.
+    const immediate = run("manual-0", "manual", 4);      // IMMEDIATE
+    const newBuild = run("cs-0", "coming_soon", 4);       // NEW_BUILD
+    const discovery = Promise.all(Array.from({ length: 42 }, (_, i) => run(`disc-${i}`, "discovery", 4)));
+    const outcome = await Promise.race([
+      Promise.all([immediate, newBuild, discovery]).then(() => "OK"),
+      sleep(14_000).then(() => "TIMEOUT"),
+    ]);
+    stop = true;
+    await flood;
+
+    expect(outcome).toBe("OK");                  // revenue never starved by the flood
+    expect(ran.discovery).toBe(42);              // all 42 discovery completed
+    expect(ran.manual).toBe(1);                  // immediate ran
+    expect(ran.coming_soon).toBe(1);             // new-build/Coming Soon ran
+    expect(firstImmediateAdmissions).toBeGreaterThan(0);
+    expect(peak.expansion).toBeLessThanOrEqual(EXP_CAP);    // EXPANSION bounded to its share
+    expect(peak.city).toBeLessThanOrEqual(MAINT_CAP);       // MAINTENANCE bounded to its share
+    expect(ran.expansion).toBeGreaterThan(0);    // capped classes still received capacity
+    expect(ran.city).toBeGreaterThan(0);
+  }, 25_000);
 });

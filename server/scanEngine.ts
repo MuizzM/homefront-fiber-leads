@@ -17,7 +17,7 @@ import {
   type ScanResult,
 } from "./scanner";
 import { emitStage } from "./scanStageBus";
-import { isCriticalPriority } from "./distributedProviderCoordinator";
+import { isRevenueAdmissionClass, AdmissionTimeoutError } from "./distributedProviderCoordinator";
 import { triggerExpansionForTargets } from "./clusterExpansion";
 import crypto from "node:crypto";
 import { storage } from "./storage";
@@ -71,13 +71,15 @@ export type Checker = (a: {
   state: string;
   zip: string;
   source?: ProviderRequestPriority;
+  /** Polled while waiting for admission — abandon promptly if the run is cancelled. */
+  abort?: () => boolean;
 }) => Promise<CheckResult>;
 
 // Default checker — the existing authorized Kinetic path through the stable
 // Decodo transport. scanner.ts owns authentication, request dedupe/caching,
 // upstream-denial handling, and the provider concurrency ceiling.
 const liveChecker: Checker = async (a) => {
-  const result = await scanAddress(a.address, a.city, a.state, a.zip, { source: a.source ?? "market" });
+  const result = await scanAddress(a.address, a.city, a.state, a.zip, { source: a.source ?? "market", abort: a.abort });
   const checkFailed = result.apiSource === "failed";
   // Estimate bytes from the serialized raw response when present (the proxy bills
   // request + response); fall back to the flat estimate. Under-counting cost is
@@ -106,18 +108,35 @@ export function isRunActive(runId: string): boolean {
   return activeRuns.has(runId);
 }
 
+// Dedup window (seconds) for a run's claim guard: skip re-checking an address whose
+// canonical answer is fresher than this. User-initiated (manual/lasso/field) and
+// change-detection (recheck/rescan/nightly) runs ALWAYS re-verify → 0. Bulk sweeps,
+// discovery, and expansion skip recently-answered addresses to kill duplicate proxy
+// spend across the 65 daily-diff / 21 city-sweep runs sharing the same inventory.
+const DEDUP_RECHECK_SEC = Math.max(0, Math.floor(Number(process.env.SCAN_DEDUP_RECHECK_HOURS ?? 18) * 3600));
+function dedupSkipSecondsForRun(kind: string): number {
+  const v = String(kind ?? "").toLowerCase();
+  if (v.includes("manual") || v === "target_ids" || v.includes("lasso") || v.includes("bbox") || v.includes("area") || v.includes("field")) return 0;
+  // Change-detection runs must ALWAYS re-verify (never skip a recently-checked address):
+  // rechecks, rescans, nightly, and the state/coming-soon MONITOR watchers.
+  if (v.includes("recheck") || v.includes("rescan") || v.includes("nightly") || v.includes("scheduled") || v.includes("monitor")) return 0;
+  return DEDUP_RECHECK_SEC;
+}
+
 function providerPriorityForRun(kind: string): ProviderRequestPriority {
   const value = String(kind ?? "").toLowerCase();
-  if (value.includes("manual") || value === "target_ids") return "manual";
-  if (value.includes("lasso") || value.includes("bbox") || value.includes("area")) return "lasso";
-  // CRITICAL revenue work that must never sit behind the bulk statewide sweep:
-  // newly-detected construction, lead-triggered cluster expansion, address
-  // DISCOVERY (finds fresh leads — e.g. the targeted city discovery runs), and
-  // any Field-Map / Fresh-Lead check.
-  if (
-    value.includes("new_build") || value.includes("expansion") ||
-    value.includes("discovery") || value.includes("field") || value.includes("fresh")
-  ) return "new_build";
+  // IMMEDIATE — user/admin-initiated: a rep's tap, lasso/field-map, manual/admin check.
+  if (value.includes("manual") || value === "target_ids" || value.includes("admin")) return "manual";
+  if (value.includes("lasso") || value.includes("bbox") || value.includes("area") || value.includes("field")) return "lasso";
+  // EXPANSION — matched before new_build (kind 'lead_expansion' contains "expansion");
+  // its own class so the coordinator can share-CAP it (never crowds out revenue work).
+  if (value.includes("expansion")) return "expansion";
+  // NEW_BUILD — newly-detected construction/permits + Coming Soon rechecks.
+  if (value.includes("coming_soon") || value.includes("comingsoon")) return "coming_soon";
+  if (value.includes("new_build") || value.includes("newbuild") || value.includes("permit")) return "new_build";
+  // DISCOVERY — address/market discovery that surfaces fresh leads.
+  if (value.includes("discovery") || value.includes("fresh")) return "discovery";
+  // MAINTENANCE — stale + statewide baseline (share-capped bulk).
   if (value.includes("city")) return "city";
   if (value.includes("recheck") || value.includes("rescan")) return "recheck";
   if (value.includes("nightly") || value.includes("scheduled")) return "nightly";
@@ -165,11 +184,11 @@ export async function runScanWorker(
       // grab the same targets and double-spend the proxy. Requeued (transient-error)
       // targets are 'queued' again, so the queue only drains once every address has
       // a conclusive or unresolved answer.
-      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget));
+      const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind));
       if (batch.length === 0) {
         finish(run, "done");
         return;
-      } // queue drained — every address conclusively resolved
+      } // queue drained — every address conclusively resolved (or deduped-skip)
       touchRun(runId); // heartbeat before a batch of slow network calls
       heartbeatWorker({
         workerId,
@@ -194,6 +213,9 @@ export async function runScanWorker(
               state: t.state,
               zip: t.zip,
               source: providerPriorityForRun(run.kind),
+              // Abandon the admission wait immediately if the run is cancelled/paused,
+              // rather than blocking up to admissionMaxWaitMs.
+              abort: () => { const r = getRun(runId, tenantId); return !r || r.status !== "running"; },
             });
             if (result.blocked || checkFailed) {
               // TRANSIENT non-answer (throttle, transport error, malformed body,
@@ -233,10 +255,15 @@ export async function runScanWorker(
           } catch (err: any) {
             // An unexpected throw is TRANSIENT — requeue (never lose the address,
             // never a no-fiber, never abort the run).
-            requeueRunTarget(runId, t.targetId);
-            addRunBytes(runId, DEFAULT_BYTES_PER_CHECK); // request bytes were still spent
             const message = String(err?.message ?? err ?? "Provider check failed");
             const attempt = targetAttempt(runId, t.targetId);
+            // An ADMISSION TIMEOUT/abort means the coordinator was saturated (contention),
+            // not an address problem. Back off before retrying so a starved target does
+            // not hot-loop claim→120s wait→timeout→immediate re-claim and spin its run.
+            const admissionTimedOut = err instanceof AdmissionTimeoutError || err?.name === "AdmissionTimeoutError";
+            const backoffSec = admissionTimedOut ? Math.min(120, 15 * Math.max(1, attempt)) : 0;
+            requeueRunTarget(runId, t.targetId, backoffSec);
+            addRunBytes(runId, DEFAULT_BYTES_PER_CHECK); // request bytes were still spent
             recordFiberFailure({
               tenantId, runId, targetId: t.targetId, category: "provider_exception",
               message, attempt, retryable: true,
@@ -680,11 +707,14 @@ export function resumeInterruptedRuns(): void {
 export function resumeCriticalRuns(): void {
   try {
     for (const run of getResumableRuns(0)) {
-      if (!isCriticalPriority(providerPriorityForRun(run.kind))) continue;
+      // Fast-resume every REVENUE-class run (IMMEDIATE/NEW_BUILD/DISCOVERY) so a rep's
+      // tap, a fresh new-build/Coming-Soon check, or a discovery run never waits for the
+      // 30s staleness window after a deploy. EXPANSION/MAINTENANCE resume via the reaper.
+      if (!isRevenueAdmissionClass(providerPriorityForRun(run.kind))) continue;
       if (isRunActive(run.id)) continue;
       resetInflightTargets(run.id);
       if (countQueued(run.id) === 0) { setRunStatus(run.id, "done"); continue; }
-      console.log(`[scan-engine] fast-resuming CRITICAL run ${run.id} kind=${run.kind} (${countQueued(run.id)} pending)`);
+      console.log(`[scan-engine] fast-resuming revenue run ${run.id} kind=${run.kind} (${countQueued(run.id)} pending)`);
       void runScanWorker(run.id, run.tenantId);
     }
   } catch (err: any) {

@@ -184,12 +184,44 @@ export function createScanRun(r: {
   ).run({ id: r.id, tenantId: r.tenantId, kind: r.kind, label: r.label, city: r.city ?? null, state: r.state ?? null, bbox: r.bbox ?? null, budget: r.budget, createdBy: r.createdBy ?? null });
 }
 
+// Queue backpressure is applied at the GENERATION side (clusterExpansion pauses new
+// expansion when the backlog is large) — NOT at enqueue. Gating here is unsafe: the run
+// is already created, so deferring its targets leaves a zombie run that drains straight
+// to 'done' having checked nothing, which downstream treats as "resolved". This function
+// only DEDUPLICATES; every enqueued run keeps its full target set.
+// GLOBAL DEDUP: a normalized address (scan_targets.id ↔ globally-UNIQUE address) that
+// is already queued/inflight in ANOTHER running run is skipped at enqueue — so the same
+// address is never queued into many runs at once (the source of the 34,995 cross-run
+// duplicates). No unique address is lost: it stays claimable in the run that already
+// holds it, and scan_targets is the durable backstop for future cycles. Set
+// SCAN_ENQUEUE_DEDUP=off to disable. Requeues (state updates) are unaffected.
+const _pendingElsewhere = (ids: number[], excludeRunId: string): Set<number> => {
+  const found = new Set<number>();
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400);
+    const rows = rawDb.prepare(
+      `SELECT DISTINCT t.target_id AS id FROM scan_run_targets t JOIN scan_runs r ON r.id = t.run_id
+        WHERE t.target_id IN (${chunk.map(() => "?").join(",")})
+          AND t.state IN ('queued','inflight') AND r.status='running' AND t.run_id != ?`,
+    ).all(...chunk, excludeRunId) as any[];
+    for (const row of rows) found.add(Number(row.id));
+  }
+  return found;
+};
+const ENQUEUE_DEDUP = process.env.SCAN_ENQUEUE_DEDUP !== "off";
 export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq: number }>): void {
+  if (!ranked.length) return;
+  let rows = ranked;
+  if (ENQUEUE_DEDUP) {
+    const dupes = _pendingElsewhere(ranked.map((r) => r.id), runId);
+    if (dupes.size) rows = ranked.filter((r) => !dupes.has(r.id));
+  }
+  if (!rows.length) return;
   const stmt = rawDb.prepare(`INSERT OR IGNORE INTO scan_run_targets (run_id, target_id, seq, state) VALUES (?,?,?,'queued')`);
-  const tx = rawDb.transaction((rows: Array<{ id: number; seq: number }>) => {
-    for (const row of rows) stmt.run(runId, row.id, row.seq);
+  const tx = rawDb.transaction((batch: Array<{ id: number; seq: number }>) => {
+    for (const row of batch) stmt.run(runId, row.id, row.seq);
   });
-  tx(ranked);
+  tx(rows);
 }
 
 // ATOMICALLY claim the next batch of queued targets: mark them 'inflight' and
@@ -204,13 +236,28 @@ const _claimSelect = rawDb.prepare(
     ORDER BY t.seq ASC LIMIT ?`);
 const _claimMark = rawDb.prepare(`UPDATE scan_run_targets SET state='inflight',attempt_count=attempt_count+1
   WHERE run_id=? AND target_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))`);
-const _claimTx = rawDb.transaction((runId: string, limit: number) => {
+// DEDUP guard: before claiming, mark as terminal 'skipped' any queued target whose
+// ADDRESS was already conclusively checked within the dedup window. scan_targets holds
+// the canonical last_scanned_at + result for a globally-UNIQUE address, so the answer
+// already exists — re-checking it (across the 34,995 cross-run duplicates, or the same
+// address across time) would only re-spend proxy. No unique address is lost: the row is
+// resolved from the canonical snapshot, not discarded, and change-detection runs
+// (recheck/rescan/nightly) + user-initiated checks pass skipSec=0 so they always verify.
+const _skipRecentlyScanned = rawDb.prepare(
+  `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+     WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
+       AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
+                     AND st.last_scanned_at IS NOT NULL AND st.last_scanned_at > datetime('now', ?))`);
+const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlyScannedSec: number) => {
+  if (skipRecentlyScannedSec > 0) {
+    _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
+  }
   const rows = _claimSelect.all(runId, limit) as any[];
   for (const r of rows) _claimMark.run(runId, r.targetId);
   return rows;
 });
-export function claimRunTargets(runId: string, limit: number): Array<{ targetId: number; seq: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }> {
-  return _claimTx(runId, limit) as any;
+export function claimRunTargets(runId: string, limit: number, skipRecentlyScannedSec = 0): Array<{ targetId: number; seq: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }> {
+  return _claimTx(runId, limit, skipRecentlyScannedSec) as any;
 }
 
 // Finalize one checked target: set its terminal state AND bump the run counters
@@ -331,7 +378,7 @@ export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
       WHERE r.status='done' AND EXISTS (
         SELECT 1 FROM scan_run_targets t WHERE t.run_id=r.id AND t.state='queued'
           AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))
-      ORDER BY r.completed_at DESC LIMIT ?`,
+      ORDER BY r.completed_at ASC LIMIT ?`,
     limit,
   );
 }

@@ -35,7 +35,23 @@ const CFG = {
   maxActive: () => bounded(process.env.EXPANSION_MAX_ACTIVE, 8, 1, 500),
   osm: () => process.env.EXPANSION_OSM !== "off",
   tickMs: () => bounded(process.env.EXPANSION_TICK_MS, 20_000, 3_000, 120_000),
+  // City-boundary stop condition: keep a cluster within its origin city so a ring
+  // bbox can't spill checks into neighboring towns. On by default; EXPANSION_CITY_BOUNDARY=off disables.
+  cityBoundary: () => process.env.EXPANSION_CITY_BOUNDARY !== "off",
+  // ONE BOUNDED JOB per lead cluster: total addresses a single cluster may check
+  // across ALL its rings before it is considered complete (in addition to ring/empty
+  // stop conditions). Keeps each cluster a finite job, not an unbounded crawl.
+  clusterBudget: () => bounded(process.env.EXPANSION_CLUSTER_BUDGET, 600, 20, 20000),
+  // Generation backpressure: pause spawning NEW expansions when the global pending
+  // backlog exceeds this (existing clusters keep consuming). 0 disables.
+  backpressurePending: () => bounded(process.env.EXPANSION_BACKPRESSURE_PENDING, 150_000, 0, 5_000_000),
 };
+const normCity = (c: unknown) => String(c ?? "").trim().toLowerCase();
+// Global pending (queued+inflight) backlog — used to gate NEW expansion generation.
+function globalPendingBacklog(): number {
+  try { return Number((rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets WHERE state IN ('queued','inflight')`).get() as any).c); }
+  catch { return 0; }
+}
 function bounded(v: string | undefined, dflt: number, min: number, max: number): number {
   const n = Number(v); return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : dflt;
 }
@@ -112,6 +128,15 @@ export function onFreshLead(tenantId: number, seed: LeadSeed): { expansionId: st
 
   if (activeCount() >= CFG.maxActive()) return { expansionId: null, action: "at_active_cap" };
 
+  // GENERATION BACKPRESSURE: when the backlog is already large, do NOT spawn a NEW
+  // expansion (existing clusters keep consuming). The green lead is still saved + pinned
+  // by the caller; it can seed an expansion on a later tick once the backlog drains.
+  const bp = CFG.backpressurePending();
+  if (bp > 0 && globalPendingBacklog() >= bp) {
+    structuredLog("expansion.backpressure", { pending: globalPendingBacklog(), threshold: bp, origin: seed.address }, "warn");
+    return { expansionId: null, action: "backpressure" };
+  }
+
   const id = `exp_${tenantId}_${now.toString(36)}_${crypto.randomBytes(2).toString("hex")}`;
   rawDb.prepare(`INSERT INTO lead_expansions
     (id,tenant_id,origin_lead_id,origin_target_id,origin_address,origin_city,origin_state,origin_zip,origin_lat,origin_lng,status,ring,created_at,updated_at)
@@ -187,12 +212,16 @@ async function expandRingInner(expansionId: string): Promise<void> {
   );
   // Never re-check the origin lead itself.
   seen.add(originKey);
+  // City boundary: reject candidates outside the origin city (when enabled).
+  const originCityNorm = normCity(exp.origin_city);
+  const enforceCityBoundary = CFG.cityBoundary() && !!originCityNorm;
   type Cand = { targetId: number | null; key: string; address: string; city: string; state: string; zip: string; lat: number; lng: number; dist: number; lastMs: number | null };
   const cands: Cand[] = [];
   const addCand = (r: { id?: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null; lastScanned?: string | null }) => {
     if (r.lat == null || r.lng == null) return;
     const key = normalizeKineticAddressKey(r.address, r.city, r.state, r.zip ?? "");
     if (seen.has(key) || already.has(key)) return;
+    if (enforceCityBoundary && r.city && normCity(r.city) !== originCityNorm) return; // reject only KNOWN out-of-city (empty city = unknown, keep)
     const dist = haversineMeters(origin, { lat: r.lat, lng: r.lng });
     if (dist < inner || dist >= outer) return; // strictly this ring
     seen.add(key);
@@ -257,35 +286,40 @@ async function expandRingInner(expansionId: string): Promise<void> {
 // what winds the runaway (78 concurrent lead_expansion runs) back down to the cap.
 function enforceActiveCap(): void {
   const cap = CFG.maxActive();
-  const active = rawDb.prepare(`SELECT id, last_run_id FROM lead_expansions WHERE status='active' ORDER BY fresh_found ASC, updated_at ASC`).all() as any[];
+  // Order MOST-productive first (most fresh leads, then most-recently active) so the
+  // kept head = the best clusters and the paused tail = the least-productive/deadest.
+  // (Pausing the productive ones was a bug: it stalled the clusters actually finding
+  // leads and let dead ones hog the cap.)
+  const active = rawDb.prepare(`SELECT id, last_run_id FROM lead_expansions WHERE status='active' ORDER BY fresh_found DESC, updated_at DESC`).all() as any[];
   if (active.length <= cap) return;
   const excess = active.slice(cap);
   const now = Date.now();
-  let cancelledRuns = 0;
   const tx = rawDb.transaction(() => {
     for (const e of excess) {
+      // PAUSE ADVANCEMENT only — do NOT cancel the in-flight ring run. The ring keeps
+      // draining (its checks are share-capped at admission so they can't monopolize),
+      // and the tick simply won't advance a paused cluster to a new ring. This avoids
+      // stranding a cancelled ring's unchecked targets (which the reaper never re-opens).
       rawDb.prepare(`UPDATE lead_expansions SET status='paused', updated_at=? WHERE id=?`).run(now, e.id);
-      if (e.last_run_id) {
-        const r = rawDb.prepare(`UPDATE scan_runs SET status='cancelled' WHERE id=? AND status='running'`).run(e.last_run_id);
-        cancelledRuns += r.changes;
-      }
     }
   });
   tx();
-  structuredLog("expansion.capped", { cap, paused: excess.length, cancelledRuns }, "warn");
+  structuredLog("expansion.capped", { cap, paused: excess.length }, "warn");
 }
 
-// When capacity frees, resume the oldest paused clusters (re-run their current ring;
-// enqueue/check dedup makes re-entry safe). Bounded by open slots so we never exceed cap.
+// When capacity frees, resume the MOST-productive paused clusters (mirror the cap's
+// keep-the-best rule). Just flip status back to 'active'; the tick picks up from the
+// cluster's current ring (its run kept draining while paused), so nothing is skipped or
+// re-run. Bounded by open slots so we never exceed cap.
 function resumePausedIfCapacity(): void {
   const cap = CFG.maxActive();
   const slots = cap - activeCount();
   if (slots <= 0) return;
-  const paused = rawDb.prepare(`SELECT id FROM lead_expansions WHERE status='paused' ORDER BY updated_at ASC LIMIT ?`).all(slots) as any[];
+  const paused = rawDb.prepare(`SELECT id FROM lead_expansions WHERE status='paused' ORDER BY fresh_found DESC, updated_at DESC LIMIT ?`).all(slots) as any[];
   if (!paused.length) return;
   const now = Date.now();
   for (const p of paused) {
-    rawDb.prepare(`UPDATE lead_expansions SET status='active', last_run_id=NULL, updated_at=? WHERE id=?`).run(now, p.id);
+    rawDb.prepare(`UPDATE lead_expansions SET status='active', updated_at=? WHERE id=?`).run(now, p.id);
   }
   structuredLog("expansion.resumed", { resumed: paused.length }, "info");
 }
@@ -293,7 +327,7 @@ function resumePausedIfCapacity(): void {
 export async function expansionTick(): Promise<void> {
   if (!CFG.enabled()) return;
   ensureSchema();
-  enforceActiveCap();       // shed runaway first so the pipeline breathes
+  enforceActiveCap();       // pause excess clusters (advancement only) so the pipeline breathes
   resumePausedIfCapacity(); // then backfill freed slots from the paused backlog
   const active = rawDb.prepare(`SELECT * FROM lead_expansions WHERE status='active' ORDER BY updated_at ASC LIMIT 20`).all() as any[];
   for (const exp of active) {
@@ -310,7 +344,11 @@ export async function expansionTick(): Promise<void> {
     const ringLeads = Number((rawDb.prepare(`SELECT COUNT(*) c FROM expansion_members WHERE expansion_id=? AND ring=? AND became_lead=1`).get(exp.id, exp.ring) as any).c);
     const emptyStreak = ringLeads > 0 ? 0 : exp.empty_streak + 1;
     const nextRing = exp.ring + 1;
-    const stop = emptyStreak >= CFG.maxEmptyRings() || nextRing >= CFG.maxRings();
+    // Stop conditions: consecutive-empty rings, max depth, OR the cluster's total
+    // address budget is spent (keeps each cluster ONE bounded job, not an endless crawl).
+    const stop = emptyStreak >= CFG.maxEmptyRings()
+      || nextRing >= CFG.maxRings()
+      || Number(exp.addresses_checked) >= CFG.clusterBudget();
     if (stop) {
       rawDb.prepare(`UPDATE lead_expansions SET status='exhausted', empty_streak=?, updated_at=? WHERE id=?`).run(emptyStreak, Date.now(), exp.id);
       structuredLog("expansion.exhausted", { id: exp.id, rings: exp.ring + 1, fresh: exp.fresh_found, emptyStreak }, "info");
