@@ -122,9 +122,23 @@ function activeCount(): number {
   return Number((rawDb.prepare(`SELECT COUNT(*) c FROM lead_expansions WHERE status='active'`).get() as any).c);
 }
 
+// Ring discovery awaits OSM, so guard against the tick advancing (or re-entering)
+// an expansion while its current ring is still being discovered + enqueued.
+const _expanding = new Set<string>();
+
 // ── Ring discovery + enqueue (CRITICAL) ───────────────────────────────────────
 async function expandRing(expansionId: string): Promise<void> {
   ensureSchema();
+  if (_expanding.has(expansionId)) return;
+  _expanding.add(expansionId);
+  try {
+    await expandRingInner(expansionId);
+  } finally {
+    _expanding.delete(expansionId);
+  }
+}
+
+async function expandRingInner(expansionId: string): Promise<void> {
   const exp = rawDb.prepare(`SELECT * FROM lead_expansions WHERE id=?`).get(expansionId) as any;
   if (!exp || exp.status !== "active") return;
   const ring = exp.ring;
@@ -236,6 +250,7 @@ export async function expansionTick(): Promise<void> {
   ensureSchema();
   const active = rawDb.prepare(`SELECT * FROM lead_expansions WHERE status='active' ORDER BY updated_at ASC LIMIT 20`).all() as any[];
   for (const exp of active) {
+    if (_expanding.has(exp.id)) continue; // its ring is still being discovered/enqueued
     // If a ring is in flight, wait until its run drains (all targets conclusive).
     if (exp.last_run_id) {
       const run = rawDb.prepare(`SELECT status,verified,failed,budget FROM scan_runs WHERE id=?`).get(exp.last_run_id) as any;
