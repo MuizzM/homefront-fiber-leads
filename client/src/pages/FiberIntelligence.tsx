@@ -6,13 +6,14 @@ import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Zap, Map as MapIcon, Clock, Layers, Activity, ArrowRight, MapPin, ExternalLink,
+  Hammer, Building2, AlertTriangle,
 } from "lucide-react";
 
 // The Scan Inspector is heavy (SSE stream + live table) and admin-only, so it is
 // code-split and only mounted when the Operations tab is opened.
 const ScanInspector = lazy(() => import("@/components/fiber/ScanInspector"));
 
-type TabKey = "fresh" | "map" | "coming" | "coverage" | "ops";
+type TabKey = "fresh" | "map" | "newbuilds" | "coming" | "coverage" | "ops";
 interface FirstSeenLive {
   windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
   addresses: Array<{ id: number; address: string; city: string; firstSeenLiveAt: string; confidence: string; leadId?: number | null }>;
@@ -36,6 +37,7 @@ function fmtTime(iso: string): string {
 const TABS: Array<{ key: TabKey; label: string; icon: any }> = [
   { key: "fresh", label: "Fresh Now", icon: Zap },
   { key: "map", label: "Map", icon: MapIcon },
+  { key: "newbuilds", label: "New Builds", icon: Hammer },
   { key: "coming", label: "Coming Soon", icon: Clock },
   { key: "coverage", label: "Coverage", icon: Layers },
   { key: "ops", label: "Operations", icon: Activity },
@@ -73,6 +75,7 @@ export default function FiberIntelligence() {
       <div className="min-h-0 flex-1">
         {tab === "fresh" && <FreshNow />}
         {tab === "map" && <MapTab />}
+        {tab === "newbuilds" && <NewBuilds isAdmin={isAdmin} />}
         {tab === "coming" && <ComingSoon />}
         {tab === "coverage" && <Coverage />}
         {tab === "ops" && isAdmin && (
@@ -198,6 +201,146 @@ function Coverage() {
         ))}
       </div>
       <Link href="/map" className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-primary hover:underline">Open the coverage map <ExternalLink className="h-3.5 w-3.5" /></Link>
+    </div>
+  );
+}
+
+// ── New Builds — newly-appearing NC/SC addresses flowing into Fiber Intelligence ─
+interface NewBuildRow {
+  id: number; address: string | null; city: string | null; state: string; zip: string | null; county: string | null;
+  source: string; sources: string[]; buildStage: string; confidence: string; monitored: boolean;
+  clusterId: string | null; detectedAt: number; fiberStatus: string | null; billingStatus: string | null;
+  leadId: number | null; checkedAt: string | null; actionable: boolean;
+}
+interface NewBuildFeed {
+  rows: NewBuildRow[];
+  counts: { total: number; addressed: number; monitored: number; checked: number; leads: number; clusters: number };
+}
+interface Coverage {
+  sources: Array<{ state: string; county: string | null; source: string; scope: string; status: string; recordsSeen: number; newFound: number; lastPollAt: number | null; note: string | null }>;
+  summary: { ncCountiesTracked: number; ncCountiesSeeded: number; scTilesTracked: number; gaps: number; staleOverMin: number };
+}
+const SOURCE_LABEL: Record<string, string> = { nc_onemap: "NC OneMap", osm_overpass: "OSM", new_build: "New Build" };
+function relMs(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
+  const [state, setState] = useState<"all" | "NC" | "SC">("all");
+  const [stage, setStage] = useState<"all" | "addressed" | "monitored" | "actionable">(isAdmin ? "all" : "actionable");
+  const { data, isLoading } = useQuery<NewBuildFeed>({
+    queryKey: ["/api/newbuilds/live"],
+    queryFn: () => apiRequest("GET", "/api/newbuilds/live?hours=168").then((r) => r.json()),
+    refetchInterval: 8000, staleTime: 5000,
+  });
+  const cov = useQuery<Coverage>({
+    queryKey: ["/api/newbuilds/coverage"],
+    queryFn: () => apiRequest("GET", "/api/newbuilds/coverage").then((r) => r.json()),
+    refetchInterval: 30000, enabled: isAdmin,
+  });
+
+  const rows = (data?.rows ?? []).filter((r) =>
+    (state === "all" || r.state === state) &&
+    (stage === "all" || (stage === "addressed" && r.buildStage === "addressed" && !r.monitored) || (stage === "monitored" && r.monitored) || (stage === "actionable" && r.actionable)),
+  );
+  const gaps = (cov.data?.sources ?? []).filter((s) => s.status === "missing");
+
+  return (
+    <div className="space-y-3">
+      {/* Counts */}
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
+        {[
+          ["New builds", data?.counts.total ?? 0, "text-foreground"],
+          ["Addressed", data?.counts.addressed ?? 0, "text-sky-400"],
+          ["Monitored", data?.counts.monitored ?? 0, "text-amber-400"],
+          ["Checked", data?.counts.checked ?? 0, "text-violet-300"],
+          ["Leads", data?.counts.leads ?? 0, "text-emerald-400"],
+          ["Clusters", data?.counts.clusters ?? 0, "text-primary"],
+        ].map(([l, v, t]) => (
+          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
+            <div className={`text-[20px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · streaming into Fiber Intelligence</span>
+        <div className="ml-auto flex gap-1">
+          {(["all", "NC", "SC"] as const).map((s) => (
+            <button key={s} onClick={() => setState(s)} className={`rounded-lg px-2.5 py-1 font-semibold ${state === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s === "all" ? "All" : s}</button>
+          ))}
+        </div>
+        <div className="flex gap-1">
+          {(isAdmin ? (["all", "addressed", "monitored", "actionable"] as const) : (["actionable"] as const)).map((s) => (
+            <button key={s} onClick={() => setStage(s)} className={`rounded-lg px-2.5 py-1 font-semibold capitalize ${stage === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Admin: coverage gaps banner */}
+      {isAdmin && gaps.length > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-300">
+          <div className="mb-1 flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" /> {gaps.length} source coverage gap{gaps.length > 1 ? "s" : ""}</div>
+          {gaps.map((g) => <div key={g.source} className="text-[11px] text-amber-300/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
+        </div>
+      )}
+
+      {/* Feed */}
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        {isLoading && !data ? (
+          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-8 w-8 rounded-lg" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
+          ))}</div>
+        ) : rows.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">
+            {isAdmin ? "No new builds detected yet in this window. The radar polls NC OneMap + OSM continuously; new addresses appear here and are checked immediately." : "No actionable new-build leads yet. Verified fresh-fiber new builds appear here ready to knock."}
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {rows.map((r) => (
+              <div key={r.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`newbuild-row-${r.id}`}>
+                <span className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg ${r.actionable ? "bg-emerald-500/15 text-emerald-400" : r.monitored ? "bg-amber-500/15 text-amber-400" : "bg-primary/12 text-primary"}`}>
+                  {r.monitored ? <Building2 className="h-4 w-4" /> : <Hammer className="h-4 w-4" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-foreground">{r.address ?? `Addressless building${r.county ? ` · ${r.county} Co.` : ""}`}{r.city ? `, ${r.city}` : ""}</div>
+                  <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted-foreground">
+                    <span>{r.state}{r.zip ? ` ${r.zip}` : ""}</span>
+                    <span>· {r.sources.map((s) => SOURCE_LABEL[s] ?? s).join(", ")}</span>
+                    <span>· {relMs(r.detectedAt)}</span>
+                    {r.clusterId && isAdmin && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">cluster</span>}
+                  </div>
+                </div>
+                {/* status */}
+                <div className="flex shrink-0 items-center gap-2">
+                  {r.leadId ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-400">Lead</span>
+                    : r.actionable ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-400">Fresh fiber</span>
+                    : r.monitored ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-400">Monitoring</span>
+                    : r.checkedAt ? <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">{(r.fiberStatus ?? "checked").replace(/_/g, " ")}</span>
+                    : <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-sky-300">Checking</span>}
+                  {r.address && <Link href="/map" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Admin: source coverage summary */}
+      {isAdmin && cov.data && (
+        <div className="rounded-2xl border border-border bg-card px-4 py-3 text-[12px]">
+          <div className="mb-1 font-semibold text-foreground">Source coverage</div>
+          <div className="text-[11px] text-muted-foreground">
+            NC OneMap: {cov.data.summary.ncCountiesTracked}/100 counties tracked · SC OSM tiles: {cov.data.summary.scTilesTracked} · gaps: {cov.data.summary.gaps} · stale: {cov.data.summary.staleOverMin}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

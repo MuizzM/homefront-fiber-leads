@@ -472,6 +472,13 @@ app.use((req, res, next) => {
         });
       }
     } catch (e: any) { console.warn("[state-sweep] deploy auto-start skipped:", e?.message); }
+    // New Build Radar — continuously watch free NC/SC sources for newly-appearing
+    // addresses/buildings and feed valid ones straight into the scan pipeline.
+    // Kill-switch: NEWBUILD_RADAR=off.
+    try {
+      const { startNewBuildRadar } = await import("./newBuildRadar");
+      startNewBuildRadar();
+    } catch (e: any) { console.warn("[newbuild-radar] start skipped:", e?.message); }
   }
   try {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");

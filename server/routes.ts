@@ -1683,6 +1683,40 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
   });
 
+  // ── New Build Radar ─────────────────────────────────────────────────────────
+  // Live feed of newly-appearing NC/SC addresses/buildings flowing into Fiber
+  // Intelligence. Reps see ONLY actionable leads; admins see all (incl. unverified
+  // construction + addressless monitored buildings). Per-county source coverage +
+  // gaps are admin-visible.
+  app.get("/api/newbuilds/live", requireAuth, async (req: any, res) => {
+    const { getNewBuildFeed } = await import("./newBuildRadar");
+    const role = req.user?.role;
+    const isStaff = role === "admin" || role === "manager" || role === "team_lead";
+    const hours = Math.min(720, Math.max(1, Number(req.query.hours) || 72));
+    // Reps only ever get actionable (fresh-fiber) leads — never raw construction.
+    const feed = getNewBuildFeed({ hours, actionableOnly: !isStaff, limit: 300 });
+    res.json(feed);
+  });
+
+  app.get("/api/newbuilds/coverage", requireManager, async (_req, res) => {
+    const { getSourceCoverage } = await import("./newBuildRadar");
+    res.json(getSourceCoverage());
+  });
+
+  // Admin: run one radar tick right now (advances the round-robin scope), OR force
+  // a bounded poll of a specific NC county for its most-recent real addresses.
+  app.post("/api/newbuilds/tick", requireAdmin, async (req: any, res) => {
+    try {
+      const { runRadarTick, radarPollCounty } = await import("./newBuildRadar");
+      const county = typeof req.body?.county === "string" ? req.body.county.trim() : null;
+      if (county) {
+        const lookback = Math.min(50, Math.max(1, Number(req.body?.lookback) || 10));
+        return res.json(await radarPollCounty(county, lookback));
+      }
+      res.json(await runRadarTick());
+    } catch (e: any) { res.status(500).json({ error: String(e?.message ?? e) }); }
+  });
+
   // Daily confirmed-market refresh — OSM diff (new addresses) + live-check the new
   // ones, across every confirmed NC/SC Kinetic city. Also runs nightly (cron).
   app.post("/api/scan/daily-refresh", requireAdmin, requireScanningAllowed, authorizedScanAdmission, (req: any, res) => {
