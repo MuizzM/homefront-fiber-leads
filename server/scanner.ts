@@ -537,16 +537,6 @@ export interface AddressScanOptions {
 }
 
 
-// Parse an upstream Retry-After header (seconds or HTTP-date) → ms. 0 when absent/invalid.
-function parseRetryAfterMs(value: string | null): number {
-  if (!value) return 0;
-  const seconds = Number(value.trim());
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.floor(seconds * 1000);
-  const at = Date.parse(value);
-  if (Number.isFinite(at)) return Math.max(0, at - Date.now());
-  return 0;
-}
-
 function kbpsToMbps(kbps: string | number | null | undefined): number | null {
   if (!kbps) return null;
   const n = typeof kbps === "string" ? parseInt(kbps) : kbps;
@@ -818,19 +808,16 @@ async function scanAddressDirect(
       return base;
     }
     if (res.status === 429 || res.status >= 500) {
-      // Rate limit / transient server error — requeue (the coordinator paces admission).
-      // An explicit upstream Retry-After is ALWAYS honored: pause new request starts
-      // for exactly that window (bounded to 5 min so a hostile/huge value can't wedge
-      // the queue), rotate the Decodo session so the resume lands on a fresh egress
-      // IP, and let the requeued address retry automatically. Never a halt.
-      const retryAfterMs = parseRetryAfterMs(res.headers.get("retry-after"));
-      if (retryAfterMs > 0) {
-        providerQueue.pauseFor(Math.min(retryAfterMs, 5 * 60_000), source);
-        void rotateProxySession(`retry-after ${res.status}`);
-      }
+      // Rate limit / transient server error — NO waiting, NO Retry-After pauses.
+      // We are authorized and the budget is unlimited: the throttle is keyed to the
+      // current residential egress IP, so the remedy is immediate — rotate the
+      // Decodo session (fresh IP) and requeue the SAME address so it retries right
+      // away on the fresh session. Never a halt, never a cooldown, never a
+      // no-service verdict.
+      void rotateProxySession(`upstream ${res.status}`);
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
-      base.notes = `Upstream ${res.status} (transient) — address requeued${retryAfterMs > 0 ? ` after honoring Retry-After ${Math.round(retryAfterMs / 1000)}s` : ""}`;
-      emit("blocked", { status: "blocked", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `${res.status === 429 ? "rate-limited" : "server error"} — requeued for retry${retryAfterMs > 0 ? ` (Retry-After ${Math.round(retryAfterMs / 1000)}s honored)` : ""}`, detail: "transient — kept pending, NOT a no-service verdict" });
+      base.notes = `Upstream ${res.status} (transient) — Decodo session rotated, address requeued immediately`;
+      emit("blocked", { status: "blocked", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `${res.status === 429 ? "rate-limited" : "server error"} — session rotated, retrying immediately on fresh IP`, detail: "transient — kept pending, NOT a no-service verdict" });
       structuredLog("scan.provider.rate_limited", { status: res.status, source }, "warn");
       return base;
     }

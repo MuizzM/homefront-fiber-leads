@@ -279,10 +279,9 @@ class KineticEvidenceGateway {
       if (result.outcome === "rate_limited") {
         this.circuit.rateLimitCount++;
         if (this.circuit.rateLimitCount >= 3)
-          this.trip(
-            "repeated rate limits — rotating Decodo session",
-            Math.min(Math.max(result.retryAfterMs ?? 0, 5_000), 30_000),
-          );
+          // No upstream-hint waits: rotate the Decodo session (fresh egress IP)
+          // and cool off only long enough for the rotation to land.
+          this.trip("repeated rate limits — rotating Decodo session", 5_000);
         throw new KineticEvidenceUnavailableError(
           "RATE_LIMITED",
           "Evidence source rate-limited this session; rotate Decodo session and retry the same address.",
