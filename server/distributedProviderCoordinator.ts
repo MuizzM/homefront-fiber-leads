@@ -132,7 +132,7 @@ export class DistributedProviderCoordinator<T> {
   private readonly instanceId = `${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
 
   constructor(options: Options) {
-    this.maxConcurrency = bounded(options.maxConcurrency, 1, 50, 45);
+    this.maxConcurrency = bounded(options.maxConcurrency, 1, 500, 45);
     this.maxRequestsPerMinute = bounded(options.maxRequestsPerMinute, 1, 60_000, 100);
     this.resultCacheTtlMs = Math.max(0, Math.floor(options.resultCacheTtlMs));
     this.leaseMs = Math.max(10_000, Math.floor(options.leaseMs ?? 30_000));

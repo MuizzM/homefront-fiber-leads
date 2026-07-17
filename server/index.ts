@@ -561,69 +561,44 @@ app.use((req, res, next) => {
       } catch (e: any) { console.warn("[fresh-lead-backfill] skipped:", e?.message); }
     })();
   }
-  // PRIORITY SEED + MARKET SCAN (env-gated, idempotent): enqueue the Sugar-and-Wine-Rd
-  // seed corridor (IMMEDIATE) + the 7 target markets' unchecked/stale addresses
-  // (DISCOVERY) through the REAL startTargetRun path (dedup + worker dispatch). Only
-  // UNCHECKED-or-stale targets are picked, and it self-limits to at most one burst per
-  // 12h, so leaving SEED_PRIORITY_SCAN=on simply keeps these prioritized without piling
-  // up runs. Set SEED_PRIORITY_SCAN=off (default) to disable entirely.
-  if (process.env.SEED_PRIORITY_SCAN && process.env.SEED_PRIORITY_SCAN !== "off") {
-    void (async () => {
-      try {
-        const { rawDb } = await import("./db");
-        const { startTargetRun } = await import("./scanService");
-        const { getDefaultTenantId } = await import("./storage");
-        const tid = getDefaultTenantId();
-        if (tid == null) return;
-        const recent = rawDb.prepare(`SELECT COUNT(*) c FROM scan_runs WHERE label LIKE 'PRIORITY:%' AND heartbeat_at > datetime('now','-12 hours')`).get() as any;
-        if (Number(recent.c) > 0) { structuredLog("priority_seed_scan.skipped", { reason: "recent PRIORITY burst" }); return; }
-        const enqueued: any[] = [];
-        const pick = (sql: string, ...a: any[]) => (rawDb.prepare(sql).all(...a) as any[]).map((r) => Number(r.id));
-        // Seed corridor (includes 4707 Sugar and Wine Rd) — IMMEDIATE so it's checked first.
-        const seedIds = pick(`SELECT id FROM scan_targets WHERE lower(address) LIKE '%sugar%wine%'
-          AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours')) LIMIT 400`);
-        if (seedIds.length) enqueued.push({ area: "seed:sugar-and-wine", ...startTargetRun({ tenantId: tid, city: "Marshville", state: "NC", targetIds: seedIds, runKind: "manual", label: "PRIORITY: Sugar and Wine Rd seed corridor" }) });
-        // 7 Kinetic markets — DISCOVERY (revenue class), unchecked/stale first.
-        for (const c of ["harrisburg", "monroe", "albemarle", "oakboro", "indian trail", "concord", "rockwell"]) {
-          const ids = pick(`SELECT id FROM scan_targets WHERE lower(city)=?
-            AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours'))
-            ORDER BY (last_scanned_at IS NULL) DESC LIMIT 500`, c);
-          if (ids.length) enqueued.push({ area: c, ...startTargetRun({ tenantId: tid, city: c, state: "NC", targetIds: ids, runKind: "discovery", label: "PRIORITY: market " + c }) });
-        }
-        structuredLog("priority_seed_scan.enqueued", { runs: enqueued.length, totalQueued: enqueued.reduce((s, e) => s + (e.queued || 0), 0), areas: JSON.stringify(enqueued.map((e) => ({ area: e.area, queued: e.queued }))) });
-      } catch (e: any) { console.warn("[priority-seed-scan] skipped:", e?.message); }
-    })();
-  }
-  // LEGACY-GREEN RE-VERIFY (env-gated, self-limiting): scan_targets marked green by the
-  // loose columns (last_fiber_status/new_fiber + billing N) but WITHOUT an authoritative
-  // conclusive NEW-FIBER+N snapshot need one fresh re-check to become (or refresh) real
-  // assignable pins. Enqueue them as 'recheck' runs — always re-verify (dedup skip = 0)
-  // and MAINTENANCE class, so the backlog drains at the share-capped rate without ever
-  // crowding revenue checks. At most one burst per 24h; GREEN_REVERIFY=off disables.
-  if (process.env.GREEN_REVERIFY && process.env.GREEN_REVERIFY !== "off") {
-    void (async () => {
-      try {
-        const { rawDb } = await import("./db");
-        const { startTargetRun } = await import("./scanService");
-        const { getDefaultTenantId } = await import("./storage");
-        const tid = getDefaultTenantId();
-        if (tid == null) return;
-        const recent = rawDb.prepare(`SELECT COUNT(*) c FROM scan_runs WHERE label LIKE 'RE-VERIFY:%' AND heartbeat_at > datetime('now','-24 hours')`).get() as any;
-        if (Number(recent.c) > 0) { structuredLog("green_reverify.skipped", { reason: "recent RE-VERIFY burst" }); return; }
-        const ids = (rawDb.prepare(`SELECT s.id FROM scan_targets s
-          WHERE s.tenant_id=? AND s.state IN ('NC','SC')
-            AND s.last_fiber_status='new_fiber' AND s.last_billing_status='N'
-            AND NOT EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.conclusive=1
-              AND upper(COALESCE(a.household_segment_type,''))='NEW FIBER' AND upper(COALESCE(a.billing_status,''))='N')
-          ORDER BY s.last_scanned_at ASC LIMIT 8000`).all(tid) as any[]).map((r) => Number(r.id));
-        let batch = 0;
-        for (let i = 0; i < ids.length; i += 500) {
-          startTargetRun({ tenantId: tid, city: "NC/SC legacy green", state: "NC", targetIds: ids.slice(i, i + 500), runKind: "recheck", label: `RE-VERIFY: legacy green batch ${++batch}` });
-        }
-        structuredLog("green_reverify.enqueued", { candidates: ids.length, runs: batch });
-      } catch (e: any) { console.warn("[green-reverify] skipped:", e?.message); }
-    })();
-  }
+  // PRIORITY SEED + MARKET SCAN — ON BY DEFAULT, CONTINUOUSLY CYCLING. Enqueue the
+  // Sugar-and-Wine-Rd seed corridor (IMMEDIATE) + the 7 target markets'
+  // unchecked/stale addresses (DISCOVERY) through the REAL startTargetRun path
+  // (dedup + worker dispatch). Runs on boot AND on a 4h cycle forever, so all seven
+  // markets keep sweeping for new addresses, new fiber, Coming Soon transitions and
+  // stale-lead rechecks without any operator action. Only UNCHECKED-or-stale
+  // targets are picked and it self-limits to one burst per 4h, so the cycle never
+  // piles up duplicate runs. Set SEED_PRIORITY_SCAN=off to disable entirely.
+  const runPrioritySeedBurst = async () => {
+    try {
+      const { rawDb } = await import("./db");
+      const { startTargetRun } = await import("./scanService");
+      const { getDefaultTenantId } = await import("./storage");
+      const tid = getDefaultTenantId();
+      if (tid == null) return;
+      const recent = rawDb.prepare(`SELECT COUNT(*) c FROM scan_runs WHERE label LIKE 'PRIORITY:%' AND heartbeat_at > datetime('now','-4 hours')`).get() as any;
+      if (Number(recent.c) > 0) { structuredLog("priority_seed_scan.skipped", { reason: "recent PRIORITY burst" }); return; }
+      const enqueued: any[] = [];
+      const pick = (sql: string, ...a: any[]) => (rawDb.prepare(sql).all(...a) as any[]).map((r) => Number(r.id));
+      // Seed corridor (includes 4707 Sugar and Wine Rd) — IMMEDIATE so it's checked first.
+      const seedIds = pick(`SELECT id FROM scan_targets WHERE lower(address) LIKE '%sugar%wine%'
+        AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-12 hours')) LIMIT 400`);
+      if (seedIds.length) enqueued.push({ area: "seed:sugar-and-wine", ...startTargetRun({ tenantId: tid, city: "Marshville", state: "NC", targetIds: seedIds, runKind: "manual", label: "PRIORITY: Sugar and Wine Rd seed corridor" }) });
+      // 7 Kinetic markets — DISCOVERY (revenue class), unchecked/stale first.
+      for (const c of ["harrisburg", "monroe", "albemarle", "oakboro", "indian trail", "concord", "rockwell"]) {
+        const ids = pick(`SELECT id FROM scan_targets WHERE lower(city)=?
+          AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-12 hours'))
+          ORDER BY (last_scanned_at IS NULL) DESC LIMIT 1000`, c);
+        if (ids.length) enqueued.push({ area: c, ...startTargetRun({ tenantId: tid, city: c, state: "NC", targetIds: ids, runKind: "discovery", label: "PRIORITY: market " + c }) });
+      }
+      structuredLog("priority_seed_scan.enqueued", { runs: enqueued.length, totalQueued: enqueued.reduce((s, e) => s + (e.queued || 0), 0), areas: JSON.stringify(enqueued.map((e) => ({ area: e.area, queued: e.queued }))) });
+    } catch (e: any) { console.warn("[priority-seed-scan] skipped:", e?.message); }
+  };
+  if (process.env.SEED_PRIORITY_SCAN !== "off") {
+    void runPrioritySeedBurst();
+    const seedCycle = setInterval(() => { void runPrioritySeedBurst(); }, 4 * 60 * 60_000);
+    if (typeof (seedCycle as any).unref === "function") seedCycle.unref();
+  }  }
   }; // end startBackgroundServices
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────

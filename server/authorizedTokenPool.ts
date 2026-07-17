@@ -98,13 +98,15 @@ export class AuthorizedTokenPool {
   private readonly refreshWaiters: Array<() => void> = [];
 
   constructor(options: AuthorizedTokenPoolOptions) {
-    this.maxSize = boundedInt(options.maxSize, 1, 100, 1);
+    // Unlimited Decodo budget → no artificial pool ceilings. Bounds exist only to
+    // catch absurd misconfiguration, not to ration proxy spend.
+    this.maxSize = boundedInt(options.maxSize, 1, 1_000, 1);
     this.warmMinimum = boundedInt(options.warmMinimum, 1, this.maxSize, 1);
     this.refreshMarginMs = Math.max(1_000, Math.floor(options.refreshMarginMs));
     this.maintenanceIntervalMs = Math.max(1_000, Math.floor(options.maintenanceIntervalMs ?? 15_000));
-    this.maxLeasesPerToken = boundedInt(options.maxLeasesPerToken ?? 10, 1, 1_000, 10);
-    this.maxConcurrentRefreshes = boundedInt(options.maxConcurrentRefreshes ?? 2, 1, 20, 2);
-    this.maxChecksPerToken = boundedInt(options.maxChecksPerToken ?? 100, 1, 100, 100);
+    this.maxLeasesPerToken = boundedInt(options.maxLeasesPerToken ?? 10, 1, 10_000, 10);
+    this.maxConcurrentRefreshes = boundedInt(options.maxConcurrentRefreshes ?? 2, 1, 100, 2);
+    this.maxChecksPerToken = boundedInt(options.maxChecksPerToken ?? 100, 1, 100_000, 100);
     this.mint = options.mint;
     this.now = options.now ?? Date.now;
   }

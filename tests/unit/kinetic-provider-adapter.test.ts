@@ -89,7 +89,7 @@ describe("Kinetic evidence boundary", () => {
     ).rejects.toMatchObject({ code });
     expect(getKineticEvidenceGateway().status().circuitOpen).toBe(true);
   });
-  it("opens the circuit after repeated rate limits", async () => {
+  it("briefly cools off (never stops) after repeated rate limits", async () => {
     setKineticEvidenceSourceForTest(
       adapter({ outcome: "rate_limited", record: null, retryAfterMs: 1000 }),
     );
@@ -105,7 +105,7 @@ describe("Kinetic evidence boundary", () => {
       ).rejects.toMatchObject({ code: "RATE_LIMITED" });
     expect(gateway.status()).toMatchObject({
       circuitOpen: true,
-      circuitReason: "repeated rate limits",
+      circuitReason: "repeated rate limits — rotating Decodo session",
     });
   });
 });

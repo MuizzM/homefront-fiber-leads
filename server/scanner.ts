@@ -30,12 +30,12 @@ import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from
 // uqualProvisioningResult.finalPlacement → "BUR" (buried) | "AER" (aerial)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 100);
+const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 200);
 // Keep enough authorized Decodo sessions warm to cover the full concurrent
-// workload (≈maxConcurrency 50 ÷ maxLeasesPerToken 10 = 5, plus headroom so a
+// workload (≈maxConcurrency 200 ÷ maxLeasesPerToken 10 = 20, plus headroom so a
 // burst never waits on a mint). Unlimited Decodo budget → mint generously; token
 // scarcity must never stall a priority check.
-const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 8);
+const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 25);
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 
@@ -180,9 +180,12 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
 // The first success populates a READY slot; concurrent leasers then take that token
 // via pickReady instead of minting, so the queue drains without a flood. This is
 // pacing, NOT a disabled/halted state — the pool still self-heals on the next tick.
+// The chain still SERIALIZES mints (no duplicate concurrent mint requests — that
+// guard prevents a stampede deadlock), but the spacing is now minimal: unlimited
+// Decodo budget means a fresh residential IP is always available for the next mint.
 const MINT_MIN_INTERVAL_MS = process.env.VITEST
   ? 0 // unit/integration tests never pace mints (real timers would slow the suite)
-  : Math.max(0, Number(process.env.KFS_MINT_MIN_INTERVAL_MS ?? 1_200));
+  : Math.max(0, Number(process.env.KFS_MINT_MIN_INTERVAL_MS ?? 100));
 let mintChain: Promise<unknown> = Promise.resolve();
 let lastMintAt = 0;
 function gatedMint(): Promise<{ token: string; expiresAt: number }> {
@@ -201,12 +204,13 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   maxSize: Number.isFinite(configuredTokenPoolSize) ? configuredTokenPoolSize : 100,
   warmMinimum: Number.isFinite(configuredWarmTokens) ? configuredWarmTokens : 2,
   refreshMarginMs: TOKEN_REFRESH_MARGIN_MS,
-  maintenanceIntervalMs: Number(process.env.KFS_TOKEN_MAINTENANCE_MS ?? 15_000),
-  maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 10),
-  // One mint in flight at a time — the global gate already serializes, and a single
-  // gentle stream is what lets a throttled egress recover.
-  maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 1),
-  maxChecksPerToken: Number(process.env.KFS_TOKEN_MAX_CHECKS ?? 100),
+  maintenanceIntervalMs: Number(process.env.KFS_TOKEN_MAINTENANCE_MS ?? 10_000),
+  maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 25),
+  // The global gate still serializes individual mint requests, but several slots
+  // may refresh concurrently so a large warm pool never waits on one mint stream.
+  maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 4),
+  // Unlimited budget → a token serves many more checks before being retired.
+  maxChecksPerToken: Number(process.env.KFS_TOKEN_MAX_CHECKS ?? 1_000),
   mint: () => gatedMint(),
 });
 
@@ -393,9 +397,12 @@ export interface ScanResult {
   leadScore: number;
 }
 
-const configuredProviderConcurrency = Number(process.env.SCAN_PROVIDER_CONCURRENCY ?? 50);
-const configuredGlobalConcurrency = Number(process.env.SCAN_GLOBAL_CONCURRENCY ?? 50);
-const configuredProviderRpm = Number(process.env.SCAN_PROVIDER_REQUESTS_PER_MINUTE ?? 100);
+// Unlimited Decodo budget → run wide open by default. Decodo session rotation
+// (proactive + reactive-on-403) is what absorbs upstream throttle pressure, not
+// static rate caps. Every value remains env-tunable for an emergency dial-down.
+const configuredProviderConcurrency = Number(process.env.SCAN_PROVIDER_CONCURRENCY ?? 100);
+const configuredGlobalConcurrency = Number(process.env.SCAN_GLOBAL_CONCURRENCY ?? 100);
+const configuredProviderRpm = Number(process.env.SCAN_PROVIDER_REQUESTS_PER_MINUTE ?? 30_000);
 const configuredCacheTtlMs = Number(process.env.SCAN_RESULT_CACHE_MS ?? 5 * 60_000);
 
 const addressTokenAliases: Record<string, string> = {
@@ -465,8 +472,11 @@ const distributedProviderCoordinator = new DistributedProviderCoordinator<ScanRe
   // at most this fraction of concurrency. Their combined headroom is the guaranteed
   // reserve for the revenue classes (IMMEDIATE/NEW_BUILD/DISCOVERY) — a burst of
   // expansion OR a 300k maintenance backlog can never occupy every slot.
-  expansionShareFraction: Number(process.env.PROVIDER_EXPANSION_SHARE ?? 0.35),
-  maintenanceShareFraction: Number(process.env.PROVIDER_MAINTENANCE_SHARE ?? 0.5),
+  // Share caps default to 0 (UNCAPPED): with an unlimited Decodo budget there is
+  // no spend to ration, and priority ordering + aging alone govern admission. Set
+  // the env vars to re-introduce fairness caps if upstream pressure ever returns.
+  expansionShareFraction: Number(process.env.PROVIDER_EXPANSION_SHARE ?? 0),
+  maintenanceShareFraction: Number(process.env.PROVIDER_MAINTENANCE_SHARE ?? 0),
 });
 
 export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {
@@ -604,8 +614,8 @@ export async function liveTestAddress(
   stages.push({ stage: "OSM found", ok: true, detail: `${address}, ${city}, ${state} ${zip}` });
   stages.push({ stage: "Normalized address", ok: true, detail: normalizeKineticAddressKey(address, city, state, zip) });
 
-  // Fresh Braze token via the approved flow (minted DIRECT, not through the
-  // throttled proxy). On failure, invalidate stale state and retry ONCE — no
+  // Fresh Braze token via the approved flow (minted through the authorized Decodo
+  // transport — never direct). On failure, invalidate stale state and retry ONCE — no
   // duplicate requests (the pool single-flights the mint). If it still fails the
   // address stays PENDING_AUTH and is never classified as no-service.
   try {

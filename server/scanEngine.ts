@@ -170,7 +170,7 @@ export async function runScanWorker(
   });
   // Fixed batch size. There is NO AIMD/backoff/cooldown: the shared distributed
   // coordinator's steady concurrency + requests-per-minute cap is the only pacing.
-  const BATCH = Math.max(1, Number(process.env.SCAN_BATCH_CONCURRENCY) || 25);
+  const BATCH = Math.max(1, Number(process.env.SCAN_BATCH_CONCURRENCY) || 50);
   try {
     for (;;) {
       const run = getRun(runId, tenantId);
@@ -236,7 +236,9 @@ export async function runScanWorker(
               // address is still preserved + retried, just on a slower cadence, so the
               // run can drain instead of stranding a perpetually-requeued tail.
               const addressNotReady = !result.blocked && /AddressNeedsFix|AddressSuggestions/i.test(result.notes || "");
-              const backoffSec = addressNotReady ? Math.min(6 * 3600, 45 * Math.pow(2, Math.min(attempt, 7))) : 0;
+              // Unlimited budget → recheck new/not-yet-cataloged addresses far more
+              // eagerly (cap 1h, was 6h) so a NEW FIBER activation surfaces fast.
+              const backoffSec = addressNotReady ? Math.min(3600, 20 * Math.pow(2, Math.min(attempt, 8))) : 0;
               requeueRunTarget(runId, t.targetId, backoffSec);
               addRunBytes(runId, bytes); // the failed attempt still cost its request bytes
               recordFiberFailure({

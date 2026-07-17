@@ -120,7 +120,7 @@ export class ProviderRequestQueue<T> {
     const maxRps = Number(options.maxRequestsPerSecond);
     const cacheTtlMs = Number(options.cacheTtlMs);
     const cacheEntries = Number(options.maxCacheEntries ?? 20_000);
-    this.maxConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.min(100, Math.floor(concurrency))) : 8;
+    this.maxConcurrency = Number.isFinite(concurrency) ? Math.max(1, Math.min(1_000, Math.floor(concurrency))) : 8;
     this.maxRequestsPerSecond = Number.isFinite(maxRps) && maxRps > 0
       ? Math.max(1, Math.min(10_000, Math.floor(maxRps)))
       : Number.POSITIVE_INFINITY;

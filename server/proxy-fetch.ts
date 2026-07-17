@@ -19,12 +19,15 @@ let _rotateInFlight: Promise<void> | null = null;
 // Proactive rotation cadence: retire the Decodo egress IP set every N proxied
 // requests so it never accumulates enough traffic to hit the per-IP rolling-window
 // throttle. 0 disables. Tunable without redeploy via PROXY_ROTATE_EVERY.
-const PROACTIVE_ROTATE_EVERY = boundedInt(process.env.PROXY_ROTATE_EVERY, 40, 0, 100_000);
+// Unlimited Decodo budget → rotate aggressively so no residential egress IP ever
+// accumulates enough traffic to trip the per-IP rolling-window throttle. There is
+// no usage cap: fresh IPs are free, throttled IPs are not.
+const PROACTIVE_ROTATE_EVERY = boundedInt(process.env.PROXY_ROTATE_EVERY, 20, 0, 100_000);
 let _reqSinceRotate = 0;
 
-// Sized to support the globally selected 40–50 search window. The distributed
+// Sized to support the raised global search window. The distributed
 // coordinator, not this socket pool, remains the authoritative system ceiling.
-const POOL_SIZE = boundedInt(process.env.PROXY_POOL_CONNECTIONS, 50, 1, 100);
+const POOL_SIZE = boundedInt(process.env.PROXY_POOL_CONNECTIONS, 100, 1, 500);
 const PIPELINE = boundedInt(process.env.PROXY_PIPELINING, 1, 1, 2);
 const CONN_TIMEOUT = 5_000;     // 5s connect timeout — fail fast
 const KEEP_ALIVE  = 60_000;     // 60s keepalive — fewer reconnects under load

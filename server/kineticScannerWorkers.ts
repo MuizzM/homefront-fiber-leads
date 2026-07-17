@@ -133,26 +133,23 @@ async function runRecheck(id: string): Promise<void> {
           .prepare(
             `UPDATE kinetic_scan_job_items SET status=?,last_error=?,lease_owner=NULL,lease_expires_at=NULL,updated_at=datetime('now') WHERE job_id=? AND item_key=?`,
           )
-          .run(
-            error instanceof KineticEvidenceUnavailableError &&
-              ["ACCESS_DENIED", "CHALLENGE", "CIRCUIT_OPEN"].includes(
-                error.code,
-              )
-              ? "dead_letter"
-              : "failed",
-            message,
-            id,
-            itemKey,
-          );
+          // NEVER-STOP: a denial/challenge/rate-limit is transient — the gateway
+          // rotates the Decodo session (fresh egress IP) and cools off for only a
+          // few seconds. Mark the item 'failed' (retriable — never dead_letter, the
+          // address is preserved) and keep the job running; the next item already
+          // rides the fresh session. Only a hard OFFLINE (no source registered at
+          // all) still aborts the run, since no item could ever succeed.
+          .run("failed", message, id, itemKey);
         heartbeat(id, { last_error: message });
         if (
           error instanceof KineticEvidenceUnavailableError &&
-          (["ACCESS_DENIED", "CHALLENGE", "CIRCUIT_OPEN", "OFFLINE"].includes(
-            error.code,
-          ) ||
-            gateway.status().circuitOpen)
+          error.code === "OFFLINE"
         )
           throw error;
+        // Brief cooloff after a session-level denial so the next item lands on the
+        // rotated Decodo session instead of the just-throttled egress IP.
+        if (error instanceof KineticEvidenceUnavailableError)
+          await new Promise(resolve => setTimeout(resolve, 2_000));
       }
       rawDb
         .prepare(

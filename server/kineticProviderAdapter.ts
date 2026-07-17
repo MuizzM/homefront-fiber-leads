@@ -255,30 +255,37 @@ class KineticEvidenceGateway {
     signal?: AbortSignal,
   ): Promise<KineticEvidenceResponse> {
     const result = await this.adapter!.qualifyAddress(address, signal);
+      // NEVER-STOP POLICY: an upstream denial, challenge, or rate limit is a
+      // TRANSIENT signal, not a reason to halt. The circuit never opens for more
+      // than a brief same-IP cooloff — the remedy is a fresh authorized Decodo
+      // session (new residential egress IP) and an immediate retry of the SAME
+      // address, which the caller's retry loop performs. Unlimited Decodo budget
+      // means a fresh session is always available; no manual recovery is ever
+      // required and no address is ever dropped or mis-classified.
       if (result.outcome === "denied") {
-        this.trip("access denied (403)", 60 * 60_000);
+        this.trip("access denied (403) — rotating Decodo session", 5_000);
         throw new KineticEvidenceUnavailableError(
           "ACCESS_DENIED",
-          "Evidence source denied automated access; scanning stopped.",
+          "Evidence source denied this session; rotate Decodo session and retry the same address.",
         );
       }
       if (result.outcome === "challenge") {
-        this.trip("challenge or CAPTCHA", 24 * 60 * 60_000);
+        this.trip("challenge or CAPTCHA — rotating Decodo session", 10_000);
         throw new KineticEvidenceUnavailableError(
           "CHALLENGE",
-          "Challenge/CAPTCHA detected; scanning stopped without interpreting the page.",
+          "Challenge/CAPTCHA on this egress IP; rotate Decodo session and retry the same address.",
         );
       }
       if (result.outcome === "rate_limited") {
         this.circuit.rateLimitCount++;
         if (this.circuit.rateLimitCount >= 3)
           this.trip(
-            "repeated rate limits",
-            Math.max(result.retryAfterMs ?? 0, 30 * 60_000),
+            "repeated rate limits — rotating Decodo session",
+            Math.min(Math.max(result.retryAfterMs ?? 0, 5_000), 30_000),
           );
         throw new KineticEvidenceUnavailableError(
           "RATE_LIMITED",
-          "Evidence source rate limit respected; no availability result recorded.",
+          "Evidence source rate-limited this session; rotate Decodo session and retry the same address.",
         );
       }
       this.circuit.rateLimitCount = 0;
