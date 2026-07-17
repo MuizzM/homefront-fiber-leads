@@ -525,6 +525,39 @@ app.use((req, res, next) => {
       } catch (e: any) { console.warn("[fresh-lead-backfill] skipped:", e?.message); }
     })();
   }
+  // PRIORITY SEED + MARKET SCAN (env-gated, idempotent): enqueue the Sugar-and-Wine-Rd
+  // seed corridor (IMMEDIATE) + the 7 target markets' unchecked/stale addresses
+  // (DISCOVERY) through the REAL startTargetRun path (dedup + worker dispatch). Only
+  // UNCHECKED-or-stale targets are picked, and it self-limits to at most one burst per
+  // 12h, so leaving SEED_PRIORITY_SCAN=on simply keeps these prioritized without piling
+  // up runs. Set SEED_PRIORITY_SCAN=off (default) to disable entirely.
+  if (process.env.SEED_PRIORITY_SCAN && process.env.SEED_PRIORITY_SCAN !== "off") {
+    void (async () => {
+      try {
+        const { rawDb } = await import("./db");
+        const { startTargetRun } = await import("./scanService");
+        const { getDefaultTenantId } = await import("./storage");
+        const tid = getDefaultTenantId();
+        if (tid == null) return;
+        const recent = rawDb.prepare(`SELECT COUNT(*) c FROM scan_runs WHERE label LIKE 'PRIORITY:%' AND created_at > datetime('now','-12 hours')`).get() as any;
+        if (Number(recent.c) > 0) { structuredLog("priority_seed_scan.skipped", { reason: "recent PRIORITY burst" }); return; }
+        const enqueued: any[] = [];
+        const pick = (sql: string, ...a: any[]) => (rawDb.prepare(sql).all(...a) as any[]).map((r) => Number(r.id));
+        // Seed corridor (includes 4707 Sugar and Wine Rd) — IMMEDIATE so it's checked first.
+        const seedIds = pick(`SELECT id FROM scan_targets WHERE lower(address) LIKE '%sugar%wine%'
+          AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours')) LIMIT 400`);
+        if (seedIds.length) enqueued.push({ area: "seed:sugar-and-wine", ...startTargetRun({ tenantId: tid, city: "Marshville", state: "NC", targetIds: seedIds, runKind: "manual", label: "PRIORITY: Sugar and Wine Rd seed corridor" }) });
+        // 7 Kinetic markets — DISCOVERY (revenue class), unchecked/stale first.
+        for (const c of ["harrisburg", "monroe", "albemarle", "oakboro", "indian trail", "concord", "rockwell"]) {
+          const ids = pick(`SELECT id FROM scan_targets WHERE lower(city)=?
+            AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours'))
+            ORDER BY (last_scanned_at IS NULL) DESC LIMIT 500`, c);
+          if (ids.length) enqueued.push({ area: c, ...startTargetRun({ tenantId: tid, city: c, state: "NC", targetIds: ids, runKind: "discovery", label: "PRIORITY: market " + c }) });
+        }
+        structuredLog("priority_seed_scan.enqueued", { runs: enqueued.length, totalQueued: enqueued.reduce((s, e) => s + (e.queued || 0), 0), areas: JSON.stringify(enqueued.map((e) => ({ area: e.area, queued: e.queued }))) });
+      } catch (e: any) { console.warn("[priority-seed-scan] skipped:", e?.message); }
+    })();
+  }
   }; // end startBackgroundServices
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────

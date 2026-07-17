@@ -31,6 +31,11 @@ services:
       # address-lock prevent any double-check against the sweep.
       ENABLE_STATE_MONITORING: "true"
       STATE_MONITOR_LIVE: "true"
+      # One-shot-per-12h priority burst: on boot, enqueue the Sugar-and-Wine-Rd seed
+      # corridor + the 7 target Kinetic markets (Harrisburg/Monroe/Albemarle/Oakboro/
+      # Indian Trail/Concord/Rockwell) via the real startTargetRun path. Self-limiting;
+      # set to "off" once the corridor + markets are well-covered.
+      SEED_PRIORITY_SCAN: "on"
       # ── Outbound mail sender (2026-07-16 OTP outage) ─────────────────────────
       # The Resend account has exactly ONE verified sending domain:
       # portal.homefrontsolutionsllc.com. The host .env pointed MAIL_FROM at the
