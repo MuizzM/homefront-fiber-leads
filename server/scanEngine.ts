@@ -109,9 +109,14 @@ function providerPriorityForRun(kind: string): ProviderRequestPriority {
   const value = String(kind ?? "").toLowerCase();
   if (value.includes("manual") || value === "target_ids") return "manual";
   if (value.includes("lasso") || value.includes("bbox") || value.includes("area")) return "lasso";
-  // Newly-detected construction AND lead-triggered cluster expansion jump ahead of
-  // the bulk statewide sweep (both are CRITICAL revenue work).
-  if (value.includes("new_build") || value.includes("expansion")) return "new_build";
+  // CRITICAL revenue work that must never sit behind the bulk statewide sweep:
+  // newly-detected construction, lead-triggered cluster expansion, address
+  // DISCOVERY (finds fresh leads — e.g. the targeted city discovery runs), and
+  // any Field-Map / Fresh-Lead check.
+  if (
+    value.includes("new_build") || value.includes("expansion") ||
+    value.includes("discovery") || value.includes("field") || value.includes("fresh")
+  ) return "new_build";
   if (value.includes("city")) return "city";
   if (value.includes("recheck") || value.includes("rescan")) return "recheck";
   if (value.includes("nightly") || value.includes("scheduled")) return "nightly";
@@ -607,8 +612,26 @@ function finish(run: ScanRunRow, status: string): void {
 // On boot: re-dispatch any run that was 'running' when the process died and
 // whose heartbeat is stale. This is what makes "leave and return without losing
 // progress" real across a crash/deploy. Each run continues from its DB queue.
+// Heartbeat age past which a still-"active" worker is treated as WEDGED, not slow.
+// Admission waits are now bounded (coordinator admissionMaxWaitMs ~120s) and a
+// batch of network checks completes well under this, so a run whose heartbeat has
+// been frozen this long is genuinely stuck — its in-memory activeRuns entry is a
+// zombie that blocks the normal (isRunActive) resume path below. Evicting it is the
+// "remove stale leases/deadlocks" fix; set generously so only truly-dead workers
+// are reclaimed (a resurrected zombie is deduped by the coordinator address-lock).
+const STUCK_RECLAIM_SECONDS = Number(process.env.SCAN_STUCK_RECLAIM_SECONDS ?? 300);
+
 export function resumeInterruptedRuns(): void {
   try {
+    // First evict zombie leases: runs whose worker is still in activeRuns but whose
+    // heartbeat has been frozen far past any legitimate batch. Without this a wedged
+    // worker holds its run 'active' forever and the reaper below skips it — the exact
+    // deadlock that left the discovery run at "0 checked" with orphaned inflight rows.
+    for (const run of getResumableRuns(STUCK_RECLAIM_SECONDS)) {
+      if (!activeRuns.has(run.id)) continue; // worker already gone — normal resume covers it
+      console.warn(`[scan-engine] force-reclaiming wedged run ${run.id} kind=${run.kind} (heartbeat ${run.heartbeatAt ?? "null"})`);
+      activeRuns.delete(run.id); // drop the zombie lease so runScanWorker can re-enter below
+    }
     const runs = getResumableRuns(30);
     for (const run of runs) {
       if (isRunActive(run.id)) continue; // a live worker already owns it

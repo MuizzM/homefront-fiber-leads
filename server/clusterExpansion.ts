@@ -28,7 +28,11 @@ const CFG = {
   maxEmptyRings: () => bounded(process.env.EXPANSION_MAX_EMPTY_RINGS, 2, 1, 20), // stop after N empty rings
   ringBudget: () => bounded(process.env.EXPANSION_RING_BUDGET, 60, 5, 500),      // addresses/ring cap
   recheckMs: () => bounded(process.env.EXPANSION_RECHECK_MS, 6 * 3600_000, 60_000, 30 * 24 * 3600_000),
-  maxActive: () => bounded(process.env.EXPANSION_MAX_ACTIVE, 60, 1, 500),
+  // Concurrent active expansions. Each holds one in-flight CRITICAL run, so an
+  // unbounded value lets expansion crowd the CRITICAL admission pool and slow the
+  // core pipeline (address discovery, Field Map, manual checks). Kept low; excess
+  // clusters are paused (not lost) and resumed as capacity frees.
+  maxActive: () => bounded(process.env.EXPANSION_MAX_ACTIVE, 8, 1, 500),
   osm: () => process.env.EXPANSION_OSM !== "off",
   tickMs: () => bounded(process.env.EXPANSION_TICK_MS, 20_000, 3_000, 120_000),
 };
@@ -246,9 +250,51 @@ async function expandRingInner(expansionId: string): Promise<void> {
 // For each active expansion whose current ring's run has drained, count the new
 // leads it produced; if none → empty_streak++. Stop after maxEmptyRings or maxRings;
 // otherwise expand the next (larger) ring outward.
+// Keep concurrent active expansions at or below maxActive. Excess (least-productive
+// first: fewest fresh leads, then oldest touch) is PAUSED — not lost — and its
+// in-flight CRITICAL run is cancelled so its worker stops and its admission slots
+// free for the core pipeline. Paused clusters resume when capacity opens. This is
+// what winds the runaway (78 concurrent lead_expansion runs) back down to the cap.
+function enforceActiveCap(): void {
+  const cap = CFG.maxActive();
+  const active = rawDb.prepare(`SELECT id, last_run_id FROM lead_expansions WHERE status='active' ORDER BY fresh_found ASC, updated_at ASC`).all() as any[];
+  if (active.length <= cap) return;
+  const excess = active.slice(cap);
+  const now = Date.now();
+  let cancelledRuns = 0;
+  const tx = rawDb.transaction(() => {
+    for (const e of excess) {
+      rawDb.prepare(`UPDATE lead_expansions SET status='paused', updated_at=? WHERE id=?`).run(now, e.id);
+      if (e.last_run_id) {
+        const r = rawDb.prepare(`UPDATE scan_runs SET status='cancelled' WHERE id=? AND status='running'`).run(e.last_run_id);
+        cancelledRuns += r.changes;
+      }
+    }
+  });
+  tx();
+  structuredLog("expansion.capped", { cap, paused: excess.length, cancelledRuns }, "warn");
+}
+
+// When capacity frees, resume the oldest paused clusters (re-run their current ring;
+// enqueue/check dedup makes re-entry safe). Bounded by open slots so we never exceed cap.
+function resumePausedIfCapacity(): void {
+  const cap = CFG.maxActive();
+  const slots = cap - activeCount();
+  if (slots <= 0) return;
+  const paused = rawDb.prepare(`SELECT id FROM lead_expansions WHERE status='paused' ORDER BY updated_at ASC LIMIT ?`).all(slots) as any[];
+  if (!paused.length) return;
+  const now = Date.now();
+  for (const p of paused) {
+    rawDb.prepare(`UPDATE lead_expansions SET status='active', last_run_id=NULL, updated_at=? WHERE id=?`).run(now, p.id);
+  }
+  structuredLog("expansion.resumed", { resumed: paused.length }, "info");
+}
+
 export async function expansionTick(): Promise<void> {
   if (!CFG.enabled()) return;
   ensureSchema();
+  enforceActiveCap();       // shed runaway first so the pipeline breathes
+  resumePausedIfCapacity(); // then backfill freed slots from the paused backlog
   const active = rawDb.prepare(`SELECT * FROM lead_expansions WHERE status='active' ORDER BY updated_at ASC LIMIT 20`).all() as any[];
   for (const exp of active) {
     if (_expanding.has(exp.id)) continue; // its ring is still being discovered/enqueued
@@ -279,6 +325,10 @@ let _timer: ReturnType<typeof setInterval> | null = null;
 export function startExpansionEngine(): void {
   if (_timer || !CFG.enabled()) return;
   ensureSchema();
+  // Shed any runaway from before this boot immediately (a prior process may have
+  // left dozens of active expansions holding CRITICAL runs) so the core pipeline
+  // regains admission headroom on deploy instead of waiting for the first tick.
+  try { enforceActiveCap(); } catch (e: any) { structuredLog("expansion.boot_cap_failed", { error: String(e?.message ?? e).slice(0, 120) }, "warn"); }
   _timer = setInterval(() => { void expansionTick().catch(() => {}); }, CFG.tickMs());
   if (typeof (_timer as any).unref === "function") (_timer as any).unref();
   structuredLog("expansion.engine_started", { tickMs: CFG.tickMs(), ringM: CFG.ringM(), maxRings: CFG.maxRings(), maxEmptyRings: CFG.maxEmptyRings() }, "info");

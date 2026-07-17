@@ -154,4 +154,52 @@ describe("DistributedProviderCoordinator", () => {
     }
     expect(a.snapshot()).toMatchObject({ maxRequestsPerMinute: 3, active: 0, queued: 0 });
   });
+
+  it("times out a request that never gets admitted so its worker can requeue (no deadlock)", async () => {
+    // One concurrency slot, held forever by a CRITICAL request. A NORMAL request
+    // behind it can never be admitted; instead of hanging its worker forever it must
+    // give up after admissionMaxWaitMs and reject (the scan worker then requeues).
+    const c = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 1, maxRequestsPerMinute: 1000, resultCacheTtlMs: 0, rateWindowMs: 100, pollMs: 5,
+      admissionMaxWaitMs: 120, agingRatePerSec: 0, // aging off so it truly can't be admitted
+    });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const holder = c.execute("hold", "new_build", async () => { await gate; return { value: 1 }; }, codec);
+    await new Promise(r => setTimeout(r, 20)); // holder becomes active
+    await expect(
+      c.execute("blocked", "city", async () => ({ value: 2 }), codec),
+    ).rejects.toThrow(/admission not granted/i);
+    // The timed-out request must not leave a stuck 'queued' row that blocks the head.
+    const stuckQueued = rawDb.prepare(`SELECT COUNT(*) c FROM provider_admission_queue WHERE state='queued'`).get() as any;
+    expect(stuckQueued.c).toBe(0);
+    release();
+    await holder;
+  });
+
+  it("ages a starved NORMAL item into the CRITICAL band so a sustained flood can't starve it forever", async () => {
+    // One slot + one rate/window. A steady stream of CRITICAL work would ordinarily
+    // keep a lone NORMAL item queued indefinitely. Aging must lift it to the cutoff
+    // within a bounded time so it eventually runs. Fast aging keeps the test quick.
+    const c = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 2, maxRequestsPerMinute: 1000, resultCacheTtlMs: 0, rateWindowMs: 50, pollMs: 4,
+      admissionMaxWaitMs: 5_000, agingRatePerSec: 400, agingMaxBoost: 200, // NORMAL 275 → 380 in ~0.26s
+    });
+    const done: string[] = [];
+    let stop = false;
+    // Flood: keep a CRITICAL request in flight continuously.
+    const flood = (async () => {
+      let i = 0;
+      while (!stop) {
+        await c.execute(`flood-${i++}`, "new_build", async () => { done.push("C"); return { value: 0 }; }, codec)
+          .catch(() => {});
+      }
+    })();
+    // The lone NORMAL request must complete despite the flood (aging saves it).
+    const normal = await c.execute("normal", "city", async () => { done.push("N"); return { value: 1 }; }, codec);
+    stop = true;
+    await flood;
+    expect(normal).toEqual({ value: 1 });
+    expect(done).toContain("N"); // it ran — never starved
+  });
 });

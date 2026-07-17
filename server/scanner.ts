@@ -456,6 +456,11 @@ const distributedProviderCoordinator = new DistributedProviderCoordinator<ScanRe
   // so the bulk statewide sweep can never starve immediate checks.
   criticalReservedConcurrency: Number(process.env.PROVIDER_CRITICAL_RESERVED ?? 3),
   criticalReservedRate: Number(process.env.PROVIDER_CRITICAL_RESERVED_RATE ?? 2),
+  // Bounded admission wait + aging so a sustained CRITICAL flood (e.g. many
+  // lead-expansion runs) can never deadlock or permanently starve NORMAL work.
+  admissionMaxWaitMs: Number(process.env.PROVIDER_ADMISSION_MAX_WAIT_MS ?? 120_000),
+  agingRatePerSec: Number(process.env.PROVIDER_ADMISSION_AGING_PER_SEC ?? 4),
+  agingMaxBoost: Number(process.env.PROVIDER_ADMISSION_AGING_MAX_BOOST ?? 150),
 });
 
 export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {

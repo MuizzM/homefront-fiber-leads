@@ -25,6 +25,22 @@ export function isCriticalPriority(source: ProviderRequestPriority): boolean {
   return priorityValue[source] >= CRITICAL_PRIORITY_CUTOFF;
 }
 
+/**
+ * Thrown when a request waits past the admission deadline without being admitted.
+ * NOT a provider/no-service answer — the scan worker treats it as a transient
+ * miss and requeues the address. Its purpose is to guarantee a worker's
+ * `await execute()` ALWAYS returns in bounded time, so a saturated coordinator
+ * can never leave a target 'inflight' forever (which deadlocked whole runs:
+ * the reaper skips a run whose worker is still "alive" but permanently blocked).
+ */
+export class AdmissionTimeoutError extends Error {
+  readonly transient = true;
+  constructor(waitedMs: number) {
+    super(`admission not granted within ${waitedMs}ms (requeue + retry)`);
+    this.name = "AdmissionTimeoutError";
+  }
+}
+
 export interface DistributedProviderSnapshot {
   active: number;
   queued: number;
@@ -49,6 +65,12 @@ interface Options {
   criticalReservedConcurrency?: number;
   /** Per-window admission starts held in reserve for CRITICAL work. */
   criticalReservedRate?: number;
+  /** Max time a request may wait for admission before it gives up (requeue). */
+  admissionMaxWaitMs?: number;
+  /** Priority points a queued item gains per second of waiting (anti-starvation). */
+  agingRatePerSec?: number;
+  /** Cap on the aging boost, so NORMAL climbs into — not far above — CRITICAL. */
+  agingMaxBoost?: number;
   now?: () => number;
 }
 
@@ -70,6 +92,9 @@ export class DistributedProviderCoordinator<T> {
   private readonly rollingAdmissionLimit: number;
   private readonly criticalReservedConcurrency: number;
   private readonly criticalReservedRate: number;
+  private readonly admissionMaxWaitMs: number;
+  private readonly agingRatePerSec: number;
+  private readonly agingMaxBoost: number;
   private readonly now: () => number;
   private readonly instanceId = `${process.pid}-${crypto.randomUUID().slice(0, 8)}`;
 
@@ -99,6 +124,19 @@ export class DistributedProviderCoordinator<T> {
     // slot (a reservation that starves NORMAL entirely would deadlock it).
     this.criticalReservedConcurrency = bounded(options.criticalReservedConcurrency ?? 0, 0, Math.max(0, this.maxConcurrency - 1), 0);
     this.criticalReservedRate = bounded(options.criticalReservedRate ?? 0, 0, Math.max(0, this.rollingAdmissionLimit - 1), 0);
+    // A request may not wait for admission forever. When the coordinator is
+    // saturated (e.g. a sustained CRITICAL flood), a NORMAL request gives up after
+    // this deadline and the scan worker requeues its address — the worker keeps
+    // looping (heartbeating) instead of hanging, so runs never deadlock.
+    this.admissionMaxWaitMs = Math.max(100, Math.floor(options.admissionMaxWaitMs ?? 120_000));
+    // Aging: a queued item earns priority the longer it waits, guaranteeing that
+    // even under a permanent CRITICAL flood a NORMAL item eventually crosses the
+    // CRITICAL cutoff — for BOTH ordering and the reserved-slot ceiling — and runs.
+    // Bounded so aging lifts NORMAL into the CRITICAL band without burying fresh
+    // CRITICAL work indefinitely. Sub-second unit tests see ~0 boost (no behavior
+    // change); starvation only matters over tens of seconds of real backlog.
+    this.agingRatePerSec = Math.max(0, Math.floor(options.agingRatePerSec ?? 4));
+    this.agingMaxBoost = Math.max(0, Math.floor(options.agingMaxBoost ?? 150));
     this.now = options.now ?? Date.now;
     ensureSchema();
   }
@@ -183,25 +221,49 @@ export class DistributedProviderCoordinator<T> {
   }
 
   private async awaitAdmission(workId: string): Promise<void> {
+    const waitStartedAt = this.now();
     for (;;) {
+      // Bounded wait: never hang a scan worker forever. On deadline the request
+      // gives up, its queue row is retired, and the caller requeues the address.
+      if (this.now() - waitStartedAt >= this.admissionMaxWaitMs) {
+        rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error=?,lease_expires_at=NULL,updated_at=? WHERE id=? AND state='queued'`)
+          .run("admission wait timeout", this.now(), workId);
+        throw new AdmissionTimeoutError(this.now() - waitStartedAt);
+      }
       const decision = rawDb.transaction(() => {
         this.cleanup();
         const now = this.now();
         const control = this.control();
         const nextStartAt = Number(control.next_start_at ?? 0);
         if (nextStartAt > now) return { admitted: false, waitMs: Math.max(this.pollMs, nextStartAt - now) };
-        // Highest-priority queued item is the admission head. Priority DESC already
-        // orders CRITICAL ahead of NORMAL; the reservation below additionally keeps
-        // NORMAL out of the last slots so a CRITICAL item never has to wait for a
-        // NORMAL in-flight request to finish before it can start.
-        const head = rawDb.prepare(`SELECT id,priority FROM provider_admission_queue WHERE state='queued'
-          ORDER BY priority DESC,enqueued_at ASC,id ASC LIMIT 1`).get() as any;
+        // Admission head = the highest EFFECTIVE-priority queued item. Effective
+        // priority ages a waiting item upward, but asymmetrically so anti-starvation
+        // never defeats CRITICAL-first:
+        //   • NORMAL (base < cutoff) ages only UP TO the cutoff — enough to escape
+        //     starvation and earn CRITICAL-band ceiling access, but it can never
+        //     SURPASS real CRITICAL, so a bulk NORMAL backlog can't bury fresh
+        //     CRITICAL work by all aging past it at once.
+        //   • CRITICAL (base >= cutoff) ages ABOVE the cutoff, so genuinely urgent
+        //     work still out-sorts any aged-NORMAL that reached the cutoff.
+        const agedExpr = `CASE WHEN priority >= ${CRITICAL_PRIORITY_CUTOFF}
+            THEN priority + MIN(@maxBoost, CAST((@now - enqueued_at) * @rate / 1000 AS INTEGER))
+            ELSE MIN(${CRITICAL_PRIORITY_CUTOFF}, priority + CAST((@now - enqueued_at) * @rate / 1000 AS INTEGER)) END`;
+        const head = rawDb.prepare(`SELECT id,priority,enqueued_at FROM provider_admission_queue WHERE state='queued'
+          ORDER BY (${agedExpr}) DESC, enqueued_at ASC, id ASC LIMIT 1`)
+          .get({ maxBoost: this.agingMaxBoost, now, rate: this.agingRatePerSec }) as any;
         if (!head || head.id !== workId) return { admitted: false, waitMs: this.pollMs };
-        const headIsCritical = Number(head.priority) >= CRITICAL_PRIORITY_CUTOFF;
+        const agedPoints = this.agingRatePerSec > 0
+          ? Math.floor((now - Number(head.enqueued_at)) * this.agingRatePerSec / 1000) : 0;
+        const base = Number(head.priority);
+        const effectivePriority = base >= CRITICAL_PRIORITY_CUTOFF
+          ? base + Math.min(this.agingMaxBoost, agedPoints)
+          : Math.min(CRITICAL_PRIORITY_CUTOFF, base + agedPoints);
+        const headIsCritical = effectivePriority >= CRITICAL_PRIORITY_CUTOFF;
         const active = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_admission_queue WHERE state='active'`).get() as any).count);
         const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any).count);
-        // CRITICAL may use every slot; NORMAL is held below the reserved band so the
-        // reserved concurrency + per-window rate stays available for CRITICAL only.
+        // CRITICAL (incl. aged-into-CRITICAL) may use every slot; NORMAL is held below
+        // the reserved band so the reserved concurrency + per-window rate stays
+        // available for CRITICAL only.
         const concurrencyCeiling = headIsCritical ? this.maxConcurrency : this.maxConcurrency - this.criticalReservedConcurrency;
         const rateCeiling = headIsCritical ? this.rollingAdmissionLimit : this.rollingAdmissionLimit - this.criticalReservedRate;
         if (active >= concurrencyCeiling || starts >= rateCeiling) {
