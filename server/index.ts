@@ -539,7 +539,7 @@ app.use((req, res, next) => {
         const { getDefaultTenantId } = await import("./storage");
         const tid = getDefaultTenantId();
         if (tid == null) return;
-        const recent = rawDb.prepare(`SELECT COUNT(*) c FROM scan_runs WHERE label LIKE 'PRIORITY:%' AND created_at > datetime('now','-12 hours')`).get() as any;
+        const recent = rawDb.prepare(`SELECT COUNT(*) c FROM scan_runs WHERE label LIKE 'PRIORITY:%' AND heartbeat_at > datetime('now','-12 hours')`).get() as any;
         if (Number(recent.c) > 0) { structuredLog("priority_seed_scan.skipped", { reason: "recent PRIORITY burst" }); return; }
         const enqueued: any[] = [];
         const pick = (sql: string, ...a: any[]) => (rawDb.prepare(sql).all(...a) as any[]).map((r) => Number(r.id));
