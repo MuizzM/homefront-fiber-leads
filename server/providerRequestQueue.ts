@@ -149,7 +149,7 @@ export class ProviderRequestQueue<T> {
       if (existing.pending && priority > existing.pending.priority) {
         existing.pending.priority = priority;
         existing.pending.source = source;
-        this.sortPending();
+        this.pendingDirty = true; // lazy sort at dispatch — never O(n) per enqueue
       }
       this.emit({ type: "deduped", key: normalizedKey, queued: this.pending.length, active: this.active, source });
       return existing.promise.then(value => this.clone(value));
@@ -164,7 +164,7 @@ export class ProviderRequestQueue<T> {
     };
     this.inFlight.set(normalizedKey, { promise, pending: item });
     this.pending.push(item);
-    this.sortPending();
+    this.pendingDirty = true; // sorted lazily in pump() — bulk loads stay O(n) total
     this.emit({ type: "queued", key: normalizedKey, queued: this.pending.length, active: this.active, priority, source });
     this.pump();
     return promise.then(value => this.clone(value));
@@ -211,12 +211,18 @@ export class ProviderRequestQueue<T> {
 
   clearCache(): void { this.cache.clear(); }
 
+  private pendingDirty = false;
   private sortPending(): void {
+    // Lazy ordering: enqueue only marks dirty, so loading a 20k-target sweep costs
+    // one sort at dispatch time instead of 20k full re-sorts (was O(n²) per batch).
+    if (!this.pendingDirty) return;
     this.pending.sort((a, b) => b.priority - a.priority || a.sequence - b.sequence);
+    this.pendingDirty = false;
   }
 
   private pump(): void {
     if (this.pending.length === 0) return;
+    this.sortPending();
     const now = this.now();
     if (this.pausedUntil > now) {
       this.scheduleWake(this.pausedUntil - now);

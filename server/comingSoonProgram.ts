@@ -151,15 +151,22 @@ export async function runComingSoonSweep(tenantId: number): Promise<{ due: numbe
   let dispatched = 0;
   if (due.length) {
     // Ensure every watch address exists as a scan target, then check them in one
-    // durable run so a deploy never loses the batch.
+    // durable run so a deploy never loses the batch. BULK: one upsert + one
+    // lookup query for the whole batch (was a query per address — N+1).
+    storage.upsertScanTargets(due.map((row) => ({
+      tenantId, address: row.address, city: row.city, state: row.state, zip: row.zip,
+      lat: row.lat, lng: row.lng, source: "coming-soon-watch",
+    } as any)));
     const ids: number[] = [];
-    for (const row of due) {
-      storage.upsertScanTargets([{ tenantId, address: row.address, city: row.city, state: row.state, zip: row.zip, lat: row.lat, lng: row.lng, source: "coming-soon-watch" } as any]);
-      const t = rawDb.prepare(
-        `SELECT id FROM scan_targets WHERE tenant_id=? AND lower(address)=lower(?) AND lower(city)=lower(?) AND state=? LIMIT 1`,
-      ).get(tenantId, row.address, row.city, row.state) as any;
-      if (t?.id) ids.push(Number(t.id));
-    }
+    const lookup = rawDb.prepare(
+      `SELECT id FROM scan_targets WHERE tenant_id=? AND lower(address)=lower(?) AND lower(city)=lower(?) AND state=? LIMIT 1`,
+    );
+    rawDb.transaction(() => {
+      for (const row of due) {
+        const t = lookup.get(tenantId, row.address, row.city, row.state) as any;
+        if (t?.id) ids.push(Number(t.id));
+      }
+    })();
     for (let i = 0; i < ids.length; i += 1_000) {
       const batch = ids.slice(i, i + 1_000);
       scanService.startTargetRun({
@@ -182,13 +189,18 @@ export async function runComingSoonSweep(tenantId: number): Promise<{ due: numbe
     rawDb.prepare(`UPDATE coming_soon_watch SET status='promoted', promoted_lead_id=?, promoted_at=datetime('now'), updated_at=datetime('now') WHERE id=?`)
       .run(row.leadId, row.watchId);
   }
-  // Reschedule everything that was checked (whether due this sweep or not).
-  rawDb.prepare(`UPDATE coming_soon_watch SET checks=checks+1, updated_at=datetime('now') WHERE tenant_id=? AND status='watching' AND id IN (${due.map(() => "?").join(",") || "NULL"})`)
-    .run(tenantId, ...due.map((r) => r.id));
-  for (const row of due) {
-    const { score, cadenceHours } = opportunityFor(row.expected_completion_at, countNearbyFresh(tenantId, row.lat, row.lng));
-    rawDb.prepare(`UPDATE coming_soon_watch SET opportunity_score=?, next_check_at=datetime('now', ?), updated_at=datetime('now') WHERE id=? AND status='watching'`)
-      .run(score, `+${cadenceHours} hours`, row.id);
+  // Reschedule everything that was checked (whether due this sweep or not). All
+  // rescore + reschedule writes happen inside ONE transaction (was N+1 fsyncs).
+  if (due.length) {
+    rawDb.prepare(`UPDATE coming_soon_watch SET checks=checks+1, updated_at=datetime('now') WHERE tenant_id=? AND status='watching' AND id IN (${due.map(() => "?").join(",")})`)
+      .run(tenantId, ...due.map((r) => r.id));
+    const reschedule = rawDb.prepare(`UPDATE coming_soon_watch SET opportunity_score=?, next_check_at=datetime('now', ?), updated_at=datetime('now') WHERE id=? AND status='watching'`);
+    rawDb.transaction(() => {
+      for (const row of due) {
+        const { score, cadenceHours } = opportunityFor(row.expected_completion_at, countNearbyFresh(tenantId, row.lat, row.lng));
+        reschedule.run(score, `+${cadenceHours} hours`, row.id);
+      }
+    })();
   }
   if (due.length || promotedRows.length) {
     structuredLog("coming_soon.sweep", { tenantId, due: due.length, dispatched, promoted: promotedRows.length });
