@@ -39,6 +39,7 @@ import {
   getTargetSnapshot,
   countQueued,
   getResumableRuns,
+  getStrandedDoneRuns,
   resetInflightTargets,
   type ScanRunRow,
 } from "./scanIntelStore";
@@ -201,10 +202,19 @@ export async function runScanWorker(
               // A conclusive "not serviceable" is NOT this path — the scanner
               // returns that as a real kinetic_live answer. No retry-count limit:
               // it recurs until a valid response or an explicit cancel.
-              requeueRunTarget(runId, t.targetId);
-              addRunBytes(runId, bytes); // the failed attempt still cost its request bytes
               const category = result.blocked ? "provider_blocked" : "inconclusive";
               const attempt = targetAttempt(runId, t.targetId);
+              // A throttle/transport block AND a generic transient check failure retry
+              // promptly (they clear on the next attempt). ONLY a brand-new-address
+              // non-answer — Kinetic returns AddressNeedsFix/AddressSuggestions for
+              // addresses not yet in its fabric — backs off exponentially: hammering
+              // it every second is wasteful and keeps the run spinning forever. The
+              // address is still preserved + retried, just on a slower cadence, so the
+              // run can drain instead of stranding a perpetually-requeued tail.
+              const addressNotReady = !result.blocked && /AddressNeedsFix|AddressSuggestions/i.test(result.notes || "");
+              const backoffSec = addressNotReady ? Math.min(6 * 3600, 45 * Math.pow(2, Math.min(attempt, 7))) : 0;
+              requeueRunTarget(runId, t.targetId, backoffSec);
+              addRunBytes(runId, bytes); // the failed attempt still cost its request bytes
               recordFiberFailure({
                 tenantId, runId, targetId: t.targetId, category,
                 message: result.notes || "transient provider error", attempt, retryable: true,
@@ -643,6 +653,17 @@ export function resumeInterruptedRuns(): void {
       console.log(
         `[scan-engine] resuming interrupted run ${run.id} (${countQueued(run.id)} pending)`,
       );
+      void runScanWorker(run.id, run.tenantId);
+    }
+    // Drain STRANDED TAILS: 'done' runs that still hold claimable queued targets
+    // (a target requeued exactly as the batch drained). Re-open a bounded number so
+    // every discovered address is actually consumed — "preserve and retry every
+    // address." The requeue backoff makes the re-opened run converge, not spin.
+    for (const run of getStrandedDoneRuns(10)) {
+      if (isRunActive(run.id)) continue;
+      resetInflightTargets(run.id);
+      setRunStatus(run.id, "running");
+      console.log(`[scan-engine] re-opening stranded 'done' run ${run.id} (${countQueued(run.id)} claimable pending)`);
       void runScanWorker(run.id, run.tenantId);
     }
   } catch (err: any) {

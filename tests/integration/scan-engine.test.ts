@@ -566,4 +566,38 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     expect(run.verified + run.failed).toBe(6); // all six eventually processed
     expect(store.countQueued(runId)).toBe(0);
   });
+
+  it("detects a 'done' run that stranded a claimable queued target (but not cancelled runs), and backoff excludes it", () => {
+    const seed = rawDb.prepare(`INSERT INTO scan_targets (address, city, state, zip, lat, lng, source) VALUES (?,?,?,?,?,?,'test')`);
+    const id = Number(seed.run("1 Stranded St", "Strandton", "NC", "28103", 35.81, -80.71).lastInsertRowid);
+    const runId = "run_test_stranded";
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "address_discovery", label: "Strand", city: "Strandton", state: "NC", budget: 1 });
+    store.enqueueRunTargets(runId, [{ id, seq: 0 }]);
+    // Claim → requeue (transient, immediately claimable) → the run finishes 'done'
+    // anyway (the premature-finish this fix targets): a claimable tail is stranded.
+    store.claimRunTargets(runId, 1);
+    store.requeueRunTarget(runId, id);
+    store.setRunStatus(runId, "done");
+    expect(store.getStrandedDoneRuns(10).map((r) => r.id)).toContain(runId);
+
+    // A CANCELLED run with the same shape must NOT be re-opened (deliberately stopped
+    // — e.g. a shed expansion run; re-opening it would resurrect the runaway).
+    const cid = "run_test_cancelled_tail";
+    const id2 = Number(seed.run("2 Stranded St", "Strandton", "NC", "28103", 35.82, -80.72).lastInsertRowid);
+    store.createScanRun({ id: cid, tenantId: TENANT, kind: "lead_expansion", label: "Exp", city: "Strandton", state: "NC", budget: 1 });
+    store.enqueueRunTargets(cid, [{ id: id2, seq: 0 }]);
+    store.claimRunTargets(cid, 1);
+    store.requeueRunTarget(cid, id2);
+    store.setRunStatus(cid, "cancelled");
+    expect(store.getStrandedDoneRuns(10).map((r) => r.id)).not.toContain(cid);
+
+    // Backoff: a delayed requeue makes the target un-claimable until due, so the run
+    // is no longer "stranded" (it converges/drains instead of spinning).
+    store.setRunStatus(runId, "running");
+    store.claimRunTargets(runId, 1);
+    store.requeueRunTarget(runId, id, 3600); // 1h backoff
+    store.setRunStatus(runId, "done");
+    expect(store.getStrandedDoneRuns(10).map((r) => r.id)).not.toContain(runId);
+    expect(store.claimRunTargets(runId, 1).length).toBe(0); // not claimable until the backoff elapses
+  });
 });

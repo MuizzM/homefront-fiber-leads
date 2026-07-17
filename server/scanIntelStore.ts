@@ -238,9 +238,18 @@ export function resetInflightTargets(runId: string): number {
 // it is retried later in the SAME run. It is neither verified nor failed — no
 // progress is lost, no address is skipped, and there is no retry-count limit. The
 // attempt_count already incremented at claim time is kept for observability.
+//
+// delaySeconds > 0 sets next_attempt_at so the target is not immediately re-claimed.
+// Used for NON-CONCLUSIVE answers (brand-new addresses Kinetic returns as
+// AddressNeedsFix/AddressSuggestions): retrying them every second is wasteful and
+// keeps the run spinning forever, so they back off and get retried on a slower
+// cadence — the run drains (finishes) instead of never completing. A pure transient
+// (throttle/token/admission timeout) still uses delaySeconds=0 (retry promptly).
 const _requeueTarget = rawDb.prepare(`UPDATE scan_run_targets SET state='queued', next_attempt_at=NULL WHERE run_id=? AND target_id=? AND state='inflight'`);
-export function requeueRunTarget(runId: string, targetId: number): void {
-  _requeueTarget.run(runId, targetId);
+const _requeueTargetDelayed = rawDb.prepare(`UPDATE scan_run_targets SET state='queued', next_attempt_at=datetime('now', ?) WHERE run_id=? AND target_id=? AND state='inflight'`);
+export function requeueRunTarget(runId: string, targetId: number, delaySeconds = 0): void {
+  if (delaySeconds > 0) _requeueTargetDelayed.run(`+${Math.floor(delaySeconds)} seconds`, runId, targetId);
+  else _requeueTarget.run(runId, targetId);
 }
 
 // Cost honesty for retried attempts: a transient failure still burned proxy
@@ -304,6 +313,27 @@ export function getResumableRuns(staleSeconds = 30): ScanRunRow[] {
 // Pending = still to process (queued OR mid-flight). "Queue drained" means 0.
 export function countQueued(runId: string): number {
   return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id=? AND state IN ('queued','inflight')`, runId).c;
+}
+
+// STRANDED TAILS: runs marked 'done' that still hold CLAIMABLE queued targets — a
+// target requeued in the same instant the batch drained, so the worker finished
+// while work remained. These addresses would otherwise never be consumed. Only
+// 'done' runs (NOT 'cancelled' — those were deliberately stopped, e.g. shed
+// expansion runs — and NOT 'error'). Re-opening lets a worker drain the tail; the
+// requeue backoff guarantees it converges (finishes) instead of spinning.
+export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
+  return all<ScanRunRow>(
+    `SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,
+            r.new_fiber AS newFiber, r.newly_live AS newlyLive, r.failed, r.status, r.error,
+            r.est_bytes AS estBytes, r.created_by AS createdBy, r.started_at AS startedAt,
+            r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt
+       FROM scan_runs r
+      WHERE r.status='done' AND EXISTS (
+        SELECT 1 FROM scan_run_targets t WHERE t.run_id=r.id AND t.state='queued'
+          AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))
+      ORDER BY r.completed_at DESC LIMIT ?`,
+    limit,
+  );
 }
 
 // ── Per-target scan memory (used by the live engine) ──────────────────────────
