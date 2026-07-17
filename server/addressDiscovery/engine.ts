@@ -445,11 +445,11 @@ function prepareAndDispatchQualification(job: DiscoveryJobRow, finalize = true):
   );
   for (const candidate of candidates) {
     if (existingChecks.has(Number(candidate.id))) continue;
-    // The authorized Kinetic qualifier and fresh-lead projector currently
-    // support NC/SC only. Discovery may still inventory a wider map geometry,
-    // but unsupported states never consume a provider request that cannot be
+    // The authorized Kinetic qualifier and fresh-lead projector support
+    // GA/NC/SC. Discovery may still inventory a wider map geometry, but
+    // unsupported states never consume a provider request that cannot be
     // published safely.
-    if (!["NC", "SC"].includes(String(candidate.state).toUpperCase())) {
+    if (!["GA", "NC", "SC"].includes(String(candidate.state).toUpperCase())) {
       createQualificationCheck({
         tenantId: job.tenantId,
         jobId: job.id,

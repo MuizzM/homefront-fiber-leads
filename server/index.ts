@@ -621,9 +621,15 @@ app.use((req, res, next) => {
     const runDaily = async () => {
       try {
         const { runDailyMarketRefresh } = await import("./dailyMarketRefresh");
+        const { runCopperUpgradeSweep } = await import("./copperUpgradeSweep");
         const { getDefaultTenantId } = await import("./storage");
         const tid = getDefaultTenantId();
-        if (tid != null) await runDailyMarketRefresh(tid);
+        if (tid != null) {
+          await runDailyMarketRefresh(tid);
+          // Copper-upgrade sweep: recheck known non-fiber addresses (rolling 7d)
+          // so a legacy-copper → fiber flip becomes a green Fresh Lead instantly.
+          runCopperUpgradeSweep(tid);
+        }
       } catch (e: any) { console.warn("[daily-market-refresh] failed:", e?.message); }
     };
     const dailyTimer = setInterval(() => { void runDaily(); }, 24 * 60 * 60_000);
