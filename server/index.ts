@@ -513,7 +513,6 @@ app.use((req, res, next) => {
       try {
         const { projectConfirmedFreshLeads } = await import("./freshFiberProjector");
         const { rawDb } = await import("./db");
-        const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
         const tenantIds = rawDb.prepare("SELECT id FROM tenants").all().map((r: any) => Number(r.id));
         for (const tid of tenantIds) {
           // LINK-BY-ADDRESS first: thousands of green scan_targets already have a lead
@@ -543,7 +542,6 @@ app.use((req, res, next) => {
               // Isolate a bad chunk — never abort the remaining thousands of links.
               console.warn(`[fresh-lead-backfill] link chunk ${i / 500} failed:`, chunkErr?.message);
             }
-            await sleep(25);
           }
           if (pairs.length) structuredLog("fresh_lead.link_backfill", { tenantId: tid, candidatePairs: pairs.length, linkedByAddress: addrLinked });
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
@@ -554,7 +552,6 @@ app.use((req, res, next) => {
           for (let i = 0; i < ids.length; i += 300) {
             const r = projectConfirmedFreshLeads(tid, ids.slice(i, i + 300));
             created += r.created; linkedProj += r.linkedExisting;
-            await sleep(40);
           }
           structuredLog("fresh_lead.boot_backfill", { tenantId: tid, candidates: ids.length, created, linkedExisting: linkedProj });
         }

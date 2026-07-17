@@ -225,7 +225,7 @@ function getCursor(source: string, scope: string): string {
 
 // ── Tick / continuous loop ────────────────────────────────────────────────────
 // One scope per tick, round-robin across every NC county (NC OneMap) + Overpass
-// tiles (NC+SC). Cheap + polite to the free endpoints; a full NC cycle completes
+// tiles (NC+SC). Fast, durable and retried against the free endpoints; a full NC cycle completes
 // over time. Injectable pollers make this fully testable without the network.
 export interface RadarPollers {
   ncOneMap?: typeof pollNcOneMapCounty;

@@ -179,12 +179,12 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
   }
 }
 
-// ── Global mint gate — collapse the stampede ──────────────────────────────────
+// ── Global mint gate — serialize mints, never pace them ──────────────────────
 // On boot the auto-started statewide sweep leases tokens en masse; with no pacing
 // the pool fired ~1.7k mint attempts in seconds, DDoSing BOTH egresses (direct →
 // Cloudflare 429, proxy → rolling-window 403) so neither could ever succeed — a
 // self-reinforcing deadlock. This gate serializes every mint through one chain
-// with a minimum spacing, so the egresses see at most one gentle mint at a time.
+// with minimal spacing (100ms), so the pool refills at full speed.
 // The first success populates a READY slot; concurrent leasers then take that token
 // via pickReady instead of minting, so the queue drains without a flood. This is
 // pacing, NOT a disabled/halted state — the pool still self-heals on the next tick.

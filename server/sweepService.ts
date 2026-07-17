@@ -333,7 +333,7 @@ async function runStateSweep(id: string) {
           advanceMarketCadence(); // this city was just swept — advance its cadence bookkeeping
           break;
         }
-        await sleep(2_000);
+        await sleep(400); // fast poll — city turnover must never idle
       }
     }
   } finally { activeState.delete(id); }
@@ -562,7 +562,7 @@ async function runSweep(id: string) {
       const inRun = rawDb.prepare(`SELECT run_id FROM sweep_job_targets WHERE sweep_job_id=? AND state='in_run' AND run_id IS NOT NULL LIMIT 1`).get(id) as any;
       if (inRun?.run_id) {
         const run = scanService.getRunStatus(inRun.run_id, job.tenant_id);
-        if (run && ["running", "paused"].includes(run.status)) { updateProgress(id); await sleep(2_000); continue; }
+        if (run && ["running", "paused"].includes(run.status)) { updateProgress(id); await sleep(400); continue; } // fast poll
         rawDb.prepare(`UPDATE sweep_job_targets SET state=? WHERE sweep_job_id=? AND run_id=?`).run(run?.status === "done" ? "done" : "failed", id, inRun.run_id);
         updateProgress(id); continue;
       }

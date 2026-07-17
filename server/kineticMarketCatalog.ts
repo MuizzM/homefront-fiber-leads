@@ -206,7 +206,7 @@ export function applyAuthoritativeMarketCatalog(): { verified: number; expanding
   };
 }
 
-/** Weekly conservative refresh of carrier-owned location indexes. New entries
+/** Continuous refresh of carrier-owned location indexes. New entries
  * become eligible; a missing entry is never silently removed because a partial
  * publisher response must not erase coverage. */
 export async function refreshKineticLocationDirectory(force = false): Promise<{ status: string; seen: number; added: number }> {

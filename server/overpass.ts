@@ -202,7 +202,7 @@ export function tileBbox(bbox: Bbox, tileDeg = 0.06): Bbox[] {
 /**
  * Pull EVERY residential address across a whole-city bbox. Small bboxes run as
  * one query; large ones are tiled so no single query hits the 25–60s Overpass
- * cap and returns empty. Tiles run at bounded concurrency (polite to public
+ * cap and returns empty. Tiles run in parallel and retry on failure (public
  * Overpass) and are merged + deduped.
  */
 export async function pullCityAddressesTiled(bbox: Bbox, cityName: string, stateName: string): Promise<OverpassAddress[]> {
@@ -228,8 +228,9 @@ export async function pullCityAddressesTiled(bbox: Bbox, cityName: string, state
   // skip remaining tiles and return what we have (marked incomplete in the log).
   const deadline = Date.now() + Number(process.env.OVERPASS_CITY_DEADLINE_MS ?? 75000);
   let failed = 0, skipped = 0, truncatedTiles = 0;
-  // Concurrency 3 — enough to be fast, gentle enough not to trip public rate limits.
-  const perTile = await pooledMap(tiles, 3, async (t) => {
+  // Concurrency 6 — tiles are durable and retried, so a rare public-API 429 costs
+  // nothing; unfinished tiles simply requeue. Speed wins.
+  const perTile = await pooledMap(tiles, Number(process.env.OVERPASS_TILE_CONCURRENCY) || 6, async (t) => {
     if (Date.now() > deadline) { skipped++; return [] as OverpassAddress[]; }
     try {
       const { addresses, truncated } = await pullTile(t, cityName, stateName);

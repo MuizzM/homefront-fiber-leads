@@ -178,7 +178,7 @@ export function startStateMonitorScheduler() {
     status.lastResult = "inventory initialized; scheduler disabled (ENABLE_STATE_MONITORING=false)";
     return;
   }
-  const minutes = positiveInt("STATE_MONITOR_TICK_MINUTES", 60, 1_440);
+  const minutes = positiveInt("STATE_MONITOR_TICK_MINUTES", 15, 1_440); // full-speed default: 15 min (was 60)
   const intervalMs = minutes * 60_000;
   status.nextTickAt = new Date(Date.now() + intervalMs).toISOString();
   timer = setInterval(() => {
