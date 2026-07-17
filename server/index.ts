@@ -520,19 +520,32 @@ app.use((req, res, next) => {
           // row for the same address (created before source_scan_target_id linking) but
           // no converted_to_lead_id. Link them so the metric is honest and the projector
           // never double-creates. Pure existing-data join (idx_leads_addr_ci), chunked.
-          const pairs = rawDb.prepare(`SELECT s.id sid, l.id lid FROM scan_targets s JOIN leads l
+          // ONE lead per target (MIN(l.id)) — the address join can match several leads
+          // with identical address text; without dedup, stamping the same
+          // source_scan_target_id onto a second lead violates the UNIQUE partial index
+          // idx_leads_confirmed_scan_target and aborted the whole backfill (seen live).
+          const pairs = rawDb.prepare(`SELECT s.id sid, MIN(l.id) lid FROM scan_targets s JOIN leads l
               ON lower(trim(l.address))=lower(trim(s.address)) AND lower(trim(l.city))=lower(trim(s.city)) AND upper(l.state)=upper(s.state)
             WHERE s.tenant_id=? AND s.converted_to_lead_id IS NULL
-              AND s.last_fiber_status='new_fiber' AND s.last_billing_status='N'`).all(tid) as any[];
+              AND s.last_fiber_status='new_fiber' AND s.last_billing_status='N'
+            GROUP BY s.id`).all(tid) as any[];
           const linkStmt = rawDb.prepare(`UPDATE scan_targets SET converted_to_lead_id=? WHERE id=? AND converted_to_lead_id IS NULL`);
-          const stampStmt = rawDb.prepare(`UPDATE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?) WHERE id=?`);
+          // OR IGNORE: if this sid is already stamped on another lead (duplicate address
+          // rows sharing one lead), skip the stamp rather than violate the unique index.
+          const stampStmt = rawDb.prepare(`UPDATE OR IGNORE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?) WHERE id=?`);
+          let linked = 0;
           for (let i = 0; i < pairs.length; i += 500) {
-            rawDb.transaction(() => {
-              for (const p of pairs.slice(i, i + 500)) { linkStmt.run(p.lid, p.sid); stampStmt.run(p.sid, p.lid); }
-            })();
+            try {
+              rawDb.transaction(() => {
+                for (const p of pairs.slice(i, i + 500)) { linkStmt.run(p.lid, p.sid); stampStmt.run(p.sid, p.lid); linked++; }
+              })();
+            } catch (chunkErr: any) {
+              // Isolate a bad chunk — never abort the remaining thousands of links.
+              console.warn(`[fresh-lead-backfill] link chunk ${i / 500} failed:`, chunkErr?.message);
+            }
             await sleep(25);
           }
-          if (pairs.length) structuredLog("fresh_lead.link_backfill", { tenantId: tid, linkedByAddress: pairs.length });
+          if (pairs.length) structuredLog("fresh_lead.link_backfill", { tenantId: tid, candidatePairs: pairs.length, linkedByAddress: linked });
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
           const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('NC','SC')
             AND last_fiber_status='new_fiber' AND last_billing_status='N' AND converted_to_lead_id IS NULL`).all(tid).map((r: any) => Number(r.id));
