@@ -42,14 +42,18 @@ const CFG = {
   // across ALL its rings before it is considered complete (in addition to ring/empty
   // stop conditions). Keeps each cluster a finite job, not an unbounded crawl.
   clusterBudget: () => bounded(process.env.EXPANSION_CLUSTER_BUDGET, 600, 20, 20000),
-  // Generation backpressure: pause spawning NEW expansions when the global pending
-  // backlog exceeds this (existing clusters keep consuming). 0 disables.
-  backpressurePending: () => bounded(process.env.EXPANSION_BACKPRESSURE_PENDING, 150_000, 0, 5_000_000),
+  // Generation backpressure: pause spawning NEW expansions when EXPANSION's OWN pending
+  // backlog exceeds this (existing clusters keep consuming). Gauged on expansion work
+  // ONLY — never on the statewide MAINTENANCE sweep backlog, which is intentionally huge
+  // and must not block the green→expansion moat. 0 disables.
+  backpressurePending: () => bounded(process.env.EXPANSION_BACKPRESSURE_PENDING, 25_000, 0, 5_000_000),
 };
 const normCity = (c: unknown) => String(c ?? "").trim().toLowerCase();
-// Global pending (queued+inflight) backlog — used to gate NEW expansion generation.
-function globalPendingBacklog(): number {
-  try { return Number((rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets WHERE state IN ('queued','inflight')`).get() as any).c); }
+// EXPANSION-only pending (queued+inflight) backlog — gates NEW expansion generation so a
+// green lead can always seed a cluster regardless of how backed-up the bulk sweep is.
+function expansionPendingBacklog(): number {
+  try { return Number((rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id
+    WHERE r.kind='lead_expansion' AND r.status='running' AND t.state IN ('queued','inflight')`).get() as any).c); }
   catch { return 0; }
 }
 function bounded(v: string | undefined, dflt: number, min: number, max: number): number {
@@ -132,8 +136,9 @@ export function onFreshLead(tenantId: number, seed: LeadSeed): { expansionId: st
   // expansion (existing clusters keep consuming). The green lead is still saved + pinned
   // by the caller; it can seed an expansion on a later tick once the backlog drains.
   const bp = CFG.backpressurePending();
-  if (bp > 0 && globalPendingBacklog() >= bp) {
-    structuredLog("expansion.backpressure", { pending: globalPendingBacklog(), threshold: bp, origin: seed.address }, "warn");
+  const expPending = expansionPendingBacklog();
+  if (bp > 0 && expPending >= bp) {
+    structuredLog("expansion.backpressure", { expansionPending: expPending, threshold: bp, origin: seed.address }, "warn");
     return { expansionId: null, action: "backpressure" };
   }
 
