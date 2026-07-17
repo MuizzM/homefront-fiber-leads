@@ -73,10 +73,11 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
   { href: "/my-commission",label: "My Commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
   { href: "/my-documents", label: "My Documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
-  // ── Scan — market intelligence (manager+ read/deploy); Scanner=admin tools ─
-  { href: "/markets",      label: "Markets",       icon: TrendingUp,   show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
-  { href: "/sweeps",       label: "Fresh Fiber",   icon: Radar,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Scan" },
-  { href: "/scanner",      label: "Scan Tools",    icon: Radar,        show: r => hasRole(r, "admin"),                 group: "Scan" },
+  // ── Fiber Intelligence — ONE consolidated map-first workspace (Fresh Now · Map
+  //    · Coming Soon · Coverage · Operations). Old Markets/Sweeps/Scanner routes
+  //    redirect here. Deep scan tools stay admin-only.
+  { href: "/fiber",        label: "Fiber Intelligence", icon: Radar,   show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Fiber" },
+  { href: "/scanner-tools",label: "Scan Tools",    icon: TrendingUp,   show: r => hasRole(r, "admin"),                 group: "Fiber" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
   { href: "/commission-console", label: "Commissions & Pay", icon: Banknote, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
@@ -334,7 +335,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Mobile header — standard app chrome on every page EXCEPT the map:
             the Field Map is full-bleed (owner spec) with its own floating menu. */}
         {!onMap && (
-        <header className="md:hidden sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border/80 bg-card px-3">
+        <header
+          className="md:hidden sticky top-0 z-30 flex min-h-14 items-center gap-2 border-b border-border/70 bg-card/80 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-card/70"
+          style={{ paddingTop: "calc(env(safe-area-inset-top) + 12px)", paddingBottom: "8px" }}
+        >
           <button type="button" aria-label="Open navigation menu" aria-expanded={mobileOpen}
             onClick={() => setMobileOpen(true)}
             className="inline-flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground">
@@ -358,7 +362,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
-        <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(64px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(70px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
         {!onMap && !onCalling && <BottomTabs moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}

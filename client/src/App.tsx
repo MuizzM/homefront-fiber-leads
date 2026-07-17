@@ -1,7 +1,7 @@
 import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { QueryClientProvider } from "@tanstack/react-query";
-import { queryClient } from "@/lib/queryClient";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
+import { queryClient, persistOptions } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/auth";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -25,8 +25,7 @@ const FollowUps = lazy(() => import("@/pages/FollowUps"));
 const MapView = lazy(() => import("@/pages/MapView"));
 const Leads = lazy(() => import("@/pages/Leads"));
 const Scanners = lazy(() => import("@/pages/Scanners"));
-const ScanIntel = lazy(() => import("@/pages/ScanIntel"));
-const SweepCommand = lazy(() => import("@/pages/SweepCommand"));
+const FiberIntelligence = lazy(() => import("@/pages/FiberIntelligence"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
@@ -221,19 +220,24 @@ function AppRoutes() {
           {/* ── Scan Intelligence — market discovery. Manager+ can read the
               intelligence + deploy; only admin can start a (money-spending)
               scan, gated inside the page and on the server. ── */}
-          <Route path="/markets">
+          {/* ── Fiber Intelligence — ONE consolidated map-first workspace
+              (Fresh Now · Map · Coming Soon · Coverage · Operations). Replaces the
+              separate city / USA / Kinetic scanners, Markets, and Sweeps pages. ── */}
+          <Route path="/fiber">
             <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
-              <ScanIntel />
+              <FiberIntelligence />
             </Guard>
           </Route>
-          <Route path="/sweeps">
-            <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
-              <SweepCommand />
-            </Guard>
-          </Route>
+          {/* Old scanner routes redirect into the consolidated workspace (bookmarks preserved). */}
+          <Route path="/markets"><Redirect to="/fiber" /></Route>
+          <Route path="/sweeps"><Redirect to="/fiber" /></Route>
+          <Route path="/scanner"><Redirect to="/fiber" /></Route>
+          <Route path="/city-scan"><Redirect to="/fiber" /></Route>
+          <Route path="/usa-scan"><Redirect to="/fiber" /></Route>
+          <Route path="/kinetic-scanner"><Redirect to="/fiber" /></Route>
 
-          {/* ── Scanner — admin only (advanced tools + token; scanning spends proxy money) ── */}
-          <Route path="/scanner">
+          {/* Deep scanner tools remain reachable directly for admins who need them. */}
+          <Route path="/scanner-tools">
             <Guard role={role} allowed={["admin"]}>
               <Scanners />
             </Guard>
@@ -241,23 +245,6 @@ function AppRoutes() {
           <Route path="/live-map">
             <Guard role={role} allowed={["admin", "manager"]}>
               <LiveMap />
-            </Guard>
-          </Route>
-
-          {/* Old scanner bookmarks land on the right tab of the Scanner hub */}
-          <Route path="/city-scan">
-            <Guard role={role} allowed={["admin"]}>
-              <Scanners initialTab="city" />
-            </Guard>
-          </Route>
-          <Route path="/usa-scan">
-            <Guard role={role} allowed={["admin"]}>
-              <Scanners initialTab="usa" />
-            </Guard>
-          </Route>
-          <Route path="/kinetic-scanner">
-            <Guard role={role} allowed={["admin"]}>
-              <Scanners initialTab="kinetic" />
             </Guard>
           </Route>
           {/* ── Admin only ── */}
@@ -297,13 +284,13 @@ function AppRoutes() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
+    <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
       <AuthProvider>
         <AppRoutes />
         <Toaster />
         <UpdatePrompt />
       </AuthProvider>
-    </QueryClientProvider>
+    </PersistQueryClientProvider>
   );
 }
 

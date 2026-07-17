@@ -129,7 +129,7 @@ interface RepActivity {
 }
 
 // Dashboard field tiles use the shared KPI card (fixed width for the thumb-scroll row).
-function FieldTile(props: { label: string; value: number | string; tone: string; icon: any; chip: string; accent: string }) {
+function FieldTile(props: { label: string; value: number | string; tone: string; icon: any; chip: string; accent: string; loading?: boolean }) {
   return <KpiTile {...props} className="w-[132px]" />;
 }
 
@@ -216,12 +216,12 @@ export default function Dashboard() {
 
   // Rep-scoped lead stats power the field tiles (assigned / dispositioned /
   // sold / follow-ups) — the byStatus map is O(statuses), not O(leads).
-  const { data: leadStats } = useQuery<LeadStats>({
+  const { data: leadStats, isLoading: leadStatsLoading } = useQuery<LeadStats>({
     queryKey: ["/api/stats"],
     queryFn: () => apiRequest("GET", "/api/stats").then(r => r.json()),
     staleTime: 30_000,
   });
-  const { data: newFiber } = useQuery<FirstSeenLive>({
+  const { data: newFiber, isLoading: newFiberLoading } = useQuery<FirstSeenLive>({
     queryKey: ["/api/scan/first-seen-live"],
     queryFn: () => apiRequest("GET", "/api/scan/first-seen-live?hours=24").then(r => r.json()),
     enabled: isManager,
@@ -280,11 +280,11 @@ export default function Dashboard() {
         <h2 className={EYEBROW}>{isRep ? "Your day" : "Today at a glance"}</h2>
         <div className="-mx-6 flex gap-2.5 overflow-x-auto px-6 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pill-row-fade"
           data-testid="field-tiles">
-          <FieldTile label="Knocks today" value={stats?.knocks.today ?? "—"} tone="text-primary" icon={Zap} chip="bg-primary/15" accent="bg-primary" />
-          <FieldTile label="Assigned" value={assigned} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
-          <FieldTile label="Dispositioned" value={dispositioned} tone="text-sky-400" icon={Activity} chip="bg-sky-500/15" accent="bg-sky-500" />
-          <FieldTile label="Sold" value={leadStats?.byStatus?.sold ?? 0} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
-          <FieldTile label="Follow-ups due" value={leadStats?.byStatus?.follow_up ?? 0} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
+          <FieldTile label="Knocks today" value={stats?.knocks.today ?? "—"} loading={statsLoading && !stats} tone="text-primary" icon={Zap} chip="bg-primary/15" accent="bg-primary" />
+          <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
+          <FieldTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="text-sky-400" icon={Activity} chip="bg-sky-500/15" accent="bg-sky-500" />
+          <FieldTile label="Sold" value={leadStats?.byStatus?.sold ?? 0} loading={leadStatsLoading && !leadStats} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
+          <FieldTile label="Follow-ups due" value={leadStats?.byStatus?.follow_up ?? 0} loading={leadStatsLoading && !leadStats} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
         </div>
       </section>
 
@@ -324,15 +324,28 @@ export default function Dashboard() {
       {openRepId != null && <RepActivityCard repId={openRepId} onClose={() => setOpenRepId(null)} />}
 
       {/* ── Fiber changes — every row carries explicit confirmation confidence ── */}
-      {isManager && newFiber && (
+      {isManager && (
         <section data-testid="new-fiber-today">
           <div className="mb-2 flex items-baseline justify-between">
             <h2 className={EYEBROW}>Fiber changes · last 24h</h2>
-            {newFiber.count > 0 && (
+            {newFiber && newFiber.count > 0 && (
               <span className="text-[11px] tabular-nums text-muted-foreground">{newFiber.confirmed} confirmed · {newFiber.provisional} provisional</span>
             )}
           </div>
-          {newFiber.count === 0 ? (
+          {(newFiberLoading && !newFiber) || !newFiber ? (
+            <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card" data-testid="new-fiber-skeleton">
+              {[0, 1, 2].map(i => (
+                <div key={i} className="flex min-w-0 items-center gap-3 px-4 py-3">
+                  <Skeleton className="h-2 w-2 shrink-0 rounded-full" />
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <Skeleton className="h-3.5 w-2/3" />
+                    <Skeleton className="h-2.5 w-2/5" />
+                  </div>
+                  <Skeleton className="h-[20px] w-20 shrink-0 rounded-full" />
+                </div>
+              ))}
+            </div>
+          ) : newFiber.count === 0 ? (
             <div className="rounded-2xl border border-border bg-card px-4 py-5 text-[13px] italic text-muted-foreground">
               No current fiber flips detected in the last 24 hours — the monitor is watching the address pool.
             </div>

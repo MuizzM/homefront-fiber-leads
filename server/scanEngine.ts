@@ -13,8 +13,10 @@
 import {
   refreshTokenFromApi,
   scanAddress,
+  normalizeKineticAddressKey,
   type ScanResult,
 } from "./scanner";
+import { emitStage } from "./scanStageBus";
 import crypto from "node:crypto";
 import { storage } from "./storage";
 import { rawDb } from "./db";
@@ -551,6 +553,19 @@ function persistSnapshot(
     latencyMs,
     orIgnore: true,
   });
+  // Inspector: the conclusive snapshot has been persisted for this address.
+  try {
+    emitStage({
+      addressKey: normalizeKineticAddressKey(t.address, t.city, t.state, t.zip),
+      address: t.address, city: t.city, state: t.state, zip: t.zip,
+      runId, source: "run", stage: "saving",
+      status: checkFailed ? "error" : "ok",
+      attempt: 1, latencyMs,
+      classification: checkFailed ? null : result.fiberStatus,
+      detail: checkFailed ? `not saved as conclusive — ${result.blocked ? "blocked/retry" : "unresolved"}` : `snapshot saved · ${result.fiberStatus}`,
+      tsEpoch: Date.now(),
+    });
+  } catch { /* telemetry best-effort */ }
 }
 
 function finish(run: ScanRunRow, status: string): void {

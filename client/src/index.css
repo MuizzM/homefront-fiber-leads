@@ -118,6 +118,11 @@
     overflow-x: hidden;
     min-height: 100dvh;
     -webkit-tap-highlight-color: transparent;
+    /* Native-feel: kill the browser rubber-band / pull-to-refresh bounce at the
+       page root so the app doesn't reveal the web viewport behind it. Inner
+       scrollers keep their own `overscroll-behavior: contain`. */
+    overscroll-behavior-y: none;
+    overscroll-behavior-x: none;
   }
 
   /* Snappy taps: kill the 300ms delay and double-tap-zoom on real controls, so

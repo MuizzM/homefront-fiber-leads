@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -181,6 +182,9 @@ export const queryClient = new QueryClient({
       // refetches in the background so other reps' knocks/assignments appear.
       // (Was Infinity — data never refreshed unless this tab mutated it.)
       staleTime: 60_000,
+      // Keep inactive query data for 24h so a persisted entry survives long
+      // enough to be rehydrated on the next launch (must be >= persister maxAge).
+      gcTime: 1000 * 60 * 60 * 24,
       retry: shouldRetryQuery,
       retryDelay: queryRetryDelay,
     },
@@ -189,3 +193,51 @@ export const queryClient = new QueryClient({
     },
   },
 });
+
+// ── Stale-while-revalidate to disk (dashboard first paint) ────────────────────
+// Persist ONLY the dashboard's aggregate stat + fiber-changes queries to
+// localStorage. On the next launch the dashboard paints instantly from this
+// snapshot, then TanStack revalidates in the background. Large / PII-bearing
+// datasets (leads, map pins) are deliberately NOT persisted — they stay in
+// memory only, keeping the localStorage snapshot tiny and non-sensitive.
+export const PERSISTED_QUERY_KEYS = new Set<string>([
+  "/api/stats/saas",
+  "/api/stats",
+  "/api/scan/first-seen-live",
+]);
+
+const QUERY_CACHE_STORAGE_KEY = "hf-query-cache-v1";
+
+export const queryPersister =
+  typeof window !== "undefined"
+    ? createSyncStoragePersister({
+        storage: window.localStorage,
+        key: QUERY_CACHE_STORAGE_KEY,
+        throttleTime: 1000,
+      })
+    : undefined;
+
+export const persistOptions = {
+  persister: queryPersister!,
+  // Must match the query gcTime so a restored entry isn't immediately evicted.
+  maxAge: 1000 * 60 * 60 * 24,
+  // Bump to invalidate every persisted cache after a breaking response shape change.
+  buster: "hf-cache-1",
+  dehydrateOptions: {
+    shouldDehydrateQuery: (query: { state: { status: string }; queryKey: unknown }) =>
+      query.state.status === "success" &&
+      PERSISTED_QUERY_KEYS.has(
+        String(Array.isArray(query.queryKey) ? query.queryKey[0] : query.queryKey),
+      ),
+  },
+};
+
+// Purge the on-disk snapshot (call on logout so the next account never paints
+// the previous user's dashboard from cache).
+export function clearPersistedQueryCache(): void {
+  try {
+    if (typeof window !== "undefined") window.localStorage.removeItem(QUERY_CACHE_STORAGE_KEY);
+  } catch {
+    /* storage unavailable (private mode) — nothing to clear */
+  }
+}

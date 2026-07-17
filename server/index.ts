@@ -433,6 +433,11 @@ app.use((req, res, next) => {
     registerKineticEvidenceSource(new KineticAuthorizedSearchAdapter());
   }
   try {
+    // Scan Inspector: begin persisting + relaying per-address pipeline stage events.
+    const { startScanEvents } = await import("./scanEvents");
+    startScanEvents();
+  } catch (e: any) { console.warn("[scan-events] start skipped:", e?.message); }
+  try {
     const { resumeInterruptedRuns, startScanReaper } = await import("./scanEngine");
     resumeInterruptedRuns();
     startScanReaper(); // periodic reaper: pick up runs whose worker died sans restart

@@ -1,9 +1,27 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
+import { visualizer } from "rollup-plugin-visualizer";
+
+// Opt-in bundle analysis: `ANALYZE=1 npx vite build` emits dist/public/stats.html
+// (treemap) with gzip/brotli sizes. Off by default so normal / production builds
+// are unaffected.
+const analyze = process.env.ANALYZE === "1" || process.env.ANALYZE === "true";
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    ...(analyze
+      ? [
+          visualizer({
+            filename: path.resolve(import.meta.dirname, "dist/public/stats.html"),
+            template: "treemap",
+            gzipSize: true,
+            brotliSize: true,
+          }),
+        ]
+      : []),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(import.meta.dirname, "client", "src"),

@@ -21,7 +21,7 @@ export function BottomTabs({ onMore, moreOpen = false, moreButtonRef }: { onMore
       data-testid="bottom-tabs"
       aria-label="Primary navigation"
       className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/70 bg-card/92 shadow-[0_-10px_32px_rgba(0,0,0,0.22)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/78"
-      style={{ paddingBottom: "max(env(safe-area-inset-bottom), 6px)" }}
+      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)" }}
     >
       <div className="grid grid-cols-5 h-[58px] px-1">
       {TABS.map(({ href, label, icon: Icon, ...tab }) => {

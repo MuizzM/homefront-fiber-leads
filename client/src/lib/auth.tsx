@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler } from "@/lib/queryClient";
+import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -126,6 +126,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     _memSession = null;
     writePersistedSession(null); // clear persisted session
+    clearPersistedQueryCache(); // drop the on-disk dashboard SWR snapshot
     setSid(null);
     syncSessionToQueryClient(null);
     setUser(null);

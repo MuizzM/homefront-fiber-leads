@@ -1,7 +1,8 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, rotateProxySession } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession, getProxySessionId } from "./proxy-fetch";
+import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
 import { parseKineticResponse } from "./kineticResponseParser";
@@ -469,6 +470,25 @@ export function getAddressScanQueueStatus(): ProviderQueueSnapshot & {
   };
 }
 
+// ── Scan Inspector controls ───────────────────────────────────────────────────
+// Pause/resume act on the shared provider admission queue, so they gate ALL scan
+// sources (statewide sweep, field map, manual) at once. Pause is a long, explicit
+// hold the admin clears with Resume — distinct from the coordinator's short
+// Retry-After pacing pauses.
+let _inspectorPaused = false;
+const PAUSE_MS = 24 * 60 * 60 * 1000; // effectively "until Resume"
+export function pauseScanning(): void {
+  _inspectorPaused = true;
+  providerQueue.pauseFor(PAUSE_MS, "manual");
+}
+export function resumeScanning(): void {
+  _inspectorPaused = false;
+  providerQueue.resume();
+}
+export function isScanningPaused(): boolean {
+  return _inspectorPaused;
+}
+
 // A transient upstream access-denial (403). It is NOT a halt: the scan worker's
 // AIMD controller treats a `blocked` result as back-pressure (shrinks the window,
 // refreshes the session, paces), and the address is left pending for retry. No
@@ -639,6 +659,9 @@ export async function scanAddress(
   const source = options.source ?? "market";
   const normalizedKey = normalizeKineticAddressKey(address, city, state, zip);
   const distributedKey = crypto.createHash("sha256").update(normalizedKey).digest("hex");
+  // Inspector: the address has entered the active check queue (awaiting admission
+  // through the coordinator, then token mint). scanAddressDirect emits the rest.
+  emitStage({ addressKey: normalizedKey, address, city, state, zip, runId: null, source: String(source), stage: "queued", status: "info", attempt: 1, tsEpoch: Date.now() });
   return providerQueue.request(normalizedKey, () => distributedProviderCoordinator.execute(
     distributedKey,
     source,
@@ -671,10 +694,21 @@ async function scanAddressDirect(
     leadTag: null, leadScore: 0,
   };
 
+  // ── Scan Inspector telemetry — emit each pipeline stage to the stage bus. Safe
+  //    diagnostics only: MASKED session id + token last-4, never the token/creds.
+  const evKey = normalizeKineticAddressKey(address, city, state, zip);
+  const emit = (stage: ScanStage, extra: Partial<Parameters<typeof emitStage>[0]> = {}) =>
+    emitStage({
+      addressKey: evKey, address, city, state, zip, runId: null, source: String(source),
+      stage, status: (extra.status ?? "info") as any, attempt: extra.attempt ?? 1,
+      tsEpoch: Date.now(), ...extra,
+    });
+
   let tokenLease: AuthorizedTokenLease | null = null;
   const tokenAddressKey = crypto.createHash("sha256")
     .update(normalizeKineticAddressKey(address, city, state, zip))
     .digest("hex");
+  emit("minting", { status: "info", detail: "acquiring authorized Decodo token" });
   try {
     tokenLease = await authorizedTokenPool.lease(tokenAddressKey);
   } catch (err: any) {
@@ -684,9 +718,13 @@ async function scanAddressDirect(
     // run / daily recheck revisits it.
     base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
     base.notes = `No authorized session — ${String(err?.message ?? err)} (unresolved, recheck)`;
+    emit("error", { status: "error", detail: `no authorized Decodo session — ${String(err?.message ?? err).slice(0, 80)}`, sessionId: getProxySessionId() });
     return base;
   }
+  emit("token_ready", { status: "info", sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4) });
+  const searchStart = Date.now();
   try {
+    emit("searching", { status: "info", sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4) });
     const res = await proxyFetch(KFS_SCAN_URL, {
       method: "POST",
       headers: providerHeaders({
@@ -699,6 +737,7 @@ async function scanAddressDirect(
       body: JSON.stringify({ addressLine1: address, addressLine2: "", city, state, postalCode: zip }),
       signal: AbortSignal.timeout(5_000),
     });
+    const searchMs = Date.now() - searchStart;
 
     // ── One shared error contract — NO in-loop retry, cooldown, backoff, or halt.
     //    TRANSIENT errors return a `blocked` result so the worker requeues the
@@ -714,6 +753,7 @@ async function scanAddressDirect(
       void rotateProxySession(`search ${res.status}`);
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
       base.notes = `Upstream ${res.status} (token/session) — token invalidated, Decodo session rotated, address requeued`;
+      emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `auth ${res.status} — token invalidated, Decodo session rotated`, detail: "PENDING_AUTH — retrying same address on a fresh session" });
       if (res.status === 403) {
         structuredLog("scan.provider.access_denied", { status: 403, source }, "warn");
         const alertHook = (globalThis as any).__alertProviderAccessDenied;
@@ -725,17 +765,25 @@ async function scanAddressDirect(
       // Rate limit / transient server error — requeue (the coordinator paces admission).
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
       base.notes = `Upstream ${res.status} (transient) — address requeued`;
+      emit("blocked", { status: "blocked", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `${res.status === 429 ? "rate-limited" : "server error"} — requeued for retry`, detail: "transient — kept pending, NOT a no-service verdict" });
       structuredLog("scan.provider.rate_limited", { status: res.status, source }, "warn");
       return base;
     }
     if (!res.ok) {
-      // Other non-2xx (e.g. 400/404) — a definite non-answer a retry won't fix →
-      // unresolved (rechecked daily), NEVER a no-service answer.
+      // Other non-2xx (e.g. malformed 400 / 404) — a definite non-answer a retry
+      // won't fix. Do NOT rotate the session (this is not an IP/auth denial) — the
+      // request contract is at fault. DIAGNOSE it: capture the safe response head so
+      // an admin can repair the request. Marked unresolved (rechecked), NEVER no-service.
+      let diag = "";
+      try { diag = (await res.text()).replace(/eyJ[A-Za-z0-9._-]{10,}/g, "<jwt>").slice(0, 160); } catch { /* body unreadable */ }
       base.fiberStatus = "unknown"; base.confidence = "LOW";
-      base.notes = `API returned ${res.status} (unresolved)`;
+      base.notes = `API returned ${res.status} (unresolved, request-contract issue — NOT rotated)`;
+      emit("bad_request", { status: "bad_request", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `HTTP ${res.status} malformed/not-found — diagnose request contract (session NOT rotated)`, detail: diag || `HTTP ${res.status}` });
+      structuredLog("scan.provider.bad_request", { status: res.status, source, detail: diag.slice(0, 120) }, "warn");
       return base;
     }
 
+    emit("parsing", { status: "info", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId() });
     let data: KineticAddressResponse;
     try {
       data = (await res.json()) as KineticAddressResponse;
@@ -743,6 +791,7 @@ async function scanAddressDirect(
       // 200 with an unparseable body = malformed → unresolved (recheck), not no-fiber.
       base.fiberStatus = "unknown"; base.confidence = "LOW";
       base.notes = "Malformed 200 response (unparseable) — unresolved, recheck";
+      emit("error", { status: "error", httpStatus: res.status, latencyMs: searchMs, detail: "malformed 200 body (unparseable) — unresolved, recheck" });
       return base;
     }
     base.rawResponse = data;
@@ -758,6 +807,7 @@ async function scanAddressDirect(
       base.apiSource = "kinetic_live";
       base.confidence = "HIGH";
       base.notes = `Not serviceable: ${vr}`;
+      emit("classified", { status: "ok", httpStatus: 200, latencyMs: searchMs, classification: /addressnotfound/i.test(vr) ? "address_not_found" : "not_serviceable", detail: `conclusive: ${vr}` });
       return base;
     }
     // A soft `success:false` with an UNRECOGNIZED / error-shaped validationResult is
@@ -768,6 +818,7 @@ async function scanAddressDirect(
       base.apiSource = "failed";
       base.confidence = "LOW";
       base.notes = `Non-conclusive response (success=false, ${vr || "no validationResult"})`;
+      emit("error", { status: "error", httpStatus: 200, latencyMs: searchMs, detail: `non-conclusive (success=false, ${vr || "no validationResult"}) — unresolved, NOT no-service` });
       return base;
     }
 
@@ -884,6 +935,17 @@ async function scanAddressDirect(
     base.leadTag = score.leadTag;
     base.leadScore = score.leadScore;
 
+    const billingY = String(base.billingStatus ?? "").toUpperCase() === "Y";
+    const cls = base.fiberStatus === "new_fiber"
+      ? (billingY ? "already_customer" : "fresh_fiber")
+      : base.fiberStatus === "tenured_fiber"
+        ? (billingY ? "already_customer" : "tenured_fiber")
+        : base.fiberAvailable ? "fiber_available" : "copper";
+    emit("classified", {
+      status: "ok", httpStatus: 200, latencyMs: Date.now() - searchStart, sessionId: getProxySessionId(),
+      classification: cls,
+      detail: `${base.fiberStatus} · segment=${base.householdSegmentType || "?"} · billing=${base.billingStatus || "?"}`,
+    });
   } catch (err: any) {
     // PRODUCT LAW: a failed check (timeout / network / no-token) carries NO
     // availability signal and NEVER aborts the run or becomes a "no fiber". These
@@ -896,6 +958,7 @@ async function scanAddressDirect(
     base.confidence = "LOW";
     base.blocked = true;
     base.notes = `Check failed (transient) — ${err.message}`;
+    emit("error", { status: "error", latencyMs: Date.now() - searchStart, retryReason: `transient — ${String(err?.message ?? err).slice(0, 60)}`, detail: "network/timeout — kept pending for retry, NOT no-service" });
   } finally {
     tokenLease?.release();
   }

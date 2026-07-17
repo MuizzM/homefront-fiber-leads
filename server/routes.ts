@@ -145,7 +145,9 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, type ScanResult } from "./scanner";
+import { scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, pauseScanning, resumeScanning, isScanningPaused, type ScanResult } from "./scanner";
+import { getInspectorSnapshot, getAddressTimeline, onScanEvent } from "./scanEvents";
+import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
@@ -1591,6 +1593,91 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     try {
       const { address, city, state, zip } = parsed.data;
       res.json(await liveTestAddress(address, city, state.toUpperCase(), zip));
+    } catch (e: any) {
+      res.status(500).json({ error: String(e?.message ?? e) });
+    }
+  });
+
+  // ── Scan Inspector (admin-only) ─────────────────────────────────────────────
+  // Live per-address pipeline observability. Diagnostics are SAFE ONLY — masked
+  // proxy session id + token last-4, HTTP status, latency, attempts, retry reason.
+  // Full tokens / proxy credentials / auth headers are NEVER emitted.
+  function inspectorHealth() {
+    const token = getTokenStatus();
+    return {
+      decodoConnected: isProxyConnected(),
+      proxySessionId: getProxySessionId(),           // masked "decodo-sN"
+      tokenReady: token.hasToken,
+      tokenExpiresIn: token.expiresIn,               // seconds
+      tokenPool: { ready: token.readySessions, size: token.configuredSessions },
+      paused: isScanningPaused(),
+      queue: getAddressScanQueueStatus(),
+    };
+  }
+
+  app.get("/api/scan/inspector", requireAdmin, (req, res) => {
+    const runId = typeof req.query.runId === "string" ? req.query.runId : null;
+    const limit = Math.min(500, Math.max(10, Number(req.query.limit) || 200));
+    const snap = getInspectorSnapshot({ runId, limit });
+    res.json({ ...snap, health: inspectorHealth() });
+  });
+
+  app.get("/api/scan/inspector/timeline/:key", requireAdmin, (req, res) => {
+    res.json({ timeline: getAddressTimeline(String(req.params.key), 80) });
+  });
+
+  // SSE — streams each stage event as it happens. Never polls static counters.
+  app.get("/api/scan/inspector/stream", requireAdmin, (req, res) => {
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+    const send = (event: string, data: unknown) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    // Initial snapshot so a fresh/refreshed client paints immediately.
+    send("snapshot", { ...getInspectorSnapshot({ limit: 200 }), health: inspectorHealth() });
+    const unsub = onScanEvent((evt) => send("stage", evt));
+    // Heartbeat + periodic health so "blocked stage" detection has a clock and the
+    // Decodo/token status stays live even when no address is moving.
+    const hb = setInterval(() => {
+      try { res.write(`: ping\n\n`); send("health", inspectorHealth()); } catch { /* closed */ }
+    }, 5000);
+    req.on("close", () => { clearInterval(hb); unsub(); });
+  });
+
+  // Controls — Pause / Resume / Retry failed / Stop. Act on the shared provider
+  // admission queue + active runs, so they govern every scan source at once.
+  app.post("/api/scan/inspector/control", requireAdmin, async (req: any, res) => {
+    const action = String(req.body?.action ?? "");
+    try {
+      if (action === "pause") { pauseScanning(); }
+      else if (action === "resume") { resumeScanning(); }
+      else if (action === "retry-failed") {
+        const { listRuns, resetInflightTargets } = await import("./scanIntelStore");
+        let requeued = 0;
+        for (const r of listRuns(tid(req), 20)) {
+          if (r.status === "running" || r.status === "paused") requeued += resetInflightTargets(r.id);
+        }
+        resumeScanning();
+        return res.json({ ok: true, action, requeued });
+      }
+      else if (action === "stop") {
+        const { listRuns } = await import("./scanIntelStore");
+        const { controlRun } = await import("./scanService");
+        let stopped = 0;
+        for (const r of listRuns(tid(req), 20)) {
+          if (r.status === "running" || r.status === "paused") { controlRun(r.id, tid(req), "cancel"); stopped++; }
+        }
+        pauseScanning();
+        return res.json({ ok: true, action, stopped });
+      }
+      else return res.status(400).json({ error: "unknown action" });
+      res.json({ ok: true, action, paused: isScanningPaused() });
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });
     }

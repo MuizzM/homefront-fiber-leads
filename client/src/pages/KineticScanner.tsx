@@ -999,7 +999,7 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <aside className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-emerald-900/60 bg-[#071A11] p-4 text-white shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none">
+      <aside className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-emerald-900/60 bg-[#071A11] p-4 pb-[max(1rem,calc(env(safe-area-inset-bottom)+0.5rem))] text-white shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none sm:pb-4">
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
         <button
           onClick={onClose}
