@@ -103,8 +103,8 @@ export default function SweepCommand(){
             <div className="mt-1 break-words font-mono text-[11px] text-muted-foreground">{s.detail}</div>
             {s.data&&<pre className="mt-1 overflow-x-auto whitespace-pre-wrap text-[10px] text-muted-foreground/80">{JSON.stringify(s.data,null,1)}</pre>}
           </div>)}
-          <div className={`rounded-lg p-2.5 text-xs font-semibold ${ltResult.checked?(ltResult.wouldSaveLead?"bg-emerald-500/15 text-emerald-500":"bg-blue-500/10 text-blue-600 dark:text-blue-400"):"bg-red-500/10 text-red-500"}`}>
-            {ltResult.checked?`Checked ✓ — ${ltResult.classification}${ltResult.wouldSaveLead?" → saves as fresh lead":""}`:"Not checked — the pipeline failed at the red stage above. That's an infrastructure failure, NOT a no-service result."}
+          <div className={`rounded-lg p-2.5 text-xs font-semibold ${ltResult.checked?(ltResult.wouldSaveLead?"bg-emerald-500/15 text-emerald-500":"bg-blue-500/10 text-blue-600 dark:text-blue-400"):ltResult.pendingAuth?"bg-amber-500/15 text-amber-600 dark:text-amber-400":"bg-red-500/10 text-red-500"}`}>
+            {ltResult.checked?`Checked ✓ — ${ltResult.classification}${ltResult.wouldSaveLead?" → saves as fresh lead":""}`:ltResult.pendingAuth?"PENDING_AUTH — token/auth flow failed after retry. Address kept for retry. This is NOT a no-service result.":"Not checked — the pipeline failed at the red stage above. That's an infrastructure failure, NOT a no-service result."}
           </div>
         </div>}
       </section>

@@ -3891,8 +3891,8 @@ export default function MapView() {
                     <div className="mt-0.5 break-words font-mono text-[10px] text-white/55">{s.detail}</div>
                   </div>
                 ))}
-                <div className={`rounded-lg p-2 text-[11px] font-semibold ${ltResult.checked ? (ltResult.wouldSaveLead ? "bg-emerald-500/15 text-emerald-300" : "bg-sky-500/15 text-sky-300") : "bg-red-500/15 text-red-300"}`}>
-                  {ltResult.checked ? `Checked ✓ — ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : "Not checked — failed at the red stage (infra error, not a no-service verdict)."}
+                <div className={`rounded-lg p-2 text-[11px] font-semibold ${ltResult.checked ? (ltResult.wouldSaveLead ? "bg-emerald-500/15 text-emerald-300" : "bg-sky-500/15 text-sky-300") : ltResult.pendingAuth ? "bg-amber-500/15 text-amber-300" : "bg-red-500/15 text-red-300"}`}>
+                  {ltResult.checked ? `Checked ✓ — ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : ltResult.pendingAuth ? "PENDING_AUTH — token/auth flow failed after retry. Address kept for retry, NOT a no-service verdict." : "Not checked — failed at the red stage (infra error, not a no-service verdict)."}
                 </div>
               </div>
             ) : (

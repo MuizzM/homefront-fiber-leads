@@ -5,7 +5,7 @@ export interface SweepResult { id:number; address:string; city:string; state:str
 export interface StateSweepCity { city:string; status:string; checked:number; freshLeads:number; comingSoon:number; unresolved:number }
 export interface StateSweep { id:string; state:"NC"|"SC"; status:string; phase:string; citiesTotal:number; citiesCompleted:number; currentCity:string|null; discovered?:number; checked:number; freshLeads:number; newLeads?:number; stillFresh?:number; comingSoon:number; pending?:number; retried?:number; retrying:number; unresolved:number; report:any|null; error:string|null; startedAt:string; completedAt:string|null; cities:StateSweepCity[] }
 export interface LiveTestStage { stage:string; ok:boolean; detail:string; data?:Record<string,unknown> }
-export interface LiveTest { input:{address:string;city:string;state:string;zip:string}; stages:LiveTestStage[]; checked:boolean; classification:string; wouldSaveLead:boolean }
+export interface LiveTest { input:{address:string;city:string;state:string;zip:string}; stages:LiveTestStage[]; checked:boolean; classification:string; wouldSaveLead:boolean; pendingAuth?:boolean }
 const json = async <T>(method:string,url:string,body?:unknown):Promise<T> => (await apiRequest(method,url,body)).json();
 export const sweepApi = {
   list: () => json<{sweeps:SweepJob[]}>("GET","/api/sweeps"),

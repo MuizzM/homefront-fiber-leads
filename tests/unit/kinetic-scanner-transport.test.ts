@@ -4,6 +4,9 @@ import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAll
 const { proxyFetch } = vi.hoisted(() => ({ proxyFetch: vi.fn() }));
 vi.mock("../../server/proxy-fetch", () => ({
   proxyFetch,
+  // The anonymous token mint now egresses DIRECT (not through the proxy). Route it
+  // to the same mock so mint + search stay observable through one call log.
+  directFetch: proxyFetch,
   getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100 }),
 }));
 vi.mock("../../server/distributedProviderCoordinator", () => {

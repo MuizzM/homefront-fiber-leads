@@ -110,6 +110,20 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
   return fetch(url, opts);
 }
 
+/**
+ * Direct (un-proxied) transport, used ONLY for the anonymous Kinetic token mint
+ * (`/api/v1/auth/session`). That endpoint takes the baked client Basic credential,
+ * carries no user identity, and is verified to return 201 from the server's own
+ * egress IP. Minting is low-volume (a few tokens/hour); the high-volume, identity-
+ * bearing Search calls stay on the fixed residential proxy via proxyFetch(). This
+ * is NOT a post-failure fallback — it is the deliberate, up-front transport for the
+ * mint, so the mint is never subject to the proxy IP's rolling-window rate limit
+ * (which was returning 403 on the mint and failing the whole check as "auth error").
+ */
+export function directFetch(url: string, opts: RequestInit = {}): Promise<Response> {
+  return fetch(url, opts);
+}
+
 export function getProxyStatus(): { enabled: boolean; url: string | null; slots: number } {
   const proxyUrl = configuredProxyUrl();
   return {

@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch } from "./proxy-fetch";
+import { proxyFetch, directFetch } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
 import { parseKineticResponse } from "./kineticResponseParser";
@@ -101,8 +101,18 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
   // Basic credential (KFS_AUTH_BASIC, which already carries its "Basic " prefix)
   // and a braze device body, and returns { token } (a JWT). Some other token
   // services return { access_token, expires_in } — handle both.
+  //
+  // TRANSPORT: mint DIRECT (server egress), never through the residential proxy.
+  // This endpoint is anonymous — it carries the baked client credential, not a
+  // user identity — and is verified to return 201 from the server's own IP. The
+  // proxy IP enforces a rolling-window rate limit shared with the high-volume
+  // Search calls; routing the low-volume mint through it made the mint itself
+  // return 403 ("Auto-auth blocked"), failing the whole check as an auth error
+  // even though the address was never looked up. Only the identity-bearing Search
+  // calls need the fixed residential egress. Opt back in with KFS_MINT_VIA_PROXY=true.
   const basic = process.env.KFS_AUTH_BASIC?.trim();
-  const response = await proxyFetch(kineticTokenUrl(), {
+  const mintFetch = process.env.KFS_MINT_VIA_PROXY === "true" ? proxyFetch : directFetch;
+  const response = await mintFetch(kineticTokenUrl(), {
     method: "POST",
     headers: providerHeaders({
       "Content-Type": "application/json",
@@ -155,6 +165,12 @@ export async function refreshTokenFromApi(): Promise<string> {
     return await authorizedTokenPool.refreshLease(lease);
   }
   finally { lease.release(); }
+}
+
+/** Drop a token the caller saw fail against the provider so it is never reused.
+ * The slot returns to EMPTY and is re-minted on the next lease. */
+export function invalidateAuthorizedToken(token: string | null | undefined): void {
+  authorizedTokenPool.invalidate(token);
 }
 
 /** Shared token accessor for authorized server-side scanner routes. */
@@ -428,8 +444,27 @@ export interface LiveTestResult {
   input: { address: string; city: string; state: string; zip: string };
   stages: LiveTestStage[];
   checked: boolean;
+  // "pending_auth" = the mint/token flow failed (403/401/mint error); the address
+  // is intentionally left un-checked and un-classified so a later run retries it.
+  // It is NEVER "no_service" — an auth failure is not a service verdict.
   classification: string;
   wouldSaveLead: boolean;
+  pendingAuth: boolean;
+}
+
+// Mint through the approved token flow, dropping any stale token first so a retry
+// never reuses a token the provider just rejected. Single-flight + bounded refresh
+// concurrency inside the pool guarantee this issues no duplicate mint requests.
+async function mintThroughApprovedFlow(invalidateFirst?: string): Promise<string> {
+  if (invalidateFirst) invalidateAuthorizedToken(invalidateFirst);
+  return refreshTokenFromApi();
+}
+
+// A `blocked` ScanResult is an AUTH block (401/403 — retry after re-mint) rather
+// than a plain throttle (429/5xx) when scanAddressDirect tagged it token/session.
+function isAuthBlock(result: ScanResult): boolean {
+  const notes = String(result.notes ?? "");
+  return /token\/session/i.test(notes) || /\b(401|403)\b/.test(notes);
 }
 
 // Diagnostic — runs ONE address through the SAME shared check path the Field Map,
@@ -441,35 +476,70 @@ export async function liveTestAddress(
   address: string, city: string, state: string, zip: string,
 ): Promise<LiveTestResult> {
   const stages: LiveTestStage[] = [];
-  const out: LiveTestResult = { input: { address, city, state, zip }, stages, checked: false, classification: "unresolved", wouldSaveLead: false };
+  const out: LiveTestResult = { input: { address, city, state, zip }, stages, checked: false, classification: "unresolved", wouldSaveLead: false, pendingAuth: false };
+
+  const markPendingAuth = (why: string) => {
+    out.checked = false;
+    out.classification = "pending_auth";
+    out.pendingAuth = true;
+    out.wouldSaveLead = false;
+    stages.push({ stage: "Classification", ok: false, detail: `PENDING_AUTH — ${why}; address kept for retry, NOT a no-service verdict` });
+    return out;
+  };
 
   stages.push({ stage: "OSM found", ok: true, detail: `${address}, ${city}, ${state} ${zip}` });
   stages.push({ stage: "Normalized address", ok: true, detail: normalizeKineticAddressKey(address, city, state, zip) });
 
-  // Fresh Braze token — the identical mint every scan run performs at its start.
+  // Fresh Braze token via the approved flow (minted DIRECT, not through the
+  // throttled proxy). On failure, invalidate stale state and retry ONCE — no
+  // duplicate requests (the pool single-flights the mint). If it still fails the
+  // address stays PENDING_AUTH and is never classified as no-service.
   try {
-    const token = await refreshTokenFromApi();
+    const token = await mintThroughApprovedFlow();
     stages.push({ stage: "Token minted", ok: true, detail: `fresh token · ${token.length} chars` });
-  } catch (e: any) {
-    stages.push({ stage: "Token minted", ok: false, detail: `MINT FAILED: ${String(e?.message ?? e)}` });
-    return out;
+  } catch (firstErr: any) {
+    stages.push({ stage: "Token minted", ok: false, detail: `mint failed (${String(firstErr?.message ?? firstErr)}) — invalidating stale state, retrying once` });
+    try {
+      const token = await mintThroughApprovedFlow();
+      stages.push({ stage: "Token minted (retry)", ok: true, detail: `fresh token · ${token.length} chars` });
+    } catch (retryErr: any) {
+      stages.push({ stage: "Token minted (retry)", ok: false, detail: `AUTH FAILED: ${String(retryErr?.message ?? retryErr)}` });
+      return markPendingAuth("token mint returned auth failure after one retry");
+    }
   }
 
   stages.push({ stage: "Kinetic search called", ok: true, detail: `POST ${KFS_SCAN_URL}`, data: { request: { addressLine1: address, addressLine2: "", city, state, postalCode: zip }, authorization: "Bearer <redacted>" } });
 
   // THE one shared check path — same code the field/city/nightly workers run.
-  const result = await scanAddressDirect(address, city, state, zip, "manual");
+  // scanAddressDirect invalidates the leased token on a 401/403 and returns a
+  // `blocked` result. When that is an AUTH block, remint through the approved flow
+  // (which stores a fresh token in the pool) and immediately retry the SAME address
+  // ONCE before giving up — never a duplicate concurrent request.
+  let result = await scanAddressDirect(address, city, state, zip, "manual");
+  if (result.blocked && isAuthBlock(result)) {
+    stages.push({ stage: "Auth retry", ok: true, detail: "Search returned 401/403 — token invalidated, reminting and retrying same address once" });
+    try {
+      const token = await mintThroughApprovedFlow();
+      stages.push({ stage: "Token re-minted", ok: true, detail: `fresh token · ${token.length} chars` });
+    } catch (e: any) {
+      stages.push({ stage: "Token re-minted", ok: false, detail: `AUTH FAILED: ${String(e?.message ?? e)}` });
+      return markPendingAuth("re-mint after Search auth block failed");
+    }
+    result = await scanAddressDirect(address, city, state, zip, "manual");
+  }
 
   const httpOk = result.apiSource === "kinetic_live";
   stages.push({
     stage: "HTTP result", ok: httpOk,
     detail: httpOk ? "HTTP 200 OK"
-      : result.blocked ? "throttled (403) — transient, address kept pending for retry"
+      : result.blocked ? "throttled/auth-blocked (401/403/429) — transient, address kept pending for retry"
       : `no conclusive answer — ${result.notes || "infra error"} (NOT a no-service verdict)`,
   });
 
   if (!httpOk) {
     stages.push({ stage: "Response", ok: false, detail: result.notes || "non-conclusive response" });
+    // An auth/throttle block is PENDING_AUTH (retriable), not a service verdict.
+    if (result.blocked && isAuthBlock(result)) return markPendingAuth("Search API kept returning 401/403 after retry");
     stages.push({ stage: "Classification", ok: false, detail: `unresolved (infra) — ${result.blocked ? "throttled" : "error"}; NOT a no-service verdict` });
     return out;
   }
