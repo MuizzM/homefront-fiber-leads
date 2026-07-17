@@ -26,7 +26,7 @@ export interface KineticParsed {
   lng: number | null;
   householdSegmentType: string | null; // "NEW FIBER" | "TENURED" | …
   marketSegmentType: string | null;
-  billingStatus: string | null; // "N" (no account) | "Y" (has account)
+  billingStatus: string | null; // "N" (no account) | "Y" / "A" (active account)
   dfAddressId: string | null;
   dfAddressIdXref: string | null;
   accessId: string | null; // qualAddressAccessId
@@ -170,7 +170,9 @@ export function classifyKineticResult(p: KineticParsed): KineticClassification {
   if (!seg || !billing) return "UNRESOLVED";
   // AUTHORITATIVE LEAD RULE: NEW FIBER + billing N + successful exact match.
   if (seg === "NEW FIBER" && billing === "N" && p.addressFound && p.exactMatch) return "FRESH_LEAD";
-  if (seg === "NEW FIBER" && billing === "Y") return "NOW_ACTIVE"; // active service, not a lead
+  // Active service, not a lead. Kinetic returns BOTH "Y" and "A" for an address
+  // with an active account (verified live: 4051 Dakeita Cir → billingStatus "A").
+  if (seg === "NEW FIBER" && (billing === "Y" || billing === "A")) return "NOW_ACTIVE";
   if (isComingSoon(p, seg)) return "COMING_SOON";
   // A successful, conclusive result that is not a lead still counts as Checked.
   return "CHECKED";

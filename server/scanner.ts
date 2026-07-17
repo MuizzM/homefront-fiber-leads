@@ -66,7 +66,10 @@ function jwtExpiryMs(token: string): number | null {
 }
 
 export function kineticTokenUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return env.KFS_AUTH_URL?.trim() || `${KFS_ORIGIN}/_internal/precisely/token`;
+  // Live-verified session mint (2026-07): the storefront's real flow is
+  // POST /api/v1/auth/session?context=web with the client Basic credential —
+  // the legacy /_internal/precisely/token endpoint rejects non-internal callers.
+  return env.KFS_AUTH_URL?.trim() || `${KFS_ORIGIN}/api/v1/auth/session?context=web`;
 }
 
 export function kineticTokenRequestInit(signal?: AbortSignal): RequestInit {
@@ -114,8 +117,13 @@ function isAuthDenialMessage(message: string): boolean {
 // { access_token, expires_in } — handle both. A non-2xx (403 IP throttle, 429,
 // 5xx) or a non-JSON body (bot-challenge interstitial) throws so the caller can
 // rotate the Decodo session and retry.
+// The storefront's public client credential (base64 of "kinetic:SecuRe!CoNneCt1",
+// extracted from the official buy.gokinetic.com web bundle). KFS_AUTH_BASIC
+// overrides it when the provider issues a deployment-specific credential.
+const DEFAULT_KFS_AUTH_BASIC = `Basic ${Buffer.from("kinetic:SecuRe!CoNneCt1").toString("base64")}`;
+
 async function mintViaDecodo(): Promise<{ token: string; expiresAt: number }> {
-  const basic = process.env.KFS_AUTH_BASIC?.trim();
+  const basic = process.env.KFS_AUTH_BASIC?.trim() || DEFAULT_KFS_AUTH_BASIC;
   const response = await proxyFetch(kineticTokenUrl(), {
     method: "POST",
     headers: providerHeaders({

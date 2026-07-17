@@ -74,7 +74,7 @@ describe("Kinetic scanner transport hardening", () => {
   it("on 401 invalidates the token and returns a blocked result (one attempt) for the worker to requeue", async () => {
     let searches = 0;
     proxyFetch.mockImplementation(async (url: string, init: RequestInit) => {
-      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
+      if (url.includes("/api/v1/auth/session")) return json(200, { access_token: "fresh", expires_in: 2_100 });
       expect(url).toBe("https://buy.gokinetic.com/api/v1/address/search");
       searches++;
       expect(new Headers(init.headers).get("authorization")).toMatch(/^Bearer /);
@@ -91,7 +91,7 @@ describe("Kinetic scanner transport hardening", () => {
   it("on 429 returns a blocked result (one attempt) for the worker to requeue — no in-loop wait", async () => {
     let searches = 0;
     proxyFetch.mockImplementation(async (url: string) => {
-      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
+      if (url.includes("/api/v1/auth/session")) return json(200, { access_token: "fresh", expires_in: 2_100 });
       searches++;
       return json(429, {}, { "retry-after": "0" });
     });
@@ -104,7 +104,7 @@ describe("Kinetic scanner transport hardening", () => {
     // Mint succeeds; the search always 403s. A 403 invalidates the leased token,
     // so the next address re-mints a fresh one and tries again — never wedged.
     proxyFetch.mockImplementation(async (url: string) => {
-      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
+      if (url.includes("/api/v1/auth/session")) return json(200, { access_token: "fresh", expires_in: 2_100 });
       return json(403, {});
     });
     const first = await scanner.scanAddress("403 Stop Court", "Lexington", "NC", "27292", { source: "manual" });
@@ -120,7 +120,7 @@ describe("Kinetic scanner transport hardening", () => {
 
   it("345 James Allgood Dr flows through the SHARED scanAddress path as fresh fiber (copper override ignored)", async () => {
     proxyFetch.mockImplementation(async (url: string) => {
-      if (url.includes("/_internal/precisely/token")) return json(200, { access_token: "fresh", expires_in: 2_100 });
+      if (url.includes("/api/v1/auth/session")) return json(200, { access_token: "fresh", expires_in: 2_100 });
       return json(200, FIX);
     });
     // scanAddress is the ONE path Manual Check + Field Map + city + recheck share,

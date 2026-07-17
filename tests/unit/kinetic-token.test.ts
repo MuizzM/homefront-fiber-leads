@@ -16,9 +16,9 @@ describe("Kinetic browser-equivalent token contract", () => {
     expect(KFS_SCAN_URL).toBe("https://buy.gokinetic.com/api/v1/address/search");
   });
 
-  it("defaults to the confirmed internal token URL and permits an explicit override", () => {
+  it("defaults to the live-verified auth/session URL and permits an explicit override", () => {
     expect(kineticTokenUrl({} as NodeJS.ProcessEnv)).toBe(
-      "https://buy.gokinetic.com/_internal/precisely/token",
+      "https://buy.gokinetic.com/api/v1/auth/session?context=web",
     );
     expect(
       kineticTokenUrl({

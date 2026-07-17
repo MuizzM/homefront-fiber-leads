@@ -420,7 +420,9 @@ function applyCheck(
   // Active-service rows are silent Coming Soon watches; the nightly recheck worker
   // consumes the same shared queue and promotes nothing until billingStatus=N and
   // the independent fresh-fiber projector confirms the transition.
-  if (result.isNewFiber && ["N", "Y"].includes(String(result.billingStatus))) {
+  // "A" is Kinetic's other active-billing value (verified live) — include it so
+  // active-service NEW FIBER addresses stay in the monitoring inventory.
+  if (result.isNewFiber && ["N", "Y", "A"].includes(String(result.billingStatus))) {
     // COMING SOON PROGRAM: NEW FIBER with billing still active = fiber built,
     // service not yet orderable. Add it to the durable watchlist — the built-in
     // worker rechecks it on an opportunity-weighted cadence and promotes it to a
