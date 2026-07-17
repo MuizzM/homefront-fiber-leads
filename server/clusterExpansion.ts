@@ -92,20 +92,21 @@ export function onFreshLead(tenantId: number, seed: LeadSeed): { expansionId: st
   const existingOrigin = rawDb.prepare(`SELECT id FROM lead_expansions WHERE origin_target_id=?`).get(seed.targetId) as any;
   if (existingOrigin) return { expansionId: existingOrigin.id, action: "origin_exists" };
 
-  // If this lead was discovered by an ACTIVE nearby cluster, mark it a lead there
-  // and reset that cluster's empty streak (density found → keep expanding) — do NOT
-  // spawn a duplicate expansion.
+  // If this lead was discovered by an ACTIVE nearby cluster, it is already covered:
+  // record it in that cluster's chain and reset its empty streak (density found →
+  // keep expanding OUTWARD from the parent's frontier). Do NOT spawn a competing,
+  // overlapping expansion — that is the "no duplicate active expansion jobs" rule.
+  // A genuinely-new green lead beyond every active cluster's reach seeds its own.
   const member = rawDb.prepare(`SELECT em.expansion_id FROM expansion_members em
     JOIN lead_expansions e ON e.id=em.expansion_id
     WHERE em.address_key=? AND e.status='active' LIMIT 1`).get(key) as any;
   if (member) {
     rawDb.prepare(`UPDATE expansion_members SET became_lead=1, lead_id=? WHERE expansion_id=? AND address_key=?`).run(seed.leadId, member.expansion_id, key);
     rawDb.prepare(`UPDATE lead_expansions SET empty_streak=0, fresh_found=fresh_found+1, updated_at=? WHERE id=?`).run(now, member.expansion_id);
-    // Also seed a NEW outward expansion from this lead (density-driven growth),
-    // unless we're at the active cap.
+    return { expansionId: member.expansion_id, action: "attached" };
   }
 
-  if (activeCount() >= CFG.maxActive()) return { expansionId: member?.expansion_id ?? null, action: "at_active_cap" };
+  if (activeCount() >= CFG.maxActive()) return { expansionId: null, action: "at_active_cap" };
 
   const id = `exp_${tenantId}_${now.toString(36)}_${crypto.randomBytes(2).toString("hex")}`;
   rawDb.prepare(`INSERT INTO lead_expansions

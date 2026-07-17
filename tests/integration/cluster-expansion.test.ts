@@ -105,9 +105,11 @@ describe("Lead cluster expansion", () => {
     const a1 = target("2 Cluster Ave", 300, { green: true }); // in ring 0
     exp.onFreshLead(1, { targetId: origin, leadId: 900, address: "1 Origin St", city: "Marshville", state: "NC", zip: "28103", lat: ORIGIN.lat, lng: ORIGIN.lng });
     await Promise.resolve();
-    // a1 came back green → onFreshLead(a1): it's a member of origin's expansion.
+    // a1 came back green → onFreshLead(a1): it's already a member of origin's
+    // cluster, so it ATTACHES (no duplicate/overlapping expansion job spawned).
     const res = exp.onFreshLead(1, { targetId: a1, leadId: 901, address: "2 Cluster Ave", city: "Marshville", state: "NC", zip: "28103", lat: northMeters(300), lng: ORIGIN.lng });
-    expect(["started", "at_active_cap"]).toContain(res.action); // attached + (optionally) seeded its own outward growth
+    expect(res.action).toBe("attached");
+    expect(rawDb.prepare(`SELECT COUNT(*) c FROM lead_expansions`).get().c).toBe(1); // still ONE expansion, no overlap
     const originExp = rawDb.prepare(`SELECT id, empty_streak, fresh_found FROM lead_expansions WHERE origin_target_id=?`).get(origin);
     const member = rawDb.prepare(`SELECT became_lead, lead_id FROM expansion_members WHERE expansion_id=? AND target_id=?`).get(originExp.id, a1);
     expect(member.became_lead).toBe(1);   // recorded which green lead the cluster discovered
