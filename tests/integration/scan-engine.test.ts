@@ -591,6 +591,18 @@ describe("budgeted scan engine (replay — zero proxy)", () => {
     store.setRunStatus(cid, "cancelled");
     expect(store.getStrandedDoneRuns(10).map((r) => r.id)).not.toContain(cid);
 
+    // An ERROR run with a claimable tail MUST be re-opened: the worker died on a
+    // terminal exception, but its queued addresses are still claimable (seen live:
+    // a PRIORITY market run erroring with its tail stranded).
+    const eid = "run_test_error_tail";
+    const id3 = Number(seed.run("3 Stranded St", "Strandton", "NC", "28103", 35.83, -80.73).lastInsertRowid);
+    store.createScanRun({ id: eid, tenantId: TENANT, kind: "discovery", label: "Err", city: "Strandton", state: "NC", budget: 1 });
+    store.enqueueRunTargets(eid, [{ id: id3, seq: 0 }]);
+    store.claimRunTargets(eid, 1);
+    store.requeueRunTarget(eid, id3);
+    store.setRunStatus(eid, "error", "boom");
+    expect(store.getStrandedDoneRuns(10).map((r) => r.id)).toContain(eid);
+
     // Backoff: a delayed requeue makes the target un-claimable until due, so the run
     // is no longer "stranded" (it converges/drains instead of spinning).
     store.setRunStatus(runId, "running");

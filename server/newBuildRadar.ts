@@ -1,13 +1,14 @@
 // ── New Build Radar ───────────────────────────────────────────────────────────
 // Continuously watches free NC/SC sources (NC OneMap authoritative address points
-// + OSM Overpass newer:) for newly-appearing addresses and buildings, dedups them
+// + SC county E911/GIS address layers + OSM Overpass newer:) for newly-appearing
+// addresses and buildings, dedups them
 // against a durable inventory (preserving every source + detection date), monitors
 // ADDRESSLESS new buildings until an address appears, detects construction
 // clusters, and — the revenue path — the moment a valid new address appears it is
 // enqueued into the EXISTING Fiber Intelligence scan pipeline (upsertScanTargets +
 // startTargetRun) so Kinetic checks it immediately and the shared projector
 // publishes a Lead on NEW FIBER + billingStatus=N. Per-county source coverage
-// (incl. gaps like the unreachable SC statewide GIS) is tracked and exposed.
+// (incl. remaining gaps like the missing SC statewide feed) is tracked and exposed.
 //
 // This does NOT rebuild discovery/queue/leads — it reuses them. It never touches
 // Mapbox (billing history) or the Decodo proxy (Kinetic-only); gov/OSM are direct.
@@ -18,13 +19,16 @@ import { startTargetRun } from "./scanService";
 import { normalizeKineticAddressKey } from "./scanner";
 import { structuredLog } from "./structuredLog";
 import {
-  pollNcOneMapCounty, pollOverpassArea, fetchNcOneMapRecent, type NewBuildCandidate, type OverpassArea, type SourcePollResult,
+  pollNcOneMapCounty, pollOverpassArea, fetchNcOneMapRecent, pollScCountyAddresses,
+  SC_COUNTY_SOURCES, SC_COUNTY_SOURCE_ID,
+  type NewBuildCandidate, type OverpassArea, type SourcePollResult, type ScCountySource,
 } from "./newBuildSources";
 
 // ── Scopes ────────────────────────────────────────────────────────────────────
-// Every NC county (NC OneMap is county-queryable → "all NC" authoritative), plus
-// Overpass tiles covering NC+SC for observed new builds / addressless monitoring.
-// The unreachable SC statewide authoritative dataset is registered as a GAP.
+// Every NC county (NC OneMap is county-queryable → "all NC" authoritative), the
+// verified SC county E911/GIS address layers (Kinetic SC markets), plus Overpass
+// tiles covering NC+SC for observed new builds / addressless monitoring. What
+// still has no live authoritative feed is registered as a GAP.
 const NC_COUNTIES = [
   "ALAMANCE","ALEXANDER","ALLEGHANY","ANSON","ASHE","AVERY","BEAUFORT","BERTIE","BLADEN","BRUNSWICK",
   "BUNCOMBE","BURKE","CABARRUS","CALDWELL","CAMDEN","CARTERET","CASWELL","CATAWBA","CHATHAM","CHEROKEE",
@@ -50,9 +54,16 @@ const OVERPASS_TILES: OverpassArea[] = [
 ];
 
 // Known coverage GAPS to surface honestly (requirement: expose missing datasets).
+// Verified 2026-07-17: SC publishes NO statewide address FeatureServer (AGOL
+// search 0 public results; scarng-gis.sc.gov hosts only county boundaries; RFA
+// 911 address data is not open REST) — authoritative SC coverage is per-county
+// (see SC_COUNTY_SOURCES). Cherokee and Union counties expose no public ArcGIS
+// REST at all, so their Kinetic markets (e.g. Gaffney, Union) stay OSM-only.
 const KNOWN_GAPS: Array<{ state: string; source: string; scope: string; note: string }> = [
-  { state: "SC", source: "sc_rfa_gis", scope: "SC statewide", note: "SC Revenue & Fiscal Affairs statewide address FeatureServer unreachable — using OSM Overpass for SC until a live authoritative endpoint is available" },
-  { state: "NC", source: "county_permits", scope: "residential permits", note: "County residential-permit feeds are fragmented and not uniformly published as open APIs — not wired; new construction is detected via NC OneMap new address points + OSM new buildings instead" },
+  { state: "SC", source: "sc_rfa_gis", scope: "SC statewide", note: "No public SC statewide address FeatureServer exists (RFA 911 data not published as open REST; AGOL search 0 results) — authoritative SC coverage is per-county via sc_county_addr; counties without open GIS fall back to OSM Overpass" },
+  { state: "SC", source: "sc_cherokee_gis", scope: "Cherokee county", note: "Cherokee County (Gaffney) publishes parcels only via qPublic/Schneider (no public ArcGIS REST) — OSM Overpass only until an open endpoint appears" },
+  { state: "SC", source: "sc_union_gis", scope: "Union county", note: "Union County SC publishes maps only via WTH GIS viewer (no public ArcGIS REST) — OSM Overpass only until an open endpoint appears" },
+  { state: "NC", source: "county_permits", scope: "residential permits", note: "County residential-permit feeds (NC and SC) are fragmented and not uniformly published as open APIs — not wired; new construction is detected via authoritative new address points + OSM new buildings instead" },
 ];
 
 let _ready = false;
@@ -85,8 +96,12 @@ function ensureSchema(): void {
       UNIQUE(source, scope)
     );
   `);
-  // Seed known gaps once (idempotent).
-  const gapStmt = rawDb.prepare(`INSERT OR IGNORE INTO scan_source_coverage (state, county, source, scope, cursor, status, note, last_poll_at) VALUES (?,?,?,?,?,?,?,?)`);
+  // Seed known gaps (idempotent) and keep still-missing gap notes current on
+  // existing DBs (e.g. the SC statewide note now points at the county feeds).
+  const gapStmt = rawDb.prepare(`
+    INSERT INTO scan_source_coverage (state, county, source, scope, cursor, status, note, last_poll_at) VALUES (?,?,?,?,?,?,?,?)
+    ON CONFLICT(source, scope) DO UPDATE SET note=excluded.note WHERE scan_source_coverage.status='missing'
+  `);
   for (const g of KNOWN_GAPS) gapStmt.run(g.state, null, g.source, g.scope, null, "missing", g.note, null);
   _ready = true;
 }
@@ -205,7 +220,7 @@ function updateCoverage(r: SourcePollResult, state: string, county: string | nul
 function getCursor(source: string, scope: string): string {
   ensureSchema();
   const row = rawDb.prepare(`SELECT cursor FROM scan_source_coverage WHERE source=? AND scope=?`).get(source, scope) as { cursor: string } | undefined;
-  return row?.cursor ?? (source === "nc_onemap" ? "0" : "");
+  return row?.cursor ?? (source === "nc_onemap" || source === SC_COUNTY_SOURCE_ID ? "0" : "");
 }
 
 // ── Tick / continuous loop ────────────────────────────────────────────────────
@@ -215,9 +230,15 @@ function getCursor(source: string, scope: string): string {
 export interface RadarPollers {
   ncOneMap?: typeof pollNcOneMapCounty;
   overpass?: typeof pollOverpassArea;
+  scCounty?: typeof pollScCountyAddresses;
 }
-const ALL_SCOPES: Array<{ kind: "nc_onemap"; county: string } | { kind: "osm_overpass"; area: OverpassArea }> = [
+const ALL_SCOPES: Array<
+  | { kind: "nc_onemap"; county: string }
+  | { kind: "sc_county_addr"; src: ScCountySource }
+  | { kind: "osm_overpass"; area: OverpassArea }
+> = [
   ...NC_COUNTIES.map((county) => ({ kind: "nc_onemap" as const, county })),
+  ...SC_COUNTY_SOURCES.map((src) => ({ kind: "sc_county_addr" as const, src })),
   ...OVERPASS_TILES.map((area) => ({ kind: "osm_overpass" as const, area })),
 ];
 let _tickIdx = 0;
@@ -228,12 +249,16 @@ export async function runRadarTick(pollers: RadarPollers = {}): Promise<{ scope:
   _tickIdx++;
   const ncPoll = pollers.ncOneMap ?? pollNcOneMapCounty;
   const opPoll = pollers.overpass ?? pollOverpassArea;
+  const scPoll = pollers.scCounty ?? pollScCountyAddresses;
 
   let result: SourcePollResult;
   let state: string, county: string | null, label: string;
   if (scope.kind === "nc_onemap") {
     state = "NC"; county = scope.county; label = `${scope.county}, NC`;
     result = await ncPoll(scope.county, getCursor("nc_onemap", scope.county));
+  } else if (scope.kind === "sc_county_addr") {
+    state = "SC"; county = scope.src.county; label = `${scope.src.county}, SC`;
+    result = await scPoll(scope.src, getCursor(SC_COUNTY_SOURCE_ID, scope.src.county));
   } else {
     state = scope.area.state; county = scope.area.county; label = scope.area.key;
     result = await opPoll(scope.area, getCursor("osm_overpass", scope.area.key));
@@ -327,10 +352,10 @@ export function getNewBuildFeed(opts: { hours?: number; actionableOnly?: boolean
 
 export function getSourceCoverage(): {
   sources: Array<{ state: string; county: string | null; source: string; scope: string; status: string; recordsSeen: number; newFound: number; lastPollAt: number | null; note: string | null }>;
-  summary: { ncCountiesTracked: number; ncCountiesSeeded: number; scTilesTracked: number; gaps: number; staleOverMin: number };
+  summary: { ncCountiesTracked: number; ncCountiesSeeded: number; scCountiesTracked: number; scCountiesSeeded: number; scTilesTracked: number; gaps: number; staleOverMin: number };
 } {
   ensureSchema();
-  const rows = rawDb.prepare(`SELECT state, county, source, scope, status, records_seen r, new_found n, last_poll_at ts, note FROM scan_source_coverage ORDER BY state, source, scope`).all() as any[];
+  const rows = rawDb.prepare(`SELECT state, county, source, scope, cursor, status, records_seen r, new_found n, last_poll_at ts, note FROM scan_source_coverage ORDER BY state, source, scope`).all() as any[];
   const now = Date.now();
   const STALE_MS = Number(process.env.NEWBUILD_STALE_MS ?? 6 * 3600_000);
   return {
@@ -338,6 +363,8 @@ export function getSourceCoverage(): {
     summary: {
       ncCountiesTracked: rows.filter((x) => x.source === "nc_onemap").length,
       ncCountiesSeeded: rows.filter((x) => x.source === "nc_onemap" && x.status !== "missing" && x.cursor !== "0").length,
+      scCountiesTracked: rows.filter((x) => x.source === SC_COUNTY_SOURCE_ID).length,
+      scCountiesSeeded: rows.filter((x) => x.source === SC_COUNTY_SOURCE_ID && x.status !== "missing" && x.cursor !== "0").length,
       scTilesTracked: rows.filter((x) => x.source === "osm_overpass" && x.state === "SC").length,
       gaps: rows.filter((x) => x.status === "missing").length,
       staleOverMin: rows.filter((x) => x.status !== "missing" && x.ts && now - x.ts > STALE_MS).length,

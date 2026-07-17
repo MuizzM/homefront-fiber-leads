@@ -83,6 +83,8 @@ import * as commissionSvc from "./commissionService";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
+import { registerComingSoonRoutes } from "./comingSoonWatchlist";
+import { registerLeadRankingRoutes } from "./leadRanking";
 import { registerKineticScannerRoutes } from "./kineticScannerRoutes";
 
 type AddressScanner = typeof scanAddress;
@@ -859,6 +861,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   registerKineticScannerRoutes(app, {
     requireCapability, requireScanningAllowed, scanAdmission: authorizedScanAdmission,
   });
+  // Coming-Soon watchlist (rep-facing) + ranked fresh leads — same injected-auth pattern.
+  registerComingSoonRoutes(app, { requireAuth, requireManager });
+  registerLeadRankingRoutes(app, { requireAuth });
 
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────

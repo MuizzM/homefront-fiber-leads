@@ -118,8 +118,10 @@ function dedupSkipSecondsForRun(kind: string): number {
   const v = String(kind ?? "").toLowerCase();
   if (v.includes("manual") || v === "target_ids" || v.includes("lasso") || v.includes("bbox") || v.includes("area") || v.includes("field")) return 0;
   // Change-detection runs must ALWAYS re-verify (never skip a recently-checked address):
-  // rechecks, rescans, nightly, and the state/coming-soon MONITOR watchers.
-  if (v.includes("recheck") || v.includes("rescan") || v.includes("nightly") || v.includes("scheduled") || v.includes("monitor")) return 0;
+  // rechecks, rescans, nightly, and the state/coming-soon MONITOR/WATCH watchers
+  // (the Coming-Soon watchlist's 'coming_soon_watch' cadence — down to 6h — would
+  // otherwise be silently swallowed by the 18h bulk dedup window).
+  if (v.includes("recheck") || v.includes("rescan") || v.includes("nightly") || v.includes("scheduled") || v.includes("monitor") || v.includes("watch")) return 0;
   return DEDUP_RECHECK_SEC;
 }
 
@@ -682,15 +684,16 @@ export function resumeInterruptedRuns(): void {
       );
       void runScanWorker(run.id, run.tenantId);
     }
-    // Drain STRANDED TAILS: 'done' runs that still hold claimable queued targets
-    // (a target requeued exactly as the batch drained). Re-open a bounded number so
-    // every discovered address is actually consumed — "preserve and retry every
-    // address." The requeue backoff makes the re-opened run converge, not spin.
+    // Drain STRANDED TAILS: 'done' or 'error' runs that still hold claimable queued
+    // targets (a target requeued exactly as the batch drained, or a worker that died
+    // on a terminal exception). Re-open a bounded number so every discovered address
+    // is actually consumed — "preserve and retry every address." The requeue backoff
+    // makes the re-opened run converge, not spin. ('cancelled' stays closed.)
     for (const run of getStrandedDoneRuns(10)) {
       if (isRunActive(run.id)) continue;
       resetInflightTargets(run.id);
       setRunStatus(run.id, "running");
-      console.log(`[scan-engine] re-opening stranded 'done' run ${run.id} (${countQueued(run.id)} claimable pending)`);
+      console.log(`[scan-engine] re-opening stranded '${run.status}' run ${run.id} (${countQueued(run.id)} claimable pending)`);
       void runScanWorker(run.id, run.tenantId);
     }
   } catch (err: any) {

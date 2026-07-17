@@ -9,15 +9,23 @@
 //    via an objectid high-water-mark per county (ArcGIS auto-increments objectid on
 //    insert, so objectid > cursor = addresses added since last poll). Seeded on
 //    first contact so we never flood the pipeline with the existing backlog.
+//  • SC county authoritative address points (sc_county_addr): SC has NO public
+//    statewide address FeatureServer (verified 2026-07: AGOL search 0 results,
+//    scarng-gis.sc.gov hosts only county boundaries, RFA 911 address data is not
+//    published as open REST), so the authoritative feeds are per-county E911/GIS
+//    ArcGIS layers. Each wired endpoint was live-probed (count + ordered query +
+//    outSR=4326) before inclusion; incremental via the same objectid
+//    high-water-mark pattern as NC OneMap.
 //  • OSM Overpass `newer:` (NC AND SC): new residential building ways + addr nodes
 //    since the last poll timestamp; also surfaces ADDRESSLESS new buildings to
 //    monitor until an address appears.
 //
-// SC statewide GIS (RFA) is currently unreachable — tracked as a coverage GAP by
-// the radar rather than silently substituted.
+// Remaining SC gaps (no public ArcGIS REST): statewide RFA, Cherokee (qPublic
+// only), Union (WTH GIS only) — tracked as coverage GAPS by the radar rather
+// than silently substituted.
 
 export interface NewBuildCandidate {
-  source: string;                 // "nc_onemap" | "osm_overpass"
+  source: string;                 // "nc_onemap" | "sc_county_addr" | "osm_overpass"
   sourceRecordId: string;         // stable id within the source (objectid / osm id)
   address: string | null;         // null = addressless building (monitored)
   city: string | null;
@@ -127,6 +135,135 @@ export async function pollNcOneMapCounty(
   }
 }
 
+// ── SC county authoritative address points (incremental via objectid) ─────────
+export const SC_COUNTY_SOURCE_ID = "sc_county_addr";
+
+export interface ScCountySource {
+  county: string;                 // Title-case county name; also the coverage scope
+  layerUrl: string;               // full ArcGIS REST layer URL (FeatureServer/N or MapServer/N)
+  oidField: string;               // verified auto-increment OID field for this layer
+  addressFields: string[];        // single-line address candidates; first non-empty wins
+  cityFields: string[];           // postal-community candidates; first non-empty wins ([] = none)
+  zipField: string | null;
+  pageSize: number;               // ≤ the layer's verified maxRecordCount
+}
+
+// Every endpoint below was LIVE-VERIFIED (2026-07-17): responds to
+// query?returnCountOnly, supports orderByFields on the OID and outSR=4326.
+// Counts at verification time are noted for scale context.
+export const SC_COUNTY_SOURCES: ScCountySource[] = [
+  { // 201,400 pts · maxRec 2000 · Kinetic markets: Inman, Campobello, Spartanburg
+    county: "Spartanburg",
+    layerUrl: "https://maps.spartanburgcounty.org/server/rest/services/GIS/Address_Points/FeatureServer/0",
+    oidField: "OBJECTID", addressFields: ["FullName"], cityFields: ["MSAGComm", "Inc_Muni"], zipField: "Post_Code", pageSize: 1000,
+  },
+  { // 306,800 pts · maxRec 5000 · layer exposes ADDRESS+ZIPCODE only (no city field)
+    county: "Greenville",
+    layerUrl: "https://www.gcgis.org/arcgis/rest/services/GreenvilleJS/Map_Layers_JS/MapServer/36",
+    oidField: "OBJECTID", addressFields: ["ADDRESS"], cityFields: [], zipField: "ZIPCODE", pageSize: 1000,
+  },
+  { // 157,787 pts · maxRec 1000 · Fort Mill / Rock Hill / Tega Cay / Clover
+    county: "York",
+    layerUrl: "https://services1.arcgis.com/2AGLxyiJoNiVHKwq/arcgis/rest/services/Addresses/FeatureServer/0",
+    oidField: "OBJECTID", addressFields: ["WHOLE_ADDRESS"], cityFields: ["POST_COMM", "INC_MUNI"], zipField: "POST_CODE", pageSize: 1000,
+  },
+  { // 64,633 pts · maxRec 16000 · AGOL-hosted, refreshed by LancoGIS (item modified same-day at probe)
+    county: "Lancaster",
+    layerUrl: "https://services3.arcgis.com/rJcpRneDUBgTeCT3/arcgis/rest/services/LC_Addresses/FeatureServer/0",
+    oidField: "FID", addressFields: ["WHOLE_ADDR"], cityFields: ["POSTAL_TOW", "INC_MUNI"], zipField: "POSTAL_ZIP", pageSize: 1000,
+  },
+  { // 120,393 pts · maxRec 2000 · SSAP (site/structure address points), daily E911 updates
+    county: "Anderson",
+    layerUrl: "https://propertyviewer.andersoncountysc.org/arcgis/rest/services/Address_Viewer/MapServer/0",
+    oidField: "OBJECTID", addressFields: ["LST_FullAddress"], cityFields: ["Post_Comm", "Inc_Muni"], zipField: "Post_Code", pageSize: 1000,
+  },
+  { // 51,540 pts · maxRec 1000 · 'Address' is the clean single-line field (FullAddress embeds city/state/zip)
+    county: "Laurens",
+    layerUrl: "https://www.laurenscountygis.org/arcgis/rest/services/Pebble/LaurensCountyData/MapServer/1",
+    oidField: "OBJECTID", addressFields: ["Address"], cityFields: ["Municipality"], zipField: "ZIPCode", pageSize: 500,
+  },
+];
+
+function scFirstNonEmpty(a: Record<string, any>, fields: string[]): string | null {
+  for (const f of fields) {
+    const v = (a[f] ?? "").toString().trim();
+    if (v && !/^unincorporated$/i.test(v)) return v;
+  }
+  return null;
+}
+
+/**
+ * Incremental SC county address-point poll — same contract as pollNcOneMapCounty:
+ * first contact (cursor ""/"0") SEEDS the cursor to the layer's current max OID
+ * and ingests NOTHING; later polls return only rows with OID > cursor (genuine
+ * post-seed additions), normalized to {address, city, state:'SC', zip, lat, lng}.
+ */
+export async function pollScCountyAddresses(
+  src: ScCountySource,
+  cursor: string,
+  opts: { fetchImpl?: FetchLike; now?: () => number; limit?: number } = {},
+): Promise<SourcePollResult> {
+  const fetchImpl = (opts.fetchImpl ?? (fetch as unknown as FetchLike));
+  const now = opts.now ?? Date.now;
+  const limit = Math.min(src.pageSize, Math.max(1, opts.limit ?? src.pageSize));
+  const base = `${src.layerUrl}/query`;
+  const oid = src.oidField;
+
+  try {
+    // First contact → seed to the current max OID via a top-1 DESC probe (works on
+    // both FeatureServer and older MapServer layers, unlike outStatistics).
+    if (!cursor || cursor === "0") {
+      const seedUrl = `${base}?where=1%3D1&outFields=${encodeURIComponent(oid)}&orderByFields=${encodeURIComponent(`${oid} DESC`)}&resultRecordCount=1&returnGeometry=false&f=json`;
+      const r = await fetchImpl(seedUrl, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(20000) });
+      if (!r.ok) return { source: SC_COUNTY_SOURCE_ID, scope: src.county, candidates: [], cursor: "0", seeded: false, recordsSeen: 0, ok: false, note: `seed HTTP ${r.status}` };
+      const j = await r.json();
+      if (j?.error) return { source: SC_COUNTY_SOURCE_ID, scope: src.county, candidates: [], cursor: "0", seeded: false, recordsSeen: 0, ok: false, note: `seed ArcGIS error ${j.error.code ?? ""}`.trim() };
+      const mx = Number(j?.features?.[0]?.attributes?.[oid] ?? 0);
+      return { source: SC_COUNTY_SOURCE_ID, scope: src.county, candidates: [], cursor: String(Number.isFinite(mx) ? mx : 0), seeded: true, recordsSeen: 0, ok: true, note: `seeded @ ${oid} ${mx}` };
+    }
+
+    // Incremental: rows with OID > cursor = additions since last poll.
+    const outFields = [oid, ...src.addressFields, ...src.cityFields, ...(src.zipField ? [src.zipField] : [])].join(",");
+    const url =
+      `${base}?where=${encodeURIComponent(`${oid}>${Number(cursor)}`)}&outFields=${encodeURIComponent(outFields)}` +
+      `&orderByFields=${encodeURIComponent(`${oid} ASC`)}&resultRecordCount=${limit}&returnGeometry=true&outSR=4326&f=json`;
+    const r = await fetchImpl(url, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(25000) });
+    if (!r.ok) return { source: SC_COUNTY_SOURCE_ID, scope: src.county, candidates: [], cursor, seeded: false, recordsSeen: 0, ok: false, note: `HTTP ${r.status}` };
+    const j = await r.json();
+    if (j?.error) return { source: SC_COUNTY_SOURCE_ID, scope: src.county, candidates: [], cursor, seeded: false, recordsSeen: 0, ok: false, note: `ArcGIS error ${j.error.code ?? ""}`.trim() };
+    const feats: any[] = j?.features ?? [];
+    let maxOid = Number(cursor);
+    const candidates: NewBuildCandidate[] = [];
+    for (const f of feats) {
+      const a = f.attributes ?? {};
+      const id = Number(a[oid]);
+      if (Number.isFinite(id) && id > maxOid) maxOid = id;
+      const rawAddr = scFirstNonEmpty(a, src.addressFields);
+      const address = rawAddr ? titleCase(rawAddr) : null;
+      const city = scFirstNonEmpty(a, src.cityFields);
+      const zipRaw = src.zipField ? (a[src.zipField] ?? "").toString().trim() : "";
+      const lat = Number(f.geometry?.y);
+      const lng = Number(f.geometry?.x);
+      candidates.push({
+        source: SC_COUNTY_SOURCE_ID, sourceRecordId: `${src.county.toLowerCase()}:${id}`,
+        address,
+        city: city ? titleCase(city) : null,
+        state: "SC",
+        zip: zipRaw ? zipRaw.slice(0, 5) : null,
+        county: src.county,
+        lat: Number.isFinite(lat) ? lat : null,
+        lng: Number.isFinite(lng) ? lng : null,
+        buildStage: address ? "addressed" : "addressless",
+        confidence: "authoritative",
+        detectedAt: now(),
+      });
+    }
+    return { source: SC_COUNTY_SOURCE_ID, scope: src.county, candidates, cursor: String(maxOid), seeded: false, recordsSeen: feats.length, ok: true, note: null };
+  } catch (e: any) {
+    return { source: SC_COUNTY_SOURCE_ID, scope: src.county, candidates: [], cursor, seeded: false, recordsSeen: 0, ok: false, note: String(e?.message ?? e).slice(0, 120) };
+  }
+}
+
 // ── OSM Overpass (NC + SC, incremental via newer:) ────────────────────────────
 export interface OverpassArea { key: string; state: "NC" | "SC"; county: string | null; bbox: [number, number, number, number]; } // [s,w,n,e]
 
@@ -217,4 +354,4 @@ export async function fetchNcOneMapRecent(
   return pollNcOneMapCounty(county, from, { ...opts, limit: clamp, fetchImpl });
 }
 
-export const _internal = { ncAddress, parseOverpassElements, titleCase };
+export const _internal = { ncAddress, parseOverpassElements, titleCase, scFirstNonEmpty };

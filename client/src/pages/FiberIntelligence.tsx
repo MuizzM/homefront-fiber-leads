@@ -12,6 +12,9 @@ import {
 // The Scan Inspector is heavy (SSE stream + live table) and admin-only, so it is
 // code-split and only mounted when the Operations tab is opened.
 const ScanInspector = lazy(() => import("@/components/fiber/ScanInspector"));
+// Rep-facing sales intelligence: ranked fresh leads + the Coming Soon watchlist.
+const RankedLeads = lazy(() => import("@/components/fiber/RankedLeads"));
+const ComingSoonWatchlist = lazy(() => import("@/components/fiber/ComingSoonWatchlist"));
 
 type TabKey = "fresh" | "map" | "newbuilds" | "coming" | "coverage" | "ops";
 interface FirstSeenLive {
@@ -106,6 +109,10 @@ function FreshNow() {
           </div>
         ))}
       </div>
+      {/* Sales-intelligence ordering: green assignable leads ranked hottest-first. */}
+      <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
+        <RankedLeads />
+      </Suspense>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
         <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · last 24h · refreshes automatically</span>
       </div>
@@ -163,6 +170,9 @@ function ComingSoon() {
         <div className="text-[12px] text-muted-foreground">Addresses flagged <span className="font-medium text-foreground">Coming Soon</span> (future/pending construction) across the active NC &amp; SC sweeps.</div>
       </div>
       <p className="px-1 text-[12px] text-muted-foreground">Coming Soon addresses are stored separately from active fresh leads and automatically re-checked as their completion date approaches — they promote into <span className="font-medium text-foreground">Fresh Now</span> the moment fiber goes live.</p>
+      <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
+        <ComingSoonWatchlist />
+      </Suspense>
     </div>
   );
 }
@@ -218,7 +228,7 @@ interface NewBuildFeed {
 }
 interface Coverage {
   sources: Array<{ state: string; county: string | null; source: string; scope: string; status: string; recordsSeen: number; newFound: number; lastPollAt: number | null; note: string | null }>;
-  summary: { ncCountiesTracked: number; ncCountiesSeeded: number; scTilesTracked: number; gaps: number; staleOverMin: number };
+  summary: { ncCountiesTracked: number; ncCountiesSeeded: number; scCountiesTracked: number; scCountiesSeeded: number; scTilesTracked: number; gaps: number; staleOverMin: number };
 }
 interface ExpansionFeed {
   expansions: Array<{
@@ -373,7 +383,7 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
         <div className="rounded-2xl border border-border bg-card px-4 py-3 text-[12px]">
           <div className="mb-1 font-semibold text-foreground">Source coverage</div>
           <div className="text-[11px] text-muted-foreground">
-            NC OneMap: {cov.data.summary.ncCountiesTracked}/100 counties tracked · SC OSM tiles: {cov.data.summary.scTilesTracked} · gaps: {cov.data.summary.gaps} · stale: {cov.data.summary.staleOverMin}
+            NC OneMap: {cov.data.summary.ncCountiesTracked}/100 counties tracked · SC county GIS: {cov.data.summary.scCountiesTracked} · SC OSM tiles: {cov.data.summary.scTilesTracked} · gaps: {cov.data.summary.gaps} · stale: {cov.data.summary.staleOverMin}
           </div>
         </div>
       )}

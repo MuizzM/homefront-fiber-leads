@@ -127,6 +127,18 @@ if [ "$ok" = "1" ]; then
   echo "${PREV_TAG:-}" > .previous-tag
   echo "$NEW_TAG" > .deployed-tag
   echo "[deploy] HEALTHY — $NEW_TAG is live. (previous kept: ${PREV_TAG:-none})"
+  # Disk hygiene: every deploy builds a new homefront-app:<sha> image; without pruning
+  # they accumulate until the disk fills (seen live: 79 images/17GB → 100% full →
+  # "database or disk is full", blocking deploys AND threatening the SQLite volume).
+  # Keep ONLY the live image and the rollback image; delete older release tags,
+  # dangling layers, and trim the build cache. Best-effort — never fail the deploy.
+  docker images 'homefront-app' --format '{{.Tag}}' 2>/dev/null | while read -r tag; do
+    [ -z "$tag" ] || [ "$tag" = "$NEW_TAG" ] || [ "$tag" = "${PREV_TAG:-}" ] || [ "$tag" = "<none>" ] || \
+      docker image rm "homefront-app:$tag" >/dev/null 2>&1 || true
+  done
+  docker image prune -f >/dev/null 2>&1 || true
+  docker builder prune -f --keep-storage 2GB >/dev/null 2>&1 || true
+  echo "[deploy] pruned old release images + build cache (kept $NEW_TAG + ${PREV_TAG:-none})"
 else
   echo "[deploy] UNHEALTHY after cutover — rolling back" >&2
   if [ -n "${PREV_TAG:-}" ]; then

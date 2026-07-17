@@ -36,6 +36,10 @@ services:
       # Indian Trail/Concord/Rockwell) via the real startTargetRun path. Self-limiting;
       # set to "off" once the corridor + markets are well-covered.
       SEED_PRIORITY_SCAN: "on"
+      # One-burst-per-24h: re-check legacy "green" targets that lack an authoritative
+      # conclusive NEW-FIBER+N snapshot so they become real assignable pins. Runs as
+      # MAINTENANCE-class recheck (share-capped; never crowds revenue checks).
+      GREEN_REVERIFY: "on"
       # ── Outbound mail sender (2026-07-16 OTP outage) ─────────────────────────
       # The Resend account has exactly ONE verified sending domain:
       # portal.homefrontsolutionsllc.com. The host .env pointed MAIL_FROM at the

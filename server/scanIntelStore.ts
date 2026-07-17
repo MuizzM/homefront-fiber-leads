@@ -362,12 +362,15 @@ export function countQueued(runId: string): number {
   return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id=? AND state IN ('queued','inflight')`, runId).c;
 }
 
-// STRANDED TAILS: runs marked 'done' that still hold CLAIMABLE queued targets — a
-// target requeued in the same instant the batch drained, so the worker finished
-// while work remained. These addresses would otherwise never be consumed. Only
-// 'done' runs (NOT 'cancelled' — those were deliberately stopped, e.g. shed
-// expansion runs — and NOT 'error'). Re-opening lets a worker drain the tail; the
-// requeue backoff guarantees it converges (finishes) instead of spinning.
+// STRANDED TAILS: runs marked 'done' OR 'error' that still hold CLAIMABLE queued
+// targets. 'done': a target requeued in the same instant the batch drained, so the
+// worker finished while work remained. 'error': the worker died on a terminal
+// exception (e.g. one transient throw during dispatch) but its queued addresses are
+// still perfectly claimable — leaving them stranded until the next full sweep loses
+// time on real leads (seen live: a PRIORITY market run erroring with 486 queued).
+// NOT 'cancelled' — those were deliberately stopped (e.g. shed expansion runs) and
+// must not resurrect. Re-opening lets a worker drain the tail; the requeue backoff
+// guarantees it converges (finishes) instead of spinning.
 export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
   return all<ScanRunRow>(
     `SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,
@@ -375,7 +378,7 @@ export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
             r.est_bytes AS estBytes, r.created_by AS createdBy, r.started_at AS startedAt,
             r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt
        FROM scan_runs r
-      WHERE r.status='done' AND EXISTS (
+      WHERE r.status IN ('done','error') AND EXISTS (
         SELECT 1 FROM scan_run_targets t WHERE t.run_id=r.id AND t.state='queued'
           AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= datetime('now')))
       ORDER BY r.completed_at ASC LIMIT ?`,

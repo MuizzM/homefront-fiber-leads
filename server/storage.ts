@@ -294,6 +294,9 @@ export function runMigrations() {
     // Address dedup for upsertLeadByAddress must hit the DB every time (cross-process
     // cache can't be trusted) — index it so that lookup stays cheap.
     `CREATE INDEX IF NOT EXISTS idx_leads_address ON leads(address)`,
+    // Case/whitespace-insensitive address lookup — powers the green→lead link
+    // backfill (find an existing lead for a scan_target by normalized address).
+    `CREATE INDEX IF NOT EXISTS idx_leads_addr_ci ON leads(lower(trim(address)), lower(trim(city)))`,
     `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
     `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
     `ALTER TABLE tenants ADD COLUMN brand_logo TEXT`,
@@ -1659,6 +1662,42 @@ export function runMigrations() {
        PRIMARY KEY(tenant_id, scan_target_id)
      )`,
     `CREATE INDEX IF NOT EXISTS idx_fiber_freshness_rank ON fiber_freshness_scores(tenant_id, score DESC, calculated_at DESC)`,
+    // ── Explicit address lifecycle ────────────────────────────────────────────
+    // Durable per-address lifecycle written ONLY from CONCLUSIVE provider answers
+    // by the ONE snapshot writer (server/availabilitySnapshot.ts). States:
+    // UNAVAILABLE, COMING_SOON, NEWLY_LIT, FRESH_LEAD, STILL_FRESH, AGED.
+    // lifecycle_changed_at is canonical EPOCH MILLISECONDS (INTEGER) — same
+    // lesson as availability_snapshots.checked_at_epoch: never a sortable-maybe
+    // text timestamp. It records when the state was last set OR re-affirmed by a
+    // conclusive check (AGED = FRESH/STILL_FRESH not re-affirmed in N days).
+    `ALTER TABLE scan_targets ADD COLUMN lifecycle_state TEXT`,
+    `ALTER TABLE scan_targets ADD COLUMN lifecycle_changed_at INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_lifecycle ON scan_targets(lifecycle_state, lifecycle_changed_at)`,
+    // ── Coming-Soon watchlist ─────────────────────────────────────────────────
+    // One row per address the provider says is pre-launch (COMING SOON segment or
+    // NEW FIBER + active billing — the existing scanner 'coming_soon' rule).
+    // Upserted by the snapshot writer on every conclusive COMING_SOON answer;
+    // consumed by server/comingSoonWatchlist.ts which rechecks rows on an urgency
+    // cadence and marks them 'promoted' when the address flips live. Timestamps
+    // are epoch ms. estimated_completion stays NULL unless the provider/new-build
+    // radar actually supplied a date (kinetic_addresses.estimated_completion_date).
+    `CREATE TABLE IF NOT EXISTS coming_soon_watchlist (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       scan_target_id INTEGER NOT NULL UNIQUE,
+       address_key TEXT NOT NULL,
+       first_seen_at INTEGER NOT NULL,
+       last_checked_at INTEGER,
+       estimated_completion TEXT,
+       source TEXT,
+       confidence TEXT,
+       cluster_id TEXT,
+       status TEXT NOT NULL DEFAULT 'active',
+       created_at INTEGER NOT NULL,
+       updated_at INTEGER NOT NULL
+     )`,
+    `CREATE INDEX IF NOT EXISTS idx_coming_soon_watch_tenant ON coming_soon_watchlist(tenant_id, status, last_checked_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_coming_soon_watch_due ON coming_soon_watchlist(status, last_checked_at)`,
 
   ];
   for (const stmt of stmts) {

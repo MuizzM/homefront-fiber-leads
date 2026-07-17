@@ -497,6 +497,12 @@ app.use((req, res, next) => {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");
     resumeDiscoveryJobs();
   } catch (e: any) { console.warn("[address-discovery] resume skipped:", e?.message); }
+  try {
+    // Coming-Soon watchlist tick — urgency-cadence rechecks (NEW_BUILD reserved class)
+    // + promote-on-flip + AGED lifecycle pass. Kill-switch: COMING_SOON_WATCHLIST=off.
+    const { startComingSoonWatchlist } = await import("./comingSoonWatchlist");
+    startComingSoonWatchlist();
+  } catch (e: any) { console.warn("[coming-soon-watchlist] start skipped:", e?.message); }
   // FRESH-LEAD BACKFILL INVARIANT: every already-confirmed green address (NEW FIBER +
   // billing N, per its latest conclusive snapshot) must be an assignable Field-Map lead.
   // Re-project ALL tenants once on boot from EXISTING data (no re-scan, no Decodo cost,
@@ -510,6 +516,23 @@ app.use((req, res, next) => {
         const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
         const tenantIds = rawDb.prepare("SELECT id FROM tenants").all().map((r: any) => Number(r.id));
         for (const tid of tenantIds) {
+          // LINK-BY-ADDRESS first: thousands of green scan_targets already have a lead
+          // row for the same address (created before source_scan_target_id linking) but
+          // no converted_to_lead_id. Link them so the metric is honest and the projector
+          // never double-creates. Pure existing-data join (idx_leads_addr_ci), chunked.
+          const pairs = rawDb.prepare(`SELECT s.id sid, l.id lid FROM scan_targets s JOIN leads l
+              ON lower(trim(l.address))=lower(trim(s.address)) AND lower(trim(l.city))=lower(trim(s.city)) AND upper(l.state)=upper(s.state)
+            WHERE s.tenant_id=? AND s.converted_to_lead_id IS NULL
+              AND s.last_fiber_status='new_fiber' AND s.last_billing_status='N'`).all(tid) as any[];
+          const linkStmt = rawDb.prepare(`UPDATE scan_targets SET converted_to_lead_id=? WHERE id=? AND converted_to_lead_id IS NULL`);
+          const stampStmt = rawDb.prepare(`UPDATE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?) WHERE id=?`);
+          for (let i = 0; i < pairs.length; i += 500) {
+            rawDb.transaction(() => {
+              for (const p of pairs.slice(i, i + 500)) { linkStmt.run(p.lid, p.sid); stampStmt.run(p.sid, p.lid); }
+            })();
+            await sleep(25);
+          }
+          if (pairs.length) structuredLog("fresh_lead.link_backfill", { tenantId: tid, linkedByAddress: pairs.length });
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
           const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('NC','SC')
             AND last_fiber_status='new_fiber' AND last_billing_status='N' AND converted_to_lead_id IS NULL`).all(tid).map((r: any) => Number(r.id));
@@ -556,6 +579,36 @@ app.use((req, res, next) => {
         }
         structuredLog("priority_seed_scan.enqueued", { runs: enqueued.length, totalQueued: enqueued.reduce((s, e) => s + (e.queued || 0), 0), areas: JSON.stringify(enqueued.map((e) => ({ area: e.area, queued: e.queued }))) });
       } catch (e: any) { console.warn("[priority-seed-scan] skipped:", e?.message); }
+    })();
+  }
+  // LEGACY-GREEN RE-VERIFY (env-gated, self-limiting): scan_targets marked green by the
+  // loose columns (last_fiber_status/new_fiber + billing N) but WITHOUT an authoritative
+  // conclusive NEW-FIBER+N snapshot need one fresh re-check to become (or refresh) real
+  // assignable pins. Enqueue them as 'recheck' runs — always re-verify (dedup skip = 0)
+  // and MAINTENANCE class, so the backlog drains at the share-capped rate without ever
+  // crowding revenue checks. At most one burst per 24h; GREEN_REVERIFY=off disables.
+  if (process.env.GREEN_REVERIFY && process.env.GREEN_REVERIFY !== "off") {
+    void (async () => {
+      try {
+        const { rawDb } = await import("./db");
+        const { startTargetRun } = await import("./scanService");
+        const { getDefaultTenantId } = await import("./storage");
+        const tid = getDefaultTenantId();
+        if (tid == null) return;
+        const recent = rawDb.prepare(`SELECT COUNT(*) c FROM scan_runs WHERE label LIKE 'RE-VERIFY:%' AND heartbeat_at > datetime('now','-24 hours')`).get() as any;
+        if (Number(recent.c) > 0) { structuredLog("green_reverify.skipped", { reason: "recent RE-VERIFY burst" }); return; }
+        const ids = (rawDb.prepare(`SELECT s.id FROM scan_targets s
+          WHERE s.tenant_id=? AND s.state IN ('NC','SC')
+            AND s.last_fiber_status='new_fiber' AND s.last_billing_status='N'
+            AND NOT EXISTS (SELECT 1 FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.conclusive=1
+              AND upper(COALESCE(a.household_segment_type,''))='NEW FIBER' AND upper(COALESCE(a.billing_status,''))='N')
+          ORDER BY s.last_scanned_at ASC LIMIT 8000`).all(tid) as any[]).map((r) => Number(r.id));
+        let batch = 0;
+        for (let i = 0; i < ids.length; i += 500) {
+          startTargetRun({ tenantId: tid, city: "NC/SC legacy green", state: "NC", targetIds: ids.slice(i, i + 500), runKind: "recheck", label: `RE-VERIFY: legacy green batch ${++batch}` });
+        }
+        structuredLog("green_reverify.enqueued", { candidates: ids.length, runs: batch });
+      } catch (e: any) { console.warn("[green-reverify] skipped:", e?.message); }
     })();
   }
   }; // end startBackgroundServices
