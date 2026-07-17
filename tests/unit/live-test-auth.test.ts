@@ -44,6 +44,7 @@ describe("Live Test authentication flow", () => {
   beforeAll(async () => {
     process.env.KFS_AUTOMATION_AUTHORIZED = "false";
     process.env.KFS_TOKEN_POOL_WARM_MIN = "1";
+    process.env.KFS_MINT_MIN_INTERVAL_MS = "0"; // no inter-mint spacing in tests
     scanner = await import("../../server/scanner");
     process.env.KFS_AUTOMATION_AUTHORIZED = "true";
   });
@@ -51,6 +52,7 @@ describe("Live Test authentication flow", () => {
   beforeEach(() => {
     directFetch.mockReset();
     proxyFetch.mockReset();
+    scanner.__resetTokenTransportStateForTests(); // clear direct-cooldown between cases
   });
 
   it("mints DIRECT first — the mint never rides the proxy when direct works", async () => {
@@ -87,21 +89,22 @@ describe("Live Test authentication flow", () => {
     expect(out.pendingAuth).toBe(true);
     expect(out.classification).toBe("pending_auth");
     expect(out.classification).not.toBe("no_service");
-    // Retried the mint through the approved flow (>= 2 mint rounds), no search fired.
-    expect(directFetch.mock.calls.filter(([u]) => isTokenUrl(String(u))).length).toBeGreaterThanOrEqual(2);
+    // Retried the mint through the approved flow (>= 2 mint rounds via proxy after
+    // direct parks on its cooldown), and NO search fired without a token.
+    expect(proxyFetch.mock.calls.filter(([u]) => isTokenUrl(String(u))).length).toBeGreaterThanOrEqual(2);
     expect(proxyFetch.mock.calls.filter(([u]) => isSearchUrl(String(u))).length).toBe(0);
   });
 
-  it("mint blocked once then recovers on the single retry → address IS checked", async () => {
-    let round = 0;
-    directFetch.mockImplementation(async (url: string) => {
-      if (!isTokenUrl(url)) return json(200, FIX);
-      round++;
-      return round === 1 ? json(403, {}) : freshToken();
+  it("mint blocked once then recovers on the single retry (via proxy) → address IS checked", async () => {
+    // Direct stays blocked (parks on cooldown); the proxy token endpoint fails the
+    // first round then recovers, so the single retry is what gets a token.
+    directFetch.mockImplementation(async () => json(403, {}));
+    let proxyTokenCalls = 0;
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (isSearchUrl(url)) return json(200, FIX);
+      proxyTokenCalls++;
+      return proxyTokenCalls === 1 ? json(403, {}) : freshToken();
     });
-    // Proxy fallback also blocked on the first round so the FIRST mint truly fails
-    // and the single retry is what recovers it.
-    proxyFetch.mockImplementation(async (url: string) => isSearchUrl(url) ? json(200, FIX) : json(403, {}));
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(true);
     expect(out.pendingAuth).toBe(false);

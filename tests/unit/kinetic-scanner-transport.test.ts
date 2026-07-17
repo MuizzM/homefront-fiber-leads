@@ -53,6 +53,7 @@ describe("Kinetic scanner transport hardening", () => {
   beforeAll(async () => {
     process.env.KFS_AUTOMATION_AUTHORIZED = "false";
     process.env.KFS_TOKEN_POOL_WARM_MIN = "1";
+    process.env.KFS_MINT_MIN_INTERVAL_MS = "0"; // no inter-mint spacing in tests
     scanner = await import("../../server/scanner");
     process.env.KFS_AUTOMATION_AUTHORIZED = "true";
   });

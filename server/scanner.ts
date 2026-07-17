@@ -140,6 +140,18 @@ async function mintOverTransport(
   return { token, expiresAt };
 }
 
+// When a DIRECT mint draws a Cloudflare challenge (429 / non-JSON interstitial),
+// the server IP is temporarily flagged; hammering it keeps it flagged. Park direct
+// for a cooldown so the IP decays back to clean while the proxy carries the mint.
+const MINT_DIRECT_COOLDOWN_MS = Math.max(5_000, Number(process.env.KFS_MINT_DIRECT_COOLDOWN_MS ?? 60_000));
+let directMintBlockedUntil = 0;
+
+// A challenge/throttle signature that should park the DIRECT egress: 429, 403, or a
+// bot-challenge interstitial body. (A timeout is transient, not an IP flag.)
+function isDirectBlockSignal(message: string): boolean {
+  return /\b429\b/.test(message) || /\b403\b/.test(message) || /challenge/i.test(message);
+}
+
 async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
   // TWO-TRANSPORT MINT — the token endpoint is anonymous (baked client credential,
   // no user identity), so it may be fetched over either egress. The two egresses
@@ -148,27 +160,63 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
   //     rate limit — which is shared with the high-volume Search calls and was
   //     returning 403 on the mint itself ("Auto-auth blocked"), failing the whole
   //     check as an auth error before the address was ever looked up. Cheap + fast,
-  //     but a single static IP can occasionally draw a Cloudflare bot challenge.
+  //     but a single static IP can draw a Cloudflare bot challenge under load.
   //   • PROXY (rotating residential IP): recovers when the server IP is challenged,
   //     but is subject to the search throttle.
   // Preferring DIRECT keeps the low-volume mint off the search throttle (fixing the
   // 403); the proxy fallback keeps minting resilient if the server IP is ever
-  // blocked. Only the identity-bearing Search calls are pinned to the fixed proxy
-  // egress. KFS_MINT_VIA_PROXY=true forces proxy-first (direct still used as fallback).
+  // blocked. When DIRECT was recently challenged we skip it entirely for a cooldown
+  // (proxy-only) so the IP can decay clean instead of being re-flagged every attempt.
+  // KFS_MINT_VIA_PROXY=true forces proxy-first (direct still used as a last resort).
   const proxyFirst = process.env.KFS_MINT_VIA_PROXY === "true";
-  const transports: Array<[typeof directFetch, string]> = proxyFirst
-    ? [[proxyFetch, "proxy"], [directFetch, "direct"]]
+  const directCoolingDown = Date.now() < directMintBlockedUntil;
+  const transports: Array<[typeof directFetch, string]> =
+    proxyFirst ? [[proxyFetch, "proxy"], [directFetch, "direct"]]
+    : directCoolingDown ? [[proxyFetch, "proxy"]]
     : [[directFetch, "direct"], [proxyFetch, "proxy"]];
   let lastErr: unknown;
   for (const [transport, label] of transports) {
     try {
-      return await mintOverTransport(transport, label);
+      const minted = await mintOverTransport(transport, label);
+      if (label === "direct") directMintBlockedUntil = 0; // clean — clear any cooldown
+      return minted;
     } catch (err) {
       lastErr = err;
-      structuredLog("scan.token.mint_transport_failed", { transport: label, error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
+      const message = String((err as any)?.message ?? err);
+      if (label === "direct" && isDirectBlockSignal(message)) {
+        directMintBlockedUntil = Date.now() + MINT_DIRECT_COOLDOWN_MS;
+        structuredLog("scan.token.direct_cooldown", { until: directMintBlockedUntil, reason: message.slice(0, 80) }, "warn");
+      }
+      structuredLog("scan.token.mint_transport_failed", { transport: label, error: message.slice(0, 120) }, "warn");
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error("Auto-auth blocked (all transports)");
+}
+
+// ── Global mint gate — collapse the stampede ──────────────────────────────────
+// On boot the auto-started statewide sweep leases tokens en masse; with no pacing
+// the pool fired ~1.7k mint attempts in seconds, DDoSing BOTH egresses (direct →
+// Cloudflare 429, proxy → rolling-window 403) so neither could ever succeed — a
+// self-reinforcing deadlock. This gate serializes every mint through one chain
+// with a minimum spacing, so the egresses see at most one gentle mint at a time.
+// The first success populates a READY slot; concurrent leasers then take that token
+// via pickReady instead of minting, so the queue drains without a flood. This is
+// pacing, NOT a disabled/halted state — the pool still self-heals on the next tick.
+const MINT_MIN_INTERVAL_MS = process.env.VITEST
+  ? 0 // unit/integration tests never pace mints (real timers would slow the suite)
+  : Math.max(0, Number(process.env.KFS_MINT_MIN_INTERVAL_MS ?? 1_200));
+let mintChain: Promise<unknown> = Promise.resolve();
+let lastMintAt = 0;
+function gatedMint(): Promise<{ token: string; expiresAt: number }> {
+  const run = mintChain.then(async () => {
+    const wait = Math.max(0, lastMintAt + MINT_MIN_INTERVAL_MS - Date.now());
+    if (wait) await new Promise(resolve => setTimeout(resolve, wait));
+    try { return await mintAuthorizedToken(); }
+    finally { lastMintAt = Date.now(); }
+  });
+  // Keep the chain alive across failures without unhandled rejections.
+  mintChain = run.then(() => undefined, () => undefined);
+  return run;
 }
 
 const authorizedTokenPool = new AuthorizedTokenPool({
@@ -177,10 +225,20 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   refreshMarginMs: TOKEN_REFRESH_MARGIN_MS,
   maintenanceIntervalMs: Number(process.env.KFS_TOKEN_MAINTENANCE_MS ?? 15_000),
   maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 10),
-  maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 2),
+  // One mint in flight at a time — the global gate already serializes, and a single
+  // gentle stream is what lets a throttled egress recover.
+  maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 1),
   maxChecksPerToken: Number(process.env.KFS_TOKEN_MAX_CHECKS ?? 100),
-  mint: () => mintAuthorizedToken(),
+  mint: () => gatedMint(),
 });
+
+/** Test-only: reset the module-level mint gate + direct-cooldown state so unit
+ * tests don't leak throttle/cooldown state between cases. No effect in prod use. */
+export function __resetTokenTransportStateForTests(): void {
+  directMintBlockedUntil = 0;
+  lastMintAt = 0;
+  mintChain = Promise.resolve();
+}
 
 /** Called from routes.ts when user pastes a JWT from their browser */
 export function setManualToken(token: string) {
