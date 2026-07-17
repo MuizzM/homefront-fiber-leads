@@ -62,7 +62,8 @@ export async function runStateMonitorTick(options: { allowSpend?: boolean } = {}
     try { announcementWatch = await pollAnnouncementsIfDue(); }
     catch (error: any) { announcementWatch = { status: "failed", error: error.message }; }
     let directoryWatch: any = { status: "disabled", seen: 0, added: 0 };
-    if (process.env.ENABLE_KINETIC_DIRECTORY_WATCH === "true") {
+    // On by default (unlimited budget posture); set ENABLE_KINETIC_DIRECTORY_WATCH=off to disable.
+    if (process.env.ENABLE_KINETIC_DIRECTORY_WATCH !== "off") {
       try { directoryWatch = await refreshKineticLocationDirectory(false); }
       catch (error: any) { directoryWatch = { status: "failed", error: error.message }; }
     }
@@ -71,7 +72,7 @@ export async function runStateMonitorTick(options: { allowSpend?: boolean } = {}
     const delivered = await drainFreshAlerts(tenantId);
     tickSequence++;
     const inventoryEvery = positiveInt("STATE_MONITOR_INVENTORY_EVERY_TICKS", 1, 168);
-    const inventoryEnabled = process.env.ENABLE_STATE_ADDRESS_HARVEST === "true";
+    const inventoryEnabled = process.env.ENABLE_STATE_ADDRESS_HARVEST !== "off"; // on by default
     const shouldHarvest = inventoryEnabled && tickSequence % inventoryEvery === 0;
     let inventoryHarvested: { city: string; state: string; addresses: number; inserted: number } | null = null;
     if (shouldHarvest) {
@@ -80,7 +81,7 @@ export async function runStateMonitorTick(options: { allowSpend?: boolean } = {}
         syncMarketState();
       }
     }
-    const allowSpend = options.allowSpend === true && process.env.ENABLE_STATE_MONITORING === "true" && process.env.STATE_MONITOR_LIVE === "true";
+    const allowSpend = options.allowSpend === true && process.env.ENABLE_STATE_MONITORING !== "off" && process.env.STATE_MONITOR_LIVE !== "off"; // live spend on by default
     if (!allowSpend) {
       status.lastResult = `${inventoryHarvested ? `harvested ${inventoryHarvested.addresses} addresses for ${inventoryHarvested.city}; ` : ""}inventory synced; ${alerts} alerts queued, ${delivered} delivered; live scans disabled`;
       return { seeded, announcementWatch, directoryWatch, alertsQueued: alerts, alertsDelivered: delivered, inventoryHarvested, scanStarted: null, liveSpendEnabled: false };
@@ -93,8 +94,8 @@ export async function runStateMonitorTick(options: { allowSpend?: boolean } = {}
       status.lastResult = `waiting for active scan ${active.id}`;
       return { seeded, alertsQueued: alerts, alertsDelivered: delivered, inventoryHarvested, scanStarted: null, activeRunId: active.id };
     }
-    const dailyLimit = positiveInt("STATE_MONITOR_DAILY_CHECK_BUDGET", 2_000, 100_000);
-    const marketLimit = positiveInt("STATE_MONITOR_MARKET_BUDGET", 250, 10_000);
+    const dailyLimit = positiveInt("STATE_MONITOR_DAILY_CHECK_BUDGET", 100_000, 1_000_000); // unlimited-budget default (was 2,000/day)
+    const marketLimit = positiveInt("STATE_MONITOR_MARKET_BUDGET", 10_000, 100_000); // unlimited-budget default (was 250/market)
     const spent = (rawDb.prepare(`SELECT COALESCE(SUM(budget),0) AS n FROM scan_runs WHERE kind='state-monitor' AND started_at >= date('now')`).get() as any).n as number;
     const remaining = Math.max(0, dailyLimit - spent);
     if (!remaining) {
@@ -168,8 +169,8 @@ export function startStateMonitorScheduler() {
   // Avoid a scan-service/scheduler import cycle while still letting a completed
   // scan batch request an immediate, tenant-scoped outbox flush.
   (globalThis as any).__flushFreshFiberAlerts = flushFreshOpportunityAlerts;
-  status.enabled = process.env.ENABLE_STATE_MONITORING === "true";
-  status.liveSpendEnabled = status.enabled && process.env.STATE_MONITOR_LIVE === "true";
+  status.enabled = process.env.ENABLE_STATE_MONITORING !== "off"; // on by default
+  status.liveSpendEnabled = status.enabled && process.env.STATE_MONITOR_LIVE !== "off";
   // Inventory seeding and dashboard synchronization are safe and free, so run
   // them even when paid provider checks are disabled.
   void runStateMonitorTick({ allowSpend: status.liveSpendEnabled }).catch((error) => console.error("[state-monitor] startup tick failed:", error.message));

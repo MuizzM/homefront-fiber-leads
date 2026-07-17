@@ -598,7 +598,7 @@ app.use((req, res, next) => {
     void runPrioritySeedBurst();
     const seedCycle = setInterval(() => { void runPrioritySeedBurst(); }, 4 * 60 * 60_000);
     if (typeof (seedCycle as any).unref === "function") seedCycle.unref();
-  }  }
+  }
   }; // end startBackgroundServices
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────

@@ -68,7 +68,7 @@ export function bytesToUsd(bytes: number, rate: CostRate = {}): number {
 // unbounded money. The route clamps the operator's budget to this. 5,000 checks
 // ≈ 60 MB ≈ ~$0.18 at the default rate — enough to verify a small city or the
 // hottest slice of a big one, small enough to never be a billing event.
-export const MAX_CHECKS_PER_RUN = 5_000;
+export const MAX_CHECKS_PER_RUN = 100_000; // unlimited-budget posture (was 5,000)
 
 // Suggested budget tiers surfaced in the UI — named so an operator reasons in
 // outcomes ("sample a market" vs "work a neighborhood"), not raw request counts.

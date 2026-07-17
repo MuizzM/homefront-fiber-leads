@@ -6,7 +6,7 @@ import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Zap, Map as MapIcon, Clock, Layers, Activity, ArrowRight, MapPin, ExternalLink,
-  Hammer, Building2, AlertTriangle,
+  Hammer, Building2, AlertTriangle, Flame,
 } from "lucide-react";
 
 // The Scan Inspector is heavy (SSE stream + live table) and admin-only, so it is
@@ -16,13 +16,13 @@ const ScanInspector = lazy(() => import("@/components/fiber/ScanInspector"));
 const RankedLeads = lazy(() => import("@/components/fiber/RankedLeads"));
 const ComingSoonWatchlist = lazy(() => import("@/components/fiber/ComingSoonWatchlist"));
 
-type TabKey = "fresh" | "map" | "newbuilds" | "coming" | "coverage" | "ops";
+type TabKey = "fresh" | "newlylit" | "map" | "newbuilds" | "coming" | "coverage" | "ops";
 interface FirstSeenLive {
   windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
   addresses: Array<{ id: number; address: string; city: string; firstSeenLiveAt: string; confidence: string; leadId?: number | null }>;
 }
 interface StateSweep {
-  id: string; state: "NC" | "SC"; status: string; currentCity: string | null;
+  id: string; state: "NC" | "SC" | "GA"; status: string; currentCity: string | null;
   citiesTotal: number; citiesCompleted: number; discovered?: number; checked: number;
   freshLeads: number; comingSoon: number; pending?: number; unresolved: number;
 }
@@ -39,6 +39,7 @@ function fmtTime(iso: string): string {
 
 const TABS: Array<{ key: TabKey; label: string; icon: any }> = [
   { key: "fresh", label: "Fresh Now", icon: Zap },
+  { key: "newlylit", label: "Newly Lit", icon: Flame },
   { key: "map", label: "Map", icon: MapIcon },
   { key: "newbuilds", label: "New Builds", icon: Hammer },
   { key: "coming", label: "Coming Soon", icon: Clock },
@@ -55,7 +56,7 @@ export default function FiberIntelligence() {
     <div className="mx-auto flex h-full w-full max-w-5xl flex-col px-4 pb-6 pt-4 sm:px-6">
       <header className="mb-3">
         <h1 className="text-[22px] font-bold tracking-tight text-foreground">Fiber Intelligence</h1>
-        <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across NC &amp; SC — one workspace.</p>
+        <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC — one workspace.</p>
       </header>
 
       {/* Tab rail */}
@@ -77,6 +78,7 @@ export default function FiberIntelligence() {
 
       <div className="min-h-0 flex-1">
         {tab === "fresh" && <FreshNow />}
+        {tab === "newlylit" && <NewlyLit />}
         {tab === "map" && <MapTab />}
         {tab === "newbuilds" && <NewBuilds isAdmin={isAdmin} />}
         {tab === "coming" && <ComingSoon />}
@@ -143,6 +145,61 @@ function FreshNow() {
   );
 }
 
+// ── Newly Lit — COMING_SOON / dark addresses that transitioned to live fiber ──
+// A 7-day window (vs Fresh Now's 24h) so a rep sees every recent lighting they
+// can still be first to knock. Cross-verified, assign-ready transitions lead.
+function NewlyLit() {
+  const { data, isLoading } = useQuery<FirstSeenLive>({
+    queryKey: ["/api/scan/first-seen-live", "7d"],
+    queryFn: () => apiRequest("GET", "/api/scan/first-seen-live?hours=168").then((r) => r.json()),
+    refetchInterval: 15000,
+    staleTime: 10000,
+  });
+  const lit = (data?.addresses ?? []).slice().sort((a, b) =>
+    (b.confidence === "cross_verified" ? 1 : 0) - (a.confidence === "cross_verified" ? 1 : 0)
+    || +new Date(b.firstSeenLiveAt) - +new Date(a.firstSeenLiveAt));
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-2">
+        {[["Lit (7d)", data?.count ?? 0, "text-amber-400"], ["Verified", data?.confirmed ?? 0, "text-emerald-400"], ["Assignable", data?.readyToAssign ?? 0, "text-sky-400"]].map(([l, v, t]) => (
+          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
+            <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
+          </div>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1"><Flame className="h-3 w-3 text-amber-400" /> Addresses that went from dark / Coming Soon to live fiber in the last 7 days</span>
+      </div>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        {isLoading && !data ? (
+          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-2 w-2 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
+          ))}</div>
+        ) : lit.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No newly lit addresses in the last 7 days — Coming Soon watchlists promote here automatically the moment fiber activates.</div>
+        ) : (
+          <div className="divide-y divide-border">
+            {lit.slice(0, 60).map((a) => (
+              <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`newlylit-row-${a.id}`}>
+                <Flame className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
+                  <div className="text-[11px] text-muted-foreground">Lit {fmtTime(a.firstSeenLiveAt)}</div>
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
+                {a.leadId != null
+                  ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
+                  : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MapTab() {
   return (
     <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-card px-6 py-12 text-center">
@@ -167,7 +224,7 @@ function ComingSoon() {
     <div className="space-y-3">
       <div className="rounded-2xl border border-border bg-card px-4 py-4">
         <div className="text-[28px] font-bold tabular-nums text-cyan-400">{total}</div>
-        <div className="text-[12px] text-muted-foreground">Addresses flagged <span className="font-medium text-foreground">Coming Soon</span> (future/pending construction) across the active NC &amp; SC sweeps.</div>
+        <div className="text-[12px] text-muted-foreground">Addresses flagged <span className="font-medium text-foreground">Coming Soon</span> (future/pending construction) across the active GA, NC &amp; SC sweeps.</div>
       </div>
       <p className="px-1 text-[12px] text-muted-foreground">Coming Soon addresses are stored separately from active fresh leads and automatically re-checked as their completion date approaches — they promote into <span className="font-medium text-foreground">Fresh Now</span> the moment fiber goes live.</p>
       <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
@@ -196,7 +253,7 @@ function Coverage() {
         ))}
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
-        <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">NC &amp; SC statewide sweeps</div>
+        <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">GA, NC &amp; SC statewide sweeps</div>
         {sweeps.length === 0 ? (
           <div className="px-4 py-8 text-center text-[13px] text-muted-foreground">No active sweep. The statewide sweep resumes on each deploy and continues in the background.</div>
         ) : sweeps.map((s) => (

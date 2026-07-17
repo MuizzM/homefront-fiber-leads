@@ -10,7 +10,7 @@ export function announcementSourceStatus() {
 }
 
 export async function pollAnnouncementsIfDue(force = false): Promise<{ status: string; discovered: number; prioritized: number }> {
-  if (process.env.ENABLE_ANNOUNCEMENT_WATCH !== "true") return { status: "disabled", discovered: 0, prioritized: 0 };
+  if (process.env.ENABLE_ANNOUNCEMENT_WATCH === "off") return { status: "disabled", discovered: 0, prioritized: 0 }; // on by default
   const sourceUrl = process.env.KINETIC_ANNOUNCEMENT_FEED_URL || DEFAULT_FEED;
   const prior = rawDb.prepare(`SELECT * FROM monitor_source_polls WHERE source_url=?`).get(sourceUrl) as any;
   if (!force && prior?.next_poll_at && Date.parse(prior.next_poll_at + "Z") > Date.now()) return { status: "not_due", discovered: 0, prioritized: 0 };

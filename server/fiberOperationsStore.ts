@@ -180,7 +180,7 @@ export function listDeadLetters(tenantId: number, limit = 100) {
 }
 
 export function providerConfigs(tenantId: number) {
-  const kineticEnabled = process.env.RADAR_LIVE === "true";
+  const kineticEnabled = process.env.RADAR_LIVE !== "off"; // live radar on by default
   rawDb.prepare(`INSERT OR IGNORE INTO provider_adapter_configs
     (tenant_id,provider,enabled,display_name,mode,rate_limit_per_minute)
     VALUES (?,?,?,?,?,?)`).run(tenantId, "kinetic", kineticEnabled ? 1 : 0, "Kinetic", "authorized_http", 30);
@@ -193,7 +193,7 @@ export function providerConfigs(tenantId: number) {
 }
 
 export function recordProviderOutcome(tenantId: number, success: boolean, error?: string | null): void {
-  const enabled = process.env.RADAR_LIVE === "true" ? 1 : 0;
+  const enabled = process.env.RADAR_LIVE !== "off" ? 1 : 0; // live radar on by default
   rawDb.prepare(`INSERT INTO provider_adapter_configs
     (tenant_id,provider,enabled,display_name,mode,rate_limit_per_minute,health_status,consecutive_failures,last_success_at,last_failure_at,last_error,updated_at)
     VALUES (?,'kinetic',?,'Kinetic','authorized_http',30,?,?,?,?,?,datetime('now'))

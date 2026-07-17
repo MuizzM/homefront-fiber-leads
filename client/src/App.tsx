@@ -118,7 +118,12 @@ function AppRoutes() {
       else {
         import("@/pages/Leads");
         if (user.role === "rep") import("@/pages/Today");
-        else import("@/pages/Dashboard");
+        else {
+          import("@/pages/Dashboard");
+          // Ops roles live in Fiber Intelligence — warm its chunk on idle so the
+          // workspace opens instantly.
+          import("@/pages/FiberIntelligence");
+        }
       }
       if (canWarmMap && fieldRole) import("@/pages/MapView");
     };

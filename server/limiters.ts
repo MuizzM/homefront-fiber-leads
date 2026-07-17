@@ -15,10 +15,11 @@ export const authorizedScanAdmission: RequestHandler = (_req, res, next) => {
   next();
 };
 
-// Owner lookup rate limit: 20 hits / hour per IP (each costs $0.20)
+// Owner lookup rate limit: generous by default (unlimited budget posture) —
+// remains only as an abuse tripwire, never a workflow blocker. 500/hr per IP.
 export const ownerLookupLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 20,
+  max: 500,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Owner lookup limit reached. Try again in an hour." },

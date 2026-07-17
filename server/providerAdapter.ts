@@ -109,7 +109,7 @@ export class FixtureProvider implements AvailabilityProvider {
 // This is the only real provider path. It calls server/scanner.scanAddress
 // (the authorized KFS v2 integration through the approved Decodo transport). It
 // NEVER touches the public consumer form and has NO fallback to it. It is
-// LIVE-GATED: check() throws unless RADAR_LIVE === "true", so nothing spends
+// LIVE-GATED (on by default): check() throws only when RADAR_LIVE === "off", so nothing spends
 // proxy money by accident. A heuristic/knowledge-base result is treated as
 // INCONCLUSIVE (not a real provider observation — no fabrication).
 export class KineticProvider implements AvailabilityProvider {
@@ -121,8 +121,8 @@ export class KineticProvider implements AvailabilityProvider {
   constructor(private scanAddress?: (address: string, city: string, state: string, zip: string) => Promise<any>) {}
 
   async check(target: AuthorizedTarget, _signal?: AbortSignal): Promise<ProviderObservation> {
-    if (process.env.RADAR_LIVE !== "true") {
-      throw new Error("RADAR_LIVE_DISABLED: live Kinetic monitoring is gated off. Set RADAR_LIVE=true with a valid authorized source to enable.");
+    if (process.env.RADAR_LIVE === "off") { // live by default; explicit off disables
+      throw new Error("RADAR_LIVE_DISABLED: live Kinetic monitoring is gated off by RADAR_LIVE=off. Unset it (live is the default) to enable.");
     }
     const t0 = Date.now();
     const scan = this.scanAddress ?? (await import("./scanner")).scanAddress;
