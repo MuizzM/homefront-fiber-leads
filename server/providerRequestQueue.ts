@@ -1,8 +1,11 @@
-export type ProviderRequestPriority = "manual" | "lasso" | "coming_soon" | "recheck" | "market" | "nightly" | "city";
+export type ProviderRequestPriority = "manual" | "lasso" | "new_build" | "coming_soon" | "recheck" | "market" | "nightly" | "city";
 
 export const PROVIDER_PRIORITY: Record<ProviderRequestPriority, number> = {
   manual: 500,
   lasso: 400,
+  // Newly-detected construction is revenue-critical — checked immediately, above
+  // the bulk statewide sweep (market/city) but below user-interactive manual/field.
+  new_build: 380,
   coming_soon: 350,
   recheck: 300,
   market: 275,
@@ -177,7 +180,7 @@ export class ProviderRequestQueue<T> {
     const now = this.now();
     this.pruneStarts(now);
     const attempts = this.completed + this.failed;
-    const queuedBySource: Record<ProviderRequestPriority, number> = { manual: 0, lasso: 0, coming_soon: 0, recheck: 0, market: 0, nightly: 0, city: 0 };
+    const queuedBySource: Record<ProviderRequestPriority, number> = { manual: 0, lasso: 0, new_build: 0, coming_soon: 0, recheck: 0, market: 0, nightly: 0, city: 0 };
     for (const item of this.pending) queuedBySource[item.source]++;
     return {
       active: this.active,

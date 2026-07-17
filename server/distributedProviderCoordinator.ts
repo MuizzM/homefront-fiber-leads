@@ -5,6 +5,7 @@ import type { ProviderRequestPriority } from "./providerRequestQueue";
 const priorityValue: Record<ProviderRequestPriority, number> = {
   manual: 500,
   lasso: 400,
+  new_build: 380,
   coming_soon: 350,
   recheck: 300,
   market: 275,

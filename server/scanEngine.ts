@@ -107,6 +107,8 @@ function providerPriorityForRun(kind: string): ProviderRequestPriority {
   const value = String(kind ?? "").toLowerCase();
   if (value.includes("manual") || value === "target_ids") return "manual";
   if (value.includes("lasso") || value.includes("bbox") || value.includes("area")) return "lasso";
+  // Newly-detected construction jumps ahead of the bulk statewide sweep.
+  if (value.includes("new_build")) return "new_build";
   if (value.includes("city")) return "city";
   if (value.includes("recheck") || value.includes("rescan")) return "recheck";
   if (value.includes("nightly") || value.includes("scheduled")) return "nightly";
