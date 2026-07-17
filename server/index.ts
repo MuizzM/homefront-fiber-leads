@@ -545,7 +545,7 @@ app.use((req, res, next) => {
           }
           if (pairs.length) structuredLog("fresh_lead.link_backfill", { tenantId: tid, candidatePairs: pairs.length, linkedByAddress: addrLinked });
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
-          const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('NC','SC')
+          const ids = rawDb.prepare(`SELECT id FROM scan_targets WHERE tenant_id=? AND state IN ('GA','NC','SC')
             AND last_fiber_status='new_fiber' AND last_billing_status='N' AND converted_to_lead_id IS NULL`).all(tid).map((r: any) => Number(r.id));
           let created = 0, linkedProj = 0;
           // Chunk so each projection transaction is small and the event loop breathes.

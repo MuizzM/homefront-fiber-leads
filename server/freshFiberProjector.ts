@@ -74,7 +74,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         SELECT a.id FROM availability_snapshots a WHERE a.scan_target_id=s.id AND a.tenant_id=? AND a.conclusive=1
         ORDER BY a.checked_at_epoch DESC,a.id DESC LIMIT 1
       )
-     WHERE s.state IN ('NC','SC') AND s.tenant_id=?
+     WHERE s.state IN ('GA','NC','SC') AND s.tenant_id=?
        -- No historical requirement: a target qualifies on its flip stamp OR on
        -- the CURRENT conclusive answer alone (NEW FIBER + billing N is a Fresh
        -- Lead now — no first_seen_fiber_at, detected flip, or corroboration
@@ -133,7 +133,8 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       // signed up. Move the existing Fresh Lead to now_active — never delete it.
       // Only lead_status changes (not a fresh-guard-watched column), so the guard
       // trigger is untouched.
-      if (candidate.converted_to_lead_id != null && seg === "NEW FIBER" && billing === "Y") {
+      // "A" is Kinetic's other active-billing value (verified live) — same flip.
+      if (candidate.converted_to_lead_id != null && seg === "NEW FIBER" && (billing === "Y" || billing === "A")) {
         const changed = rawDb.prepare(`UPDATE leads SET lead_status='now_active', updated_at=datetime('now')
           WHERE id=? AND tenant_id=? AND lead_status<>'now_active'`).run(candidate.converted_to_lead_id, tenantId).changes;
         if (changed) result.leadIds.push(candidate.converted_to_lead_id);

@@ -810,9 +810,9 @@ async function qualifyAddressesViaKinetic(
 // A drawn box is a small, resolved address list (a subdivision, not a whole
 // city), so it doesn't need the 4×200 city-scan fan-out — and MUST NOT open
 // hundreds of simultaneous proxied Kinetic calls (that's how you trip a 429).
-// pooledMap caps in-flight calls; each call retries transient failures with
-// jittered backoff and yields politely when Kinetic pushes back (403).
-const AREA_SCAN_CONCURRENCY = Number(process.env.AREA_SCAN_CONCURRENCY ?? 10);
+// pooledMap bounds in-flight calls; each call rotates the Decodo session and
+// retries transient failures immediately — never waits, never drops an address.
+const AREA_SCAN_CONCURRENCY = Number(process.env.AREA_SCAN_CONCURRENCY ?? 25); // unlimited budget: drawn-box scans run 25-wide (was 10)
 async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateAddresses>) {
   const job = scanJobs.get(jobId);
   if (!job) return;

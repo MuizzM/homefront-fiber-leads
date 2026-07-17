@@ -954,7 +954,7 @@ export function runMigrations() {
     // availability. The address pool + observations remain the ground truth.
     `CREATE TABLE IF NOT EXISTS state_fiber_markets (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
-       state TEXT NOT NULL CHECK(state IN ('NC','SC')),
+       state TEXT NOT NULL CHECK(state IN ('GA','NC','SC')),
        place_fips TEXT NOT NULL,
        city TEXT NOT NULL,
        legal_name TEXT NOT NULL,
@@ -1035,7 +1035,7 @@ export function runMigrations() {
        source_url TEXT NOT NULL,
        title TEXT NOT NULL,
        published_at TEXT,
-       state TEXT CHECK(state IN ('NC','SC')),
+       state TEXT CHECK(state IN ('GA','NC','SC')),
        locations_json TEXT NOT NULL DEFAULT '[]',
        content_hash TEXT NOT NULL UNIQUE,
        last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -1707,6 +1707,26 @@ export function runMigrations() {
         console.warn("Migration warning:", e.message);
       }
     }
+  }
+  // CHECK-constraint migration: tables created with state IN ('NC','SC') reject GA
+  // rows, and SQLite can't alter a CHECK — rebuild any such table in place. The
+  // new CREATE above is a no-op for existing DBs, so detect the old constraint
+  // from sqlite_master and swap the table under a copy.
+  for (const table of ["state_fiber_markets", "market_announcements"]) {
+    try {
+      const row = raw.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name=?`).get(table) as any;
+      if (row?.sql && row.sql.includes("CHECK(state IN ('NC','SC'))")) {
+        const newSql = row.sql.replaceAll("CHECK(state IN ('NC','SC'))", "CHECK(state IN ('GA','NC','SC'))")
+          .replace(`CREATE TABLE ${table}`, `CREATE TABLE ${table}_ga`);
+        raw.transaction(() => {
+          raw.exec(newSql);
+          raw.exec(`INSERT INTO ${table}_ga SELECT * FROM ${table}`);
+          raw.exec(`DROP TABLE ${table}`);
+          raw.exec(`ALTER TABLE ${table}_ga RENAME TO ${table}`);
+        })();
+        console.log(`[migration] ${table}: rebuilt with GA in state CHECK`);
+      }
+    } catch (e: any) { console.warn(`Migration warning (${table} GA CHECK):`, e.message); }
   }
   // Seed default commission rate if none exist
   try {

@@ -202,7 +202,7 @@ export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
        AND datetime(c.observed_at) >= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'-7 days')
        AND datetime(c.observed_at) <= datetime(COALESCE(s.first_seen_fiber_at,s.first_seen_live_at),'+31 days')
        AND datetime(c.observed_at) <= datetime('now','+5 minutes')
-     WHERE s.state IN ('NC','SC')
+     WHERE s.state IN ('GA','NC','SC')
        -- A historical flip remains in the audit ledger, but it must disappear
        -- from current opportunity/knock surfaces as soon as Kinetic regresses.
        AND s.last_fiber_available=1
@@ -222,7 +222,7 @@ export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
 }
 
 export function monitoringSummary(tenantId: number, days = 7) {
-  const tracked = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE state IN ('NC','SC') AND tenant_id=?`).get(tenantId) as any;
+  const tracked = rawDb.prepare(`SELECT COUNT(*) AS n FROM scan_targets WHERE state IN ('GA','NC','SC') AND tenant_id=?`).get(tenantId) as any;
   const fresh = freshPoints(tenantId, days);
   const clusters = clusterFreshFiber(fresh);
   const markets = rawDb.prepare(`SELECT COUNT(*) n,
