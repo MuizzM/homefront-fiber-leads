@@ -96,23 +96,19 @@ export function parseKineticTokenPayload(
   return { token, expiresAt };
 }
 
-async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
-  // The gokinetic token endpoint is a POST that authenticates with the client
-  // Basic credential (KFS_AUTH_BASIC, which already carries its "Basic " prefix)
-  // and a braze device body, and returns { token } (a JWT). Some other token
-  // services return { access_token, expires_in } — handle both.
-  //
-  // TRANSPORT: mint DIRECT (server egress), never through the residential proxy.
-  // This endpoint is anonymous — it carries the baked client credential, not a
-  // user identity — and is verified to return 201 from the server's own IP. The
-  // proxy IP enforces a rolling-window rate limit shared with the high-volume
-  // Search calls; routing the low-volume mint through it made the mint itself
-  // return 403 ("Auto-auth blocked"), failing the whole check as an auth error
-  // even though the address was never looked up. Only the identity-bearing Search
-  // calls need the fixed residential egress. Opt back in with KFS_MINT_VIA_PROXY=true.
+// One mint attempt over a chosen transport. The gokinetic token endpoint is a
+// POST that authenticates with the client Basic credential (KFS_AUTH_BASIC, which
+// already carries its "Basic " prefix) and a braze device body, and returns
+// { token } (a JWT). Some other token services return { access_token, expires_in }
+// — handle both. A non-2xx (403 proxy throttle, 429 Cloudflare challenge, 5xx) or
+// a non-JSON body (Cloudflare interstitial HTML) throws so the caller can fail
+// over to the other transport.
+async function mintOverTransport(
+  transport: (url: string, opts: RequestInit) => Promise<Response>,
+  label: string,
+): Promise<{ token: string; expiresAt: number }> {
   const basic = process.env.KFS_AUTH_BASIC?.trim();
-  const mintFetch = process.env.KFS_MINT_VIA_PROXY === "true" ? proxyFetch : directFetch;
-  const response = await mintFetch(kineticTokenUrl(), {
+  const response = await transport(kineticTokenUrl(), {
     method: "POST",
     headers: providerHeaders({
       "Content-Type": "application/json",
@@ -124,17 +120,55 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
     body: JSON.stringify({ brazeDeviceId: "" }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new Error(`Auto-auth blocked (${response.status})`);
-  const data = (await response.json()) as Record<string, unknown>;
+  if (!response.ok) throw new Error(`Auto-auth blocked (${response.status} via ${label})`);
+  let data: Record<string, unknown>;
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    // A 200 with a non-JSON body is a bot-challenge interstitial (e.g. Cloudflare
+    // "Just a moment…"), not a real token — treat it as a block, not a token.
+    throw new Error(`Auto-auth non-JSON body (challenge via ${label})`);
+  }
   const token = typeof data.token === "string" ? data.token.trim()
     : typeof data.access_token === "string" ? data.access_token.trim() : "";
-  if (!token) throw new Error("No token in mint response");
+  if (!token) throw new Error(`No token in mint response (via ${label})`);
   const now = Date.now();
   const expiresIn = Number(data.expires_in);
   const expiresAt = jwtExpiryMs(token)
     ?? (Number.isFinite(expiresIn) && expiresIn > 0 ? now + Math.floor(expiresIn * 1000) : now + 28 * 60 * 1000);
-  if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS) throw new Error("Minted token expires too soon");
+  if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS) throw new Error(`Minted token expires too soon (via ${label})`);
   return { token, expiresAt };
+}
+
+async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
+  // TWO-TRANSPORT MINT — the token endpoint is anonymous (baked client credential,
+  // no user identity), so it may be fetched over either egress. The two egresses
+  // fail INDEPENDENTLY, so we try one then fall back to the other:
+  //   • DIRECT (server IP): decoupled from the residential proxy's rolling-window
+  //     rate limit — which is shared with the high-volume Search calls and was
+  //     returning 403 on the mint itself ("Auto-auth blocked"), failing the whole
+  //     check as an auth error before the address was ever looked up. Cheap + fast,
+  //     but a single static IP can occasionally draw a Cloudflare bot challenge.
+  //   • PROXY (rotating residential IP): recovers when the server IP is challenged,
+  //     but is subject to the search throttle.
+  // Preferring DIRECT keeps the low-volume mint off the search throttle (fixing the
+  // 403); the proxy fallback keeps minting resilient if the server IP is ever
+  // blocked. Only the identity-bearing Search calls are pinned to the fixed proxy
+  // egress. KFS_MINT_VIA_PROXY=true forces proxy-first (direct still used as fallback).
+  const proxyFirst = process.env.KFS_MINT_VIA_PROXY === "true";
+  const transports: Array<[typeof directFetch, string]> = proxyFirst
+    ? [[proxyFetch, "proxy"], [directFetch, "direct"]]
+    : [[directFetch, "direct"], [proxyFetch, "proxy"]];
+  let lastErr: unknown;
+  for (const [transport, label] of transports) {
+    try {
+      return await mintOverTransport(transport, label);
+    } catch (err) {
+      lastErr = err;
+      structuredLog("scan.token.mint_transport_failed", { transport: label, error: String((err as any)?.message ?? err).slice(0, 120) }, "warn");
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error("Auto-auth blocked (all transports)");
 }
 
 const authorizedTokenPool = new AuthorizedTokenPool({

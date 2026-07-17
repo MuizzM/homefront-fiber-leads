@@ -2,12 +2,14 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
 // Live Test auth contract:
-//  - the token mint egresses DIRECT (directFetch), never through the proxy
+//  - the token mint is a TWO-TRANSPORT fail-over: DIRECT (server IP) preferred,
+//    PROXY (rotating IP) as fallback — the two egresses fail independently, so a
+//    403/429 on one recovers on the other; the mint never rides the search throttle
 //  - a mint failure invalidates stale state and retries ONCE through the approved
-//    flow; if that also fails the address is PENDING_AUTH (never no_service)
+//    flow; if every transport is blocked the address is PENDING_AUTH (never no_service)
 //  - a Search 401/403 invalidates the token, re-mints, and immediately retries the
 //    SAME address once; still blocked → PENDING_AUTH (never no_service)
-const { proxyFetch, directFetch } = vi.hoisted(() => ({ proxyFetch: vi.fn(), directFetch: vi.fn() }));
+const { directFetch, proxyFetch } = vi.hoisted(() => ({ directFetch: vi.fn(), proxyFetch: vi.fn() }));
 vi.mock("../../server/proxy-fetch", () => ({
   proxyFetch,
   directFetch,
@@ -32,6 +34,9 @@ let scanner: typeof import("../../server/scanner");
 function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 }
+const isTokenUrl = (u: string) => u.includes("/_internal/precisely/token") || u.includes("/auth/session");
+const isSearchUrl = (u: string) => u.includes("/address/search");
+const freshToken = () => json(201, { token: `t${Math.random()}`.padEnd(40, "x"), success: true });
 
 const ADDR = ["4023 Dakeita Circle", "Concord", "NC", "28025"] as const;
 
@@ -44,43 +49,59 @@ describe("Live Test authentication flow", () => {
   });
 
   beforeEach(() => {
-    proxyFetch.mockReset();
     directFetch.mockReset();
+    proxyFetch.mockReset();
   });
 
-  it("mints the token DIRECT — the mint request never rides the proxy", async () => {
-    directFetch.mockImplementation(async () => json(201, { token: "t".repeat(40), success: true }));
-    proxyFetch.mockImplementation(async () => json(200, FIX));
+  it("mints DIRECT first — the mint never rides the proxy when direct works", async () => {
+    directFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(200, FIX));
+    proxyFetch.mockImplementation(async (url: string) => isSearchUrl(url) ? json(200, FIX) : freshToken());
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(true);
-    expect(directFetch.mock.calls.length).toBeGreaterThan(0);
-    // Every proxied call is the Search API; no proxied call is the token endpoint.
-    for (const [url] of proxyFetch.mock.calls) expect(String(url)).toContain("/address/search");
-    expect(out.classification).toBe("fresh_fiber");
+    // The mint was served by directFetch; no proxied call hit the token endpoint.
+    expect(directFetch.mock.calls.some(([u]) => isTokenUrl(String(u)))).toBe(true);
+    expect(proxyFetch.mock.calls.some(([u]) => isTokenUrl(String(u)))).toBe(false);
+    // Search rides the proxy.
+    expect(proxyFetch.mock.calls.some(([u]) => isSearchUrl(String(u)))).toBe(true);
     expect(out.pendingAuth).toBe(false);
   });
 
-  it("mint 403 twice → PENDING_AUTH, never no_service, address left un-checked", async () => {
+  it("direct mint blocked (403/Cloudflare) → PROXY fallback recovers → address IS checked", async () => {
+    directFetch.mockImplementation(async () => json(403, {})); // server IP challenged
+    proxyFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(200, FIX));
+    const out = await scanner.liveTestAddress(...ADDR);
+    expect(out.checked).toBe(true);
+    expect(out.classification).toBe("fresh_fiber");
+    // Fallback exercised: proxy served the mint.
+    expect(proxyFetch.mock.calls.some(([u]) => isTokenUrl(String(u)))).toBe(true);
+  });
+
+  it("EVERY mint transport blocked → PENDING_AUTH, never no_service, no search fired", async () => {
     directFetch.mockImplementation(async () => json(403, {}));
-    proxyFetch.mockImplementation(async () => { throw new Error("search must not run without a token"); });
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (isSearchUrl(url)) throw new Error("search must not run without a token");
+      return json(403, {}); // proxy token endpoint also blocked
+    });
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(false);
     expect(out.pendingAuth).toBe(true);
     expect(out.classification).toBe("pending_auth");
     expect(out.classification).not.toBe("no_service");
-    // Retried the mint through the approved flow (>= 2 mint attempts), no search fired.
-    expect(directFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
-    const searchCalls = proxyFetch.mock.calls.filter(([u]) => String(u).includes("/address/search"));
-    expect(searchCalls.length).toBe(0);
+    // Retried the mint through the approved flow (>= 2 mint rounds), no search fired.
+    expect(directFetch.mock.calls.filter(([u]) => isTokenUrl(String(u))).length).toBeGreaterThanOrEqual(2);
+    expect(proxyFetch.mock.calls.filter(([u]) => isSearchUrl(String(u))).length).toBe(0);
   });
 
-  it("mint fails once then succeeds on the single retry → address IS checked", async () => {
-    let mints = 0;
-    directFetch.mockImplementation(async () => {
-      mints++;
-      return mints === 1 ? json(403, {}) : json(201, { token: "t".repeat(40), success: true });
+  it("mint blocked once then recovers on the single retry → address IS checked", async () => {
+    let round = 0;
+    directFetch.mockImplementation(async (url: string) => {
+      if (!isTokenUrl(url)) return json(200, FIX);
+      round++;
+      return round === 1 ? json(403, {}) : freshToken();
     });
-    proxyFetch.mockImplementation(async () => json(200, FIX));
+    // Proxy fallback also blocked on the first round so the FIRST mint truly fails
+    // and the single retry is what recovers it.
+    proxyFetch.mockImplementation(async (url: string) => isSearchUrl(url) ? json(200, FIX) : json(403, {}));
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(true);
     expect(out.pendingAuth).toBe(false);
@@ -88,9 +109,10 @@ describe("Live Test authentication flow", () => {
   });
 
   it("Search 403 → token invalidated, re-mint, SAME address retried once and checked", async () => {
-    directFetch.mockImplementation(async () => json(201, { token: `t${Math.random()}`.padEnd(40, "x"), success: true }));
+    directFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(200, FIX));
     let searches = 0;
-    proxyFetch.mockImplementation(async (_url: string, init: RequestInit) => {
+    proxyFetch.mockImplementation(async (url: string, init: RequestInit) => {
+      if (isTokenUrl(url)) return freshToken();
       searches++;
       const body = JSON.parse(String(init.body));
       expect(body.addressLine1).toBe("4023 Dakeita Circle"); // same address every attempt
@@ -104,14 +126,13 @@ describe("Live Test authentication flow", () => {
   });
 
   it("Search 403 persists after re-mint → PENDING_AUTH, never no_service", async () => {
-    directFetch.mockImplementation(async () => json(201, { token: `t${Math.random()}`.padEnd(40, "x"), success: true }));
-    proxyFetch.mockImplementation(async () => json(403, {}));
+    directFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(403, {}));
+    proxyFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(403, {}));
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(false);
     expect(out.pendingAuth).toBe(true);
     expect(out.classification).toBe("pending_auth");
     // Exactly two search attempts (original + one post-remint retry).
-    const searchCalls = proxyFetch.mock.calls.filter(([u]) => String(u).includes("/address/search"));
-    expect(searchCalls.length).toBe(2);
+    expect(proxyFetch.mock.calls.filter(([u]) => isSearchUrl(String(u))).length).toBe(2);
   });
 });
