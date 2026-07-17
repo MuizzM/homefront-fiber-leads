@@ -138,28 +138,34 @@ function rebuildDispatcher(proxyUrl: string): void {
   if (old && typeof old.close === "function") { old.close().catch(() => {}); }
 }
 
+async function doRotate(proxyUrl: string, reason?: string): Promise<void> {
+  if (!_proxyLoaded) await undiciReady;
+  if (!_ProxyAgent) return; // undici missing → nothing to rotate (fails closed elsewhere)
+  rebuildDispatcher(proxyUrl);
+  console.log(`[proxy-fetch] Decodo session rotated → #${_sessionSeq}${reason ? ` (${reason})` : ""}`);
+}
+
 /**
  * Obtain a fresh authorized Decodo session (new residential egress IP). Called by
  * the scanner on an authenticated denial (401/403) so the immediate retry leaves
  * the throttled IP behind. Single-flight: concurrent callers coalesce into ONE
  * rebuild, so a burst of auth failures never triggers a rotation storm.
  * No-op when no proxy is configured (local/dev). Never exposes the server IP.
+ *
+ * NOTE: the in-flight reset runs in a `.finally` attached AFTER the assignment
+ * below (never inside the promise body). doRotate can complete SYNCHRONOUSLY when
+ * undici is already loaded; if the reset lived in the body's `finally`, it would
+ * run BEFORE `_rotateInFlight = done` and leave a resolved promise pinned forever,
+ * silently disabling all future rotations (the exact bug that stalled the scan).
  */
 export async function rotateProxySession(reason?: string): Promise<void> {
   const proxyUrl = configuredProxyUrl();
   if (!proxyUrl) return;
   if (_rotateInFlight) return _rotateInFlight;
-  _rotateInFlight = (async () => {
-    try {
-      if (!_proxyLoaded) await undiciReady;
-      if (!_ProxyAgent) return; // undici missing → nothing to rotate (fails closed elsewhere)
-      rebuildDispatcher(proxyUrl);
-      console.log(`[proxy-fetch] Decodo session rotated → #${_sessionSeq}${reason ? ` (${reason})` : ""}`);
-    } finally {
-      _rotateInFlight = null;
-    }
-  })();
-  return _rotateInFlight;
+  const done = doRotate(proxyUrl, reason);
+  _rotateInFlight = done;
+  void done.catch(() => {}).finally(() => { if (_rotateInFlight === done) _rotateInFlight = null; });
+  return done;
 }
 
 /** Masked, safe session identifier for diagnostics — no IP, no credentials. */
