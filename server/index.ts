@@ -599,6 +599,37 @@ app.use((req, res, next) => {
     const seedCycle = setInterval(() => { void runPrioritySeedBurst(); }, 4 * 60 * 60_000);
     if (typeof (seedCycle as any).unref === "function") seedCycle.unref();
   }
+
+  // COMING SOON PROGRAM — the overarching always-on watch system. The built-in
+  // worker sweeps the durable watchlist every 15 minutes on an opportunity-
+  // weighted cadence and promotes COMING_SOON → AVAILABLE into a green assignable
+  // Fresh Lead with nearby expansion. Set COMING_SOON_PROGRAM=off to disable.
+  if (process.env.COMING_SOON_PROGRAM !== "off") {
+    void (async () => {
+      try {
+        const { startComingSoonProgram } = await import("./comingSoonProgram");
+        const { getDefaultTenantId } = await import("./storage");
+        startComingSoonProgram(() => getDefaultTenantId());
+      } catch (e: any) { console.warn("[coming-soon-program] start failed:", e?.message); }
+    })();
+  }
+
+  // DAILY FULL-MARKET SCAN — built-in worker: every day, re-discover addresses in
+  // every confirmed GA/NC/SC market and live-check the new ones, so we are FIRST
+  // to find fresh fiber. Set DAILY_MARKET_REFRESH=off to disable.
+  if (process.env.DAILY_MARKET_REFRESH !== "off") {
+    const runDaily = async () => {
+      try {
+        const { runDailyMarketRefresh } = await import("./dailyMarketRefresh");
+        const { getDefaultTenantId } = await import("./storage");
+        const tid = getDefaultTenantId();
+        if (tid != null) await runDailyMarketRefresh(tid);
+      } catch (e: any) { console.warn("[daily-market-refresh] failed:", e?.message); }
+    };
+    const dailyTimer = setInterval(() => { void runDaily(); }, 24 * 60 * 60_000);
+    if (typeof (dailyTimer as any).unref === "function") dailyTimer.unref();
+    setTimeout(() => { void runDaily(); }, 10 * 60_000); // first run 10 min after boot
+  }
   }; // end startBackgroundServices
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────

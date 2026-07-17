@@ -213,18 +213,71 @@ function MapTab() {
   );
 }
 
+interface ComingSoonWatchlist {
+  watching: number; promoted: number; dueNow: number;
+  rows: Array<{
+    id: number; address: string; city: string; state: string; zip: string;
+    firstSeenAt: string; lastSeenAt: string; expectedCompletionAt: string | null;
+    confidence: string; opportunityScore: number; nextCheckAt: string;
+    status: "watching" | "promoted" | "retired"; promotedLeadId: number | null; checks: number;
+  }>;
+}
+
+// ── Coming Soon — the durable watchlist. Every address the Kinetic search flags
+// as fiber-built-but-not-yet-orderable, re-checked on an opportunity-weighted
+// cadence by the built-in worker, and promoted to a green Fresh Lead the moment
+// billing goes inactive. ───────────────────────────────────────────────────────
 function ComingSoon() {
-  const { data } = useQuery<{ sweeps: StateSweep[] }>({
-    queryKey: ["/api/sweeps/state"],
-    queryFn: () => apiRequest("GET", "/api/sweeps/state").then((r) => r.json()),
+  const { data, isLoading } = useQuery<ComingSoonWatchlist>({
+    queryKey: ["/api/coming-soon/watchlist"],
+    queryFn: () => apiRequest("GET", "/api/coming-soon/watchlist").then((r) => r.json()),
     refetchInterval: 15000,
+    staleTime: 10000,
   });
-  const total = (data?.sweeps ?? []).reduce((n, s) => n + (s.comingSoon ?? 0), 0);
+  const rows = data?.rows ?? [];
   return (
     <div className="space-y-3">
-      <div className="rounded-2xl border border-border bg-card px-4 py-4">
-        <div className="text-[28px] font-bold tabular-nums text-cyan-400">{total}</div>
-        <div className="text-[12px] text-muted-foreground">Addresses flagged <span className="font-medium text-foreground">Coming Soon</span> (future/pending construction) across the active GA, NC &amp; SC sweeps.</div>
+      <div className="grid grid-cols-3 gap-2">
+        {[["Watching", data?.watching ?? 0, "text-cyan-400"], ["Promoted", data?.promoted ?? 0, "text-emerald-400"], ["Due now", data?.dueNow ?? 0, "text-amber-400"]].map(([l, v, t]) => (
+          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
+            <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
+          </div>
+        ))}
+      </div>
+      <p className="px-1 text-[12px] text-muted-foreground">The built-in Coming Soon worker re-checks every watched address on an opportunity-weighted cadence (hottest first) and promotes it into <span className="font-medium text-foreground">Fresh Now</span> with a green assignable pin the moment fiber becomes orderable.</p>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        {isLoading && !data ? (
+          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-2 w-2 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
+          ))}</div>
+        ) : rows.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No Coming Soon addresses yet — every Kinetic search that returns one lands here automatically and stays under watch.</div>
+        ) : (
+          <div className="divide-y divide-border">
+            {rows.map((r) => (
+              <div key={r.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`coming-row-${r.id}`}>
+                <span className={`h-2 w-2 shrink-0 rounded-full ${r.status === "promoted" ? "bg-emerald-400" : "animate-pulse bg-cyan-400"}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-foreground">{r.address}, {r.city}, {r.state}</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Watched since {fmtTime(r.firstSeenAt)} · {r.checks} checks
+                    {r.expectedCompletionAt ? ` · expected ${fmtTime(r.expectedCompletionAt)}` : ""}
+                    {r.status === "watching" ? ` · next check ${fmtTime(r.nextCheckAt)}` : ""}
+                  </div>
+                </div>
+                {r.status === "watching" && (
+                  <span className="shrink-0 rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-400" title="Opportunity score">#{r.opportunityScore}</span>
+                )}
+                {r.status === "promoted" && r.promotedLeadId != null ? (
+                  <Link href={`/lead/${r.promotedLeadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
+                ) : r.status === "promoted" ? (
+                  <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">Promoted</span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
       <p className="px-1 text-[12px] text-muted-foreground">Coming Soon addresses are stored separately from active fresh leads and automatically re-checked as their completion date approaches — they promote into <span className="font-medium text-foreground">Fresh Now</span> the moment fiber goes live.</p>
       <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>

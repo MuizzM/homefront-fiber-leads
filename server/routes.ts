@@ -151,6 +151,7 @@ import { scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, getAd
 import { getInspectorSnapshot, getAddressTimeline, onScanEvent } from "./scanEvents";
 import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
+import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
 import {
@@ -2869,6 +2870,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // FLIPPED from unavailable to live within the window (default 24h), newest
   // first, each tagged with whether it's already been turned into a lead.
   // This is the core "New Fiber Today / First Seen Live" manager surface.
+  // GET /api/coming-soon/watchlist — the Coming Soon Program surface: the durable
+  // watchlist with coordinates, first/last seen, expected completion, opportunity
+  // score and next scheduled check, plus watching/promoted/due-now counters.
+  app.get("/api/coming-soon/watchlist", requireManager, (req: any, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? getDefaultTenantId();
+      res.json(getComingSoonWatchlist(tenantId));
+    } catch (error: any) {
+      res.status(500).json({ error: String(error?.message ?? error) });
+    }
+  });
+
   app.get("/api/scan/first-seen-live", requireManager, (req: any, res) => {
     const hours = Math.min(Math.max(Number(req.query.hours) || 24, 1), 24 * 30);
     const tenantId = req.user?.tenantId ?? getDefaultTenantId();

@@ -44,6 +44,7 @@ import {
   type ScanRunRow,
 } from "./scanIntelStore";
 import { projectConfirmedFreshLeads } from "./freshFiberProjector";
+import { watchComingSoon } from "./comingSoonProgram";
 import { structuredLog } from "./structuredLog";
 import { calculateFiberFreshness } from "@shared/fiberFreshness";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
@@ -420,6 +421,26 @@ function applyCheck(
   // consumes the same shared queue and promotes nothing until billingStatus=N and
   // the independent fresh-fiber projector confirms the transition.
   if (result.isNewFiber && ["N", "Y"].includes(String(result.billingStatus))) {
+    // COMING SOON PROGRAM: NEW FIBER with billing still active = fiber built,
+    // service not yet orderable. Add it to the durable watchlist — the built-in
+    // worker rechecks it on an opportunity-weighted cadence and promotes it to a
+    // green Fresh Lead the moment billing flips to inactive.
+    if (String(result.billingStatus) === "Y") {
+      try {
+        watchComingSoon(tenantId, {
+          address: result.address || t.address,
+          city: result.city || t.city,
+          state: result.state || t.state,
+          zip: result.zip || t.zip,
+          lat: result.lat ?? t.lat,
+          lng: result.lng ?? t.lng,
+          source: "kinetic-search",
+          confidence: "provider",
+        });
+      } catch (e: any) {
+        structuredLog("coming_soon.watch_failed", { tenantId, runId, error: String(e?.message ?? e).slice(0, 120) }, "warn");
+      }
+    }
     try {
       ensureKineticMonitoringSchema();
       const rawEvidence = result.rawResponse ?? result;
