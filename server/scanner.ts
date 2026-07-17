@@ -1,7 +1,7 @@
 // Kinetic availability adapter. Live use is opt-in and requires a licensed API,
 // partner integration, or written automation permission; credentials and the
 // stable provider-issued identity are loaded only from environment variables.
-import { proxyFetch, directFetch } from "./proxy-fetch";
+import { proxyFetch, rotateProxySession } from "./proxy-fetch";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
 import { parseKineticResponse } from "./kineticResponseParser";
@@ -96,19 +96,22 @@ export function parseKineticTokenPayload(
   return { token, expiresAt };
 }
 
-// One mint attempt over a chosen transport. The gokinetic token endpoint is a
-// POST that authenticates with the client Basic credential (KFS_AUTH_BASIC, which
-// already carries its "Basic " prefix) and a braze device body, and returns
-// { token } (a JWT). Some other token services return { access_token, expires_in }
-// — handle both. A non-2xx (403 proxy throttle, 429 Cloudflare challenge, 5xx) or
-// a non-JSON body (Cloudflare interstitial HTML) throws so the caller can fail
-// over to the other transport.
-async function mintOverTransport(
-  transport: (url: string, opts: RequestInit) => Promise<Response>,
-  label: string,
-): Promise<{ token: string; expiresAt: number }> {
+// A message that signals an AUTHENTICATED denial (401/403) — the retriable case
+// where a fresh authorized Decodo session (new residential IP) is the remedy.
+function isAuthDenialMessage(message: string): boolean {
+  return /\b(401|403)\b/.test(message);
+}
+
+// One mint attempt over the authorized Decodo transport. The gokinetic token
+// endpoint is a POST that authenticates with the client Basic credential
+// (KFS_AUTH_BASIC, which already carries its "Basic " prefix) and a braze device
+// body, and returns { token } (a JWT). Some other token services return
+// { access_token, expires_in } — handle both. A non-2xx (403 IP throttle, 429,
+// 5xx) or a non-JSON body (bot-challenge interstitial) throws so the caller can
+// rotate the Decodo session and retry.
+async function mintViaDecodo(): Promise<{ token: string; expiresAt: number }> {
   const basic = process.env.KFS_AUTH_BASIC?.trim();
-  const response = await transport(kineticTokenUrl(), {
+  const response = await proxyFetch(kineticTokenUrl(), {
     method: "POST",
     headers: providerHeaders({
       "Content-Type": "application/json",
@@ -120,77 +123,47 @@ async function mintOverTransport(
     body: JSON.stringify({ brazeDeviceId: "" }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!response.ok) throw new Error(`Auto-auth blocked (${response.status} via ${label})`);
+  if (!response.ok) throw new Error(`Auto-auth blocked (${response.status} via decodo)`);
   let data: Record<string, unknown>;
   try {
     data = (await response.json()) as Record<string, unknown>;
   } catch {
-    // A 200 with a non-JSON body is a bot-challenge interstitial (e.g. Cloudflare
-    // "Just a moment…"), not a real token — treat it as a block, not a token.
-    throw new Error(`Auto-auth non-JSON body (challenge via ${label})`);
+    throw new Error("Auto-auth non-JSON body (challenge via decodo)");
   }
   const token = typeof data.token === "string" ? data.token.trim()
     : typeof data.access_token === "string" ? data.access_token.trim() : "";
-  if (!token) throw new Error(`No token in mint response (via ${label})`);
+  if (!token) throw new Error("No token in mint response (via decodo)");
   const now = Date.now();
   const expiresIn = Number(data.expires_in);
   const expiresAt = jwtExpiryMs(token)
     ?? (Number.isFinite(expiresIn) && expiresIn > 0 ? now + Math.floor(expiresIn * 1000) : now + 28 * 60 * 1000);
-  if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS) throw new Error(`Minted token expires too soon (via ${label})`);
+  if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS) throw new Error("Minted token expires too soon (via decodo)");
   return { token, expiresAt };
 }
 
-// When a DIRECT mint draws a Cloudflare challenge (429 / non-JSON interstitial),
-// the server IP is temporarily flagged; hammering it keeps it flagged. Park direct
-// for a cooldown so the IP decays back to clean while the proxy carries the mint.
-const MINT_DIRECT_COOLDOWN_MS = Math.max(5_000, Number(process.env.KFS_MINT_DIRECT_COOLDOWN_MS ?? 60_000));
-let directMintBlockedUntil = 0;
-
-// A challenge/throttle signature that should park the DIRECT egress: 429, 403, or a
-// bot-challenge interstitial body. (A timeout is transient, not an IP flag.)
-function isDirectBlockSignal(message: string): boolean {
-  return /\b429\b/.test(message) || /\b403\b/.test(message) || /challenge/i.test(message);
-}
-
 async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number }> {
-  // TWO-TRANSPORT MINT — the token endpoint is anonymous (baked client credential,
-  // no user identity), so it may be fetched over either egress. The two egresses
-  // fail INDEPENDENTLY, so we try one then fall back to the other:
-  //   • DIRECT (server IP): decoupled from the residential proxy's rolling-window
-  //     rate limit — which is shared with the high-volume Search calls and was
-  //     returning 403 on the mint itself ("Auto-auth blocked"), failing the whole
-  //     check as an auth error before the address was ever looked up. Cheap + fast,
-  //     but a single static IP can draw a Cloudflare bot challenge under load.
-  //   • PROXY (rotating residential IP): recovers when the server IP is challenged,
-  //     but is subject to the search throttle.
-  // Preferring DIRECT keeps the low-volume mint off the search throttle (fixing the
-  // 403); the proxy fallback keeps minting resilient if the server IP is ever
-  // blocked. When DIRECT was recently challenged we skip it entirely for a cooldown
-  // (proxy-only) so the IP can decay clean instead of being re-flagged every attempt.
-  // KFS_MINT_VIA_PROXY=true forces proxy-first (direct still used as a last resort).
-  const proxyFirst = process.env.KFS_MINT_VIA_PROXY === "true";
-  const directCoolingDown = Date.now() < directMintBlockedUntil;
-  const transports: Array<[typeof directFetch, string]> =
-    proxyFirst ? [[proxyFetch, "proxy"], [directFetch, "direct"]]
-    : directCoolingDown ? [[proxyFetch, "proxy"]]
-    : [[directFetch, "direct"], [proxyFetch, "proxy"]];
-  let lastErr: unknown;
-  for (const [transport, label] of transports) {
-    try {
-      const minted = await mintOverTransport(transport, label);
-      if (label === "direct") directMintBlockedUntil = 0; // clean — clear any cooldown
-      return minted;
-    } catch (err) {
-      lastErr = err;
-      const message = String((err as any)?.message ?? err);
-      if (label === "direct" && isDirectBlockSignal(message)) {
-        directMintBlockedUntil = Date.now() + MINT_DIRECT_COOLDOWN_MS;
-        structuredLog("scan.token.direct_cooldown", { until: directMintBlockedUntil, reason: message.slice(0, 80) }, "warn");
-      }
-      structuredLog("scan.token.mint_transport_failed", { transport: label, error: message.slice(0, 120) }, "warn");
+  // DECODO-EXCLUSIVE MINT. The token is minted ONLY through the authorized Decodo
+  // residential proxy — the server's own IP is never used. Root cause of the
+  // production stall ("8 found · 0 checked · 8 pending"): the long-lived undici
+  // dispatcher kept its keep-alive connections pinned to a couple of Decodo egress
+  // IPs; under continuous mint load those IPs hit Kinetic's rolling-window rate
+  // limit → 403 forever, and a 403 HTTP *response* (not a socket error) never
+  // rebuilt the dispatcher. Verified in prod: a freshly-built dispatcher gets a new
+  // residential IP and returns 201. So on an authenticated denial we rotate the
+  // Decodo SESSION (fresh IP) and retry once. If Decodo itself is unavailable the
+  // request fails closed (proxyFetch throws) and the address stays PENDING_AUTH.
+  try {
+    return await mintViaDecodo();
+  } catch (err) {
+    const message = String((err as any)?.message ?? err);
+    structuredLog("scan.token.mint_failed", { transport: "decodo", error: message.slice(0, 120) }, "warn");
+    if (isAuthDenialMessage(message)) {
+      // Fresh authorized Decodo session (new residential IP), then retry once.
+      await rotateProxySession(`mint ${message.match(/\d{3}/)?.[0] ?? "auth"}`);
+      return await mintViaDecodo();
     }
+    throw err; // fail closed (Decodo down / transient) — pool self-heals next tick
   }
-  throw lastErr instanceof Error ? lastErr : new Error("Auto-auth blocked (all transports)");
 }
 
 // ── Global mint gate — collapse the stampede ──────────────────────────────────
@@ -232,10 +205,9 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   mint: () => gatedMint(),
 });
 
-/** Test-only: reset the module-level mint gate + direct-cooldown state so unit
- * tests don't leak throttle/cooldown state between cases. No effect in prod use. */
+/** Test-only: reset the module-level mint-gate state so unit tests don't leak
+ * pacing state between cases. No effect in prod use. */
 export function __resetTokenTransportStateForTests(): void {
-  directMintBlockedUntil = 0;
   lastMintAt = 0;
   mintChain = Promise.resolve();
 }
@@ -735,8 +707,13 @@ async function scanAddressDirect(
     //    pool re-mints. A non-answer is NEVER recorded as "no fiber".
     if (res.status === 401 || res.status === 403) {
       authorizedTokenPool.invalidate(tokenLease.token);
+      // Fresh authorized Decodo session (new residential IP) so the requeued retry
+      // and the pool's re-mint leave the throttled egress IP behind. Single-flight
+      // inside rotateProxySession coalesces a burst of concurrent 403s into ONE
+      // rotation. Fire-and-forget — this result is already `blocked`/requeued.
+      void rotateProxySession(`search ${res.status}`);
       base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
-      base.notes = `Upstream ${res.status} (token/session) — token invalidated, address requeued`;
+      base.notes = `Upstream ${res.status} (token/session) — token invalidated, Decodo session rotated, address requeued`;
       if (res.status === 403) {
         structuredLog("scan.provider.access_denied", { status: 403, source }, "warn");
         const alertHook = (globalThis as any).__alertProviderAccessDenied;

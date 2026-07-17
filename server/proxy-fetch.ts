@@ -1,11 +1,21 @@
-/** Shared transport for an authorized fixed egress proxy. The application-level
- * provider queue remains the true concurrency control; this pool only reuses
- * sockets and never rotates identities or bypasses an upstream denial. */
+/** Shared transport for the authorized Decodo residential proxy. ALL provider
+ * traffic (token mint + address search) egresses through Decodo — the server's
+ * own IP is never used for provider calls. The application-level provider queue
+ * remains the true concurrency control. On an authenticated denial the caller
+ * asks for a fresh authorized Decodo SESSION (rotateProxySession): the dispatcher
+ * is rebuilt so subsequent requests open new connections and Decodo's rotating
+ * residential gateway hands out a fresh egress IP. This obtains a new authorized
+ * session per the provider agreement; it never bypasses an actual upstream denial. */
 
 let _ProxyAgent: any = null;
 let _undiciFetch: any = null;
 let _proxyLoaded = false;
 let _sharedDispatcher: any = null;
+// Monotonic session counter — bumped every time the Decodo dispatcher is rebuilt
+// (a fresh authorized session). Exposed MASKED for the Scan Inspector diagnostics.
+let _sessionSeq = 1;
+// Single-flight guard so concurrent auth failures trigger exactly one rotation.
+let _rotateInFlight: Promise<void> | null = null;
 
 // Sized to support the globally selected 40–50 search window. The distributed
 // coordinator, not this socket pool, remains the authoritative system ceiling.
@@ -98,7 +108,7 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
       return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
     } catch (err: any) {
       if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
-        _sharedDispatcher = buildAgent(proxyUrl);
+        rebuildDispatcher(proxyUrl);
         console.log("[proxy-fetch] Pool rebuilt after socket reset");
         return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
       }
@@ -106,29 +116,68 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
     }
   }
 
-  // No proxy configured (local/dev): a direct request is the intended behaviour.
+  // No proxy resolved from env. In PRODUCTION this is a misconfiguration, and
+  // going direct would expose the server IP for provider traffic — so FAIL CLOSED.
+  // Dev/test (and an explicit ALLOW_DIRECT_EGRESS=true opt-in) may egress directly
+  // so the suite + local dev run without a Decodo account.
+  if (process.env.NODE_ENV === "production" && process.env.ALLOW_DIRECT_EGRESS !== "true") {
+    throw new Error("[proxy-fetch] No Decodo proxy configured in production — refusing direct egress (fail closed)");
+  }
   return fetch(url, opts);
+}
+
+// Replace the shared dispatcher with a freshly-built one and bump the session id.
+// New requests open new connections, so Decodo's rotating residential gateway
+// assigns a fresh egress IP — a fresh authorized session.
+function rebuildDispatcher(proxyUrl: string): void {
+  const old = _sharedDispatcher;
+  _sharedDispatcher = buildAgent(proxyUrl);
+  _sessionSeq++;
+  // Graceful, fire-and-forget close of the old pool so in-flight requests finish
+  // on it while new traffic moves to the fresh session. Never awaited.
+  if (old && typeof old.close === "function") { old.close().catch(() => {}); }
 }
 
 /**
- * Direct (un-proxied) transport, used ONLY for the anonymous Kinetic token mint
- * (`/api/v1/auth/session`). That endpoint takes the baked client Basic credential,
- * carries no user identity, and is verified to return 201 from the server's own
- * egress IP. Minting is low-volume (a few tokens/hour); the high-volume, identity-
- * bearing Search calls stay on the fixed residential proxy via proxyFetch(). This
- * is NOT a post-failure fallback — it is the deliberate, up-front transport for the
- * mint, so the mint is never subject to the proxy IP's rolling-window rate limit
- * (which was returning 403 on the mint and failing the whole check as "auth error").
+ * Obtain a fresh authorized Decodo session (new residential egress IP). Called by
+ * the scanner on an authenticated denial (401/403) so the immediate retry leaves
+ * the throttled IP behind. Single-flight: concurrent callers coalesce into ONE
+ * rebuild, so a burst of auth failures never triggers a rotation storm.
+ * No-op when no proxy is configured (local/dev). Never exposes the server IP.
  */
-export function directFetch(url: string, opts: RequestInit = {}): Promise<Response> {
-  return fetch(url, opts);
+export async function rotateProxySession(reason?: string): Promise<void> {
+  const proxyUrl = configuredProxyUrl();
+  if (!proxyUrl) return;
+  if (_rotateInFlight) return _rotateInFlight;
+  _rotateInFlight = (async () => {
+    try {
+      if (!_proxyLoaded) await undiciReady;
+      if (!_ProxyAgent) return; // undici missing → nothing to rotate (fails closed elsewhere)
+      rebuildDispatcher(proxyUrl);
+      console.log(`[proxy-fetch] Decodo session rotated → #${_sessionSeq}${reason ? ` (${reason})` : ""}`);
+    } finally {
+      _rotateInFlight = null;
+    }
+  })();
+  return _rotateInFlight;
 }
 
-export function getProxyStatus(): { enabled: boolean; url: string | null; slots: number } {
+/** Masked, safe session identifier for diagnostics — no IP, no credentials. */
+export function getProxySessionId(): string {
+  return `decodo-s${_sessionSeq}`;
+}
+
+/** True when a Decodo proxy is configured AND a live dispatcher exists. */
+export function isProxyConnected(): boolean {
+  return !!configuredProxyUrl() && !!_sharedDispatcher;
+}
+
+export function getProxyStatus(): { enabled: boolean; url: string | null; slots: number; sessionId: string } {
   const proxyUrl = configuredProxyUrl();
   return {
     enabled: !!proxyUrl && !!_sharedDispatcher,
     url: proxyUrl ? proxyUrl.replace(/:[^:@]+@/, ":****@") : null,
     slots: POOL_SIZE * PIPELINE,
+    sessionId: getProxySessionId(),
   };
 }

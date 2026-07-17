@@ -1,19 +1,23 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
-// Live Test auth contract:
-//  - the token mint is a TWO-TRANSPORT fail-over: DIRECT (server IP) preferred,
-//    PROXY (rotating IP) as fallback — the two egresses fail independently, so a
-//    403/429 on one recovers on the other; the mint never rides the search throttle
-//  - a mint failure invalidates stale state and retries ONCE through the approved
-//    flow; if every transport is blocked the address is PENDING_AUTH (never no_service)
-//  - a Search 401/403 invalidates the token, re-mints, and immediately retries the
-//    SAME address once; still blocked → PENDING_AUTH (never no_service)
-const { directFetch, proxyFetch } = vi.hoisted(() => ({ directFetch: vi.fn(), proxyFetch: vi.fn() }));
+// Live Test auth contract (DECODO-EXCLUSIVE):
+//  - the token mint AND the address search both egress through proxyFetch (Decodo).
+//    There is no directFetch / server-IP path anywhere.
+//  - on an authenticated denial (401/403) the scanner asks for a fresh authorized
+//    Decodo session (rotateProxySession → new residential IP) and retries the SAME
+//    address; the mint's single-flight gate is preserved.
+//  - a persistent auth denial → PENDING_AUTH (address kept for retry), NEVER no_service.
+const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({
+  proxyFetch: vi.fn(),
+  rotateProxySession: vi.fn(async () => {}),
+}));
 vi.mock("../../server/proxy-fetch", () => ({
   proxyFetch,
-  directFetch,
-  getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100 }),
+  rotateProxySession,
+  getProxySessionId: () => "decodo-s1",
+  isProxyConnected: () => true,
+  getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100, sessionId: "decodo-s1" }),
 }));
 vi.mock("../../server/distributedProviderCoordinator", () => {
   class DistributedProviderCoordinator<T> {
@@ -40,79 +44,64 @@ const freshToken = () => json(201, { token: `t${Math.random()}`.padEnd(40, "x"),
 
 const ADDR = ["4023 Dakeita Circle", "Concord", "NC", "28025"] as const;
 
-describe("Live Test authentication flow", () => {
+describe("Live Test authentication flow — Decodo-exclusive", () => {
   beforeAll(async () => {
     process.env.KFS_AUTOMATION_AUTHORIZED = "false";
     process.env.KFS_TOKEN_POOL_WARM_MIN = "1";
-    process.env.KFS_MINT_MIN_INTERVAL_MS = "0"; // no inter-mint spacing in tests
+    process.env.KFS_MINT_MIN_INTERVAL_MS = "0";
     scanner = await import("../../server/scanner");
     process.env.KFS_AUTOMATION_AUTHORIZED = "true";
   });
 
   beforeEach(() => {
-    directFetch.mockReset();
     proxyFetch.mockReset();
-    scanner.__resetTokenTransportStateForTests(); // clear direct-cooldown between cases
+    rotateProxySession.mockClear();
+    scanner.__resetTokenTransportStateForTests();
   });
 
-  it("mints DIRECT first — the mint never rides the proxy when direct works", async () => {
-    directFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(200, FIX));
-    proxyFetch.mockImplementation(async (url: string) => isSearchUrl(url) ? json(200, FIX) : freshToken());
-    const out = await scanner.liveTestAddress(...ADDR);
-    expect(out.checked).toBe(true);
-    // The mint was served by directFetch; no proxied call hit the token endpoint.
-    expect(directFetch.mock.calls.some(([u]) => isTokenUrl(String(u)))).toBe(true);
-    expect(proxyFetch.mock.calls.some(([u]) => isTokenUrl(String(u)))).toBe(false);
-    // Search rides the proxy.
-    expect(proxyFetch.mock.calls.some(([u]) => isSearchUrl(String(u)))).toBe(true);
-    expect(out.pendingAuth).toBe(false);
-  });
-
-  it("direct mint blocked (403/Cloudflare) → PROXY fallback recovers → address IS checked", async () => {
-    directFetch.mockImplementation(async () => json(403, {})); // server IP challenged
+  it("mints AND searches through Decodo only (proxyFetch) — address checked", async () => {
     proxyFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(200, FIX));
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(true);
     expect(out.classification).toBe("fresh_fiber");
-    // Fallback exercised: proxy served the mint.
-    expect(proxyFetch.mock.calls.some(([u]) => isTokenUrl(String(u)))).toBe(true);
+    expect(out.pendingAuth).toBe(false);
+    // Every network call — mint and search — went through proxyFetch (Decodo).
+    const urls = proxyFetch.mock.calls.map(([u]) => String(u));
+    expect(urls.some(isTokenUrl)).toBe(true);   // mint via Decodo
+    expect(urls.some(isSearchUrl)).toBe(true);  // search via Decodo
+    // No auth failure → no session rotation needed.
+    expect(rotateProxySession).not.toHaveBeenCalled();
   });
 
-  it("EVERY mint transport blocked → PENDING_AUTH, never no_service, no search fired", async () => {
-    directFetch.mockImplementation(async () => json(403, {}));
+  it("mint 403 → rotates a fresh Decodo session and retries → address checked", async () => {
+    let mintCalls = 0;
+    proxyFetch.mockImplementation(async (url: string) => {
+      if (isSearchUrl(url)) return json(200, FIX);
+      mintCalls++;
+      return mintCalls === 1 ? json(403, {}) : freshToken(); // first mint 403, retry ok
+    });
+    const out = await scanner.liveTestAddress(...ADDR);
+    expect(out.checked).toBe(true);
+    expect(out.classification).toBe("fresh_fiber");
+    // A fresh authorized Decodo session was obtained before the mint retry.
+    expect(rotateProxySession).toHaveBeenCalled();
+  });
+
+  it("mint 403 persists → PENDING_AUTH, never no_service, no search fired", async () => {
     proxyFetch.mockImplementation(async (url: string) => {
       if (isSearchUrl(url)) throw new Error("search must not run without a token");
-      return json(403, {}); // proxy token endpoint also blocked
+      return json(403, {}); // every mint attempt denied
     });
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(false);
     expect(out.pendingAuth).toBe(true);
     expect(out.classification).toBe("pending_auth");
     expect(out.classification).not.toBe("no_service");
-    // Retried the mint through the approved flow (>= 2 mint rounds via proxy after
-    // direct parks on its cooldown), and NO search fired without a token.
-    expect(proxyFetch.mock.calls.filter(([u]) => isTokenUrl(String(u))).length).toBeGreaterThanOrEqual(2);
+    expect(rotateProxySession).toHaveBeenCalled(); // tried to recover with fresh sessions
     expect(proxyFetch.mock.calls.filter(([u]) => isSearchUrl(String(u))).length).toBe(0);
   });
 
-  it("mint blocked once then recovers on the single retry (via proxy) → address IS checked", async () => {
-    // Direct stays blocked (parks on cooldown); the proxy token endpoint fails the
-    // first round then recovers, so the single retry is what gets a token.
-    directFetch.mockImplementation(async () => json(403, {}));
-    let proxyTokenCalls = 0;
-    proxyFetch.mockImplementation(async (url: string) => {
-      if (isSearchUrl(url)) return json(200, FIX);
-      proxyTokenCalls++;
-      return proxyTokenCalls === 1 ? json(403, {}) : freshToken();
-    });
-    const out = await scanner.liveTestAddress(...ADDR);
-    expect(out.checked).toBe(true);
-    expect(out.pendingAuth).toBe(false);
-    expect(out.classification).toBe("fresh_fiber");
-  });
-
-  it("Search 403 → token invalidated, re-mint, SAME address retried once and checked", async () => {
-    directFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(200, FIX));
+  it("Search 403 → invalidate + rotate + re-mint + retry SAME address once → checked", async () => {
     let searches = 0;
     proxyFetch.mockImplementation(async (url: string, init: RequestInit) => {
       if (isTokenUrl(url)) return freshToken();
@@ -126,15 +115,17 @@ describe("Live Test authentication flow", () => {
     expect(out.checked).toBe(true);
     expect(out.classification).toBe("fresh_fiber");
     expect(out.stages.some(s => s.stage === "Auth retry")).toBe(true);
+    // Search 403 rotated a fresh Decodo session.
+    expect(rotateProxySession).toHaveBeenCalled();
   });
 
   it("Search 403 persists after re-mint → PENDING_AUTH, never no_service", async () => {
-    directFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(403, {}));
     proxyFetch.mockImplementation(async (url: string) => isTokenUrl(url) ? freshToken() : json(403, {}));
     const out = await scanner.liveTestAddress(...ADDR);
     expect(out.checked).toBe(false);
     expect(out.pendingAuth).toBe(true);
     expect(out.classification).toBe("pending_auth");
+    expect(out.classification).not.toBe("no_service");
     // Exactly two search attempts (original + one post-remint retry).
     expect(proxyFetch.mock.calls.filter(([u]) => isSearchUrl(String(u))).length).toBe(2);
   });

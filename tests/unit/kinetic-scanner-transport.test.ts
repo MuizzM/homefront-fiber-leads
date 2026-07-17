@@ -1,13 +1,16 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { KINETIC_345_JAMES_ALLGOOD as FIX } from "../fixtures/kinetic345JamesAllgood";
 
-const { proxyFetch } = vi.hoisted(() => ({ proxyFetch: vi.fn() }));
+const { proxyFetch, rotateProxySession } = vi.hoisted(() => ({ proxyFetch: vi.fn(), rotateProxySession: vi.fn(async () => {}) }));
 vi.mock("../../server/proxy-fetch", () => ({
+  // Decodo-exclusive: mint AND search both funnel through proxyFetch (the Decodo
+  // transport), observable through one call log. rotateProxySession is the
+  // fresh-session hook the scanner calls on an auth denial.
   proxyFetch,
-  // The anonymous token mint now egresses DIRECT (not through the proxy). Route it
-  // to the same mock so mint + search stay observable through one call log.
-  directFetch: proxyFetch,
-  getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100 }),
+  rotateProxySession,
+  getProxySessionId: () => "decodo-s1",
+  isProxyConnected: () => true,
+  getProxyStatus: () => ({ enabled: true, url: "http://redacted@proxy", slots: 100, sessionId: "decodo-s1" }),
 }));
 vi.mock("../../server/distributedProviderCoordinator", () => {
   class DistributedProviderCoordinator<T> {
