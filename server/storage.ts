@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
+import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
   users, sessions, otpCodes, territories, repApplications,
@@ -2726,7 +2727,7 @@ export class Storage implements IStorage {
   // Record a primary-provider scan result. Returns the previous classification so
   // callers can detect a change; publication still requires independent evidence.
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; accessId?: string | null; serviceKey?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean } {
-    const prev = rawDb.prepare("SELECT last_is_new_fiber FROM scan_targets WHERE id = ?").get(id) as any;
+    const prev = rawDb.prepare("SELECT last_is_new_fiber, last_fiber_status, last_billing_status FROM scan_targets WHERE id = ?").get(id) as any;
     rawDb.prepare(
       `UPDATE scan_targets SET last_fiber_status=@fs, last_is_new_fiber=@nf, last_billing_status=@bs,
          access_id=COALESCE(@accessId,access_id), service_key=COALESCE(@serviceKey,service_key),
@@ -2757,6 +2758,21 @@ export class Storage implements IStorage {
       customerConfidence: r.customerConfidence ?? null,
       customerSignals: r.customerSignals ? JSON.stringify(r.customerSignals) : null,
     });
+    // Permanent transition feed: any classification CHANGE (dark→live, copper→
+    // fiber, →coming soon, regressions) is recorded once. Cheap no-op when the
+    // verdict is unchanged.
+    try {
+      recordTransition(id, {
+        fiberStatus: prev?.last_fiber_status ?? null,
+        isNewFiber: !!(prev && prev.last_is_new_fiber),
+        billingStatus: prev?.last_billing_status ?? null,
+      }, {
+        fiberStatus: r.fiberStatus ?? prev?.last_fiber_status ?? null,
+        isNewFiber: r.isNewFiber ?? !!(prev && prev.last_is_new_fiber),
+        billingStatus: r.billingStatus ?? prev?.last_billing_status ?? null,
+        fiberAvailable: r.fiberAvailable ?? null,
+      });
+    } catch { /* the feed must never break result recording */ }
     return { prevIsNewFiber: !!(prev && prev.last_is_new_fiber) };
   }
   // Count ONE inconclusive probe against a pooled address (by id, or by its globally

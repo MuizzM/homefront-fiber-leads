@@ -148,7 +148,33 @@ function FreshNow() {
 // ── Newly Lit — COMING_SOON / dark addresses that transitioned to live fiber ──
 // A 7-day window (vs Fresh Now's 24h) so a rep sees every recent lighting they
 // can still be first to knock. Cross-verified, assign-ready transitions lead.
+interface FiberChanges {
+  count: number; wentLive: number; copperUpgrades: number; comingSoon: number;
+  rows: Array<{
+    id: number; scanTargetId: number; kind: "went_live" | "copper_upgrade" | "coming_soon" | "lost_fiber";
+    address: string; city: string; state: string; leadId: number | null; at: string;
+  }>;
+}
+
+const KIND_STYLE: Record<string, { label: string; cls: string }> = {
+  copper_upgrade: { label: "Copper→Fiber", cls: "bg-orange-500/15 text-orange-400" },
+  went_live: { label: "Went live", cls: "bg-amber-500/15 text-amber-400" },
+  coming_soon: { label: "Coming soon", cls: "bg-cyan-500/15 text-cyan-400" },
+  lost_fiber: { label: "Lost", cls: "bg-red-500/15 text-red-400" },
+};
+
 function NewlyLit() {
+  const { data: changes } = useQuery<FiberChanges>({
+    queryKey: ["/api/fiber/changes", "7d"],
+    queryFn: () => apiRequest("GET", "/api/fiber/changes?hours=168").then((r) => r.json()),
+    refetchInterval: 15000,
+    staleTime: 10000,
+  });
+  const { data: copperPool } = useQuery<{ total: number; byState: Array<{ state: string; n: number }> }>({
+    queryKey: ["/api/fiber/copper-pool"],
+    queryFn: () => apiRequest("GET", "/api/fiber/copper-pool").then((r) => r.json()),
+    refetchInterval: 60000,
+  });
   const { data, isLoading } = useQuery<FirstSeenLive>({
     queryKey: ["/api/scan/first-seen-live", "7d"],
     queryFn: () => apiRequest("GET", "/api/scan/first-seen-live?hours=168").then((r) => r.json()),
@@ -160,6 +186,32 @@ function NewlyLit() {
     || +new Date(b.firstSeenLiveAt) - +new Date(a.firstSeenLiveAt));
   return (
     <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-2">
+        {[["Copper upgrades (7d)", changes?.copperUpgrades ?? 0, "text-orange-400"], ["Copper pool", copperPool?.total ?? 0, "text-orange-300"], ["Transitions (7d)", changes?.count ?? 0, "text-foreground"]].map(([l, v, t]) => (
+          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
+            <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
+          </div>
+        ))}
+      </div>
+      {(changes?.rows?.length ?? 0) > 0 && (
+        <div className="overflow-hidden rounded-2xl border border-border bg-card">
+          <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest transitions — copper→fiber upgrades lead the list</div>
+          <div className="divide-y divide-border">
+            {changes!.rows.slice(0, 30).map((c) => (
+              <div key={c.id} className="flex min-w-0 items-center gap-3 px-4 py-2.5 hover:bg-secondary/40" data-testid={`change-row-${c.id}`}>
+                <span className={`h-2 w-2 shrink-0 rounded-full ${c.kind === "copper_upgrade" ? "bg-orange-400" : c.kind === "went_live" ? "bg-amber-400" : "bg-cyan-400"}`} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-[14px] font-medium text-foreground">{c.address}, {c.city}, {c.state}</div>
+                  <div className="text-[11px] text-muted-foreground">{fmtTime(c.at)}</div>
+                </div>
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${KIND_STYLE[c.kind]?.cls ?? ""}`}>{KIND_STYLE[c.kind]?.label ?? c.kind}</span>
+                {c.leadId != null && <Link href={`/lead/${c.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-3 gap-2">
         {[["Lit (7d)", data?.count ?? 0, "text-amber-400"], ["Verified", data?.confirmed ?? 0, "text-emerald-400"], ["Assignable", data?.readyToAssign ?? 0, "text-sky-400"]].map(([l, v, t]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">

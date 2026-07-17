@@ -152,6 +152,7 @@ import { getInspectorSnapshot, getAddressTimeline, onScanEvent } from "./scanEve
 import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
+import { getFiberChanges, getCopperPool } from "./fiberTransitions";
 import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
 import {
@@ -2870,6 +2871,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // FLIPPED from unavailable to live within the window (default 24h), newest
   // first, each tagged with whether it's already been turned into a lead.
   // This is the core "New Fiber Today / First Seen Live" manager surface.
+  // GET /api/fiber/changes — the permanent transition feed: every dark→live flip,
+  // copper→fiber upgrade, coming-soon sighting and regression, newest first.
+  app.get("/api/fiber/changes", requireManager, (req: any, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? getDefaultTenantId();
+      const hours = Math.min(24 * 90, Math.max(1, Number(req.query.hours) || 168));
+      const limit = Math.min(2_000, Math.max(1, Number(req.query.limit) || 300));
+      res.json(getFiberChanges(tenantId, hours, limit));
+    } catch (error: any) { res.status(500).json({ error: String(error?.message ?? error) }); }
+  });
+
+  // GET /api/fiber/copper-pool — the copper-upgrade candidate pool: addresses whose
+  // last answer was copper/legacy, rechecked daily by the copper-upgrade sweep.
+  app.get("/api/fiber/copper-pool", requireManager, (req: any, res) => {
+    try {
+      const tenantId = req.user?.tenantId ?? getDefaultTenantId();
+      res.json(getCopperPool(tenantId));
+    } catch (error: any) { res.status(500).json({ error: String(error?.message ?? error) }); }
+  });
+
   // GET /api/coming-soon/program — the Coming Soon PROGRAM surface (opportunity-
   // weighted worker + counters). The canonical watchlist board lives at
   // /api/coming-soon/watchlist (comingSoonWatchlist.ts).
