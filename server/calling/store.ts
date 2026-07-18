@@ -357,7 +357,7 @@ export function syncFreshFiberQueue(tenantId: number): number {
       min(100,coalesce(l.lead_score,0)+CASE WHEN l.fresh_confidence='cross_verified' THEN 20 ELSE 0 END),
       datetime('now'),datetime('now')
     FROM leads l
-    WHERE l.tenant_id=? AND l.fresh_confidence='cross_verified'
+    WHERE l.tenant_id=? AND l.fresh_confidence IN ${process.env.CALLING_SIMPLE_MODE !== "off" ? "('cross_verified','provisional')" : "('cross_verified')"}
       AND l.source_scan_target_id IS NOT NULL AND l.fresh_confirmed_at IS NOT NULL
       AND lower(coalesce(l.lead_status,'prospect')) NOT IN ('sold','not_interested')`).run(tenantId);
   return result.changes;

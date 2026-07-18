@@ -171,6 +171,37 @@ export function evaluateCallingCompliance(input: ComplianceInput): ComplianceEva
     rules.push({ rule, passed, reasonCode, evidenceRef });
     return passed;
   };
+  const finishEarly = (decision: CallingDecision, eligible = false): ComplianceEvaluation => {
+    const evaluated = new Date(input.evaluatedAt);
+    const ttlMs = eligible ? 2 * 60_000 : 15 * 60_000;
+    const clock = input.timeZone ? localClock(input.evaluatedAt, input.timeZone) : null;
+    return {
+      decision, eligible,
+      reasonCodes: rules.filter((rule) => !rule.passed).map((rule) => rule.reasonCode),
+      rules, evaluatedAt: input.evaluatedAt,
+      expiresAt: new Date((Number.isFinite(evaluated.getTime()) ? evaluated.getTime() : 0) + ttlMs).toISOString(),
+      localTime: clock?.label ?? null, timeZone: input.timeZone, ruleVersion: input.ruleVersion,
+    };
+  };
+  // ── SIMPLE MODE (default) ── DNC-only gating: module on, lead open, phone
+  // present, NOT on any DNC list, consent not revoked. Full 30-gate stack via
+  // CALLING_SIMPLE_MODE=off.
+  if (process.env.CALLING_SIMPLE_MODE !== "off") {
+    add("feature_enabled", input.featureEnabled && !input.emergencyDisabled, input.emergencyDisabled ? "EMERGENCY_DISABLED" : "CALLING_DISABLED");
+    add("lead_current_status", input.leadStillQualified, "LEAD_NO_LONGER_FRESH_OR_OPEN");
+    add("phone_present", Boolean(input.phoneValid), "PHONE_INVALID");
+    const internalDncOk = add("internal_dnc", !input.internalDnc && !input.tenantDnc, input.internalDnc ? "COMPANY_DNC_HIT" : "TENANT_DNC_HIT");
+    const nationalOk = add("national_dnc", !input.nationalDnc, "NATIONAL_DNC_HIT", input.dncDatasetRef);
+    const stateOk = add("state_dnc", !input.stateDnc, "STATE_DNC_HIT", input.dncDatasetRef);
+    const consentOk = add("consent_revocation", !input.consentRevoked, "CONSENT_REVOKED");
+    if (!internalDncOk) return finishEarly("BLOCKED_INTERNAL_DNC");
+    if (!consentOk) return finishEarly("BLOCKED_CONSENT_REVOKED");
+    if (!nationalOk) return finishEarly("BLOCKED_NATIONAL_DNC");
+    if (!stateOk) return finishEarly("BLOCKED_STATE_DNC");
+    const gate = rules.find((rule) => !rule.passed);
+    if (gate) return finishEarly("BLOCKED_TENANT_POLICY");
+    return finishEarly("ELIGIBLE_MANUAL_CALL", true);
+  }
   const finish = (decision: CallingDecision, eligible = false): ComplianceEvaluation => {
     const evaluated = new Date(input.evaluatedAt);
     const ttlMs = eligible ? 2 * 60_000 : 15 * 60_000;

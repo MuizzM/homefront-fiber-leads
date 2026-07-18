@@ -96,7 +96,28 @@ const SC_LEGACY_SERVICE: Record<string, string> = {
  * The NC directory's duplicate "Mt Pleasant" is folded into Mount Pleasant and
  * its geographically invalid "Landrum, NC" entry is represented once as SC.
  */
+// Georgia: Dalton is an active fresh-fiber build zone (field-confirmed). The
+// surrounding north-GA Kinetic ILEC territory is seeded as legacy/transition
+// candidates — the weekly directory watch promotes/corrects entries.
+const GA_FIBER: Record<string, string> = {
+  Dalton: "Whitfield",
+};
+
+const GA_LEGACY_SERVICE: Record<string, string> = {
+  Chatsworth: "Murray", "Eton": "Murray", Calhoun: "Gordon", Resaca: "Gordon",
+  Adairsville: "Bartow", "Rydal": "Bartow", Ellijay: "Gilmer", "East Ellijay": "Gilmer",
+  "Blue Ridge": "Fannin", McCaysville: "Fannin", Jasper: "Pickens", "Talking Rock": "Pickens",
+  Dawsonville: "Dawson", Cleveland: "White", Cornelia: "Habersham", Toccoa: "Stephens",
+  LaFayette: "Walker", Chickamauga: "Walker", "Fort Oglethorpe": "Catoosa", Ringgold: "Catoosa",
+  Summerville: "Chattooga", Trion: "Chattooga", Cedartown: "Polk", Rockmart: "Polk",
+  Dallas: "Paulding", Hiram: "Paulding", Trenton: "Dade", "Rising Fawn": "Dade",
+};
+
+const EXPANDING_GA = new Set(["dalton"]);
+
 export const KINETIC_MARKET_CATALOG: KineticMarketCatalogEntry[] = [
+  ...Object.entries(GA_FIBER).map(([city, county]) => makeEntry(city, "GA", county)),
+  ...Object.entries(GA_LEGACY_SERVICE).map(([city, county]) => makeLegacyEntry(city, "GA", county)),
   ...Object.entries(NC_FIBER).map(([city, county]) => makeEntry(city, "NC", county)),
   ...Object.entries(SC_FIBER).map(([city, county]) => makeEntry(city, "SC", county)),
   ...Object.entries(NC_LEGACY_SERVICE)
@@ -110,7 +131,8 @@ export const KINETIC_MARKET_CATALOG: KineticMarketCatalogEntry[] = [
 ];
 
 function makeEntry(city: string, state: "NC" | "SC" | "GA", county: string): KineticMarketCatalogEntry {
-  const expanding = state === "NC" && EXPANDING_NC.has(normalizePlace(city));
+  const expanding = (state === "NC" && EXPANDING_NC.has(normalizePlace(city)))
+    || (state === "GA" && EXPANDING_GA.has(normalizePlace(city)));
   return {
     city, state, county,
     status: expanding ? "verified_expanding" : "verified_served",

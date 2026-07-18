@@ -230,6 +230,11 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   if (result.published > 0) {
     const bust = (globalThis as any).__bustMapCache;
     if (typeof bust === "function") bust(tenantId);
+    // Auto-enroll every fresh drop into the calling queue the moment it publishes.
+    try {
+      const { syncFreshFiberQueue } = require("./calling/store") as typeof import("./calling/store");
+      syncFreshFiberQueue(tenantId);
+    } catch { /* calling module optional — never block lead publication */ }
     structuredLog("fresh_fiber.projected", {
       tenantId, confirmed: result.confirmed, created: result.created, linkedExisting: result.linkedExisting, published: result.published,
       targets: result.leadIds.length,

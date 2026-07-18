@@ -153,8 +153,11 @@ function buildEvaluation(
       && script?.sellerName === profile.sellerName,
     providerUseApproved,
     providerContractRef: [candidate.providerContractRef, candidate.validationProviderContractRef].filter(Boolean).join("|") || null,
-    phoneValid: Boolean(candidate.phoneId) && candidate.phoneValidationStatus !== "INVALID" && !rulePolicy.blockedLineType
-      && !["unknown", "toll_free", "other"].includes(candidate.lineType?.toLowerCase() ?? "unknown"),
+    // Simple mode: a phone number existing is enough.
+    phoneValid: process.env.CALLING_SIMPLE_MODE !== "off"
+      ? Boolean(candidate.phoneId)
+      : Boolean(candidate.phoneId) && candidate.phoneValidationStatus !== "INVALID" && !rulePolicy.blockedLineType
+        && !["unknown", "toll_free", "other"].includes(candidate.lineType?.toLowerCase() ?? "unknown"),
     lineType: candidate.lineType,
     manualActionConfirmed,
     phoneValidationFresh,

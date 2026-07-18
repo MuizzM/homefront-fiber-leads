@@ -592,9 +592,55 @@ app.use((req, res, next) => {
     } catch (e: any) { console.warn("[priority-seed-scan] skipped:", e?.message); }
   };
   if (process.env.SEED_PRIORITY_SCAN !== "off") {
-    void runPrioritySeedBurst();
+    // Stagger: web settles + token pool warms first, then the market cycle starts.
+    setTimeout(() => { void runPrioritySeedBurst(); }, 2 * 60_000);
     const seedCycle = setInterval(() => { void runPrioritySeedBurst(); }, 4 * 60 * 60_000);
     if (typeof (seedCycle as any).unref === "function") seedCycle.unref();
+  }
+
+  // HOT MARKETS — active fresh-fiber build zones (default: Dalton GA). Own
+  // 20-minute cycle, 30-minute stale window, 5000-target batches, never-checked
+  // first, plus an hourly address-discovery job per hot city. HOT_MARKETS=off
+  // disables; "dalton:ga,calhoun:ga" extends.
+  const runHotBurst = async () => {
+    try {
+      const hotSpec = (process.env.HOT_MARKETS ?? "dalton:ga").trim();
+      if (hotSpec === "off") return;
+      const { rawDb } = await import("./db");
+      const { startTargetRun } = await import("./scanService");
+      const { getDefaultTenantId } = await import("./storage");
+      const tid = getDefaultTenantId();
+      if (tid == null) return;
+      for (const entry of hotSpec.split(",").map((s) => s.trim()).filter(Boolean)) {
+        const [city, st = "ga"] = entry.split(":").map((s) => s.trim());
+        if (!city) continue;
+        const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=? AND lower(state)=?
+          AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-30 minutes'))
+          ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT 5000`)
+          .all(city, st) as any[]).map((r) => Number(r.id));
+        if (ids.length) {
+          startTargetRun({ tenantId: tid, city, state: st.toUpperCase(), targetIds: ids, runKind: "hot_market", label: `HOT: ${city} ${st.toUpperCase()} fresh-fiber sweep` });
+          structuredLog("hot_market.burst", { city, state: st, queued: ids.length });
+        }
+        try {
+          const { createDiscoveryJob } = await import("./addressDiscovery/store");
+          const pretty = city.replace(/\b\w/g, (c) => c.toUpperCase());
+          const hourKey = new Date().toISOString().slice(0, 13);
+          const { job } = createDiscoveryJob({
+            tenantId: tid,
+            idempotencyKey: `hot:${city.toLowerCase()}:${st.toLowerCase()}:${hourKey}`,
+            requestHash: `hot-market:${city.toLowerCase()}:${st.toLowerCase()}`,
+            townName: pretty, state: st.toUpperCase(), createdBy: 1,
+          } as any);
+          if (job) structuredLog("hot_market.discovery", { city, state: st, jobId: (job as any).id });
+        } catch { /* discovery module optional */ }
+      }
+    } catch (e: any) { console.warn("[hot-market] skipped:", e?.message); }
+  };
+  if ((process.env.HOT_MARKETS ?? "dalton:ga") !== "off") {
+    setTimeout(() => { void runHotBurst(); }, 3 * 60_000);
+    const hotCycle = setInterval(() => { void runHotBurst(); }, 20 * 60_000);
+    if (typeof (hotCycle as any).unref === "function") hotCycle.unref();
   }
 
   // COMING SOON PROGRAM — the overarching always-on watch system. The built-in
@@ -631,7 +677,7 @@ app.use((req, res, next) => {
     };
     const dailyTimer = setInterval(() => { void runDaily(); }, 24 * 60 * 60_000);
     if (typeof (dailyTimer as any).unref === "function") dailyTimer.unref();
-    setTimeout(() => { void runDaily(); }, 10 * 60_000); // first run 10 min after boot
+    setTimeout(() => { void runDaily(); }, 20 * 60_000); // first run 10 min after boot
   }
   }; // end startBackgroundServices
 

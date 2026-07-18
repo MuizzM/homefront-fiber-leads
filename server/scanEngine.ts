@@ -176,7 +176,7 @@ export async function runScanWorker(
   });
   // Fixed batch size. There is NO AIMD/backoff/cooldown: the shared distributed
   // coordinator's steady concurrency + requests-per-minute cap is the only pacing.
-  const BATCH = Math.max(1, Number(process.env.SCAN_BATCH_CONCURRENCY) || 50);
+  const BATCH = Math.max(1, Number(process.env.SCAN_BATCH_CONCURRENCY) || 100);
   try {
     for (;;) {
       const run = getRun(runId, tenantId);

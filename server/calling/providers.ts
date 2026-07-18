@@ -223,7 +223,10 @@ function assertPaidOperationAllowed(tenantId: number, leadId: number): void {
     FROM leads l JOIN calling_queue_entries q ON q.tenant_id=l.tenant_id AND q.lead_id=l.id
     LEFT JOIN phone_numbers p ON p.tenant_id=q.tenant_id AND p.id=q.phone_id
     WHERE l.tenant_id=? AND l.id=?`).get(tenantId, leadId) as any;
-  if (!row || row.freshConfidence !== "cross_verified" || !row.sourceScanTargetId || !row.freshConfirmedAt) {
+  const freshOk = process.env.CALLING_SIMPLE_MODE !== "off"
+    ? ["cross_verified", "provisional"].includes(row?.freshConfidence ?? "")
+    : row?.freshConfidence === "cross_verified";
+  if (!row || !freshOk || !row.sourceScanTargetId || !row.freshConfirmedAt) {
     throw new Error("Paid provider access requires a cross-verified fresh-fiber lead");
   }
   if (row.closedAt || ["sold", "not_interested"].includes(row.leadStatus)

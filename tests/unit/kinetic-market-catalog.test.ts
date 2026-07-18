@@ -12,9 +12,10 @@ describe("Kinetic NC/SC market catalog", () => {
     expect(keys).toContain("SC|lexington");
     expect(keys).toContain("SC|landrum");
     expect(keys).not.toContain("NC|landrum");
-    expect(keys).toHaveLength(132);
-    expect(KINETIC_MARKET_CATALOG.filter((m) => m.status === "verified_expanding").length).toBe(13);
-    expect(KINETIC_MARKET_CATALOG.filter((m) => m.status === "verified_legacy_service")).toHaveLength(69);
+    expect(keys).toContain("GA|dalton");
+    expect(keys).toHaveLength(161);
+    expect(KINETIC_MARKET_CATALOG.filter((m) => m.status === "verified_expanding").length).toBe(14);
+    expect(KINETIC_MARKET_CATALOG.filter((m) => m.status === "verified_legacy_service")).toHaveLength(97);
     expect(KINETIC_MARKET_CATALOG.find((m) => m.city === "Statesville" && m.state === "NC")).toMatchObject({
       status: "verified_legacy_service", serviceTier: "other_high_speed", cadenceHours: 336,
     });

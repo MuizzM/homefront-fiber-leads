@@ -1,3 +1,6 @@
+// Tests exercise the FULL calling-compliance stack; production defaults to simple mode.
+process.env.CALLING_SIMPLE_MODE = "off";
+
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterEach } from "vitest";
