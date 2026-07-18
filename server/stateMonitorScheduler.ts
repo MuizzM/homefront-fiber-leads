@@ -88,13 +88,17 @@ export async function runStateMonitorTick(options: { allowSpend?: boolean } = {}
     }
     const billingBlock = scanBlockReason(tenantId);
     if (billingBlock) throw new Error(`STATE_MONITOR_BILLING_BLOCKED: ${billingBlock.message}`);
-    const active = scanService.getRuns(tenantId).find((r: any) => r.status === "running" || r.active);
+    // Wait only on the monitor's OWN in-flight run. Waiting on ANY running run made
+    // this permanently idle — the continuous statewide sweep means some run is ALWAYS
+    // running, so cadence market scans never fired. The weighted-fair admission
+    // coordinator already arbitrates capacity between the monitor and other runs.
+    const active = scanService.getRuns(tenantId).find((r: any) => (r.status === "running" || r.active) && String(r.kind ?? "").startsWith("state-monitor"));
     if (active) {
       status.currentRunId = active.id;
-      status.lastResult = `waiting for active scan ${active.id}`;
+      status.lastResult = `waiting for active state-monitor scan ${active.id}`;
       return { seeded, alertsQueued: alerts, alertsDelivered: delivered, inventoryHarvested, scanStarted: null, activeRunId: active.id };
     }
-    const dailyLimit = positiveInt("STATE_MONITOR_DAILY_CHECK_BUDGET", 100_000, 1_000_000); // unlimited-budget default (was 2,000/day)
+    const dailyLimit = positiveInt("STATE_MONITOR_DAILY_CHECK_BUDGET", 1_000_000, 10_000_000); // effectively unlimited (~200x observed daily throughput)
     const marketLimit = positiveInt("STATE_MONITOR_MARKET_BUDGET", 10_000, 100_000); // unlimited-budget default (was 250/market)
     const spent = (rawDb.prepare(`SELECT COALESCE(SUM(budget),0) AS n FROM scan_runs WHERE kind='state-monitor' AND started_at >= date('now')`).get() as any).n as number;
     const remaining = Math.max(0, dailyLimit - spent);
@@ -200,8 +204,12 @@ function enqueueFreshAlerts(tenantId: number): number {
   // Only the primary money segment triggers an operational knock alert. Fresh
   // infrastructure with an existing/unknown customer signal remains visible in
   // the dashboard, but is not sent to reps as a non-customer opportunity.
+  // 'single_source_provisional' (one conclusive authoritative Kinetic answer) is the
+  // SAME bar that publishes an assignable Fresh Lead pin — alerts must fire on it
+  // too. Requiring only 'cross_verified' left this channel dead: no automated
+  // corroboration source exists, so rep knock alerts never sent.
   const clusters = clusterFreshFiber(freshPoints(tenantId, 7).filter((point) =>
-    point.customerSegment === "new_opportunity" && point.confidence === "cross_verified",
+    point.customerSegment === "new_opportunity" && (point.confidence === "cross_verified" || point.confidence === "single_source_provisional"),
   ));
   const insert = rawDb.prepare(`INSERT OR IGNORE INTO notification_outbox (tenant_id,dedupe_key,kind,payload,status) VALUES (?,?, 'fresh_fiber',?,'pending')`);
   let queued = 0;

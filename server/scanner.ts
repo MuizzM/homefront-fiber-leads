@@ -432,7 +432,12 @@ export function normalizeKineticAddressKey(address: string, city: string, state:
 }
 
 function logQueueEvent(event: QueueEvent): void {
-  if (event.type === "queued" && process.env.SCAN_VERBOSE_LOGS !== "true") return;
+  // Per-check started/completed lines are the app's largest log stream (~50% of all
+  // container output at full scan rate — thousands of JSON serializations/minute,
+  // rotating real diagnostics out of the 10MB log window within minutes). The Scan
+  // Inspector (scan_events + SSE) is the observability path for per-address flow;
+  // keep only failures/pauses in logs unless SCAN_VERBOSE_LOGS=true.
+  if ((event.type === "queued" || event.type === "started" || event.type === "completed" || event.type === "cache_hit" || event.type === "deduped") && process.env.SCAN_VERBOSE_LOGS !== "true") return;
   // Address-level work is observable without writing a resident's street address
   // to application logs. The stable hash is enough to correlate retries/dedupes.
   const addressKey = crypto.createHash("sha256").update(event.key).digest("hex").slice(0, 16);
@@ -1078,6 +1083,11 @@ async function scanAddressDirect(
     // it with a fresh token. A stale/errored lease token is invalidated so the
     // pool re-mints on the next attempt.
     if (tokenLease?.token) authorizedTokenPool.invalidate(tokenLease.token);
+    // A timeout/socket error usually means THIS Decodo egress is black-holing —
+    // rotating (single-flight coalesced) moves the retry to a fresh residential IP
+    // instead of feeding the same dead egress for minutes. Observed live: a stalled
+    // egress collapsed throughput 728→15 searches/5m until rotation.
+    void rotateProxySession(`search transient: ${String(err?.message ?? err).slice(0, 40)}`);
     base.apiSource = "failed";
     base.fiberStatus = "unknown";
     base.confidence = "LOW";

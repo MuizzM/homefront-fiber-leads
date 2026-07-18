@@ -280,7 +280,9 @@ export interface RankedLead {
 /** Rank the tenant's assignable confirmed-fresh leads. Read-only, one pool pass. */
 export function rankLeads(tenantId: number | undefined, limit: number, nowMs: number = Date.now()): RankedLead[] {
   ensureIndexes();
-  const clauses = ["fresh_confirmed_at IS NOT NULL", "lead_status NOT IN ('sold','not_interested')"];
+  // 'now_active' = the address already signed with Kinetic (billing active) — never
+  // point a rep at a door that already converted.
+  const clauses = ["fresh_confirmed_at IS NOT NULL", "lead_status NOT IN ('sold','not_interested','now_active')"];
   const params: unknown[] = [];
   if (tenantId != null) { clauses.push("tenant_id = ?"); params.push(tenantId); } // getLeadsForMap scoping idiom
   const pool = rawDb.prepare(`

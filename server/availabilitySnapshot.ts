@@ -162,7 +162,9 @@ export function lifecycleSignalOf(s: {
     // COMING_SOON = an explicit pre-launch segment, OR the existing scanner
     // rule (scanner.ts Live-Test classification + kinetic_addresses
     // is_coming_soon): NEW FIBER with an ACTIVE billing account.
-    comingSoon: COMING_SOON_SEGMENT_RE.test(seg) || (newFiber && billing === "Y"),
+    // Billing 'A' is ALSO an active account (live-verified Kinetic contract), same
+    // pre-launch/coming-soon shape as 'Y'.
+    comingSoon: COMING_SOON_SEGMENT_RE.test(seg) || (newFiber && (billing === "Y" || billing === "A")),
     // THE Fresh Lead rule, unchanged: NEW FIBER + billing N + fiber qualified.
     freshQualifying: available && newFiber && billing === "N",
     transitionStatus: String(s.transitionStatus ?? ""),

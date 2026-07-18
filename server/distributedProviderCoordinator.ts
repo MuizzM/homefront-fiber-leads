@@ -384,6 +384,14 @@ export class DistributedProviderCoordinator<T> {
     const now = this.now();
     rawDb.prepare(`DELETE FROM provider_rate_events WHERE started_at<=?`).run(now - this.rateWindowMs - 1_000);
     rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',updated_at=? WHERE state='active' AND lease_expires_at<=?`).run(now, now);
+    // HARD active-age cap: the lifetime heartbeat keeps a HUNG task's lease fresh
+    // forever, so lease expiry alone can never reclaim its slot. No legitimate check
+    // exceeds a few tens of seconds (5s search cap + parse + save); anything active
+    // past the task deadline is wedged upstream — expire it so the slot frees (its
+    // eventual completion is a harmless no-op UPDATE). Observed live: 16 slots hung
+    // 435s+ on a black-holed egress collapsed throughput while 300k targets waited.
+    rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error='task deadline exceeded',updated_at=? WHERE state='active' AND started_at<=?`)
+      .run(now, now - Math.max(60_000, Number(process.env.PROVIDER_TASK_MAX_MS ?? 180_000)));
     rawDb.prepare(`DELETE FROM provider_address_locks WHERE expires_at<=?`).run(now);
     rawDb.prepare(`DELETE FROM provider_shared_result_cache WHERE expires_at<=?`).run(now);
     rawDb.prepare(`DELETE FROM provider_admission_queue WHERE state IN ('completed','failed','expired') AND updated_at<=?`).run(now - 60 * 60_000);

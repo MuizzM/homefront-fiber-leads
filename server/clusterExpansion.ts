@@ -121,9 +121,13 @@ export function onFreshLead(tenantId: number, seed: LeadSeed): { expansionId: st
   // keep expanding OUTWARD from the parent's frontier). Do NOT spawn a competing,
   // overlapping expansion — that is the "no duplicate active expansion jobs" rule.
   // A genuinely-new green lead beyond every active cluster's reach seeds its own.
+  // PAUSED clusters included: a cap-paused cluster's ring keeps draining, and its
+  // greens must still attach (recording became_lead + resetting the empty streak) —
+  // the productivity-ordered resume then favors reactivating that hot cluster.
+  // Excluding paused here silently dropped those greens from every cluster chain.
   const member = rawDb.prepare(`SELECT em.expansion_id FROM expansion_members em
     JOIN lead_expansions e ON e.id=em.expansion_id
-    WHERE em.address_key=? AND e.status='active' LIMIT 1`).get(key) as any;
+    WHERE em.address_key=? AND e.status IN ('active','paused') LIMIT 1`).get(key) as any;
   if (member) {
     rawDb.prepare(`UPDATE expansion_members SET became_lead=1, lead_id=? WHERE expansion_id=? AND address_key=?`).run(seed.leadId, member.expansion_id, key);
     rawDb.prepare(`UPDATE lead_expansions SET empty_streak=0, fresh_found=fresh_found+1, updated_at=? WHERE id=?`).run(now, member.expansion_id);
@@ -329,11 +333,48 @@ function resumePausedIfCapacity(): void {
   structuredLog("expansion.resumed", { resumed: paused.length }, "info");
 }
 
+// DEFERRED GREENS: onFreshLead returns at_active_cap/backpressure without recording
+// anything, which used to DROP that green lead's expansion forever — the moat's
+// worst failure mode (a confirmed newly-lit door with no fan-out). Self-heal every
+// tick: when capacity exists, find recent green leads (last 72h) that have no origin
+// cluster and are not covered by any live cluster, and seed them now. Bounded per
+// tick; onFreshLead's own dedup makes re-tries idempotent.
+function retryDeferredGreens(): void {
+  try {
+    if (activeCount() >= CFG.maxActive()) return;
+    const bp = CFG.backpressurePending();
+    if (bp > 0 && expansionPendingBacklog() >= bp) return;
+    const room = CFG.maxActive() - activeCount();
+    const candidates = rawDb.prepare(`SELECT s.id targetId, s.converted_to_lead_id leadId,
+        s.address, s.city, s.state, s.zip, s.lat, s.lng,
+        (SELECT l.tenant_id FROM leads l WHERE l.id = s.converted_to_lead_id) tenantId
+      FROM scan_targets s
+      WHERE s.last_fiber_status='new_fiber' AND s.last_billing_status='N'
+        AND s.converted_to_lead_id IS NOT NULL AND s.lat IS NOT NULL
+        AND s.last_scanned_at > datetime('now','-72 hours')
+        AND NOT EXISTS (SELECT 1 FROM lead_expansions e WHERE e.origin_target_id=s.id)
+      ORDER BY s.last_scanned_at DESC LIMIT ?`).all(Math.min(room, 6)) as any[];
+    for (const c of candidates) {
+      const r = onFreshLead(Number(c.tenantId ?? 1), {
+        targetId: c.targetId, leadId: c.leadId, address: c.address, city: c.city,
+        state: c.state, zip: c.zip ?? "", lat: c.lat, lng: c.lng,
+      });
+      if (r.action === "started") structuredLog("expansion.deferred_green_seeded", { origin: c.address, expansionId: r.expansionId }, "info");
+      if (r.action === "at_active_cap" || r.action === "backpressure") break; // capacity gone — next tick
+    }
+  } catch (e: any) {
+    // Best-effort self-heal — a schema variation (hermetic tests) or transient DB
+    // error must never break ring advancement in the same tick.
+    structuredLog("expansion.deferred_retry_failed", { error: String(e?.message ?? e).slice(0, 120) }, "warn");
+  }
+}
+
 export async function expansionTick(): Promise<void> {
   if (!CFG.enabled()) return;
   ensureSchema();
   enforceActiveCap();       // pause excess clusters (advancement only) so the pipeline breathes
   resumePausedIfCapacity(); // then backfill freed slots from the paused backlog
+  retryDeferredGreens();    // re-seed greens that were deferred at cap/backpressure
   const active = rawDb.prepare(`SELECT * FROM lead_expansions WHERE status='active' ORDER BY updated_at ASC LIMIT 20`).all() as any[];
   for (const exp of active) {
     if (_expanding.has(exp.id)) continue; // its ring is still being discovered/enqueued
