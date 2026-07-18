@@ -43,6 +43,19 @@ if [ "$RETENTION_DAYS" -gt 0 ] 2>/dev/null; then
   done < <(backups_newest_first)
 fi
 
+# Count cap — deploys back up several times a day at ~GB scale, so an age
+# window alone still accumulates days × deploys × size (observed: 28 backups,
+# 21GB, 87% disk). Keep the newest KEEP_MAX regardless of age.
+KEEP_MAX="${BACKUP_KEEP_MAX:-6}"
+if [ "$KEEP_MAX" -gt 0 ] 2>/dev/null; then
+  idx=0
+  while IFS= read -r f; do
+    idx=$((idx + 1))
+    [ "$idx" -le "$KEEP_MAX" ] && continue
+    rm -f "$f" && echo "[backup] pruned (count>$KEEP_MAX): $f"
+  done < <(backups_newest_first)
+fi
+
 # Space guard — need ~3x DB size free (raw snapshot + encrypted copy + slack).
 DB_KB=$(du -k "$DB_PATH" | cut -f1)
 NEED_KB=$((DB_KB * 3 + 65536))
