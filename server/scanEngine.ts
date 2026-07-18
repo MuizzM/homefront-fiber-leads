@@ -154,6 +154,11 @@ const DEDUP_RECHECK_SEC = Math.max(0, Math.floor(Number(process.env.SCAN_DEDUP_R
 // Kinetic's fabric — a DATA verdict, never no-service. Parked from bulk claims
 // for ANF_QUIET_DAYS, then re-probed (new fabric imports do add streets).
 const ANF_TERMINAL_ATTEMPTS = Math.max(2, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_ATTEMPTS ?? 6) || 6));
+// 403-storm back-off: when at least this FRACTION of a batch came back blocked
+// (throttle/403), sleep up to PROVIDER_BLOCK_BACKOFF_MS (scaled by severity) so
+// workers stop hammering Decodo's depleted rolling window and it can refill.
+const PROVIDER_BLOCK_BACKOFF_FRACTION = Math.min(1, Math.max(0, Number(process.env.PROVIDER_BLOCK_BACKOFF_FRACTION ?? 0.5) || 0.5));
+const PROVIDER_BLOCK_BACKOFF_MS = Math.max(0, Number(process.env.PROVIDER_BLOCK_BACKOFF_MS ?? 15_000) || 15_000);
 function dedupSkipSecondsForRun(kind: string): number {
   const v = String(kind ?? "").toLowerCase();
   if (v.includes("manual") || v === "target_ids" || v.includes("lasso") || v.includes("bbox") || v.includes("area") || v.includes("field")) return 0;
@@ -250,6 +255,7 @@ export async function runScanWorker(
         metadata: { completed: run.verified + run.failed, budget: run.budget },
       });
 
+      let blockedInBatch = 0; // 403/throttle count — drives the storm back-off below
       await Promise.all(
         batch.map(async (t) => {
           // Re-check status mid-batch so a cancel takes effect promptly. A claimed
@@ -276,6 +282,7 @@ export async function runScanWorker(
               // returns that as a real kinetic_live answer. No retry-count limit:
               // it recurs until a valid response or an explicit cancel.
               const category = result.blocked ? "provider_blocked" : "inconclusive";
+              if (result.blocked) blockedInBatch++; // 403/throttle — feeds storm back-off
               const attempt = targetAttempt(runId, t.targetId);
               // A throttle/transport block AND a generic transient check failure retry
               // promptly (they clear on the next attempt). ONLY a brand-new-address
@@ -366,6 +373,22 @@ export async function runScanWorker(
           }
         }),
       );
+
+      // 403-STORM BACK-OFF. Decodo's rolling-window throttle returns 403 for
+      // (nearly) every request once the window is depleted. Without this, workers
+      // keep hammering + rotating sessions at full tilt — pegging the CPU, starving
+      // /api/health, and producing ~zero leads (all blocked) while KEEPING the
+      // window depleted so it never refills. When most of a batch was blocked,
+      // sleep proportionally so the worker yields the CPU and the window refills;
+      // a clean batch resets to full speed. In-memory + per-batch only — never a
+      // persisted halt (a DB-persisted 403 halt once survived restarts and stranded
+      // scanning at "0 checked"). PROVIDER_BLOCK_* tune it.
+      if (batch.length > 0 && blockedInBatch / batch.length >= PROVIDER_BLOCK_BACKOFF_FRACTION) {
+        const severity = blockedInBatch / batch.length; // 0..1
+        const backoffMs = Math.round(PROVIDER_BLOCK_BACKOFF_MS * severity);
+        structuredLog("scan.provider.storm_backoff", { runId, blocked: blockedInBatch, batch: batch.length, backoffMs }, "warn");
+        await new Promise((r) => setTimeout(r, backoffMs));
+      }
 
       const current = getRun(runId, tenantId);
       if (current)
