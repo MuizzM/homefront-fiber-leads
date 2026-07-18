@@ -465,20 +465,35 @@ app.use((req, res, next) => {
   // Field Map scans outrank sweep traffic in the priority queue.
   // Kill-switch: STATEWIDE_SCAN_ON_DEPLOY=off.
   if (process.env.NODE_ENV === "production" && process.env.STATEWIDE_SCAN_ON_DEPLOY !== "off") {
-    try {
-      const { startStateSweep } = await import("./sweepService");
-      const { getDefaultTenantId } = await import("./storage");
-      const tenantId = getDefaultTenantId();
-      if (tenantId == null) throw new Error("no default tenant yet");
-      for (const state of ["NC", "SC"] as const) {
-        const sweep = startStateSweep({ tenantId, state });
-        structuredLog("state_sweep.deploy_start", {
-          state, stateSweepId: sweep.id,
-          citiesTotal: sweep.citiesTotal ?? sweep.cities_total ?? null,
-          citiesCompleted: sweep.citiesCompleted ?? sweep.cities_completed ?? null,
-        });
-      }
-    } catch (e: any) { console.warn("[state-sweep] deploy auto-start skipped:", e?.message); }
+    // DEFER past the warm-up window. Starting the statewide sweep the instant the
+    // container boots pulls every due market (hundreds) and drives a city sweep +
+    // OSM harvest immediately — on a 1-CPU box that synchronous burst blocks the
+    // event loop while the deploy health-gate is still probing /api/health, so the
+    // gate times out and the deploy rolls back (observed live). A ~90s delay lets
+    // the app answer health first; the sweep is idempotent + checkpoint-resumed,
+    // so nothing is lost by starting it a minute later. Default 150s is past the
+    // healthcheck start_period (120s), so the deploy health-gate confirms the
+    // container healthy BEFORE the sweep's first heavy harvest runs — the gate
+    // can never time out on sweep work. STATE_SWEEP_BOOT_DELAY_MS overrides.
+    const stateSweepDelay = Math.max(0, Number(process.env.STATE_SWEEP_BOOT_DELAY_MS ?? 150_000) || 150_000);
+    const startStateSweeps = async () => {
+      try {
+        const { startStateSweep } = await import("./sweepService");
+        const { getDefaultTenantId } = await import("./storage");
+        const tenantId = getDefaultTenantId();
+        if (tenantId == null) throw new Error("no default tenant yet");
+        for (const state of ["NC", "SC"] as const) {
+          const sweep = startStateSweep({ tenantId, state });
+          structuredLog("state_sweep.deploy_start", {
+            state, stateSweepId: sweep.id,
+            citiesTotal: sweep.citiesTotal ?? sweep.cities_total ?? null,
+            citiesCompleted: sweep.citiesCompleted ?? sweep.cities_completed ?? null,
+          });
+        }
+      } catch (e: any) { console.warn("[state-sweep] deploy auto-start skipped:", e?.message); }
+    };
+    const sst = setTimeout(() => { void startStateSweeps(); }, stateSweepDelay);
+    if (typeof (sst as any).unref === "function") (sst as any).unref();
     // New Build Radar — continuously watch free NC/SC sources for newly-appearing
     // addresses/buildings and feed valid ones straight into the scan pipeline.
     // Kill-switch: NEWBUILD_RADAR=off.

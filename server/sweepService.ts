@@ -131,7 +131,17 @@ export function getSweepKnockList(id: string, tenantId: number) {
 
 export function resumeSweepJobs() {
   const jobs = rawDb.prepare(`SELECT id FROM sweep_jobs WHERE status='running'`).all() as Array<{ id: string }>;
-  for (const job of jobs) void runSweep(job.id).catch((error) => failSweep(job.id, error));
+  // STAGGER the resumes. Driving every running city sweep at once on a cold boot
+  // pile-drives the single event-loop thread — one Triangle-city OSM harvest can
+  // be 30k+ addresses, and several concurrent harvest+upsert transactions block
+  // the loop long enough that /api/health times out and the deploy health-gate
+  // fails (observed: prod wedged on boot, deploy rolled back). One resume every
+  // SWEEP_RESUME_STAGGER_MS; unref'd so it never holds the process open.
+  const stagger = Math.max(0, Number(process.env.SWEEP_RESUME_STAGGER_MS ?? 5000) || 5000);
+  jobs.forEach((job, i) => {
+    const t = setTimeout(() => { void runSweep(job.id).catch((error) => failSweep(job.id, error)); }, i * stagger);
+    if (typeof (t as any).unref === "function") (t as any).unref();
+  });
 }
 
 // ── Statewide sweep ──────────────────────────────────────────────────────────
