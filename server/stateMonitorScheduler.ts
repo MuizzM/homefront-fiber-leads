@@ -171,11 +171,19 @@ export function startStateMonitorScheduler() {
   (globalThis as any).__flushFreshFiberAlerts = flushFreshOpportunityAlerts;
   status.enabled = process.env.ENABLE_STATE_MONITORING !== "off"; // on by default
   status.liveSpendEnabled = status.enabled && process.env.STATE_MONITOR_LIVE !== "off";
-  // Inventory seeding and dashboard synchronization are safe and free, so run
-  // them even when paid provider checks are disabled.
-  void runStateMonitorTick({ allowSpend: status.liveSpendEnabled }).catch((error) => console.error("[state-monitor] startup tick failed:", error.message));
+  // Inventory seeding and dashboard synchronization are safe and free — but with
+  // markets switched on nationwide the first tick grinds MINUTES of synchronous
+  // better-sqlite3 + OSM-parse work at 100% CPU. Running it inline here (called
+  // before httpServer.listen) froze boot past the deploy health window and forced
+  // a rollback — a ~10-minute production outage on EVERY deploy. DELAY it well past
+  // listen so the app is healthy in seconds; the tick then runs in the background.
+  const startupDelayMs = Math.max(10_000, Number(process.env.STATE_MONITOR_STARTUP_DELAY_MS ?? 180_000));
+  const startupTick = setTimeout(() => {
+    void runStateMonitorTick({ allowSpend: status.liveSpendEnabled }).catch((error) => console.error("[state-monitor] startup tick failed:", error.message));
+  }, startupDelayMs);
+  startupTick.unref();
   if (!status.enabled) {
-    status.lastResult = "inventory initialized; scheduler disabled (ENABLE_STATE_MONITORING=false)";
+    status.lastResult = "inventory init scheduled; scheduler disabled (ENABLE_STATE_MONITORING=false)";
     return;
   }
   const minutes = positiveInt("STATE_MONITOR_TICK_MINUTES", 15, 1_440); // full-speed default: 15 min (was 60)
