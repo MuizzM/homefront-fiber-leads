@@ -1,5 +1,6 @@
 import { rawDb } from "./db";
 import { startCitySweep } from "./sweepService";
+import { startTargetRun } from "./scanService";
 import { getDefaultTenantId } from "./storage";
 import { structuredLog } from "./structuredLog";
 
@@ -86,7 +87,61 @@ export function runExploreBurst(
   return decisions;
 }
 
+// PRIORITY_CITIES — "scan these right away": one DISCOVERY-class run per listed
+// city over its EXISTING stale/unchecked targets (no harvest wait; the revenue
+// admission band services it promptly). Complements EXPLORE_CITIES, which
+// harvests addresses for cities we have never enumerated. Idempotent via the
+// 'PRIORITY-CITY:' label guard (one burst per 4h window, re-fires each boot).
+
+export interface PriorityDecision extends ExploreCity {
+  action: "started" | "no_stale_targets";
+  runId?: string;
+  queued?: number;
+}
+
+export function runPriorityCityBurst(
+  env: NodeJS.ProcessEnv = process.env,
+  start: typeof startTargetRun = startTargetRun,
+  tenantId: number | null = getDefaultTenantId(),
+): PriorityDecision[] {
+  const cities = parseExploreSpec(env.PRIORITY_CITIES);
+  if (!cities.length || tenantId == null) return [];
+  const recent = rawDb.prepare(
+    `SELECT COUNT(*) c FROM scan_runs WHERE tenant_id=? AND label LIKE 'PRIORITY-CITY:%' AND heartbeat_at > datetime('now','-4 hours')`,
+  ).get(tenantId) as { c: number };
+  if (Number(recent.c) > 0) {
+    structuredLog("priority_city.skipped", { reason: "recent PRIORITY-CITY burst" });
+    return [];
+  }
+  const pickTargets = rawDb.prepare(
+    `SELECT id FROM scan_targets WHERE tenant_id=? AND lower(city)=? AND lower(state)=lower(?)
+      AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-12 hours'))
+      ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT 3000`,
+  );
+  const decisions: PriorityDecision[] = [];
+  for (const c of cities) {
+    const ids = (pickTargets.all(tenantId, c.city, c.state) as Array<{ id: number }>).map((r) => r.id);
+    if (!ids.length) {
+      decisions.push({ ...c, action: "no_stale_targets" });
+      continue;
+    }
+    const run = start({ tenantId, city: c.city, state: c.state, targetIds: ids, runKind: "discovery", label: `PRIORITY-CITY: ${c.city} ${c.state}` });
+    decisions.push({ ...c, action: "started", runId: (run as any)?.runId ?? (run as any)?.id, queued: (run as any)?.queued ?? ids.length });
+    structuredLog("priority_city.started", { city: c.city, state: c.state, queued: ids.length });
+  }
+  return decisions;
+}
+
 export function startExploreCycle(env: NodeJS.ProcessEnv = process.env): void {
+  if (parseExploreSpec(env.PRIORITY_CITIES).length) {
+    const burst = () => {
+      try { runPriorityCityBurst(env); } catch (e: any) { console.warn("[priority-cities] burst skipped:", e?.message); }
+    };
+    const first = setTimeout(burst, 2 * 60_000);
+    if (typeof (first as any).unref === "function") (first as any).unref();
+    const cycle = setInterval(burst, 4 * 60 * 60_000);
+    if (typeof (cycle as any).unref === "function") (cycle as any).unref();
+  }
   if (!parseExploreSpec(env.EXPLORE_CITIES).length) return;
   const tick = () => {
     try { runExploreBurst(env); } catch (e: any) { console.warn("[explore-cities] tick skipped:", e?.message); }

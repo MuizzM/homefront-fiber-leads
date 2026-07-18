@@ -90,3 +90,58 @@ describe("runExploreBurst", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("runPriorityCityBurst", () => {
+  const insertTarget = (city: string, lastScanned: string | null) =>
+    rawDb.prepare(
+      `INSERT INTO scan_targets (address, city, state, zip, tenant_id, last_scanned_at, source)
+       VALUES (?,?,?,?,?,?, 'test')`,
+    ).run(`${Math.random().toString(36).slice(2)} Main St`, city, "NC", "27505", TENANT, lastScanned);
+
+  const fakeRun = () => {
+    const calls: any[] = [];
+    const start = ((opts: any) => {
+      calls.push(opts);
+      const id = `run_test_${calls.length}`;
+      rawDb.prepare(
+        `INSERT INTO scan_runs (id, tenant_id, kind, label, city, state, budget, status, heartbeat_at)
+         VALUES (?,?,?,?,?,?,?, 'running', datetime('now'))`,
+      ).run(id, opts.tenantId, opts.runKind, opts.label, opts.city, opts.state, opts.targetIds.length);
+      return { runId: id, queued: opts.targetIds.length } as any;
+    }) as any;
+    return { start, calls };
+  };
+
+  beforeEach(() => {
+    rawDb.prepare(`DELETE FROM scan_runs WHERE label LIKE 'PRIORITY-CITY:%'`).run();
+    rawDb.prepare(`DELETE FROM scan_targets WHERE source='test'`).run();
+  });
+
+  it("starts a DISCOVERY run over stale/unchecked targets and skips cities with none", () => {
+    insertTarget("Broadway", null);
+    insertTarget("Broadway", "2020-01-01 00:00:00");
+    insertTarget("Sanford", new Date().toISOString().slice(0, 19).replace("T", " ")); // fresh → excluded
+    const { start, calls } = fakeRun();
+    const decisions = explore.runPriorityCityBurst({ PRIORITY_CITIES: "broadway:nc,sanford:nc,olivia:nc" } as any, start, TENANT);
+    expect(decisions).toEqual([
+      expect.objectContaining({ city: "broadway", action: "started", queued: 2 }),
+      expect.objectContaining({ city: "sanford", action: "no_stale_targets" }),
+      expect.objectContaining({ city: "olivia", action: "no_stale_targets" }),
+    ]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ city: "broadway", runKind: "discovery", label: "PRIORITY-CITY: broadway NC" });
+  });
+
+  it("is idempotent within the 4h label-guard window", () => {
+    insertTarget("Broadway", null);
+    const { start, calls } = fakeRun();
+    const env = { PRIORITY_CITIES: "broadway:nc" } as any;
+    expect(explore.runPriorityCityBurst(env, start, TENANT)[0].action).toBe("started");
+    expect(explore.runPriorityCityBurst(env, start, TENANT)).toEqual([]);
+    expect(calls).toHaveLength(1);
+    // Outside the window → re-fires.
+    rawDb.prepare(`UPDATE scan_runs SET heartbeat_at=datetime('now','-5 hours') WHERE label LIKE 'PRIORITY-CITY:%'`).run();
+    expect(explore.runPriorityCityBurst(env, start, TENANT)[0].action).toBe("started");
+    expect(calls).toHaveLength(2);
+  });
+});

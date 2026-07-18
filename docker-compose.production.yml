@@ -50,6 +50,10 @@ services:
       # Corridor first; Durham-ring probes after, to prove the rumor with our own
       # scanner verdicts rather than aggregator listings.
       EXPLORE_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,durham:nc,chapel hill:nc,hillsborough:nc,creedmoor:nc,butner:nc,roxboro:nc,oxford:nc,mebane:nc,pittsboro:nc,wake forest:nc"
+      # "Right away" corridor scan (user 2026-07-18): DISCOVERY-class runs over
+      # EXISTING stale targets, 2 min after boot — no harvest wait. Explore above
+      # still harvests the never-enumerated towns (olivia has zero targets).
+      PRIORITY_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc"
       # ── Concurrency tuned to the THROUGHPUT PLATEAU, not a rate limit ────────
       # At the raised default (100 concurrent checks) Node's single thread saturated
       # on synchronous SQLite work: per-check latency inflated ~10x (to ~30s),
