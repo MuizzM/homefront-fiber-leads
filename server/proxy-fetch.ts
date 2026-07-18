@@ -22,7 +22,7 @@ let _rotateInFlight: Promise<void> | null = null;
 // Unlimited Decodo budget → rotate aggressively so no residential egress IP ever
 // accumulates enough traffic to trip the per-IP rolling-window throttle. There is
 // no usage cap: fresh IPs are free, throttled IPs are not.
-const PROACTIVE_ROTATE_EVERY = boundedInt(process.env.PROXY_ROTATE_EVERY, 20, 0, 100_000);
+const PROACTIVE_ROTATE_EVERY = boundedInt(process.env.PROXY_ROTATE_EVERY, 10, 0, 100_000);
 let _reqSinceRotate = 0;
 
 // Sized to support the raised global search window. The distributed

@@ -34,8 +34,9 @@ const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 200);
 // Keep enough authorized Decodo sessions warm to cover the full concurrent
 // workload (≈maxConcurrency 200 ÷ maxLeasesPerToken 10 = 20, plus headroom so a
 // burst never waits on a mint). Unlimited Decodo budget → mint generously; token
-// scarcity must never stall a priority check.
-const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 25);
+// scarcity must never stall a priority check. Warm reserve 40 so the frequent
+// token switching (10 leases/token) never leaves a lease waiting on a mint.
+const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 40);
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 
@@ -213,12 +214,14 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   warmMinimum: Number.isFinite(configuredWarmTokens) ? configuredWarmTokens : 2,
   refreshMarginMs: TOKEN_REFRESH_MARGIN_MS,
   maintenanceIntervalMs: Number(process.env.KFS_TOKEN_MAINTENANCE_MS ?? 10_000),
-  maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 25),
+  // Frequent token switching (owner directive): a token serves only 10 leases /
+  // 250 checks before retirement, so no single token accumulates upstream
+  // throttle pressure. Unlimited Decodo budget funds the higher mint rate.
+  maxLeasesPerToken: Number(process.env.KFS_TOKEN_MAX_LEASES_PER_SLOT ?? 10),
   // The global gate still serializes individual mint requests, but several slots
   // may refresh concurrently so a large warm pool never waits on one mint stream.
-  maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 4),
-  // Unlimited budget → a token serves many more checks before being retired.
-  maxChecksPerToken: Number(process.env.KFS_TOKEN_MAX_CHECKS ?? 1_000),
+  maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 6),
+  maxChecksPerToken: Number(process.env.KFS_TOKEN_MAX_CHECKS ?? 250),
   mint: () => gatedMint(),
 });
 
@@ -253,6 +256,11 @@ export async function refreshTokenFromApi(): Promise<string> {
 export function invalidateAuthorizedToken(token: string | null | undefined): void {
   authorizedTokenPool.invalidate(token);
 }
+
+/** Per-address count of 4xx-driven token/session switches. A 4xx burns the
+ * token and rotates the session up to 3 times per address (fresh-token proof
+ * that the request contract — not the session — is at fault), then stops. */
+const fourXxRotations = new Map<string, number>();
 
 /** Shared token accessor for authorized server-side scanner routes. */
 export async function getAuthToken(): Promise<string> {
@@ -845,15 +853,36 @@ async function scanAddressDirect(
       return base;
     }
     if (!res.ok) {
-      // Other non-2xx (e.g. malformed 400 / 404) — a definite non-answer a retry
-      // won't fix. Do NOT rotate the session (this is not an IP/auth denial) — the
-      // request contract is at fault. DIAGNOSE it: capture the safe response head so
-      // an admin can repair the request. Marked unresolved (rechecked), NEVER no-service.
+      // ANY other 4xx (400 / 404 / 422 …) — owner directive: SWITCH TOKEN FIRST.
+      // A 4xx can be Kinetic rejecting the token/session shape rather than the
+      // address, and the proxy budget is unlimited — so the first remedy is the
+      // same as an auth denial: burn the leased token, rotate the Decodo session
+      // (fresh residential IP), and requeue the address so it retries right away
+      // on a fresh token. Only after 3 fresh-token retries for the SAME address
+      // do we conclude the request contract itself is at fault and stop rotating.
       let diag = "";
       try { diag = (await res.text()).replace(/eyJ[A-Za-z0-9._-]{10,}/g, "<jwt>").slice(0, 160); } catch { /* body unreadable */ }
+      const rotations = (fourXxRotations.get(tokenAddressKey) ?? 0) + 1;
+      if (fourXxRotations.size > 50_000) fourXxRotations.clear(); // bound memory
+      fourXxRotations.set(tokenAddressKey, rotations);
+      if (rotations <= 3) {
+        authorizedTokenPool.invalidate(tokenLease.token);
+        // Single-flight inside rotateProxySession coalesces a concurrent burst
+        // into ONE rotation; fire-and-forget — the result is already requeued.
+        void rotateProxySession(`search ${res.status}`);
+        base.blocked = true; base.fiberStatus = "unknown"; base.confidence = "LOW";
+        base.notes = `Upstream ${res.status} — token invalidated + Decodo session rotated (switch ${rotations}/3), address requeued`;
+        emit("retry", { status: "pending_auth", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), tokenSuffix: tokenLease.token.slice(-4), retryReason: `HTTP ${res.status} — fresh token + session (switch ${rotations}/3), retrying same address`, detail: diag || `HTTP ${res.status}` });
+        structuredLog("scan.provider.4xx_rotate", { status: res.status, source, switch: rotations }, "warn");
+        return base;
+      }
+      // 3 fresh-token retries all returned the same 4xx — the request contract
+      // is genuinely at fault. DIAGNOSE: capture the safe response head so an
+      // admin can repair the request. Unresolved (rechecked), NEVER no-service.
+      fourXxRotations.delete(tokenAddressKey);
       base.fiberStatus = "unknown"; base.confidence = "LOW";
-      base.notes = `API returned ${res.status} (unresolved, request-contract issue — NOT rotated)`;
-      emit("bad_request", { status: "bad_request", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `HTTP ${res.status} malformed/not-found — diagnose request contract (session NOT rotated)`, detail: diag || `HTTP ${res.status}` });
+      base.notes = `API returned ${res.status} after 3 fresh-token retries (unresolved, request-contract issue)`;
+      emit("bad_request", { status: "bad_request", httpStatus: res.status, latencyMs: searchMs, sessionId: getProxySessionId(), retryReason: `HTTP ${res.status} persisted across 3 token switches — diagnose request contract`, detail: diag || `HTTP ${res.status}` });
       structuredLog("scan.provider.bad_request", { status: res.status, source, detail: diag.slice(0, 120) }, "warn");
       return base;
     }
