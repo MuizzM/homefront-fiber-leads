@@ -161,7 +161,12 @@ export async function runScanWorker(
   // Mint a fresh token before this run starts — Scan Map, city, and nightly scans
   // all pass through here. Best-effort: a mint hiccup is non-fatal (the pool and
   // the per-401 remint below still recover), but a stale token never starts a run.
-  try { await refreshTokenFromApi(); } catch { /* pool + per-address remint recover */ }
+  // Only the LIVE checker touches the token pool: an injected replay checker
+  // (tests) never waits on real mints. And without automation authorization the
+  // checker fails closed per-address — minting tokens would be pointless spend.
+  if (checker === liveChecker && process.env.KFS_AUTOMATION_AUTHORIZED) {
+    try { await refreshTokenFromApi(); } catch { /* pool + per-address remint recover */ }
+  }
   heartbeatWorker({
     workerId,
     tenantId,
@@ -188,6 +193,10 @@ export async function runScanWorker(
       // targets are 'queued' again, so the queue only drains once every address has
       // a conclusive or unresolved answer.
       const batch = claimRunTargets(runId, Math.min(BATCH, remainingBudget), dedupSkipSecondsForRun(run.kind));
+      // Yield a full event-loop turn every claim cycle: a batch of instantly-failing
+      // addresses (fail-closed transport) would otherwise chain microtasks forever
+      // and starve timers/cancels. One setImmediate per batch costs ~nothing.
+      await new Promise(resolve => setImmediate(resolve));
       if (batch.length === 0) {
         finish(run, "done");
         return;

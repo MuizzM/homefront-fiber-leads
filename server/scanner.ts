@@ -758,6 +758,16 @@ async function scanAddressDirect(
       tsEpoch: Date.now(), ...extra,
     });
 
+  // Fail closed FAST: automation not authorized and no ready/manual token in the
+  // pool → do not even attempt a mint. The address stays unresolved for a future
+  // recheck; zero token spend is wasted on a session that cannot exist yet.
+  if (process.env.KFS_AUTOMATION_AUTHORIZED !== "true" && authorizedTokenPool.snapshot().ready === 0) {
+    base.fiberStatus = "unknown"; base.confidence = "LOW"; base.blocked = false;
+    base.notes = "No authorized session — automation not authorized (unresolved, recheck)";
+    emit("error", { status: "error", detail: "automation not authorized — no session, check skipped" });
+    return base;
+  }
+
   let tokenLease: AuthorizedTokenLease | null = null;
   const tokenAddressKey = crypto.createHash("sha256")
     .update(normalizeKineticAddressKey(address, city, state, zip))

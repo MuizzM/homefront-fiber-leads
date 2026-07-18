@@ -169,11 +169,12 @@ describe("Radar transition engine (fixtures — zero proxy)", () => {
     expect(delivered.filter(r => r.target_id === t.id && r.kind === "primary_candidate_new").length).toBe(1);
   });
 
-  it("LIVE GATE: KineticProvider.check throws when RADAR_LIVE!=true (no accidental proxy spend)", async () => {
-    const prev = process.env.RADAR_LIVE; delete process.env.RADAR_LIVE;
+  it("LIVE GATE: KineticProvider.check throws when RADAR_LIVE=off (explicit kill switch)", async () => {
+    const prev = process.env.RADAR_LIVE;
+    process.env.RADAR_LIVE = "off"; // live is the default; only explicit =off blocks spend
     const kp = new PA.KineticProvider(async () => { throw new Error("SHOULD NOT BE CALLED"); });
     await expect(kp.check(seedTarget("live"))).rejects.toThrow(/RADAR_LIVE_DISABLED/);
-    if (prev) process.env.RADAR_LIVE = prev;
+    if (prev) process.env.RADAR_LIVE = prev; else delete process.env.RADAR_LIVE;
   });
 
   it("a heuristic (knowledge_base) result is INCONCLUSIVE — never a fabricated New", async () => {

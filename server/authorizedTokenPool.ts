@@ -89,6 +89,7 @@ export class AuthorizedTokenPool {
   private readonly maxConcurrentRefreshes: number;
   private readonly maxChecksPerToken: number;
   private readonly mint: AuthorizedTokenPoolOptions["mint"];
+  private consecutiveMintFailures = 0;
   private readonly now: () => number;
   private readonly slots: TokenSlot[] = [];
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
@@ -206,6 +207,7 @@ export class AuthorizedTokenPool {
         slot.addressKeys.clear();
         slot.failures = 0;
         slot.lastError = null;
+        this.consecutiveMintFailures = 0;
       } catch (error) {
         // No cooldown, no backoff — the slot simply becomes EMPTY and is re-minted
         // on the next lease/maintenance. Failures are tracked for health only.
@@ -215,6 +217,7 @@ export class AuthorizedTokenPool {
         slot.health = slot.failures >= 3 ? "UNHEALTHY" : "DEGRADED";
         slot.lastError = String((error as any)?.message ?? error).slice(0, 180);
         slot.state = "EMPTY";
+        this.consecutiveMintFailures++;
         throw error;
       } finally {
         slot.refreshInFlight = null;
@@ -317,7 +320,12 @@ export class AuthorizedTokenPool {
     if (this.warmInFlight) return this.warmInFlight;
     this.warmInFlight = (async () => {
       this.updateStates();
-      const needed = Math.min(this.maxSize - this.slots.length, Math.max(0, this.warmMinimum - this.slots.length));
+      // When mints are FAILING, bound the synchronous wave to one concurrency
+      // window: a lease must never sit through dozens of doomed mints before
+      // concluding the pool is empty (the maintenance timer keeps retrying in
+      // the background). Healthy pools warm fully, immediately.
+      const wave = this.consecutiveMintFailures > 0 ? this.maxConcurrentRefreshes : Number.MAX_SAFE_INTEGER;
+      const needed = Math.min(wave, this.maxSize - this.slots.length, Math.max(0, this.warmMinimum - this.slots.length));
       const created = Array.from({ length: needed }, () => this.createSlot());
       await Promise.allSettled(created.map(slot => this.refreshSlot(slot.id, true)));
       if (!this.pickReady()) {
@@ -336,7 +344,10 @@ export class AuthorizedTokenPool {
       (slot.state === "READY" && slot.expiresAt <= now + this.refreshMarginMs) ||
       slot.state === "EXPIRED" ||
       slot.state === "EMPTY");
-    await Promise.allSettled(due.map(slot => this.refreshSlot(slot.id, true)));
+    // Same failure-aware bound as ensureWarm: when the endpoint is down, one
+    // wave per lease; the maintenance timer sweeps the rest.
+    const wave = this.consecutiveMintFailures > 0 ? this.maxConcurrentRefreshes : due.length;
+    await Promise.allSettled(due.slice(0, wave).map(slot => this.refreshSlot(slot.id, true)));
   }
 
   private updateStates(): void {
