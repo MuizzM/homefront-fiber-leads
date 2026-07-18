@@ -443,17 +443,30 @@ app.use((req, res, next) => {
     const { startScanEvents } = await import("./scanEvents");
     startScanEvents();
   } catch (e: any) { console.warn("[scan-events] start skipped:", e?.message); }
-  try {
-    const { resumeInterruptedRuns, resumeCriticalRuns, startScanReaper } = await import("./scanEngine");
-    resumeCriticalRuns();    // CRITICAL runs (new-build/manual/field) resume FIRST + immediately
-    resumeInterruptedRuns();
-    startScanReaper(); // periodic reaper: pick up runs whose worker died sans restart
-  } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
-  try {
-    const { resumeSweepJobs, resumeStateSweeps } = await import("./sweepService");
-    resumeSweepJobs();
-    resumeStateSweeps(); // crash-recovery only — picks a running statewide sweep back up
-  } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
+  // DEFER all scan/sweep RESUME past the healthcheck start_period. On a fresh
+  // container these fire dozens of worker loops that immediately hammer Decodo
+  // (and, when its 403 rolling-window is depleted, spin) — enough to peg the box
+  // and fail the deploy health-gate before /api/health ever stabilizes. Letting
+  // the container answer health FIRST, then resuming scanning ~150s later (past
+  // start_period 120s), makes the gate deterministic. Resume is idempotent and
+  // checkpoint-based, so nothing is lost by starting a bit later. The periodic
+  // reaper (started immediately, first tick 60s) still recovers anything if this
+  // deferred pass is somehow missed. BACKGROUND_RESUME_DELAY_MS overrides.
+  const resumeDelay = Math.max(0, Number(process.env.BACKGROUND_RESUME_DELAY_MS ?? 150_000) || 150_000);
+  const deferredResume = setTimeout(() => { void (async () => {
+    try {
+      const { resumeInterruptedRuns, resumeCriticalRuns, startScanReaper } = await import("./scanEngine");
+      resumeCriticalRuns();    // CRITICAL runs (new-build/manual/field) resume first
+      resumeInterruptedRuns();
+      startScanReaper(); // periodic reaper — started only now so its 60s tick can't fire during the health gate
+    } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
+    try {
+      const { resumeSweepJobs, resumeStateSweeps } = await import("./sweepService");
+      resumeSweepJobs();
+      resumeStateSweeps(); // crash-recovery only — picks a running statewide sweep back up
+    } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
+  })(); }, resumeDelay);
+  if (typeof (deferredResume as any).unref === "function") (deferredResume as any).unref();
   // ── Statewide NC+SC scan on every production deployment ────────────────────
   // Business purpose: surface newly serviceable, non-active Kinetic addresses so
   // reps reach fresh doors first. Every prod boot (deploy = container restart)
