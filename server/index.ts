@@ -616,13 +616,16 @@ app.use((req, res, next) => {
     if (typeof (seedCycle as any).unref === "function") seedCycle.unref();
   }
 
-  // HOT MARKETS — active fresh-fiber build zones (default: Dalton GA). Own
-  // 20-minute cycle, 30-minute stale window, 5000-target batches, never-checked
-  // first, plus an hourly address-discovery job per hot city. HOT_MARKETS=off
-  // disables; "dalton:ga,calhoun:ga" extends.
+  // HOT MARKETS — active fresh-fiber build zones. Default: Dalton GA plus the
+  // Sanford NC cluster (Sanford, Broadway, and the surrounding Lee/Moore-county
+  // towns already in the market catalog). Own 20-minute cycle, 30-minute stale
+  // window, 5000-target batches, never-checked first, plus an hourly address-
+  // discovery job per hot city. HOT_MARKETS=off disables; comma-separated
+  // "city:st" entries extend.
+  const DEFAULT_HOT_MARKETS = "dalton:ga,sanford:nc,broadway:nc,cameron:nc,aberdeen:nc,pinebluff:nc";
   const runHotBurst = async () => {
     try {
-      const hotSpec = (process.env.HOT_MARKETS ?? "dalton:ga").trim();
+      const hotSpec = (process.env.HOT_MARKETS ?? DEFAULT_HOT_MARKETS).trim();
       if (hotSpec === "off") return;
       const { rawDb } = await import("./db");
       const { startTargetRun } = await import("./scanService");
@@ -655,8 +658,9 @@ app.use((req, res, next) => {
       }
     } catch (e: any) { console.warn("[hot-market] skipped:", e?.message); }
   };
-  if ((process.env.HOT_MARKETS ?? "dalton:ga") !== "off") {
-    setTimeout(() => { void runHotBurst(); }, 3 * 60_000);
+  if ((process.env.HOT_MARKETS ?? DEFAULT_HOT_MARKETS) !== "off") {
+    // First burst 90s after boot — hot markets start pumping almost immediately.
+    setTimeout(() => { void runHotBurst(); }, 90 * 1000);
     const hotCycle = setInterval(() => { void runHotBurst(); }, 20 * 60_000);
     if (typeof (hotCycle as any).unref === "function") hotCycle.unref();
   }
