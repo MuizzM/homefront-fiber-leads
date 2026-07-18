@@ -97,12 +97,35 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const findByCityLeads = rawDb.prepare(`SELECT id,tenant_id,assigned_rep_id,address FROM leads
     WHERE lower(trim(city))=lower(trim(?)) AND upper(state)=upper(?)
     ORDER BY CASE WHEN tenant_id=? THEN 0 ELSE 1 END,id`);
-  const findByAddressNormalized = (address: string, city: string, state: string): any => {
-    const key = normalizeKineticAddressKey(address, city, state, "");
-    for (const row of findByCityLeads.iterate(city, state, tenantId) as Iterable<any>) {
-      if (normalizeKineticAddressKey(row.address ?? "", city, state, "") === key) return row;
+  // Per-CITY normalized-address index, built ONCE per city per projector call and
+  // cached. The previous version re-hashed every lead in the city for EVERY
+  // candidate — O(candidates × city_leads) synchronous work that pegged the single
+  // event-loop thread and wedged the app as the leads table grew (prod outage:
+  // fresh_fiber.projected froze the loop). Now each city's leads are hashed once
+  // into a Map for O(1) lookups; newly-inserted leads are added to the live index
+  // so within-call dedup stays correct.
+  const cityLeadIndex = new Map<string, Map<string, any>>();
+  const cityIndexKey = (city: string, state: string) => `${String(city).trim().toLowerCase()}|${String(state).trim().toUpperCase()}`;
+  const getCityIndex = (city: string, state: string): Map<string, any> => {
+    const ck = cityIndexKey(city, state);
+    let idx = cityLeadIndex.get(ck);
+    if (!idx) {
+      idx = new Map();
+      for (const row of findByCityLeads.iterate(city, state, tenantId) as Iterable<any>) {
+        const k = normalizeKineticAddressKey(row.address ?? "", city, state, "");
+        if (!idx.has(k)) idx.set(k, row); // tenant-preferred, lowest id wins
+      }
+      cityLeadIndex.set(ck, idx);
     }
-    return undefined;
+    return idx;
+  };
+  const findByAddressNormalized = (address: string, city: string, state: string): any =>
+    getCityIndex(city, state).get(normalizeKineticAddressKey(address, city, state, ""));
+  const rememberNewLead = (lead: { id: number; tenant_id: number; assigned_rep_id: number | null }, address: string, city: string, state: string): void => {
+    const idx = cityLeadIndex.get(cityIndexKey(city, state));
+    if (!idx) return; // not built yet — a later lookup rebuilds it from the DB (sees this insert)
+    const k = normalizeKineticAddressKey(address, city, state, "");
+    if (!idx.has(k)) idx.set(k, { id: lead.id, tenant_id: lead.tenant_id, assigned_rep_id: lead.assigned_rep_id, address });
   };
   const insert = rawDb.prepare(`INSERT INTO leads
     (address,city,state,zip,lat,lng,fiber_status,max_download_mbps,is_new_deployment,is_new_fiber,is_tenured,
@@ -207,6 +230,9 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
           (candidate as any).carrier ?? "kinetic",
         );
         leadId = Number(created.lastInsertRowid);
+        // Keep the in-memory index current so a later candidate for the SAME
+        // normalized address in this call attaches instead of minting a duplicate.
+        rememberNewLead({ id: leadId, tenant_id: tenantId, assigned_rep_id: assignment?.repId ?? null }, candidate.address, candidate.city, candidate.state);
         result.created++;
       } else {
         result.linkedExisting++;
