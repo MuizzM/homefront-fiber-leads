@@ -94,3 +94,25 @@ describe("canonical availability_snapshots — mixed formats impossible; failed 
     expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE lower(address)='258 ranier dr'`).get() as any).n).toBe(1);
   });
 });
+
+describe("canonical-address dedup — suffix/case variants attach, never duplicate", () => {
+  it("a Kinetic-canonical variant of an existing lead's address attaches to it", async () => {
+    // Existing lead minted from the OSM-form address.
+    const tidA = target("338 Farrell Road");
+    (storage as any).recordScanTargetResult(tidA, { fiberStatus: "new_fiber", fiberAvailable: true, isNewFiber: true, billingStatus: "N", availabilityStatus: "checked_available", newlyLive: false, customerSegment: "new_opportunity", customerConfidence: "high", customerSignals: [] });
+    record({ tenantId: TENANT, scanTargetId: tidA, runId: "dup-a", checkedAt: "2026-07-18T16:25:00.000Z", conclusive: true, fiberAvailable: true, fiberStatus: "new_fiber", householdSegmentType: "NEW FIBER", billingStatus: "N", transitionStatus: "baseline_available", apiSource: "kinetic_live", evidenceHash: "dup-a" });
+    expect(projectConfirmedFreshLeads(TENANT, [tidA]).created).toBe(1);
+
+    // A SECOND scan target for the SAME house in Kinetic's canonical form
+    // ("Road"→"RD", ALL CAPS) — must attach to the existing lead, not mint #2
+    // (prod defect: lead #11318 duplicated #11198 exactly this way).
+    const tidB = target("338 FARRELL RD");
+    (storage as any).recordScanTargetResult(tidB, { fiberStatus: "new_fiber", fiberAvailable: true, isNewFiber: true, billingStatus: "N", availabilityStatus: "checked_available", newlyLive: false, customerSegment: "new_opportunity", customerConfidence: "high", customerSignals: [] });
+    record({ tenantId: TENANT, scanTargetId: tidB, runId: "dup-b", checkedAt: "2026-07-18T17:35:00.000Z", conclusive: true, fiberAvailable: true, fiberStatus: "new_fiber", householdSegmentType: "NEW FIBER", billingStatus: "N", transitionStatus: "baseline_available", apiSource: "kinetic_live", evidenceHash: "dup-b" });
+    const res = projectConfirmedFreshLeads(TENANT, [tidB]);
+    expect(res.created).toBe(0);
+    expect(res.published).toBeGreaterThanOrEqual(1);
+    const rows = rawDb.prepare(`SELECT id FROM leads WHERE lower(replace(address,'road','rd')) LIKE '338 farrell%'`).all() as any[];
+    expect(rows).toHaveLength(1);
+  });
+});

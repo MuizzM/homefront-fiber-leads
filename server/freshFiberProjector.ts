@@ -3,6 +3,7 @@ import { decideFreshFiberConfirmation, type FreshFiberConfirmationDecision, type
 import { structuredLog } from "./structuredLog";
 import { pointInPolygon } from "@shared/geo";
 import { meterQualifiedLead } from "./billingStore";
+import { normalizeKineticAddressKey } from "./scanner";
 
 interface ProjectionCandidate {
   id: number;
@@ -87,9 +88,21 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const evidenceStmt = rawDb.prepare(`SELECT source,observed_at AS observedAt,availability,technology
     FROM availability_corroboration WHERE tenant_id=? AND scan_target_id=? ORDER BY observed_at`);
   const findBySource = rawDb.prepare(`SELECT id,assigned_rep_id FROM leads WHERE tenant_id=? AND source_scan_target_id=? LIMIT 1`);
-  const findByAddress = rawDb.prepare(`SELECT id,tenant_id,assigned_rep_id FROM leads
-    WHERE lower(trim(address))=lower(trim(?)) AND lower(trim(city))=lower(trim(?)) AND upper(state)=upper(?)
-    ORDER BY CASE WHEN tenant_id=? THEN 0 ELSE 1 END,id LIMIT 1`);
+  // Address match must use the CANONICAL key, not raw text: Kinetic's canonical
+  // form abbreviates suffixes and directionals ("338 Farrell Road" vs
+  // "338 FARRELL RD"), and two scan targets for the same house (OSM harvest vs
+  // Kinetic canonical) would otherwise mint duplicate leads (observed: lead
+  // #11318 duplicating #11198). Pull the city's leads and compare normalized.
+  const findByCityLeads = rawDb.prepare(`SELECT id,tenant_id,assigned_rep_id,address FROM leads
+    WHERE lower(trim(city))=lower(trim(?)) AND upper(state)=upper(?)
+    ORDER BY CASE WHEN tenant_id=? THEN 0 ELSE 1 END,id`);
+  const findByAddressNormalized = (address: string, city: string, state: string): any => {
+    const key = normalizeKineticAddressKey(address, city, state, "");
+    for (const row of findByCityLeads.iterate(city, state, tenantId) as Iterable<any>) {
+      if (normalizeKineticAddressKey(row.address ?? "", city, state, "") === key) return row;
+    }
+    return undefined;
+  };
   const insert = rawDb.prepare(`INSERT INTO leads
     (address,city,state,zip,lat,lng,fiber_status,max_download_mbps,is_new_deployment,is_new_fiber,is_tenured,
      household_segment_type,billing_status,lead_status,notes,deployment_notes,lead_tag,lead_score,tenant_id,
@@ -165,7 +178,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       result.published++;
       const assignment = territoryAssignmentFor(tenantId, candidate.lat, candidate.lng);
       if (!leadId) {
-        const addressMatch = findByAddress.get(candidate.address, candidate.city, candidate.state, tenantId) as any;
+        const addressMatch = findByAddressNormalized(candidate.address, candidate.city, candidate.state);
         if (addressMatch && Number(addressMatch.tenant_id) !== tenantId) {
           throw new Error(`LEAD_ADDRESS_TENANT_CONFLICT: scan target ${candidate.id}`);
         }
