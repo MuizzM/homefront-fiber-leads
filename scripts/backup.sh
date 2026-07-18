@@ -69,8 +69,10 @@ if [ -n "${BACKUP_VOLUME:-}" ]; then
 
   OUT="$BACKUP_DIR/data-$STAMP.db.age"
   [ -s "$OUT" ] || { echo "[backup] output artifact is missing or empty" >&2; exit 1; }
-  find "$BACKUP_DIR" -name 'data-*.db.age' -mtime "+$RETENTION_DAYS" -delete
-  echo "[backup] pruned backups older than ${RETENTION_DAYS} days"
+  # Retention is owned by backup-container.sh (age prune with a KEEP_MIN floor,
+  # KEEP_MAX count cap, space guard). The host-side find-delete that used to
+  # run here had NO floor: after a >14-day deploy pause it would have wiped
+  # every preserved generation down to a single file.
   exit 0
 fi
 
