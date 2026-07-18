@@ -453,6 +453,16 @@ app.use((req, res, next) => {
   // reaper (started immediately, first tick 60s) still recovers anything if this
   // deferred pass is somehow missed. BACKGROUND_RESUME_DELAY_MS overrides.
   const resumeDelay = Math.max(0, Number(process.env.BACKGROUND_RESUME_DELAY_MS ?? 150_000) || 150_000);
+  // Defer any engine START past the deploy health gate. These schedule 20s
+  // interval ticks that would otherwise begin firing (heavy synchronous DB work)
+  // WHILE the gate is still probing /api/health — the recurring cause of failed
+  // deploys/rollbacks. The imports below still run at boot (cheap); only the
+  // scheduling of the recurring work is delayed. Own try/catch since the caller's
+  // has already returned by the time this fires.
+  const deferBoot = (fn: () => void, label: string) => {
+    const t = setTimeout(() => { try { fn(); } catch (e: any) { console.warn(`[${label}] deferred start failed:`, e?.message); } }, resumeDelay);
+    if (typeof (t as any).unref === "function") (t as any).unref();
+  };
   const deferredResume = setTimeout(() => { void (async () => {
     try {
       const { resumeInterruptedRuns, resumeCriticalRuns, startScanReaper } = await import("./scanEngine");
@@ -512,31 +522,31 @@ app.use((req, res, next) => {
     // Kill-switch: NEWBUILD_RADAR=off.
     try {
       const { startNewBuildRadar } = await import("./newBuildRadar");
-      startNewBuildRadar();
+      deferBoot(startNewBuildRadar, "newbuild-radar");
     } catch (e: any) { console.warn("[newbuild-radar] start skipped:", e?.message); }
     // Lead-triggered CRITICAL cluster expansion — fans out from every confirmed
     // green FRESH_LEAD. Kill-switch: EXPANSION_ENABLED=off.
     try {
       const { startExpansionEngine } = await import("./clusterExpansion");
-      startExpansionEngine();
+      deferBoot(startExpansionEngine, "expansion");
     } catch (e: any) { console.warn("[expansion] start skipped:", e?.message); }
   }
   try {
     const { resumeDiscoveryJobs } = await import("./addressDiscovery/engine");
-    resumeDiscoveryJobs();
+    deferBoot(resumeDiscoveryJobs, "address-discovery");
   } catch (e: any) { console.warn("[address-discovery] resume skipped:", e?.message); }
   try {
     // Coming-Soon watchlist tick — urgency-cadence rechecks (NEW_BUILD reserved class)
     // + promote-on-flip + AGED lifecycle pass. Kill-switch: COMING_SOON_WATCHLIST=off.
     const { startComingSoonWatchlist } = await import("./comingSoonWatchlist");
-    startComingSoonWatchlist();
+    deferBoot(startComingSoonWatchlist, "coming-soon-watchlist");
   } catch (e: any) { console.warn("[coming-soon-watchlist] start skipped:", e?.message); }
   try {
     // Rumor-driven territory probes ("I heard there's Kinetic fiber near X"):
     // EXPLORE_CITIES="durham:nc,…" → bounded city sweeps outside the verified
     // catalog. Idempotent per city; see server/exploreCities.ts.
     const { startExploreCycle } = await import("./exploreCities");
-    startExploreCycle();
+    deferBoot(startExploreCycle, "explore-cities");
   } catch (e: any) { console.warn("[explore-cities] start skipped:", e?.message); }
   try {
     // One-shot: terminalize the already-exhausted needs-fix tail (30k+ targets at
