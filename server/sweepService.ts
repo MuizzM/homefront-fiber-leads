@@ -31,7 +31,7 @@ async function upsertHarvestChunked(rows: Array<Parameters<typeof storage.upsert
 // provider rate stays governed by the scheduler + 403/429 backoff (correctness).
 const MAX_SWEEP_CHECKS = () => Number.MAX_SAFE_INTEGER;
 
-export interface StartSweepInput { tenantId: number; city: string; state: "NC" | "SC"; maxChecks?: number; createdBy?: number | null; }
+export interface StartSweepInput { tenantId: number; city: string; state: "NC" | "SC" | "GA"; maxChecks?: number; createdBy?: number | null; }
 export interface StartAddressSweepInput { tenantId: number; query: string; radiusMeters: number; maxChecks?: number; createdBy?: number | null; }
 
 export function startCitySweep(input: StartSweepInput) {
@@ -84,8 +84,8 @@ export async function searchAddressArea(input: { tenantId: number; query: string
   const isoState = String(hit.address?.["ISO3166-2-lvl4"] ?? hit.address?.["ISO3166-2-lvl3"] ?? "");
   const stateName = String(hit.address?.state ?? "").toLowerCase();
   const state = String(hit.address?.state_code ?? isoState.split("-").pop() ?? "").toUpperCase()
-    || (stateName === "north carolina" ? "NC" : stateName === "south carolina" ? "SC" : "");
-  if (!(["NC", "SC"].includes(state))) throw new Error("OUTSIDE_SUPPORTED_STATES");
+    || (stateName === "north carolina" ? "NC" : stateName === "south carolina" ? "SC" : stateName === "georgia" ? "GA" : "");
+  if (!(["NC", "SC", "GA"].includes(state))) throw new Error("OUTSIDE_SUPPORTED_STATES");
   const city = hit.address?.city ?? hit.address?.town ?? hit.address?.village ?? hit.address?.municipality ?? "";
   const latDelta = input.radiusMeters / 111_320;
   const lngDelta = input.radiusMeters / (111_320 * Math.cos(lat * Math.PI / 180));
@@ -203,7 +203,7 @@ const reArmTimers = new Map<string, ReturnType<typeof setTimeout>>();
  * the idempotent startStateSweep. Returns the plan so callers/tests can assert it.
  */
 export function scheduleStateSweepReArm(
-  parent: { tenant_id: number; state: "NC" | "SC"; created_by: number | null; max_checks_per_city: number | null },
+  parent: { tenant_id: number; state: "NC" | "SC" | "GA"; created_by: number | null; max_checks_per_city: number | null },
   start: (input: StartStateSweepInput) => unknown = startStateSweep,
 ): ReArmPlan {
   const plan = planStateSweepReArm();
@@ -235,7 +235,7 @@ export function __clearReArmTimers() {
   reArmTimers.clear();
 }
 
-export interface StartStateSweepInput { tenantId: number; state: "NC" | "SC"; createdBy?: number | null; maxChecksPerCity?: number; }
+export interface StartStateSweepInput { tenantId: number; state: "NC" | "SC" | "GA"; createdBy?: number | null; maxChecksPerCity?: number; }
 
 /**
  * Every scan-eligible market in the state's catalog, de-duped case-insensitively
@@ -254,7 +254,7 @@ export interface StartStateSweepInput { tenantId: number; state: "NC" | "SC"; cr
  *   6. city ASC            — stable alphabetical tiebreak (fully deterministic)
  * This mirrors the idx_state_markets_due / idx_state_markets_state_priority indexes.
  */
-export function stateCities(state: "NC" | "SC"): string[] {
+export function stateCities(state: "NC" | "SC" | "GA"): string[] {
   const rows = rawDb.prepare(
     `SELECT city FROM state_fiber_markets
       WHERE state=? AND auto_scan_eligible=1

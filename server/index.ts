@@ -495,7 +495,7 @@ app.use((req, res, next) => {
         const { getDefaultTenantId } = await import("./storage");
         const tenantId = getDefaultTenantId();
         if (tenantId == null) throw new Error("no default tenant yet");
-        for (const state of ["NC", "SC"] as const) {
+        for (const state of ["NC", "SC", "GA"] as const) {
           const sweep = startStateSweep({ tenantId, state });
           structuredLog("state_sweep.deploy_start", {
             state, stateSweepId: sweep.id,

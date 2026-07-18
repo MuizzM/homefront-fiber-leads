@@ -20,13 +20,13 @@ import { structuredLog } from "./structuredLog";
 // committing a full sweep to unverified territory; catalog promotion buys the
 // full-coverage cadence afterwards.
 
-export interface ExploreCity { city: string; state: "NC" | "SC" }
+export interface ExploreCity { city: string; state: "NC" | "SC" | "GA" }
 export interface ExploreDecision extends ExploreCity {
   action: "started" | "skipped_running" | "skipped_recent" | "deferred_tick_cap";
   sweepId?: string;
 }
 
-const EXPLORE_STATES = new Set(["NC", "SC"]);
+const EXPLORE_STATES = new Set(["NC", "SC", "GA"]);
 
 export function parseExploreSpec(spec: string | undefined): ExploreCity[] {
   const seen = new Set<string>();
@@ -39,7 +39,7 @@ export function parseExploreSpec(spec: string | undefined): ExploreCity[] {
     const key = `${city}|${state}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ city, state: state as "NC" | "SC" });
+    out.push({ city, state: state as "NC" | "SC" | "GA" });
   }
   return out;
 }

@@ -34,11 +34,13 @@ beforeEach(() => {
 });
 
 describe("parseExploreSpec", () => {
-  it("parses cities, defaults state to NC, dedups, drops invalid states", () => {
-    expect(explore.parseExploreSpec("durham:nc, Chapel Hill , durham:NC, atlanta:ga, oxford:sc")).toEqual([
+  it("parses cities, defaults state to NC, dedups, keeps NC/SC/GA, drops other states", () => {
+    expect(explore.parseExploreSpec("durham:nc, Chapel Hill , durham:NC, dalton:ga, oxford:sc, austin:tx")).toEqual([
       { city: "durham", state: "NC" },
       { city: "chapel hill", state: "NC" },
+      { city: "dalton", state: "GA" }, // GA is now a supported scan state (Dalton build)
       { city: "oxford", state: "SC" },
+      // austin:tx dropped — TX is not a supported state
     ]);
     expect(explore.parseExploreSpec("")).toEqual([]);
     expect(explore.parseExploreSpec(undefined)).toEqual([]);
