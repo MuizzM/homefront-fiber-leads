@@ -77,7 +77,8 @@ export default function FiberIntelligence() {
         <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC — one workspace.</p>
       </header>
 
-      <div role="tablist" aria-label="Fiber Intelligence sections" className="sticky top-0 z-10 -mx-4 mb-4 overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:-mx-6 sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div className="relative sticky top-0 z-10 -mx-4 mb-4 sm:-mx-6">
+      <div role="tablist" aria-label="Fiber Intelligence sections" className="overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex gap-1">
           {TABS.map(({ key, label, icon: Icon }) => (
             <button
@@ -93,6 +94,9 @@ export default function FiberIntelligence() {
             </button>
           ))}
         </div>
+      </div>
+      {/* Overflow hint on the narrowest phones: fades the clipped edge. */}
+      <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-background to-transparent sm:hidden" />
       </div>
 
       <div className="min-h-0 flex-1">
