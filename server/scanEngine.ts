@@ -98,6 +98,39 @@ const liveChecker: Checker = async (a) => {
 // In-process guard so a run is never dispatched by two workers at once (e.g. a
 // resume racing a still-live worker). Cleared when the worker exits.
 const activeRuns = new Set<string>();
+
+// BOUNDED RUN DISPATCH. Each runScanWorker loop polls the DB (claimRunTargets is
+// a synchronous better-sqlite3 transaction) every batch — so N concurrent worker
+// loops means N synchronous DB hits contending for the single event-loop thread.
+// On boot, resume/critical/reaper would spawn a worker for EVERY 'running' run at
+// once; with a backlog of 100+ runs that pegged the one core to 99% and starved
+// /api/health (prod outage + failed deploys). Cap concurrent workers and queue
+// the rest; a finishing worker pumps the next. Provider concurrency is already
+// bounded separately by the admission coordinator — this bounds the WORKER LOOPS.
+const MAX_ACTIVE_RUN_WORKERS = Math.max(1, Math.floor(Number(process.env.MAX_ACTIVE_RUN_WORKERS ?? 16) || 16));
+const _runQueue: Array<{ runId: string; tenantId: number; checker?: Checker }> = [];
+const _runQueued = new Set<string>();
+
+/** Dispatch a run through the concurrency cap. Use this instead of calling
+ *  runScanWorker directly from resume/reaper/route paths. Idempotent per run. */
+export function dispatchRun(runId: string, tenantId: number, checker?: Checker): void {
+  if (activeRuns.has(runId) || _runQueued.has(runId)) return;
+  if (activeRuns.size >= MAX_ACTIVE_RUN_WORKERS) {
+    _runQueued.add(runId);
+    _runQueue.push({ runId, tenantId, checker });
+    return;
+  }
+  void runScanWorker(runId, tenantId, checker);
+}
+
+function pumpRunQueue(): void {
+  while (activeRuns.size < MAX_ACTIVE_RUN_WORKERS && _runQueue.length > 0) {
+    const next = _runQueue.shift()!;
+    _runQueued.delete(next.runId);
+    if (activeRuns.has(next.runId)) continue;
+    void runScanWorker(next.runId, next.tenantId, next.checker);
+  }
+}
 let kineticMonitoringSchemaReady = false;
 
 function ensureKineticMonitoringSchema(): void {
@@ -408,6 +441,7 @@ export async function runScanWorker(
       lastError: terminalError,
     });
     activeRuns.delete(runId);
+    pumpRunQueue(); // a slot freed — start the next queued run, if any
   }
 }
 
@@ -759,7 +793,7 @@ export function resumeInterruptedRuns(): void {
       console.log(
         `[scan-engine] resuming interrupted run ${run.id} (${countQueued(run.id)} pending)`,
       );
-      void runScanWorker(run.id, run.tenantId);
+      dispatchRun(run.id, run.tenantId);
     }
     // Drain STRANDED TAILS: 'done' or 'error' runs that still hold claimable queued
     // targets (a target requeued exactly as the batch drained, or a worker that died
@@ -771,7 +805,7 @@ export function resumeInterruptedRuns(): void {
       resetInflightTargets(run.id);
       setRunStatus(run.id, "running");
       console.log(`[scan-engine] re-opening stranded '${run.status}' run ${run.id} (${countQueued(run.id)} claimable pending)`);
-      void runScanWorker(run.id, run.tenantId);
+      dispatchRun(run.id, run.tenantId);
     }
   } catch (err: any) {
     console.warn("[scan-engine] resume failed:", err?.message);
@@ -795,7 +829,7 @@ export function resumeCriticalRuns(): void {
       resetInflightTargets(run.id);
       if (countQueued(run.id) === 0) { setRunStatus(run.id, "done"); continue; }
       console.log(`[scan-engine] fast-resuming revenue run ${run.id} kind=${run.kind} (${countQueued(run.id)} pending)`);
-      void runScanWorker(run.id, run.tenantId);
+      dispatchRun(run.id, run.tenantId);
     }
   } catch (err: any) {
     console.warn("[scan-engine] critical resume failed:", err?.message);

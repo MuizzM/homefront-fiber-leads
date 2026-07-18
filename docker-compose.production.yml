@@ -84,6 +84,17 @@ services:
       # add per-minute rate caps.
       SCAN_GLOBAL_CONCURRENCY: "64"
       SCAN_BATCH_CONCURRENCY: "32"
+      # Cap concurrently-EXECUTING scan-run worker loops (not provider concurrency,
+      # which SCAN_GLOBAL_CONCURRENCY governs). A backlog of 100+ 'running' runs all
+      # resuming at boot spawned 100+ worker loops, each polling the DB synchronously,
+      # pegging the single core to 99% and starving /api/health (prod outage). 16 is
+      # plenty — provider concurrency (64) is shared across them.
+      MAX_ACTIVE_RUN_WORKERS: "16"
+      # Proactive Decodo rotation cadence. 10 was too aggressive: under a 403
+      # rolling-window storm it rotated the session hundreds of times/sec (runaway
+      # CPU). 40 is the previously-proven value — 403s are a refilling throttle, so
+      # pace, don't rotate harder. Reactive on-403 rotation still catches the rest.
+      PROXY_ROTATE_EVERY: "40"
       # ── Outbound mail sender (2026-07-16 OTP outage) ─────────────────────────
       # The Resend account has exactly ONE verified sending domain:
       # portal.homefrontsolutionsllc.com. The host .env pointed MAIL_FROM at the
