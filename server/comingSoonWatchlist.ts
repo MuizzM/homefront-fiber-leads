@@ -68,11 +68,26 @@ function parseDateMs(value: string | null | undefined): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
+// Cities with a FUNDED/announced expansion (e.g. the SW-Chatham CAB build) run
+// at the hot cadence even without a per-address ETA — a switch-on there is a
+// when, not an if. Spec: COMING_SOON_HOT_CITIES="bear creek:nc,goldston:nc"
+// (state defaults to NC). Parse once per tick and pass the set to urgencyOf.
+export function hotCitySet(env: NodeJS.ProcessEnv = process.env): Set<string> {
+  const out = new Set<string>();
+  for (const entry of String(env.COMING_SOON_HOT_CITIES ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean)) {
+    out.add(entry.includes(":") ? entry : `${entry}:nc`);
+  }
+  return out;
+}
+
 /** Urgency of one watch row — shared by the tick's due-selection and the API. */
 export function urgencyOf(
-  row: { estimated_completion?: string | null; source?: string | null },
+  row: { estimated_completion?: string | null; source?: string | null; city?: string | null; state?: string | null },
   now = Date.now(),
+  hotCities?: Set<string>,
 ): WatchUrgency {
+  if (hotCities?.size && row.city
+      && hotCities.has(`${String(row.city).trim().toLowerCase()}:${String(row.state ?? "nc").trim().toLowerCase()}`)) return "hot";
   const eta = parseDateMs(row.estimated_completion);
   if (eta != null && eta <= now + CFG.hotWindowDays() * DAY_MS) return "hot";
   if (CONSTRUCTION_SOURCE_RE.test(String(row.source ?? ""))) return "soon";
@@ -176,10 +191,11 @@ function selectDue(now: number, limit: number): DueRow[] {
       ORDER BY w.last_checked_at ASC
       LIMIT 2000`,
   ).all(now - cadenceMs("hot")) as DueRow[];
-  const due = rows.filter((r) => r.last_checked_at == null || now - r.last_checked_at >= cadenceMs(urgencyOf(r, now)));
+  const hot = hotCitySet();
+  const due = rows.filter((r) => r.last_checked_at == null || now - r.last_checked_at >= cadenceMs(urgencyOf(r, now, hot)));
   // Hot-first within the batch cap, oldest-checked first inside each band.
   due.sort((a, b) =>
-    URGENCY_RANK[urgencyOf(a)] - URGENCY_RANK[urgencyOf(b)] ||
+    URGENCY_RANK[urgencyOf(a, now, hot)] - URGENCY_RANK[urgencyOf(b, now, hot)] ||
     (a.last_checked_at ?? 0) - (b.last_checked_at ?? 0));
   return due.slice(0, limit);
 }

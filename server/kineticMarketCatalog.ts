@@ -115,6 +115,19 @@ const GA_LEGACY_SERVICE: Record<string, string> = {
 
 const EXPANDING_GA = new Set(["dalton"]);
 
+// COPPER-SWITCH WATCH: legacy "other high-speed" towns are Kinetic ILEC copper
+// territory — the exact places where the next copper→fiber switch-on mints a
+// whole town of Fresh Leads at once. A 336h (2-week) revisit was far too slow
+// to catch a flip; copper towns now re-sweep every COPPER_WATCH_HOURS (72h).
+// (Declared BEFORE the catalog array below — its literal evaluates these at
+// module init, so a later declaration would be a temporal-dead-zone crash.)
+const COPPER_WATCH_HOURS = Math.max(6, Math.floor(Number(process.env.COPPER_WATCH_HOURS ?? 72) || 72));
+// SW Chatham NC: Windstream's June 2025 CAB grant (1,037 unserved locations
+// around Bear Creek/Goldston, FTTH due Oct 31 2026) — the closest FUNDED
+// Kinetic build to the Triangle. Copper here is actively becoming fiber:
+// daily cadence + a big score boost so the sweep reaches them first.
+const COPPER_TRANSITION_HOT_NC = new Set(["bear creek", "goldston", "moncure"]);
+
 export const KINETIC_MARKET_CATALOG: KineticMarketCatalogEntry[] = [
   ...Object.entries(GA_FIBER).map(([city, county]) => makeEntry(city, "GA", county)),
   ...Object.entries(GA_LEGACY_SERVICE).map(([city, county]) => makeLegacyEntry(city, "GA", county)),
@@ -149,9 +162,10 @@ function makeEntry(city: string, state: "NC" | "SC" | "GA", county: string): Kin
 }
 
 function makeLegacyEntry(city: string, state: "NC" | "SC" | "GA", county: string): KineticMarketCatalogEntry {
+  const hot = state === "NC" && COPPER_TRANSITION_HOT_NC.has(normalizePlace(city));
   return {
     city, state, county, status: "verified_legacy_service", serviceTier: "other_high_speed",
-    priorityClass: "low", priorityScore: 40, cadenceHours: 336,
+    priorityClass: "low", priorityScore: hot ? 90 : 40, cadenceHours: hot ? 24 : COPPER_WATCH_HOURS,
     directoryUrl: KINETIC_DIRECTORY_URLS[state], directoryVerified: true, announcementUrls: [],
   };
 }
@@ -169,8 +183,12 @@ export function applyAuthoritativeMarketCatalog(): { verified: number; expanding
     kinetic_status=?,auto_scan_eligible=1,directory_url=?,evidence_checked_at=?,directory_last_seen_at=?,
     coverage_gap=CASE WHEN lat IS NULL OR lng IS NULL THEN 'coordinates_pending' ELSE NULL END,
     priority_class=CASE WHEN ?='verified_expanding' THEN 'critical' WHEN ?='verified_served' THEN 'medium' WHEN population>=25000 THEN 'medium' ELSE 'low' END,
-    priority_score=CASE WHEN ?='verified_expanding' THEN 100 WHEN ?='verified_served' THEN 65 WHEN population>=25000 THEN 65 ELSE 45 END,
-    cadence_hours=CASE WHEN ?='verified_expanding' THEN 24 WHEN ?='verified_served' THEN 168 WHEN population>=25000 THEN 168 ELSE 336 END,
+    -- Catalog-entry score/cadence are BOUND and combined with MAX/MIN so a
+    -- per-entry value can only raise urgency (higher score, shorter cadence),
+    -- never relax the status-derived baseline. This is how the copper-switch
+    -- watch (72h legacy re-sweep, 24h SW-Chatham CAB towns) reaches the DB.
+    priority_score=MAX(?, CASE WHEN ?='verified_expanding' THEN 100 WHEN ?='verified_served' THEN 65 WHEN population>=25000 THEN 65 ELSE 45 END),
+    cadence_hours=MIN(?, CASE WHEN ?='verified_expanding' THEN 24 WHEN ?='verified_served' THEN 168 WHEN population>=25000 THEN 168 ELSE 336 END),
     priority_reasons=?,announcement_url=COALESCE(?,announcement_url),
     next_scan_at=MIN(COALESCE(next_scan_at,datetime('now')),datetime('now')),updated_at=datetime('now')
     WHERE id=?`);
@@ -204,7 +222,9 @@ export function applyAuthoritativeMarketCatalog(): { verified: number; expanding
       update.run(
         entry.county, JSON.stringify(entry.county.split("|")), entry.status, entry.directoryVerified ? entry.directoryUrl : null,
         CATALOG_OBSERVED_AT, CATALOG_OBSERVED_AT,
-        entry.status, entry.status, entry.status, entry.status, entry.status, entry.status,
+        entry.status, entry.status,
+        entry.priorityScore, entry.status, entry.status,
+        entry.cadenceHours, entry.status, entry.status,
         JSON.stringify(priorityReasons(entry)), entry.announcementUrls[0] ?? null, market.id,
       );
       if (entry.directoryVerified) {

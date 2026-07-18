@@ -39,11 +39,15 @@ describe("state monitoring evidence store", () => {
       verifiedMarkets: 161, expandingMarkets: 14, syntheticMarkets: 161,
     });
     const tiers = rawDb.prepare(`SELECT priority_class AS priorityClass,cadence_hours AS cadenceHours,COUNT(*) AS count
-      FROM state_fiber_markets GROUP BY priority_class,cadence_hours ORDER BY cadence_hours`).all();
+      FROM state_fiber_markets GROUP BY priority_class,cadence_hours ORDER BY cadence_hours,priority_class`).all();
     expect(tiers).toEqual([
       { priorityClass: "critical", cadenceHours: 24, count: 14 },
+      // Copper-switch watch: SW-Chatham CAB towns (bear creek/goldston/moncure)
+      // run daily; every other legacy copper town re-sweeps at 72h (was 336h)
+      // so a copper→fiber switch-on is caught within days, not weeks.
+      { priorityClass: "low", cadenceHours: 24, count: 3 },
+      { priorityClass: "low", cadenceHours: 72, count: 94 },
       { priorityClass: "medium", cadenceHours: 168, count: 50 },
-      { priorityClass: "low", cadenceHours: 336, count: 97 },
     ]);
   });
 

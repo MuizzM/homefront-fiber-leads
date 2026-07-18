@@ -16,8 +16,14 @@ describe("Kinetic NC/SC market catalog", () => {
     expect(keys).toHaveLength(161);
     expect(KINETIC_MARKET_CATALOG.filter((m) => m.status === "verified_expanding").length).toBe(14);
     expect(KINETIC_MARKET_CATALOG.filter((m) => m.status === "verified_legacy_service")).toHaveLength(97);
+    // Copper-switch watch: an ordinary legacy copper town now re-sweeps at 72h
+    // (was 336h) so a copper→fiber flip is caught within days, not weeks.
     expect(KINETIC_MARKET_CATALOG.find((m) => m.city === "Statesville" && m.state === "NC")).toMatchObject({
-      status: "verified_legacy_service", serviceTier: "other_high_speed", cadenceHours: 336,
+      status: "verified_legacy_service", serviceTier: "other_high_speed", cadenceHours: 72, priorityScore: 40,
+    });
+    // Funded SW-Chatham CAB town (Bear Creek) runs daily with a score boost.
+    expect(KINETIC_MARKET_CATALOG.find((m) => m.city === "Bear Creek" && m.state === "NC")).toMatchObject({
+      status: "verified_legacy_service", cadenceHours: 24, priorityScore: 90,
     });
     const hemby = KINETIC_MARKET_CATALOG.find((m) => m.city === "Hemby Bridge" && m.state === "NC")!;
     expect(hemby.directoryVerified).toBe(false);

@@ -49,11 +49,23 @@ services:
       # Chatham CAB build (Bear Creek/Goldston, 1,037 locations, due Oct 2026).
       # Corridor first; Durham-ring probes after, to prove the rumor with our own
       # scanner verdicts rather than aggregator listings.
-      EXPLORE_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,durham:nc,chapel hill:nc,hillsborough:nc,creedmoor:nc,butner:nc,roxboro:nc,oxford:nc,mebane:nc,pittsboro:nc,wake forest:nc"
+      EXPLORE_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,durham:nc,chapel hill:nc,hillsborough:nc,creedmoor:nc,butner:nc,roxboro:nc,oxford:nc,mebane:nc,pittsboro:nc,wake forest:nc,inman:sc,moncure:nc"
       # "Right away" corridor scan (user 2026-07-18): DISCOVERY-class runs over
       # EXISTING stale targets, 2 min after boot — no harvest wait. Explore above
       # still harvests the never-enumerated towns (olivia has zero targets).
-      PRIORITY_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc"
+      PRIORITY_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,inman:sc,moncure:nc"
+      # ── Copper-switch watch (2026-07-18) ─────────────────────────────────
+      # Legacy Kinetic ILEC copper towns re-sweep every 72h (was 336h) so a
+      # copper→fiber switch-on is caught within days, not weeks; SW-Chatham CAB
+      # towns (bear creek/goldston/moncure — funded build due Oct 2026) run at
+      # 24h with a score boost via the catalog.
+      COPPER_WATCH_HOURS: "72"
+      # Coming-Soon rechecks at DOUBLE frequency (hot 6→3h, construction
+      # 12→6h, watch 24→12h) + funded-expansion cities always hot.
+      COMING_SOON_HOT_HOURS: "3"
+      COMING_SOON_CONSTRUCTION_HOURS: "6"
+      COMING_SOON_WATCH_HOURS: "12"
+      COMING_SOON_HOT_CITIES: "bear creek:nc,goldston:nc,moncure:nc,inman:sc"
       # ── Concurrency tuned to the THROUGHPUT PLATEAU, not a rate limit ────────
       # At the raised default (100 concurrent checks) Node's single thread saturated
       # on synchronous SQLite work: per-check latency inflated ~10x (to ~30s),

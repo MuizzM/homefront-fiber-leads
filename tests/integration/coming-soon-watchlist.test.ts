@@ -299,3 +299,18 @@ describe("GET /api/coming-soon/watchlist", () => {
     expect(payload.items[0]).toHaveProperty("lastCheckedAt");
   });
 });
+
+describe("funded-expansion hot cities", () => {
+  it("hotCitySet parses the spec with NC default and urgencyOf boosts matching cities to hot", async () => {
+    const { hotCitySet, urgencyOf } = await import("../../server/comingSoonWatchlist");
+    const hot = hotCitySet({ COMING_SOON_HOT_CITIES: "bear creek:nc, Goldston , inman:sc" } as any);
+    expect(hot).toEqual(new Set(["bear creek:nc", "goldston:nc", "inman:sc"]));
+    // No ETA, no construction source — normally "watch", but the city is funded-hot.
+    expect(urgencyOf({ estimated_completion: null, source: "scanner", city: "Bear Creek", state: "NC" }, Date.now(), hot)).toBe("hot");
+    expect(urgencyOf({ estimated_completion: null, source: "scanner", city: "Inman", state: "SC" }, Date.now(), hot)).toBe("hot");
+    // Non-listed city keeps its ordinary urgency.
+    expect(urgencyOf({ estimated_completion: null, source: "scanner", city: "Concord", state: "NC" }, Date.now(), hot)).toBe("watch");
+    // Without the set, behavior is unchanged.
+    expect(urgencyOf({ estimated_completion: null, source: "scanner", city: "Bear Creek", state: "NC" })).toBe("watch");
+  });
+});
