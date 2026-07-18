@@ -5,6 +5,12 @@
 // are pure DB operations over data the product already accumulated.
 import { rawDb } from "./db";
 import type { MarketAggregate } from "@shared/marketIntel";
+import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
+
+// Quiet window for addresses concluded address_not_found (persistent needs-fix
+// non-answers with no adoptable suggestion): parked out of BULK claims this
+// long, then re-probed. Manual/lasso/recheck kinds pass skipSec=0 → always check.
+export const ANF_QUIET_DAYS = Math.max(1, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_QUIET_DAYS ?? 14) || 14));
 
 const g = <T = any>(sql: string, ...args: any[]): T => rawDb.prepare(sql).get(...args) as T;
 const all = <T = any>(sql: string, ...args: any[]): T[] => rawDb.prepare(sql).all(...args) as T[];
@@ -248,9 +254,23 @@ const _skipRecentlyScanned = rawDb.prepare(
      WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
        AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
                      AND st.last_scanned_at IS NOT NULL AND st.last_scanned_at > datetime('now', ?))`);
+// Parked address_not_found rows: the address string was concluded absent from
+// Kinetic's fabric (INCONCLUSIVE_GIVEUP+ needs-fix non-answers, never a
+// conclusive answer). Bulk claims skip them during the quiet window instead of
+// re-burning proxy checks; after it lapses they are claimable again (re-probe).
+const _skipParkedNotFound = rawDb.prepare(
+  `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+     WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
+       AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
+                     AND st.last_scanned_at IS NULL AND st.inconclusive_attempts >= ?
+                     AND st.last_inconclusive_at IS NOT NULL AND st.last_inconclusive_at > datetime('now', ?))`);
 const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlyScannedSec: number) => {
   if (skipRecentlyScannedSec > 0) {
     _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
+    _skipParkedNotFound.run(
+      "parked: address_not_found quiet window (needs-fix non-answers exhausted)",
+      runId, INCONCLUSIVE_GIVEUP, `-${ANF_QUIET_DAYS} days`,
+    );
   }
   const rows = _claimSelect.all(runId, limit) as any[];
   for (const r of rows) _claimMark.run(runId, r.targetId);
@@ -279,6 +299,36 @@ export function finalizeRunTarget(runId: string, targetId: number, state: "verif
 // Return orphaned 'inflight' rows to the queue (crash recovery on resume).
 export function resetInflightTargets(runId: string): number {
   return rawDb.prepare(`UPDATE scan_run_targets SET state='queued' WHERE run_id=? AND state='inflight'`).run(runId).changes;
+}
+
+// One-shot boot backfill: terminalize the ALREADY-EXHAUSTED needs-fix tail
+// (queued targets at attemptCap+ attempts whose last error is the needs-fix
+// family) WITHOUT burning one more check each — the recorded history IS the
+// evidence the live path would re-gather. Idempotent: finalized rows leave
+// 'queued' and never match again.
+export function finalizeAddressNotFoundBacklog(attemptCap: number): { targets: number; runs: number } {
+  const rows = rawDb.prepare(
+    `SELECT rt.run_id AS runId, rt.target_id AS targetId, rt.attempt_count AS attempts
+       FROM scan_run_targets rt
+      WHERE rt.state='queued' AND rt.attempt_count >= ?
+        AND (rt.last_error_message LIKE '%AddressNeedsFix%' OR rt.last_error_message LIKE '%AddressSuggestions%')
+      LIMIT 100000`,
+  ).all(attemptCap) as Array<{ runId: string; targetId: number; attempts: number }>;
+  if (!rows.length) return { targets: 0, runs: 0 };
+  const park = rawDb.prepare(
+    `UPDATE scan_targets SET inconclusive_attempts = MAX(inconclusive_attempts, ?), last_inconclusive_at = datetime('now')
+      WHERE id = ? AND last_scanned_at IS NULL`,
+  );
+  const runsTouched = new Set<string>();
+  const chunk = rawDb.transaction((batch: typeof rows) => {
+    for (const r of batch) {
+      finalizeRunTarget(r.runId, r.targetId, "failed", `address_not_found: backfill after ${r.attempts} needs-fix attempts`, { failed: 1 });
+      park.run(INCONCLUSIVE_GIVEUP, r.targetId);
+      runsTouched.add(r.runId);
+    }
+  });
+  for (let i = 0; i < rows.length; i += 500) chunk(rows.slice(i, i + 500));
+  return { targets: rows.length, runs: runsTouched.size };
 }
 
 // Requeue ONE target after a TRANSIENT provider error (token/throttle/network) so

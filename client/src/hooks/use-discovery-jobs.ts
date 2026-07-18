@@ -12,7 +12,26 @@ type JobMap = Record<string, DiscoveryJob>;
 type Listener = (event: DiscoveryEvent) => void;
 
 function mergeJob(current: DiscoveryJob | undefined, patch: Partial<DiscoveryJob> & { id: string }): DiscoveryJob {
-  return normalizeDiscoveryJob({ ...(current ?? {}), ...patch, id: patch.id });
+  const next = normalizeDiscoveryJob({ ...(current ?? {}), ...patch, id: patch.id });
+  // Identity-preserving merge: SSE re-sends the same counters constantly during
+  // a scan; returning the CURRENT object when nothing observable changed lets
+  // the reducer's `state[id] === next` bailout actually fire (it was dead code
+  // while this always allocated), so no-change events cost zero renders.
+  if (current && equalJob(current, next)) return current;
+  return next;
+}
+
+function equalJob(a: DiscoveryJob, b: DiscoveryJob): boolean {
+  for (const key of JOB_KEYS) {
+    const x = (a as any)[key];
+    const y = (b as any)[key];
+    if (x === y) continue;
+    // Object-valued fields (geometry, sources, sourceWarnings) arrive as fresh
+    // references per event even when deep-equal; compare by value.
+    if (x && y && typeof x === "object" && typeof y === "object" && JSON.stringify(x) === JSON.stringify(y)) continue;
+    return false;
+  }
+  return true;
 }
 
 function reducer(state: JobMap, action:
@@ -119,6 +138,17 @@ export function useDiscoveryJobs(enabled: boolean) {
     }
   }, [enabled]);
 
+  const pendingRef = useRef(new Map<string, Partial<DiscoveryJob> & { id: string }>());
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushPending = useCallback(() => {
+    if (flushTimerRef.current != null) { clearTimeout(flushTimerRef.current); flushTimerRef.current = null; }
+    if (!pendingRef.current.size) return;
+    const batch = pendingRef.current;
+    pendingRef.current = new Map();
+    // Multiple dispatches in one tick — React batches them into a single render.
+    for (const job of batch.values()) dispatch({ type: "upsert", job });
+  }, []);
+
   useEffect(() => {
     if (!enabled) return;
     let stopped = false;
@@ -129,7 +159,21 @@ export function useDiscoveryJobs(enabled: boolean) {
     const publish = (event: DiscoveryEvent) => {
       lastEventIdRef.current = String(event.id);
       const patch = jobPatchFromEvent(event);
-      if (patch) dispatch({ type: "upsert", job: patch });
+      if (patch) {
+        if (patch.status) {
+          // Status transitions render immediately (a tap must feel instant) —
+          // flush any buffered counters first so ordering is preserved.
+          flushPending();
+          dispatch({ type: "upsert", job: patch });
+        } else {
+          // Count-only progress (checked/qualified/discovered ticks arrive many
+          // times per second during a town scan): coalesce to ≤4 renders/s so the
+          // map stays at 60fps while the counters still feel live.
+          const prev = pendingRef.current.get(patch.id);
+          pendingRef.current.set(patch.id, prev ? { ...prev, ...patch, id: patch.id } : patch);
+          if (flushTimerRef.current == null) flushTimerRef.current = setTimeout(flushPending, 250);
+        }
+      }
       for (const listener of listenersRef.current) listener(event);
     };
 
@@ -184,9 +228,10 @@ export function useDiscoveryJobs(enabled: boolean) {
       stopped = true;
       controller?.abort();
       if (retryTimer) clearTimeout(retryTimer);
+      flushPending(); // deliver any buffered counters before teardown
       setConnected(false);
     };
-  }, [enabled, hydrate]);
+  }, [enabled, hydrate, flushPending]);
 
   const subscribe = useCallback((listener: Listener) => {
     listenersRef.current.add(listener);

@@ -56,6 +56,27 @@ function writePersistedSession(sid: string | null) {
   try { window.name = JSON.stringify(sid ? { sid } : {}); } catch { /* ignore */ }
 }
 
+// Last-known user snapshot — the offline cold-launch grace. A rep opening the
+// PWA in a dead zone used to hit an unpassable login wall (status check network-
+// errors, user stays null) even though the session + shell + pins were cached.
+// The snapshot only ever hydrates alongside a persisted session id on a NETWORK
+// failure — a real 401 still logs out and clears it.
+const USER_KEY = "hfs.user";
+function readPersistedUser(): AuthUser | null {
+  try {
+    const raw = window.localStorage?.getItem(USER_KEY);
+    if (!raw) return null;
+    const u = JSON.parse(raw);
+    return u && typeof u === "object" && typeof u.id === "number" && typeof u.role === "string" ? (u as AuthUser) : null;
+  } catch { return null; }
+}
+function writePersistedUser(u: AuthUser | null) {
+  try {
+    if (u) window.localStorage?.setItem(USER_KEY, JSON.stringify(u));
+    else window.localStorage?.removeItem(USER_KEY);
+  } catch { /* storage blocked */ }
+}
+
 let _memSession: string | null = readPersistedSession();
 export function getSessionId() { return _memSession; }
 
@@ -78,6 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!_memSession) return;
       _memSession = null;
       writePersistedSession(null);
+      writePersistedUser(null); // a real 401 ends offline grace too
       setSid(null);
       syncSessionToQueryClient(null);
       setUser(null);
@@ -95,13 +117,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsFirstRun(data.isFirstRun);
       if (data.currentUser) {
         setUser(data.currentUser);
+        writePersistedUser(data.currentUser); // refresh the offline-grace snapshot
         if (existingSid) {
           setSid(existingSid);
           syncSessionToQueryClient(existingSid);
           (window as any).__sessionId = existingSid; // expose for browser scanner
         }
       }
-    } catch {}
+    } catch {
+      // NETWORK failure (dead zone / offline PWA launch) — not an auth rejection
+      // (a rejected session resolves with no currentUser instead). Hydrate the
+      // last-known user so the cached shell, pins and knock queue stay usable,
+      // and re-verify the moment connectivity returns. A true expiry surfaces
+      // as a 401 on the first real API call and logs out via the global handler.
+      if (existingSid) {
+        const snapshot = readPersistedUser();
+        if (snapshot) {
+          setUser(snapshot);
+          setSid(existingSid);
+          syncSessionToQueryClient(existingSid);
+          (window as any).__sessionId = existingSid;
+          window.addEventListener("online", () => void checkStatus(existingSid), { once: true });
+        }
+      }
+    }
     setLoading(false);
   }
 
@@ -112,6 +151,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     syncSessionToQueryClient(newSid);
     (window as any).__sessionId = newSid; // expose for browser scanner native fetch calls
     setUser(u);
+    writePersistedUser(u); // offline-grace snapshot
     setIsFirstRun(false);
   }
 
@@ -126,6 +166,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     _memSession = null;
     writePersistedSession(null); // clear persisted session
+    writePersistedUser(null); // clear the offline-grace snapshot
     clearPersistedQueryCache(); // drop the on-disk dashboard SWR snapshot
     setSid(null);
     syncSessionToQueryClient(null);

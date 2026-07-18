@@ -4,7 +4,7 @@ import { rawDb } from "./db";
 export type FiberEventType =
   | "job.started" | "job.progress" | "job.paused" | "job.resumed" | "job.cancelled"
   | "job.completed" | "job.failed" | "address.completed" | "address.failed" | "address.requeued"
-  | "worker.heartbeat" | "dead_letter.retried";
+  | "address.not_found_terminal" | "worker.heartbeat" | "dead_letter.retried";
 
 export function correlationId(runId: string): string {
   const row = rawDb.prepare(`SELECT correlation_id AS correlationId FROM scan_runs WHERE id=?`).get(runId) as any;

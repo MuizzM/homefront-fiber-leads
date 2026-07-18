@@ -41,6 +41,7 @@ import {
   getResumableRuns,
   getStrandedDoneRuns,
   resetInflightTargets,
+  ANF_QUIET_DAYS,
   type ScanRunRow,
 } from "./scanIntelStore";
 import { projectConfirmedFreshLeads } from "./freshFiberProjector";
@@ -115,6 +116,11 @@ export function isRunActive(runId: string): boolean {
 // discovery, and expansion skip recently-answered addresses to kill duplicate proxy
 // spend across the 65 daily-diff / 21 city-sweep runs sharing the same inventory.
 const DEDUP_RECHECK_SEC = Math.max(0, Math.floor(Number(process.env.SCAN_DEDUP_RECHECK_HOURS ?? 18) * 3600));
+// address_not_found terminal: after this many needs-fix non-answers (per run,
+// sessions rotating across attempts) the address string is concluded absent from
+// Kinetic's fabric — a DATA verdict, never no-service. Parked from bulk claims
+// for ANF_QUIET_DAYS, then re-probed (new fabric imports do add streets).
+const ANF_TERMINAL_ATTEMPTS = Math.max(2, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_ATTEMPTS ?? 6) || 6));
 function dedupSkipSecondsForRun(kind: string): number {
   const v = String(kind ?? "").toLowerCase();
   if (v.includes("manual") || v === "target_ids" || v.includes("lasso") || v.includes("bbox") || v.includes("area") || v.includes("field")) return 0;
@@ -246,20 +252,57 @@ export async function runScanWorker(
               // address is still preserved + retried, just on a slower cadence, so the
               // run can drain instead of stranding a perpetually-requeued tail.
               const addressNotReady = !result.blocked && /AddressNeedsFix|AddressSuggestions/i.test(result.notes || "");
-              // Unlimited budget → recheck new/not-yet-cataloged addresses far more
-              // eagerly (cap 1h, was 6h) so a NEW FIBER activation surfaces fast.
-              const backoffSec = addressNotReady ? Math.min(3600, 20 * Math.pow(2, Math.min(attempt, 8))) : 0;
-              requeueRunTarget(runId, t.targetId, backoffSec);
-              addRunBytes(runId, bytes); // the failed attempt still cost its request bytes
-              recordFiberFailure({
-                tenantId, runId, targetId: t.targetId, category,
-                message: result.notes || "transient provider error", attempt, retryable: true,
-              });
-              recordProviderOutcome(tenantId, false, result.notes);
-              appendFiberEvent({
-                tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
-                payload: { category, attempt },
-              });
+              if (addressNotReady) {
+                // Target-level ledger of needs-fix non-answers. Only counts while the
+                // address has never had a conclusive answer; a real answer later
+                // resets it to 0 (recordScanTargetResult).
+                storage.bumpScanTargetInconclusive({ id: t.targetId });
+              }
+              if (addressNotReady && attempt >= ANF_TERMINAL_ATTEMPTS) {
+                // N real attempts (sessions rotate across them), every one a needs-fix
+                // non-answer with no adoptable suggestion → the ADDRESS STRING is not
+                // in Kinetic's fabric today. Conclude address_not_found — a conclusive
+                // DATA verdict about the address, never a no-service serviceability
+                // verdict. The target parks out of BULK claims for the quiet window
+                // (claimRunTargets; manual/lasso/recheck kinds always re-verify), is
+                // re-probed after it (fabric imports do add streets), and the run
+                // drains instead of dragging a permanently-requeued tail. Prod data
+                // behind the cap: 30,385 targets stuck at 8+ attempts were re-burning
+                // ~30% of daily check capacity with zero yield.
+                finalizeRunTarget(runId, t.targetId, "failed", `address_not_found: ${attempt}× needs-fix non-answer, no adoptable suggestion`, { failed: 1, estBytes: bytes });
+                emitStage({
+                  addressKey: normalizeKineticAddressKey(t.address, t.city, t.state, t.zip),
+                  address: t.address, city: t.city, state: t.state, zip: t.zip,
+                  runId, source: run.kind, stage: "classified", status: "ok", attempt,
+                  classification: "address_not_found",
+                  detail: `conclusive after ${attempt} needs-fix attempts — address not in Kinetic fabric (NOT no-service); quiet ${ANF_QUIET_DAYS}d then re-probe`,
+                  tsEpoch: Date.now(),
+                });
+                recordFiberFailure({
+                  tenantId, runId, targetId: t.targetId, category: "address_not_found",
+                  message: result.notes || "needs-fix non-answer", attempt, retryable: false,
+                });
+                recordProviderOutcome(tenantId, false, result.notes);
+                appendFiberEvent({
+                  tenantId, runId, eventType: "address.not_found_terminal", targetId: t.targetId,
+                  payload: { attempt },
+                });
+              } else {
+                // Unlimited budget → recheck new/not-yet-cataloged addresses far more
+                // eagerly (cap 1h, was 6h) so a NEW FIBER activation surfaces fast.
+                const backoffSec = addressNotReady ? Math.min(3600, 20 * Math.pow(2, Math.min(attempt, 8))) : 0;
+                requeueRunTarget(runId, t.targetId, backoffSec);
+                addRunBytes(runId, bytes); // the failed attempt still cost its request bytes
+                recordFiberFailure({
+                  tenantId, runId, targetId: t.targetId, category,
+                  message: result.notes || "transient provider error", attempt, retryable: true,
+                });
+                recordProviderOutcome(tenantId, false, result.notes);
+                appendFiberEvent({
+                  tenantId, runId, eventType: "address.requeued", targetId: t.targetId,
+                  payload: { category, attempt },
+                });
+              }
             } else {
               // VALID provider response — a conclusive serviceability answer
               // (fiber, NEW FIBER, no-service, out-of-territory…). Record it,

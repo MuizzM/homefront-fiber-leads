@@ -510,6 +510,17 @@ app.use((req, res, next) => {
     const { startExploreCycle } = await import("./exploreCities");
     startExploreCycle();
   } catch (e: any) { console.warn("[explore-cities] start skipped:", e?.message); }
+  try {
+    // One-shot: terminalize the already-exhausted needs-fix tail (30k+ targets at
+    // 8+ attempts re-burning ~30% of check capacity) as address_not_found without
+    // spending one more check each. Idempotent; ANF_BACKFILL=off disables.
+    if (process.env.ANF_BACKFILL !== "off") {
+      const { finalizeAddressNotFoundBacklog } = await import("./scanIntelStore");
+      const cap = Math.max(2, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_ATTEMPTS ?? 6) || 6));
+      const res = finalizeAddressNotFoundBacklog(cap);
+      if (res.targets > 0) structuredLog("anf_backfill.finalized", { targets: res.targets, runs: res.runs, attemptCap: cap });
+    }
+  } catch (e: any) { console.warn("[anf-backfill] skipped:", e?.message); }
   // FRESH-LEAD BACKFILL INVARIANT: every already-confirmed green address (NEW FIBER +
   // billing N, per its latest conclusive snapshot) must be an assignable Field-Map lead.
   // Re-project ALL tenants once on boot from EXISTING data (no re-scan, no Decodo cost,

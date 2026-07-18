@@ -22,7 +22,13 @@ const Dashboard = lazy(() => import("@/pages/Dashboard"));
 const Today = lazy(() => import("@/pages/Today"));
 const PropertyDetail = lazy(() => import("@/pages/PropertyDetail"));
 const FollowUps = lazy(() => import("@/pages/FollowUps"));
-const MapView = lazy(() => import("@/pages/MapView"));
+const MapView = lazy(() => {
+  // Kick the mapbox-gl CDN download (idempotent loader in index.html) the moment
+  // the route chunk is requested instead of after it parses and the component
+  // mounts — overlapping the two fetches shaves ~0.5-1.5s off time-to-map on LTE.
+  (window as unknown as { __loadMapbox?: () => void }).__loadMapbox?.();
+  return import("@/pages/MapView");
+});
 const Leads = lazy(() => import("@/pages/Leads"));
 const Scanners = lazy(() => import("@/pages/Scanners"));
 const FiberIntelligence = lazy(() => import("@/pages/FiberIntelligence"));
@@ -127,7 +133,12 @@ function AppRoutes() {
           if (user.role === "admin" || user.role === "manager") import("@/pages/FiberIntelligence");
         }
       }
-      if (canWarmMap && fieldRole) import("@/pages/MapView");
+      if (canWarmMap && fieldRole) {
+        import("@/pages/MapView");
+        // Warm the mapbox-gl CDN lib too, so a rep's first Field Map tap mounts
+        // against an already-cached library instead of a fresh ~290KB fetch.
+        (window as unknown as { __loadMapbox?: () => void }).__loadMapbox?.();
+      }
     };
     const idleWindow = window as Window & {
       requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
