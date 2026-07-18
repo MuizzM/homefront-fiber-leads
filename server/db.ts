@@ -14,7 +14,31 @@ sqlite.pragma("journal_mode = WAL");
 // checkpoint while field/API reads continue without spurious SQLITE_BUSY.
 sqlite.pragma("foreign_keys = ON");
 sqlite.pragma("synchronous = NORMAL");
-sqlite.pragma("busy_timeout = 5000");
+// Longer busy timeout: under heavy scanning a writer transaction can hold the
+// lock for a moment; 15s lets readers wait rather than throw SQLITE_BUSY.
+sqlite.pragma(`busy_timeout = ${Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 15000) || 15000}`);
+
+// ── Use the box's RAM: keep the whole DB hot in memory ───────────────────────
+// The single biggest scanner-throughput lever on this workload. Node runs the
+// app on ONE thread and better-sqlite3 is synchronous, so every scan transaction
+// that touches DISK stalls that one thread — the root cause of the event-loop
+// wedges that took the portal down. The DB is ~1.6GB and the box has 8GB, so we
+// cache it entirely in RAM: transactions then complete in microseconds and the
+// thread stays free to serve /api and dispatch more scans. All sizes are env-
+// tunable so they can be trimmed on a smaller box without a redeploy.
+//   cache_size (negative = KiB of page cache) — 1GB SQLite page cache.
+//   mmap_size — memory-map up to 4GB of the file (reads via the OS page cache,
+//     no syscall per page).
+//   temp_store=MEMORY — sorts/temp b-trees (big GROUP BY / ORDER BY) stay in RAM.
+try {
+  const cacheKb = Math.max(2000, Number(process.env.SQLITE_CACHE_KB ?? 1_048_576) || 1_048_576); // ~1GB
+  sqlite.pragma(`cache_size = -${cacheKb}`);
+  const mmapBytes = Math.max(0, Number(process.env.SQLITE_MMAP_BYTES ?? 4_294_967_296) || 4_294_967_296); // 4GB
+  sqlite.pragma(`mmap_size = ${mmapBytes}`);
+  sqlite.pragma("temp_store = MEMORY");
+} catch (e: any) {
+  console.warn("[db] RAM pragma tuning skipped:", e?.message);
+}
 
 export const db = drizzle(sqlite, { schema });
 export const rawDb = sqlite; // Raw better-sqlite3 instance for prepared statements
