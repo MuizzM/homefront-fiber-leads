@@ -219,7 +219,26 @@ export default function ScanInspector() {
     } catch { setTimeline([]); }
   };
 
-  const sortedRows = useMemo(() => [...rows.values()].sort((a, b) => b.updatedAt - a.updatedAt), [rows]);
+  // Log-viewer filters: one address is traceable end-to-end by its correlation id
+  // (the stable addressKey hash) — filter rows by it, by pipeline stage, or by outcome.
+  const [filterQuery, setFilterQuery] = useState("");
+  const [filterStage, setFilterStage] = useState<string>("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | "ok" | "working" | "problem">("all");
+  const PROBLEM_STAGES = ["error", "blocked", "bad_request", "retry"];
+  const sortedRows = useMemo(() => {
+    const q = filterQuery.trim().toLowerCase();
+    return [...rows.values()]
+      .filter((r) => {
+        if (q && !r.addressKey.toLowerCase().includes(q) && !(r.address ?? "").toLowerCase().includes(q)) return false;
+        if (filterStage !== "all" && r.stage !== filterStage) return false;
+        if (filterStatus === "ok" && r.stage !== "classified") return false;
+        if (filterStatus === "problem" && !PROBLEM_STAGES.includes(r.stage)) return false;
+        if (filterStatus === "working" && (r.stage === "classified" || PROBLEM_STAGES.includes(r.stage))) return false;
+        return true;
+      })
+      .sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [rows, filterQuery, filterStage, filterStatus]);
+  const totalRows = rows.size;
 
   return (
     <div className="space-y-4" data-testid="scan-inspector">
@@ -268,6 +287,43 @@ export default function ScanInspector() {
         <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"><Copy className="h-4 w-4" /> Copy diagnostics</button>
       </div>
 
+      {/* Log-viewer filters — trace one address end-to-end by correlation id */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={filterQuery}
+          onChange={(e) => setFilterQuery(e.target.value)}
+          placeholder="Filter by correlation id or address…"
+          aria-label="Filter by correlation id or address"
+          data-testid="insp-filter-query"
+          className="h-8 w-56 rounded-lg border border-border bg-card px-2.5 text-[12px] text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        <select
+          value={filterStage}
+          onChange={(e) => setFilterStage(e.target.value)}
+          aria-label="Filter by pipeline stage"
+          data-testid="insp-filter-stage"
+          className="h-8 rounded-lg border border-border bg-card px-2 text-[12px] text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <option value="all">All stages</option>
+          {["queued", "minting", "token_ready", "searching", "parsing", "saving", "classified", "retry", "blocked", "bad_request", "error"].map((s) => (
+            <option key={s} value={s}>{STAGE_LABEL[s] ?? s}</option>
+          ))}
+        </select>
+        <div className="flex gap-1" role="group" aria-label="Filter by outcome">
+          {(["all", "ok", "working", "problem"] as const).map((s) => (
+            <button
+              key={s}
+              onClick={() => setFilterStatus(s)}
+              data-testid={`insp-filter-status-${s}`}
+              className={`rounded-lg px-2.5 py-1 text-[12px] font-semibold capitalize transition-colors ${filterStatus === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}
+            >{s === "ok" ? "Classified" : s}</button>
+          ))}
+        </div>
+        {(filterQuery || filterStage !== "all" || filterStatus !== "all") && (
+          <span className="text-[11px] text-muted-foreground">{sortedRows.length} of {totalRows} rows</span>
+        )}
+      </div>
+
       {/* Live rows */}
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         <div className="overflow-x-auto">
@@ -308,6 +364,12 @@ export default function ScanInspector() {
               )}
               {isOpen && (
                 <div className="border-t border-border/60 bg-background/40 px-4 py-3 pl-9">
+                  <button
+                    onClick={() => { void navigator.clipboard?.writeText(r.addressKey); }}
+                    title="Copy correlation id"
+                    data-testid="insp-correlation-id"
+                    className="mb-2 inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"
+                  >correlation: {r.addressKey}</button>
                   {timeline.length === 0 ? <div className="text-[12px] text-muted-foreground">Loading timeline…</div> : (
                     <ol className="space-y-1.5">
                       {timeline.map((t) => (

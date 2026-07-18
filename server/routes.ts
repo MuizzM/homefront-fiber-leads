@@ -1622,15 +1622,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     };
   }
 
+  // Log-notation contract: every inspector event carries a stable per-address
+  // correlation id (correlationId = the addressKey hash used across the pipeline)
+  // plus an ISO timestamp, so one address is traceable end-to-end
+  // queued→minting→token_ready→searching→parsing→saving→classified. Tokens and
+  // credentials never appear — events carry only the masked decodo session id and
+  // token last-4.
+  const withCorrelation = <T extends { addressKey?: string; tsEpoch?: number }>(e: T) => ({
+    ...e,
+    correlationId: e.addressKey,
+    ts: typeof e.tsEpoch === "number" ? new Date(e.tsEpoch).toISOString() : undefined,
+  });
   app.get("/api/scan/inspector", requireAdmin, (req, res) => {
     const runId = typeof req.query.runId === "string" ? req.query.runId : null;
     const limit = Math.min(500, Math.max(10, Number(req.query.limit) || 200));
     const snap = getInspectorSnapshot({ runId, limit });
-    res.json({ ...snap, health: inspectorHealth() });
+    res.json({ ...snap, rows: (snap.rows as any[])?.map(withCorrelation) ?? snap.rows, health: inspectorHealth() });
   });
 
   app.get("/api/scan/inspector/timeline/:key", requireAdmin, (req, res) => {
-    res.json({ timeline: getAddressTimeline(String(req.params.key), 80) });
+    res.json({ correlationId: String(req.params.key), timeline: getAddressTimeline(String(req.params.key), 80).map(withCorrelation) });
   });
 
   // SSE — streams each stage event as it happens. Never polls static counters.

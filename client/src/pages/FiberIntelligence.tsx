@@ -75,13 +75,18 @@ export default function FiberIntelligence() {
         <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC — one workspace.</p>
       </header>
 
-      {/* Tab rail */}
-      <div className="sticky top-0 z-10 -mx-4 mb-4 overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:-mx-6 sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* Tab rail — 7 tabs overflow on phones with the scrollbar hidden, which read
+          as "there are no more tabs" (observed confusion in a live walk). The right-
+          edge fade signals more content; scrollIntoView keeps the active tab visible. */}
+      <div className="relative sticky top-0 z-10 -mx-4 mb-4 sm:-mx-6">
+      <div role="tablist" aria-label="Fiber Intelligence sections" className="overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex gap-1">
           {TABS.filter((t) => t.key !== "ops" || isAdmin).map(({ key, label, icon: Icon }) => (
             <button
               key={key}
-              onClick={() => setTab(key)}
+              role="tab"
+              aria-selected={tab === key}
+              onClick={(e) => { setTab(key); (e.currentTarget as HTMLElement).scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" }); }}
               data-testid={`fi-tab-${key}`}
               className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2.5 text-[13px] font-semibold transition-colors ${tab === key ? "text-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
@@ -90,6 +95,9 @@ export default function FiberIntelligence() {
             </button>
           ))}
         </div>
+      </div>
+      {/* Overflow hint: fades the clipped edge so hidden tabs are discoverable. */}
+      <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-background to-transparent sm:hidden" />
       </div>
 
       <div className="min-h-0 flex-1">
