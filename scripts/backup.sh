@@ -29,18 +29,35 @@ if [ -n "${BACKUP_VOLUME:-}" ]; then
   docker image inspect "$BACKUP_TOOL_IMAGE" >/dev/null
 
   BACKUP_DIR_ABS="$(cd "$BACKUP_DIR" && pwd -P)"
-  docker run --rm \
-    --read-only \
-    --network none \
-    --cap-drop ALL \
-    --security-opt no-new-privileges \
-    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
-    --user "$(id -u):$(id -g)" \
-    -e AGE_RECIPIENT \
-    -e BACKUP_STAMP="$STAMP" \
-    -v "$BACKUP_VOLUME:/data:ro" \
-    -v "$BACKUP_DIR_ABS:/backups" \
-    "$BACKUP_TOOL_IMAGE"
+  # The scanner writes continuously, so the WAL re-dirties within seconds of any
+  # checkpoint — and the read-only backup container fails WAL recovery on a dirty
+  # WAL ("attempt to write a readonly database", seen failing real deploys).
+  # Checkpoint through the LIVE app immediately before each attempt and retry a
+  # few times; the checkpoint+open race window is then ~a second.
+  backup_ok=0
+  for attempt in 1 2 3 4; do
+    docker exec "${APP_CONTAINER_NAME:-homefront-app-1}" node -e \
+      'const d=new (require("better-sqlite3"))("/data/data.db");d.pragma("wal_checkpoint(TRUNCATE)");d.close()' \
+      >/dev/null 2>&1 || true
+    if docker run --rm \
+      --read-only \
+      --network none \
+      --cap-drop ALL \
+      --security-opt no-new-privileges \
+      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+      --user "$(id -u):$(id -g)" \
+      -e AGE_RECIPIENT \
+      -e BACKUP_STAMP="$STAMP" \
+      -v "$BACKUP_VOLUME:/data:ro" \
+      -v "$BACKUP_DIR_ABS:/backups" \
+      "$BACKUP_TOOL_IMAGE"; then
+      backup_ok=1
+      break
+    fi
+    echo "[backup] attempt $attempt failed (dirty WAL race?) — re-checkpointing and retrying" >&2
+    sleep 2
+  done
+  [ "$backup_ok" = "1" ] || { echo "[backup] all attempts failed" >&2; exit 1; }
 
   OUT="$BACKUP_DIR/data-$STAMP.db.age"
   [ -s "$OUT" ] || { echo "[backup] output artifact is missing or empty" >&2; exit 1; }
