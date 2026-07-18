@@ -81,15 +81,16 @@ const cityLine = (l: Lead) => `${l.city}${l.state ? `, ${l.state}` : ""}${l.zip 
 
 // The app routes on the URL hash, so a query can live either inside the hash
 // (`#/lead/7?cardVariant=2` — what a pasted link produces) or in the real
-// search string (`?cardVariant=2#/lead/7`). Accept both; anything else → 1.
+// search string (`?cardVariant=2#/lead/7`). Accept both; anything else → the
+// chosen default: V2 "Split-panel" (owner-selected from the three variants).
 type CardVariant = 1 | 2 | 3;
 function readCardVariant(): CardVariant {
   try {
     const hashQuery = window.location.hash.split("?")[1] ?? "";
     const raw = new URLSearchParams(hashQuery).get("cardVariant")
       ?? new URLSearchParams(window.location.search).get("cardVariant");
-    return raw === "2" ? 2 : raw === "3" ? 3 : 1;
-  } catch { return 1; }
+    return raw === "1" ? 1 : raw === "3" ? 3 : 2;
+  } catch { return 2; }
 }
 
 function VerifyBadge({ v }: { v?: string | null }) {
