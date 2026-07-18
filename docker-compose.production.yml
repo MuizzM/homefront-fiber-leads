@@ -49,7 +49,13 @@ services:
       # Chatham CAB build (Bear Creek/Goldston, 1,037 locations, due Oct 2026).
       # Corridor first; Durham-ring probes after, to prove the rumor with our own
       # scanner verdicts rather than aggregator listings.
-      EXPLORE_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,durham:nc,chapel hill:nc,hillsborough:nc,creedmoor:nc,butner:nc,roxboro:nc,oxford:nc,mebane:nc,pittsboro:nc,wake forest:nc,inman:sc,moncure:nc"
+      # Kinetic-only corridor. The Durham-ring probes (durham/chapel hill/
+      # hillsborough/creedmoor/butner/roxboro/oxford/mebane/pittsboro/wake forest)
+      # were REMOVED after the research verdict: they are Frontier/AT&T/Brightspeed
+      # ILEC territory, not Kinetic — every full-city OSM harvest there (Hillsborough
+      # alone pulled 37,924 addresses) was pure proxy + event-loop cost with zero
+      # Kinetic yield, and the giant synchronous upserts destabilized the 1-CPU box.
+      EXPLORE_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,inman:sc,moncure:nc"
       # "Right away" corridor scan (user 2026-07-18): DISCOVERY-class runs over
       # EXISTING stale targets, 2 min after boot — no harvest wait. Explore above
       # still harvests the never-enumerated towns (olivia has zero targets).

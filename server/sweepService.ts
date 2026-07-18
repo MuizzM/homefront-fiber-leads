@@ -11,6 +11,22 @@ import { flushFreshOpportunityAlerts } from "./stateMonitorScheduler";
 
 const active = new Set<string>();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Upsert a large harvest WITHOUT blocking the event loop. upsertScanTargets runs
+// one synchronous better-sqlite3 transaction, so a big-city OSM harvest (observed:
+// 37,924 addresses) blocks the single thread for many seconds — long enough that
+// /api/health times out and the deploy health-gate rolls the release back. Split
+// into bounded transactions and yield to the loop between them so health always
+// answers. SWEEP_UPSERT_CHUNK addresses per transaction (default 2000).
+async function upsertHarvestChunked(rows: Array<Parameters<typeof storage.upsertScanTargets>[0][number]>): Promise<number> {
+  const chunk = Math.max(200, Number(process.env.SWEEP_UPSERT_CHUNK ?? 2000) || 2000);
+  let inserted = 0;
+  for (let i = 0; i < rows.length; i += chunk) {
+    inserted += storage.upsertScanTargets(rows.slice(i, i + chunk));
+    if (i + chunk < rows.length) await new Promise((r) => setImmediate(r)); // yield between chunks
+  }
+  return inserted;
+}
 // No cap — a sweep checks every discovered address in the market. Outbound
 // provider rate stays governed by the scheduler + 403/429 backoff (correctness).
 const MAX_SWEEP_CHECKS = () => Number.MAX_SAFE_INTEGER;
@@ -74,7 +90,7 @@ export async function searchAddressArea(input: { tenantId: number; query: string
   const latDelta = input.radiusMeters / 111_320;
   const lngDelta = input.radiusMeters / (111_320 * Math.cos(lat * Math.PI / 180));
   const addresses = await pullAddressesFromOverpass({ south: lat - latDelta, north: lat + latDelta, west: lng - lngDelta, east: lng + lngDelta }, city, state);
-  const inserted = storage.upsertScanTargets(addresses.map((a) => ({ ...a, tenantId: input.tenantId, source: "osm-address-radius" })));
+  const inserted = await upsertHarvestChunked(addresses.map((a) => ({ ...a, tenantId: input.tenantId, source: "osm-address-radius" })));
   return { match: { displayName: hit.display_name, lat, lng, city, state, zip: hit.address?.postcode ?? "" }, radiusMeters: input.radiusMeters, addresses, inserted };
 }
 
@@ -557,7 +573,7 @@ async function runSweep(id: string) {
         updateJob(id, { city: job.city, state: job.state });
       } else {
         const cityHarvest = await getCityAddresses(job.city, job.state);
-        const inserted = storage.upsertScanTargets(cityHarvest.addresses.map((a) => ({ ...a, tenantId: job.tenant_id, source: "osm-city-sweep" })));
+        const inserted = await upsertHarvestChunked(cityHarvest.addresses.map((a) => ({ ...a, tenantId: job.tenant_id, source: "osm-city-sweep" })));
         harvested = { addresses: cityHarvest.addresses, inserted };
         targets = rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=lower(?) AND state=? ORDER BY (last_scanned_at IS NOT NULL),last_scanned_at LIMIT ?`).all(job.city, job.state, job.max_checks) as Array<{ id: number }>;
       }
