@@ -33,15 +33,17 @@ beforeAll(async () => {
 
 describe("state monitoring evidence store", () => {
   it("seeds every official market with the intended critical, weekly, and change-watch cadence tiers", () => {
+    // 161 = 132 NC/SC + 29 GA (Dalton active build + north-GA ILEC legacy watch);
+    // Dalton is the 14th critical/expanding market.
     expect(monitor.seedStateMarkets("/definitely/missing-market-catalog.csv")).toMatchObject({
-      verifiedMarkets: 132, expandingMarkets: 13, syntheticMarkets: 132,
+      verifiedMarkets: 161, expandingMarkets: 14, syntheticMarkets: 161,
     });
     const tiers = rawDb.prepare(`SELECT priority_class AS priorityClass,cadence_hours AS cadenceHours,COUNT(*) AS count
       FROM state_fiber_markets GROUP BY priority_class,cadence_hours ORDER BY cadence_hours`).all();
     expect(tiers).toEqual([
-      { priorityClass: "critical", cadenceHours: 24, count: 13 },
+      { priorityClass: "critical", cadenceHours: 24, count: 14 },
       { priorityClass: "medium", cadenceHours: 168, count: 50 },
-      { priorityClass: "low", cadenceHours: 336, count: 69 },
+      { priorityClass: "low", cadenceHours: 336, count: 97 },
     ]);
   });
 
