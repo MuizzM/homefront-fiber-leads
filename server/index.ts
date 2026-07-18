@@ -503,6 +503,13 @@ app.use((req, res, next) => {
     const { startComingSoonWatchlist } = await import("./comingSoonWatchlist");
     startComingSoonWatchlist();
   } catch (e: any) { console.warn("[coming-soon-watchlist] start skipped:", e?.message); }
+  try {
+    // Rumor-driven territory probes ("I heard there's Kinetic fiber near X"):
+    // EXPLORE_CITIES="durham:nc,…" → bounded city sweeps outside the verified
+    // catalog. Idempotent per city; see server/exploreCities.ts.
+    const { startExploreCycle } = await import("./exploreCities");
+    startExploreCycle();
+  } catch (e: any) { console.warn("[explore-cities] start skipped:", e?.message); }
   // FRESH-LEAD BACKFILL INVARIANT: every already-confirmed green address (NEW FIBER +
   // billing N, per its latest conclusive snapshot) must be an assignable Field-Map lead.
   // Re-project ALL tenants once on boot from EXISTING data (no re-scan, no Decodo cost,
