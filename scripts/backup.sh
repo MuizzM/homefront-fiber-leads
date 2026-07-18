@@ -32,19 +32,24 @@ if [ -n "${BACKUP_VOLUME:-}" ]; then
   # The scanner writes continuously, so a read-only open of the LIVE db races its
   # dirty WAL ("attempt to write a readonly database") — checkpoint+retry lost that
   # race 4/4 times under real load. Instead: take an ONLINE snapshot THROUGH the
-  # live app (SQLite backup API — correct under concurrent writers), then point the
-  # locked-down tool container at the quiescent snapshot (it honors DB_PATH). The
-  # snapshot is self-contained with an empty WAL, so the :ro mount is always safe.
+  # live app, then point the locked-down tool container at the quiescent snapshot
+  # (it honors DB_PATH). The snapshot is self-contained with no WAL, so the :ro
+  # mount is always safe.
   APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-homefront-app-1}"
   SNAP="/data/backup-snapshot.db"
   cleanup_snapshot() { docker exec "$APP_CONTAINER_NAME" rm -f "$SNAP" "$SNAP-wal" "$SNAP-shm" >/dev/null 2>&1 || true; }
   trap cleanup_snapshot EXIT
-  echo "[backup] online snapshot via live app…"
-  docker exec "$APP_CONTAINER_NAME" node -e '
+  echo "[backup] online snapshot via live app (VACUUM INTO)…"
+  # VACUUM INTO reads ONE consistent MVCC snapshot under WAL: it never blocks the
+  # writers and — unlike the backup API from a separate connection, which RESTARTS
+  # on every external write and livelocks under our constant scan writes (observed:
+  # 5-minute hang) — it completes in a single pass. Bounded at 240s.
+  cleanup_snapshot
+  docker exec -e SNAP="$SNAP" "$APP_CONTAINER_NAME" timeout 240 node -e '
     const Database = require("better-sqlite3");
     const d = new Database("/data/data.db", { readonly: true });
-    d.backup("'"$SNAP"'").then(() => { d.close(); process.exit(0); })
-      .catch((e) => { console.error("snapshot failed:", e.message); process.exit(1); });
+    d.exec("VACUUM INTO \x27" + process.env.SNAP + "\x27");
+    d.close();
   ' || { echo "[backup] online snapshot failed" >&2; exit 1; }
   docker run --rm \
     --read-only \
