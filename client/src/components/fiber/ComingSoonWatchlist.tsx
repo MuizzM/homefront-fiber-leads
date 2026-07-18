@@ -43,7 +43,7 @@ function DateBlock({ ms, urgency }: { ms: number | null; urgency: WatchlistItem[
   if (ms == null) {
     return (
       <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-secondary">
-        <CalendarClock className={`h-4 w-4 ${urgency === "hot" ? "animate-pulse text-orange-400" : "text-muted-foreground"}`} />
+        <CalendarClock className={`h-4 w-4 ${urgency === "hot" ? "animate-pulse text-orange-600 dark:text-orange-400" : "text-muted-foreground"}`} />
       </span>
     );
   }
@@ -76,21 +76,26 @@ function normalize(json: unknown): WatchlistItem[] {
     }));
 }
 
+// Shared with the Coming Soon tab header (FiberIntelligence.tsx) so its big
+// "Watching" count reads the exact same cached query as this list — the two
+// numbers can never disagree.
+export const WATCHLIST_QUERY = {
+  queryKey: ["/api/coming-soon/watchlist"],
+  queryFn: async (): Promise<WatchlistItem[] | null> => {
+    try {
+      const res = await apiRequest("GET", "/api/coming-soon/watchlist");
+      return normalize(await res.json());
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null; // endpoint not shipped yet
+      throw e;
+    }
+  },
+  refetchInterval: 30_000,
+  retry: (count: number, err: unknown) => !(err instanceof ApiError && (err.status === 404 || err.status === 403)) && count < 2,
+} as const;
+
 export default function ComingSoonWatchlist() {
-  const { data, isLoading } = useQuery<WatchlistItem[] | null>({
-    queryKey: ["/api/coming-soon/watchlist"],
-    queryFn: async () => {
-      try {
-        const res = await apiRequest("GET", "/api/coming-soon/watchlist");
-        return normalize(await res.json());
-      } catch (e) {
-        if (e instanceof ApiError && e.status === 404) return null; // endpoint not shipped yet
-        throw e;
-      }
-    },
-    refetchInterval: 30_000,
-    retry: (count, err) => !(err instanceof ApiError && (err.status === 404 || err.status === 403)) && count < 2,
-  });
+  const { data, isLoading } = useQuery<WatchlistItem[] | null>(WATCHLIST_QUERY);
 
   const items = (data ?? []).slice().sort((a, b) =>
     URGENCY_ORDER[a.urgency] - URGENCY_ORDER[b.urgency]
@@ -100,7 +105,7 @@ export default function ComingSoonWatchlist() {
     <div className="overflow-hidden rounded-2xl border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          <Clock className="h-3.5 w-3.5 text-cyan-400" /> Watchlist
+          <Clock className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" /> Watchlist
         </div>
         {items.length > 0 && <div className="text-[11px] text-muted-foreground">{items.length} watched</div>}
       </div>
@@ -118,6 +123,7 @@ export default function ComingSoonWatchlist() {
           Nothing on the watchlist yet — Coming Soon addresses land here and are re-checked as completion approaches.
         </div>
       ) : (
+        <>
         <div className="divide-y divide-border">
           {items.slice(0, 60).map((it) => {
             const etaMs = parseMs(it.estimatedCompletion);
@@ -141,6 +147,12 @@ export default function ComingSoonWatchlist() {
             );
           })}
         </div>
+        {items.length > 60 && (
+          <div className="border-t border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
+            Showing first 60 of {items.length}
+          </div>
+        )}
+        </>
       )}
     </div>
   );

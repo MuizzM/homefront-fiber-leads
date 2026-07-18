@@ -68,6 +68,13 @@ function rel(ts: number): string {
   return `${Math.floor(s / 3600)}h ago`;
 }
 
+// ONE column template shared by the header row and every data row. The two are
+// separate grid containers, so `auto` tracks would size to their own content
+// and drift out of alignment — fixed trailing tracks keep the columns lined up,
+// and the table scrolls horizontally on narrow screens instead of squeezing.
+const TABLE_COLS = "grid grid-cols-[minmax(0,1fr)_10.5rem_5.5rem_4.5rem] items-center gap-3";
+const TABLE_MIN_W = "min-w-[34rem]";
+
 export default function ScanInspector() {
   const { sessionId } = useAuth();
   const { toast } = useToast();
@@ -221,7 +228,7 @@ export default function ScanInspector() {
         <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${connected ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-400"}`}>
           {connected ? <Activity className="h-3.5 w-3.5" /> : <Loader2 className="h-3.5 w-3.5 animate-spin" />} {connected ? "Live" : "Connecting…"}
         </span>
-        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-emerald-500/30 text-emerald-400" : "border-red-500/30 text-red-400"}`}>
+        <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 ${health?.decodoConnected ? "border-emerald-500/30 text-emerald-600 dark:text-emerald-400" : "border-red-500/30 text-red-600 dark:text-red-400"}`}>
           {health?.decodoConnected ? <Wifi className="h-3.5 w-3.5" /> : <WifiOff className="h-3.5 w-3.5" />} Decodo {health?.decodoConnected ? "connected" : "down"}
         </span>
         <span className="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-muted-foreground font-mono">{health?.proxySessionId ?? "decodo-s?"}</span>
@@ -235,11 +242,11 @@ export default function ScanInspector() {
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
         {([
           ["Found", liveCounters.found, "text-foreground"],
-          ["Checked", liveCounters.checked, "text-emerald-400"],
+          ["Checked", liveCounters.checked, "text-emerald-600 dark:text-emerald-400"],
           ["Queued", liveCounters.queued, "text-muted-foreground"],
-          ["Checking", liveCounters.checking, "text-sky-400"],
-          ["Retrying", liveCounters.retrying, "text-amber-400"],
-          ["Unresolved", liveCounters.unresolved, "text-orange-400"],
+          ["Checking", liveCounters.checking, "text-sky-600 dark:text-sky-400"],
+          ["Retrying", liveCounters.retrying, "text-amber-600 dark:text-amber-400"],
+          ["Unresolved", liveCounters.unresolved, "text-orange-600 dark:text-orange-400"],
         ] as const).map(([label, val, tone]) => (
           <div key={label} className="rounded-xl border border-border bg-card px-3 py-2.5">
             <div className={`text-[22px] font-bold leading-none tabular-nums ${tone}`}>{val}</div>
@@ -257,13 +264,15 @@ export default function ScanInspector() {
           ? <button onClick={() => control("resume")} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-2 text-[13px] font-semibold text-[#04241f] hover:bg-emerald-400"><Play className="h-4 w-4" /> Resume</button>
           : <button onClick={() => control("pause")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"><Pause className="h-4 w-4" /> Pause</button>}
         <button onClick={() => control("retry-failed")} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"><RotateCcw className="h-4 w-4" /> Retry failed</button>
-        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-card px-3 py-2 text-[13px] font-semibold text-red-400 hover:bg-red-500/10"><Square className="h-4 w-4" /> Stop</button>
+        <button onClick={() => control("stop")} className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/40 bg-card px-3 py-2 text-[13px] font-semibold text-red-600 hover:bg-red-500/10 dark:text-red-400"><Square className="h-4 w-4" /> Stop</button>
         <button onClick={copyDiagnostics} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-2 text-[13px] font-semibold hover:bg-secondary"><Copy className="h-4 w-4" /> Copy diagnostics</button>
       </div>
 
       {/* Live rows */}
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
-        <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-3 border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <div className="overflow-x-auto">
+        <div className={TABLE_MIN_W}>
+        <div className={`${TABLE_COLS} border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground`}>
           <span>Address</span><span>Stage</span><span className="text-right">Latency</span><span className="text-right">Updated</span>
         </div>
         {sortedRows.length === 0 && (
@@ -276,7 +285,7 @@ export default function ScanInspector() {
           const isOpen = expanded === r.addressKey;
           return (
             <div key={r.addressKey} className="border-b border-border/60 last:border-0">
-              <button onClick={() => openTimeline(r.addressKey)} className="grid w-full grid-cols-[1fr_auto_auto_auto] items-center gap-3 px-4 py-2.5 text-left hover:bg-secondary/40" data-testid={`insp-row-${r.addressKey}`}>
+              <button onClick={() => openTimeline(r.addressKey)} className={`${TABLE_COLS} w-full px-4 py-2.5 text-left hover:bg-secondary/40`} data-testid={`insp-row-${r.addressKey}`}>
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     {isOpen ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
@@ -284,8 +293,8 @@ export default function ScanInspector() {
                   </div>
                   <div className="truncate pl-5 text-[11px] text-muted-foreground">{[r.city, r.state, r.zip].filter(Boolean).join(" ")} · {r.source}{r.attempt > 1 ? ` · attempt ${r.attempt}` : ""}</div>
                 </div>
-                <div className="flex flex-col items-start gap-0.5">
-                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stale ? "bg-red-500/15 text-red-400 border-red-500/30" : STAGE_TONE[r.stage] ?? "bg-muted text-muted-foreground border-border"}`}>
+                <div className="flex min-w-0 flex-col items-start gap-0.5">
+                  <span className={`inline-flex max-w-full items-center gap-1 truncate rounded-full border px-2 py-0.5 text-[11px] font-semibold ${stale ? "bg-red-500/15 text-red-400 border-red-500/30" : STAGE_TONE[r.stage] ?? "bg-muted text-muted-foreground border-border"}`}>
                     {stale ? <AlertTriangle className="h-3 w-3" /> : r.stage === "classified" ? <CheckCircle2 className="h-3 w-3" /> : null}
                     {stale ? `Blocked at ${STAGE_LABEL[r.stage] ?? r.stage}` : STAGE_LABEL[r.stage] ?? r.stage}
                   </span>
@@ -295,7 +304,7 @@ export default function ScanInspector() {
                 <div className="text-right text-[11px] tabular-nums text-muted-foreground">{rel(r.updatedAt)}</div>
               </button>
               {stale && r.retryReason && (
-                <div className="px-4 pb-2 pl-9 text-[11px] text-red-400">{r.retryReason}</div>
+                <div className="px-4 pb-2 pl-9 text-[11px] text-red-600 dark:text-red-400">{r.retryReason}</div>
               )}
               {isOpen && (
                 <div className="border-t border-border/60 bg-background/40 px-4 py-3 pl-9">
@@ -321,6 +330,8 @@ export default function ScanInspector() {
             </div>
           );
         })}
+        </div>
+        </div>
       </div>
     </div>
   );

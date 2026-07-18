@@ -4,6 +4,15 @@
 // tech, competitor, segment, score) → actions (Add / Open, Directions, Copy).
 // Works for a live scan hit, a reverse-geocoded tap, or an existing lead. Pure
 // UI — the parent owns "add as lead" and "open".
+//
+// THREE presentation variants, selectable via the `cardVariant` URL param
+// (1 | 2 | 3, default 1). Same props, same behavior, same testids — only the
+// layout differs:
+//   1 "Compact row-sheet" — tight single column, inline equal-width action row.
+//   2 "Stat-strip"        — hairline-divided score/status/confidence strip,
+//                            stacked full-width actions.
+//   3 "Hero-accent"       — status-tinted band behind the address, floating
+//                            action row, larger tap targets for gloved use.
 import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { MapPin, Zap, Plus, ArrowUpRight, Navigation } from "lucide-react";
 import { CopyAddressButton } from "@/components/CopyAddressButton";
@@ -22,21 +31,60 @@ export interface CardProperty {
   source?: "scan" | "tap" | "lead";
 }
 
+// Which layout to render. Works with the SPA's hash router: the param may sit
+// before the hash (?cardVariant=2#/map) or inside it (#/map?cardVariant=2).
+export type CardVariant = 1 | 2 | 3;
+export function readCardVariant(): CardVariant {
+  try {
+    const hash = window.location.hash;
+    const qIdx = hash.indexOf("?");
+    const fromHash = qIdx >= 0
+      ? new URLSearchParams(hash.slice(qIdx + 1)).get("cardVariant")
+      : null;
+    const fromSearch = new URLSearchParams(window.location.search).get("cardVariant");
+    const v = Number(fromHash ?? fromSearch);
+    return v === 2 || v === 3 ? v : 1;
+  } catch {
+    return 1;
+  }
+}
+
 function speedLabel(mbps?: number | null): string | null {
   if (!mbps) return null;
   return mbps >= 1000 ? `${(mbps / 1000).toFixed(mbps % 1000 ? 1 : 0)} Gig` : `${mbps} Mbps`;
 }
 
-function statusBadge(p: CardProperty): { text: string; cls: string } {
-  if (p.leadTag === "fresh_fiber_confirmed") return { text: "Confirmed fresh fiber", cls: "bg-emerald-500/15 text-emerald-500 ring-emerald-500/30" };
-  if (p.isNewFiber && p.billingStatus === "N") return { text: "New-fiber lead", cls: "bg-emerald-500/15 text-emerald-500 ring-emerald-500/30" };
-  if (p.isNewFiber) return { text: "New fiber here", cls: "bg-teal-500/15 text-teal-500 ring-teal-500/30" };
-  if (p.leadTag === "coming_soon") return { text: "Fiber coming soon", cls: "bg-amber-500/15 text-amber-500 ring-amber-500/30" };
-  if (p.competitorName) return { text: `Competitor: ${p.competitorName}`, cls: "bg-orange-500/15 text-orange-500 ring-orange-500/30" };
-  if (p.fiberStatus === "copper" || p.fiberStatus === "no_service") return { text: "No fiber yet", cls: "bg-muted text-muted-foreground ring-border" };
-  if (p.source === "tap") return { text: "Tapped location", cls: "bg-sky-500/15 text-sky-500 ring-sky-500/30" };
-  return { text: p.fiberStatus || "Unknown", cls: "bg-muted text-muted-foreground ring-border" };
+// Status chip + tone system. Every accent pairs a -600 light shade with a
+// dark:-400 shade over a 10% tinted bg, so the chip clears AA in BOTH themes.
+// `tone` is the bare text pairing (V2's stat strip), `band` feeds V3's hero
+// gradient (≈8-10% tint fading to transparent).
+type Badge = { text: string; short: string; cls: string; tone: string; band: string };
+function statusBadge(p: CardProperty): Badge {
+  const emerald = { tone: "text-emerald-600 dark:text-emerald-400", cls: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 ring-emerald-500/30", band: "from-emerald-500/10" };
+  if (p.leadTag === "fresh_fiber_confirmed")
+    return { text: "Confirmed fresh fiber", short: "Fresh fiber", ...emerald };
+  if (p.isNewFiber && p.billingStatus === "N")
+    return { text: "New-fiber lead", short: "New lead", ...emerald };
+  if (p.isNewFiber)
+    return { text: "New fiber here", short: "New fiber", tone: "text-teal-600 dark:text-teal-400", cls: "bg-teal-500/10 text-teal-600 dark:text-teal-400 ring-teal-500/30", band: "from-teal-500/10" };
+  if (p.leadTag === "coming_soon")
+    return { text: "Fiber coming soon", short: "Coming soon", tone: "text-amber-600 dark:text-amber-400", cls: "bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-amber-500/30", band: "from-amber-500/10" };
+  if (p.competitorName)
+    return { text: `Competitor: ${p.competitorName}`, short: "Competitor", tone: "text-orange-600 dark:text-orange-400", cls: "bg-orange-500/10 text-orange-600 dark:text-orange-400 ring-orange-500/30", band: "from-orange-500/10" };
+  if (p.fiberStatus === "copper" || p.fiberStatus === "no_service")
+    return { text: "No fiber yet", short: "No fiber", tone: "text-foreground", cls: "bg-muted text-muted-foreground ring-border", band: "from-muted/40" };
+  if (p.source === "tap")
+    return { text: "Tapped location", short: "Tapped", tone: "text-sky-600 dark:text-sky-400", cls: "bg-sky-500/10 text-sky-600 dark:text-sky-400 ring-sky-500/30", band: "from-sky-500/10" };
+  return { text: p.fiberStatus || "Unknown", short: p.fiberStatus || "Unknown", tone: "text-foreground", cls: "bg-muted text-muted-foreground ring-border", band: "from-muted/40" };
 }
+
+// Accent text tones — the same -600/dark:-400 pairing as the badge, so a value
+// highlighted in the facts list stays readable on white and on ink.
+const TONE = {
+  emerald: "text-emerald-600 dark:text-emerald-400",
+  sky: "text-sky-600 dark:text-sky-400",
+  orange: "text-orange-600 dark:text-orange-400",
+} as const;
 
 // The labeled "Details" rows — only facts that are actually present.
 function buildFacts(p: CardProperty): Array<{ label: string; value: string; tone?: string }> {
@@ -45,20 +93,103 @@ function buildFacts(p: CardProperty): Array<{ label: string; value: string; tone
     : p.fiberStatus === "copper" ? "Copper only"
     : p.fiberStatus === "no_service" ? "No service"
     : p.fiberStatus ? p.fiberStatus.replace(/_/g, " ") : null;
-  if (fiber) f.push({ label: "Fiber", value: fiber, tone: p.isNewFiber ? "text-emerald-500" : undefined });
-  if (p.billingStatus) f.push({ label: "Occupancy", value: p.billingStatus === "N" ? "No current subscriber" : "Has service", tone: p.billingStatus === "N" ? "text-emerald-500" : undefined });
+  if (fiber) f.push({ label: "Fiber", value: fiber, tone: p.isNewFiber ? TONE.emerald : undefined });
+  if (p.billingStatus) f.push({ label: "Occupancy", value: p.billingStatus === "N" ? "No current subscriber" : "Has service", tone: p.billingStatus === "N" ? TONE.emerald : undefined });
   const spd = speedLabel(p.maxDownloadMbps);
-  if (spd) f.push({ label: "Max speed", value: spd, tone: "text-sky-500" });
+  if (spd) f.push({ label: "Max speed", value: spd, tone: TONE.sky });
   else if (p.speedTier) f.push({ label: "Plan", value: p.speedTier });
   if (p.techType) f.push({ label: "Technology", value: p.techType });
   if (p.placement) f.push({ label: "Placement", value: p.placement });
-  if (p.competitorName) f.push({ label: "Competitor", value: p.competitorName, tone: "text-orange-500" });
+  if (p.competitorName) f.push({ label: "Competitor", value: p.competitorName, tone: TONE.orange });
   if (p.householdSegmentType) f.push({ label: "Segment", value: p.householdSegmentType });
-  if (typeof p.leadScore === "number" && p.leadScore > 0) f.push({ label: "Lead score", value: String(p.leadScore), tone: "text-emerald-500" });
-  if (p.freshConfidence === "cross_verified") f.push({ label: "Evidence", value: "Cross-verified", tone: "text-emerald-500" });
-  else if (p.freshConfidence === "kinetic_new_fiber") f.push({ label: "Evidence", value: "Kinetic new fiber (billing N)", tone: "text-emerald-500" });
+  if (typeof p.leadScore === "number" && p.leadScore > 0) f.push({ label: "Lead score", value: String(p.leadScore), tone: TONE.emerald });
+  if (p.freshConfidence === "cross_verified") f.push({ label: "Evidence", value: "Cross-verified", tone: TONE.emerald });
+  else if (p.freshConfidence === "kinetic_new_fiber") f.push({ label: "Evidence", value: "Kinetic new fiber (billing N)", tone: TONE.emerald });
   return f;
 }
+
+// ── Shared building blocks (identical behavior across variants) ───────────────
+
+function Grabber() {
+  return <div className="mx-auto mb-4 h-1 w-9 rounded-full bg-border" aria-hidden="true" />;
+}
+
+function BadgePill({ p, badge, size = "sm" }: {
+  p: CardProperty;
+  badge: { text: string; cls: string };
+  size?: "sm" | "md";
+}) {
+  const dims = size === "md" ? "px-3 py-1.5 text-[12px]" : "px-2.5 py-1 text-[11px]";
+  const icon = size === "md" ? "w-3.5 h-3.5" : "w-3 h-3";
+  return (
+    <span className={`inline-flex items-center gap-1.5 rounded-full font-semibold uppercase tracking-wider ring-1 ${dims} ${badge.cls}`}>
+      {p.isNewFiber ? <Zap className={icon} /> : <MapPin className={icon} />}
+      {badge.text}
+    </span>
+  );
+}
+
+function FactsList({ facts, dense = true, label = "Details" }: {
+  facts: Array<{ label: string; value: string; tone?: string }>;
+  dense?: boolean;
+  label?: string;
+}) {
+  if (facts.length === 0) return null;
+  const rowPad = dense ? "px-3.5 py-2.5" : "px-4 py-3";
+  const labelSize = dense ? "text-[13px]" : "text-[14px]";
+  const valueSize = dense ? "text-[13px]" : "text-[14px]";
+  return (
+    <div className="mt-4">
+      <div className="mb-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</div>
+      <dl className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-secondary/40">
+        {facts.map((row, i) => (
+          <div key={i} className={`flex items-center justify-between gap-4 ${rowPad}`}>
+            <dt className={`${labelSize} shrink-0 text-muted-foreground`}>{row.label}</dt>
+            <dd className={`${valueSize} text-right font-semibold tabular-nums ${row.tone ?? "text-foreground"}`}>{row.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+// Primary action (Open lead / Add as lead). `className` tunes the emphasis per
+// variant; the click behavior and testids never change. `withIcon:false` keeps
+// the compact variant's 3-up row from overflowing at 320px.
+function PrimaryAction({ p, canAdd, onAddLead, onOpen, className, withIcon = true }: {
+  p: CardProperty;
+  canAdd: boolean;
+  onAddLead: (p: CardProperty) => void;
+  onOpen?: (id: number) => void;
+  className: string;
+  withIcon?: boolean;
+}) {
+  if (p.id) {
+    return (
+      <button type="button" onClick={() => onOpen?.(p.id!)} data-testid="lead-card-open" className={className}>
+        Open lead {withIcon && <ArrowUpRight className="h-4 w-4" />}
+      </button>
+    );
+  }
+  if (!canAdd) return null;
+  return (
+    <button type="button" onClick={() => onAddLead(p)} data-testid="lead-card-add" className={className}>
+      {withIcon && <Plus className="h-4 w-4" />} Add as lead
+    </button>
+  );
+}
+
+function DirectionsLink({ mapsUrl, className }: { mapsUrl: string; className: string }) {
+  return (
+    <a href={mapsUrl} target="_blank" rel="noopener noreferrer" data-testid="lead-card-directions" className={className}>
+      <Navigation className="h-4 w-4 text-sky-600 dark:text-sky-400" /> Directions
+    </a>
+  );
+}
+
+// Quiet bordered button base — Linear-style: 1px hairline, subtle hover fill.
+const QUIET =
+  "inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-secondary/40 font-medium text-foreground transition-colors hover:bg-secondary active:scale-[0.98]";
 
 export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }: {
   property: CardProperty | null;
@@ -69,7 +200,8 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
 }) {
   const open = !!property;
   const p = property;
-  const badge = p ? statusBadge(p) : { text: "", cls: "" };
+  const variant = readCardVariant();
+  const badge: Badge = p ? statusBadge(p) : { text: "", short: "", cls: "", tone: "", band: "" };
   const full = p ? formatFullAddress(p) : "";
   const facts = p ? buildFacts(p) : [];
   const mapsUrl = p
@@ -77,63 +209,120 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
         ? `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`
         : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(full)}`)
     : "#";
+  const cityLine = p
+    ? [p.city, [p.state, p.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")
+    : "";
+  const hasPrimary = !!p && (!!p.id || canAdd);
 
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="bottom" className="rounded-t-3xl p-0 border-border max-h-[88vh] overflow-y-auto" data-testid="lead-card">
-        {p && (
+      <SheetContent
+        side="bottom"
+        className="max-h-[88vh] overflow-y-auto rounded-t-3xl border-border p-0"
+        data-testid="lead-card"
+        data-variant={variant}
+      >
+        {p && variant === 1 && (
+          /* ── V1 "Compact row-sheet" — tight single column; one inline row of
+                 equal-width quiet actions, teal reserved for the primary. ── */
+          <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+            <Grabber />
+            <BadgePill p={p} badge={badge} />
+            <h2 className="mt-2.5 text-[19px] font-bold leading-tight tracking-tight text-foreground">{p.address}</h2>
+            <p className="mt-0.5 text-[13px] text-muted-foreground">{cityLine}</p>
+
+            <FactsList facts={facts} />
+
+            <div className={`mt-4 grid gap-2 ${hasPrimary ? "grid-cols-3" : "grid-cols-2"}`}>
+              <PrimaryAction
+                p={p} canAdd={canAdd} onAddLead={onAddLead} onOpen={onOpen} withIcon={false}
+                className="inline-flex h-11 items-center justify-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 text-[13px] font-semibold text-primary transition-colors hover:bg-primary/15 active:scale-[0.98]"
+              />
+              <DirectionsLink mapsUrl={mapsUrl} className={`${QUIET} h-11 text-[13px]`} />
+              <CopyAddressButton text={full} className="h-11 text-[13px]" />
+            </div>
+          </div>
+        )}
+
+        {p && variant === 2 && (
+          /* ── V2 "Stat-strip" — header, then a 3-cell hairline-divided strip
+                 (score · status · confidence), then stacked full-width actions. ── */
           <div className="p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
-            <div className="mx-auto mb-4 h-1 w-9 rounded-full bg-border" aria-hidden="true" />
+            <Grabber />
+            <BadgePill p={p} badge={badge} />
+            <h2 className="mt-3 text-[21px] font-bold leading-tight tracking-tight text-foreground">{p.address}</h2>
+            <p className="mt-0.5 text-[13px] text-muted-foreground">{cityLine}</p>
 
-            {/* Status badge */}
-            <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ring-1 ${badge.cls}`}>
-              {p.isNewFiber ? <Zap className="w-3 h-3" /> : <MapPin className="w-3 h-3" />}
-              {badge.text}
-            </span>
-
-            {/* Address — the hero */}
-            <h2 className="mt-3 text-[22px] font-bold tracking-tight text-foreground leading-tight">{p.address}</h2>
-            <p className="text-[14px] text-muted-foreground mt-0.5">
-              {[p.city, [p.state, p.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
-            </p>
-
-            {/* Details — the in-depth labeled grid (only present facts). */}
-            {facts.length > 0 && (
-              <div className="mt-4">
-                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5 px-0.5">Details</div>
-                <dl className="rounded-2xl border border-border bg-secondary/40 divide-y divide-border overflow-hidden">
-                  {facts.map((row, i) => (
-                    <div key={i} className="flex items-center justify-between gap-4 px-3.5 py-2.5">
-                      <dt className="text-[13px] text-muted-foreground shrink-0">{row.label}</dt>
-                      <dd className={`text-[13.5px] font-semibold text-right ${row.tone ?? "text-foreground"}`}>{row.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </div>
-            )}
-
-            {/* Primary action */}
-            <div className="mt-5">
-              {p.id ? (
-                <button type="button" onClick={() => onOpen?.(p.id!)} data-testid="lead-card-open"
-                  className="w-full inline-flex items-center justify-center gap-1.5 h-12 rounded-2xl bg-primary text-primary-foreground text-[15px] font-semibold active:scale-[0.99] transition">
-                  Open lead <ArrowUpRight className="w-4 h-4" />
-                </button>
-              ) : canAdd ? (
-                <button type="button" onClick={() => onAddLead(p)} data-testid="lead-card-add"
-                  className="w-full inline-flex items-center justify-center gap-1.5 h-12 rounded-2xl bg-primary text-primary-foreground text-[15px] font-semibold active:scale-[0.99] transition">
-                  <Plus className="w-4 h-4" /> Add as lead
-                </button>
-              ) : null}
+            <div className="mt-4 grid grid-cols-3 divide-x divide-border overflow-hidden rounded-xl border border-border bg-secondary/40">
+              {[
+                {
+                  label: "Score",
+                  value: typeof p.leadScore === "number" && p.leadScore > 0 ? String(p.leadScore) : "—",
+                  tone: typeof p.leadScore === "number" && p.leadScore > 0 ? TONE.emerald : "text-muted-foreground",
+                },
+                {
+                  label: "Status",
+                  value: badge.short,
+                  tone: badge.tone,
+                },
+                {
+                  label: "Confidence",
+                  value: p.freshConfidence === "cross_verified" ? "Verified"
+                    : p.freshConfidence === "kinetic_new_fiber" ? "Kinetic"
+                    : "—",
+                  tone: p.freshConfidence === "cross_verified" || p.freshConfidence === "kinetic_new_fiber"
+                    ? TONE.emerald
+                    : "text-muted-foreground",
+                },
+              ].map((cell) => (
+                <div key={cell.label} className="px-2 py-2.5 text-center">
+                  <div className={`truncate text-[14px] font-semibold tabular-nums ${cell.tone}`}>{cell.value}</div>
+                  <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{cell.label}</div>
+                </div>
+              ))}
             </div>
 
-            {/* Secondary actions — Directions + Copy (a rep on the doorstep). */}
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <a href={mapsUrl} target="_blank" rel="noopener noreferrer" data-testid="lead-card-directions"
-                className="inline-flex items-center justify-center gap-1.5 h-11 rounded-xl border border-border bg-secondary/60 text-[13px] font-medium text-foreground active:scale-[0.98] transition">
-                <Navigation className="w-4 h-4 text-sky-500" /> Directions
-              </a>
-              <CopyAddressButton text={full} className="h-11" />
+            {/* Score + evidence live in the strip above — don't repeat them. */}
+            <FactsList facts={facts.filter((f) => f.label !== "Lead score" && f.label !== "Evidence")} />
+
+            <div className="mt-4 flex flex-col gap-2">
+              <PrimaryAction
+                p={p} canAdd={canAdd} onAddLead={onAddLead} onOpen={onOpen}
+                className="inline-flex h-12 w-full items-center justify-center gap-1.5 rounded-xl bg-primary text-[15px] font-semibold text-primary-foreground transition hover:bg-primary/90 active:scale-[0.99]"
+              />
+              <DirectionsLink mapsUrl={mapsUrl} className={`${QUIET} h-11 w-full text-[13px]`} />
+              <CopyAddressButton text={full} className="h-11 w-full text-[13px]" />
+            </div>
+          </div>
+        )}
+
+        {p && variant === 3 && (
+          /* ── V3 "Hero-accent" — status-tinted band behind the address, a
+                 floating action row, larger tap targets for gloved field use. ── */
+          <div className="pb-[max(1.25rem,env(safe-area-inset-bottom))]">
+            <div className={`bg-gradient-to-b ${badge.band} to-transparent px-5 pb-2 pt-5`}>
+              <Grabber />
+              <BadgePill p={p} badge={badge} size="md" />
+              <h2 className="mt-3 text-[24px] font-bold leading-tight tracking-tight text-foreground">{p.address}</h2>
+              <p className="mt-1 text-[14px] text-muted-foreground">{cityLine}</p>
+            </div>
+
+            <div className="px-5">
+              {/* Floating action card — lifted off the band with a soft shadow.
+                  Full-width primary + a 2-up secondary row: big gloved-thumb
+                  targets that can't overflow at 320px. */}
+              <div className="mt-2 space-y-2 rounded-2xl border border-border bg-card p-2 shadow-lg shadow-black/10 dark:shadow-black/30">
+                <PrimaryAction
+                  p={p} canAdd={canAdd} onAddLead={onAddLead} onOpen={onOpen}
+                  className="inline-flex h-14 w-full items-center justify-center gap-2 rounded-xl bg-primary text-[16px] font-semibold text-primary-foreground transition hover:bg-primary/90 active:scale-[0.98]"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  <DirectionsLink mapsUrl={mapsUrl} className={`${QUIET} h-12 text-[14px]`} />
+                  <CopyAddressButton text={full} className="h-12 text-[14px]" />
+                </div>
+              </div>
+
+              <FactsList facts={facts} dense={false} />
             </div>
           </div>
         )}

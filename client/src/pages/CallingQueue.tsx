@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, CheckCircle2, Clock3, LockKeyhole, Search, ShieldAlert, UserRound, Wifi } from "lucide-react";
+import { ArrowRight, Clock3, PhoneCall, Search, ShieldAlert } from "lucide-react";
 import { CallingAvailability, CallingChrome, CallingPageSkeleton, CallingUnknownState } from "@/components/calling/CallingChrome";
 import { formatDecision, formatStage, getCallingQueue, getCallingStatus, type CallingCandidate } from "@/lib/callingApi";
 import { cn } from "@/lib/utils";
@@ -14,55 +14,104 @@ const STAGE_FILTERS = [
 ] as const;
 
 function stageTone(stage: string): string {
-  if (stage === "ELIGIBLE_MANUAL_CALL") return "border-emerald-500/25 bg-emerald-500/10 text-emerald-400";
-  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "border-red-500/25 bg-red-500/10 text-red-400";
-  if (stage === "COMPLIANCE_REVIEW") return "border-amber-500/25 bg-amber-500/10 text-amber-400";
-  if (stage === "CALLBACK_SCHEDULED") return "border-sky-500/25 bg-sky-500/10 text-sky-400";
+  if (stage === "ELIGIBLE_MANUAL_CALL") return "border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
+  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400";
+  if (stage === "COMPLIANCE_REVIEW") return "border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400";
+  if (stage === "CALLBACK_SCHEDULED") return "border-sky-500/25 bg-sky-500/10 text-sky-600 dark:text-sky-400";
   return "border-border bg-secondary text-muted-foreground";
+}
+
+/** Compact display names for common stages so pills stay one word on mobile;
+ *  unknown stages fall back to the full humanized stage name. */
+const STAGE_LABELS: Record<string, string> = {
+  ELIGIBLE_MANUAL_CALL: "Eligible",
+  CALLBACK_SCHEDULED: "Callback",
+  COMPLIANCE_REVIEW: "Review",
+  COMPLIANCE_BLOCKED: "Blocked",
+  AWAITING_ENRICHMENT: "Enrichment",
+  AWAITING_PHONE_VALIDATION: "Phone validation",
+  AWAITING_DNC_CHECK: "DNC check",
+  FRESH_FIBER_DETECTED: "Fresh fiber",
+  SUPPRESSED: "Suppressed",
+  ATTEMPTED: "Attempted",
+  INTERESTED: "Interested",
+  CONVERTED: "Converted",
+};
+
+function stageLabel(stage: string): string {
+  return STAGE_LABELS[stage] ?? formatStage(stage);
+}
+
+function stageDot(stage: string): string {
+  if (stage === "ELIGIBLE_MANUAL_CALL") return "bg-emerald-500";
+  if (stage === "COMPLIANCE_BLOCKED" || stage === "SUPPRESSED") return "bg-red-500";
+  if (stage === "COMPLIANCE_REVIEW") return "bg-amber-500";
+  if (stage === "CALLBACK_SCHEDULED") return "bg-sky-500";
+  return "bg-muted-foreground/40";
 }
 
 function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
   const eligible = candidate.queueStage === "ELIGIBLE_MANUAL_CALL";
   return (
-    <Link href={`/calling/lead/${candidate.leadId}`} data-testid={`calling-lead-${candidate.leadId}`}
-      className="render-lazy group block rounded-2xl border border-border bg-card p-4 transition hover:border-primary/30 active:scale-[.995]">
-      <div className="flex items-start gap-3">
-        <span className={cn("mt-0.5 grid h-10 w-10 shrink-0 place-items-center rounded-xl",
-          eligible ? "bg-emerald-500/12 text-emerald-400" : "bg-secondary text-muted-foreground")}>
-          {eligible ? <CheckCircle2 className="h-[19px] w-[19px]" /> : <LockKeyhole className="h-[18px] w-[18px]" />}
-        </span>
+    <li className="render-lazy">
+      <Link href={`/calling/lead/${candidate.leadId}`} data-testid={`calling-lead-${candidate.leadId}`}
+        className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40 active:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60">
+        <span aria-hidden="true" className={cn("h-1.5 w-1.5 shrink-0 rounded-full", stageDot(candidate.queueStage))} />
         <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <h2 className="truncate text-[15px] font-semibold tracking-tight text-foreground">{candidate.address}</h2>
-              <p className="truncate text-xs text-muted-foreground">{candidate.city}, {candidate.state} {candidate.zip}</p>
-            </div>
-            <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-          </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <span className={cn("inline-flex min-h-6 items-center rounded-full border px-2.5 text-[10px] font-semibold uppercase tracking-wide", stageTone(candidate.queueStage))}>
-              {formatStage(candidate.queueStage)}
-            </span>
-            <span className="inline-flex min-h-6 items-center gap-1 rounded-full bg-primary/10 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-primary">
-              <Wifi className="h-3 w-3" /> Fresh fiber
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[13px] font-medium leading-5 text-foreground">{candidate.address}</span>
+            <span className={cn("inline-flex max-w-[50%] shrink-0 items-center rounded-full border px-2 py-px text-[10px] font-medium uppercase tracking-wide", stageTone(candidate.queueStage))}>
+              <span className="truncate">{stageLabel(candidate.queueStage)}</span>
             </span>
           </div>
-          <div className="mt-3 grid grid-cols-2 gap-2 border-t border-border/70 pt-3 text-xs">
-            <div className="min-w-0">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Resident match</div>
-              <div className="mt-0.5 flex items-center gap-1.5 truncate text-foreground"><UserRound className="h-3.5 w-3.5 text-muted-foreground" />{candidate.contactName || "Not enriched"}</div>
-            </div>
-            <div className="min-w-0 text-right">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Phone</div>
-              <div className="mt-0.5 truncate font-mono text-foreground">{candidate.maskedPhone || "Not available"}</div>
-            </div>
-          </div>
-          {candidate.lastDecisionStatus && (
-            <p className="mt-2 truncate text-[11px] text-muted-foreground">Last check: {formatDecision(candidate.lastDecisionStatus)}</p>
-          )}
+          <p className="mt-0.5 truncate text-xs leading-4 text-muted-foreground">
+            {candidate.city}, {candidate.state} {candidate.zip}
+            {" "}<span aria-hidden="true">·</span> {candidate.contactName ?? "Not enriched"}
+            {candidate.maskedPhone ? <> <span aria-hidden="true">·</span> <span className="font-mono text-[11px] tabular-nums">{candidate.maskedPhone}</span></> : null}
+            {candidate.lastDecisionStatus ? <> <span aria-hidden="true">·</span> Last check: {formatDecision(candidate.lastDecisionStatus)}</> : null}
+          </p>
         </div>
+        {eligible
+          ? <PhoneCall aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
+          : <ArrowRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5 group-hover:text-muted-foreground" />}
+      </Link>
+    </li>
+  );
+}
+
+const SKELETON_WIDTHS = ["w-2/5", "w-1/2", "w-1/3", "w-3/5", "w-2/5", "w-1/2"] as const;
+
+function QueueRowsSkeleton() {
+  return (
+    <div role="status" aria-label="Loading calling queue" aria-busy="true" className="overflow-hidden rounded-2xl border border-border bg-card">
+      <div className="border-b border-border px-4 py-2.5">
+        <div className="app-skeleton my-0.5 h-3 w-28 rounded" />
       </div>
-    </Link>
+      <div className="divide-y divide-border/60">
+        {SKELETON_WIDTHS.map((width, index) => (
+          <div key={index} className="flex items-center gap-3 px-4 py-3">
+            <div className="app-skeleton h-1.5 w-1.5 shrink-0 rounded-full" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className={cn("app-skeleton h-3.5 rounded", width)} />
+              <div className="app-skeleton h-3 w-4/5 rounded" />
+            </div>
+            <div className="app-skeleton h-5 w-16 shrink-0 rounded-full" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MetricCell({ label, value, dot }: { label: string; value: number | null; dot?: string }) {
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {dot && <span aria-hidden="true" className={cn("h-1.5 w-1.5 rounded-full", dot)} />}
+        {label}
+      </div>
+      <div className="mt-1 text-lg font-semibold leading-6 tabular-nums text-foreground">{value ?? "—"}</div>
+    </div>
   );
 }
 
@@ -94,61 +143,65 @@ export default function CallingQueue() {
 
   return (
     <CallingChrome>
-      <div className="flex-1 space-y-4 px-4 pb-24 pt-4 md:px-6 md:pb-8">
+      <div className="flex-1 space-y-5 px-4 pb-24 pt-4 md:px-6 md:pb-8">
         {statusQuery.isLoading ? <CallingPageSkeleton /> : statusQuery.isError || !statusQuery.data ? (
           <CallingUnknownState retry={() => void statusQuery.refetch()} />
         ) : (
           <>
             <CallingAvailability status={statusQuery.data} />
 
-            <section aria-label="Calling queue metrics" className="grid grid-cols-3 overflow-hidden rounded-2xl border border-border bg-card divide-x divide-border">
-              <div className="p-3.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Open</div>
-                <div className="mt-1 text-xl font-semibold tabular-nums">{queueQuery.data?.length ?? "—"}</div>
-              </div>
-              <div className="p-3.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Eligible</div>
-                <div className="mt-1 text-xl font-semibold tabular-nums text-emerald-400">{queueQuery.data ? eligible : "—"}</div>
-              </div>
-              <div className="p-3.5">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Callbacks</div>
-                <div className="mt-1 text-xl font-semibold tabular-nums text-sky-400">{queueQuery.data ? callbacks : "—"}</div>
-              </div>
+            <section aria-label="Calling queue metrics" className="grid grid-cols-3 divide-x divide-border overflow-hidden rounded-2xl border border-border bg-card">
+              <MetricCell label="Open" value={queueQuery.data?.length ?? null} />
+              <MetricCell label="Eligible" value={queueQuery.data ? eligible : null} dot="bg-emerald-500" />
+              <MetricCell label="Callbacks" value={queueQuery.data ? callbacks : null} dot="bg-sky-500" />
             </section>
 
-            <div className="space-y-3">
+            <div className="space-y-2.5">
               <div className="relative">
-                <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
                 <input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search address or resident" aria-label="Search calling queue"
-                  className="h-11 w-full rounded-xl border border-border bg-card pl-10 pr-3 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary/60 focus:outline-none" />
+                  className="h-10 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-ring/30" />
               </div>
               <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter calling queue">
                 {STAGE_FILTERS.map(filter => (
                   <button key={filter.value} type="button" onClick={() => setStage(filter.value)} aria-pressed={stage === filter.value}
-                    className={cn("min-h-10 shrink-0 rounded-full border px-4 text-xs font-semibold transition",
-                      stage === filter.value ? "border-primary/40 bg-primary/12 text-primary" : "border-border bg-card text-muted-foreground hover:text-foreground")}>
+                    className={cn("inline-flex min-h-10 shrink-0 items-center rounded-full border px-4 text-xs font-medium transition-colors",
+                      stage === filter.value
+                        ? "border-primary/40 bg-primary/10 text-primary"
+                        : "border-border bg-card text-muted-foreground hover:bg-secondary/40 hover:text-foreground")}>
                     {filter.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            {queueQuery.isLoading ? <CallingPageSkeleton /> : queueQuery.isError ? (
-              <div role="alert" className="rounded-2xl border border-red-500/30 bg-red-500/[0.08] p-5 text-center">
-                <ShieldAlert className="mx-auto h-6 w-6 text-red-400" />
-                <h2 className="mt-2 text-sm font-semibold text-red-400">Queue unavailable</h2>
-                <p className="mt-1 text-xs text-muted-foreground">No lead can be opened for calling while the queue is unknown.</p>
-                <button type="button" onClick={() => void queueQuery.refetch()} className="mt-4 min-h-11 rounded-xl border border-border bg-card px-4 text-sm font-semibold">Retry</button>
+            {queueQuery.isLoading ? <QueueRowsSkeleton /> : queueQuery.isError ? (
+              <div role="alert" className="rounded-2xl border border-red-500/25 bg-card p-5 text-center">
+                <span className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-red-500/10">
+                  <ShieldAlert aria-hidden="true" className="h-[18px] w-[18px] text-red-600 dark:text-red-400" />
+                </span>
+                <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">Queue unavailable</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">No lead can be opened for calling while the queue is unknown.</p>
+                <button type="button" onClick={() => void queueQuery.refetch()}
+                  className="mt-4 min-h-10 rounded-xl border border-border bg-card px-4 text-[13px] font-semibold transition-colors hover:bg-secondary/60">Retry</button>
               </div>
             ) : filtered.length ? (
-              <section aria-label="Calling queue" className="space-y-2.5">
-                {filtered.map(item => <CandidateRow key={item.queueId} candidate={item} />)}
+              <section aria-label="Calling queue" className="overflow-hidden rounded-2xl border border-border bg-card">
+                <header className="flex items-baseline justify-between gap-3 border-b border-border px-4 py-2.5">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Fresh-fiber leads</h2>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">{filtered.length}</span>
+                </header>
+                <ul className="divide-y divide-border/60">
+                  {filtered.map(item => <CandidateRow key={item.queueId} candidate={item} />)}
+                </ul>
               </section>
             ) : (
               <div className="rounded-2xl border border-dashed border-border p-8 text-center">
-                <Clock3 className="mx-auto h-6 w-6 text-muted-foreground" />
-                <h2 className="mt-2 text-sm font-semibold">No leads in this view</h2>
-                <p className="mt-1 text-xs text-muted-foreground">Fresh-fiber leads appear here only after the calling pipeline accepts them.</p>
+                <span className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-secondary">
+                  <Clock3 aria-hidden="true" className="h-[18px] w-[18px] text-muted-foreground" />
+                </span>
+                <h2 className="mt-2.5 text-[13px] font-semibold text-foreground">No leads in this view</h2>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Fresh-fiber leads appear here only after the calling pipeline accepts them.</p>
               </div>
             )}
           </>

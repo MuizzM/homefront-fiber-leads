@@ -5,7 +5,7 @@ import { useState, useCallback } from "react";
 import { Copy, Check } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-export function CopyAddressButton({ text, label = "Copy", className = "" }: {
+export function CopyAddressButton({ text, label = "Copy", className = "h-11 text-[13px]" }: {
   text: string;
   label?: string;
   className?: string;
@@ -37,7 +37,7 @@ export function CopyAddressButton({ text, label = "Copy", className = "" }: {
       onClick={onCopy}
       data-testid="copy-address"
       aria-label={`Copy address ${text}`}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-secondary/60 px-3 h-11 text-[13px] font-medium text-foreground active:scale-[0.98] transition ${className}`}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-secondary/40 px-3 font-medium text-foreground transition-colors hover:bg-secondary active:scale-[0.98] ${className}`}
     >
       {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
       {copied ? "Copied" : label}

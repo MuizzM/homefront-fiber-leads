@@ -12,9 +12,12 @@ import {
 // The Scan Inspector is heavy (SSE stream + live table) and admin-only, so it is
 // code-split and only mounted when the Operations tab is opened.
 const ScanInspector = lazy(() => import("@/components/fiber/ScanInspector"));
-// Rep-facing sales intelligence: ranked fresh leads + the Coming Soon watchlist.
+// Ranked fresh leads — the "knock these doors first" list on the Fresh Now tab.
 const RankedLeads = lazy(() => import("@/components/fiber/RankedLeads"));
-const ComingSoonWatchlist = lazy(() => import("@/components/fiber/ComingSoonWatchlist"));
+// Statically imported (it's tiny) so the Coming Soon tab header can share the
+// exact watchlist query — the big "Watching" count and the list count can
+// never disagree.
+import ComingSoonWatchlist, { WATCHLIST_QUERY, type WatchlistItem } from "@/components/fiber/ComingSoonWatchlist";
 
 type TabKey = "fresh" | "newlylit" | "map" | "newbuilds" | "coming" | "coverage" | "ops";
 interface FirstSeenLive {
@@ -31,7 +34,15 @@ function fmtTime(iso: string): string {
   const s = iso.includes("T") ? iso : `${iso.replace(" ", "T")}Z`;
   const d = new Date(s);
   const mins = Math.round((Date.now() - d.getTime()) / 60000);
-  if (mins < 1) return "just now";
+  if (Math.abs(mins) < 1) return "just now";
+  if (mins < 0) {
+    // Future timestamps (Coming Soon ETAs, next-check times) — mirror of the
+    // past branch, so "expected in 3d" instead of "expected just now".
+    const m = -mins;
+    if (m < 60) return `in ${m}m`;
+    if (m < 1440) return `in ${Math.floor(m / 60)}h`;
+    return `in ${Math.ceil(m / 1440)}d`;
+  }
   if (mins < 60) return `${mins}m ago`;
   if (mins < 1440) return `${Math.floor(mins / 60)}h ago`;
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
@@ -49,7 +60,12 @@ const TABS: Array<{ key: TabKey; label: string; icon: any }> = [
 
 export default function FiberIntelligence() {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin" || user?.role === "manager";
+  // Mirror the server's middleware exactly (server/routes.ts): requireManager
+  // (all Fiber Intelligence data endpoints) allows admin + manager;
+  // requireAdmin (the Scan Inspector endpoints) allows admin only. Showing a
+  // tab the server will 403 just renders a permanently dead surface.
+  const isManager = user?.role === "admin" || user?.role === "manager";
+  const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState<TabKey>("fresh");
 
   return (
@@ -80,7 +96,7 @@ export default function FiberIntelligence() {
         {tab === "fresh" && <FreshNow />}
         {tab === "newlylit" && <NewlyLit />}
         {tab === "map" && <MapTab />}
-        {tab === "newbuilds" && <NewBuilds isAdmin={isAdmin} />}
+        {tab === "newbuilds" && <NewBuilds isManager={isManager} />}
         {tab === "coming" && <ComingSoon />}
         {tab === "coverage" && <Coverage />}
         {tab === "ops" && isAdmin && (
@@ -104,7 +120,7 @@ function FreshNow() {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
-        {[["New now", data?.count ?? 0, "text-primary"], ["Cross-verified", data?.confirmed ?? 0, "text-emerald-400"], ["Ready to assign", data?.readyToAssign ?? 0, "text-sky-400"]].map(([l, v, t]) => (
+        {[["New now", data?.count ?? 0, "text-primary"], ["Cross-verified", data?.confirmed ?? 0, "text-emerald-600 dark:text-emerald-400"], ["Ready to assign", data?.readyToAssign ?? 0, "text-sky-600 dark:text-sky-400"]].map(([l, v, t]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
             <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
@@ -126,21 +142,35 @@ function FreshNow() {
         ) : (data?.addresses?.length ?? 0) === 0 ? (
           <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No fresh fiber in the last 24h — the pipeline is watching. New detections stream in here.</div>
         ) : (
-          <div className="divide-y divide-border">
-            {data!.addresses.slice(0, 40).map((a) => (
-              <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`fresh-row-${a.id}`}>
-                <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-orange-400" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
-                  <div className="text-[11px] text-muted-foreground">Detected {fmtTime(a.firstSeenLiveAt)}</div>
+          <>
+            <div className="divide-y divide-border">
+              {data!.addresses.slice(0, 40).map((a) => (
+                <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`fresh-row-${a.id}`}>
+                  <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-orange-400" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
+                    <div className="text-[11px] text-muted-foreground">Detected {fmtTime(a.firstSeenLiveAt)}</div>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
+                  <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
-                <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+            <TruncationNote shown={40} total={data!.addresses.length} />
+          </>
         )}
       </div>
+    </div>
+  );
+}
+
+// Item counts on the stat tiles can exceed what a capped list renders — say so
+// instead of silently truncating, so the numbers never look wrong.
+function TruncationNote({ shown, total }: { shown: number; total: number }) {
+  if (total <= shown) return null;
+  return (
+    <div className="border-t border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
+      Showing first {shown} of {total}
     </div>
   );
 }
@@ -187,7 +217,7 @@ function NewlyLit() {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
-        {[["Copper upgrades (7d)", changes?.copperUpgrades ?? 0, "text-orange-400"], ["Copper pool", copperPool?.total ?? 0, "text-orange-300"], ["Transitions (7d)", changes?.count ?? 0, "text-foreground"]].map(([l, v, t]) => (
+        {[["Copper upgrades (7d)", changes?.copperUpgrades ?? 0, "text-orange-600 dark:text-orange-400"], ["Copper pool", copperPool?.total ?? 0, "text-orange-500 dark:text-orange-300"], ["Transitions (7d)", changes?.count ?? 0, "text-foreground"]].map(([l, v, t]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
             <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
@@ -210,10 +240,11 @@ function NewlyLit() {
               </div>
             ))}
           </div>
+          <TruncationNote shown={30} total={changes!.rows.length} />
         </div>
       )}
       <div className="grid grid-cols-3 gap-2">
-        {[["Lit (7d)", data?.count ?? 0, "text-amber-400"], ["Verified", data?.confirmed ?? 0, "text-emerald-400"], ["Assignable", data?.readyToAssign ?? 0, "text-sky-400"]].map(([l, v, t]) => (
+        {[["Lit (7d)", data?.count ?? 0, "text-amber-600 dark:text-amber-400"], ["Verified", data?.confirmed ?? 0, "text-emerald-600 dark:text-emerald-400"], ["Assignable", data?.readyToAssign ?? 0, "text-sky-600 dark:text-sky-400"]].map(([l, v, t]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
             <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
@@ -221,7 +252,7 @@ function NewlyLit() {
         ))}
       </div>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1"><Flame className="h-3 w-3 text-amber-400" /> Addresses that went from dark / Coming Soon to live fiber in the last 7 days</span>
+        <span className="inline-flex items-center gap-1"><Flame className="h-3 w-3 text-amber-600 dark:text-amber-400" /> Addresses that went from dark / Coming Soon to live fiber in the last 7 days</span>
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         {isLoading && !data ? (
@@ -231,10 +262,11 @@ function NewlyLit() {
         ) : lit.length === 0 ? (
           <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No newly lit addresses in the last 7 days — Coming Soon watchlists promote here automatically the moment fiber activates.</div>
         ) : (
+          <>
           <div className="divide-y divide-border">
             {lit.slice(0, 60).map((a) => (
               <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`newlylit-row-${a.id}`}>
-                <Flame className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <Flame className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
                 <div className="min-w-0 flex-1">
                   <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
                   <div className="text-[11px] text-muted-foreground">Lit {fmtTime(a.firstSeenLiveAt)}</div>
@@ -246,6 +278,8 @@ function NewlyLit() {
               </div>
             ))}
           </div>
+          <TruncationNote shown={60} total={lit.length} />
+          </>
         )}
       </div>
     </div>
@@ -265,32 +299,27 @@ function MapTab() {
   );
 }
 
-interface ComingSoonWatchlist {
-  watching: number; promoted: number; dueNow: number;
-  rows: Array<{
-    id: number; address: string; city: string; state: string; zip: string;
-    firstSeenAt: string; lastSeenAt: string; expectedCompletionAt: string | null;
-    confidence: string; opportunityScore: number; nextCheckAt: string;
-    status: "watching" | "promoted" | "retired"; promotedLeadId: number | null; checks: number;
-  }>;
-}
+// Program-level counters for the Coming Soon tiles (promotions + due-now).
+interface ComingSoonProgram { watching: number; promoted: number; dueNow: number }
 
 // ── Coming Soon — the durable watchlist. Every address the Kinetic search flags
 // as fiber-built-but-not-yet-orderable, re-checked on an opportunity-weighted
 // cadence by the built-in worker, and promoted to a green Fresh Lead the moment
-// billing goes inactive. ───────────────────────────────────────────────────────
+// billing goes inactive. ONE list renders it (ComingSoonWatchlist); the
+// "Watching" tile reads the same query, so the counts always agree. ───────────
 function ComingSoon() {
-  const { data, isLoading } = useQuery<ComingSoonWatchlist>({
+  const { data: program } = useQuery<ComingSoonProgram>({
     queryKey: ["/api/coming-soon/program"],
     queryFn: () => apiRequest("GET", "/api/coming-soon/program").then((r) => r.json()),
     refetchInterval: 15000,
     staleTime: 10000,
   });
-  const rows = data?.rows ?? [];
+  const { data: watchlist } = useQuery<WatchlistItem[] | null>(WATCHLIST_QUERY);
+  const watching = watchlist?.length ?? 0;
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
-        {[["Watching", data?.watching ?? 0, "text-cyan-400"], ["Promoted", data?.promoted ?? 0, "text-emerald-400"], ["Due now", data?.dueNow ?? 0, "text-amber-400"]].map(([l, v, t]) => (
+        {[["Watching", watching, "text-cyan-600 dark:text-cyan-400"], ["Promoted", program?.promoted ?? 0, "text-emerald-600 dark:text-emerald-400"], ["Due now", program?.dueNow ?? 0, "text-amber-600 dark:text-amber-400"]].map(([l, v, t]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
             <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
             <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
@@ -298,43 +327,7 @@ function ComingSoon() {
         ))}
       </div>
       <p className="px-1 text-[12px] text-muted-foreground">The built-in Coming Soon worker re-checks every watched address on an opportunity-weighted cadence (hottest first) and promotes it into <span className="font-medium text-foreground">Fresh Now</span> with a green assignable pin the moment fiber becomes orderable.</p>
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
-        {isLoading && !data ? (
-          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-2 w-2 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
-          ))}</div>
-        ) : rows.length === 0 ? (
-          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No Coming Soon addresses yet — every Kinetic search that returns one lands here automatically and stays under watch.</div>
-        ) : (
-          <div className="divide-y divide-border">
-            {rows.map((r) => (
-              <div key={r.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`coming-row-${r.id}`}>
-                <span className={`h-2 w-2 shrink-0 rounded-full ${r.status === "promoted" ? "bg-emerald-400" : "animate-pulse bg-cyan-400"}`} />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[14px] font-medium text-foreground">{r.address}, {r.city}, {r.state}</div>
-                  <div className="text-[11px] text-muted-foreground">
-                    Watched since {fmtTime(r.firstSeenAt)} · {r.checks} checks
-                    {r.expectedCompletionAt ? ` · expected ${fmtTime(r.expectedCompletionAt)}` : ""}
-                    {r.status === "watching" ? ` · next check ${fmtTime(r.nextCheckAt)}` : ""}
-                  </div>
-                </div>
-                {r.status === "watching" && (
-                  <span className="shrink-0 rounded-full bg-cyan-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-cyan-400" title="Opportunity score">#{r.opportunityScore}</span>
-                )}
-                {r.status === "promoted" && r.promotedLeadId != null ? (
-                  <Link href={`/lead/${r.promotedLeadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
-                ) : r.status === "promoted" ? (
-                  <span className="shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-400">Promoted</span>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-      <p className="px-1 text-[12px] text-muted-foreground">Coming Soon addresses are stored separately from active fresh leads and automatically re-checked as their completion date approaches — they promote into <span className="font-medium text-foreground">Fresh Now</span> the moment fiber goes live.</p>
-      <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
-        <ComingSoonWatchlist />
-      </Suspense>
+      <ComingSoonWatchlist />
     </div>
   );
 }
@@ -410,9 +403,9 @@ function relMs(ms: number): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
+function NewBuilds({ isManager }: { isManager: boolean }) {
   const [state, setState] = useState<"all" | "NC" | "SC">("all");
-  const [stage, setStage] = useState<"all" | "addressed" | "monitored" | "actionable">(isAdmin ? "all" : "actionable");
+  const [stage, setStage] = useState<"all" | "addressed" | "monitored" | "actionable">(isManager ? "all" : "actionable");
   const { data, isLoading } = useQuery<NewBuildFeed>({
     queryKey: ["/api/newbuilds/live"],
     queryFn: () => apiRequest("GET", "/api/newbuilds/live?hours=168").then((r) => r.json()),
@@ -421,12 +414,12 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
   const cov = useQuery<Coverage>({
     queryKey: ["/api/newbuilds/coverage"],
     queryFn: () => apiRequest("GET", "/api/newbuilds/coverage").then((r) => r.json()),
-    refetchInterval: 30000, enabled: isAdmin,
+    refetchInterval: 30000, enabled: isManager,
   });
   const exp = useQuery<ExpansionFeed>({
     queryKey: ["/api/expansions/live"],
     queryFn: () => apiRequest("GET", "/api/expansions/live").then((r) => r.json()),
-    refetchInterval: 8000, enabled: isAdmin,
+    refetchInterval: 8000, enabled: isManager,
   });
 
   const rows = (data?.rows ?? []).filter((r) =>
@@ -441,10 +434,10 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
       <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
         {[
           ["New builds", data?.counts.total ?? 0, "text-foreground"],
-          ["Addressed", data?.counts.addressed ?? 0, "text-sky-400"],
-          ["Monitored", data?.counts.monitored ?? 0, "text-amber-400"],
-          ["Checked", data?.counts.checked ?? 0, "text-violet-300"],
-          ["Leads", data?.counts.leads ?? 0, "text-emerald-400"],
+          ["Addressed", data?.counts.addressed ?? 0, "text-sky-600 dark:text-sky-400"],
+          ["Monitored", data?.counts.monitored ?? 0, "text-amber-600 dark:text-amber-400"],
+          ["Checked", data?.counts.checked ?? 0, "text-violet-500 dark:text-violet-300"],
+          ["Leads", data?.counts.leads ?? 0, "text-emerald-600 dark:text-emerald-400"],
           ["Clusters", data?.counts.clusters ?? 0, "text-primary"],
         ].map(([l, v, t]) => (
           <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
@@ -462,18 +455,22 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
             <button key={s} onClick={() => setState(s)} className={`rounded-lg px-2.5 py-1 font-semibold ${state === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s === "all" ? "All" : s}</button>
           ))}
         </div>
-        <div className="flex gap-1">
-          {(isAdmin ? (["all", "addressed", "monitored", "actionable"] as const) : (["actionable"] as const)).map((s) => (
-            <button key={s} onClick={() => setStage(s)} className={`rounded-lg px-2.5 py-1 font-semibold capitalize ${stage === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s}</button>
-          ))}
-        </div>
+        {/* Stage chips are only a real choice for managers — non-managers are
+            pinned to "actionable", so a single dead chip would just be noise. */}
+        {isManager && (
+          <div className="flex gap-1">
+            {(["all", "addressed", "monitored", "actionable"] as const).map((s) => (
+              <button key={s} onClick={() => setStage(s)} className={`rounded-lg px-2.5 py-1 font-semibold capitalize ${stage === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s}</button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Admin: live lead-triggered cluster expansions */}
-      {isAdmin && (exp.data?.expansions?.length ?? 0) > 0 && (
+      {/* Manager: live lead-triggered cluster expansions */}
+      {isManager && (exp.data?.expansions?.length ?? 0) > 0 && (
         <div className="rounded-2xl border border-emerald-500/25 bg-card">
           <div className="flex items-center justify-between border-b border-border px-4 py-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-400">Lead cluster expansions</div>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Lead cluster expansions</div>
             <div className="text-[11px] text-muted-foreground">{exp.data!.summary.active} active · {exp.data!.summary.freshFound} new leads · {exp.data!.summary.addressesChecked} checked</div>
           </div>
           {exp.data!.expansions.slice(0, 6).map((e) => (
@@ -484,18 +481,19 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
                 <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${e.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{e.status}</span>
               </div>
               <div className="pl-4 text-[11px] text-muted-foreground">
-                radius {(e.radiusM / 1000).toFixed(1)}km · ring {e.ring} · {e.addressesChecked} checked · <span className="font-medium text-emerald-400">{e.newLeads.length} new green leads</span>{e.emptyStreak > 0 ? ` · ${e.emptyStreak} empty ring${e.emptyStreak > 1 ? "s" : ""}` : ""}
+                radius {(e.radiusM / 1000).toFixed(1)}km · ring {e.ring} · {e.addressesChecked} checked · <span className="font-medium text-emerald-600 dark:text-emerald-400">{e.newLeads.length} new green leads</span>{e.emptyStreak > 0 ? ` · ${e.emptyStreak} empty ring${e.emptyStreak > 1 ? "s" : ""}` : ""}
               </div>
             </div>
           ))}
+          <TruncationNote shown={6} total={exp.data!.expansions.length} />
         </div>
       )}
 
-      {/* Admin: coverage gaps banner */}
-      {isAdmin && gaps.length > 0 && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-300">
+      {/* Manager: coverage gaps banner */}
+      {isManager && gaps.length > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12px] text-amber-700 dark:text-amber-300">
           <div className="mb-1 flex items-center gap-1.5 font-semibold"><AlertTriangle className="h-3.5 w-3.5" /> {gaps.length} source coverage gap{gaps.length > 1 ? "s" : ""}</div>
-          {gaps.map((g) => <div key={g.source} className="text-[11px] text-amber-300/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
+          {gaps.map((g) => <div key={g.source} className="text-[11px] text-amber-700/80 dark:text-amber-300/80">· <span className="font-medium">{g.scope}</span>: {g.note}</div>)}
         </div>
       )}
 
@@ -507,7 +505,7 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
           ))}</div>
         ) : rows.length === 0 ? (
           <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">
-            {isAdmin ? "No new builds detected yet in this window. The radar polls NC OneMap + OSM continuously; new addresses appear here and are checked immediately." : "No actionable new-build leads yet. Verified fresh-fiber new builds appear here ready to knock."}
+            {isManager ? "No new builds detected yet in this window. The radar polls NC OneMap + OSM continuously; new addresses appear here and are checked immediately." : "No actionable new-build leads yet. Verified fresh-fiber new builds appear here ready to knock."}
           </div>
         ) : (
           <div className="divide-y divide-border">
@@ -522,7 +520,7 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
                     <span>{r.state}{r.zip ? ` ${r.zip}` : ""}</span>
                     <span>· {r.sources.map((s) => SOURCE_LABEL[s] ?? s).join(", ")}</span>
                     <span>· {relMs(r.detectedAt)}</span>
-                    {r.clusterId && isAdmin && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">cluster</span>}
+                    {r.clusterId && isManager && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">cluster</span>}
                   </div>
                 </div>
                 {/* status */}
@@ -540,8 +538,8 @@ function NewBuilds({ isAdmin }: { isAdmin: boolean }) {
         )}
       </div>
 
-      {/* Admin: source coverage summary */}
-      {isAdmin && cov.data && (
+      {/* Manager: source coverage summary */}
+      {isManager && cov.data && (
         <div className="rounded-2xl border border-border bg-card px-4 py-3 text-[12px]">
           <div className="mb-1 font-semibold text-foreground">Source coverage</div>
           <div className="text-[11px] text-muted-foreground">

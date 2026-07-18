@@ -3855,7 +3855,7 @@ export default function MapView() {
             data-testid="live-test-open"
             aria-label="Live Test one address"
             title="Live Test one address"
-            className="grid h-[52px] w-[52px] place-items-center rounded-full border border-white/15 bg-slate-950/90 text-white/80 shadow-xl backdrop-blur-xl transition hover:text-white active:scale-95"
+            className="glass-capsule grid h-[52px] w-[52px] place-items-center text-white/80 transition hover:text-white active:scale-95"
           >
             <Crosshair className="h-[18px] w-[18px]" />
           </button>
@@ -3868,7 +3868,7 @@ export default function MapView() {
           style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
           className="absolute left-1/2 z-30 w-[min(456px,calc(100vw-24px))] -translate-x-1/2"
         >
-          <div className="glass-surface flex flex-col gap-2 rounded-2xl border-teal-300/40 p-3" data-testid="live-test-panel">
+          <div className="glass-surface flex flex-col gap-2 border-teal-300/40 p-3" data-testid="live-test-panel">
             <div className="flex items-center gap-2">
               <Crosshair className="h-4 w-4 text-emerald-400" />
               <span className="text-[13px] font-semibold text-white">Live Test — trace one address</span>
@@ -3909,7 +3909,7 @@ export default function MapView() {
           className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2"
         >
           <div
-            className="flex items-center gap-2 rounded-full border border-emerald-300/40 bg-slate-950/90 px-4 py-3 text-[13.5px] font-semibold text-white shadow-xl backdrop-blur-xl"
+            className="glass-capsule flex h-11 items-center gap-2 border-emerald-300/40 px-4 text-[13.5px] font-semibold text-white"
             data-testid="scan-map-hint"
           >
             <Radar className="h-4 w-4 shrink-0 text-emerald-400" />
@@ -3923,7 +3923,7 @@ export default function MapView() {
             }}
             data-testid="scan-map-cancel"
             aria-label="Cancel scan-area selection"
-            className="grid h-11 w-11 place-items-center rounded-full border border-white/15 bg-slate-950/90 text-white/70 shadow-xl backdrop-blur-xl transition hover:text-white"
+            className="glass-capsule grid h-11 w-11 place-items-center text-white/70 transition hover:text-white active:scale-95"
           >
             <X className="h-4 w-4" />
           </button>
@@ -3941,7 +3941,10 @@ export default function MapView() {
             className="absolute left-1/2 z-30 w-[min(456px,calc(100vw-24px))] -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 duration-200"
             data-testid="scan-sheet"
           >
-            <div className="glass-surface rounded-2xl border border-white/12 px-3.5 py-3 shadow-xl shadow-black/35">
+            {/* glass-surface already carries the panel radius (20px), hairline
+                border, and shadow — no per-instance overrides, so this sheet
+                matches the control cluster / layers / legend surfaces. */}
+            <div className="glass-surface px-4 py-3.5">
               {/* Header: state + primary control */}
               <div className="flex items-center gap-2.5">
                 {scanning || scanSubmitting ? (
@@ -3993,7 +3996,7 @@ export default function MapView() {
               {/* Progress bar while running */}
               {(scanning || scanSubmitting) && (
                 <div
-                  className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-white/10"
+                  className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/10"
                   role="progressbar"
                   aria-label="Scan progress"
                 >
@@ -4010,28 +4013,32 @@ export default function MapView() {
               )}
 
               {/* Outcome counts (OSM addresses + checked are in the line above):
-                  new · still fresh · now active · coming soon · unresolved. */}
+                  new · still fresh · now active · coming soon · unresolved.
+                  ONE hairline-divided strip with single-line labels — the old
+                  per-cell tiles wrapped their two-line ALL-CAPS labels unevenly.
+                  Short labels carry a title with the full phrase. */}
               <div
-                className="mt-2.5 grid grid-cols-5 gap-1"
+                className="mt-3 grid grid-cols-5 divide-x divide-white/[0.08] overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.04]"
                 data-testid="scan-summary"
               >
                 {[
-                  { label: "New", value: scanSummary.newLeads, tone: "text-emerald-400" },
-                  { label: "Still fresh", value: scanSummary.stillFresh, tone: "text-emerald-300" },
-                  { label: "Already customers", value: scanSummary.serviceActive, tone: "text-sky-400" },
-                  { label: "Coming soon", value: scanSummary.comingSoon, tone: "text-amber-400" },
-                  { label: "Unresolved", value: scanSummary.unresolved, tone: "text-white/45" },
+                  { label: "New", full: "New leads", value: scanSummary.newLeads, tone: "text-emerald-400" },
+                  { label: "Fresh", full: "Still fresh", value: scanSummary.stillFresh, tone: "text-emerald-300" },
+                  { label: "Active", full: "Already customers", value: scanSummary.serviceActive, tone: "text-sky-400" },
+                  { label: "Soon", full: "Fiber coming soon", value: scanSummary.comingSoon, tone: "text-amber-400" },
+                  { label: "Failed", full: "Unresolved — couldn't conclusively check", value: scanSummary.unresolved, tone: "text-white/50" },
                 ].map((c) => (
                   <div
                     key={c.label}
-                    className="rounded-lg bg-white/[0.05] px-1.5 py-1.5 text-center"
+                    title={c.full}
+                    className="px-1 py-2 text-center"
                   >
                     <div
-                      className={`text-[14px] font-bold leading-none tabular-nums ${c.tone}`}
+                      className={`text-[15px] font-semibold leading-none tabular-nums ${c.tone}`}
                     >
                       {c.value.toLocaleString()}
                     </div>
-                    <div className="mt-0.5 text-[9px] uppercase leading-tight tracking-wide text-white/45">
+                    <div className="mt-1 whitespace-nowrap text-[9.5px] font-medium uppercase leading-none tracking-wider text-white/45">
                       {c.label}
                     </div>
                   </div>
@@ -4046,7 +4053,7 @@ export default function MapView() {
                 ["partial_coverage", "sparse_source_data", "verification_required", "source_unavailable"].includes(
                   String(scanSummary.coverage),
                 ) && (
-                  <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-300/90" data-testid="scan-coverage-gap">
+                  <div className="mt-3 flex items-start gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-[10.5px] leading-snug text-amber-300/90" data-testid="scan-coverage-gap">
                     <AlertCircle className="mt-px h-3.5 w-3.5 shrink-0" />
                     <span>
                       OpenStreetMap coverage looks{" "}
@@ -4071,14 +4078,19 @@ export default function MapView() {
       {mapReady && leads.length > 0 && !lassoMode && (
         <div
           style={{
-            top: "calc(env(safe-area-inset-top) + 0.6rem)",
-            right: isRep ? 8 : 64,
+            // Same top inset as the floating menu button; the row is 44px tall
+            // with centered 36px chips, so chip centers align with the menu.
+            top: "calc(env(safe-area-inset-top) + 0.75rem)",
+            right: isRep ? 12 : 76,
           }}
-          className="absolute left-2 z-20 pointer-events-none"
+          // Starts to the RIGHT of the 44px menu button on phones (it used to
+          // start at the screen edge and scroll underneath it, clipping counts
+          // behind the button). ≥768px the menu button is hidden → left-3.
+          className="absolute left-[60px] md:left-3 z-20 pointer-events-none"
           data-testid="status-filter-bar"
         >
           <div
-            className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pointer-events-auto pr-2"
+            className="flex h-11 items-center gap-1.5 overflow-x-auto no-scrollbar pill-row-fade pointer-events-auto pr-3"
             role="tablist"
             aria-label="Filter leads by status"
           >
@@ -4088,7 +4100,7 @@ export default function MapView() {
               aria-selected={filterStatus === "all"}
               onClick={() => setFilterStatus("all")}
               data-testid="status-chip-all"
-              className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-2.5 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition ${
+              className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-2.5 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition active:scale-[0.97] ${
                 filterStatus === "all"
                   ? "bg-white text-slate-900 shadow"
                   : "glass-surface text-white/85 hover:text-white"
@@ -4112,7 +4124,7 @@ export default function MapView() {
                   onClick={() => setFilterStatus(active ? "all" : c.key)}
                   data-testid={`status-chip-${c.key}`}
                   title={`${c.label} · ${c.count}`}
-                  className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-2.5 pr-2 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition glass-surface ${active ? "ring-2" : "text-white/85 hover:text-white"}`}
+                  className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-2.5 pr-2 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition active:scale-[0.97] glass-surface ${active ? "ring-2" : "text-white/85 hover:text-white"}`}
                   style={
                     active
                       ? {
@@ -4297,9 +4309,11 @@ export default function MapView() {
 
           {/* The lead-count chip was removed — the map speaks for itself; a raw
               "3355 pins" tally added noise without operational value. An active
-              status filter still needs a visible, clearable indication, so a
-              minimal filter pill survives (only when a filter is applied). */}
-          {mapReady && !isRep && leads.length > 0 && filterStatus !== "all" && (
+              status filter still needs a visible, clearable indication. The
+              disposition bar above carries that whenever it's on screen, so
+              this minimal pill now shows ONLY while the bar is hidden (lasso
+              mode) — before, both rendered stacked in the same top strip. */}
+          {mapReady && !isRep && leads.length > 0 && filterStatus !== "all" && lassoMode && (
             <div
               style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
               className="glass-capsule glass-opaque absolute left-[64px] md:left-3 md:top-3 z-10 flex items-center gap-2 pl-3 pr-1.5 min-h-[36px]"
@@ -4476,7 +4490,16 @@ export default function MapView() {
           {useSheet && queueSnap.pendingCount > 0 && (
             <div
               data-testid="knock-pending-badge"
-              className={`glass-capsule glass-opaque absolute top-3 ${isRep && isMobile ? "right-3" : "right-14"} z-20 flex items-center gap-1.5 h-8 px-3 border-amber-500/40 text-amber-300 text-xs font-semibold`}
+              // Safe-area aware (top-3 sat under the notch). Rep phones: drops
+              // BELOW the status-chip row so the two never overlap; other
+              // mobile roles: top strip, clear of the ~72px control cluster.
+              style={{
+                top:
+                  isRep && isMobile
+                    ? "calc(env(safe-area-inset-top) + 4rem)"
+                    : "calc(env(safe-area-inset-top) + 0.75rem)",
+              }}
+              className={`glass-capsule glass-opaque absolute ${isRep && isMobile ? "right-3" : "right-[76px]"} z-20 flex items-center gap-1.5 h-9 px-3 border-amber-500/40 text-amber-300 text-xs font-semibold tabular-nums`}
             >
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
               {queueSnap.pendingCount} to sync
@@ -5355,7 +5378,7 @@ export default function MapView() {
                       />
                     )}
                     <span
-                      className="text-[11px] flex-1"
+                      className="text-[12px] flex-1"
                       style={{
                         color: isActive ? pin.bg : "#94a3b8",
                         fontWeight: isActive ? 700 : 400,
@@ -5364,8 +5387,8 @@ export default function MapView() {
                       {pin.label}
                     </span>
                     <span
-                      className="text-[10px] tabular-nums"
-                      style={{ color: count > 0 ? "#e2e8f0" : "#475569" }}
+                      className="text-[11px] tabular-nums"
+                      style={{ color: count > 0 ? "#e2e8f0" : "#64748b" }}
                     >
                       {count}
                     </span>

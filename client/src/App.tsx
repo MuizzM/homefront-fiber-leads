@@ -121,8 +121,10 @@ function AppRoutes() {
         else {
           import("@/pages/Dashboard");
           // Ops roles live in Fiber Intelligence — warm its chunk on idle so the
-          // workspace opens instantly.
-          import("@/pages/FiberIntelligence");
+          // workspace opens instantly. Matches the server's requireManager set
+          // (admin + manager); other roles can't open /fiber, so don't spend
+          // their bandwidth on it.
+          if (user.role === "admin" || user.role === "manager") import("@/pages/FiberIntelligence");
         }
       }
       if (canWarmMap && fieldRole) import("@/pages/MapView");
@@ -228,8 +230,12 @@ function AppRoutes() {
           {/* ── Fiber Intelligence — ONE consolidated map-first workspace
               (Fresh Now · Map · Coming Soon · Coverage · Operations). Replaces the
               separate city / USA / Kinetic scanners, Markets, and Sweeps pages. ── */}
+          {/* Role set mirrors the server's requireManager middleware
+              (server/routes.ts) — every Fiber Intelligence data endpoint allows
+              exactly admin + manager, so wider client access would only render
+              permanently empty tabs. */}
           <Route path="/fiber">
-            <Guard role={role} allowed={["admin", "manager", "team_lead"]}>
+            <Guard role={role} allowed={["admin", "manager"]}>
               <FiberIntelligence />
             </Guard>
           </Route>

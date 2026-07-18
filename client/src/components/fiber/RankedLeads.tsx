@@ -46,7 +46,7 @@ function ScoreRing({ score }: { score: number }) {
         <circle cx="24" cy="24" r={R} fill="none" strokeWidth="4" className="stroke-secondary" />
         <circle
           cx="24" cy="24" r={R} fill="none" strokeWidth="4" strokeLinecap="round"
-          className="stroke-emerald-400"
+          className="stroke-emerald-600 dark:stroke-emerald-400"
           strokeDasharray={`${C * pct} ${C}`}
         />
       </svg>
@@ -66,7 +66,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
     >
       {/* Oversized rank numeral, Netflix-top-10 style — pure background texture. */}
       <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-emerald-400/10">1</span>
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-400">
+      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-600 dark:text-emerald-400">
         <Flame className="h-3 w-3" /> Knock this door first
       </div>
       <div className="relative flex items-center gap-3">
@@ -117,7 +117,7 @@ export default function RankedLeads() {
     <div className="overflow-hidden rounded-2xl border border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-2">
         <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          <Flame className="h-3.5 w-3.5 text-orange-400" /> Top leads — ranked
+          <Flame className="h-3.5 w-3.5 text-orange-600 dark:text-orange-400" /> Top leads — ranked
         </div>
         {data && <div className="text-[11px] text-muted-foreground">{data.count} scored</div>}
       </div>
@@ -129,7 +129,13 @@ export default function RankedLeads() {
             <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-6 w-6 rounded-lg" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-10 rounded-full" /></div>
           ))}
         </div>
-      ) : error || leads.length === 0 ? (
+      ) : error ? (
+        // A distinct quiet failure state — an API error must never wear the
+        // happy "no leads yet" empty state.
+        <div className="px-4 py-8 text-center text-[13px] text-muted-foreground" data-testid="ranked-error">
+          Couldn&rsquo;t load rankings — retrying automatically.
+        </div>
+      ) : leads.length === 0 ? (
         <div className="px-4 py-8 text-center text-[13px] italic text-muted-foreground">
           No ranked leads yet — confirmed fresh-fiber leads appear here ordered by how hot they are.
         </div>
@@ -168,6 +174,11 @@ export default function RankedLeads() {
               </button>
             ))}
           </div>
+          {data != null && data.count > leads.length && (
+            <div className="border-t border-border px-4 py-2 text-center text-[11px] text-muted-foreground">
+              Showing first {leads.length} of {data.count}
+            </div>
+          )}
         </>
       )}
 

@@ -76,7 +76,9 @@ const NAV_ITEMS: NavItem[] = [
   // ── Fiber Intelligence — ONE consolidated map-first workspace (Fresh Now · Map
   //    · Coming Soon · Coverage · Operations). Old Markets/Sweeps/Scanner routes
   //    redirect here. Deep scan tools stay admin-only.
-  { href: "/fiber",        label: "Fiber Intelligence", icon: Radar,   show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Fiber" },
+  // Matches the server's requireManager set (admin + manager) — the /fiber data
+  // endpoints 403 for anyone else, which would render permanently empty tabs.
+  { href: "/fiber",        label: "Fiber Intelligence", icon: Radar,   show: r => hasRole(r, "admin", "manager"), group: "Fiber" },
   { href: "/scanner-tools",label: "Scan Tools",    icon: TrendingUp,   show: r => hasRole(r, "admin"),                 group: "Fiber" },
   // ── Manage — Team is the one place for people (members with email can log in)
   { href: "/team",         label: "Team",          icon: Users,        show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Manage" },
