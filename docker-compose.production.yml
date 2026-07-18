@@ -40,6 +40,18 @@ services:
       # conclusive NEW-FIBER+N snapshot so they become real assignable pins. Runs as
       # MAINTENANCE-class recheck (share-capped; never crowds revenue checks).
       GREEN_REVERIFY: "on"
+      # ── Concurrency tuned to the THROUGHPUT PLATEAU, not a rate limit ────────
+      # At the raised default (100 concurrent checks) Node's single thread saturated
+      # on synchronous SQLite work: per-check latency inflated ~10x (to ~30s),
+      # throughput plateaued (~137/min), and the HTTP server starved — /api/health
+      # timed out for minutes and reps could not load the app at all (observed live,
+      # container flapping unhealthy). SQLite is single-writer and Decodo RTT
+      # dominates, so parallelism beyond the plateau adds latency, not leads.
+      # 64/32 keeps the scanner at full speed AND the app responsive. If observed
+      # searches/5m drops below the 100-concurrency baseline, raise these — never
+      # add per-minute rate caps.
+      SCAN_GLOBAL_CONCURRENCY: "64"
+      SCAN_BATCH_CONCURRENCY: "32"
       # ── Outbound mail sender (2026-07-16 OTP outage) ─────────────────────────
       # The Resend account has exactly ONE verified sending domain:
       # portal.homefrontsolutionsllc.com. The host .env pointed MAIL_FROM at the
