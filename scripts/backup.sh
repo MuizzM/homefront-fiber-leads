@@ -29,35 +29,38 @@ if [ -n "${BACKUP_VOLUME:-}" ]; then
   docker image inspect "$BACKUP_TOOL_IMAGE" >/dev/null
 
   BACKUP_DIR_ABS="$(cd "$BACKUP_DIR" && pwd -P)"
-  # The scanner writes continuously, so the WAL re-dirties within seconds of any
-  # checkpoint — and the read-only backup container fails WAL recovery on a dirty
-  # WAL ("attempt to write a readonly database", seen failing real deploys).
-  # Checkpoint through the LIVE app immediately before each attempt and retry a
-  # few times; the checkpoint+open race window is then ~a second.
-  backup_ok=0
-  for attempt in 1 2 3 4; do
-    docker exec "${APP_CONTAINER_NAME:-homefront-app-1}" node -e \
-      'const d=new (require("better-sqlite3"))("/data/data.db");d.pragma("wal_checkpoint(TRUNCATE)");d.close()' \
-      >/dev/null 2>&1 || true
-    if docker run --rm \
-      --read-only \
-      --network none \
-      --cap-drop ALL \
-      --security-opt no-new-privileges \
-      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
-      --user "$(id -u):$(id -g)" \
-      -e AGE_RECIPIENT \
-      -e BACKUP_STAMP="$STAMP" \
-      -v "$BACKUP_VOLUME:/data:ro" \
-      -v "$BACKUP_DIR_ABS:/backups" \
-      "$BACKUP_TOOL_IMAGE"; then
-      backup_ok=1
-      break
-    fi
-    echo "[backup] attempt $attempt failed (dirty WAL race?) — re-checkpointing and retrying" >&2
-    sleep 2
-  done
-  [ "$backup_ok" = "1" ] || { echo "[backup] all attempts failed" >&2; exit 1; }
+  # The scanner writes continuously, so a read-only open of the LIVE db races its
+  # dirty WAL ("attempt to write a readonly database") — checkpoint+retry lost that
+  # race 4/4 times under real load. Instead: take an ONLINE snapshot THROUGH the
+  # live app (SQLite backup API — correct under concurrent writers), then point the
+  # locked-down tool container at the quiescent snapshot (it honors DB_PATH). The
+  # snapshot is self-contained with an empty WAL, so the :ro mount is always safe.
+  APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-homefront-app-1}"
+  SNAP="/data/backup-snapshot.db"
+  cleanup_snapshot() { docker exec "$APP_CONTAINER_NAME" rm -f "$SNAP" "$SNAP-wal" "$SNAP-shm" >/dev/null 2>&1 || true; }
+  trap cleanup_snapshot EXIT
+  echo "[backup] online snapshot via live app…"
+  docker exec "$APP_CONTAINER_NAME" node -e '
+    const Database = require("better-sqlite3");
+    const d = new Database("/data/data.db", { readonly: true });
+    d.backup("'"$SNAP"'").then(() => { d.close(); process.exit(0); })
+      .catch((e) => { console.error("snapshot failed:", e.message); process.exit(1); });
+  ' || { echo "[backup] online snapshot failed" >&2; exit 1; }
+  docker run --rm \
+    --read-only \
+    --network none \
+    --cap-drop ALL \
+    --security-opt no-new-privileges \
+    --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+    --user "$(id -u):$(id -g)" \
+    -e AGE_RECIPIENT \
+    -e BACKUP_STAMP="$STAMP" \
+    -e DB_PATH="$SNAP" \
+    -v "$BACKUP_VOLUME:/data:ro" \
+    -v "$BACKUP_DIR_ABS:/backups" \
+    "$BACKUP_TOOL_IMAGE"
+  cleanup_snapshot
+  trap - EXIT
 
   OUT="$BACKUP_DIR/data-$STAMP.db.age"
   [ -s "$OUT" ] || { echo "[backup] output artifact is missing or empty" >&2; exit 1; }
