@@ -259,13 +259,14 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         href={href}
                         onClick={() => setMobileOpen(false)}
                         className={cn(
-                          "flex min-h-11 md:min-h-0 items-center gap-3 rounded-xl md:rounded-lg px-3 py-2.5 md:py-2 text-[14px] md:text-[13px] font-medium transition-colors",
+                          "relative flex min-h-11 md:min-h-0 items-center gap-3 rounded-xl md:rounded-lg px-3 py-2.5 md:py-2 text-[14px] md:text-[13px] font-medium transition-colors",
                           isActive
-                            ? "bg-secondary text-foreground"
+                            ? "bg-primary/12 text-foreground"
                             : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
                         )}
                         data-testid={`nav-${label.toLowerCase().replace(/\s/g, "-")}`}
                       >
+                        {isActive && <span aria-hidden className="absolute left-0 top-1/2 h-5 w-[3px] -translate-y-1/2 rounded-full bg-primary" />}
                         <Icon className={cn("w-[18px] h-[18px] md:w-4 md:h-4 flex-shrink-0", isActive && "text-primary")} />
                         <span className="flex-1">{label}</span>
                         {badgeCount > 0 && (
@@ -292,22 +293,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           )}
         </nav>
 
-        {/* Footer */}
-        <div className="p-4 pb-[max(1rem,env(safe-area-inset-bottom))] border-t border-border space-y-3">
-          {/* User info */}
-          <div className="flex items-center gap-2">
-            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0 ${avatarBg(role)}`}>
+        {/* Footer — account card */}
+        <div className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-border space-y-2">
+          <div className="flex items-center gap-2.5 rounded-xl border border-border bg-secondary/40 px-2.5 py-2">
+            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0 ${avatarBg(role)}`}>
               {user?.name?.slice(0, 2).toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium text-foreground truncate">{user?.name}</div>
+              <div className="text-[13px] font-semibold text-foreground truncate">{user?.name}</div>
               <RoleBadge role={role} />
             </div>
             <button
               onClick={toggle}
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
               data-testid="button-theme-toggle"
-              className="grid h-11 w-11 place-items-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              className="grid h-9 w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
               {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
             </button>
@@ -315,13 +315,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               onClick={() => logout()}
               title="Sign out"
               data-testid="button-logout"
-              className="grid h-11 w-11 place-items-center rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              className="grid h-9 w-9 place-items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             >
               <LogOut size={14} />
             </button>
           </div>
 
-          <div className="text-[11px] text-muted-foreground" data-testid="org-footer">
+          <div className="px-1 text-[11px] text-muted-foreground" data-testid="org-footer">
             {orgName}{orgTagline ? ` · ${orgTagline}` : ""}
           </div>
         </div>

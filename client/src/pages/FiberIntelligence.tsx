@@ -5,12 +5,12 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Zap, Map as MapIcon, Clock, Layers, Activity, ArrowRight, MapPin, ExternalLink,
+  Zap, Clock, Layers, MapPin, ExternalLink,
   Hammer, Building2, AlertTriangle, Flame,
 } from "lucide-react";
 
 // The Scan Inspector is heavy (SSE stream + live table) and admin-only, so it is
-// code-split and only mounted when the Operations tab is opened.
+// code-split and only mounted when the Coverage tab is opened by an admin.
 const ScanInspector = lazy(() => import("@/components/fiber/ScanInspector"));
 // Ranked fresh leads — the "knock these doors first" list on the Fresh Now tab.
 const RankedLeads = lazy(() => import("@/components/fiber/RankedLeads"));
@@ -19,7 +19,12 @@ const RankedLeads = lazy(() => import("@/components/fiber/RankedLeads"));
 // never disagree.
 import ComingSoonWatchlist, { WATCHLIST_QUERY, type WatchlistItem } from "@/components/fiber/ComingSoonWatchlist";
 
-type TabKey = "fresh" | "newlylit" | "map" | "newbuilds" | "coming" | "coverage" | "ops";
+// ONE workspace, FOUR jobs: what's hot right now (Fresh Now), what's about to
+// be (Coming Soon), what's being built (New Builds), and how far the machine
+// has swept (Coverage). The old Newly Lit tab was the same first-seen data on
+// a longer window — now a 24h/7d toggle here — and the old Map tab was just a
+// link (the sidebar already has the Field Map).
+type TabKey = "fresh" | "coming" | "newbuilds" | "coverage";
 interface FirstSeenLive {
   windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
   addresses: Array<{ id: number; address: string; city: string; firstSeenLiveAt: string; confidence: string; leadId?: number | null }>;
@@ -50,12 +55,9 @@ function fmtTime(iso: string): string {
 
 const TABS: Array<{ key: TabKey; label: string; icon: any }> = [
   { key: "fresh", label: "Fresh Now", icon: Zap },
-  { key: "newlylit", label: "Newly Lit", icon: Flame },
-  { key: "map", label: "Map", icon: MapIcon },
-  { key: "newbuilds", label: "New Builds", icon: Hammer },
   { key: "coming", label: "Coming Soon", icon: Clock },
+  { key: "newbuilds", label: "New Builds", icon: Hammer },
   { key: "coverage", label: "Coverage", icon: Layers },
-  { key: "ops", label: "Operations", icon: Activity },
 ];
 
 export default function FiberIntelligence() {
@@ -63,7 +65,7 @@ export default function FiberIntelligence() {
   // Mirror the server's middleware exactly (server/routes.ts): requireManager
   // (all Fiber Intelligence data endpoints) allows admin + manager;
   // requireAdmin (the Scan Inspector endpoints) allows admin only. Showing a
-  // tab the server will 403 just renders a permanently dead surface.
+  // surface the server will 403 just renders a permanently dead panel.
   const isManager = user?.role === "admin" || user?.role === "manager";
   const isAdmin = user?.role === "admin";
   const [tab, setTab] = useState<TabKey>("fresh");
@@ -75,13 +77,9 @@ export default function FiberIntelligence() {
         <p className="text-[13px] text-muted-foreground">Real-time fresh-fiber detection across GA, NC &amp; SC — one workspace.</p>
       </header>
 
-      {/* Tab rail — 7 tabs overflow on phones with the scrollbar hidden, which read
-          as "there are no more tabs" (observed confusion in a live walk). The right-
-          edge fade signals more content; scrollIntoView keeps the active tab visible. */}
-      <div className="relative sticky top-0 z-10 -mx-4 mb-4 sm:-mx-6">
-      <div role="tablist" aria-label="Fiber Intelligence sections" className="overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div role="tablist" aria-label="Fiber Intelligence sections" className="sticky top-0 z-10 -mx-4 mb-4 overflow-x-auto border-b border-border bg-background/80 px-4 backdrop-blur-xl sm:-mx-6 sm:px-6 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex gap-1">
-          {TABS.filter((t) => t.key !== "ops" || isAdmin).map(({ key, label, icon: Icon }) => (
+          {TABS.map(({ key, label, icon: Icon }) => (
             <button
               key={key}
               role="tab"
@@ -96,78 +94,23 @@ export default function FiberIntelligence() {
           ))}
         </div>
       </div>
-      {/* Overflow hint: fades the clipped edge so hidden tabs are discoverable. */}
-      <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-background to-transparent sm:hidden" />
-      </div>
 
       <div className="min-h-0 flex-1">
         {tab === "fresh" && <FreshNow />}
-        {tab === "newlylit" && <NewlyLit />}
-        {tab === "map" && <MapTab />}
         {tab === "newbuilds" && <NewBuilds isManager={isManager} />}
         {tab === "coming" && <ComingSoon />}
-        {tab === "coverage" && <Coverage />}
-        {tab === "ops" && isAdmin && (
-          <Suspense fallback={<Skeleton className="h-64 w-full rounded-2xl" />}>
-            <ScanInspector />
-          </Suspense>
-        )}
+        {tab === "coverage" && <Coverage isAdmin={isAdmin} />}
       </div>
     </div>
   );
 }
 
-// ── Fresh Now — verified fresh leads as they are detected ─────────────────────
-function FreshNow() {
-  const { data, isLoading } = useQuery<FirstSeenLive>({
-    queryKey: ["/api/scan/first-seen-live"],
-    queryFn: () => apiRequest("GET", "/api/scan/first-seen-live?hours=24").then((r) => r.json()),
-    refetchInterval: 8000, // near-real-time without an SSE dependency
-    staleTime: 5000,
-  });
+// ── Shared stat tile — one treatment for every counter in the workspace ──────
+function StatTile({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-2">
-        {[["New now", data?.count ?? 0, "text-primary"], ["Cross-verified", data?.confirmed ?? 0, "text-emerald-600 dark:text-emerald-400"], ["Ready to assign", data?.readyToAssign ?? 0, "text-sky-600 dark:text-sky-400"]].map(([l, v, t]) => (
-          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
-            <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
-            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
-          </div>
-        ))}
-      </div>
-      {/* Sales-intelligence ordering: green assignable leads ranked hottest-first. */}
-      <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
-        <RankedLeads />
-      </Suspense>
-      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · last 24h · refreshes automatically</span>
-      </div>
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
-        {isLoading && !data ? (
-          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-2 w-2 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
-          ))}</div>
-        ) : (data?.addresses?.length ?? 0) === 0 ? (
-          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No fresh fiber in the last 24h — the pipeline is watching. New detections stream in here.</div>
-        ) : (
-          <>
-            <div className="divide-y divide-border">
-              {data!.addresses.slice(0, 40).map((a) => (
-                <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`fresh-row-${a.id}`}>
-                  <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-orange-400" />
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
-                    <div className="text-[11px] text-muted-foreground">Detected {fmtTime(a.firstSeenLiveAt)}</div>
-                  </div>
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
-                  <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>
-                </div>
-              ))}
-            </div>
-            <TruncationNote shown={40} total={data!.addresses.length} />
-          </>
-        )}
-      </div>
+    <div className="rounded-xl border border-border bg-card px-3 py-2.5">
+      <div className={`text-[22px] font-bold leading-none tabular-nums ${tone}`}>{value}</div>
+      <div className="mt-1 text-[11px] text-muted-foreground">{label}</div>
     </div>
   );
 }
@@ -183,9 +126,10 @@ function TruncationNote({ shown, total }: { shown: number; total: number }) {
   );
 }
 
-// ── Newly Lit — COMING_SOON / dark addresses that transitioned to live fiber ──
-// A 7-day window (vs Fresh Now's 24h) so a rep sees every recent lighting they
-// can still be first to knock. Cross-verified, assign-ready transitions lead.
+// ── Fresh Now — every lead worth knocking, hottest first. Merges the old
+// "Newly Lit" tab: the 24h/7d toggle switches the first-seen window, and the
+// transition feed (went live · copper→fiber · coming soon · lost) rides below
+// so one tab answers "what changed and what do I knock". ─────────────────────
 interface FiberChanges {
   count: number; wentLive: number; copperUpgrades: number; comingSoon: number;
   rows: Array<{
@@ -201,7 +145,14 @@ const KIND_STYLE: Record<string, { label: string; cls: string }> = {
   lost_fiber: { label: "Lost", cls: "bg-red-500/15 text-red-400" },
 };
 
-function NewlyLit() {
+function FreshNow() {
+  const [hours, setHours] = useState<24 | 168>(24);
+  const { data, isLoading } = useQuery<FirstSeenLive>({
+    queryKey: ["/api/scan/first-seen-live", hours],
+    queryFn: () => apiRequest("GET", `/api/scan/first-seen-live?hours=${hours}`).then((r) => r.json()),
+    refetchInterval: 8000, // near-real-time without an SSE dependency
+    staleTime: 5000,
+  });
   const { data: changes } = useQuery<FiberChanges>({
     queryKey: ["/api/fiber/changes", "7d"],
     queryFn: () => apiRequest("GET", "/api/fiber/changes?hours=168").then((r) => r.json()),
@@ -213,28 +164,75 @@ function NewlyLit() {
     queryFn: () => apiRequest("GET", "/api/fiber/copper-pool").then((r) => r.json()),
     refetchInterval: 60000,
   });
-  const { data, isLoading } = useQuery<FirstSeenLive>({
-    queryKey: ["/api/scan/first-seen-live", "7d"],
-    queryFn: () => apiRequest("GET", "/api/scan/first-seen-live?hours=168").then((r) => r.json()),
-    refetchInterval: 15000,
-    staleTime: 10000,
-  });
-  const lit = (data?.addresses ?? []).slice().sort((a, b) =>
-    (b.confidence === "cross_verified" ? 1 : 0) - (a.confidence === "cross_verified" ? 1 : 0)
-    || +new Date(b.firstSeenLiveAt) - +new Date(a.firstSeenLiveAt));
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-2">
-        {[["Copper upgrades (7d)", changes?.copperUpgrades ?? 0, "text-orange-600 dark:text-orange-400"], ["Copper pool", copperPool?.total ?? 0, "text-orange-500 dark:text-orange-300"], ["Transitions (7d)", changes?.count ?? 0, "text-foreground"]].map(([l, v, t]) => (
-          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
-            <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
-            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
-          </div>
-        ))}
+      {/* Window-aware counters + the 24h/7d switch (this toggle IS the old
+          Newly Lit tab — same data, wider lens). */}
+      <div className="flex items-center gap-2">
+        <div className="grid flex-1 grid-cols-3 gap-2">
+          <StatTile label="New now" value={data?.count ?? 0} tone="text-primary" />
+          <StatTile label="Cross-verified" value={data?.confirmed ?? 0} tone="text-emerald-600 dark:text-emerald-400" />
+          <StatTile label="Ready to assign" value={data?.readyToAssign ?? 0} tone="text-sky-600 dark:text-sky-400" />
+        </div>
+        <div className="flex shrink-0 flex-col gap-1" role="group" aria-label="Detection window">
+          {([24, 168] as const).map((h) => (
+            <button
+              key={h}
+              onClick={() => setHours(h)}
+              aria-pressed={hours === h}
+              data-testid={`fi-window-${h}`}
+              className={`rounded-lg px-2.5 py-1 text-[11px] font-bold ${hours === h ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}
+            >{h === 24 ? "24h" : "7d"}</button>
+          ))}
+        </div>
       </div>
+      {/* Sales-intelligence ordering: green assignable leads ranked hottest-first. */}
+      <Suspense fallback={<Skeleton className="h-40 w-full rounded-2xl" />}>
+        <RankedLeads />
+      </Suspense>
+      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · last {hours === 24 ? "24h" : "7 days"} · refreshes automatically</span>
+      </div>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card">
+        {isLoading && !data ? (
+          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
+            <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-2 w-2 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
+          ))}</div>
+        ) : (data?.addresses?.length ?? 0) === 0 ? (
+          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No fresh fiber in this window — the pipeline is watching. New detections stream in here.</div>
+        ) : (
+          <>
+            <div className="divide-y divide-border">
+              {data!.addresses.slice(0, 40).map((a) => (
+                <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`fresh-row-${a.id}`}>
+                  <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-orange-400" />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
+                    <div className="text-[11px] text-muted-foreground">Detected {fmtTime(a.firstSeenLiveAt)}</div>
+                  </div>
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
+                  {a.leadId != null
+                    ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
+                    : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
+                </div>
+              ))}
+            </div>
+            <TruncationNote shown={40} total={data!.addresses.length} />
+          </>
+        )}
+      </div>
+
+      {/* Transition feed — every address that changed state in the last 7 days.
+          Copper→fiber upgrades lead the list (the competitor-parity lead type). */}
       {(changes?.rows?.length ?? 0) > 0 && (
         <div className="overflow-hidden rounded-2xl border border-border bg-card">
-          <div className="border-b border-border px-4 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest transitions — copper→fiber upgrades lead the list</div>
+          <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Latest transitions — 7 days</div>
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1"><Flame className="h-3 w-3 text-orange-400" />{changes!.copperUpgrades} copper upgrades</span>
+              <span>· pool {copperPool?.total ?? 0}</span>
+            </div>
+          </div>
           <div className="divide-y divide-border">
             {changes!.rows.slice(0, 30).map((c) => (
               <div key={c.id} className="flex min-w-0 items-center gap-3 px-4 py-2.5 hover:bg-secondary/40" data-testid={`change-row-${c.id}`}>
@@ -251,58 +249,6 @@ function NewlyLit() {
           <TruncationNote shown={30} total={changes!.rows.length} />
         </div>
       )}
-      <div className="grid grid-cols-3 gap-2">
-        {[["Lit (7d)", data?.count ?? 0, "text-amber-600 dark:text-amber-400"], ["Verified", data?.confirmed ?? 0, "text-emerald-600 dark:text-emerald-400"], ["Assignable", data?.readyToAssign ?? 0, "text-sky-600 dark:text-sky-400"]].map(([l, v, t]) => (
-          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
-            <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
-            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
-          </div>
-        ))}
-      </div>
-      <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1"><Flame className="h-3 w-3 text-amber-600 dark:text-amber-400" /> Addresses that went from dark / Coming Soon to live fiber in the last 7 days</span>
-      </div>
-      <div className="overflow-hidden rounded-2xl border border-border bg-card">
-        {isLoading && !data ? (
-          <div className="divide-y divide-border">{[0, 1, 2, 3].map((i) => (
-            <div key={i} className="flex items-center gap-3 px-4 py-3"><Skeleton className="h-2 w-2 rounded-full" /><div className="flex-1 space-y-1.5"><Skeleton className="h-3.5 w-2/3" /><Skeleton className="h-2.5 w-2/5" /></div><Skeleton className="h-5 w-20 rounded-full" /></div>
-          ))}</div>
-        ) : lit.length === 0 ? (
-          <div className="px-4 py-10 text-center text-[13px] italic text-muted-foreground">No newly lit addresses in the last 7 days — Coming Soon watchlists promote here automatically the moment fiber activates.</div>
-        ) : (
-          <>
-          <div className="divide-y divide-border">
-            {lit.slice(0, 60).map((a) => (
-              <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`newlylit-row-${a.id}`}>
-                <Flame className="h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
-                  <div className="text-[11px] text-muted-foreground">Lit {fmtTime(a.firstSeenLiveAt)}</div>
-                </div>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-amber-500/15 text-amber-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
-                {a.leadId != null
-                  ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
-                  : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
-              </div>
-            ))}
-          </div>
-          <TruncationNote shown={60} total={lit.length} />
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function MapTab() {
-  return (
-    <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-border bg-card px-6 py-12 text-center">
-      <MapIcon className="h-8 w-8 text-primary" />
-      <div className="text-[15px] font-semibold">Field Map</div>
-      <p className="max-w-sm text-[13px] text-muted-foreground">The full-bleed field map — green pins for verified fresh leads, lasso to assign, tap a house to check on the spot.</p>
-      <Link href="/map" className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground hover:opacity-90" data-testid="fi-open-map">
-        Open Field Map <ArrowRight className="h-4 w-4" />
-      </Link>
     </div>
   );
 }
@@ -327,12 +273,9 @@ function ComingSoon() {
   return (
     <div className="space-y-3">
       <div className="grid grid-cols-3 gap-2">
-        {[["Watching", watching, "text-cyan-600 dark:text-cyan-400"], ["Promoted", program?.promoted ?? 0, "text-emerald-600 dark:text-emerald-400"], ["Due now", program?.dueNow ?? 0, "text-amber-600 dark:text-amber-400"]].map(([l, v, t]) => (
-          <div key={l as string} className="rounded-xl border border-border bg-card px-3 py-2.5">
-            <div className={`text-[22px] font-bold leading-none tabular-nums ${t}`}>{v as number}</div>
-            <div className="mt-1 text-[11px] text-muted-foreground">{l as string}</div>
-          </div>
-        ))}
+        <StatTile label="Watching" value={watching} tone="text-cyan-600 dark:text-cyan-400" />
+        <StatTile label="Promoted" value={program?.promoted ?? 0} tone="text-emerald-600 dark:text-emerald-400" />
+        <StatTile label="Due now" value={program?.dueNow ?? 0} tone="text-amber-600 dark:text-amber-400" />
       </div>
       <p className="px-1 text-[12px] text-muted-foreground">The built-in Coming Soon worker re-checks every watched address on an opportunity-weighted cadence (hottest first) and promotes it into <span className="font-medium text-foreground">Fresh Now</span> with a green assignable pin the moment fiber becomes orderable.</p>
       <ComingSoonWatchlist />
@@ -340,7 +283,9 @@ function ComingSoon() {
   );
 }
 
-function Coverage() {
+// ── Coverage — how far the machine has swept, plus (admin only) the live Scan
+// Inspector folded in at the bottom: one tab for "is the pipeline healthy". ──
+function Coverage({ isAdmin }: { isAdmin: boolean }) {
   const { data } = useQuery<{ sweeps: StateSweep[] }>({
     queryKey: ["/api/sweeps/state"],
     queryFn: () => apiRequest("GET", "/api/sweeps/state").then((r) => r.json()),
@@ -374,6 +319,15 @@ function Coverage() {
         ))}
       </div>
       <Link href="/map" className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-primary hover:underline">Open the coverage map <ExternalLink className="h-3.5 w-3.5" /></Link>
+
+      {isAdmin && (
+        <div className="space-y-2 pt-2">
+          <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Operations — live scan inspector</div>
+          <Suspense fallback={<Skeleton className="h-64 w-full rounded-2xl" />}>
+            <ScanInspector />
+          </Suspense>
+        </div>
+      )}
     </div>
   );
 }
