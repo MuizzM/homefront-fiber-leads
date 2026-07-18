@@ -693,6 +693,58 @@ app.use((req, res, next) => {
     if (typeof (hotCycle as any).unref === "function") hotCycle.unref();
   }
 
+  // FRONTIER MARKETS — Frontier-fiber towns (default: Durham NC). Mirrors the
+  // hot-market cadence but tags every target carrier='frontier' so the engine
+  // routes it to the Frontier serviceability scanner and publishes RED leads.
+  // Own 20-minute cycle, 30-minute stale window, hourly discovery job per town.
+  // FRONTIER_MARKETS=off disables; comma-separated "city:st" entries extend.
+  const DEFAULT_FRONTIER_MARKETS = "durham:nc";
+  const runFrontierBurst = async () => {
+    try {
+      const spec = (process.env.FRONTIER_MARKETS ?? DEFAULT_FRONTIER_MARKETS).trim();
+      if (spec === "off") return;
+      const { rawDb } = await import("./db");
+      const { startTargetRun } = await import("./scanService");
+      const { getDefaultTenantId } = await import("./storage");
+      const tid = getDefaultTenantId();
+      if (tid == null) return;
+      for (const entry of spec.split(",").map((s) => s.trim()).filter(Boolean)) {
+        const [city, st = "nc"] = entry.split(":").map((s) => s.trim());
+        if (!city) continue;
+        // Tag everything harvested for this town as Frontier territory — the
+        // discovery harvester is carrier-agnostic; the town assignment owns it.
+        rawDb.prepare(`UPDATE scan_targets SET carrier='frontier' WHERE lower(city)=? AND lower(state)=? AND carrier<>'frontier'`).run(city, st);
+        const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE carrier='frontier' AND lower(city)=? AND lower(state)=?
+          AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-30 minutes'))
+          ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT 5000`)
+          .all(city, st) as any[]).map((r) => Number(r.id));
+        if (ids.length) {
+          startTargetRun({ tenantId: tid, city, state: st.toUpperCase(), targetIds: ids, runKind: "frontier_hot", label: `FRONTIER: ${city} ${st.toUpperCase()} fiber sweep` });
+          structuredLog("frontier_market.burst", { city, state: st, queued: ids.length });
+        }
+        try {
+          const { createDiscoveryJob } = await import("./addressDiscovery/store");
+          const pretty = city.replace(/\b\w/g, (c) => c.toUpperCase());
+          const hourKey = new Date().toISOString().slice(0, 13);
+          const { job } = createDiscoveryJob({
+            tenantId: tid,
+            idempotencyKey: `frontier:${city.toLowerCase()}:${st.toLowerCase()}:${hourKey}`,
+            requestHash: `frontier-market:${city.toLowerCase()}:${st.toLowerCase()}`,
+            townName: pretty, state: st.toUpperCase(), createdBy: 1,
+          } as any);
+          if (job) structuredLog("frontier_market.discovery", { city, state: st, jobId: (job as any).id });
+        } catch { /* discovery module optional */ }
+      }
+    } catch (e: any) { console.warn("[frontier-market] skipped:", e?.message); }
+  };
+  if ((process.env.FRONTIER_MARKETS ?? DEFAULT_FRONTIER_MARKETS) !== "off") {
+    // First burst 2.5 min after boot (offset from the 90s Kinetic hot burst so
+    // both don't slam the event loop in the same second).
+    setTimeout(() => { void runFrontierBurst(); }, 150 * 1000);
+    const frontierCycle = setInterval(() => { void runFrontierBurst(); }, 20 * 60_000);
+    if (typeof (frontierCycle as any).unref === "function") frontierCycle.unref();
+  }
+
   // COMING SOON PROGRAM — the overarching always-on watch system. The built-in
   // worker sweeps the durable watchlist every 15 minutes on an opportunity-
   // weighted cadence and promotes COMING_SOON → AVAILABLE into a green assignable

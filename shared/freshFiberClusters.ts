@@ -12,6 +12,7 @@ export interface FreshFiberPoint {
   confidence: FreshConfidence;
   sources: string[];
   leadId?: number | null;
+  carrier?: string; // 'kinetic' (default) | 'frontier' — red on the map
   customerSegment?: "new_opportunity" | "existing_customer" | "unknown";
   customerConfidence?: "medium" | "low";
 }

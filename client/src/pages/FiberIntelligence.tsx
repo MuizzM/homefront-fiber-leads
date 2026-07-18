@@ -27,7 +27,7 @@ import ComingSoonWatchlist, { WATCHLIST_QUERY, type WatchlistItem } from "@/comp
 type TabKey = "fresh" | "coming" | "newbuilds" | "coverage";
 interface FirstSeenLive {
   windowHours: number; count: number; confirmed: number; provisional: number; readyToAssign: number;
-  addresses: Array<{ id: number; address: string; city: string; firstSeenLiveAt: string; confidence: string; leadId?: number | null }>;
+  addresses: Array<{ id: number; address: string; city: string; firstSeenLiveAt: string; confidence: string; leadId?: number | null; carrier?: string }>;
 }
 interface StateSweep {
   id: string; state: "NC" | "SC" | "GA"; status: string; currentCity: string | null;
@@ -209,11 +209,12 @@ function FreshNow() {
             <div className="divide-y divide-border">
               {data!.addresses.slice(0, 40).map((a) => (
                 <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 hover:bg-secondary/40" data-testid={`fresh-row-${a.id}`}>
-                  <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-orange-400" />
+                  <span className={`h-2 w-2 shrink-0 animate-pulse rounded-full ${a.carrier === "frontier" ? "bg-red-500" : "bg-orange-400"}`} />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
                     <div className="text-[11px] text-muted-foreground">Detected {fmtTime(a.firstSeenLiveAt)}</div>
                   </div>
+                  {a.carrier === "frontier" && <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-400">Frontier</span>}
                   <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
                   {a.leadId != null
                     ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>

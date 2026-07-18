@@ -128,6 +128,7 @@ interface MapPin {
   leadScore: number;
   leadTag?: string | null;
   freshConfidence?: string | null;
+  carrier?: string | null;
   visited?: boolean;
   knockCount?: number;
   lastOutcome?: string | null;
@@ -537,9 +538,10 @@ function ensureTransientMapLayers(map: any): void {
       paint: {
         "circle-radius": 8,
         "circle-opacity": 0.96,
-        "circle-color": "#22c55e",
+        // Carrier color: Kinetic fresh = green, Frontier fresh = red.
+        "circle-color": ["case", ["==", ["get", "carrier"], "frontier"], "#ef4444", "#22c55e"],
         "circle-stroke-width": 2,
-        "circle-stroke-color": "#dcfce7",
+        "circle-stroke-color": ["case", ["==", ["get", "carrier"], "frontier"], "#fecaca", "#dcfce7"],
         "circle-blur": 0.08,
         "circle-opacity-transition": { duration: 180, delay: 0 },
         "circle-radius-transition": { duration: 220, delay: 0 },
@@ -1750,9 +1752,10 @@ export default function MapView() {
               18,
               16,
             ],
-            "circle-color": "rgba(34,197,94,0.16)",
+            "circle-color": ["case", ["==", ["get", "carrier"], "frontier"], "rgba(239,68,68,0.16)", "rgba(34,197,94,0.16)"],
             "circle-stroke-width": 2.5,
-            "circle-stroke-color": "#22c55e",
+            // Carrier halo: Kinetic fresh = green ring, Frontier fresh = red ring.
+            "circle-stroke-color": ["case", ["==", ["get", "carrier"], "frontier"], "#ef4444", "#22c55e"],
           },
         },
         "lead-unclustered",
@@ -3069,6 +3072,7 @@ export default function MapView() {
           canonicalAddressId: String(canonicalId),
           receivedAt: Date.now(),
           scanStatus: "fresh_confirmed",
+          carrier: String(row.carrier ?? "kinetic"),
           address: String(row.address ?? row.addressLine1 ?? "Address"),
           city: String(row.city ?? ""),
           state: String(row.state ?? ""),

@@ -76,6 +76,7 @@ export interface MapPinRow {
   leadScore: number | null;
   leadTag: string | null;
   freshConfidence: string | null;
+  carrier?: string | null;
   knockCount: number | null;
   lastOutcome: string | null;
   lastKnockedAt: string | null;
@@ -1674,6 +1675,12 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN lifecycle_state TEXT`,
     `ALTER TABLE scan_targets ADD COLUMN lifecycle_changed_at INTEGER`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_lifecycle ON scan_targets(lifecycle_state, lifecycle_changed_at)`,
+    // ── Carrier dimension ─────────────────────────────────────────────────────
+    // 'kinetic' (default) | 'frontier'. Frontier targets route to the Frontier
+    // serviceability scanner and publish RED leads (Kinetic = green).
+    `ALTER TABLE scan_targets ADD COLUMN carrier TEXT NOT NULL DEFAULT 'kinetic'`,
+    `ALTER TABLE leads ADD COLUMN carrier TEXT NOT NULL DEFAULT 'kinetic'`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_carrier_city ON scan_targets(carrier, lower(city), state)`,
     // ── Coming-Soon watchlist ─────────────────────────────────────────────────
     // One row per address the provider says is pre-launch (COMING SOON segment or
     // NEW FIBER + active billing — the existing scanner 'coming_soon' rule).
@@ -1915,7 +1922,7 @@ export class Storage implements IStorage {
           l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
           l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
           l.assigned_rep_id AS assignedRepId, l.lead_score AS leadScore,
-          l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence
+          l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier
         FROM leads l
         WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
       ), ranked_visits AS (

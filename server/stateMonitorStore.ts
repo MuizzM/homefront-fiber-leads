@@ -191,7 +191,7 @@ export function recordCorroboration(tenantId: number, rows: CorroborationInput[]
 
 export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
   const rows = rawDb.prepare(`
-    SELECT s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
+    SELECT s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng, s.carrier,
            COALESCE(s.first_seen_fiber_at,s.first_seen_live_at) AS firstSeenLiveAt, s.converted_to_lead_id AS leadId,
            s.last_customer_segment AS customerSegment,s.last_customer_confidence AS customerConfidence,
            GROUP_CONCAT(DISTINCT c.source) AS corroboratingSources
@@ -215,7 +215,8 @@ export function freshPoints(tenantId: number, days = 30): FreshFiberPoint[] {
       id: r.id, address: r.address, city: r.city, state: r.state, zip: r.zip,
       lat: Number(r.lat), lng: Number(r.lng), firstSeenLiveAt: toIso(r.firstSeenLiveAt), leadId: r.leadId,
       confidence: independent.length ? "cross_verified" : "single_source_provisional",
-      sources: ["kinetic", ...independent],
+      sources: [r.carrier === "frontier" ? "frontier" : "kinetic", ...independent],
+      carrier: r.carrier ?? "kinetic",
       customerSegment: r.customerSegment ?? "unknown", customerConfidence: r.customerConfidence ?? "low",
     } as FreshFiberPoint;
   });

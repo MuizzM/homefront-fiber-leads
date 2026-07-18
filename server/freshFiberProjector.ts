@@ -23,6 +23,7 @@ interface ProjectionCandidate {
   max_download_mbps: number | null;
   household_segment_type: string | null;
   billing_status: string | null;
+  carrier?: string; // 'kinetic' (default) | 'frontier' — paints the lead red
 }
 
 export interface ProjectionResult {
@@ -64,7 +65,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const filter = ids.length ? `AND s.id IN (${ids.map(() => "?").join(",")})` : "";
   const candidates = rawDb.prepare(`
     SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,s.last_fiber_available,
-           s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,
+           s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,s.carrier,
            EXISTS(SELECT 1 FROM availability_snapshots f WHERE f.scan_target_id=s.id AND f.tenant_id=? AND f.fresh=1 AND f.conclusive=1) AS proven_flip,
            latest.max_download_mbps,latest.household_segment_type,latest.billing_status
       FROM scan_targets s
@@ -107,9 +108,9 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     (address,city,state,zip,lat,lng,fiber_status,max_download_mbps,is_new_deployment,is_new_fiber,is_tenured,
      household_segment_type,billing_status,lead_status,notes,deployment_notes,lead_tag,lead_score,tenant_id,
      source_scan_target_id,fresh_confirmed_at,fresh_confidence,fresh_sources,assigned_rep_id,assigned_territory_id,
-     assignment_source,assigned_at,created_at,updated_at)
+     assignment_source,assigned_at,created_at,updated_at,carrier)
     VALUES (?,?,?,?,?,?,?,?,1,1,0,?,?,'prospect',?,?, 'fresh_fiber_confirmed',100,?,?,?,?,?,?,?,'fresh-fiber-territory',
-      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'))`);
+      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'),?)`);
   const stamp = rawDb.prepare(`UPDATE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?),
     fresh_confirmed_at=?,fresh_confidence=CASE WHEN fresh_confidence='cross_verified' THEN 'cross_verified' ELSE ? END,fresh_sources=?,lead_tag='fresh_fiber_confirmed',
     lead_score=MAX(COALESCE(lead_score,0),100),assigned_rep_id=COALESCE(assigned_rep_id,?),
@@ -203,6 +204,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
           tenantId, candidate.id, decision.confirmedAt, confidence, JSON.stringify(decision.sources),
           assignment?.repId ?? null, assignment?.territoryId ?? null,
           assignment?.repId ?? null,
+          (candidate as any).carrier ?? "kinetic",
         );
         leadId = Number(created.lastInsertRowid);
         result.created++;

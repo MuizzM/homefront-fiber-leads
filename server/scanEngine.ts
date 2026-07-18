@@ -16,6 +16,7 @@ import {
   normalizeKineticAddressKey,
   type ScanResult,
 } from "./scanner";
+import { scanFrontierAddress } from "./frontierScanner";
 import { emitStage } from "./scanStageBus";
 import { isRevenueAdmissionClass, AdmissionTimeoutError } from "./distributedProviderCoordinator";
 import { triggerExpansionForTargets } from "./clusterExpansion";
@@ -72,6 +73,9 @@ export type Checker = (a: {
   city: string;
   state: string;
   zip: string;
+  /** 'kinetic' (default) routes to the Kinetic scanner; 'frontier' routes to the
+   * Frontier serviceability scanner (RED leads). */
+  carrier?: string;
   source?: ProviderRequestPriority;
   /** Polled while waiting for admission — abandon promptly if the run is cancelled. */
   abort?: () => boolean;
@@ -81,7 +85,11 @@ export type Checker = (a: {
 // Decodo transport. scanner.ts owns authentication, request dedupe/caching,
 // upstream-denial handling, and the provider concurrency ceiling.
 const liveChecker: Checker = async (a) => {
-  const result = await scanAddress(a.address, a.city, a.state, a.zip, { source: a.source ?? "market", abort: a.abort });
+  // Carrier routing: Frontier targets go to the Frontier serviceability API
+  // (same result contract; the projector paints those leads RED downstream).
+  const result = a.carrier === "frontier"
+    ? await scanFrontierAddress(a.address, a.city, a.state, a.zip)
+    : await scanAddress(a.address, a.city, a.state, a.zip, { source: a.source ?? "market", abort: a.abort });
   const checkFailed = result.apiSource === "failed";
   // Estimate bytes from the serialized raw response when present (the proxy bills
   // request + response); fall back to the flat estimate. Under-counting cost is
@@ -269,6 +277,7 @@ export async function runScanWorker(
               city: t.city,
               state: t.state,
               zip: t.zip,
+              carrier: (t as any).carrier ?? "kinetic",
               source: providerPriorityForRun(run.kind),
               // Abandon the admission wait immediately if the run is cancelled/paused,
               // rather than blocking up to admissionMaxWaitMs.

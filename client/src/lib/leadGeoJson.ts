@@ -11,6 +11,7 @@ export interface GeoJsonLead {
   lastOutcome?: string | null;
   leadTag?: string | null;
   freshConfidence?: string | null;
+  carrier?: string | null;
 }
 
 export interface LeadPointFeature {
@@ -24,6 +25,7 @@ export interface LeadPointFeature {
     visited: number;
     ds: string;
     fresh: number;
+    carrier: string;
   };
 }
 
@@ -37,7 +39,7 @@ export type LeadFeatureCache = Map<number, CachedLeadFeature>;
 export function leadFeatureSignature(lead: GeoJsonLead): string {
   const ds = pinDisplayState(lead);
   const fresh = lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0;
-  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh].join("\u001f");
+  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic"].join("\u001f");
 }
 
 /**
@@ -80,6 +82,7 @@ export function reconcileLeadFeatures(
             visited: lead.visited ? 1 : 0,
             ds,
             fresh: lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0,
+            carrier: lead.carrier ?? "kinetic",
           },
         },
       };

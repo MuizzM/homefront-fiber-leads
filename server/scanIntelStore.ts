@@ -236,7 +236,7 @@ export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq
 // 'inflight' — resetInflightTargets() (called on resume) returns them to the
 // queue. Priority order preserved.
 const _claimSelect = rawDb.prepare(
-  `SELECT t.target_id AS targetId, t.seq AS seq, st.address, st.city, st.state, st.zip, st.lat, st.lng
+  `SELECT t.target_id AS targetId, t.seq AS seq, st.address, st.city, st.state, st.zip, st.lat, st.lng, st.carrier AS carrier
      FROM scan_run_targets t JOIN scan_targets st ON st.id = t.target_id
     WHERE t.run_id=? AND t.state='queued' AND (t.next_attempt_at IS NULL OR t.next_attempt_at<=datetime('now'))
     ORDER BY t.seq ASC LIMIT ?`);
