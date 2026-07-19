@@ -143,6 +143,18 @@ services:
       # live (gives HTTP its own core) OR the backlog/running-run pileup is drained.
       # (SEED_PRIORITY_SCAN, ENABLE_STATE_MONITORING, EXPLORE_CITIES, PRIORITY_CITIES
       #  are set to their off/empty values at their original definitions above.)
+      # Pausing the producers was NOT enough — the app still wedged ~140s after boot,
+      # because the DEFERRED RESUME (resumeCriticalRuns + resumeInterruptedRuns +
+      # startScanReaper, fired at BACKGROUND_RESUME_DELAY_MS, NOT gated by the producer
+      # flags) spins the single thread when it operates over the accumulated pileup
+      # (193 'running' runs + 280k queued targets): ~100% CPU while producing only
+      # ~60 checks/min (a spin, not throughput). Push the resume delay far out so the
+      # reaper/resume never fires on this backlog — the app stays in its healthy boot
+      # state and serves reps. On-demand scans (rep taps, lasso, manual) dispatch
+      # directly and still work. RESTORE (BACKGROUND_RESUME_DELAY_MS=150000) once the
+      # backlog/running-run pileup is drained AND/OR true multi-core gives HTTP its own
+      # core. This is the resume kill-switch for the current wedge.
+      BACKGROUND_RESUME_DELAY_MS: "86400000"
       STATEWIDE_SCAN_ON_DEPLOY: "off"
       HOT_MARKETS: "off"
       FRONTIER_MARKETS: "off"
