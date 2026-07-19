@@ -4012,18 +4012,27 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.json({ sent: true });
     }
     const code = storage.createOtp(cleanEmail);
-    let delivery: "email" | "console";
+    let delivery: "email" | "console" | "failed" = "failed";
     try {
       delivery = await sendOtpEmail(cleanEmail, code, user.name);
-    } catch {
-      // Mail infrastructure down (prod path) — tell the rep plainly, fast.
-      return res.status(502).json({ error: "Couldn't send the code right now. Try again in a moment." });
+    } catch (mailErr: any) {
+      // Mail delivery down (e.g. provider daily-quota 429). Do NOT hard-block login:
+      // the code is ALREADY generated and stored, and email is only the DELIVERY
+      // channel. A 502 here strands every user on the email step with no code field
+      // (Login.tsx only advances to code entry on a 2xx) — a mail outage becomes a
+      // total lockout. Advance the flow instead (sent:true, emailDelivered:false) so a
+      // code obtained through any working channel still verifies, and the client can
+      // warn that the email may be delayed. The code is NEVER returned in the API
+      // response in production — email remains the only automated delivery path.
+      console.warn("[otp] mail delivery failed; advancing login flow anyway:", mailErr?.message);
+      return res.json({ sent: true, emailDelivered: false });
     }
     // Localhost must remain usable without a paid mail account. The code is
     // returned only in non-production when delivery fell back to the console;
     // production can never expose an authentication secret in an API response.
     res.json({
       sent: true,
+      emailDelivered: true,
       ...(process.env.NODE_ENV !== "production" && delivery === "console" ? { developmentCode: code } : {}),
     });
   });
