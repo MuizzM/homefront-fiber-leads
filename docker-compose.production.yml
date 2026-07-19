@@ -29,8 +29,19 @@ services:
       # 24h, served = 168h, low = 336h) rather than only via the statewide sweep.
       # Unlimited Decodo budget → live spend on; global dedup + the coordinator
       # address-lock prevent any double-check against the sweep.
-      ENABLE_STATE_MONITORING: "false"
-      STATE_MONITOR_LIVE: "true"
+      ENABLE_STATE_MONITORING: "off"
+      STATE_MONITOR_LIVE: "off"
+      # WEDGE ROOT CAUSE (2026-07-19): the state-monitor alert OUTBOX had 1.25M+
+      # pending rows; every tick enqueued more fresh-fiber alert clusters (huge green
+      # backlog) and drain-spun them against the mail providers 10/sec + daily-quota
+      # limit — hundreds of state_monitor.alert_failed/sec pegged the one JS thread and
+      # starved /api ~150s after every boot. ENABLE_STATE_MONITORING must be "off" (the
+      # code checks `!== "off"`, so the earlier "false" left it ENABLED). The startup
+      # tick fires runStateMonitorTick ONCE regardless of enabled, so park it far out
+      # too. ENABLE_KINETIC_DIRECTORY_WATCH off (also runs in the tick). Re-enable after
+      # the outbox is drained/capped and mail capacity is sorted.
+      STATE_MONITOR_STARTUP_DELAY_MS: "86400000"
+      ENABLE_KINETIC_DIRECTORY_WATCH: "off"
       # One-shot-per-12h priority burst: on boot, enqueue the Sugar-and-Wine-Rd seed
       # corridor + the 7 target Kinetic markets (Harrisburg/Monroe/Albemarle/Oakboro/
       # Indian Trail/Concord/Rockwell) via the real startTargetRun path. Self-limiting;
