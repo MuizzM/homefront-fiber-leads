@@ -242,21 +242,32 @@ export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq
 // before parking — measured live at ~76% of all checks). Ordering by yield front-
 // loads the checks most likely to produce a conclusive Kinetic-serviceable answer
 // (a green lead) per proxy-dollar, and lets the needs-fix tail drain only when
-// nothing fresher is queued. Tiers:
-//   1. never-scanned (last_scanned_at IS NULL) before any re-check — the fresh
-//      opportunity we don't have an answer for yet.
-//   2. fewer prior needs-fix attempts first — the churning tail sinks to the back.
-//   3. fewer run-level retries first.
-//   4. enqueue order (seq) as the final tiebreak.
-// A run of purely fresh targets (manual / lasso / corridor / a new city sweep —
-// all never-scanned, 0 attempts) collapses tiers 1-3 to constants, so its claim
-// order is byte-identical to the old `seq ASC`. Only mixed-history backlog runs are
-// reordered. Cost: a per-run ORDER BY ... LIMIT temp-btree, O(n log k) — single-digit
-// ms even at 100k queued rows, negligible against the batch's network time. Set
-// SCAN_YIELD_ORDER=off to fall back to strict seq order.
+// nothing fresher is queued. Tiers (each a CASE evaluating to a small integer,
+// sorted ASC so 0 = highest priority):
+//   1. Kinetic before Frontier — a Kinetic sweep spends its budget on Kinetic
+//      addresses first; Frontier targets are their own line (routed to the Frontier
+//      scanner, published as red leads) and drain only when Kinetic is exhausted, so
+//      no Kinetic proxy session is burned on non-Kinetic territory ahead of a real
+//      Kinetic address. Deprioritize, not exclude — Frontier is a real line.
+//   2. never-scanned (no answer yet) before any re-check.
+//   3. HIGH-VALUE re-check / fresh signal next: a known NEW-FIBER address (may flip
+//      billing→inactive = a fresh lead) or a new-build/coming-soon/radar-sourced
+//      address, before generic addresses.
+//   4. fewer prior needs-fix attempts — the AddressNeedsFix churn tail sinks last.
+//   5. fewer run-level retries.
+//   6. enqueue order (seq) as the final tiebreak.
+// A run of purely fresh targets (manual / lasso / corridor / a new city sweep — all
+// same-carrier, never-scanned, 0 attempts, non-new-build source) collapses tiers 1-5
+// to constants, so its claim order is byte-identical to the old `seq ASC`. Only mixed
+// backlog runs reorder. Cost: a per-run ORDER BY ... LIMIT temp-btree, O(n log k),
+// single-digit ms even at 100k queued rows. SCAN_YIELD_ORDER=off → strict seq.
 const _yieldOrder = process.env.SCAN_YIELD_ORDER === "off"
   ? "t.seq ASC"
-  : `CASE WHEN st.last_scanned_at IS NULL THEN 0 ELSE 1 END ASC,
+  : `CASE WHEN st.carrier='frontier' THEN 1 ELSE 0 END ASC,
+     CASE WHEN st.last_scanned_at IS NULL THEN 0 ELSE 1 END ASC,
+     CASE WHEN st.last_is_new_fiber=1 OR st.last_fiber_status='new_fiber' THEN 0
+          WHEN st.source LIKE '%new_build%' OR st.source LIKE '%radar%' OR st.source LIKE '%coming%' THEN 1
+          ELSE 2 END ASC,
      st.inconclusive_attempts ASC, t.attempt_count ASC, t.seq ASC`;
 const _claimSelect = rawDb.prepare(
   `SELECT t.target_id AS targetId, t.seq AS seq, st.address, st.city, st.state, st.zip, st.lat, st.lng, st.carrier AS carrier

@@ -58,4 +58,29 @@ describe("yield-first claim order", () => {
     const claimed = store.claimRunTargets(runId, 3, 0);
     expect(claimed.map((c) => c.targetId)).toEqual(ids);
   });
+
+  it("deprioritizes Frontier targets below Kinetic in a mixed run", async () => {
+    // seq puts Frontier first; Kinetic must still be claimed ahead of it.
+    const frontier = seed("400 FRONTIER AVE", { carrier: "frontier" });
+    const kinetic = seed("500 KINETIC AVE", { carrier: "kinetic" });
+    const runId = "run_mixed_carrier";
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "city", label: "mixed", city: "Yieldville", state: "NC", budget: 10 });
+    store.enqueueRunTargets(runId, [{ id: frontier, seq: 0 }, { id: kinetic, seq: 1 }]);
+    const claimed = store.claimRunTargets(runId, 2, 0);
+    expect(claimed.map((c) => c.targetId)).toEqual([kinetic, frontier]);
+  });
+
+  it("prioritizes known new-fiber and new-build sources among re-checks", async () => {
+    // All re-checked (last_scanned_at set), same attempts; the new-fiber green and
+    // the new-build-sourced address must sort ahead of a generic re-check.
+    const generic = seed("600 GENERIC RD", { last_scanned_at: "2026-07-10 00:00:00", source: "overpass" });
+    const newBuild = seed("700 NEWBUILD RD", { last_scanned_at: "2026-07-10 00:00:00", source: "new_build_radar" });
+    const green = seed("800 GREEN RD", { last_scanned_at: "2026-07-10 00:00:00", last_fiber_status: "new_fiber", last_is_new_fiber: 1 });
+    const runId = "run_recheck_value";
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "recheck", label: "recheck", city: "Yieldville", state: "NC", budget: 10 });
+    // seq deliberately worst-first: generic(0), newBuild(1), green(2).
+    store.enqueueRunTargets(runId, [{ id: generic, seq: 0 }, { id: newBuild, seq: 1 }, { id: green, seq: 2 }]);
+    const claimed = store.claimRunTargets(runId, 3, 0);
+    expect(claimed.map((c) => c.targetId)).toEqual([green, newBuild, generic]);
+  });
 });
