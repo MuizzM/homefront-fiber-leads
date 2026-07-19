@@ -98,7 +98,7 @@ describe("address_not_found terminal", () => {
     expect(store.claimRunTargets(runId, 10, 3600)).toHaveLength(1);
   });
 
-  it("backfills the already-exhausted needs-fix tail without new checks", () => {
+  it("backfills the already-exhausted needs-fix tail without new checks", async () => {
     const t1 = seedTarget("111 TAIL RD");
     const t2 = seedTarget("113 TAIL RD");
     const fresh = seedTarget("115 FINE RD");
@@ -108,7 +108,7 @@ describe("address_not_found terminal", () => {
     rawDb.prepare(`UPDATE scan_run_targets SET attempt_count=9, last_error_message='Non-conclusive response (success=false, AddressNeedsFix)' WHERE run_id=? AND target_id IN (?,?)`).run(runId, t1, t2);
     rawDb.prepare(`UPDATE scan_run_targets SET attempt_count=1, last_error_message='network timeout' WHERE run_id=? AND target_id=?`).run(runId, fresh);
 
-    const res = store.finalizeAddressNotFoundBacklog(6);
+    const res = await store.finalizeAddressNotFoundBacklog(6);
     expect(res.targets).toBe(2);
     expect(res.runs).toBe(1);
     const states = rawDb.prepare(`SELECT target_id, state, result FROM scan_run_targets WHERE run_id=? ORDER BY seq`).all(runId) as any[];
@@ -121,7 +121,7 @@ describe("address_not_found terminal", () => {
     expect(parked.inconclusive_attempts).toBeGreaterThanOrEqual(3);
     expect(parked.last_inconclusive_at).not.toBeNull();
     // Idempotent second pass.
-    expect(store.finalizeAddressNotFoundBacklog(6).targets).toBe(0);
+    expect((await store.finalizeAddressNotFoundBacklog(6)).targets).toBe(0);
     // Run counters reflect the finalized tail.
     expect((rawDb.prepare(`SELECT failed FROM scan_runs WHERE id=?`).get(runId) as any).failed).toBe(2);
   });

@@ -359,6 +359,12 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN last_inconclusive_at TEXT`,
     // Partial-ish index for the re-probe selection (never-scanned, not-yet-exhausted).
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`,
+    // Covering partial index for the confirmed-green-unlinked backfill predicate
+    // (FRESH_LEAD_BOOT_BACKFILL): tenant + new_fiber + billing N + not yet a lead.
+    // Without it that boot job full-scans scan_targets per tenant (unindexed) — a
+    // synchronous stall on the grown DB. WHERE clause keeps the index tiny (only
+    // unconverted greens).
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_green_unlinked ON scan_targets(tenant_id, last_fiber_status, last_billing_status) WHERE converted_to_lead_id IS NULL`,
     // Cross-instance Kinetic provider admission. No bearer/proxy credentials are
     // stored: only hashed address keys, queue leases, rate timestamps, and a
     // short server-side normalized-result cache.

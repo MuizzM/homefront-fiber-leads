@@ -158,11 +158,14 @@ services:
       # in parallel (atomic claims + finalize CAS + the decoupled run heartbeat make
       # that safe), and HTTP stays served because no single event loop is the only one.
       BACKGROUND_RESUME_DELAY_MS: "150000"
-      # Also park the heavy BOOT-TIME DB jobs — the wedge persisted with resume +
-      # producers off, so a boot job doing heavy synchronous better-sqlite3 work over
-      # the grown dataset (FRESH_LEAD_BOOT_BACKFILL runs a non-indexed lower(trim())
-      # scan_targets×leads join per tenant; ANF backfill terminalizes the needs-fix
-      # tail) is the remaining suspect. Off until the DB is cleaned; re-enable after.
+      # BOOT-TIME DB jobs re-enabled AND made boot-safe (2026-07-19): both were heavy
+      # synchronous better-sqlite3 sweeps that stalled the control worker at boot. Now:
+      # (a) both are deferred past the 150s health gate via deferBoot; (b) both yield the
+      # event loop (setImmediate) between chunks; (c) idx_scan_targets_green_unlinked
+      # covers the FRESH_LEAD green predicate so it no longer full-scans scan_targets;
+      # (d) finalizeAddressNotFoundBacklog is async + chunk-yielding. ANF_BACKFILL
+      # terminalizes the exhausted needs-fix tail (the ~81%-of-checks churn);
+      # FRESH_LEAD_BOOT_BACKFILL promotes existing greens straight to the map.
       FRESH_LEAD_BOOT_BACKFILL: "on"
       ANF_BACKFILL: "on"
       STATEWIDE_SCAN_ON_DEPLOY: "on"

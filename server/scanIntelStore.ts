@@ -362,7 +362,12 @@ export function resetInflightTargets(runId: string): number {
 // family) WITHOUT burning one more check each — the recorded history IS the
 // evidence the live path would re-gather. Idempotent: finalized rows leave
 // 'queued' and never match again.
-export function finalizeAddressNotFoundBacklog(attemptCap: number): { targets: number; runs: number } {
+// ASYNC + inter-chunk yield: this can finalize up to 100k targets (~300k UPDATEs) in
+// one call. Running it as one synchronous burst blocks the event loop for its whole
+// duration; on the cluster's control worker that stalls the HTTP it serves. Yield to
+// the loop between 500-row transactions so /api stays responsive even mid-backfill.
+// (Each chunk is still a single atomic transaction — no partial-finalize hazard.)
+export async function finalizeAddressNotFoundBacklog(attemptCap: number): Promise<{ targets: number; runs: number }> {
   const rows = rawDb.prepare(
     `SELECT rt.run_id AS runId, rt.target_id AS targetId, rt.attempt_count AS attempts
        FROM scan_run_targets rt
@@ -383,7 +388,10 @@ export function finalizeAddressNotFoundBacklog(attemptCap: number): { targets: n
       runsTouched.add(r.runId);
     }
   });
-  for (let i = 0; i < rows.length; i += 500) chunk(rows.slice(i, i + 500));
+  for (let i = 0; i < rows.length; i += 500) {
+    chunk(rows.slice(i, i + 500));
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   return { targets: rows.length, runs: runsTouched.size };
 }
 

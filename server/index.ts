@@ -692,27 +692,38 @@ app.use((req, res, next) => {
     const { startExploreCycle } = await import("./exploreCities");
     deferBoot(startExploreCycle, "explore-cities");
   } catch (e: any) { console.warn("[explore-cities] start skipped:", e?.message); }
-  try {
-    // One-shot: terminalize the already-exhausted needs-fix tail (30k+ targets at
-    // 8+ attempts re-burning ~30% of check capacity) as address_not_found without
-    // spending one more check each. Idempotent; ANF_BACKFILL=off disables.
-    if (process.env.ANF_BACKFILL !== "off") {
-      const { finalizeAddressNotFoundBacklog } = await import("./scanIntelStore");
-      const cap = Math.max(2, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_ATTEMPTS ?? 6) || 6));
-      const res = finalizeAddressNotFoundBacklog(cap);
-      if (res.targets > 0) structuredLog("anf_backfill.finalized", { targets: res.targets, runs: res.runs, attemptCap: cap });
-    }
-  } catch (e: any) { console.warn("[anf-backfill] skipped:", e?.message); }
+  // One-shot: terminalize the already-exhausted needs-fix tail (targets at the attempt
+  // cap re-burning check capacity) as address_not_found without spending one more check
+  // each. DEFERRED past the health gate (deferBoot → resumeDelay): it is a heavy
+  // better-sqlite3 sweep over the grown DB, so running it in the boot window would stall
+  // the control worker's event loop and re-wedge /api. finalizeAddressNotFoundBacklog now
+  // yields between chunks so even post-gate it never blocks for its whole duration.
+  // Idempotent; ANF_BACKFILL=off disables.
+  if (process.env.ANF_BACKFILL !== "off") {
+    deferBoot(() => { void (async () => {
+      try {
+        const { finalizeAddressNotFoundBacklog } = await import("./scanIntelStore");
+        const cap = Math.max(2, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_ATTEMPTS ?? 6) || 6));
+        const res = await finalizeAddressNotFoundBacklog(cap);
+        if (res.targets > 0) structuredLog("anf_backfill.finalized", { targets: res.targets, runs: res.runs, attemptCap: cap });
+      } catch (e: any) { console.warn("[anf-backfill] skipped:", e?.message); }
+    })(); }, "anf-backfill");
+  }
   // FRESH-LEAD BACKFILL INVARIANT: every already-confirmed green address (NEW FIBER +
   // billing N, per its latest conclusive snapshot) must be an assignable Field-Map lead.
   // Re-project ALL tenants once on boot from EXISTING data (no re-scan, no Decodo cost,
   // fully idempotent) so no confirmed fresh fiber sits un-actioned. Kill-switch:
   // FRESH_LEAD_BOOT_BACKFILL=off.
+  // DEFERRED past the health gate (deferBoot): the green predicate scans scan_targets
+  // (covered by idx_scan_targets_green_unlinked) and the link/projection loops now yield
+  // between chunks, but running it in the boot window over the grown DB still risks
+  // stalling the control worker — keep it out of the health window like every producer.
   if (process.env.FRESH_LEAD_BOOT_BACKFILL !== "off") {
-    void (async () => {
+    deferBoot(() => { void (async () => {
       try {
         const { projectConfirmedFreshLeads } = await import("./freshFiberProjector");
         const { rawDb } = await import("./db");
+        const yieldLoop = () => new Promise((resolve) => setImmediate(resolve));
         const tenantIds = rawDb.prepare("SELECT id FROM tenants").all().map((r: any) => Number(r.id));
         for (const tid of tenantIds) {
           // LINK-BY-ADDRESS first: thousands of green scan_targets already have a lead
@@ -742,6 +753,7 @@ app.use((req, res, next) => {
               // Isolate a bad chunk — never abort the remaining thousands of links.
               console.warn(`[fresh-lead-backfill] link chunk ${i / 500} failed:`, chunkErr?.message);
             }
+            await yieldLoop(); // let the control worker serve HTTP between chunks
           }
           if (pairs.length) structuredLog("fresh_lead.link_backfill", { tenantId: tid, candidatePairs: pairs.length, linkedByAddress: addrLinked });
           // Confirmed-green (NEW FIBER + billing N) scan_targets that are not yet a lead.
@@ -752,11 +764,12 @@ app.use((req, res, next) => {
           for (let i = 0; i < ids.length; i += 300) {
             const r = projectConfirmedFreshLeads(tid, ids.slice(i, i + 300));
             created += r.created; linkedProj += r.linkedExisting;
+            await yieldLoop(); // let the control worker serve HTTP between projection chunks
           }
           structuredLog("fresh_lead.boot_backfill", { tenantId: tid, candidates: ids.length, created, linkedExisting: linkedProj });
         }
       } catch (e: any) { console.warn("[fresh-lead-backfill] skipped:", e?.message); }
-    })();
+    })(); }, "fresh-lead-backfill");
   }
   // PRIORITY SEED + MARKET SCAN — ON BY DEFAULT, CONTINUOUSLY CYCLING. Enqueue the
   // Sugar-and-Wine-Rd seed corridor (IMMEDIATE) + the 7 target markets'
