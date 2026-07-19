@@ -235,11 +235,34 @@ export function enqueueRunTargets(runId: string, ranked: Array<{ id: number; seq
 // target and double-spend the paid proxy. A crash after claiming leaves rows
 // 'inflight' — resetInflightTargets() (called on resume) returns them to the
 // queue. Priority order preserved.
+// YIELD-FIRST CLAIM ORDER. The scanner drains a large mixed backlog; scanning it in
+// raw enqueue order (seq) spends the cluster's finite check budget equally on
+// high-yield fresh addresses and on the low-yield AddressNeedsFix tail (addresses
+// Kinetic's fabric doesn't recognize, which retry up to INCONCLUSIVE_GIVEUP times
+// before parking — measured live at ~76% of all checks). Ordering by yield front-
+// loads the checks most likely to produce a conclusive Kinetic-serviceable answer
+// (a green lead) per proxy-dollar, and lets the needs-fix tail drain only when
+// nothing fresher is queued. Tiers:
+//   1. never-scanned (last_scanned_at IS NULL) before any re-check — the fresh
+//      opportunity we don't have an answer for yet.
+//   2. fewer prior needs-fix attempts first — the churning tail sinks to the back.
+//   3. fewer run-level retries first.
+//   4. enqueue order (seq) as the final tiebreak.
+// A run of purely fresh targets (manual / lasso / corridor / a new city sweep —
+// all never-scanned, 0 attempts) collapses tiers 1-3 to constants, so its claim
+// order is byte-identical to the old `seq ASC`. Only mixed-history backlog runs are
+// reordered. Cost: a per-run ORDER BY ... LIMIT temp-btree, O(n log k) — single-digit
+// ms even at 100k queued rows, negligible against the batch's network time. Set
+// SCAN_YIELD_ORDER=off to fall back to strict seq order.
+const _yieldOrder = process.env.SCAN_YIELD_ORDER === "off"
+  ? "t.seq ASC"
+  : `CASE WHEN st.last_scanned_at IS NULL THEN 0 ELSE 1 END ASC,
+     st.inconclusive_attempts ASC, t.attempt_count ASC, t.seq ASC`;
 const _claimSelect = rawDb.prepare(
   `SELECT t.target_id AS targetId, t.seq AS seq, st.address, st.city, st.state, st.zip, st.lat, st.lng, st.carrier AS carrier
      FROM scan_run_targets t JOIN scan_targets st ON st.id = t.target_id
     WHERE t.run_id=? AND t.state='queued' AND (t.next_attempt_at IS NULL OR t.next_attempt_at<=datetime('now'))
-    ORDER BY t.seq ASC LIMIT ?`);
+    ORDER BY ${_yieldOrder} LIMIT ?`);
 const _claimMark = rawDb.prepare(`UPDATE scan_run_targets SET state='inflight',attempt_count=attempt_count+1
   WHERE run_id=? AND target_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))`);
 // DEDUP guard: before claiming, mark as terminal 'skipped' any queued target whose

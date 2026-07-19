@@ -1276,13 +1276,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const daysN = Number(q.days);
     const days = Number.isFinite(daysN) && daysN > 0 ? Math.min(Math.floor(daysN), 365) : 30;
     const status = q.status === "available" || q.status === "coming_soon" ? q.status : undefined;
-    const rows = storage.getFreshLeads(tid, repFilter, { city, state, days, status });
+    // carrier filter: 'kinetic' (default view for a Kinetic operation) | 'frontier' |
+    // omitted (all). Keeps Frontier a real line while never letting it read as Kinetic.
+    const carrier = typeof q.carrier === "string" && q.carrier.trim() ? String(q.carrier).trim().toLowerCase().slice(0, 20) : undefined;
+    const rows = storage.getFreshLeads(tid, repFilter, { city, state, days, status, carrier });
     const features = rows
       .filter((r) => r.lat != null && r.lng != null)
       .map((r) => ({
         type: "Feature" as const,
         geometry: { type: "Point" as const, coordinates: [r.lng, r.lat] },
-        properties: { id: r.id, status: r.leadStatus, competitor_flag: r.competitorName ? 1 : 0 },
+        properties: { id: r.id, status: r.leadStatus, competitor_flag: r.competitorName ? 1 : 0, carrier: r.carrier ?? "kinetic" },
       }));
     res.json({ type: "FeatureCollection", features, count: features.length, days, city: city ?? null, state: state ?? null, status: status ?? null });
   });

@@ -2073,8 +2073,8 @@ export class Storage implements IStorage {
   getFreshLeads(
     tenantId: number | undefined,
     assignedRep: number | number[] | undefined,
-    opts: { city?: string; state?: string; days: number; status?: "available" | "coming_soon" },
-  ): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }> {
+    opts: { city?: string; state?: string; days: number; status?: "available" | "coming_soon"; carrier?: string },
+  ): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null; carrier: string | null }> {
     const days = Number.isFinite(opts.days) && opts.days > 0 ? Math.min(Math.floor(opts.days), 365) : 30;
     const cutoff = new Date(Date.now() - days * 86_400_000).toISOString();
     const conditions: any[] = [
@@ -2092,13 +2092,19 @@ export class Storage implements IStorage {
     }
     if (opts.city) conditions.push(sql`lower(${leads.city}) = ${opts.city.toLowerCase()}`);
     if (opts.state) conditions.push(sql`lower(${leads.state}) = ${opts.state.toLowerCase()}`);
+    // Carrier filter: Kinetic and Frontier are separate product lines that share the
+    // fresh_fiber_confirmed tag. Without this the Kinetic Fresh feed would silently
+    // mix in Frontier (red) leads — the Durham confusion. 'kinetic' also matches the
+    // pre-carrier default so legacy rows aren't dropped.
+    if (opts.carrier === "kinetic") conditions.push(sql`(${leads.id} IS NOT NULL AND (carrier IS NULL OR carrier = 'kinetic'))`);
+    else if (opts.carrier) conditions.push(sql`carrier = ${opts.carrier}`);
     // status filter: coming_soon = pre-launch fiber (leadTag), available = serviceable now.
     if (opts.status === "coming_soon") conditions.push(eq(leads.leadTag, "coming_soon"));
     else if (opts.status === "available") conditions.push(sql`(${leads.leadTag} IS NULL OR ${leads.leadTag} <> 'coming_soon')`);
     return db.select({
       id: leads.id, lat: leads.lat, lng: leads.lng, leadStatus: leads.leadStatus,
       competitorName: leads.competitorName, address: leads.address, city: leads.city,
-      state: leads.state, createdAt: leads.createdAt,
+      state: leads.state, createdAt: leads.createdAt, carrier: sql<string | null>`carrier`,
     }).from(leads)
       .where(and(...conditions))
       .orderBy(sql`${leads.createdAt} DESC`)
