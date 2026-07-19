@@ -104,42 +104,37 @@ services:
       # ── MULTI-CORE SCAN CLUSTER ──────────────────────────────────────────────
       # Fork N worker processes so scanning uses every core (the scan pipeline is
       # single-threaded JS and pegged ONE of the 4 cores at ~100% while the other 3
-      # idled). 3 (not 4) leaves a core's headroom for the supervisor primary, Caddy,
-      # the OS, and HTTP responsiveness so the portal stays snappy under full scan.
+      # idled). "auto" = ALL vCPUs deliberately (see scanWorkers.ts, the one parser):
+      # the supervisor primary is near-idle, Caddy uses <1% of a core, and every
+      # worker serves HTTP, so there is no single event loop to protect — per-worker
+      # resume stagger (25s × worker index) keeps their heavy bursts from aligning.
       # The DB-coordinated provider admission caps TOTAL Decodo concurrency globally
       # across all workers (SCAN_GLOBAL_CONCURRENCY is a global cap, not per-process),
       # so more workers do NOT multiply proxy pressure — they parallelize the CPU-bound
       # parse/classify/DB work up to that global cap. SCAN_WORKERS=0 (or unset) = the
       # single-process kill-switch (byte-for-byte the pre-cluster behavior).
-      # REVERTED TO 0 (single-process): activating 3 workers stalled scanning
-      # (checks/5m → 0, admission frozen at 11 active / 164 queued, quiet logs).
-      # Root cause: the DistributedProviderCoordinator's admission queue was built
-      # "single app instance" — its head-of-line admit ("only proceed when I am the
-      # current queue head") assumes the head item's submitter keeps polling to admit
-      # ITSELF. Across processes, if the head was submitted by another worker that
-      # isn't polling that row, every other worker waits behind it → cross-process
-      # deadlock. The multi-core cluster CODE is proven (231% CPU / 3 cores during the
-      # boot resume burst; portal stayed 200) and stays in place, dormant. Re-enable
-      # (SCAN_WORKERS=3) only AFTER the coordinator is made multi-instance-safe: the
-      # admit path must not depend on a specific worker polling its own head row
-      # (e.g. any worker may admit the eligible head; per-worker token minting must be
-      # shared/divided so N workers don't multiply auth-mint pressure).
-      SCAN_WORKERS: "0"
-      # Single-thread HTTP-headroom band. With a large accumulated backlog (280k+
-      # queued run-targets) + all producers running, concurrency 20 kept the one JS
-      # thread blocked in synchronous better-sqlite3 bursts long enough that /api/health
-      # requests arriving mid-block timed out (Docker unhealthy + external portal 000,
-      # while requests in the gaps still served in <1ms). Until true multi-core is
-      # re-enabled (needs the coordinator made multi-instance-safe — see SCAN_WORKERS
-      # note above), hold concurrency at the proven single-core band so the event loop
-      # always gets HTTP turns: a reliable portal for reps outranks raw scan speed.
-      SCAN_GLOBAL_CONCURRENCY: "10"
-      SCAN_BATCH_CONCURRENCY: "5"
-      # Cap concurrently-EXECUTING scan-run worker loops (each polls the DB via a
-      # synchronous better-sqlite3 claim). 100+ resuming at boot pegged the loop
-      # and starved /api/health. 5 keeps the loop responsive on the single thread
-      # under the current large backlog (was 8; lowered with the concurrency band).
-      MAX_ACTIVE_RUN_WORKERS: "5"
+      # ACTIVE at "auto" (= vCPUs detected at boot via availableParallelism, so a box
+      # resize rescales the cluster with no config change). The first activation
+      # (2026-07-19, SCAN_WORKERS=3) deadlocked steady-state admission: the
+      # coordinator's head-of-line admit assumed the head row's OWN submitter keeps
+      # polling — dead/starved submitter → everyone waits behind it (11/20 frozen,
+      # checks→0). FIXED in code: TOP-K SELF-ADMISSION (a poller admits itself when it
+      # ranks within the free slots under its own class ceiling — see
+      # distributedProviderCoordinator.ts). Token warm pool now divides across workers
+      # (scanner.ts) so N workers can't mint-storm Decodo at boot. Kill-switch:
+      # SCAN_WORKERS=0 = single-process, byte-for-byte pre-cluster behavior.
+      SCAN_WORKERS: "auto"
+      # GLOBAL Decodo-side cap (DB-enforced across every worker — not per-process).
+      # 20 was the proven single-thread plateau; with the cluster spreading the
+      # CPU-bound parse/classify/DB work across all cores, 24 gives the extra cores
+      # work without a step-change in proxy pressure (Decodo showed 1% 403s at 20).
+      # Raise further only if 403s stay low AND the portal stays snappy.
+      SCAN_GLOBAL_CONCURRENCY: "24"
+      SCAN_BATCH_CONCURRENCY: "10"
+      # Cap concurrently-EXECUTING scan-run worker loops PER PROCESS (each loop polls
+      # the DB via a synchronous better-sqlite3 claim). 6/worker × 4 workers = up to 24
+      # run loops box-wide, matching the global concurrency cap.
+      MAX_ACTIVE_RUN_WORKERS: "6"
       # ── TEMPORARY: heavy background PRODUCERS paused to keep the portal up ────
       # The single JS thread silently pegs at ~100% and starves /api (portal 000,
       # Docker unhealthy, no log output, probe can't even fork) ~150s after every
@@ -154,18 +149,15 @@ services:
       # live (gives HTTP its own core) OR the backlog/running-run pileup is drained.
       # (SEED_PRIORITY_SCAN, ENABLE_STATE_MONITORING, EXPLORE_CITIES, PRIORITY_CITIES
       #  are set to their off/empty values at their original definitions above.)
-      # Pausing the producers was NOT enough — the app still wedged ~140s after boot,
-      # because the DEFERRED RESUME (resumeCriticalRuns + resumeInterruptedRuns +
-      # startScanReaper, fired at BACKGROUND_RESUME_DELAY_MS, NOT gated by the producer
-      # flags) spins the single thread when it operates over the accumulated pileup
-      # (193 'running' runs + 280k queued targets): ~100% CPU while producing only
-      # ~60 checks/min (a spin, not throughput). Push the resume delay far out so the
-      # reaper/resume never fires on this backlog — the app stays in its healthy boot
-      # state and serves reps. On-demand scans (rep taps, lasso, manual) dispatch
-      # directly and still work. RESTORE (BACKGROUND_RESUME_DELAY_MS=150000) once the
-      # backlog/running-run pileup is drained AND/OR true multi-core gives HTTP its own
-      # core. This is the resume kill-switch for the current wedge.
-      BACKGROUND_RESUME_DELAY_MS: "86400000"
+      # RESUME RESTORED (150s, past the 120s health start_period). The 2026-07-19
+      # wedge turned out to be the state-monitor alert-outbox spin (1.25M pending rows
+      # drained against a dead mail quota) — NOT the resume; that root cause is now
+      # triple-guarded in code (enqueue cap + delivery circuit breaker + boot janitor
+      # pruning the backlog, see stateMonitorScheduler.ts). With the cluster live, the
+      # resume+reaper run in EVERY worker: all cores chew the accumulated run backlog
+      # in parallel (atomic claims + finalize CAS + the decoupled run heartbeat make
+      # that safe), and HTTP stays served because no single event loop is the only one.
+      BACKGROUND_RESUME_DELAY_MS: "150000"
       # Also park the heavy BOOT-TIME DB jobs — the wedge persisted with resume +
       # producers off, so a boot job doing heavy synchronous better-sqlite3 work over
       # the grown dataset (FRESH_LEAD_BOOT_BACKFILL runs a non-indexed lower(trim())

@@ -5,6 +5,7 @@ import crypto from "crypto";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import cluster from "node:cluster";
+import os from "node:os";
 import { runMigrations } from "./storage";
 import { rawDb } from "./db";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
@@ -28,7 +29,11 @@ import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPol
 //   code-free kill-switch). Worker index 0 is the control worker (runs producers +
 //   consumers); workers 1..N-1 are scan-only consumers. HF_ROLE/HF_WORKER_INDEX are
 //   set by the primary on fork.
-const SCAN_WORKERS = Math.max(0, Math.floor(Number(process.env.SCAN_WORKERS ?? 0) || 0));
+//   SCAN_WORKERS="auto" sizes the worker count to the vCPUs detected at boot; an
+//   explicit integer pins it; 0/unset stays single-process. Shared parser
+//   (scanWorkers.ts) so index/db/scanner can never drift.
+import { resolveScanWorkerCount } from "./scanWorkers";
+const SCAN_WORKERS = resolveScanWorkerCount();
 // The control role runs the work-PRODUCING singletons (statewide sweep, radar,
 // expansion, hot/frontier markets, discovery, daily refresh). True in single-process
 // and only in the index-0 worker under the cluster. Work-CONSUMING resume/reaper runs
@@ -409,10 +414,24 @@ app.use((req, res, next) => {
       return w;
     };
     for (let i = 0; i < SCAN_WORKERS; i++) forkWorker(i);
-    structuredLog("cluster.primary_started", { workers: SCAN_WORKERS, pid: process.pid });
+    structuredLog("cluster.primary_started", {
+      workers: SCAN_WORKERS, pid: process.pid,
+      vcpus: os.availableParallelism?.() ?? os.cpus().length,
+      totalRamMb: Math.round(os.totalmem() / 1_048_576),
+      scanWorkersEnv: String(process.env.SCAN_WORKERS ?? ""),
+    });
     cluster.on("exit", (w, code, signal) => {
       const index = (w as any).__hfIndex ?? 0;
       console.warn(`[cluster] worker index=${index} pid=${w.process.pid} exited (code=${code} signal=${signal ?? "none"})`);
+      // Immediately expire the dead worker's QUEUED admission rows. Its rows would
+      // otherwise keep aging in the priority rank (their own admission-timeout code
+      // died with the process) and stall NORMAL admission until the coordinator's
+      // staleness reaper catches them (~60-90s). The coordinator instanceId is
+      // "<pid>-<uuid8>", and the primary knows the pid right now. Best-effort.
+      try {
+        rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error='worker exited',updated_at=? WHERE state='queued' AND instance_id LIKE ?`)
+          .run(Date.now(), `${w.process.pid}-%`);
+      } catch { /* table may not exist on a fresh DB — the staleness reaper covers it */ }
       if (!primaryDown) {
         // Respawn after a short delay so a crash-loop can't peg the box. Preserves the
         // worker's index → the control role is always re-created if worker 0 dies.
@@ -535,7 +554,15 @@ app.use((req, res, next) => {
   // checkpoint-based, so nothing is lost by starting a bit later. The periodic
   // reaper (started immediately, first tick 60s) still recovers anything if this
   // deferred pass is somehow missed. BACKGROUND_RESUME_DELAY_MS overrides.
-  const resumeDelay = Math.max(0, Number(process.env.BACKGROUND_RESUME_DELAY_MS ?? 150_000) || 150_000);
+  // STAGGER across the cluster: a single shared delay had all 4 workers' resume
+  // bursts AND the control worker's outbox prune firing at the identical T+150s
+  // instant — a synchronized write herd into the one SQLite writer. Offset each
+  // worker by 25s (worker 0 keeps exactly the base delay, so single-process
+  // SCAN_WORKERS=0 behavior — HF_WORKER_INDEX unset → offset 0 — is unchanged).
+  // All offsets land past the 120s health start_period, so the deploy gate is
+  // unaffected.
+  const workerStaggerMs = Math.max(0, Math.floor(Number(process.env.HF_WORKER_INDEX ?? 0) || 0)) * 25_000;
+  const resumeDelay = Math.max(0, Number(process.env.BACKGROUND_RESUME_DELAY_MS ?? 150_000) || 150_000) + workerStaggerMs;
   // Defer any engine START past the deploy health gate. These schedule 20s
   // interval ticks that would otherwise begin firing (heavy synchronous DB work)
   // WHILE the gate is still probing /api/health — the recurring cause of failed
@@ -578,6 +605,22 @@ app.use((req, res, next) => {
   // producer feeds every core. In single-process IS_CONTROL_ROLE is always true, so
   // this is unchanged today.
   if (IS_CONTROL_ROLE) {
+  // Alert-outbox janitor — supersede the runaway pending backlog (1.25M rows
+  // observed) down to the cap, chunked with yields so it can never block /api.
+  // Control worker only (one writer), deferred past the health gate. Kill-switch:
+  // OUTBOX_PRUNE=off.
+  if (process.env.OUTBOX_PRUNE !== "off") {
+    // Own slot AFTER every worker's staggered resume burst (workers offset by 25s
+    // each) — the million-row prune must never overlap a resume herd.
+    const pruneDelay = resumeDelay + (SCAN_WORKERS > 0 ? SCAN_WORKERS : 1) * 25_000 + 10_000;
+    const pruneTimer = setTimeout(() => { void (async () => {
+      try {
+        const { pruneAlertOutboxBacklog } = await import("./stateMonitorScheduler");
+        await pruneAlertOutboxBacklog();
+      } catch (e: any) { console.warn("[outbox-prune] skipped:", e?.message); }
+    })(); }, pruneDelay);
+    if (typeof (pruneTimer as any).unref === "function") (pruneTimer as any).unref();
+  }
   // ── Statewide NC+SC scan on every production deployment ────────────────────
   // Business purpose: surface newly serviceable, non-active Kinetic addresses so
   // reps reach fresh doors first. Every prod boot (deploy = container restart)

@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@shared/schema";
 import path from "path";
+import { resolveScanWorkerCount } from "./scanWorkers";
 
 // DATA_DIR lets the SQLite file live on a persistent volume (set DATA_DIR=/data
 // on the host and mount your volume there). Defaults to the working directory.
@@ -38,7 +39,9 @@ try {
   // which is SHARED across every process (same file → same physical pages), so the DB
   // stays fully hot in RAM once regardless of the per-connection cache. cache_size is
   // only an extra private cache on top.
-  const workers = Math.max(1, Math.floor(Number(process.env.SCAN_WORKERS ?? 0) || 0));
+  // Shared SCAN_WORKERS parser (scanWorkers.ts) — a drifted copy here would
+  // silently give every worker the FULL cache budget.
+  const workers = Math.max(1, resolveScanWorkerCount());
   const baseCacheKb = Math.max(2000, Number(process.env.SQLITE_CACHE_KB ?? 1_048_576) || 1_048_576); // ~1GB total budget
   const cacheKb = Math.max(65_536, Math.floor(baseCacheKb / workers)); // ≥64MB per connection
   sqlite.pragma(`cache_size = -${cacheKb}`);

@@ -325,4 +325,48 @@ describe("DistributedProviderCoordinator", () => {
     expect(ran.expansion).toBeGreaterThan(0);    // capped classes still received capacity
     expect(ran.city).toBeGreaterThan(0);
   }, 25_000);
+
+  // Regression for the 2026-07-19 cluster freeze: the old admit rule required the
+  // exact queue HEAD to admit itself — a head row whose submitting process died (or
+  // whose event loop was wedged) blocked every other worker forever (11/20 active,
+  // 164 queued, checks → 0 observed live). Top-K self-admission must let a live
+  // waiter admit past a dead higher-priority head.
+  it("admits a live waiter past a dead submitter's higher-priority queued head row", async () => {
+    const coordinator = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 3, maxRequestsPerMinute: 1_000, resultCacheTtlMs: 0, rateWindowMs: 100,
+    });
+    // Simulate a DEAD submitter: a CRITICAL-priority row inserted straight into the
+    // queue with no process polling it (exactly what a crashed/wedged worker leaves).
+    rawDb.prepare(`INSERT INTO provider_admission_queue
+      (id,dedupe_key,source,priority,instance_id,state,enqueued_at,updated_at)
+      VALUES ('dead-head','dead-key','manual',500,'dead-instance','queued',?,?)`)
+      .run(Date.now(), Date.now());
+    // A live NORMAL-priority request must admit despite ranking BELOW the dead head.
+    const outcome = await Promise.race([
+      coordinator.execute("live-item", "city", async () => ({ value: 7 }), codec).then(() => "ADMITTED"),
+      new Promise<string>((resolve) => setTimeout(() => resolve("DEADLOCKED"), 5_000)),
+    ]);
+    expect(outcome).toBe("ADMITTED");
+    // The dead row is still queued (its 90s staleness window hasn't elapsed) — it
+    // occupied a rank but no longer blocks the live queue behind it.
+    const dead = rawDb.prepare(`SELECT state FROM provider_admission_queue WHERE id='dead-head'`).get() as any;
+    expect(dead?.state).toBe("queued");
+  }, 10_000);
+
+  it("expires queued rows whose submitter heartbeat is lost, freeing their ranks", async () => {
+    const coordinator = new DistributedProviderCoordinator<{ value: number }>({
+      maxConcurrency: 2, maxRequestsPerMinute: 1_000, resultCacheTtlMs: 0, rateWindowMs: 100,
+    });
+    // A dead-submitter row whose updated_at is already far past the staleness window.
+    const stale = Date.now() - 10 * 60_000;
+    rawDb.prepare(`INSERT INTO provider_admission_queue
+      (id,dedupe_key,source,priority,instance_id,state,enqueued_at,updated_at)
+      VALUES ('stale-dead','stale-key','manual',500,'dead-instance','queued',?,?)`)
+      .run(stale, stale);
+    // Any admission pass runs cleanup(), which must expire the heartbeat-lost row.
+    await coordinator.execute("cleanup-driver", "city", async () => ({ value: 1 }), codec);
+    const row = rawDb.prepare(`SELECT state,last_error FROM provider_admission_queue WHERE id='stale-dead'`).get() as any;
+    expect(row?.state).toBe("expired");
+    expect(String(row?.last_error ?? "")).toContain("heartbeat lost");
+  }, 10_000);
 });

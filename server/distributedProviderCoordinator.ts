@@ -236,13 +236,20 @@ export class DistributedProviderCoordinator<T> {
       try {
         rawDb.prepare(`UPDATE provider_admission_queue SET lease_expires_at=?,updated_at=? WHERE id=? AND state='active'`)
           .run(this.now() + this.leaseMs, this.now(), workId);
+        // Also touch the row while still QUEUED — this is the submitter-alive signal
+        // that lets cleanup() expire queued rows whose submitting process died. A dead
+        // process's rows would otherwise sit 'queued' FOREVER (their admission-timeout
+        // expiry only runs inside the dead submitter's own wait loop) and permanently
+        // occupy admission ranks — the cross-process freeze observed live.
+        rawDb.prepare(`UPDATE provider_admission_queue SET updated_at=? WHERE id=? AND state='queued'`)
+          .run(this.now(), workId);
         rawDb.prepare(`UPDATE provider_address_locks SET expires_at=? WHERE dedupe_key=? AND owner_id=?`)
           .run(this.now() + this.leaseMs, key, lockOwner);
       } catch { /* the owning request will fail closed if its DB work later fails */ }
     }, Math.max(2_000, Math.floor(this.leaseMs / 3)));
     if (typeof (heartbeat as any).unref === "function") (heartbeat as any).unref();
     try {
-      await this.awaitAdmission(workId, options.abort);
+      await this.awaitAdmission(workId, options.abort, key, lockOwner);
       const value = await task();
       if (this.resultCacheTtlMs > 0 && options.cacheable(value)) {
         const payload = options.serialize(value);
@@ -292,7 +299,7 @@ export class DistributedProviderCoordinator<T> {
     };
   }
 
-  private async awaitAdmission(workId: string, abort?: () => boolean): Promise<void> {
+  private async awaitAdmission(workId: string, abort?: () => boolean, lockKey?: string, lockOwner?: string): Promise<void> {
     const waitStartedAt = this.now();
     for (;;) {
       // Cancellation: if the owning run was cancelled/paused mid-wait, abandon the
@@ -340,33 +347,101 @@ export class DistributedProviderCoordinator<T> {
         const agedExpr = `CASE WHEN priority >= ${CRITICAL_PRIORITY_CUTOFF}
             THEN priority + MIN(@maxBoost, CAST((@now - enqueued_at) * @rate / 1000 AS INTEGER))
             ELSE MIN(${CRITICAL_PRIORITY_CUTOFF}, priority + CAST((@now - enqueued_at) * @rate / 1000 AS INTEGER)) END`;
-        const head = rawDb.prepare(`SELECT id,priority,enqueued_at FROM provider_admission_queue WHERE state='queued'
+        // TOP-K SELF-ADMISSION (multi-instance-safe). The old rule admitted ONLY the
+        // exact queue head, and only from its OWN submitter's poll loop ("if head.id
+        // !== workId → wait"). That is safe with one process but DEADLOCKS a cluster:
+        // when the head row's submitting worker stops polling (its event loop is busy
+        // with synchronous scan work, or its process died), every other worker sees
+        // "I'm not the head" and waits behind a row nobody will ever admit — observed
+        // live as admission frozen at 11/20 while 164 queued (checks/5m → 0). A poller
+        // can only ever admit ITSELF (admission resolves a promise in the submitter's
+        // process), so the fix is rank-based: fetch the eligible queue in the SAME
+        // aged-priority order and admit THIS row if it ranks within the slots free
+        // under ITS OWN class ceiling. Rank 0 behaves exactly as before; ranks 1..S-1
+        // no longer wait behind a stalled head. (A stalled-but-ALIVE head expires via
+        // its own admissionMaxWaitMs; a DEAD submitter's head is cleared only by the
+        // cleanup() queued-staleness reaper running in sibling instances — its own
+        // timeout code died with it.) Priority is preserved: with S free slots the
+        // S highest-ranked live waiters admit, CRITICAL ranks above NORMAL, and the
+        // per-candidate ceiling still holds NORMAL below the CRITICAL reserved band.
+        // Bounded transient inversion: a NORMAL row can admit during the ≤pollMs gap
+        // before a higher-ranked CRITICAL row's submitter polls again — but never INTO
+        // the reserved band, so CRITICAL capacity is never consumed by it.
+        const eligible = rawDb.prepare(`SELECT id,priority,enqueued_at FROM provider_admission_queue WHERE state='queued'
           AND (@expBlocked = 0 OR source NOT IN (${EXPANSION_SOURCES}))
           AND (@maintBlocked = 0 OR source NOT IN (${MAINTENANCE_SOURCES}))
-          ORDER BY (${agedExpr}) DESC, enqueued_at ASC, id ASC LIMIT 1`)
-          .get({ maxBoost: this.agingMaxBoost, now, rate: this.agingRatePerSec, expBlocked: expansionBlocked, maintBlocked: maintenanceBlocked }) as any;
-        if (!head || head.id !== workId) {
-          // If THIS request is a capped-out expansion item, tell it to wait a beat.
+          ORDER BY (${agedExpr}) DESC, enqueued_at ASC, id ASC LIMIT @rankLimit`)
+          .all({ maxBoost: this.agingMaxBoost, now, rate: this.agingRatePerSec, expBlocked: expansionBlocked, maintBlocked: maintenanceBlocked,
+                 rankLimit: this.maxConcurrency }) as any[];
+        const rank = eligible.findIndex((r) => r.id === workId);
+        if (rank < 0) {
+          // Two cases: (a) our row exists but ranks below the top-maxConcurrency (or
+          // its class is share-capped this round) — wait; (b) our row is GONE (the
+          // dead-submitter reaper expired it while this process was event-loop-starved
+          // past the staleness window) — no future poll can ever admit it, so fail
+          // fast: the caller treats it as the same transient it already handles
+          // (requeue the address), never a NO.
+          const own = rawDb.prepare(`SELECT state FROM provider_admission_queue WHERE id=?`).get(workId) as any;
+          if (!own || own.state !== "queued") return { admitted: false, waitMs: this.pollMs, gone: true };
           return { admitted: false, waitMs: this.pollMs };
         }
+        const mine = eligible[rank];
         const agedPoints = this.agingRatePerSec > 0
-          ? Math.floor((now - Number(head.enqueued_at)) * this.agingRatePerSec / 1000) : 0;
-        const base = Number(head.priority);
+          ? Math.floor((now - Number(mine.enqueued_at)) * this.agingRatePerSec / 1000) : 0;
+        const base = Number(mine.priority);
         const effectivePriority = base >= CRITICAL_PRIORITY_CUTOFF
           ? base + Math.min(this.agingMaxBoost, agedPoints)
           : Math.min(CRITICAL_PRIORITY_CUTOFF, base + agedPoints);
-        const headIsCritical = effectivePriority >= CRITICAL_PRIORITY_CUTOFF;
+        const candidateIsCritical = effectivePriority >= CRITICAL_PRIORITY_CUTOFF;
         const active = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_admission_queue WHERE state='active'`).get() as any).count);
         const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any).count);
         // CRITICAL (incl. aged-into-CRITICAL) may use every slot; NORMAL is held below
         // the reserved band so the reserved concurrency + per-window rate stays
         // available for CRITICAL only.
-        const concurrencyCeiling = headIsCritical ? this.maxConcurrency : this.maxConcurrency - this.criticalReservedConcurrency;
-        const rateCeiling = headIsCritical ? this.rollingAdmissionLimit : this.rollingAdmissionLimit - this.criticalReservedRate;
-        if (active >= concurrencyCeiling || starts >= rateCeiling) {
+        const concurrencyCeiling = candidateIsCritical ? this.maxConcurrency : this.maxConcurrency - this.criticalReservedConcurrency;
+        const rateCeiling = candidateIsCritical ? this.rollingAdmissionLimit : this.rollingAdmissionLimit - this.criticalReservedRate;
+        // Admit only if our priority rank fits inside the slots free under BOTH the
+        // concurrency ceiling AND the rate ceiling. Using min() keeps freed RATE slots
+        // priority-ordered too (with the head-only rule they trivially were; with
+        // top-K, gating rank on the concurrency dimension alone would let a low-rank
+        // row grab the single freed rate slot ahead of the head). With S admit slots
+        // the top-S ranked rows admit — the same set the old head-only rule admitted
+        // one poll-tick at a time, minus the strict one-at-a-time sequencing.
+        const freeSlots = concurrencyCeiling - active;
+        const admitSlots = Math.min(freeSlots, rateCeiling - starts);
+        if (admitSlots <= 0 || rank >= admitSlots) {
           const oldest = rawDb.prepare(`SELECT MIN(started_at) startedAt FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any;
+          // RANK-AWARE BACKOFF (poll-herd control): a waiter ranked far outside the
+          // admit window cannot possibly admit next tick, so polling it at 1/pollMs Hz
+          // only convoys the single SQLite writer (240 waiters × 33Hz IMMEDIATE
+          // transactions across 4 processes was a projected re-wedge). Sleep
+          // proportionally to distance-from-admission, capped at 2s, with jitter so
+          // the herd never re-synchronizes. Rank 0/near-head waiters keep the fast
+          // pollMs cadence — admission latency for the head is unchanged.
+          const distance = Math.max(0, rank - Math.max(0, admitSlots));
+          const backoff = Math.min(2_000, this.pollMs * (1 + distance)) + Math.floor(Math.random() * this.pollMs);
           return { admitted: false, waitMs: starts >= rateCeiling && oldest?.startedAt
-            ? Math.max(this.pollMs, Number(oldest.startedAt) + this.rateWindowMs - now) : this.pollMs };
+            ? Math.max(backoff, Number(oldest.startedAt) + this.rateWindowMs - now) : backoff };
+        }
+        // ADMIT-TIME ADDRESS-LOCK VALIDATION. The dedupe guarantee ("two processes
+        // never scan one address at once") lives in provider_address_locks, whose
+        // 30s lease is refreshed by the submitter's heartbeat — but a waiter whose
+        // event loop stalled past the lease can lose the lock to another worker
+        // (which then scans the address) while its OWN queued row survives the 90s
+        // reaper. Admitting it would run a duplicate concurrent scan. Verify we
+        // still own the lock inside this same transaction; if it lapsed, retire our
+        // row and fail closed (AdmissionTimeout → caller requeues, never a NO).
+        if (lockKey && lockOwner) {
+          const lock = rawDb.prepare(`SELECT 1 ok FROM provider_address_locks WHERE dedupe_key=? AND owner_id=? AND expires_at>?`)
+            .get(lockKey, lockOwner, now) as any;
+          if (!lock?.ok) {
+            rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error='address lock lost during admission wait',updated_at=? WHERE id=? AND state='queued'`)
+              .run(now, workId);
+            return { admitted: false, waitMs: this.pollMs, gone: true };
+          }
+          // Start the task with a full lock lease — we just proved ownership.
+          rawDb.prepare(`UPDATE provider_address_locks SET expires_at=? WHERE dedupe_key=? AND owner_id=?`)
+            .run(now + this.leaseMs, lockKey, lockOwner);
         }
         rawDb.prepare(`UPDATE provider_admission_queue SET state='active',started_at=?,lease_expires_at=?,updated_at=? WHERE id=? AND state='queued'`)
           .run(now, now + this.leaseMs, now, workId);
@@ -376,12 +451,22 @@ export class DistributedProviderCoordinator<T> {
         return { admitted: true, waitMs: 0 };
       }).immediate();
       if (decision.admitted) return;
+      if ((decision as any).gone) throw new AdmissionTimeoutError(this.now() - waitStartedAt);
       await sleep(decision.waitMs);
     }
   }
 
+  // Throttle: cleanup() used to run inside EVERY admission poll transaction — at a
+  // 30ms poll cadence across hundreds of waiters in 4 processes that is thousands of
+  // redundant DELETE/UPDATE passes per second convoying the single SQLite writer.
+  // Nothing it reclaims needs sub-second latency; once per second per process is
+  // plenty (leases/staleness are measured in tens of seconds).
+  private _lastCleanupAt = 0;
+
   private cleanup(): void {
     const now = this.now();
+    if (now - this._lastCleanupAt < 1_000) return;
+    this._lastCleanupAt = now;
     rawDb.prepare(`DELETE FROM provider_rate_events WHERE started_at<=?`).run(now - this.rateWindowMs - 1_000);
     rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',updated_at=? WHERE state='active' AND lease_expires_at<=?`).run(now, now);
     // HARD active-age cap: the lifetime heartbeat keeps a HUNG task's lease fresh
@@ -392,6 +477,22 @@ export class DistributedProviderCoordinator<T> {
     // 435s+ on a black-holed egress collapsed throughput while 300k targets waited.
     rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error='task deadline exceeded',updated_at=? WHERE state='active' AND started_at<=?`)
       .run(now, now - Math.max(60_000, Number(process.env.PROVIDER_TASK_MAX_MS ?? 180_000)));
+    // DEAD-SUBMITTER QUEUED rows: the lifetime heartbeat touches updated_at every
+    // max(2s, leaseMs/3) — 10s at the prod default (leaseMs 30s) — while a request
+    // waits; a queued row untouched far longer has no live submitter (process died)
+    // and NOTHING else can ever clear it: its admissionMaxWaitMs expiry runs only in
+    // the dead submitter's own wait loop. Expire it before it permanently occupies an
+    // admission rank. Floor = 6 missed heartbeats (60s at defaults) regardless of env
+    // tuning. CRITICALLY scoped to OTHER instances: a process never reaps its OWN
+    // queued rows, so a single-process (SCAN_WORKERS=0) deployment whose one event
+    // loop stalls >window can never mass-expire its own in-flight admissions —
+    // single-process semantics stay exactly pre-cluster. Sibling workers (different
+    // instanceId) and a restarted process (fresh pid-uuid instanceId) still reap a
+    // dead process's rows, which is the whole point.
+    const heartbeatMs = Math.max(2_000, Math.floor(this.leaseMs / 3));
+    const queuedStaleMs = Math.max(6 * heartbeatMs, Number(process.env.PROVIDER_QUEUED_STALE_MS ?? 90_000) || 90_000);
+    rawDb.prepare(`UPDATE provider_admission_queue SET state='expired',last_error='queued submitter heartbeat lost',updated_at=? WHERE state='queued' AND updated_at<=? AND instance_id != ?`)
+      .run(now, now - queuedStaleMs, this.instanceId);
     rawDb.prepare(`DELETE FROM provider_address_locks WHERE expires_at<=?`).run(now);
     rawDb.prepare(`DELETE FROM provider_shared_result_cache WHERE expires_at<=?`).run(now);
     rawDb.prepare(`DELETE FROM provider_admission_queue WHERE state IN ('completed','failed','expired') AND updated_at<=?`).run(now - 60 * 60_000);

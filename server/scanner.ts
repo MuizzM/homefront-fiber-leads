@@ -14,6 +14,7 @@ import {
 } from "./providerRequestQueue";
 import { structuredLog } from "./structuredLog";
 import crypto from "node:crypto";
+import { resolveScanWorkerCount } from "./scanWorkers";
 import { AuthorizedTokenPool, type AuthorizedTokenLease } from "./authorizedTokenPool";
 import { DistributedProviderCoordinator, type DistributedProviderSnapshot } from "./distributedProviderCoordinator";
 
@@ -36,7 +37,12 @@ const configuredTokenPoolSize = Number(process.env.KFS_TOKEN_POOL_MAX ?? 200);
 // burst never waits on a mint). Unlimited Decodo budget → mint generously; token
 // scarcity must never stall a priority check. Warm reserve 40 so the frequent
 // token switching (10 leases/token) never leaves a lease waiting on a mint.
-const configuredWarmTokens = Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 40);
+// MULTI-PROCESS: the pool is per-process, so N cluster workers each warm their own
+// reserve. Divide the warm budget across workers (min 4/worker) — otherwise 4 workers
+// × 40 = 160 concurrent session mints at boot, an auth-storm against Decodo's window.
+const _scanWorkerCount = Math.max(1, resolveScanWorkerCount());
+const configuredWarmTokens = Math.max(4,
+  Math.floor(Number(process.env.KFS_TOKEN_POOL_WARM_MIN ?? 40) / _scanWorkerCount));
 
 const DEFAULT_AUTOMATION_USER_AGENT = "HomeFrontFiber-AvailabilityMonitor/1.0 (operations@homefrontsolutions.com)";
 

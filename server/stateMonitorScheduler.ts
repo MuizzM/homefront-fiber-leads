@@ -30,6 +30,61 @@ let timer: NodeJS.Timeout | null = null;
 let tickSequence = 0;
 let catalogInitialized = false;
 
+// ── Alert-outbox runaway guards (2026-07-19 incident) ─────────────────────────
+// The fresh_fiber outbox grew to 1.25M+ pending rows (alert generation outran mail
+// capacity for days), and draining it against the mail provider's dead quota
+// ("550 10 req/sec" / "550 daily quota") spun the single JS thread hard enough to
+// starve /api — the portal-down wedge. Three guards make that impossible again:
+//   1. ENQUEUE CAP — never let pending grow past OUTBOX_PENDING_CAP; newest-first
+//      alerts matter, a million stale ones don't.
+//   2. DELIVERY CIRCUIT BREAKER — after OUTBOX_BREAKER_THRESHOLD consecutive send
+//      failures, stop draining for OUTBOX_BREAKER_PAUSE_MS (quota exhaustion isn't
+//      going to clear in the next 30s; retrying is pure CPU + log burn).
+//   3. BOOT JANITOR (pruneAlertOutboxBacklog) — chunked, yielding sweep that
+//      supersedes all but the newest OUTBOX_PENDING_CAP pending rows.
+const OUTBOX_PENDING_CAP = Math.max(100, Number(process.env.OUTBOX_PENDING_CAP ?? 2_000) || 2_000);
+const OUTBOX_BREAKER_THRESHOLD = Math.max(3, Number(process.env.OUTBOX_BREAKER_THRESHOLD ?? 10) || 10);
+const OUTBOX_BREAKER_PAUSE_MS = Math.max(60_000, Number(process.env.OUTBOX_BREAKER_PAUSE_MS ?? 6 * 60 * 60_000) || 6 * 60 * 60_000);
+let outboxFailStreak = 0;
+let outboxPausedUntil = 0;
+
+// The cluster's ONE outbox writer/drainer. HF_ROLE is set only by the cluster
+// primary on fork ("control" for worker 0, "scan" otherwise); single-process
+// deployments never set it → control. Draining from every worker would give each
+// its own circuit-breaker budget (N× the intended failure burn) and race the
+// janitor mid-prune.
+const IS_OUTBOX_CONTROL = process.env.HF_ROLE ? process.env.HF_ROLE === "control" : true;
+
+/** Supersede all but the newest `keep` pending fresh_fiber outbox rows, in bounded
+ *  chunks with an event-loop yield between each so a million-row backlog can never
+ *  block /api. Skips rows a live drain currently holds leased (their delivery
+ *  outcome must win); retries a chunk through transient SQLITE_BUSY so one
+ *  contended write can't kill the one-shot boot prune. Idempotent. */
+export async function pruneAlertOutboxBacklog(keep = OUTBOX_PENDING_CAP): Promise<number> {
+  const cutoff = rawDb.prepare(`SELECT id FROM notification_outbox WHERE kind='fresh_fiber' AND status='pending'
+    ORDER BY id DESC LIMIT 1 OFFSET ?`).get(keep) as any;
+  if (!cutoff?.id) return 0;
+  const chunk = rawDb.prepare(`UPDATE notification_outbox SET status='superseded', last_error='outbox backlog pruned', lease_owner=NULL, lease_expires_at=NULL
+    WHERE id IN (SELECT id FROM notification_outbox WHERE kind='fresh_fiber' AND status='pending' AND id<=?
+      AND (lease_expires_at IS NULL OR lease_expires_at<=datetime('now')) LIMIT 10000)`);
+  let total = 0;
+  for (;;) {
+    let changed = -1;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try { changed = chunk.run(cutoff.id).changes; break; }
+      catch (e: any) {
+        if (attempt === 3 || !/busy|locked/i.test(String(e?.message))) throw e;
+        await new Promise((resolve) => setTimeout(resolve, 250 * (attempt + 1)));
+      }
+    }
+    total += Math.max(0, changed);
+    if (changed < 10000) break;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  if (total > 0) structuredLog("state_monitor.outbox_pruned", { superseded: total, kept: keep });
+  return total;
+}
+
 function positiveInt(name: string, fallback: number, max: number): number {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n > 0 ? Math.min(max, Math.floor(n)) : fallback;
@@ -171,8 +226,14 @@ async function harvestNextMarketInventory(): Promise<{ city: string; state: stri
 export function startStateMonitorScheduler() {
   if (timer) return;
   // Avoid a scan-service/scheduler import cycle while still letting a completed
-  // scan batch request an immediate, tenant-scoped outbox flush.
-  (globalThis as any).__flushFreshFiberAlerts = flushFreshOpportunityAlerts;
+  // scan batch request an immediate, tenant-scoped outbox flush. CONTROL role only:
+  // in the cluster every worker calls this via registerRoutes, and installing the
+  // hook everywhere made every scan worker enqueue+drain per green snapshot — 4
+  // independent circuit-breaker budgets and 4× the failure burn against a dead mail
+  // quota. Call-sites guard `typeof hook === "function"`, so scan workers simply
+  // skip the immediate flush; the control worker's own scan batches + ticks still
+  // pick every green up from the DB. Single-process (HF_ROLE unset) is unchanged.
+  if (IS_OUTBOX_CONTROL) (globalThis as any).__flushFreshFiberAlerts = flushFreshOpportunityAlerts;
   status.enabled = process.env.ENABLE_STATE_MONITORING !== "off"; // on by default
   status.liveSpendEnabled = status.enabled && process.env.STATE_MONITOR_LIVE !== "off";
   // Inventory seeding and dashboard synchronization are safe and free — but with
@@ -182,12 +243,20 @@ export function startStateMonitorScheduler() {
   // a rollback — a ~10-minute production outage on EVERY deploy. DELAY it well past
   // listen so the app is healthy in seconds; the tick then runs in the background.
   const startupDelayMs = Math.max(10_000, Number(process.env.STATE_MONITOR_STARTUP_DELAY_MS ?? 180_000));
-  const startupTick = setTimeout(() => {
-    void runStateMonitorTick({ allowSpend: status.liveSpendEnabled }).catch((error) => console.error("[state-monitor] startup tick failed:", error.message));
-  }, startupDelayMs);
-  startupTick.unref();
+  // Startup tick: control worker only — N workers each running the tick would run
+  // N concurrent market syncs/enqueues (the tick was designed one-per-app).
+  if (IS_OUTBOX_CONTROL) {
+    const startupTick = setTimeout(() => {
+      void runStateMonitorTick({ allowSpend: status.liveSpendEnabled }).catch((error) => console.error("[state-monitor] startup tick failed:", error.message));
+    }, startupDelayMs);
+    startupTick.unref();
+  }
   if (!status.enabled) {
     status.lastResult = "inventory init scheduled; scheduler disabled (ENABLE_STATE_MONITORING=false)";
+    return;
+  }
+  if (!IS_OUTBOX_CONTROL) {
+    status.lastResult = "scheduler runs on the control worker only (this is a scan worker)";
     return;
   }
   const minutes = positiveInt("STATE_MONITOR_TICK_MINUTES", 15, 1_440); // full-speed default: 15 min (was 60)
@@ -208,6 +277,18 @@ function enqueueFreshAlerts(tenantId: number): number {
   // SAME bar that publishes an assignable Fresh Lead pin — alerts must fire on it
   // too. Requiring only 'cross_verified' left this channel dead: no automated
   // corroboration source exists, so rep knock alerts never sent.
+  // ENQUEUE CAP (per tenant — one tenant's dead backlog must never silence another
+  // tenant's alerts): never grow this tenant's pending outbox past OUTBOX_PENDING_CAP.
+  // On cap-hit, SUPERSEDE the oldest pending rows to make room rather than dropping
+  // the new ones — for a real-time knock alert the NEWEST cluster revision is the one
+  // with value; a months-old pending row is noise. Bounded cost: the cap is small.
+  const pendingNow = Number((rawDb.prepare(`SELECT COUNT(*) n FROM notification_outbox WHERE kind='fresh_fiber' AND status='pending' AND tenant_id=?`).get(tenantId) as any)?.n ?? 0);
+  if (pendingNow >= OUTBOX_PENDING_CAP) {
+    const evicted = rawDb.prepare(`UPDATE notification_outbox SET status='superseded', last_error='evicted for newer alerts (cap)', lease_owner=NULL, lease_expires_at=NULL
+      WHERE id IN (SELECT id FROM notification_outbox WHERE kind='fresh_fiber' AND status='pending' AND tenant_id=?
+        AND (lease_expires_at IS NULL OR lease_expires_at<=datetime('now')) ORDER BY created_at ASC LIMIT 100)`).run(tenantId).changes;
+    structuredLog("state_monitor.outbox_capped", { pending: pendingNow, cap: OUTBOX_PENDING_CAP, evictedOldest: evicted });
+  }
   const clusters = clusterFreshFiber(freshPoints(tenantId, 7).filter((point) =>
     point.customerSegment === "new_opportunity" && (point.confidence === "cross_verified" || point.confidence === "single_source_provisional"),
   ));
@@ -229,9 +310,19 @@ async function drainFreshAlerts(tenantId: number): Promise<number> {
   const email = adminInbox();
   const emailReady = !!(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS && email);
   if (!webhook && !emailReady) return 0;
+  // ONE drainer in the cluster (control worker): N workers each draining would give
+  // each its own breaker budget (N× the failure burn) and race the boot janitor.
+  if (!IS_OUTBOX_CONTROL) return 0;
+  // CIRCUIT BREAKER: when the provider is rejecting everything (rate limit / daily
+  // quota exhausted), stop trying for a while instead of burning CPU + logs on
+  // failures — the rows stay pending and deliver when the window/quota resets.
+  if (Date.now() < outboxPausedUntil) return 0;
+  // NEWEST-FIRST: a knock alert's value decays in hours. Draining oldest-first meant
+  // that after any outage the recovered mail quota was spent re-sending stale
+  // backlog while today's fresh clusters waited behind it.
   const rows = rawDb.prepare(`SELECT * FROM notification_outbox WHERE tenant_id=? AND kind='fresh_fiber' AND status='pending'
     AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
-    AND (lease_expires_at IS NULL OR lease_expires_at<=datetime('now')) ORDER BY created_at LIMIT 25`).all(tenantId) as any[];
+    AND (lease_expires_at IS NULL OR lease_expires_at<=datetime('now')) ORDER BY created_at DESC LIMIT 25`).all(tenantId) as any[];
   let sent = 0;
   for (const row of rows) {
     const lease = crypto.randomUUID();
@@ -258,6 +349,7 @@ async function drainFreshAlerts(tenantId: number): Promise<number> {
       }
       sent += rawDb.prepare(`UPDATE notification_outbox SET status='sent',attempts=attempts+1,sent_at=datetime('now'),
         lease_owner=NULL,lease_expires_at=NULL,last_error=NULL WHERE id=? AND status='pending' AND lease_owner=?`).run(row.id, lease).changes;
+      outboxFailStreak = 0; // provider is accepting again — breaker resets
     } catch (error: any) {
       const attempts = Number(row.attempts ?? 0) + 1;
       const retrySeconds = Math.min(21_600, 30 * 2 ** Math.min(9, attempts - 1));
@@ -265,6 +357,13 @@ async function drainFreshAlerts(tenantId: number): Promise<number> {
         next_attempt_at=CASE WHEN ?>=8 THEN NULL ELSE datetime('now',?) END,last_error=?,lease_owner=NULL,lease_expires_at=NULL
         WHERE id=? AND lease_owner=?`).run(attempts, attempts, attempts, `+${retrySeconds} seconds`, String(error.message).slice(0, 500), row.id, lease);
       structuredLog("state_monitor.alert_failed", { outboxId: row.id, error: error.message });
+      outboxFailStreak += 1;
+      if (outboxFailStreak >= OUTBOX_BREAKER_THRESHOLD) {
+        outboxPausedUntil = Date.now() + OUTBOX_BREAKER_PAUSE_MS;
+        outboxFailStreak = 0;
+        structuredLog("state_monitor.alert_drain_paused", { pauseMs: OUTBOX_BREAKER_PAUSE_MS, reason: String(error.message).slice(0, 160) });
+        break; // stop this drain pass immediately — the provider is refusing everything
+      }
     }
   }
   return sent;
