@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
+import { normalizeKineticAddressKey } from "./addressKey";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -1563,6 +1564,13 @@ export function runMigrations() {
     // city's address to a qualification run.
     `ALTER TABLE scan_targets ADD COLUMN canonical_key TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`,
+    // leads.canonical_key: the durable, DB-enforced identity that makes duplicate
+    // pins structurally impossible. Populated on every insert from the SAME
+    // normalizeKineticAddressKey used by scan_targets, so "338 Farrell Road" and
+    // "338 FARRELL RD" collapse to one lead. The UNIQUE index is created LATER,
+    // inside migrateLeadsCanonicalKey(), only AFTER existing dupes are merged
+    // (a UNIQUE index over still-duplicated rows would fail).
+    `ALTER TABLE leads ADD COLUMN canonical_key TEXT`,
 
     // ── Fiber operations control plane ─────────────────────────────────────
     // Additive companions around scan_runs: the existing worker remains the
@@ -1744,7 +1752,118 @@ export function runMigrations() {
     }
   } catch (_) {}
 
+  // Duplicate-pin root fix: backfill canonical_key, MERGE existing duplicate
+  // leads (preserving status history + child records), then add the UNIQUE index
+  // so a duplicate can never be inserted again. Runs AFTER all column ALTERs.
+  try { migrateLeadsCanonicalKey(raw); }
+  catch (e: any) { console.warn("[migration] leads canonical_key merge failed:", e?.message); }
+
   bootstrapDefaultTenant(raw);
+}
+
+// ── One-time (idempotent) duplicate-lead merge + canonical uniqueness ──────────
+// Root cause of double pins: three lead-writer paths with no shared key and no DB
+// uniqueness, so the same address became two leads. This (a) stamps a canonical
+// address key on every existing lead, (b) merges duplicate groups — keeping the
+// richest survivor, repointing every child FK, coalescing useful fields — and
+// (c) adds a partial UNIQUE index so duplicates are structurally impossible.
+// Idempotent + re-runnable: once merged, the group scan is a no-op.
+function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void {
+  const cols = new Set((raw.prepare(`PRAGMA table_info(leads)`).all() as { name: string }[]).map(c => c.name));
+  if (!cols.has("canonical_key")) return; // ALTER didn't land yet — try next boot
+
+  // (a) Backfill canonical_key for any lead missing it. CRITICAL ORDER: when
+  // there are keys to backfill, DROP the UNIQUE index first — otherwise setting
+  // the same key on two duplicate rows violates a pre-existing index (from an
+  // earlier run) before the merge can collapse them. The index is (re)built at
+  // the end, after dups are gone. Steady-state boots have nothing to backfill,
+  // so this whole block is skipped and the index is left untouched.
+  const needKey = raw.prepare(`SELECT id, address, city, state, zip FROM leads WHERE canonical_key IS NULL`).all() as Array<{ id: number; address: string; city: string; state: string; zip: string | null }>;
+  if (needKey.length) {
+    raw.exec(`DROP INDEX IF EXISTS idx_leads_canonical`);
+    const setKey = raw.prepare(`UPDATE leads SET canonical_key=? WHERE id=?`);
+    const backfill = raw.transaction((rows: typeof needKey) => {
+      for (const r of rows) setKey.run(normalizeKineticAddressKey(r.address ?? "", r.city ?? "", r.state ?? "", r.zip ?? ""), r.id);
+    });
+    for (let i = 0; i < needKey.length; i += 2000) backfill(needKey.slice(i, i + 2000));
+  }
+
+  // (b) Find + merge duplicate groups. Key is (tenant_id, canonical_key) — ONE
+  // address = ONE lead = ONE pin, regardless of carrier (Kinetic/Frontier is a
+  // status on the single lead, not a second pin). NULL carrier would also make a
+  // carrier-keyed UNIQUE index useless (NULLs compare distinct in SQLite).
+  const groups = raw.prepare(
+    `SELECT tenant_id AS tenantId, canonical_key AS ck, COUNT(*) n, GROUP_CONCAT(id) ids
+       FROM leads WHERE canonical_key IS NOT NULL
+      GROUP BY tenant_id, canonical_key HAVING COUNT(*) > 1`,
+  ).all() as Array<{ tenantId: number; ck: string; n: number; ids: string }>;
+
+  if (groups.length) {
+    // lead_status seniority: a more-worked/sold row must win over a fresh prospect.
+    const statusRank: Record<string, number> = { sold: 6, now_active: 5, callback: 4, follow_up: 4, interested: 4, contacted: 3, prospect: 2, unworked: 1 };
+    // Child tables that reference leads.id — repoint loser→survivor to keep history.
+    const childFks: Array<[string, string]> = [
+      ["knock_log", "lead_id"], ["commissions", "lead_id"], ["lead_events", "lead_id"],
+      ["commission_sales", "lead_id"], ["lead_photos", "lead_id"], ["lead_credit_ledger", "lead_id"],
+      ["scan_targets", "converted_to_lead_id"], ["scan_queue_items", "lead_id"],
+    ];
+    const existingTables = new Set((raw.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[]).map(t => t.name));
+    const rowCols = (id: number) => raw.prepare(`SELECT * FROM leads WHERE id=?`).get(id) as any;
+    const completeness = (r: any) => ["contact_name", "contact_phone", "contact_email", "owner_name", "owner_phone", "owner_email", "assigned_rep_id", "assigned_territory_id", "notes", "deployment_notes", "source_scan_target_id", "fresh_confirmed_at"].reduce((s, k) => s + (r[k] != null && r[k] !== "" ? 1 : 0), 0);
+
+    let mergedGroups = 0, deletedRows = 0;
+    const mergeOne = raw.transaction((ids: number[]) => {
+      const rows = ids.map(rowCols).filter(Boolean);
+      if (rows.length < 2) return;
+      // Survivor: has source_scan_target_id (projector-authoritative) > higher
+      // lead_status rank > more complete > lowest id.
+      rows.sort((a, b) =>
+        (b.source_scan_target_id != null ? 1 : 0) - (a.source_scan_target_id != null ? 1 : 0) ||
+        (statusRank[b.lead_status] ?? 0) - (statusRank[a.lead_status] ?? 0) ||
+        completeness(b) - completeness(a) ||
+        a.id - b.id);
+      const survivor = rows[0];
+      const losers = rows.slice(1);
+      for (const loser of losers) {
+        for (const [table, col] of childFks) {
+          if (!existingTables.has(table)) continue;
+          try { raw.prepare(`UPDATE ${table} SET ${col}=? WHERE ${col}=?`).run(survivor.id, loser.id); } catch { /* col may not exist on this DB */ }
+        }
+        // Coalesce useful fields from loser onto survivor where survivor is empty.
+        const coalesceCols = ["source_scan_target_id", "fresh_confirmed_at", "fresh_confidence", "fresh_sources", "contact_name", "contact_phone", "contact_email", "owner_name", "owner_phone", "owner_email", "assigned_rep_id", "assigned_territory_id", "notes", "deployment_notes", "lat", "lng"];
+        for (const c of coalesceCols) {
+          if (!cols.has(c)) continue;
+          if ((survivor[c] == null || survivor[c] === "") && loser[c] != null && loser[c] !== "") {
+            try { raw.prepare(`UPDATE leads SET ${c}=? WHERE id=?`).run(loser[c], survivor.id); survivor[c] = loser[c]; } catch { /* ignore */ }
+          }
+        }
+        // Promote survivor status if the loser was more advanced.
+        if ((statusRank[loser.lead_status] ?? 0) > (statusRank[survivor.lead_status] ?? 0)) {
+          raw.prepare(`UPDATE leads SET lead_status=? WHERE id=?`).run(loser.lead_status, survivor.id);
+          survivor.lead_status = loser.lead_status;
+        }
+        // Keep the fresh_fiber_confirmed tag if any copy had it.
+        if (cols.has("lead_tag") && loser.lead_tag === "fresh_fiber_confirmed" && survivor.lead_tag !== "fresh_fiber_confirmed") {
+          raw.prepare(`UPDATE leads SET lead_tag='fresh_fiber_confirmed' WHERE id=?`).run(survivor.id);
+        }
+        raw.prepare(`DELETE FROM leads WHERE id=?`).run(loser.id);
+        deletedRows++;
+      }
+      mergedGroups++;
+    });
+    for (const g of groups) {
+      try { mergeOne(g.ids.split(",").map(Number)); }
+      catch (e: any) { console.warn(`[migration] lead merge group ${g.ck} skipped:`, e?.message); }
+    }
+    console.log(`[migration] leads canonical merge: ${mergedGroups} groups, ${deletedRows} duplicate rows removed`);
+  }
+
+  // (c) Enforce uniqueness so a duplicate can never be inserted again. Partial
+  // (WHERE canonical_key IS NOT NULL) mirrors idx_leads_confirmed_scan_target.
+  raw.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_canonical ON leads(tenant_id, canonical_key) WHERE canonical_key IS NOT NULL`);
+  const idxOk = raw.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_leads_canonical'`).get();
+  if (!idxOk) console.warn("[migration] CRITICAL: idx_leads_canonical was NOT created — duplicate leads are still possible");
+  else console.log("[migration] idx_leads_canonical UNIQUE index active — duplicate pins now structurally impossible");
 }
 
 // ── Default-tenant bootstrap ─────────────────────────────────────────────────
@@ -2023,15 +2142,37 @@ export class Storage implements IStorage {
     // Tenancy: never create a tenant-less lead — system paths (scanners, cron)
     // file under the default org; user paths stamp the actor's org in routes.
     const tenantId = (lead as any).tenantId ?? getDefaultTenantId();
-    const row = db.insert(leads).values({ ...lead, tenantId, createdAt: now, updatedAt: now }).returning().get();
-    bustPinCaches(row.tenantId);
-    return row;
+    // One address = one lead: compute the canonical key, attach to an existing
+    // lead if one shares it, and let the UNIQUE index be the final backstop so a
+    // duplicate can never be inserted (a concurrent racer's insert throws
+    // SQLITE_CONSTRAINT → resolve to the row that won).
+    const canonicalKey = normalizeKineticAddressKey(lead.address ?? "", lead.city ?? "", lead.state ?? "", String((lead as any).zip ?? ""));
+    const existing = rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND canonical_key = ? LIMIT 1").get(tenantId, canonicalKey) as Lead | undefined;
+    if (existing) return existing;
+    try {
+      const row = db.insert(leads).values({ ...lead, tenantId, canonicalKey, createdAt: now, updatedAt: now } as any).returning().get();
+      bustPinCaches(row.tenantId);
+      return row;
+    } catch (e: any) {
+      if (String(e?.message ?? "").includes("UNIQUE") || e?.code === "SQLITE_CONSTRAINT_UNIQUE" || e?.code === "SQLITE_CONSTRAINT") {
+        const won = rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND canonical_key = ? LIMIT 1").get(tenantId, canonicalKey) as Lead | undefined;
+        if (won) return won;
+      }
+      throw e;
+    }
   }
 
   // Dedup-safe insert: returns existing lead if address already in DB, otherwise creates new one.
   // Uses indexed address lookup — O(log n) not O(n) full table scan.
   upsertLeadByAddress(lead: InsertLead & LegacyScanFields): { lead: Lead; created: boolean } {
     const normalizedAddr = normalizeAddress(lead.address ?? "");
+    const leadTenantId = lead.tenantId ?? getDefaultTenantId();
+    // Canonical identity — the SAME key the UNIQUE index enforces, so "Farrell
+    // Road" and "FARRELL RD" resolve to ONE lead. Check it FIRST (indexed) so
+    // suffix/case variants attach instead of duplicating.
+    const canonicalKey = normalizeKineticAddressKey(lead.address ?? "", lead.city ?? "Rockwell", lead.state ?? "NC", String(lead.zip ?? ""));
+    const ckHit = rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND canonical_key = ? LIMIT 1").get(leadTenantId, canonicalKey) as Lead | undefined;
+    if (ckHit) return { lead: ckHit, created: false };
 
     // ── Existence check — ALWAYS hit the DB (indexed on address). The in-memory
     // cache is only a warmup hint; it can be stale across processes (e.g. a
@@ -2059,7 +2200,7 @@ export class Storage implements IStorage {
         competitor_tech, in_competitor_area, address_catalog_date,
         df_address_id, access_id, exchange_id, max_download_mbps,
         assigned_rep_id, lead_status, notes, deployment_notes,
-        lead_tag, lead_score, tenant_id, created_at, updated_at
+        lead_tag, lead_score, tenant_id, canonical_key, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?,
@@ -2069,10 +2210,13 @@ export class Storage implements IStorage {
         ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?
       )
+      ON CONFLICT(tenant_id, canonical_key) WHERE canonical_key IS NOT NULL
+        DO UPDATE SET updated_at=excluded.updated_at
+      RETURNING id
     `);
-    const r = stmt.run(
+    const r = stmt.get(
       lead.address ?? "",
       lead.city ?? "Rockwell",
       lead.state ?? "NC",
@@ -2106,13 +2250,21 @@ export class Storage implements IStorage {
       lead.deploymentNotes ?? null,
       lead.leadTag ?? null,
       lead.leadScore ?? 0,
-      lead.tenantId ?? getDefaultTenantId(), // scans file under the default org
+      leadTenantId, // scans file under the default org
+      canonicalKey,
       now,
       now
-    );
-    const newLead = rawDb.prepare(`SELECT * FROM leads WHERE id = ?`).get(r.lastInsertRowid) as Lead;
+    ) as { id: number } | undefined;
+    // RETURNING id: on a canonical-key conflict this is the EXISTING row (attach,
+    // never duplicate); on insert it is the new row. A concurrent scanner losing
+    // the race resolves to the same survivor.
+    const resolvedId = r?.id ?? (rawDb.prepare("SELECT id FROM leads WHERE tenant_id IS ? AND canonical_key = ? LIMIT 1").get(leadTenantId, canonicalKey) as { id: number } | undefined)?.id;
+    const newLead = rawDb.prepare(`SELECT * FROM leads WHERE id = ?`).get(resolvedId) as Lead;
+    // created ⇔ this call inserted the row: the insert stamps created_at=now,
+    // while a conflict-attach leaves the survivor's older created_at untouched.
+    const created = (newLead as any).createdAt === now || (newLead as any).created_at === now;
     bustPinCaches(newLead.tenantId);
-    return { lead: newLead, created: true };
+    return { lead: newLead, created };
   }
   updateLead(id: number, updates: Partial<InsertLead>, tenantId?: number): Lead | undefined {
     const condition = tenantId != null

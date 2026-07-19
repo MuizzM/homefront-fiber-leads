@@ -264,6 +264,14 @@ const _skipParkedNotFound = rawDb.prepare(
        AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
                      AND st.last_scanned_at IS NULL AND st.inconclusive_attempts >= ?
                      AND st.last_inconclusive_at IS NOT NULL AND st.last_inconclusive_at > datetime('now', ?))`);
+// IMMEDIATE (not DEFERRED) so the claim takes the WAL write lock up front and
+// busy_timeout serializes concurrent claimers cleanly. A DEFERRED claim lets two
+// processes read the SAME queued rows, and the loser's first write throws
+// SQLITE_BUSY_SNAPSHOT (which busy_timeout does NOT cover) — flapping the run to
+// 'error'. And gate each row on _claimMark.changes===1: only rows THIS caller
+// actually flipped queued→inflight are returned, so a row that lost the race is
+// never scanned twice. Correct at N=1 (deploy-overlap already runs two writers
+// briefly) and the prerequisite for multi-process work-stealing.
 const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlyScannedSec: number) => {
   if (skipRecentlyScannedSec > 0) {
     _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
@@ -273,24 +281,38 @@ const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlySc
     );
   }
   const rows = _claimSelect.all(runId, limit) as any[];
-  for (const r of rows) _claimMark.run(runId, r.targetId);
-  return rows;
+  const claimed: any[] = [];
+  for (const r of rows) {
+    if (_claimMark.run(runId, r.targetId).changes === 1) claimed.push(r);
+  }
+  return claimed;
 });
 export function claimRunTargets(runId: string, limit: number, skipRecentlyScannedSec = 0): Array<{ targetId: number; seq: number; address: string; city: string; state: string; zip: string; lat: number | null; lng: number | null }> {
-  return _claimTx(runId, limit, skipRecentlyScannedSec) as any;
+  return (_claimTx as any).immediate(runId, limit, skipRecentlyScannedSec) as any;
 }
 
 // Finalize one checked target: set its terminal state AND bump the run counters
 // in a SINGLE transaction, so a crash between the two can never leave the run's
 // verified/cost totals disagreeing with the per-target ledger.
-const _finTarget = rawDb.prepare(`UPDATE scan_run_targets SET state=?, result=?, next_attempt_at=NULL WHERE run_id=? AND target_id=?`);
+// COMPARE-AND-SET: only finalize a target that is still 'inflight', and bump the
+// run counters ONLY if that flip actually happened (changes===1). Without this a
+// double-finalize (a reaper reclaim racing the original worker, a retry) would
+// double-count verified/failed/est_bytes and overrun the run budget.
+// Guard on NON-TERMINAL state (queued OR inflight): prevents a double-finalize
+// from re-counting the run totals, while still allowing both the normal worker
+// path (inflight) and the admin backfill path (finalizes exhausted 'queued'
+// targets directly). A row already verified/failed/skipped/cancelled is not
+// touched again.
+const _finTarget = rawDb.prepare(`UPDATE scan_run_targets SET state=?, result=?, next_attempt_at=NULL WHERE run_id=? AND target_id=? AND state IN ('inflight','queued')`);
 const _finBump = rawDb.prepare(
   `UPDATE scan_runs SET verified = verified + @verified, new_fiber = new_fiber + @newFiber,
       newly_live = newly_live + @newlyLive, failed = failed + @failed,
       est_bytes = est_bytes + @estBytes, heartbeat_at = datetime('now'), updated_at=datetime('now') WHERE id = @runId`);
 const _finalizeTx = rawDb.transaction((runId: string, targetId: number, state: string, result: string | null, delta: any) => {
-  _finTarget.run(state, result, runId, targetId);
-  _finBump.run({ runId, verified: delta.verified ?? 0, newFiber: delta.newFiber ?? 0, newlyLive: delta.newlyLive ?? 0, failed: delta.failed ?? 0, estBytes: delta.estBytes ?? 0 });
+  const flipped = _finTarget.run(state, result, runId, targetId).changes === 1;
+  if (flipped) {
+    _finBump.run({ runId, verified: delta.verified ?? 0, newFiber: delta.newFiber ?? 0, newlyLive: delta.newlyLive ?? 0, failed: delta.failed ?? 0, estBytes: delta.estBytes ?? 0 });
+  }
 });
 export function finalizeRunTarget(runId: string, targetId: number, state: "verified" | "failed" | "skipped", result: string | null, delta: { verified?: number; newFiber?: number; newlyLive?: number; failed?: number; estBytes?: number }): void {
   _finalizeTx(runId, targetId, state, result, delta);

@@ -421,23 +421,12 @@ const configuredGlobalConcurrency = Number(process.env.SCAN_GLOBAL_CONCURRENCY ?
 const configuredProviderRpm = Number(process.env.SCAN_PROVIDER_REQUESTS_PER_MINUTE ?? 30_000);
 const configuredCacheTtlMs = Number(process.env.SCAN_RESULT_CACHE_MS ?? 5 * 60_000);
 
-const addressTokenAliases: Record<string, string> = {
-  STREET: "ST", ST: "ST", ROAD: "RD", RD: "RD", AVENUE: "AVE", AVE: "AVE",
-  DRIVE: "DR", DR: "DR", COURT: "CT", CT: "CT", LANE: "LN", LN: "LN",
-  BOULEVARD: "BLVD", BLVD: "BLVD", HIGHWAY: "HWY", HWY: "HWY",
-  NORTH: "N", SOUTH: "S", EAST: "E", WEST: "W",
-};
-
-function canonicalAddressPart(value: string): string {
-  return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase().replace(/[^A-Z0-9#]+/g, " ").trim().split(/\s+/)
-    .filter(Boolean).map(token => addressTokenAliases[token] ?? token).join(" ");
-}
-
-export function normalizeKineticAddressKey(address: string, city: string, state: string, zip: string): string {
-  return [canonicalAddressPart(address), canonicalAddressPart(city), canonicalAddressPart(state), String(zip).match(/\d{5}/)?.[0] ?? ""]
-    .join("|");
-}
+// Canonical address key moved to ./addressKey (dependency-free) so storage.ts's
+// migration can reuse it without importing the heavy scanner graph. Imported as a
+// local binding (scanner.ts uses it internally) AND re-exported so every existing
+// `import { normalizeKineticAddressKey } from "./scanner"` keeps working.
+import { normalizeKineticAddressKey, canonicalAddressPart } from "./addressKey";
+export { normalizeKineticAddressKey, canonicalAddressPart };
 
 function logQueueEvent(event: QueueEvent): void {
   // Per-check started/completed lines are the app's largest log stream (~50% of all

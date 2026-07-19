@@ -131,9 +131,12 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     (address,city,state,zip,lat,lng,fiber_status,max_download_mbps,is_new_deployment,is_new_fiber,is_tenured,
      household_segment_type,billing_status,lead_status,notes,deployment_notes,lead_tag,lead_score,tenant_id,
      source_scan_target_id,fresh_confirmed_at,fresh_confidence,fresh_sources,assigned_rep_id,assigned_territory_id,
-     assignment_source,assigned_at,created_at,updated_at,carrier)
+     assignment_source,assigned_at,created_at,updated_at,carrier,canonical_key)
     VALUES (?,?,?,?,?,?,?,?,1,1,0,?,?,'prospect',?,?, 'fresh_fiber_confirmed',100,?,?,?,?,?,?,?,'fresh-fiber-territory',
-      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'),?)`);
+      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'),?,?)
+    ON CONFLICT(tenant_id, canonical_key) WHERE canonical_key IS NOT NULL
+      DO UPDATE SET updated_at=datetime('now')
+    RETURNING id`);
   const stamp = rawDb.prepare(`UPDATE leads SET source_scan_target_id=COALESCE(source_scan_target_id,?),
     fresh_confirmed_at=?,fresh_confidence=CASE WHEN fresh_confidence='cross_verified' THEN 'cross_verified' ELSE ? END,fresh_sources=?,lead_tag='fresh_fiber_confirmed',
     lead_score=MAX(COALESCE(lead_score,0),100),assigned_rep_id=COALESCE(assigned_rep_id,?),
@@ -216,7 +219,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         // signal so an authoritative lead is never blocked by a null-segment row.
         const leadSegment = candidate.household_segment_type ?? (authoritativeFresh ? "NEW FIBER" : candidate.last_fiber_status);
         const leadBilling = candidate.billing_status ?? candidate.last_billing_status ?? (authoritativeFresh ? "N" : null);
-        const created = insert.run(
+        const created = insert.get(
           candidate.address, candidate.city, candidate.state, candidate.zip ?? "", candidate.lat, candidate.lng,
           candidate.last_fiber_status ?? "new_fiber", candidate.max_download_mbps,
           leadSegment, leadBilling,
@@ -228,8 +231,13 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
           assignment?.repId ?? null, assignment?.territoryId ?? null,
           assignment?.repId ?? null,
           (candidate as any).carrier ?? "kinetic",
-        );
-        leadId = Number(created.lastInsertRowid);
+          // Canonical key — a concurrent projector (multi-process) that already
+          // created this address resolves via ON CONFLICT to the SAME id instead
+          // of a duplicate pin.
+          normalizeKineticAddressKey(candidate.address, candidate.city, candidate.state, candidate.zip ?? ""),
+        ) as { id: number } | undefined;
+        leadId = created?.id ?? undefined;
+        if (leadId == null) { result.rejected++; continue; } // conflict returned no row — skip safely
         // Keep the in-memory index current so a later candidate for the SAME
         // normalized address in this call attaches instead of minting a duplicate.
         rememberNewLead({ id: leadId, tenant_id: tenantId, assigned_rep_id: assignment?.repId ?? null }, candidate.address, candidate.city, candidate.state);

@@ -212,6 +212,9 @@ export const leads = sqliteTable("leads", {
   // Confirmed-fresh provenance. These fields are only stamped by the
   // independent-evidence projector, never directly by a primary scan.
   sourceScanTargetId: integer("source_scan_target_id"),
+  // Canonical dedup identity — a partial UNIQUE index on (tenant_id, canonical_key)
+  // makes "one address = one lead = one pin" a DB invariant.
+  canonicalKey: text("canonical_key"),
   freshConfirmedAt: text("fresh_confirmed_at"),
   freshConfidence: text("fresh_confidence"),
   freshSources: text("fresh_sources"),
