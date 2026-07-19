@@ -29,13 +29,13 @@ services:
       # 24h, served = 168h, low = 336h) rather than only via the statewide sweep.
       # Unlimited Decodo budget → live spend on; global dedup + the coordinator
       # address-lock prevent any double-check against the sweep.
-      ENABLE_STATE_MONITORING: "true"
+      ENABLE_STATE_MONITORING: "false"
       STATE_MONITOR_LIVE: "true"
       # One-shot-per-12h priority burst: on boot, enqueue the Sugar-and-Wine-Rd seed
       # corridor + the 7 target Kinetic markets (Harrisburg/Monroe/Albemarle/Oakboro/
       # Indian Trail/Concord/Rockwell) via the real startTargetRun path. Self-limiting;
       # set to "off" once the corridor + markets are well-covered.
-      SEED_PRIORITY_SCAN: "on"
+      SEED_PRIORITY_SCAN: "off"
       # One-burst-per-24h: re-check legacy "green" targets that lack an authoritative
       # conclusive NEW-FIBER+N snapshot so they become real assignable pins. Runs as
       # MAINTENANCE-class recheck (share-capped; never crowds revenue checks).
@@ -55,11 +55,11 @@ services:
       # ILEC territory, not Kinetic — every full-city OSM harvest there (Hillsborough
       # alone pulled 37,924 addresses) was pure proxy + event-loop cost with zero
       # Kinetic yield, and the giant synchronous upserts destabilized the 1-CPU box.
-      EXPLORE_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,inman:sc,moncure:nc,dalton:ga"
+      EXPLORE_CITIES: ""
       # "Right away" corridor scan (user 2026-07-18): DISCOVERY-class runs over
       # EXISTING stale targets, 2 min after boot — no harvest wait. Explore above
       # still harvests the never-enumerated towns (olivia has zero targets).
-      PRIORITY_CITIES: "broadway:nc,sanford:nc,olivia:nc,cameron:nc,bear creek:nc,goldston:nc,inman:sc,moncure:nc,dalton:ga"
+      PRIORITY_CITIES: ""
       # ── Copper-switch watch (2026-07-18) ─────────────────────────────────
       # Legacy Kinetic ILEC copper towns re-sweep every 72h (was 336h) so a
       # copper→fiber switch-on is caught within days, not weeks; SW-Chatham CAB
@@ -129,6 +129,28 @@ services:
       # and starved /api/health. 5 keeps the loop responsive on the single thread
       # under the current large backlog (was 8; lowered with the concurrency band).
       MAX_ACTIVE_RUN_WORKERS: "5"
+      # ── TEMPORARY: heavy background PRODUCERS paused to keep the portal up ────
+      # The single JS thread silently pegs at ~100% and starves /api (portal 000,
+      # Docker unhealthy, no log output, probe can't even fork) ~150s after every
+      # boot — when the deferred resume + the statewide sweep (harvesting tens of
+      # thousands of OSM addresses in synchronous better-sqlite3 bursts) + the other
+      # producers all fire against the accumulated backlog (193 'running' runs, 280k+
+      # queued targets). Lowering scan concurrency did NOT help (the producers, not the
+      # searches, are the load). A reliable portal for reps outranks proactive scanning,
+      # so pause the producers that generate the heavy synchronous bursts. On-demand
+      # scans (rep taps, lasso, manual) still work, and the reaper still drains the
+      # existing backlog gently at concurrency 10. RE-ENABLE once true multi-core is
+      # live (gives HTTP its own core) OR the backlog/running-run pileup is drained.
+      # (SEED_PRIORITY_SCAN, ENABLE_STATE_MONITORING, EXPLORE_CITIES, PRIORITY_CITIES
+      #  are set to their off/empty values at their original definitions above.)
+      STATEWIDE_SCAN_ON_DEPLOY: "off"
+      HOT_MARKETS: "off"
+      FRONTIER_MARKETS: "off"
+      COMING_SOON_PROGRAM: "off"
+      COMING_SOON_WATCHLIST: "off"
+      DAILY_MARKET_REFRESH: "off"
+      NEWBUILD_RADAR: "off"
+      EXPANSION_ENABLED: "off"
       # Proactive Decodo rotation cadence. 10 was too aggressive: under a 403
       # rolling-window storm it rotated the session hundreds of times/sec (runaway
       # CPU). 40 is the previously-proven value — 403s are a refilling throttle, so
