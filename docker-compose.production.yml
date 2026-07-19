@@ -114,12 +114,21 @@ services:
       # (e.g. any worker may admit the eligible head; per-worker token minting must be
       # shared/divided so N workers don't multiply auth-mint pressure).
       SCAN_WORKERS: "0"
-      SCAN_GLOBAL_CONCURRENCY: "20"
-      SCAN_BATCH_CONCURRENCY: "10"
+      # Single-thread HTTP-headroom band. With a large accumulated backlog (280k+
+      # queued run-targets) + all producers running, concurrency 20 kept the one JS
+      # thread blocked in synchronous better-sqlite3 bursts long enough that /api/health
+      # requests arriving mid-block timed out (Docker unhealthy + external portal 000,
+      # while requests in the gaps still served in <1ms). Until true multi-core is
+      # re-enabled (needs the coordinator made multi-instance-safe — see SCAN_WORKERS
+      # note above), hold concurrency at the proven single-core band so the event loop
+      # always gets HTTP turns: a reliable portal for reps outranks raw scan speed.
+      SCAN_GLOBAL_CONCURRENCY: "10"
+      SCAN_BATCH_CONCURRENCY: "5"
       # Cap concurrently-EXECUTING scan-run worker loops (each polls the DB via a
       # synchronous better-sqlite3 claim). 100+ resuming at boot pegged the loop
-      # and starved /api/health. 8 keeps the loop responsive on the single thread.
-      MAX_ACTIVE_RUN_WORKERS: "8"
+      # and starved /api/health. 5 keeps the loop responsive on the single thread
+      # under the current large backlog (was 8; lowered with the concurrency band).
+      MAX_ACTIVE_RUN_WORKERS: "5"
       # Proactive Decodo rotation cadence. 10 was too aggressive: under a 403
       # rolling-window storm it rotated the session hundreds of times/sec (runaway
       # CPU). 40 is the previously-proven value — 403s are a refilling throttle, so
