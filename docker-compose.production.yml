@@ -100,7 +100,20 @@ services:
       # so more workers do NOT multiply proxy pressure — they parallelize the CPU-bound
       # parse/classify/DB work up to that global cap. SCAN_WORKERS=0 (or unset) = the
       # single-process kill-switch (byte-for-byte the pre-cluster behavior).
-      SCAN_WORKERS: "3"
+      # REVERTED TO 0 (single-process): activating 3 workers stalled scanning
+      # (checks/5m → 0, admission frozen at 11 active / 164 queued, quiet logs).
+      # Root cause: the DistributedProviderCoordinator's admission queue was built
+      # "single app instance" — its head-of-line admit ("only proceed when I am the
+      # current queue head") assumes the head item's submitter keeps polling to admit
+      # ITSELF. Across processes, if the head was submitted by another worker that
+      # isn't polling that row, every other worker waits behind it → cross-process
+      # deadlock. The multi-core cluster CODE is proven (231% CPU / 3 cores during the
+      # boot resume burst; portal stayed 200) and stays in place, dormant. Re-enable
+      # (SCAN_WORKERS=3) only AFTER the coordinator is made multi-instance-safe: the
+      # admit path must not depend on a specific worker polling its own head row
+      # (e.g. any worker may admit the eligible head; per-worker token minting must be
+      # shared/divided so N workers don't multiply auth-mint pressure).
+      SCAN_WORKERS: "0"
       SCAN_GLOBAL_CONCURRENCY: "20"
       SCAN_BATCH_CONCURRENCY: "10"
       # Cap concurrently-EXECUTING scan-run worker loops (each polls the DB via a
