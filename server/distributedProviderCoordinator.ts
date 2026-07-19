@@ -462,11 +462,19 @@ export function ensureSchema(): void {
       catch { /* SQLite too old for DROP COLUMN — column is simply left unused */ }
     }
   }
-  // ── Clean stale admission state on boot. Admission tickets, address locks, and
-  //    rate events are per-process and in-flight only; nothing here survives a
-  //    restart, so leftover rows are stale and would otherwise pin the admission
-  //    head. Scan progress lives in scan_runs/run_targets, not here — never lost.
-  //    (Single app instance in production; revisit the blanket delete if scaled out.)
+  // NOTE: the blanket wipe of leftover admission/lock/rate state moved to
+  // coordinatorBootClean() — it must run EXACTLY ONCE per box (the primary),
+  // never in each cluster worker, or a worker's boot would erase its siblings'
+  // LIVE address locks (→ double Decodo spend) and rate ledger (→ over-admission
+  // → 403 storms). ensureSchema() stays purely idempotent DDL, safe in every
+  // process. See index.ts cluster boot.
+}
+
+// Clear stale admission/lock/rate rows left by the PREVIOUS container. Call ONCE
+// on the primary (or the single process when SCAN_WORKERS=0), BEFORE forking
+// workers — never from a worker. Scan progress lives in scan_runs/run_targets,
+// not here, so nothing real is lost.
+export function coordinatorBootClean(): void {
   rawDb.exec(`
     DELETE FROM provider_admission_queue;
     DELETE FROM provider_address_locks;

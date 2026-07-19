@@ -209,6 +209,22 @@ export async function runScanWorker(
   activeRuns.add(runId);
   const workerId = `scan:${runId}`;
   let terminalError: string | null = null;
+  // DECOUPLED RUN HEARTBEAT — the reaper's only cross-process ownership signal.
+  // touchRun() is also called per-batch (below), but a batch can stall far past the
+  // reaper's staleness window during a long admission wait (coordinator can block a
+  // single address up to ~120s when Decodo's 403 window is depleted). In multi-process
+  // mode a sibling worker's reaper would then see this run's heartbeat as stale and
+  // reset its in-flight targets — double-spending the proxy on addresses this worker
+  // is mid-flight on. Stamping heartbeat_at every 10s independently of batch progress
+  // keeps "a live worker (in ANY process) owns this run" true for getResumableRuns(),
+  // so no other process reaps a run we're actively working. When THIS worker dies the
+  // timer stops, the heartbeat goes stale within the window, and recovery proceeds
+  // correctly. Harmless in single-process (fewer false-positive self-reclaims). Unref
+  // so it never keeps the process alive on shutdown.
+  const hbTimer: ReturnType<typeof setInterval> = setInterval(() => {
+    try { touchRun(runId); } catch { /* transient DB busy — next tick covers it */ }
+  }, 10_000);
+  if (typeof (hbTimer as any).unref === "function") (hbTimer as any).unref();
   beginFiberWorker(tenantId, runId);
   // Mint a fresh token before this run starts — Scan Map, city, and nightly scans
   // all pass through here. Best-effort: a mint hiccup is non-fatal (the pool and
@@ -472,6 +488,7 @@ export async function runScanWorker(
       concurrency: 0,
       lastError: terminalError,
     });
+    clearInterval(hbTimer); // stop the decoupled heartbeat so a finished/dead run goes stale and is reclaimable
     activeRuns.delete(runId);
     pumpRunQueue(); // a slot freed — start the next queued run, if any
   }

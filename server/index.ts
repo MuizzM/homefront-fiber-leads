@@ -4,6 +4,7 @@ import type { Request } from 'express';
 import crypto from "crypto";
 import { serveStatic } from "./static";
 import { createServer } from "node:http";
+import cluster from "node:cluster";
 import { runMigrations } from "./storage";
 import { rawDb } from "./db";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
@@ -12,6 +13,31 @@ import cors from "cors";
 import compression from "compression";
 import { structuredLog } from "./structuredLog";
 import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPolicy";
+
+// ── Multi-core scan cluster ────────────────────────────────────────────────────
+// The scan pipeline is single-threaded JavaScript (synchronous better-sqlite3 +
+// parsing + classification) and pegs ONE core at ~100% while the box's other cores
+// sit idle. SCAN_WORKERS>0 forks that many worker processes so scanning uses every
+// core: each worker is a full Express+scan process, the kernel load-balances HTTP
+// across them (SO_REUSEPORT, already set on listen), the DB-backed provider-admission
+// coordinator keeps total Decodo pressure globally bounded, and Phase-0's atomic
+// claimRunTargets + finalize CAS guarantee two workers can never double-scan or
+// double-finalize a target. Runs distribute automatically: the CONTROL worker's
+// singletons PRODUCE runs; every worker's reaper CONSUMES queued targets.
+//   SCAN_WORKERS unset / 0 → single process, byte-for-byte today's behavior (the
+//   code-free kill-switch). Worker index 0 is the control worker (runs producers +
+//   consumers); workers 1..N-1 are scan-only consumers. HF_ROLE/HF_WORKER_INDEX are
+//   set by the primary on fork.
+const SCAN_WORKERS = Math.max(0, Math.floor(Number(process.env.SCAN_WORKERS ?? 0) || 0));
+// The control role runs the work-PRODUCING singletons (statewide sweep, radar,
+// expansion, hot/frontier markets, discovery, daily refresh). True in single-process
+// and only in the index-0 worker under the cluster. Work-CONSUMING resume/reaper runs
+// in every process regardless.
+const IS_CONTROL_ROLE = SCAN_WORKERS === 0 || process.env.HF_ROLE === "control";
+// A cluster WORKER must NOT re-run migrations / coordinator boot-clean / calling
+// migrations — the primary ran them exactly once before forking, and a concurrent
+// merge migration would race. Single-process runs them inline as before.
+const IS_CLUSTER_WORKER = SCAN_WORKERS > 0 && cluster.isWorker;
 
 // Node <20.12 compat: Vite 7's dep optimizer calls crypto.hash(), which was
 // only added in Node 20.12/21. Polyfill it so dev works on older runtimes;
@@ -365,12 +391,69 @@ app.use((req, res, next) => {
 });
 
 (async () => {
-  runMigrations();
+  // ── CLUSTER PRIMARY: control-plane bootstrap + supervisor only ────────────────
+  // Runs the one-time migrations/coordinator-clean/calling-migrations EXACTLY ONCE
+  // (before any worker exists, so no concurrent-writer race), forks the workers, and
+  // supervises them (respawn on crash, forward SIGTERM). It does NOT serve HTTP or
+  // scan. Only entered when SCAN_WORKERS>0; single-process falls straight through.
+  if (SCAN_WORKERS > 0 && cluster.isPrimary) {
+    runMigrations();
+    try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
+    catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
+    try { const { runCallingMigrations } = await import("./calling/migrations"); runCallingMigrations(); }
+    catch (e: any) { console.error("[cluster] calling migrations failed in primary:", e?.message); process.exit(1); }
+    let primaryDown = false;
+    const forkWorker = (index: number) => {
+      const w = cluster.fork({ HF_ROLE: index === 0 ? "control" : "scan", HF_WORKER_INDEX: String(index) });
+      (w as any).__hfIndex = index;
+      return w;
+    };
+    for (let i = 0; i < SCAN_WORKERS; i++) forkWorker(i);
+    structuredLog("cluster.primary_started", { workers: SCAN_WORKERS, pid: process.pid });
+    cluster.on("exit", (w, code, signal) => {
+      const index = (w as any).__hfIndex ?? 0;
+      console.warn(`[cluster] worker index=${index} pid=${w.process.pid} exited (code=${code} signal=${signal ?? "none"})`);
+      if (!primaryDown) {
+        // Respawn after a short delay so a crash-loop can't peg the box. Preserves the
+        // worker's index → the control role is always re-created if worker 0 dies.
+        const t = setTimeout(() => { if (!primaryDown) forkWorker(index); }, 1_000);
+        if (typeof (t as any).unref === "function") (t as any).unref();
+      }
+    });
+    const stopPrimary = (sig: string) => {
+      if (primaryDown) return; primaryDown = true;
+      const n = Object.keys(cluster.workers ?? {}).length;
+      console.log(`[cluster] ${sig} received — forwarding to ${n} worker(s)`);
+      for (const id in cluster.workers) { try { cluster.workers[id]?.kill("SIGTERM"); } catch {} }
+      // Give workers longer than their own 10s drain cap, then exit.
+      const t = setTimeout(() => process.exit(0), 12_000);
+      if (typeof (t as any).unref === "function") (t as any).unref();
+    };
+    process.on("SIGTERM", () => stopPrimary("SIGTERM"));
+    process.on("SIGINT", () => stopPrimary("SIGINT"));
+    return; // primary never runs the worker body below
+  }
+
+  // Migrations run once per DB: in single-process here, in the cluster PRIMARY above.
+  // A cluster WORKER must skip them (they already ran; a concurrent merge migration
+  // would race) but still needs every migrated table to exist — which it does, since
+  // the primary completed all migrations before forking this worker.
+  if (!IS_CLUSTER_WORKER) runMigrations();
+  // Clear stale admission/lock/rate rows left by the previous container. This ran
+  // implicitly inside the coordinator's ensureSchema() before; it now lives in an
+  // explicit call so the cluster primary can run it EXACTLY ONCE before forking
+  // workers (a worker must never wipe its siblings' live locks). Single-process
+  // runs it here; the cluster primary ran it above; cluster workers skip it.
+  if (!IS_CLUSTER_WORKER) {
+    try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
+    catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
+  }
   // The Calling/DNC schema is a strict transactional migration. If it cannot
   // be created and verified, startup stops: serving a half-migrated compliance
-  // system would be less safe than remaining offline.
+  // system would be less safe than remaining offline. Cluster workers skip the
+  // CALL (primary already migrated) but keep the import for the purge/audit hooks.
   const { runCallingMigrations } = await import("./calling/migrations");
-  runCallingMigrations();
+  if (!IS_CLUSTER_WORKER) runCallingMigrations();
   // Provider contracts can require prompt deletion of cached payloads even
   // when no representative opens Calling. Run a bounded global cleanup at
   // startup and hourly; durable usage/cost/audit metadata is preserved.
@@ -464,19 +547,37 @@ app.use((req, res, next) => {
     if (typeof (t as any).unref === "function") (t as any).unref();
   };
   const deferredResume = setTimeout(() => { void (async () => {
+    // RUN CONSUMERS + REAPER — run in EVERY worker. This is the multi-core lever:
+    // each process independently pulls queued targets (atomic claimRunTargets makes
+    // sharing safe) and reaps dead-worker runs. The decoupled run heartbeat keeps a
+    // live sibling's run from being reclaimed here.
     try {
       const { resumeInterruptedRuns, resumeCriticalRuns, startScanReaper } = await import("./scanEngine");
       resumeCriticalRuns();    // CRITICAL runs (new-build/manual/field) resume first
       resumeInterruptedRuns();
       startScanReaper(); // periodic reaper — started only now so its 60s tick can't fire during the health gate
     } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
-    try {
-      const { resumeSweepJobs, resumeStateSweeps } = await import("./sweepService");
-      resumeSweepJobs();
-      resumeStateSweeps(); // crash-recovery only — picks a running statewide sweep back up
-    } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
+    // SWEEP DRIVERS — control worker only. These advance the statewide-sweep
+    // checkpoint / re-drive sweep jobs (work PRODUCERS); driving them from every
+    // worker would race the checkpoint and double-create per-city runs.
+    if (IS_CONTROL_ROLE) {
+      try {
+        const { resumeSweepJobs, resumeStateSweeps } = await import("./sweepService");
+        resumeSweepJobs();
+        resumeStateSweeps(); // crash-recovery only — picks a running statewide sweep back up
+      } catch (e: any) { console.warn("[sweep] resume skipped:", e?.message); }
+    }
   })(); }, resumeDelay);
   if (typeof (deferredResume as any).unref === "function") (deferredResume as any).unref();
+  // ── WORK PRODUCERS — CONTROL WORKER ONLY ──────────────────────────────────────
+  // Everything below SCHEDULES or CREATES scan work (statewide sweep, new-build
+  // radar, cluster expansion, priority/hot/frontier bursts, discovery, coming-soon,
+  // daily refresh) or fires external-API cadences (OSM/OneMap/Mapbox). Running these
+  // in every cluster worker would multiply external-API spend and double-create runs.
+  // The runs they produce are consumed by ALL workers via the reaper above, so one
+  // producer feeds every core. In single-process IS_CONTROL_ROLE is always true, so
+  // this is unchanged today.
+  if (IS_CONTROL_ROLE) {
   // ── Statewide NC+SC scan on every production deployment ────────────────────
   // Business purpose: surface newly serviceable, non-active Kinetic addresses so
   // reps reach fresh doors first. Every prod boot (deploy = container restart)
@@ -791,6 +892,7 @@ app.use((req, res, next) => {
     if (typeof (dailyTimer as any).unref === "function") dailyTimer.unref();
     setTimeout(() => { void runDaily(); }, 20 * 60_000); // first run 10 min after boot
   }
+  } // end IS_CONTROL_ROLE work-producers
   }; // end startBackgroundServices
 
   // ── Purge expired sessions every 6 hours ────────────────────────────────
