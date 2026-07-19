@@ -90,6 +90,17 @@ services:
       # wedged the app (portal unreachable) even on 4 cores. 20/10 scans hard yet
       # leaves the loop headroom to answer HTTP. Raise only if searches/5m drops
       # AND the app stays healthy under load — never blindly.
+      # ── MULTI-CORE SCAN CLUSTER ──────────────────────────────────────────────
+      # Fork N worker processes so scanning uses every core (the scan pipeline is
+      # single-threaded JS and pegged ONE of the 4 cores at ~100% while the other 3
+      # idled). 3 (not 4) leaves a core's headroom for the supervisor primary, Caddy,
+      # the OS, and HTTP responsiveness so the portal stays snappy under full scan.
+      # The DB-coordinated provider admission caps TOTAL Decodo concurrency globally
+      # across all workers (SCAN_GLOBAL_CONCURRENCY is a global cap, not per-process),
+      # so more workers do NOT multiply proxy pressure — they parallelize the CPU-bound
+      # parse/classify/DB work up to that global cap. SCAN_WORKERS=0 (or unset) = the
+      # single-process kill-switch (byte-for-byte the pre-cluster behavior).
+      SCAN_WORKERS: "3"
       SCAN_GLOBAL_CONCURRENCY: "20"
       SCAN_BATCH_CONCURRENCY: "10"
       # Cap concurrently-EXECUTING scan-run worker loops (each polls the DB via a
