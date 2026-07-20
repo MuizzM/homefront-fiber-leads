@@ -880,7 +880,10 @@ app.use((req, res, next) => {
         if (!city) continue;
         // Tag everything harvested for this town as Frontier territory — the
         // discovery harvester is carrier-agnostic; the town assignment owns it.
-        rawDb.prepare(`UPDATE scan_targets SET carrier='frontier' WHERE lower(city)=? AND lower(state)=? AND carrier<>'frontier'`).run(city, st);
+        // Retag via the carrier='kinetic' predicate so idx_scan_targets_carrier_city
+        // (carrier, lower(city), state) serves it — '<>frontier' full-scanned the
+        // 884k-row table inside one write txn per town and wedged the DB writer.
+        rawDb.prepare(`UPDATE scan_targets SET carrier='frontier' WHERE carrier='kinetic' AND lower(city)=? AND lower(state)=?`).run(city, st);
         const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE carrier='frontier' AND lower(city)=? AND lower(state)=?
           AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-30 minutes'))
           ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT 5000`)
@@ -911,6 +914,42 @@ app.use((req, res, next) => {
     const frontierCycle = setInterval(() => { void runFrontierBurst(); }, 20 * 60_000);
     if (typeof (frontierCycle as any).unref === "function") frontierCycle.unref();
   }
+
+  // FRONTIER BUILD ZONES — controlNumber serving-area clustering (the Fiber Focus
+  // playbook). Frontier builds fiber per serving area (controlNumber); every
+  // strict Frontier verdict carries its "cn:<n>" fingerprint. When a serving area
+  // shows a CLUSTER of fresh no-service leads, the whole area is a fresh build —
+  // member leads are promoted to cross_verified (verified fresh) and the zone is
+  // logged for the map/ops. FRONTIER_BUILD_ZONES=off disables; threshold via
+  // FRONTIER_BUILD_ZONE_MIN (default 8 fresh leads in 21 days).
+  const runFrontierBuildZones = async () => {
+    try {
+      if (process.env.FRONTIER_BUILD_ZONES === "off") return;
+      const minCluster = Math.max(3, Math.floor(Number(process.env.FRONTIER_BUILD_ZONE_MIN ?? 8) || 8));
+      const { rawDb } = await import("./db");
+      const { getDefaultTenantId } = await import("./storage");
+      const tid = getDefaultTenantId();
+      if (tid == null) return;
+      const zones = rawDb.prepare(`SELECT exchange_id AS cn, COUNT(*) AS c,
+          MIN(created_at) AS firstSeen, MAX(created_at) AS lastSeen
+        FROM leads
+        WHERE tenant_id=? AND carrier='frontier' AND lead_tag='fresh_fiber_confirmed'
+          AND exchange_id LIKE 'cn%' AND created_at >= datetime('now','-21 days')
+        GROUP BY exchange_id HAVING c >= ? ORDER BY c DESC`).all(tid, minCluster) as any[];
+      for (const z of zones) {
+        const boosted = rawDb.prepare(`UPDATE leads SET fresh_confidence='cross_verified', updated_at=datetime('now')
+          WHERE tenant_id=? AND carrier='frontier' AND exchange_id=?
+            AND lead_tag='fresh_fiber_confirmed' AND fresh_confidence<>'cross_verified'`).run(tid, z.cn);
+        structuredLog("frontier.build_zone", {
+          control: z.cn, freshLeads: z.c, boosted: boosted.changes,
+          firstSeen: z.firstSeen, lastSeen: z.lastSeen,
+        });
+      }
+    } catch (e: any) { console.warn("[frontier-zones] skipped:", e?.message); }
+  };
+  setTimeout(() => { void runFrontierBuildZones(); }, 6 * 60_000);
+  const frontierZoneCycle = setInterval(() => { void runFrontierBuildZones(); }, 30 * 60_000);
+  if (typeof (frontierZoneCycle as any).unref === "function") frontierZoneCycle.unref();
 
   // COMING SOON PROGRAM — the overarching always-on watch system. The built-in
   // worker sweeps the durable watchlist every 15 minutes on an opportunity-
