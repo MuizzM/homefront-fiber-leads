@@ -43,14 +43,37 @@ if [ -n "${BACKUP_VOLUME:-}" ]; then
   # VACUUM INTO reads ONE consistent MVCC snapshot under WAL: it never blocks the
   # writers and — unlike the backup API from a separate connection, which RESTARTS
   # on every external write and livelocks under our constant scan writes (observed:
-  # 5-minute hang) — it completes in a single pass. Bounded at 240s.
-  cleanup_snapshot
-  docker exec -e SNAP="$SNAP" "$APP_CONTAINER_NAME" timeout 240 node -e '
-    const Database = require("better-sqlite3");
-    const d = new Database("/data/data.db", { readonly: true });
-    d.exec("VACUUM INTO \x27" + process.env.SNAP + "\x27");
-    d.close();
-  ' || { echo "[backup] online snapshot failed" >&2; exit 1; }
+  # 5-minute hang) — it completes in a single pass. But under heavy continuous scan
+  # writes it can still fail transiently (observed live: "database does not exist:
+  # backup-snapshot.db" — the VACUUM aborted and left no file), which blocked deploys.
+  # So: RETRY on transient failure (busy_timeout rides out write contention), and
+  # VERIFY the snapshot exists + is non-empty + passes a quick integrity check before
+  # we encrypt it. Only a verified snapshot proceeds.
+  BACKUP_SNAP_TRIES="${BACKUP_SNAP_TRIES:-4}"
+  SNAP_OK=0
+  for attempt in $(seq 1 "$BACKUP_SNAP_TRIES"); do
+    cleanup_snapshot
+    if docker exec -e SNAP="$SNAP" "$APP_CONTAINER_NAME" timeout 300 node -e '
+      const Database = require("better-sqlite3");
+      const d = new Database("/data/data.db", { readonly: true });
+      try { d.pragma("busy_timeout = 30000"); d.exec("VACUUM INTO \x27" + process.env.SNAP + "\x27"); }
+      finally { d.close(); }
+    '; then
+      if docker exec -e SNAP="$SNAP" "$APP_CONTAINER_NAME" node -e '
+        const fs = require("fs");
+        const p = process.env.SNAP;
+        if (!fs.existsSync(p) || fs.statSync(p).size < 65536) process.exit(3);
+        const Database = require("better-sqlite3");
+        const d = new Database(p, { readonly: true });
+        const ok = d.pragma("quick_check", { simple: true });
+        d.close();
+        process.exit(ok === "ok" ? 0 : 4);
+      '; then SNAP_OK=1; break; fi
+    fi
+    echo "[backup] snapshot attempt $attempt/$BACKUP_SNAP_TRIES failed; retrying in 5s…" >&2
+    sleep 5
+  done
+  [ "$SNAP_OK" -eq 1 ] || { echo "[backup] online snapshot failed after $BACKUP_SNAP_TRIES attempts" >&2; exit 1; }
   docker run --rm \
     --read-only \
     --network none \

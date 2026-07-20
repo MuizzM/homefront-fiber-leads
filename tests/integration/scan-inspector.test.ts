@@ -67,4 +67,21 @@ describe("Scan Inspector event store", () => {
     expect(tokenReady.tokenSuffix).toBe("KvZo");         // last 4 only
     expect(tokenReady.sessionId).toBe("decodo-s3");      // masked session id
   });
+
+  it("buffers events and persists them in ONE bulk transaction on flush (write-amplification control)", async () => {
+    const { rawDb } = await import("../../server/db");
+    const before = (rawDb.prepare("SELECT COUNT(*) c FROM scan_events WHERE address_key LIKE 'batch|%'").get() as any).c;
+    // Emit a burst WITHOUT reading the snapshot (which would auto-flush). These sit
+    // in the in-memory buffer, not yet written to the DB.
+    const t = Date.now();
+    for (let i = 0; i < 20; i++) {
+      bus.emitStage({ addressKey: `batch|${i}`, address: `${i} Buffer Rd`, city: "Inman", state: "SC", zip: "29349", runId: "run_batch", source: "field", attempt: 1, stage: "queued", status: "info", tsEpoch: t + i });
+    }
+    const midDb = (rawDb.prepare("SELECT COUNT(*) c FROM scan_events WHERE address_key LIKE 'batch|%'").get() as any).c;
+    expect(midDb).toBe(before); // still buffered — no per-event write transactions
+    const flushed = events.flushScanEvents();
+    expect(flushed).toBe(20);
+    const afterDb = (rawDb.prepare("SELECT COUNT(*) c FROM scan_events WHERE address_key LIKE 'batch|%'").get() as any).c;
+    expect(afterDb).toBe(before + 20); // all persisted in the single bulk transaction
+  });
 });

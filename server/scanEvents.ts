@@ -13,6 +13,23 @@ import { EventEmitter } from "node:events";
 
 const MAX_EVENTS = Math.max(500, Number(process.env.SCAN_EVENTS_MAX ?? 4000));
 const PRUNE_EVERY = 200;
+// ── Write-amplification control ──────────────────────────────────────────────
+// scan_events was one synchronous INSERT per pipeline stage — 7+ per address, so
+// at ~200 addr/min the telemetry alone fired ~1,400 write transactions/min, each
+// taking the WAL write lock and blocking the worker's event loop. That is a top
+// contributor to DB-lock contention + single-core peg. We now BUFFER events and
+// flush them in ONE bounded bulk transaction on a short timer (or when the buffer
+// fills). The live SSE relay still emits every event IMMEDIATELY (real-time view
+// unaffected); only the DB persist is batched. scan_events is diagnostic + already
+// bounded/pruned, so a handful of un-flushed rows lost on a hard crash is
+// acceptable. Kill-switch SCAN_EVENTS_BATCH=off → per-event persist (old path).
+const BATCH_ENABLED = process.env.SCAN_EVENTS_BATCH !== "off";
+const FLUSH_MS = Math.max(100, Number(process.env.SCAN_EVENTS_FLUSH_MS ?? 750) || 750);
+const FLUSH_MAX = Math.max(50, Number(process.env.SCAN_EVENTS_FLUSH_MAX ?? 500) || 500);
+const BUF_CAP = Math.max(FLUSH_MAX * 4, Number(process.env.SCAN_EVENTS_BUF_CAP ?? 5000) || 5000);
+const _buf: ScanStageEvent[] = [];
+let _flushTimer: ReturnType<typeof setInterval> | null = null;
+let _bulkInsert: ((rows: ScanStageEvent[]) => void) | null = null;
 
 const relay = new EventEmitter();
 relay.setMaxListeners(100);
@@ -49,7 +66,45 @@ function ensureSchema(): void {
        @attempt, @httpStatus, @latencyMs, @sessionId, @tokenSuffix, @retryReason,
        @classification, @detail, @tsEpoch)
   `);
+  // One prepared statement, reused inside a single transaction for the whole batch.
+  const bind = (evt: ScanStageEvent) => ({
+    addressKey: evt.addressKey,
+    address: evt.address ?? null, city: evt.city ?? null, state: evt.state ?? null, zip: evt.zip ?? null,
+    runId: evt.runId ?? null, source: evt.source ?? null,
+    stage: evt.stage, status: evt.status ?? null,
+    attempt: evt.attempt ?? 1,
+    httpStatus: evt.httpStatus ?? null, latencyMs: evt.latencyMs ?? null,
+    sessionId: evt.sessionId ?? null, tokenSuffix: evt.tokenSuffix ?? null,
+    retryReason: evt.retryReason ?? null, classification: evt.classification ?? null,
+    detail: evt.detail ?? null, tsEpoch: evt.tsEpoch,
+  });
+  _bulkInsert = rawDb.transaction((rows: ScanStageEvent[]) => {
+    for (const evt of rows) _insert.run(bind(evt));
+  });
   _ready = true;
+}
+
+/** Drain the event buffer into ONE bulk transaction. Bounded per call (FLUSH_MAX)
+ *  so a burst never holds the write lock too long; the timer picks up the rest on
+ *  the next tick. Best-effort — telemetry never breaks a scan. */
+export function flushScanEvents(): number {
+  if (!_buf.length) return 0;
+  try { ensureSchema(); } catch { return 0; }
+  const batch = _buf.splice(0, FLUSH_MAX);
+  try {
+    _bulkInsert!(batch);
+  } catch { /* swallow — diagnostics; drop this batch rather than break scanning */ }
+  // Prune occasionally (amortized), not per-row.
+  _sincePrune += batch.length;
+  if (_sincePrune >= PRUNE_EVERY) {
+    _sincePrune = 0;
+    try {
+      rawDb.prepare(`DELETE FROM scan_events WHERE id <= (
+        SELECT id FROM scan_events ORDER BY id DESC LIMIT 1 OFFSET ?
+      )`).run(MAX_EVENTS);
+    } catch { /* prune best-effort */ }
+  }
+  return batch.length;
 }
 
 function persist(evt: ScanStageEvent): number | null {
@@ -83,10 +138,28 @@ export function startScanEvents(): void {
   _started = true;
   try { ensureSchema(); } catch { /* schema will retry on first event */ }
   onStage((evt) => {
-    let id: number | null = null;
-    try { id = persist(evt); } catch { /* swallow — never break a scan */ }
-    relay.emit("event", { id, ...evt });
+    // LIVE path is always immediate — the SSE inspector stays real-time. Only DB
+    // persistence is batched (below), so the live view never waits on a write.
+    if (BATCH_ENABLED) {
+      _buf.push(evt);
+      // Backpressure: if the flusher can't keep up (buffer past cap), drop the
+      // OLDEST buffered diagnostics rather than grow memory unbounded or flush a
+      // giant lock-holding transaction. The live relay already showed them.
+      if (_buf.length > BUF_CAP) _buf.splice(0, _buf.length - BUF_CAP);
+      // Flush eagerly when a full batch has accumulated (keeps the buffer small
+      // under bursts without waiting the whole timer interval).
+      if (_buf.length >= FLUSH_MAX) flushScanEvents();
+      relay.emit("event", { id: null, ...evt });
+    } else {
+      let id: number | null = null;
+      try { id = persist(evt); } catch { /* swallow — never break a scan */ }
+      relay.emit("event", { id, ...evt });
+    }
   });
+  if (BATCH_ENABLED && !_flushTimer) {
+    _flushTimer = setInterval(() => { try { flushScanEvents(); } catch { /* next tick */ } }, FLUSH_MS);
+    if (typeof (_flushTimer as any).unref === "function") (_flushTimer as any).unref();
+  }
 }
 
 /** In-process subscription for the SSE endpoint. Returns an unsubscribe fn. */
@@ -133,6 +206,9 @@ export function getInspectorSnapshot(opts: { limit?: number; runId?: string | nu
   rows: InspectorRow[]; counters: InspectorCounters; sessionRotations: number | null;
 } {
   ensureSchema();
+  // Include any buffered-but-not-yet-flushed events so the inspector is accurate to
+  // the moment it's read (the timer flush is up to FLUSH_MS behind).
+  if (BATCH_ENABLED && _buf.length) { try { flushScanEvents(); } catch { /* best-effort */ } }
   const limit = Math.min(500, Math.max(10, opts.limit ?? 200));
   // Latest event per address (optionally scoped to a run), newest first.
   const where = opts.runId ? `WHERE run_id = @runId` : ``;
