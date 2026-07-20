@@ -50,9 +50,10 @@ interface FrontierPrediction {
   addressKey: string;
   parentKey?: string;
   address: { addressLine1: string; addressLine2?: string; city: string; stateProvince: string; zipCode: string };
-  latitude?: number; longitude?: number;
   isParent?: boolean; inFootprint?: boolean;
   environment?: string; controlNumber?: string;
+  samRecords?: Array<{ environment?: string; controlNumber?: string }>;
+  latitude?: number | string; longitude?: number | string;
 }
 
 interface FrontierServiceability {
@@ -93,8 +94,8 @@ export function classifyFrontierResponse(
   base.apiSource = "kinetic_live"; // live provider answer (contract name shared with Kinetic)
   base.confidence = "HIGH";
   base.dfAddressId = pred.addressKey;
-  if (pred.latitude != null) base.lat = pred.latitude;
-  if (pred.longitude != null) base.lng = pred.longitude;
+  if (pred.latitude != null && Number.isFinite(Number(pred.latitude))) base.lat = Number(pred.latitude);
+  if (pred.longitude != null && Number.isFinite(Number(pred.longitude))) base.lng = Number(pred.longitude);
 
   const redirectReason = String(svc.redirect?.reason ?? "");
   if (/VZ_ELIGIBLE|VERIZON/i.test(redirectReason)) {
@@ -141,6 +142,32 @@ export function classifyFrontierResponse(
   return base;
 }
 
+
+// DIRECT-FIRST TRANSPORT (2026-07-20): frontier.com answers these endpoints
+// fine from the Hetzner IP (sub-second 200s verified live), while the Decodo
+// residential exits were getting error envelopes / block statuses on the
+// serviceability POST — every Frontier check was burning proxy sessions and
+// requeueing without ever producing a verdict. Try DIRECT first; on a
+// transport error or a block/server status, fall back to one proxied attempt.
+// FRONTIER_DIRECT=off restores proxy-only behavior.
+const FRONTIER_DIRECT = process.env.FRONTIER_DIRECT !== "off";
+const FRONTIER_BLOCK_STATUSES = new Set([401, 403, 407, 429]);
+
+async function frontierFetch(
+  url: string,
+  init: RequestInit,
+): Promise<{ res: Response; via: "direct" | "proxy" }> {
+  if (FRONTIER_DIRECT) {
+    try {
+      const res = await fetch(url, init);
+      if (res.status < 500 && !FRONTIER_BLOCK_STATUSES.has(res.status)) {
+        return { res, via: "direct" };
+      }
+    } catch { /* direct transport failed — fall through to the proxy */ }
+  }
+  return { res: await proxyFetch(url, init), via: "proxy" };
+}
+
 export async function scanFrontierAddress(
   address: string, city: string, state: string, zip: string,
 ): Promise<ScanResult> {
@@ -159,19 +186,21 @@ export async function scanFrontierAddress(
   // ── Step 1: predictive address resolution ─────────────────────────────────
   const query = `${address}, ${city}, ${state}${zip ? ` ${zip}` : ""}`;
   let preds: FrontierPrediction[];
+  let via: "direct" | "proxy" = "proxy";
   try {
-    const res = await proxyFetch(
+    const { res, via: viaMode } = await frontierFetch(
       `${FRONTIER_API}/v2/serviceability/predictive?address=${encodeURIComponent(query)}`,
       { method: "GET", headers, signal: AbortSignal.timeout(6_000) },
     );
+    via = viaMode;
     if (res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500) {
-      void rotateProxySession(`frontier predictive ${res.status}`);
+      if (via === "proxy") void rotateProxySession(`frontier predictive ${res.status}`);
       base.blocked = true;
       base.notes = `Frontier predictive ${res.status} — Decodo session rotated, address requeued`;
       return base;
     }
     if (!res.ok) {
-      void rotateProxySession(`frontier predictive ${res.status}`);
+      if (via === "proxy") void rotateProxySession(`frontier predictive ${res.status}`);
       base.blocked = true;
       base.notes = `Frontier predictive ${res.status} — session rotated, requeued`;
       return base;
@@ -189,16 +218,91 @@ export async function scanFrontierAddress(
     base.notes = "Address not in Frontier fabric (no predictive match)";
     return base;
   }
-  // Prefer an in-footprint match in the same city; else any in-footprint; else
-  // out-of-footprint = definitively unserved by Frontier.
-  const inFoot = preds.filter((p) => p.inFootprint);
-  const pred = inFoot.find((p) => p.address.city.toLowerCase() === city.toLowerCase()) ?? inFoot[0];
+  // STRICT ADDRESS MATCH (2026-07-20, legitimacy fix). Frontier's predictive is
+  // FUZZY: it returns same-number/different-street neighbors (live example:
+  // "208 S Harrison Ave" → candidates "208 S Alston Ave [inFootprint]" etc.,
+  // with the exact address itself flagged inFootprint:false). Qualifying a
+  // NEIGHBOR and recording its verdict for the queried address mints false
+  // fiber leads. The verdict must come from the candidate that IS the queried
+  // address — same house number AND same street name (directional/suffix
+  // tolerant). An exact candidate flagged inFootprint=false is a definitive
+  // out-of-footprint verdict; no exact candidate = not in Frontier's fabric.
+  // Neighbor substitution is never acceptable.
+  const normStreet = (v: string) => v.toLowerCase().replace(/[.,#]/g, "").replace(/\s+/g, " ").trim();
+  const STOP = new Set(["st","ave","rd","dr","ln","ct","pl","blvd","cir","way","ter","pkwy","hwy","loop","trl","xng","n","s","e","w","street","avenue","road","drive","lane","court","place","boulevard","circle","terrace","parkway","highway","trail","crossing"]);
+  const wantedTokens = normStreet(address).split(" ");
+  const wantedNum = wantedTokens[0] ?? "";
+  const wantedName = wantedTokens.slice(1).filter((t) => !STOP.has(t));
+  const exact = preds.filter((p) => {
+    const cand = normStreet(String(p.address?.addressLine1 ?? ""));
+    if (!cand) return false;
+    const tok = cand.split(" ");
+    if ((tok[0] ?? "") !== wantedNum) return false;
+    const candSet = new Set(tok.slice(1).filter((t) => !STOP.has(t)));
+    return wantedName.every((t) => candSet.has(t));
+  });
+  const pred = exact.find((p) => p.inFootprint) ?? exact[0];
   if (!pred) {
+    // Direct egress from a datacenter IP gets POISONED predictive responses from
+    // Frontier's edge (every candidate flagged inFootprint:false) — that is not
+    // a footprint verdict. Never record no_service off a direct answer; requeue.
+    if (via === "direct") {
+      base.blocked = true;
+      base.notes = "Frontier predictive returned no in-footprint candidate via direct egress (edge-poisoned response) — requeued";
+      return base;
+    }
     base.fiberStatus = "no_service";
     base.apiSource = "kinetic_live";
     base.confidence = "HIGH";
-    base.notes = "Outside Frontier footprint";
+    base.notes = "Address not in Frontier fabric (no exact-address candidate — neighbor substitution refused)";
     return base;
+  }
+  if (!pred.inFootprint) {
+    if (via === "direct") {
+      base.blocked = true;
+      base.notes = "Frontier predictive edge-poisoned via direct egress (exact candidate flagged out-of-footprint) — requeued";
+      return base;
+    }
+    base.fiberStatus = "no_service";
+    base.apiSource = "kinetic_live";
+    base.confidence = "HIGH";
+    base.notes = "Outside Frontier footprint (exact address match)";
+    return base;
+  }
+
+  // Capture Frontier's serving-area fingerprint. controlNumber identifies the
+  // terminal/serving area the address hangs off of; fiber is built per serving
+  // area, so a cluster of fresh leads sharing one control number = an active
+  // build zone (stored as exchangeId "cn:<n>" → scan_targets.frontier_control
+  // → leads.exchange_id; the build-zone booster clusters on it).
+  //
+  // Gotcha (verified live): controlNumber only rides on candidates WITH a SAM
+  // record (existing service) — a fresh no-service address never carries one.
+  // Fiber Focus's trick: serving areas are contiguous, so inherit the NEAREST
+  // record-bearing neighbor's control number (same street preferred, then
+  // closest by lat/lng). Exact carries get "cn:<n>"; inferred get "cn~<n>".
+  {
+    const direct = pred.controlNumber ?? pred.samRecords?.[0]?.controlNumber;
+    if (direct) {
+      base.exchangeId = `cn:${direct}`;
+    } else {
+      const streetOf = (v: string) => v.toLowerCase().replace(/[.,#]/g, "").split(" ").slice(1).filter((t) => t.length > 2).join(" ");
+      const wantedStreet = streetOf(String(pred.address?.addressLine1 ?? ""));
+      const pLat = Number(pred.latitude), pLng = Number(pred.longitude);
+      let bestCn: string | null = null; let bestD = Number.POSITIVE_INFINITY;
+      for (const p of preds) {
+        const c = p.controlNumber ?? p.samRecords?.[0]?.controlNumber;
+        if (!c) continue;
+        let d = 5; // unknown coords — weak fallback
+        const lat = Number(p.latitude), lng = Number(p.longitude);
+        if (Number.isFinite(lat) && Number.isFinite(lng) && Number.isFinite(pLat) && Number.isFinite(pLng)) {
+          d = Math.hypot(lat - pLat, lng - pLng);
+        }
+        if (wantedStreet && streetOf(String(p.address?.addressLine1 ?? "")) === wantedStreet) d -= 10; // same street wins
+        if (d < bestD) { bestD = d; bestCn = c; }
+      }
+      if (bestCn) base.exchangeId = `cn~${bestCn}`;
+    }
   }
 
   // ── Step 2: serviceability qualification ──────────────────────────────────
@@ -224,8 +328,9 @@ export async function scanFrontierAddress(
     rawUserString: query,
   };
   let svc: FrontierServiceability;
+  let viaSvc: "direct" | "proxy" = "proxy";
   try {
-    const res = await proxyFetch(`${FRONTIER_API}/v3/serviceability`, {
+    const { res, via: viaSvcMode } = await frontierFetch(`${FRONTIER_API}/v3/serviceability`, {
       method: "POST",
       headers: {
         ...headers,
@@ -237,8 +342,9 @@ export async function scanFrontierAddress(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(6_000),
     });
+    viaSvc = viaSvcMode;
     if (res.status === 401 || res.status === 403 || res.status === 429 || res.status >= 500 || !res.ok) {
-      void rotateProxySession(`frontier serviceability ${res.status}`);
+      if (viaSvc === "proxy") void rotateProxySession(`frontier serviceability ${res.status}`);
       base.blocked = true;
       base.notes = `Frontier serviceability ${res.status} — Decodo session rotated, address requeued`;
       if (res.status === 403) structuredLog("scan.provider.access_denied", { status: 403, source: "frontier" }, "warn");
@@ -251,9 +357,20 @@ export async function scanFrontierAddress(
     return base;
   }
   if (svc.success === false) {
-    // Frontier's own error envelope (FTRError …) — a transient non-answer, not
-    // a serviceability verdict. Rotate and requeue; never recorded as no-service.
-    void rotateProxySession("frontier svc success=false");
+    // Frontier's own business verdict ("unserviceable-soft" redirect, e.g.
+    // NO_SAM_RECORD = in fabric but no service record) is a DEFINITIVE
+    // no-service answer, not a transient — record it, never requeue forever.
+    const redirectReason = String((svc as any).redirect?.reason ?? (svc as any).redirect?.scenario ?? "");
+    if (redirectReason) {
+      base.fiberStatus = "no_service";
+      base.apiSource = "kinetic_live";
+      base.confidence = "HIGH";
+      base.notes = `Not Frontier-serviceable (${redirectReason})`;
+      return base;
+    }
+    // Otherwise an FTRError transient envelope — rotate and requeue; never
+    // recorded as no-service.
+    if (viaSvc === "proxy") void rotateProxySession("frontier svc success=false");
     base.blocked = true;
     base.notes = `Frontier error envelope (${String(svc.errorMessage ?? "unknown").slice(0, 90)}) — session rotated, requeued`;
     return base;
@@ -262,7 +379,7 @@ export async function scanFrontierAddress(
   const out = classifyFrontierResponse(base, svc, pred);
   structuredLog("scan.frontier.classified", {
     carrier: "frontier", status: out.fiberStatus, billing: out.billingStatus,
-    plant: svc.plantType, tech: svc.techAvailable, session: getProxySessionId(),
+    plant: svc.plantType, tech: svc.techAvailable, via: viaSvc, session: viaSvc === "proxy" ? getProxySessionId() : 0,
   });
   return out;
 }
