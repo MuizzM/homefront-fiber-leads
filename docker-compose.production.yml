@@ -66,11 +66,11 @@ services:
       # ILEC territory, not Kinetic — every full-city OSM harvest there (Hillsborough
       # alone pulled 37,924 addresses) was pure proxy + event-loop cost with zero
       # Kinetic yield, and the giant synchronous upserts destabilized the 1-CPU box.
-      EXPLORE_CITIES: ""
+      EXPLORE_CITIES: "davidson:nc"
       # "Right away" corridor scan (user 2026-07-18): DISCOVERY-class runs over
       # EXISTING stale targets, 2 min after boot — no harvest wait. Explore above
       # still harvests the never-enumerated towns (olivia has zero targets).
-      PRIORITY_CITIES: ""
+      PRIORITY_CITIES: "davidson:nc,cornelius:nc,huntersville:nc,mooresville:nc"
       # ── Copper-switch watch (2026-07-18) ─────────────────────────────────
       # Legacy Kinetic ILEC copper towns re-sweep every 72h (was 336h) so a
       # copper→fiber switch-on is caught within days, not weeks; SW-Chatham CAB
