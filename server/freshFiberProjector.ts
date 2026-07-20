@@ -65,9 +65,9 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const filter = ids.length ? `AND s.id IN (${ids.map(() => "?").join(",")})` : "";
   const candidates = rawDb.prepare(`
     SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,s.last_fiber_available,
-           s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,s.carrier,
+           s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,s.carrier,s.frontier_control,
            EXISTS(SELECT 1 FROM availability_snapshots f WHERE f.scan_target_id=s.id AND f.tenant_id=? AND f.fresh=1 AND f.conclusive=1) AS proven_flip,
-           latest.max_download_mbps,latest.household_segment_type,latest.billing_status
+           latest.max_download_mbps,latest.household_segment_type,latest.billing_status,latest.service_status
       FROM scan_targets s
       -- Latest CONCLUSIVE snapshot, ordered by the canonical epoch (never raw text).
       -- A failed/inconclusive attempt is excluded, so it can never outrank or mask a
@@ -83,7 +83,15 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
        -- needed to be considered).
        AND (s.first_seen_fiber_at IS NOT NULL
             OR (upper(COALESCE(latest.household_segment_type,''))='NEW FIBER'
-                AND upper(COALESCE(latest.billing_status,''))='N')) ${filter}
+                AND upper(COALESCE(latest.billing_status,''))='N'))
+       -- CROSS-CARRIER CONTAMINATION GUARD: the Kinetic observation path stamps
+       -- fiber state on shared targets regardless of carrier. A frontier lead
+       -- may ONLY be published from an actual Frontier serviceability verdict
+       -- (notes start "Frontier fiber live"); Kinetic-fabric verdicts on a
+       -- frontier-tagged target are NOT Frontier leads — observed live
+       -- re-minting hundreds of false red pins after the strict cleanup.
+       AND (COALESCE(s.carrier,'') <> 'frontier'
+            OR latest.service_status LIKE 'Frontier fiber live%') ${filter}
      ORDER BY s.id`).all(tenantId, tenantId, tenantId, ...ids) as ProjectionCandidate[];
 
   const evidenceStmt = rawDb.prepare(`SELECT source,observed_at AS observedAt,availability,technology
@@ -131,9 +139,9 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     (address,city,state,zip,lat,lng,fiber_status,max_download_mbps,is_new_deployment,is_new_fiber,is_tenured,
      household_segment_type,billing_status,lead_status,notes,deployment_notes,lead_tag,lead_score,tenant_id,
      source_scan_target_id,fresh_confirmed_at,fresh_confidence,fresh_sources,assigned_rep_id,assigned_territory_id,
-     assignment_source,assigned_at,created_at,updated_at,carrier,canonical_key)
+     assignment_source,assigned_at,created_at,updated_at,carrier,exchange_id,canonical_key)
     VALUES (?,?,?,?,?,?,?,?,1,1,0,?,?,'prospect',?,?, 'fresh_fiber_confirmed',100,?,?,?,?,?,?,?,'fresh-fiber-territory',
-      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'),?,?)
+      CASE WHEN ? IS NULL THEN NULL ELSE datetime('now') END,datetime('now'),datetime('now'),?,?,?)
     ON CONFLICT(tenant_id, canonical_key) WHERE canonical_key IS NOT NULL
       DO UPDATE SET updated_at=datetime('now')
     RETURNING id`);
@@ -219,18 +227,23 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         // signal so an authoritative lead is never blocked by a null-segment row.
         const leadSegment = candidate.household_segment_type ?? (authoritativeFresh ? "NEW FIBER" : candidate.last_fiber_status);
         const leadBilling = candidate.billing_status ?? candidate.last_billing_status ?? (authoritativeFresh ? "N" : null);
+        // Carrier-honest copy: Frontier leads were being stamped "Kinetic fiber"
+        // (hardcoded below), which read as a wrong-carrier verdict on red pins.
+        const carrierName = (candidate as any).carrier === "frontier" ? "Frontier" : "Kinetic";
         const created = insert.get(
           candidate.address, candidate.city, candidate.state, candidate.zip ?? "", candidate.lat, candidate.lng,
           candidate.last_fiber_status ?? "new_fiber", candidate.max_download_mbps,
           leadSegment, leadBilling,
-          "Confirmed fresh Kinetic fiber with no active-service signal.",
+          `Confirmed fresh ${carrierName} fiber with no active-service signal.`,
           decision.sources.length >= 2
             ? `Unavailable-to-fiber flip; independently confirmed by ${decision.sources.slice(1).join(", ")}.`
-            : "NEW FIBER + billing N (authoritative Kinetic new-build signal).",
+            : `NEW FIBER + billing N (authoritative ${carrierName} new-build signal).`,
           tenantId, candidate.id, decision.confirmedAt, confidence, JSON.stringify(decision.sources),
           assignment?.repId ?? null, assignment?.territoryId ?? null,
           assignment?.repId ?? null,
           (candidate as any).carrier ?? "kinetic",
+          // Frontier serving-area fingerprint (controlNumber) → build-zone clusters.
+          (candidate as any).frontier_control ?? null,
           // Canonical key — a concurrent projector (multi-process) that already
           // created this address resolves via ON CONFLICT to the SAME id instead
           // of a duplicate pin.

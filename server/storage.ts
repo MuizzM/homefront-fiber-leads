@@ -1695,6 +1695,8 @@ export function runMigrations() {
     `ALTER TABLE scan_targets ADD COLUMN carrier TEXT NOT NULL DEFAULT 'kinetic'`,
     `ALTER TABLE leads ADD COLUMN carrier TEXT NOT NULL DEFAULT 'kinetic'`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_carrier_city ON scan_targets(carrier, lower(city), state)`,
+    `ALTER TABLE scan_targets ADD COLUMN frontier_control TEXT`,
+    `CREATE INDEX IF NOT EXISTS idx_scan_targets_frontier_control ON scan_targets(frontier_control)`,
     // ── Coming-Soon watchlist ─────────────────────────────────────────────────
     // One row per address the provider says is pre-launch (COMING SOON segment or
     // NEW FIBER + active billing — the existing scanner 'coming_soon' rule).
@@ -2917,7 +2919,7 @@ export class Storage implements IStorage {
   }
   // Record a primary-provider scan result. Returns the previous classification so
   // callers can detect a change; publication still requires independent evidence.
-  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; accessId?: string | null; serviceKey?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean } {
+  recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; accessId?: string | null; serviceKey?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[]; frontierControl?: string | null }): { prevIsNewFiber: boolean } {
     const prev = rawDb.prepare("SELECT last_is_new_fiber, last_fiber_status, last_billing_status FROM scan_targets WHERE id = ?").get(id) as any;
     rawDb.prepare(
       `UPDATE scan_targets SET last_fiber_status=@fs, last_is_new_fiber=@nf, last_billing_status=@bs,
@@ -2927,6 +2929,7 @@ export class Storage implements IStorage {
          last_customer_confidence=COALESCE(@customerConfidence,last_customer_confidence),
          last_customer_signals=COALESCE(@customerSignals,last_customer_signals),
          df_address_id=COALESCE(@df, df_address_id),
+         frontier_control=COALESCE(@frontierControl, frontier_control),
          converted_to_lead_id=COALESCE(@lead, converted_to_lead_id),
          last_availability_status=COALESCE(@avail, last_availability_status),
          -- first-seen-LIVE marks a proven unavailable→fiber flip (the "Newly Lit" signal).
@@ -2942,6 +2945,7 @@ export class Storage implements IStorage {
     ).run({
       id, fs: r.fiberStatus ?? null, nf: r.isNewFiber ? 1 : 0, bs: r.billingStatus ?? null,
       df: r.dfAddressId ?? null, accessId: r.accessId ?? null, serviceKey: r.serviceKey ?? null,
+      frontierControl: r.frontierControl ?? null,
       lead: r.convertedToLeadId ?? null,
       avail: r.availabilityStatus ?? null, newly: r.newlyLive ? 1 : 0,
       fiberAvailable: r.fiberAvailable == null ? null : (r.fiberAvailable ? 1 : 0),
