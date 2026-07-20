@@ -7,11 +7,11 @@ import fs from "node:fs";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hf-harvest-"));
 vi.mock("../../server/scanService", () => ({ startTargetRun: vi.fn(() => ({ runId: "run_test", queued: 0, budget: 0 })) }));
 
-let tierA: any, tierB: any, tierC: any, tierD: any, rawDb: any;
+let tierA: any, tierB: any, tierC: any, tierD: any, tierC0: any, tierD1: any, rawDb: any;
 
 beforeAll(async () => {
   ({ rawDb } = await import("../../server/db"));
-  ({ tierA, tierB, tierC, tierD } = await import("../../server/freshHarvest"));
+  ({ tierA, tierB, tierC, tierD, tierC0, tierD1 } = await import("../../server/freshHarvest"));
   rawDb.exec(`
     DROP TABLE IF EXISTS leads;
     DROP TABLE IF EXISTS scan_targets;
@@ -43,6 +43,11 @@ beforeAll(async () => {
   // Target 14: watchlist due → Tier A
   insT.run(14,"14 Watch Dr","hotville","nc","27501",35.01,-79.01,null,null);
   rawDb.prepare("INSERT INTO coming_soon_watchlist (tenant_id,scan_target_id,status,last_checked_at) VALUES (1,14,'active',?)").run(Date.now()-7*3600_000);
+  // Target 15: never scanned, PRIORITY city (davidson) → Tier C0
+  insT.run(15,"15 Davidson Rd","davidson","nc","28035",35.49,-80.84,null,null);
+  // Target 16: COPPER in hotville, 10 days stale → Tier D1 (copper-flip watch)
+  insT.run(16,"16 Copper Ct","hotville","nc","27501",35.01,-79.02,"2026-07-05 00:00:00","copper");
+  process.env.PRIORITY_CITIES = "davidson:nc";
 });
 
 describe("fresh harvest tiers", () => {
@@ -66,12 +71,22 @@ describe("fresh harvest tiers", () => {
     const rows = tierD(1, 100).map((r: any) => r.id);
     expect(rows).toEqual([13]);
   });
+  it("Tier C0 picks never-scanned in priority cities", () => {
+    const rows = tierC0(1, 100).map((r: any) => r.id);
+    expect(rows).toEqual([15]);
+  });
+  it("Tier D1 picks stale copper in fresh-dense cities (flip watch)", () => {
+    const rows = tierD1(1, 100).map((r: any) => r.id);
+    expect(rows).toEqual([16]);
+  });
   it("budget top-down: A before B before C before D, no duplicates", async () => {
     const { runHarvestCycle } = await import("../../server/freshHarvest");
-    const counts = runHarvestCycle(1, 2); // budget 2 → only tier A + one of B
+    const counts = runHarvestCycle(1, 3); // budget 3 → A + B + C0
     expect(counts.a).toBe(1);
     expect(counts.b).toBe(1);
+    expect(counts.c0).toBe(1);
     expect(counts.c).toBe(0);
+    expect(counts.d1).toBe(0);
     expect(counts.d).toBe(0);
   });
 });

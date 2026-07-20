@@ -884,8 +884,14 @@ app.use((req, res, next) => {
         // (carrier, lower(city), state) serves it — '<>frontier' full-scanned the
         // 884k-row table inside one write txn per town and wedged the DB writer.
         rawDb.prepare(`UPDATE scan_targets SET carrier='frontier' WHERE carrier='kinetic' AND lower(city)=? AND lower(state)=?`).run(city, st);
+        // Verdict-aware re-check windows (Decodo budget guard): never-scanned
+        // first; negative verdicts weekly; unknown/blocked daily. Confirmed
+        // fiber and existing-service addresses are KNOWN states — re-checking
+        // them every 30 minutes burned thousands of proxy calls for zero yield.
         const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE carrier='frontier' AND lower(city)=? AND lower(state)=?
-          AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-30 minutes'))
+          AND (last_scanned_at IS NULL
+               OR (COALESCE(last_fiber_status,'') IN ('no_service','copper') AND last_scanned_at < datetime('now','-7 days'))
+               OR (COALESCE(last_fiber_status,'')='' AND last_scanned_at < datetime('now','-1 day')))
           ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT 5000`)
           .all(city, st) as any[]).map((r) => Number(r.id));
         if (ids.length) {
