@@ -47,6 +47,13 @@ const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
 const TIER_D_STALE_DAYS = 30;
 
+// State focus: only these states get harvest budget (FRESH_HARVEST_STATES,
+// default NC + SC — the Kinetic build footprint). Frontier scanning is off.
+const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc")
+  .split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+const STATE_IN = FOCUS_STATES.map(() => "?").join(",");
+const stateArgs = () => [...FOCUS_STATES];
+
 interface TierRow { id: number }
 
 /** Tier A: coming-soon watchlist entries due for re-check. */
@@ -81,9 +88,10 @@ export function tierB(tenantId: number, limit: number): TierRow[] {
          ON ROUND(s.lat,2)=fc.clat AND ROUND(s.lng,2)=fc.clng
       WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
         AND s.lat IS NOT NULL AND s.lng IS NOT NULL
+        AND lower(s.state) IN (${STATE_IN})
       ORDER BY fc.hits DESC, s.id ASC
       LIMIT ?`,
-  ).all(tenantId, tenantId, limit) as TierRow[];
+  ).all(tenantId, tenantId, ...stateArgs(), limit) as TierRow[];
 }
 
 /** Tier C0: never-scanned targets in explicitly configured priority cities. */
@@ -121,9 +129,10 @@ export function tierD1(tenantId: number, limit: number): TierRow[] {
       WHERE s.tenant_id=? AND COALESCE(s.last_fiber_status,'')='copper'
         AND s.last_scanned_at IS NOT NULL
         AND s.last_scanned_at < datetime('now','-${TIER_D1_COPPER_DAYS} days')
+        AND lower(s.state) IN (${STATE_IN})
       ORDER BY s.last_scanned_at ASC
       LIMIT ?`,
-  ).all(tenantId, tenantId, limit) as TierRow[];
+  ).all(tenantId, tenantId, ...stateArgs(), limit) as TierRow[];
 }
 
 /** Tier C: never-scanned targets in cities ranked by 21-day fresh density. */
@@ -141,9 +150,10 @@ export function tierC(tenantId: number, limit: number): TierRow[] {
        FROM scan_targets s
        JOIN hot_cities hc ON lower(s.city)=hc.city AND lower(s.state)=hc.state
       WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
+        AND lower(s.state) IN (${STATE_IN})
       ORDER BY hc.hits DESC, s.id ASC
       LIMIT ?`,
-  ).all(tenantId, tenantId, limit) as TierRow[];
+  ).all(tenantId, tenantId, ...stateArgs(), limit) as TierRow[];
 }
 
 /** Tier D: stale no_service/copper verdicts, oldest first. */
@@ -156,9 +166,10 @@ export function tierD(tenantId: number, limit: number): TierRow[] {
         AND s.last_scanned_at IS NOT NULL
         AND s.last_scanned_at < datetime('now','-${TIER_D_STALE_DAYS} days')
         AND COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+        AND lower(s.state) IN (${STATE_IN})
       ORDER BY s.last_scanned_at ASC
       LIMIT ?`,
-  ).all(tenantId, limit) as TierRow[];
+  ).all(tenantId, ...stateArgs(), limit) as TierRow[];
 }
 
 /**
