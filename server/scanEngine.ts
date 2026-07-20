@@ -125,7 +125,16 @@ export function dispatchRun(runId: string, tenantId: number, checker?: Checker):
   if (activeRuns.has(runId) || _runQueued.has(runId)) return;
   if (activeRuns.size >= MAX_ACTIVE_RUN_WORKERS) {
     _runQueued.add(runId);
-    _runQueue.push({ runId, tenantId, checker });
+    // Revenue-class runs (frontier/manual/lasso/new-build/discovery) JUMP the
+    // FIFO: bulk backlog (statewide/market/recheck) would otherwise starve them
+    // for hours behind 16 busy worker slots. Non-revenue keeps FIFO order.
+    let revenue = false;
+    try {
+      const r = getRun(runId, tenantId);
+      revenue = !!r && isRevenueAdmissionClass(providerPriorityForRun((r as any).kind ?? ""));
+    } catch { /* lookup is best-effort; FIFO fallback is safe */ }
+    if (revenue) _runQueue.unshift({ runId, tenantId, checker });
+    else _runQueue.push({ runId, tenantId, checker });
     return;
   }
   void runScanWorker(runId, tenantId, checker);
@@ -175,6 +184,11 @@ function dedupSkipSecondsForRun(kind: string): number {
   // (the Coming-Soon watchlist's 'coming_soon_watch' cadence — down to 6h — would
   // otherwise be silently swallowed by the 18h bulk dedup window).
   if (v.includes("recheck") || v.includes("rescan") || v.includes("nightly") || v.includes("scheduled") || v.includes("monitor") || v.includes("watch")) return 0;
+  // Frontier runs check a DIFFERENT provider than the Kinetic sweeps — a recent
+  // Kinetic verdict says nothing about Frontier serviceability. Without this,
+  // Kinetic's constant last_scanned_at refreshes starved every frontier_hot run
+  // into claiming 0 targets and finishing "done" with 0 checks (observed live).
+  if (v.includes("frontier")) return 0;
   return DEDUP_RECHECK_SEC;
 }
 
@@ -189,6 +203,10 @@ function providerPriorityForRun(kind: string): ProviderRequestPriority {
   // NEW_BUILD — newly-detected construction/permits + Coming Soon rechecks.
   if (value.includes("coming_soon") || value.includes("comingsoon")) return "coming_soon";
   if (value.includes("new_build") || value.includes("newbuild") || value.includes("permit")) return "new_build";
+  // FRONTIER — Frontier fiber sweeps are revenue work (red leads), not bulk:
+  // without this frontier_hot fell through to "market" and starved behind the
+  // statewide Kinetic backlog.
+  if (value.includes("frontier")) return "discovery";
   // DISCOVERY — address/market discovery that surfaces fresh leads.
   if (value.includes("discovery") || value.includes("fresh")) return "discovery";
   // MAINTENANCE — stale + statewide baseline (share-capped bulk).
@@ -543,6 +561,8 @@ function applyCheck(
     dfAddressId: result.dfAddressId,
     accessId: result.accessId,
     serviceKey: result.serviceKey,
+    // Frontier serving-area fingerprint ("cn:<controlNumber>"); null on Kinetic.
+    frontierControl: (result as any).exchangeId ?? null,
     availabilityStatus: legacyAvailabilityStatus(fiberTransition.status),
     newlyLive: fiberTransition.fresh,
     customerSegment: customer.segment,
