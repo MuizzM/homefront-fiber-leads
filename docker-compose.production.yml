@@ -170,6 +170,13 @@ services:
       ANF_BACKFILL: "off"
       STATEWIDE_SCAN_ON_DEPLOY: "off"
       HOT_MARKETS: "off"
+      # FRESH HARVEST — continuous Kinetic scanning ranked by expected yield
+      # (coming-soon flips → fresh-cluster neighbors → hot-city frontier →
+      # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
+      # health, so it runs 24/7 with zero site impact. off to disable.
+      FRESH_HARVEST: "on"
+      FRESH_HARVEST_BUDGET: "4000"
+      ADAPTIVE_PACE: "on"
       FRONTIER_DIRECT: "off"
       FRONTIER_MARKETS: "durham:nc,chapel hill:nc,carrboro:nc,hillsborough:nc,morrisville:nc,cary:nc,apex:nc,raleigh:nc,garner:nc,wake forest:nc,holly springs:nc,mebane:nc,burlington:nc,graham:nc,pittsboro:nc,siler city:nc,butner:nc,creedmoor:nc,oxford:nc,zebulon:nc,clayton:nc,fuquay-varina:nc"
       COMING_SOON_PROGRAM: "off"

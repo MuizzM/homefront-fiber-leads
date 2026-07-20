@@ -19,6 +19,7 @@ import {
 import { scanFrontierAddress } from "./frontierScanner";
 import { emitStage } from "./scanStageBus";
 import { isRevenueAdmissionClass, AdmissionTimeoutError } from "./distributedProviderCoordinator";
+import { adaptivePace } from "./adaptivePace";
 import { triggerExpansionForTargets } from "./clusterExpansion";
 import crypto from "node:crypto";
 import { storage } from "./storage";
@@ -283,6 +284,11 @@ export async function runScanWorker(
       // addresses (fail-closed transport) would otherwise chain microtasks forever
       // and starve timers/cancels. One setImmediate per batch costs ~nothing.
       await new Promise(resolve => setImmediate(resolve));
+      // Website-safety feedback loop: when the event loop or health probe shows
+      // stress, every worker injects a shared, smoothly-adjusting delay between
+      // batches (AIMD). The fleet can run continuously at max safe throughput —
+      // it contracts before users feel it and re-expands when the site is idle.
+      await adaptivePace();
       if (batch.length === 0) {
         finish(run, "done");
         return;

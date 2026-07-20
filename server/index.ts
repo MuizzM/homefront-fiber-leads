@@ -915,6 +915,30 @@ app.use((req, res, next) => {
     if (typeof (frontierCycle as any).unref === "function") frontierCycle.unref();
   }
 
+  // FRESH HARVEST — Kinetic yield-ranked continuous scanning (fresh + coming-soon
+  // focus). Every cycle ranks all due work into four tiers (coming-soon flip
+  // watch → fresh-cluster neighbors → hot-city frontier → stale re-checks) and
+  // spends the budget top-down. Throughput self-regulates via adaptivePace
+  // (event-loop lag + health probe), so this runs CONTINUOUSLY with zero
+  // website impact. FRESH_HARVEST=off disables.
+  if (process.env.FRESH_HARVEST !== "off") {
+    const harvestTick = async () => {
+      try {
+        const { getDefaultTenantId } = await import("./storage");
+        const { runHarvestCycle } = await import("./freshHarvest");
+        const tid = getDefaultTenantId();
+        if (tid != null) runHarvestCycle(tid);
+      } catch (e: any) { console.warn("[fresh-harvest] skipped:", e?.message); }
+    };
+    // First cycle 4 min after boot (after Kinetic hot burst + Frontier burst).
+    setTimeout(() => { void harvestTick(); }, 4 * 60_000);
+    const harvestInterval = setInterval(
+      () => { void harvestTick(); },
+      Math.max(5, Number(process.env.FRESH_HARVEST_INTERVAL_MIN) || 15) * 60_000,
+    );
+    if (typeof (harvestInterval as any).unref === "function") harvestInterval.unref();
+  }
+
   // FRONTIER BUILD ZONES — controlNumber serving-area clustering (the Fiber Focus
   // playbook). Frontier builds fiber per serving area (controlNumber); every
   // strict Frontier verdict carries its "cn:<n>" fingerprint. When a serving area
