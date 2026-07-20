@@ -943,6 +943,21 @@ app.use((req, res, next) => {
       Math.max(5, Number(process.env.FRESH_HARVEST_INTERVAL_MIN) || 15) * 60_000,
     );
     if (typeof (harvestInterval as any).unref === "function") harvestInterval.unref();
+
+    // ECONOMY REPORT — every 6h, log proxy-call efficiency: checks, block
+    // rate, fresh verdicts, fresh leads, and calls-per-fresh-lead so we can
+    // prove (and tune) the value of every Decodo call spent.
+    const economyTick = async () => {
+      try {
+        const { getDefaultTenantId } = await import("./storage");
+        const { emitEconomyReport } = await import("./freshHarvest");
+        const tid = getDefaultTenantId();
+        if (tid != null) emitEconomyReport(tid);
+      } catch (e: any) { console.warn("[fresh-harvest] economy report skipped:", e?.message); }
+    };
+    setTimeout(() => { void economyTick(); }, 10 * 60_000);
+    const economyInterval = setInterval(() => { void economyTick(); }, 6 * 3_600_000);
+    if (typeof (economyInterval as any).unref === "function") economyInterval.unref();
   }
 
   // FRONTIER BUILD ZONES — controlNumber serving-area clustering (the Fiber Focus
