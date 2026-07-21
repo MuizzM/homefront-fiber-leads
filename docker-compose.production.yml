@@ -50,7 +50,7 @@ services:
       # One-burst-per-24h: re-check legacy "green" targets that lack an authoritative
       # conclusive NEW-FIBER+N snapshot so they become real assignable pins. Runs as
       # MAINTENANCE-class recheck (share-capped; never crowds revenue checks).
-      GREEN_REVERIFY: "off"
+      GREEN_REVERIFY: "on"
       # Rumor-driven territory probes (bounded city sweeps, MAINTENANCE class,
       # idempotent per city, 2 starts/15min tick — see server/exploreCities.ts).
       # Durham tip 2026-07-18: research (directory + Uniti build reports + ILEC/OCN
@@ -70,7 +70,7 @@ services:
       # "Right away" corridor scan (user 2026-07-18): DISCOVERY-class runs over
       # EXISTING stale targets, 2 min after boot — no harvest wait. Explore above
       # still harvests the never-enumerated towns (olivia has zero targets).
-      PRIORITY_CITIES: "davidson:nc,cornelius:nc,huntersville:nc,mooresville:nc"
+      PRIORITY_CITIES: "broadway:nc,lexington:nc,sanford:nc,concord:nc,kannapolis:nc,salisbury:nc,rockwell:nc,davidson:nc,cornelius:nc,huntersville:nc,mooresville:nc,china grove:nc,landis:nc"
       # ── Copper-switch watch (2026-07-18) ─────────────────────────────────
       # Legacy Kinetic ILEC copper towns re-sweep every 72h (was 336h) so a
       # copper→fiber switch-on is caught within days, not weeks; SW-Chatham CAB
@@ -166,7 +166,7 @@ services:
       # (d) finalizeAddressNotFoundBacklog is async + chunk-yielding. ANF_BACKFILL
       # terminalizes the exhausted needs-fix tail (the ~81%-of-checks churn);
       # FRESH_LEAD_BOOT_BACKFILL promotes existing greens straight to the map.
-      FRESH_LEAD_BOOT_BACKFILL: "off"
+      FRESH_LEAD_BOOT_BACKFILL: "on"
       ANF_BACKFILL: "off"
       # ── GA / SC FEEDER ROLLOUT (partial: light feeders ON, heavy ones staged) ──
       # These producers put GA/SC addresses INTO scan_targets. Paused during the
