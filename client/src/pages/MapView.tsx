@@ -109,6 +109,7 @@ import { useCan } from "@/lib/capabilities";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
   discoveryIdempotencyKey,
+  isBackgroundDiscoveryJob,
   isTerminalDiscoveryJob,
   type DiscoveryEvent,
 } from "@/lib/discoveryApi";
@@ -582,6 +583,10 @@ export default function MapView() {
   const scanStartInFlightRef = useRef(false);
   const [scanSubmitting, setScanSubmitting] = useState(false);
   const terminalJobsHandledRef = useRef(new Set<string>());
+  // The operator can minimize the scan sheet while their scan keeps running —
+  // it collapses to a small progress pill (tap to re-open). Reset on submit
+  // and when a scan reaches its terminal summary.
+  const [scanSheetHidden, setScanSheetHidden] = useState(false);
 
   // ── Scan lifecycle — a completed scan is a first-class RESULT, not just the
   // absence of a spinner. `scanOutcome` drives the control's success / empty /
@@ -718,11 +723,20 @@ export default function MapView() {
   const { user } = useAuth();
   const canSubmitScan = useCan("scan.submit");
   const discovery = useDiscoveryJobs(!!user && canSubmitScan);
-  const activeDiscoveryJobs = discovery.activeJobs;
-  const scanning = activeDiscoveryJobs.length > 0;
+  // FIELD scans only — the boxes drawn on THIS map. The server's recurring
+  // hot-market/frontier town harvests also stream through the same tenant job
+  // feed; binding the sheet to them kept "Scanning fiber" pinned up 24/7,
+  // hid the Scan Map button, and made Stop cancel a background job.
+  const activeFieldScanJobs = useMemo(
+    () => discovery.activeJobs.filter((j) => !isBackgroundDiscoveryJob(j)),
+    [discovery.activeJobs],
+  );
+  const scanning = activeFieldScanJobs.length > 0;
   // The scan whose summary the compact sheet shows: the live job while running,
-  // else the most-recent job (its terminal counts) until the sheet dismisses.
-  const scanSummaryJob = activeDiscoveryJobs[0] ?? discovery.jobs[0] ?? null;
+  // else the most-recent FIELD job (its terminal counts) until the sheet dismisses.
+  const scanSummaryJob = activeFieldScanJobs[0]
+    ?? discovery.jobs.find((j) => !isBackgroundDiscoveryJob(j))
+    ?? null;
   // Six-number field summary. discovered/checked/fresh/failed come straight off
   // the durable job; serviceActive/comingSoon are optional server-provided counts
   // (present once the job payload carries them) and default to 0 meanwhile.
@@ -2844,6 +2858,7 @@ export default function MapView() {
       if (!mapReady || scanStartInFlightRef.current || scanning || !canSubmitScan) return;
       scanStartInFlightRef.current = true;
       setScanSubmitting(true);
+      setScanSheetHidden(false);
       const scopeKey = boxKeyOf(bbox)!;
       const geometry = {
         type: "Polygon" as const,
@@ -3141,6 +3156,7 @@ export default function MapView() {
     let checked = 0;
     for (const job of discovery.jobs) {
       if (
+        isBackgroundDiscoveryJob(job) || // background harvests never pop a scan sheet
         !isTerminalDiscoveryJob(job) ||
         terminalJobsHandledRef.current.has(job.id)
       )
@@ -3152,6 +3168,7 @@ export default function MapView() {
       publishedLeadIdsByJobRef.current.delete(job.id);
     }
     if (handled) {
+      setScanSheetHidden(false); // a finished scan re-surfaces its summary
       setScanOutcome({
         kind: found > 0 ? "success" : "complete",
         found,
@@ -3937,7 +3954,25 @@ export default function MapView() {
       {/* ── Compact scan sheet (Mobbin pattern) — a bottom-center card that shows
              live progress then the summary. Never a full-screen takeover; the
              map stays visible behind it. ── */}
+      {/* Minimized: the scan keeps running server-side; a small pill restores the sheet. */}
+      {scanSheetHidden && (scanning || scanSubmitting) && canSubmitScan && (
+        <button
+          type="button"
+          onClick={() => setScanSheetHidden(false)}
+          style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
+          className="glass-capsule absolute left-1/2 z-30 flex h-11 -translate-x-1/2 items-center gap-2 border-emerald-300/40 px-4 text-[13px] font-semibold text-white transition active:scale-95"
+          data-testid="scan-minimized-pill"
+          aria-label="Show scan progress"
+        >
+          <Loader2 className="h-4 w-4 animate-spin text-emerald-400" />
+          {scanSummary && scanSummary.discovered > 0
+            ? `Scanning ${scanSummary.checked.toLocaleString()}/${scanSummary.discovered.toLocaleString()}`
+            : "Scanning…"}
+        </button>
+      )}
+
       {(scanSubmitting || scanning || (scanOutcome && !scanStale)) &&
+        !scanSheetHidden &&
         canSubmitScan &&
         scanSummary && (
           <div
@@ -3973,17 +4008,29 @@ export default function MapView() {
                   </div>
                 </div>
                 {scanning || scanSubmitting ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const id = activeDiscoveryJobs[0]?.id;
-                      if (id) void discovery.cancel(id);
-                    }}
-                    className="h-8 shrink-0 rounded-full px-3 text-[12px] font-semibold text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
-                    data-testid="scan-stop"
-                  >
-                    Stop
-                  </button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const id = activeFieldScanJobs[0]?.id;
+                        if (id) void discovery.cancel(id);
+                      }}
+                      className="h-8 shrink-0 rounded-full px-3 text-[12px] font-semibold text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+                      data-testid="scan-stop"
+                    >
+                      Stop
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScanSheetHidden(true)}
+                      aria-label="Minimize scan progress (scan keeps running)"
+                      title="Minimize — the scan keeps running"
+                      className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
+                      data-testid="scan-minimize"
+                    >
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
                 ) : (
                   <button
                     type="button"
