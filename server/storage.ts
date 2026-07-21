@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
-import { normalizeKineticAddressKey } from "./addressKey";
+import { normalizeKineticAddressKey, NORMALIZATION_VERSION } from "./addressKey";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -1780,13 +1780,26 @@ function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void 
   const cols = new Set((raw.prepare(`PRAGMA table_info(leads)`).all() as { name: string }[]).map(c => c.name));
   if (!cols.has("canonical_key")) return; // ALTER didn't land yet — try next boot
 
-  // (a) Backfill canonical_key for any lead missing it. CRITICAL ORDER: when
-  // there are keys to backfill, DROP the UNIQUE index first — otherwise setting
-  // the same key on two duplicate rows violates a pre-existing index (from an
-  // earlier run) before the merge can collapse them. The index is (re)built at
-  // the end, after dups are gone. Steady-state boots have nothing to backfill,
-  // so this whole block is skipped and the index is left untouched.
-  const needKey = raw.prepare(`SELECT id, address, city, state, zip FROM leads WHERE canonical_key IS NULL`).all() as Array<{ id: number; address: string; city: string; state: string; zip: string | null }>;
+  // Normalization-version gate: when the address alias table changes (e.g. a new
+  // street-suffix synonym), existing keys were computed with the OLD rules and
+  // must be re-derived so newly-equivalent addresses ("Oak Circle" ≡ "Oak Cir")
+  // collapse. Re-keying ALL leads once per version bump is idempotent — the
+  // stored version below guards against re-running.
+  raw.exec(`CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  const storedVer = Number((raw.prepare(`SELECT value FROM schema_meta WHERE key='address_norm_version'`).get() as any)?.value ?? 0);
+  const rekeyAll = storedVer < NORMALIZATION_VERSION;
+
+  // (a) Derive canonical_key. Normally only rows missing it; on a normalization
+  // bump, EVERY row (its old key is stale). CRITICAL ORDER: when there are keys
+  // to (re)write, DROP the UNIQUE index first — otherwise setting the same key
+  // on two duplicate rows violates a pre-existing index before the merge can
+  // collapse them. The index is (re)built at the end, after dups are gone.
+  // Steady-state boots (no bump, no NULLs) skip this block and leave the index.
+  const needKey = raw.prepare(
+    rekeyAll
+      ? `SELECT id, address, city, state, zip FROM leads`
+      : `SELECT id, address, city, state, zip FROM leads WHERE canonical_key IS NULL`,
+  ).all() as Array<{ id: number; address: string; city: string; state: string; zip: string | null }>;
   if (needKey.length) {
     raw.exec(`DROP INDEX IF EXISTS idx_leads_canonical`);
     const setKey = raw.prepare(`UPDATE leads SET canonical_key=? WHERE id=?`);
@@ -1872,6 +1885,14 @@ function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void 
   const idxOk = raw.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_leads_canonical'`).get();
   if (!idxOk) console.warn("[migration] CRITICAL: idx_leads_canonical was NOT created — duplicate leads are still possible");
   else console.log("[migration] idx_leads_canonical UNIQUE index active — duplicate pins now structurally impossible");
+
+  // Record the normalization version last — only after a clean re-key + merge +
+  // index, so a crash mid-migration re-runs it next boot rather than skipping.
+  if (rekeyAll) {
+    raw.prepare(`INSERT INTO schema_meta (key, value) VALUES ('address_norm_version', ?)
+                 ON CONFLICT(key) DO UPDATE SET value=excluded.value`).run(String(NORMALIZATION_VERSION));
+    console.log(`[migration] address normalization re-keyed to v${NORMALIZATION_VERSION}`);
+  }
 }
 
 // ── Default-tenant bootstrap ─────────────────────────────────────────────────
