@@ -123,7 +123,7 @@ export function LeadsInViewPanel({
           <h2 className="text-[13px] font-semibold text-white flex-1 truncate" data-testid="leads-panel-count">
             {leads.length.toLocaleString()} in view
             <span className="text-white/50 font-normal"> · {totalOnMap.toLocaleString()} total</span>
-            {filtered && <span className="ml-1.5 text-[10px] font-semibold text-teal-300">filtered</span>}
+            {filtered && <span className="ml-1.5 text-2xs font-semibold text-teal-300">filtered</span>}
           </h2>
           <button
             onClick={onClose}
@@ -189,7 +189,7 @@ export function LeadsInViewPanel({
                           <span aria-hidden="true">·</span>
                           <span className="truncate">{rep ?? "Unassigned"}</span>
                           {l.fiberStatus === "new_fiber" && (
-                            <span className="text-[9px] font-bold text-teal-400 shrink-0">NEW</span>
+                            <span className="text-2xs font-bold text-teal-400 shrink-0">NEW</span>
                           )}
                         </span>
                       </button>

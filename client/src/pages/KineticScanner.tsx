@@ -23,6 +23,7 @@ import {
   type KineticAddress,
 } from "@/lib/kineticScannerApi";
 import { KineticScannerMap } from "@/components/kinetic/KineticScannerMap";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 
 type Tab =
@@ -52,19 +53,19 @@ function staleSeconds(value?: string | null) {
 }
 function badge(address: KineticAddress) {
   if (address.discoveryState === "VERIFIED_FRESH")
-    return ["Verified Fresh", "bg-emerald-400/20 text-emerald-200"];
+    return ["Verified Fresh", "bg-success/10 text-success"];
   if (address.discoveryState === "CANDIDATE_FRESH")
-    return ["Fresh Candidate", "bg-violet-500/15 text-violet-300"];
+    return ["Fresh Candidate", "bg-warning/10 text-warning"];
   if (address.discoveryState === "BASELINE_FIBER")
-    return ["Fiber Baseline", "bg-sky-500/15 text-sky-300"];
+    return ["Fiber Baseline", "bg-secondary text-secondary-foreground"];
   if (address.discoveryState === "REGRESSED")
-    return ["Regressed", "bg-red-500/15 text-red-300"];
-  if (address.isLive) return ["Live Fiber", "bg-[#00A94F]/15 text-[#35d77e]"];
+    return ["Regressed", "bg-destructive/10 text-destructive"];
+  if (address.isLive) return ["Live Fiber", "bg-success/10 text-success"];
   if (address.isComingSoon)
-    return ["Coming Soon", "bg-violet-500/15 text-violet-300"];
+    return ["Coming Soon", "bg-warning/10 text-warning"];
   if (address.isCopperUpgradeCandidate)
-    return ["Copper Upgrade", "bg-amber-500/15 text-amber-300"];
-  return ["Observed", "bg-slate-500/15 text-slate-300"];
+    return ["Copper Upgrade", "bg-warning/10 text-warning"];
+  return ["Observed", "bg-secondary text-secondary-foreground"];
 }
 
 export default function KineticScanner() {
@@ -76,27 +77,27 @@ export default function KineticScanner() {
     refetchInterval: 30_000,
   });
   return (
-    <div className="min-h-full bg-[radial-gradient(circle_at_top_right,rgba(0,169,79,.13),transparent_38%)] px-3 py-4 sm:px-6">
+    <div className="min-h-full bg-[radial-gradient(circle_at_top_right,hsl(var(--primary)/0.08),transparent_38%)] px-3 py-4 sm:px-6">
       <div className="mx-auto max-w-7xl space-y-4">
-        <header className="overflow-hidden rounded-2xl border border-emerald-900/60 bg-[#071A11] text-white shadow-xl shadow-emerald-950/10">
+        <header className="overflow-hidden rounded-2xl border border-border bg-card text-foreground shadow-xl">
           <div className="flex flex-wrap items-center gap-3 px-4 py-4 sm:px-6">
-            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-[#00A94F]">
+            <div className="grid h-11 w-11 place-items-center rounded-2xl bg-primary text-primary-foreground">
               <Radio className="h-5 w-5" />
             </div>
             <div>
               <h1 className="text-xl font-semibold tracking-tight">
                 Kinetic Evidence Scanner
               </h1>
-              <p className="text-xs text-emerald-100/60">
+              <p className="text-xs text-muted-foreground">
                 Evidence-backed serviceability intelligence · no assumed private
                 API
               </p>
             </div>
             <div
-              className={`ml-auto flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-semibold ${ping?.ok ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300" : "border-amber-400/20 bg-amber-400/10 text-amber-200"}`}
+              className={`ml-auto flex items-center gap-2 rounded-full px-2 py-0.5 text-2xs font-semibold ${ping?.ok ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}
             >
               <i
-                className={`h-2 w-2 rounded-full ${ping?.ok ? "bg-[#00A94F]" : "bg-amber-400"}`}
+                className={`h-2 w-2 rounded-full ${ping?.ok ? "bg-success" : "bg-warning"}`}
               />
               {ping?.ok
                 ? `${ping.source} · ${ping.latencyMs}ms`
@@ -104,16 +105,19 @@ export default function KineticScanner() {
             </div>
           </div>
           <nav
-            className="flex overflow-x-auto border-t border-emerald-900/50 px-2"
+            role="tablist"
+            className="flex items-center overflow-x-auto border-t border-border px-2"
             aria-label="Kinetic Scanner sections"
           >
             {tabs.map(([id, label, Icon]) => (
               <button
                 key={id}
+                role="tab"
+                aria-selected={tab === id}
                 onClick={() => setTab(id)}
-                className={`flex h-12 shrink-0 items-center gap-2 border-b-2 px-3 text-xs font-semibold ${tab === id ? "border-[#00A94F] text-white" : "border-transparent text-emerald-100/55 hover:text-white"}`}
+                className={`relative flex h-10 shrink-0 items-center gap-1.5 rounded-t border-b-2 px-3 text-[13px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 ${tab === id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className="h-4 w-4" />
                 {label}
               </button>
             ))}
@@ -166,7 +170,7 @@ function Dashboard({
   return (
     <div className="space-y-4">
       {recheck?.status === "running" && stale != null && stale > 120 && (
-        <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+        <div className="flex items-start gap-2 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           Recheck worker may have stalled. Last heartbeat was {stale} seconds
           ago.
@@ -184,15 +188,15 @@ function Dashboard({
             onClick={label === "Total Addresses" ? onAddresses : undefined}
             className="rounded-2xl border border-border bg-card p-4 text-left shadow-sm"
           >
-            <div className="flex items-center text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              <Icon className="mr-2 h-3.5 w-3.5 text-[#00A94F]" />
+            <div className="flex items-center text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
+              <Icon className="mr-2 h-3.5 w-3.5 text-primary" />
               {label}
             </div>
             <div className="mt-3 text-2xl font-bold tabular-nums">
               {fmt(value)}
             </div>
             {label === "Verified Fresh" && (
-              <div className="mt-1 text-[9px] text-muted-foreground">
+              <div className="mt-1 text-2xs text-muted-foreground">
                 Repeat-confirmed transition
               </div>
             )}
@@ -200,25 +204,25 @@ function Dashboard({
         ))}
       </section>
       <section className="grid gap-4 lg:grid-cols-[1fr_.8fr]">
-        <article className="rounded-2xl border border-emerald-900/50 bg-[#071A11] p-5 text-white">
+        <article className="rounded-2xl border border-border bg-card p-5 text-foreground">
           <div className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-[#35d77e]" />
+            <ShieldCheck className="h-5 w-5 text-success" />
             <h2 className="text-sm font-semibold">Evidence posture</h2>
-            <span className="ml-auto rounded-full bg-amber-400/10 px-2 py-1 text-[9px] font-bold uppercase text-amber-200">
+            <span className="ml-auto rounded-full bg-warning/10 px-2 py-0.5 text-2xs font-semibold uppercase text-warning">
               {String(evidence?.configured?.mode ?? "offline").replaceAll(
                 "_",
                 " ",
               )}
             </span>
           </div>
-          <p className="mt-3 text-xs leading-5 text-emerald-100/60">
+          <p className="mt-3 text-xs leading-5 text-muted-foreground">
             No private Kinetic API is assumed. Import approved evidence or
             record a manual verification. Live qualification remains off until a
             permitted adapter and exact contract are registered.
           </p>
           <button
             onClick={onEvidence}
-            className="mt-4 h-11 w-full rounded-xl bg-[#00A94F] text-xs font-bold"
+            className="mt-4 h-11 w-full rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90"
           >
             Manage evidence sources
           </button>
@@ -260,27 +264,27 @@ function Worker({
 }) {
   const running = worker?.status === "running";
   return (
-    <article className="rounded-2xl border border-emerald-900/50 bg-[#071A11] p-4 text-white">
+    <article className="rounded-2xl border border-border bg-card p-4 text-foreground">
       <div className="flex items-center">
         <Radio
-          className={`h-4 w-4 ${running ? "animate-pulse text-amber-400" : "text-emerald-400"}`}
+          className={`h-4 w-4 ${running ? "animate-pulse text-warning" : "text-success"}`}
         />
         <h2 className="ml-2 text-sm font-semibold">{title}</h2>
         <span
-          className={`ml-auto rounded-full px-2 py-1 text-[9px] font-bold uppercase ${running ? "bg-amber-500/15 text-amber-300" : "bg-white/5 text-white/50"}`}
+          className={`ml-auto rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${running ? "bg-warning/10 text-warning" : "bg-secondary text-secondary-foreground"}`}
         >
           {worker?.status ?? "stopped"}
         </span>
       </div>
-      <div className="mt-4 text-[9px] uppercase tracking-wider text-emerald-100/50">
+      <div className="mt-4 text-2xs uppercase tracking-wider text-muted-foreground">
         Recheck Checked
       </div>
-      <div className="mt-1 font-mono text-2xl font-bold text-[#35d77e]">
+      <div className="mt-1 font-mono text-2xl font-bold text-foreground">
         {fmt(worker?.checked ?? 0)}
       </div>
-      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-white/10">
+      <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-secondary">
         <div
-          className={`h-full rounded-full bg-[#00A94F] ${running ? "w-full animate-pulse" : "w-0"}`}
+          className={`h-full rounded-full bg-primary ${running ? "w-full animate-pulse" : "w-0"}`}
         />
       </div>
       <div className="mt-4 grid grid-cols-4 gap-1">
@@ -290,16 +294,18 @@ function Worker({
           ["Live", worker?.live],
           ["Errors", worker?.errors],
         ].map(([label, value]) => (
-          <div key={label as string} className="rounded-lg bg-white/5 p-2">
+          <div key={label as string} className="rounded-lg bg-secondary/50 p-2">
             <div className="text-sm font-bold">{fmt(value)}</div>
-            <div className="text-[8px] uppercase text-white/40">{label}</div>
+            <div className="text-2xs uppercase text-muted-foreground">
+              {label}
+            </div>
           </div>
         ))}
       </div>
       <div className="mt-4 flex gap-2">
         <button
           onClick={() => onControl(running ? "stop" : "start")}
-          className={`h-10 w-full rounded-xl text-xs font-bold ${running ? "border border-red-500/20 text-red-300" : "bg-[#00A94F] text-white"}`}
+          className={`h-10 w-full rounded-xl text-xs font-bold ${running ? "border border-destructive/30 text-destructive" : "bg-primary text-primary-foreground hover:bg-primary/90"}`}
         >
           {running ? "Stop Recheck" : "Start Recheck"}
         </button>
@@ -333,7 +339,7 @@ function Diagnostics({ state }: { state: any }) {
         {values.map(([label, value]) => (
           <div key={label as string} className="rounded-xl bg-secondary/50 p-3">
             <div className="text-sm font-bold tabular-nums">{value}</div>
-            <div className="mt-1 text-[8px] uppercase tracking-wider text-muted-foreground">
+            <div className="mt-1 text-2xs uppercase tracking-wider text-muted-foreground">
               {label}
             </div>
           </div>
@@ -473,9 +479,9 @@ function EvidenceCenter() {
     <div className="grid gap-4 lg:grid-cols-2">
       <section className="rounded-2xl border border-border bg-card p-4 lg:col-span-2">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-[#00A94F]" />
+          <ShieldCheck className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold">Evidence source policy</h2>
-          <span className="ml-auto rounded-full bg-secondary px-2 py-1 text-[9px] font-bold uppercase">
+          <span className="ml-auto rounded-full bg-secondary px-2 py-0.5 text-2xs font-semibold uppercase text-secondary-foreground">
             Active:{" "}
             {String(config?.configured?.mode ?? "offline").replaceAll("_", " ")}
           </span>
@@ -510,13 +516,13 @@ function EvidenceCenter() {
           <button
             onClick={() => save.mutate()}
             disabled={save.isPending}
-            className="h-11 rounded-xl bg-[#00A94F] px-5 text-xs font-bold text-white disabled:opacity-50"
+            className="h-11 rounded-xl bg-primary px-5 text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >
             Save mode
           </button>
         </div>
         {mode === "authorized_public_lookup" && (
-          <label className="mt-3 flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/5 p-3 text-xs">
+          <label className="mt-3 flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/5 p-3 text-xs">
             <input
               type="checkbox"
               checked={confirmed}
@@ -533,7 +539,7 @@ function EvidenceCenter() {
       </section>
       <section className="rounded-2xl border border-border bg-card p-4">
         <div className="flex items-center gap-2">
-          <Upload className="h-4 w-4 text-[#00A94F]" />
+          <Upload className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold">Approved evidence import</h2>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
@@ -564,19 +570,19 @@ function EvidenceCenter() {
           onChange={(event) => setContent(event.target.value)}
           aria-label="Evidence import content"
           rows={9}
-          className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-[10px]"
+          className="mt-2 w-full rounded-xl border border-border bg-background p-3 font-mono text-2xs"
         />
         <button
           onClick={() => upload.mutate()}
           disabled={upload.isPending || !content.trim()}
-          className="mt-2 h-11 w-full rounded-xl bg-[#00A94F] text-xs font-bold text-white disabled:opacity-40"
+          className="mt-2 h-11 w-full rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
         >
           Validate and import
         </button>
       </section>
       <section className="rounded-2xl border border-border bg-card p-4">
         <div className="flex items-center gap-2">
-          <FileCheck2 className="h-4 w-4 text-[#00A94F]" />
+          <FileCheck2 className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold">Manual verification</h2>
         </div>
         <p className="mt-2 text-xs text-muted-foreground">
@@ -657,7 +663,7 @@ function EvidenceCenter() {
         <button
           onClick={() => verify.mutate()}
           disabled={verify.isPending}
-          className="mt-2 h-11 w-full rounded-xl bg-[#00A94F] text-xs font-bold text-white disabled:opacity-40"
+          className="mt-2 h-11 w-full rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
         >
           Record signed-in review
         </button>
@@ -669,11 +675,11 @@ function EvidenceCenter() {
             <div key={item.id} className="rounded-xl bg-secondary/50 p-3">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-semibold">{item.sourceName}</span>
-                <span className="ml-auto text-[9px] uppercase text-muted-foreground">
+                <span className="ml-auto text-2xs uppercase text-muted-foreground">
                   {item.format}
                 </span>
               </div>
-              <div className="mt-1 text-[10px] text-muted-foreground">
+              <div className="mt-1 text-2xs text-muted-foreground">
                 {item.acceptedCount} accepted · {item.rejectedCount} rejected ·{" "}
                 {new Date(item.createdAt).toLocaleString()}
               </div>
@@ -755,14 +761,21 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
         </button>
       </div>
       {isLoading ? (
-        <div className="grid h-64 place-items-center">
-          <Loader2 className="h-5 w-5 animate-spin text-[#00A94F]" />
+        <div className="space-y-2 p-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-12 rounded-lg" />
+          ))}
+        </div>
+      ) : !data?.items.length ? (
+        <div className="m-3 rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+          No addresses match these filters. Adjust the search or import
+          evidence to populate the ledger.
         </div>
       ) : (
         <>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[900px] text-left text-xs">
-              <thead className="bg-secondary/50 text-[9px] uppercase tracking-wider text-muted-foreground">
+              <thead className="bg-secondary/50 text-2xs uppercase tracking-wider text-muted-foreground">
                 <tr>
                   {[
                     "Sequential ID",
@@ -791,14 +804,14 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
                       <td className="px-3 py-3 font-mono font-semibold">
                         {a.sequentialId ?? "—"}
                       </td>
-                      <td className="px-3 py-3 font-mono text-[10px]">
+                      <td className="px-3 py-3 font-mono text-2xs">
                         {a.kineticAddressId ?? "—"}
                       </td>
                       <td className="px-3 py-3">
                         <div className="font-semibold">
                           {a.address ?? "Address unavailable"}
                         </div>
-                        <div className="text-[10px] text-muted-foreground">
+                        <div className="text-2xs text-muted-foreground">
                           {[a.city, a.state, a.zip].filter(Boolean).join(", ")}
                         </div>
                       </td>
@@ -808,12 +821,12 @@ function Addresses({ onOpen }: { onOpen: (id: number) => void }) {
                       </td>
                       <td className="px-3 py-3">
                         <span
-                          className={`rounded-full px-2 py-1 text-[9px] font-bold ${tone}`}
+                          className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${tone}`}
                         >
                           {label}
                         </span>
                       </td>
-                      <td className="px-3 py-3 text-[10px] text-muted-foreground">
+                      <td className="px-3 py-3 text-2xs text-muted-foreground">
                         {a.lastChecked
                           ? new Date(a.lastChecked).toLocaleString()
                           : "—"}
@@ -865,7 +878,20 @@ function Hotspots() {
     queryFn: kineticScannerApi.hotspots,
   });
   if (isLoading)
-    return <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin" />;
+    return (
+      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-28 rounded-2xl" />
+        ))}
+      </div>
+    );
+  if (!data?.hotspots?.length)
+    return (
+      <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+        No hotspots yet. Verified addresses will cluster here by city and ZIP
+        as evidence accumulates.
+      </div>
+    );
   return (
     <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
       {data?.hotspots?.map((h: any, i: number) => (
@@ -884,7 +910,7 @@ function Hotspots() {
             ].map(([l, v]) => (
               <div key={l as string} className="rounded-lg bg-secondary/50 p-2">
                 <b>{fmt(v)}</b>
-                <div className="text-[8px] uppercase text-muted-foreground">
+                <div className="text-2xs uppercase text-muted-foreground">
                   {l}
                 </div>
               </div>
@@ -902,7 +928,20 @@ function Changes() {
     refetchInterval: 15_000,
   });
   if (isLoading)
-    return <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin" />;
+    return (
+      <div className="space-y-2">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-20" />
+        ))}
+      </div>
+    );
+  if (!data?.items?.length)
+    return (
+      <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+        No field changes recorded yet. Serviceability transitions will appear
+        here as rechecks land.
+      </div>
+    );
   return (
     <section className="space-y-2">
       {data?.items?.map((c: any) => (
@@ -911,17 +950,17 @@ function Changes() {
           className="rounded-xl border border-border bg-card p-3"
         >
           <div className="flex items-center gap-2">
-            <span className="rounded-full bg-[#00A94F]/10 px-2 py-1 text-[9px] font-bold text-[#00A94F]">
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-primary">
               {c.fieldName}
             </span>
-            <span className="ml-auto text-[9px] text-muted-foreground">
+            <span className="ml-auto text-2xs text-muted-foreground">
               {new Date(c.changedAt).toLocaleString()}
             </span>
           </div>
           <div className="mt-2 text-xs font-semibold">
             {c.address || c.kineticAddressId}
           </div>
-          <div className="mt-1 font-mono text-[10px] text-muted-foreground">
+          <div className="mt-1 font-mono text-2xs text-muted-foreground">
             {c.previousValue ?? "unknown"} → {c.currentValue ?? "unknown"}
           </div>
         </article>
@@ -930,11 +969,26 @@ function Changes() {
   );
 }
 function Jobs() {
-  const { data } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["kinetic-state"],
     queryFn: kineticScannerApi.state,
     refetchInterval: 5000,
   });
+  if (isLoading)
+    return (
+      <div className="space-y-2">
+        {[0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-24 rounded-2xl" />
+        ))}
+      </div>
+    );
+  if (!data?.jobs?.length)
+    return (
+      <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+        No scan or recheck jobs have run yet. Start the recheck worker from
+        the dashboard to queue work.
+      </div>
+    );
   return (
     <section className="space-y-2">
       {data?.jobs?.map((j: any) => (
@@ -943,10 +997,10 @@ function Jobs() {
           className="rounded-2xl border border-border bg-card p-4"
         >
           <div className="flex items-center gap-2">
-            <span className="rounded-full bg-[#00A94F]/10 px-2 py-1 text-[9px] font-bold uppercase text-[#00A94F]">
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold uppercase text-primary">
               {j.workerType}
             </span>
-            <code className="text-[10px]">{j.id}</code>
+            <code className="text-2xs">{j.id}</code>
             <span className="ml-auto text-xs capitalize">{j.status}</span>
           </div>
           <div className="mt-3 font-mono text-sm">
@@ -954,7 +1008,7 @@ function Jobs() {
               ? `${fmt(j.startSequentialId)} → ${fmt(j.endSequentialId)}`
               : `${fmt(j.checked)} addresses rechecked`}
           </div>
-          <div className="mt-2 text-[10px] text-muted-foreground">
+          <div className="mt-2 text-2xs text-muted-foreground">
             {fmt(j.checked)} checked · {fmt(j.found)} found · {fmt(j.errors)}{" "}
             errors
           </div>
@@ -999,29 +1053,29 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <aside className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-emerald-900/60 bg-[#071A11] p-4 pb-[max(1rem,calc(env(safe-area-inset-bottom)+0.5rem))] text-white shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none sm:pb-4">
-        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-white/20 sm:hidden" />
+      <aside className="absolute inset-x-0 bottom-0 max-h-[88vh] overflow-y-auto rounded-t-3xl border border-border bg-card p-4 pb-[max(1rem,calc(env(safe-area-inset-bottom)+0.5rem))] text-foreground shadow-2xl sm:inset-y-0 sm:left-auto sm:w-[520px] sm:rounded-none sm:pb-4">
+        <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-muted-foreground/30 sm:hidden" />
         <button
           onClick={onClose}
-          className="float-right h-10 rounded-xl border border-white/10 px-3 text-xs"
+          className="float-right h-10 rounded-xl border border-border px-3 text-xs"
         >
           Close
         </button>
         {isLoading ? (
-          <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin text-[#00A94F]" />
+          <Loader2 className="mx-auto mt-20 h-5 w-5 animate-spin text-primary" />
         ) : (
           <>
             <div className="pr-16">
-              <div className="text-[9px] uppercase tracking-wider text-emerald-200/50">
+              <div className="text-2xs uppercase tracking-wider text-muted-foreground">
                 Kinetic Address ID
               </div>
-              <div className="mt-1 break-all font-mono text-sm text-[#35d77e]">
+              <div className="mt-1 break-all font-mono text-sm text-foreground">
                 {data?.address?.kineticAddressId ?? "Not returned"}
               </div>
               <h2 className="mt-4 text-xl font-semibold">
                 {data?.address?.address ?? "Address unavailable"}
               </h2>
-              <p className="text-xs text-white/50">
+              <p className="text-xs text-muted-foreground">
                 {[data?.address?.city, data?.address?.state, data?.address?.zip]
                   .filter(Boolean)
                   .join(", ")}
@@ -1034,8 +1088,13 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
                 ["Technology", data?.address?.technologyType],
                 ["Max qualification", data?.address?.maximumQualification],
               ].map(([l, v]) => (
-                <div key={l as string} className="rounded-xl bg-white/5 p-3">
-                  <div className="text-[8px] uppercase text-white/40">{l}</div>
+                <div
+                  key={l as string}
+                  className="rounded-xl bg-secondary/50 p-3"
+                >
+                  <div className="text-2xs uppercase text-muted-foreground">
+                    {l}
+                  </div>
                   <div className="mt-1 font-mono text-xs font-semibold">
                     {v ?? "—"}
                   </div>
@@ -1045,54 +1104,54 @@ function AddressDrawer({ id, onClose }: { id: number; onClose: () => void }) {
             <div className="mt-4 grid grid-cols-2 gap-2">
               <button
                 onClick={() => void act("recheck")}
-                className="h-11 rounded-xl border border-white/10 text-xs font-bold"
+                className="h-11 rounded-xl border border-border text-xs font-bold"
               >
                 Queue recheck
               </button>
               <button
                 onClick={() => void act("contacts")}
-                className="h-11 rounded-xl border border-white/10 text-xs font-bold"
+                className="h-11 rounded-xl border border-border text-xs font-bold"
               >
                 <Users className="mr-1 inline h-3.5 w-3.5" />
                 Refresh contacts
               </button>
               <button
                 onClick={() => void act("convert")}
-                className="col-span-2 h-11 rounded-xl bg-[#00A94F] text-xs font-bold"
+                className="col-span-2 h-11 rounded-xl bg-primary text-xs font-bold text-primary-foreground hover:bg-primary/90"
               >
                 Convert to lead
               </button>
             </div>
-            <h3 className="mt-6 text-xs font-semibold uppercase tracking-wider text-white/50">
+            <h3 className="mt-6 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Evidence
             </h3>
             <div className="mt-2 space-y-2">
               {data?.evidence?.map((o: any) => (
                 <div
                   key={o.id}
-                  className="rounded-xl border border-white/10 bg-white/5 p-3"
+                  className="rounded-xl border border-border bg-secondary/50 p-3"
                 >
                   <div className="text-xs">
                     {new Date(o.observedAt).toLocaleString()} ·{" "}
-                    <span className="font-mono text-[9px]">
+                    <span className="font-mono text-2xs">
                       {o.responseHash.slice(0, 12)}
                     </span>
                   </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] text-white/55">
-                    <span className="rounded-full bg-white/5 px-2 py-1">
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-2xs text-muted-foreground">
+                    <span className="rounded-full bg-secondary px-2 py-1">
                       {String(o.evidenceMode).replaceAll("_", " ")}
                     </span>
-                    <span className="rounded-full bg-white/5 px-2 py-1">
+                    <span className="rounded-full bg-secondary px-2 py-1">
                       {o.sourceName}
                     </span>
-                    <span className="rounded-full bg-white/5 px-2 py-1 font-mono">
+                    <span className="rounded-full bg-secondary px-2 py-1 font-mono">
                       parser {o.parserVersion}
                     </span>
                   </div>
                 </div>
               ))}
               {!data?.evidence?.length && (
-                <p className="rounded-xl bg-white/5 p-3 text-xs text-white/45">
+                <p className="rounded-xl bg-secondary/50 p-3 text-xs text-muted-foreground">
                   No evidence records are available for this address.
                 </p>
               )}

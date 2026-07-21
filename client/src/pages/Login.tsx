@@ -60,7 +60,7 @@ export default function Login() {
       setStep("code");
       if (developmentCode) setCode(developmentCode);
       setResendIn(30);
-      toast({ title: developmentCode ? "Local sign-in code filled in — tap Continue."
+      toast({ title: developmentCode ? "Local sign-in code filled in — tap Verify & sign in."
         : emailDelivered ? "Code sent — check your email."
         : "Code created, but email is delayed — ask your manager for it.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
@@ -78,7 +78,7 @@ export default function Login() {
       const { code: developmentCode, emailDelivered } = await requestCode();
       setCode(developmentCode ?? "");
       setResendIn(30);
-      toast({ title: developmentCode ? "New local code filled in — tap Continue."
+      toast({ title: developmentCode ? "New local code filled in — tap Verify & sign in."
         : emailDelivered ? "New code sent — check your email."
         : "New code created, but email is delayed — ask your manager for it.",
         ...(emailDelivered ? {} : { variant: "destructive" as const }) });
@@ -174,8 +174,8 @@ export default function Login() {
                 className={buttonClasses}
               >
                 {loading
-                  ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Logging in…</>)
-                  : (<>Login <ArrowRight className="h-4 w-4" aria-hidden /></>)}
+                  ? (<><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Sending code…</>)
+                  : (<>Continue <ArrowRight className="h-4 w-4" aria-hidden /></>)}
               </button>
             </form>
           )}
@@ -203,7 +203,7 @@ export default function Login() {
                     onClick={handleResend}
                     disabled={resendIn > 0 || loading}
                     data-testid="button-resend-code"
-                    className="text-xs font-medium text-primary transition-colors hover:text-primary/80 disabled:pointer-events-none disabled:text-muted-foreground/60"
+                    className="inline-flex items-center min-h-11 px-2 -mx-2 text-xs font-medium text-primary transition-colors hover:text-primary/80 disabled:pointer-events-none disabled:text-muted-foreground/60"
                   >
                     {resendIn > 0 ? `Resend in ${resendIn}s` : "Resend code"}
                   </button>
@@ -224,7 +224,7 @@ export default function Login() {
               <button
                 type="button"
                 onClick={() => { setStep("email"); setCode(""); setResendIn(0); }}
-                className="flex w-full items-center justify-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                className="inline-flex w-[calc(100%+1rem)] items-center justify-center gap-1.5 min-h-11 px-2 -mx-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
               >
                 <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Use a different email
               </button>

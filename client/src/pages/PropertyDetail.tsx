@@ -436,7 +436,7 @@ function PhotoStrip({ leadId, online }: { leadId: number; online: boolean }) {
           className="flex h-20 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border bg-card text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground active:scale-95 disabled:opacity-50 disabled:hover:border-border disabled:hover:text-muted-foreground"
         >
           {uploading ? <RefreshCw className="h-5 w-5 animate-spin text-primary" aria-hidden="true" /> : <Camera className="h-5 w-5" aria-hidden="true" />}
-          <span className="text-[10px] font-semibold">{uploading ? "Uploading…" : online ? "Add" : "Offline"}</span>
+          <span className="text-2xs font-semibold">{uploading ? "Uploading…" : online ? "Add" : "Offline"}</span>
         </button>
         {photos.map(p => (
           <button key={p.id} onClick={() => setViewer(p.id)}

@@ -303,7 +303,7 @@ function WeekView({ data }: { data: WeekResponse }) {
             <div className="flex items-center gap-1.5 text-[11px] font-semibold text-primary uppercase tracking-wide">
               <Zap className="w-3.5 h-3.5" /> This week
             </div>
-            <span className={`inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full ${state.cls}`} data-testid="week-state">
+            <span className={`inline-flex items-center gap-1.5 text-2xs font-bold px-2 py-0.5 rounded-full ${state.cls}`} data-testid="week-state">
               {state.icon === "lock"
                 ? <Lock className="w-2.5 h-2.5" />
                 : state.icon === "check"
@@ -441,7 +441,7 @@ function SaleChip({ status }: { status: string }) {
   };
   const [label, cls] = map[status] ?? [status.toLowerCase(), "bg-muted text-muted-foreground"];
   return (
-    <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${cls}`}>
+    <span className={`inline-flex items-center gap-1 text-2xs font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${cls}`}>
       <span className="w-1 h-1 rounded-full bg-current" />{label}
     </span>
   );
@@ -478,7 +478,7 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
               <span className="text-[11px] text-muted-foreground leading-tight">
                 {t.minimumSales}{t.maximumSales == null ? "+" : `–${t.maximumSales}`} sales
               </span>
-              <span className="text-sm font-bold text-primary tabular-nums">{usd(t.rateCents)}<span className="text-[9px] text-muted-foreground font-normal">/sale</span></span>
+              <span className="text-sm font-bold text-primary tabular-nums">{usd(t.rateCents)}<span className="text-2xs text-muted-foreground font-normal">/sale</span></span>
             </div>
           ))}
         </div>
@@ -539,7 +539,7 @@ function StatusPill({ status }: { status: string }) {
     PAID: "bg-emerald-500/15 text-emerald-400",
   };
   return (
-    <span className={`inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${map[status] || "bg-muted text-muted-foreground"}`}>
+    <span className={`inline-flex items-center gap-1 text-2xs font-semibold px-1.5 py-0.5 rounded-full ${map[status] || "bg-muted text-muted-foreground"}`}>
       <span className="w-1 h-1 rounded-full bg-current" />{status?.toLowerCase()}
     </span>
   );
@@ -718,7 +718,7 @@ function PayoutRow({ item }: { item: PayoutHistoryItem }) {
 function PayoutStatusPill({ status }: { status: PayoutStatus }) {
   const s = PAYOUT_STATUS[status] ?? PAYOUT_STATUS.pending;
   return (
-    <span className={`inline-flex items-center gap-1 text-[9px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${s.cls}`}>
+    <span className={`inline-flex items-center gap-1 text-2xs font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${s.cls}`}>
       <span className="w-1 h-1 rounded-full bg-current" />{s.label}
     </span>
   );

@@ -244,7 +244,7 @@ export default function Leaderboard() {
                 <div className="flex-1 min-w-0">
                   <div className="font-semibold text-sm text-foreground truncate flex items-center gap-1.5" title={entry.rep.name}>
                     <span className="truncate">{entry.rep.name}</span>
-                    {isMe && <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-primary bg-primary/15 rounded-full px-1.5 py-0.5">You</span>}
+                    {isMe && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-primary bg-primary/15 rounded-full px-1.5 py-0.5">You</span>}
                   </div>
                   <div className="text-xs text-muted-foreground capitalize">{entry.rep.role}</div>
                 </div>

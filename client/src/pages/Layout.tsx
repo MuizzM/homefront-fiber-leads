@@ -204,6 +204,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/clock" ? "Field hours"
     : location === "/leaderboard" ? "Leaderboard"
     : location === "/my-documents" ? "Documents"
+    : location === "/followups" ? "Follow-ups"
+    : location === "/my-territory" ? "My territory"
     : onCalling ? "Calling"
     : location === "/profile" ? "Profile"
     : NAV_ITEMS.find(item => item.href === location)?.label ?? orgName;
@@ -247,11 +249,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               const items = visibleNav.filter(item => (item.group ?? "Other") === group);
               return (
                 <div key={group} className="mb-1">
-                  <div className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+                  <div className="px-3 pt-3 pb-1 text-2xs font-semibold uppercase tracking-widest text-muted-foreground/50">
                     {group}
                   </div>
                   {items.map(({ href, label, icon: Icon }) => {
-                    const isActive = href === "/calling" ? location === href || location.startsWith("/calling/lead/") : location === href;
+                    // "/" also lights on /today (App redirects rep home there);
+                    // "/calling" stays lit inside a lead workspace.
+                    const isActive = href === "/"
+                      ? location === "/" || location === "/today"
+                      : href === "/calling"
+                        ? location === href || location.startsWith("/calling/lead/")
+                        : location === href;
                     const badgeCount = canManage && href === "/map" && pendingTerritoryCount > 0 ? pendingTerritoryCount : 0;
                     return (
                       <Link
@@ -270,7 +278,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         <Icon className={cn("w-[18px] h-[18px] md:w-4 md:h-4 flex-shrink-0", isActive && "text-primary")} />
                         <span className="flex-1">{label}</span>
                         {badgeCount > 0 && (
-                          <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-[10px] font-bold text-black flex items-center justify-center px-1">
+                          <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-2xs font-bold text-black flex items-center justify-center px-1">
                             {badgeCount}
                           </span>
                         )}
@@ -296,13 +304,20 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Footer — account card */}
         <div className="p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-border space-y-2">
           <div className="flex items-center gap-2.5 rounded-xl border border-border bg-secondary/40 px-2.5 py-2">
-            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0 ${avatarBg(role)}`}>
-              {user?.name?.slice(0, 2).toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold text-foreground truncate">{user?.name}</div>
-              <RoleBadge role={role} />
-            </div>
+            <Link
+              href="/profile"
+              onClick={() => setMobileOpen(false)}
+              data-testid="link-profile"
+              className="flex min-w-0 flex-1 items-center gap-2.5 rounded-lg -mx-1 -my-0.5 px-1 py-0.5 hover:bg-secondary transition-colors"
+            >
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white flex-shrink-0 ${avatarBg(role)}`}>
+                {user?.name?.slice(0, 2).toUpperCase()}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-[13px] font-semibold text-foreground truncate">{user?.name}</div>
+                <RoleBadge role={role} />
+              </div>
+            </Link>
             <button
               onClick={toggle}
               title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
@@ -348,9 +363,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </button>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold tracking-tight text-foreground">{mobileTitle}</div>
-            <div className="truncate text-[10px] text-muted-foreground">{orgName}</div>
+            {mobileTitle !== orgName && (
+              <div className="truncate text-2xs text-muted-foreground">{orgName}</div>
+            )}
           </div>
-          <button type="button" onClick={() => setMobileOpen(true)} aria-label="Open account navigation"
+          <button type="button" aria-label="Open account menu" aria-expanded={moreOpen} aria-controls="mobile-more-sheet"
+            onClick={() => { setMobileOpen(false); setMoreOpen(true); }}
             className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white ring-2 ring-border ${avatarBg(role)}`}>
             {user?.name?.slice(0, 2).toUpperCase()}
           </button>
@@ -367,10 +385,13 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(70px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
-        {!onMap && !onCalling && <BottomTabs moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
+        {!onMap && !onCalling && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
       </div>
 
-      {moreOpen && !onMap && !onCalling && (
+      {/* The More sheet renders wherever the header does (everywhere but the
+          full-bleed map) — on calling pages the header avatar is its only
+          entry point, so it must not be gated behind !onCalling. */}
+      {moreOpen && !onMap && (
         <div className="fixed inset-0 z-[60] md:hidden" role="presentation">
           <button type="button" aria-label="Close more menu" className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" onClick={closeMore} />
           <div

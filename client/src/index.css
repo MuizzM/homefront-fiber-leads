@@ -6,9 +6,19 @@
 @tailwind components;
 @tailwind utilities;
 
-@layer components {
-  .job-btn {
-    @apply inline-flex h-10 items-center gap-1.5 rounded-xl border border-border px-3 text-xs font-semibold transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
+/* ── Interaction elevation — the ONE hover/active mechanism for Button/Badge.
+   These utilities were referenced by the primitives but never defined, so every
+   button in the app was hover-inert. A foreground-tinted overlay works on any
+   background (filled, outline, ghost) in both themes without per-variant
+   colors. Hover only where a hover pointer exists (no sticky-hover on touch). */
+@layer utilities {
+  @media (hover: hover) {
+    .hover-elevate:hover {
+      background-image: linear-gradient(hsl(var(--foreground) / 0.06), hsl(var(--foreground) / 0.06));
+    }
+  }
+  .active-elevate-2:active {
+    background-image: linear-gradient(hsl(var(--foreground) / 0.10), hsl(var(--foreground) / 0.10));
   }
 }
 
@@ -52,6 +62,35 @@
     --input:        216 15% 16%;
     --ring:         172 44% 52%;      /* teal ring */
 
+    /* Semantic status tokens — the app-wide "good/attention" language. Pages
+       previously hand-rolled raw emerald/amber (with AA failures in light
+       mode); these are the single source both themes read. */
+    --success:      160 84% 42%;
+    --warning:      38 92% 55%;
+
+    /* Surface-border tokens the Tailwind config maps (card.border etc.). They
+       were referenced but never defined, so border-color fell back to
+       currentColor — near-white 1px borders on every Card instead of the
+       hairline. Triplet form for the hsl(var()/alpha) wrappers… */
+    --card-border:    var(--border);
+    --popover-border: var(--border);
+    /* …and FULL color values for the raw var() mappings + outline primitives. */
+    --primary-border:     transparent;
+    --secondary-border:   hsl(var(--border));
+    --muted-border:       hsl(var(--border));
+    --accent-border:      hsl(var(--border));
+    --destructive-border: transparent;
+    --button-outline:     hsl(var(--border));
+    --badge-outline:      hsl(var(--border));
+
+    /* Chart series ramp (ui/chart.tsx reads --chart-N; previously undefined →
+       invisible series). Teal-anchored, colorblind-spaced. */
+    --chart-1: 172 44% 46%;
+    --chart-2: 210 60% 60%;
+    --chart-3: 38 92% 55%;
+    --chart-4: 280 45% 62%;
+    --chart-5: 0 65% 60%;
+
     /* 12px base radius — cards/buttons/inputs inherit (design-system standard) */
     --radius: 0.75rem;
   }
@@ -80,30 +119,22 @@
     --border:       220 13% 91%;
     --input:        220 13% 91%;
     --ring:         172 62% 32%;
+    /* Status hues darkened for AA on white surfaces. */
+    --success:      161 94% 26%;
+    --warning:      32 95% 38%;
   }
 
   * {
     @apply border-border;
   }
 
-  /* Consistent, visible keyboard focus everywhere (WCAG 2.4.7) */
-  :focus-visible {
-    outline: 2px solid hsl(var(--ring));
-    outline-offset: 2px;
-    border-radius: 4px;
-  }
-
-  /* Type scale — one clear hierarchy for every page */
+  /* Type scale — one clear hierarchy for every page. Pages must NOT override
+     titles with ad-hoc arbitrary sizes; six drifted variants were reunified
+     onto this rule. (Focus rings, selection, and scrollbars are defined once
+     in the app-wide polish layer below.) */
   h1 { @apply text-xl font-bold tracking-tight; }
   h2 { @apply text-lg font-semibold tracking-tight; }
   h3 { @apply text-base font-semibold; }
-
-  /* Brand selection + slim dark scrollbars */
-  ::selection { background: hsl(172 44% 44% / 0.35); }
-  * { scrollbar-width: thin; scrollbar-color: hsl(210 35% 25%) transparent; }
-  *::-webkit-scrollbar { width: 8px; height: 8px; }
-  *::-webkit-scrollbar-thumb { background: hsl(210 35% 25%); border-radius: 8px; }
-  *::-webkit-scrollbar-track { background: transparent; }
 
   /* Don't let iOS inflate text on orientation change (MDN). */
   html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }

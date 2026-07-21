@@ -10,7 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 export function KpiTile({ label, value, tone, icon: Icon, chip, accent, className = "", loading = false }: {
   label: string;
   value: number | string;
-  tone: string;      // text color, e.g. "text-emerald-400"
+  tone: string;      // icon tint, e.g. "text-emerald-400" (the numeral stays text-foreground)
   icon: LucideIcon;
   chip: string;      // icon-chip bg tint, e.g. "bg-emerald-500/15"
   accent: string;    // top-accent bar bg, e.g. "bg-emerald-500"
@@ -26,7 +26,7 @@ export function KpiTile({ label, value, tone, icon: Icon, chip, accent, classNam
       <span className={`inline-flex items-center justify-center w-7 h-7 rounded-lg mb-2.5 ${chip}`}>
         <Icon className={`w-4 h-4 ${tone}`} />
       </span>
-      <div className={`text-[24px] font-bold leading-none tabular-nums ${tone}`}>
+      <div className="text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground">
         {loading ? <Skeleton className="h-6 w-12" /> : value}
       </div>
       <div className="text-[11px] text-muted-foreground font-medium mt-1.5">{label}</div>

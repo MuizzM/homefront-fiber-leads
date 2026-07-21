@@ -60,7 +60,7 @@ function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-2">
             <span className="truncate text-[13px] font-medium leading-5 text-foreground">{candidate.address}</span>
-            <span className={cn("inline-flex max-w-[50%] shrink-0 items-center rounded-full border px-2 py-px text-[10px] font-medium uppercase tracking-wide", stageTone(candidate.queueStage))}>
+            <span className={cn("inline-flex max-w-[50%] shrink-0 items-center rounded-full border px-2 py-px text-2xs font-medium uppercase tracking-wide", stageTone(candidate.queueStage))}>
               <span className="truncate">{stageLabel(candidate.queueStage)}</span>
             </span>
           </div>

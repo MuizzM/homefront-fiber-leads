@@ -51,7 +51,7 @@ export default function Scanners({
           Choose a scan tool
         </h1>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="mt-4 grid grid-cols-3 gap-2 sm:gap-3">
           {TABS.map(({ id, label, hint, Icon }) => {
             const active = tab === id;
             return (
@@ -61,7 +61,7 @@ export default function Scanners({
                 title={hint}
                 data-testid={`scanner-tab-${id}`}
                 aria-pressed={active}
-                className={`group flex items-start gap-3 rounded-xl border p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary ${
+                className={`group flex items-start gap-3 rounded-xl border p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary sm:p-4 ${
                   active
                     ? "border-primary bg-primary/5"
                     : "border-border bg-background hover:border-primary/40 hover:bg-secondary/40"
@@ -93,7 +93,7 @@ export default function Scanners({
                       }`}
                     />
                   </span>
-                  <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
+                  <span className="mt-0.5 hidden text-xs leading-snug text-muted-foreground sm:block">
                     {hint}
                   </span>
                 </span>

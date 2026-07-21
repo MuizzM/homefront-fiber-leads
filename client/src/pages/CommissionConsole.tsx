@@ -61,7 +61,7 @@ const STATUS_DOT: Record<string, string> = {
 
 function StatusChip({ status }: { status: string }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${STATUS_STYLE[status] || "bg-secondary text-muted-foreground"}`}>
+    <span className={`inline-flex items-center gap-1.5 text-2xs font-semibold px-2 py-0.5 rounded-full whitespace-nowrap ${STATUS_STYLE[status] || "bg-secondary text-muted-foreground"}`}>
       <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || "bg-muted-foreground"}`} />
       {status === "NO_PLAN" ? "no plan" : status.toLowerCase()}
     </span>
@@ -129,7 +129,7 @@ export default function CommissionConsole() {
           </Button>
           <div className="text-center min-w-[170px]">
             <div className="text-sm font-semibold">{ov?.bounds.localWeekLabel ?? "…"}</div>
-            <div className="text-[10px] text-muted-foreground">
+            <div className="text-2xs text-muted-foreground">
               {weekOffset === 0
                 ? (ov?.weekEnded ? "Week closed — ready to finalize" : "Live · Mon–Sun · updates as doors close")
                 : weekOffset > 0 ? "Future week" : "Past week"}
@@ -232,7 +232,7 @@ export default function CommissionConsole() {
               <div className="divide-y divide-border">
                 {ov.exceptions.map((ex, i) => (
                   <div key={i} className="px-4 py-2.5 flex items-start gap-3 text-sm">
-                    <span className="text-[9px] font-bold uppercase tracking-wide text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
+                    <span className="text-2xs font-bold uppercase tracking-wide text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5 mt-0.5 whitespace-nowrap">
                       {ex.type.replace(/_/g, " ").toLowerCase()}
                     </span>
                     <span className="text-muted-foreground">
@@ -289,7 +289,7 @@ export default function CommissionConsole() {
                     </div>
                     <div className="flex items-center gap-2 mt-1.5">
                       {r.structure && !r.planAccepted && (
-                        <span className="text-[9px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5">plan not accepted</span>
+                        <span className="text-2xs font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5">plan not accepted</span>
                       )}
                       {r.status === "OPEN" && r.salesUntilNextTier != null && (r.marginalJumpCents ?? 0) > 0 && (
                         <span className={`text-[11px] ${r.salesUntilNextTier <= 2 ? "text-amber-400 font-semibold" : "text-muted-foreground"}`}>
@@ -324,10 +324,10 @@ export default function CommissionConsole() {
                           <div className="font-medium text-foreground flex items-center gap-1.5">
                             {r.repName}
                             {r.structure && !r.planAccepted && (
-                              <span className="text-[8px] font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-0.5">not accepted</span>
+                              <span className="text-2xs font-bold uppercase text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-1 py-0.5">not accepted</span>
                             )}
                           </div>
-                          <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                          <div className="text-2xs text-muted-foreground flex items-center gap-1">
                             {r.structure === "FLAT" ? <DollarSign className="w-2.5 h-2.5" /> : r.structure === "TIERED" ? <Layers className="w-2.5 h-2.5" /> : null}
                             {r.structure === "FLAT" ? "Flat" : r.structure === "TIERED" ? "Tiered" : "No plan"}
                           </div>
@@ -335,7 +335,7 @@ export default function CommissionConsole() {
                         <td className="px-2 py-2.5 text-right tabular-nums">
                           <span className="font-semibold text-foreground">{r.qualifiedSaleCount}</span>
                           {(r.pendingSaleCount > 0 || r.reversedSaleCount > 0) && (
-                            <div className="text-[10px] text-muted-foreground">
+                            <div className="text-2xs text-muted-foreground">
                               {r.pendingSaleCount > 0 && `${r.pendingSaleCount} pending`}
                               {r.pendingSaleCount > 0 && r.reversedSaleCount > 0 && " · "}
                               {r.reversedSaleCount > 0 && `${r.reversedSaleCount} reversed`}
@@ -565,7 +565,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
             <span className="tabular-nums font-bold text-lg">{usd(row.finalCommissionCents)}</span>
           </div>
           {stmt && (
-            <div className="mt-2 text-[10px] text-muted-foreground">
+            <div className="mt-2 text-2xs text-muted-foreground">
               Plan v{stmt.plan_version_number} · basis {String(stmt.qualification_basis).toLowerCase().replace("_at", "")} · calc #{stmt.calculation_version} · {stmt.timezone}
               {stmt.finalized_at && <> · locked {new Date(stmt.finalized_at).toLocaleString()}</>}
             </div>
@@ -574,7 +574,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
 
         {/* The exact doors */}
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
+          <div className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold mb-1.5">
             The doors behind this number ({sales.length})
           </div>
           {sales.length === 0 ? (
@@ -585,11 +585,11 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
                 <div key={s.id} className="px-3 py-2 flex items-center justify-between text-sm bg-card">
                   <div className="min-w-0">
                     <div className={`truncate ${saleStatusStyle[s.status] ?? "text-foreground"}`}>{s.address ?? s.external_id}</div>
-                    <div className="text-[10px] text-muted-foreground">
+                    <div className="text-2xs text-muted-foreground">
                       {new Date(s.qualified_at ?? s.sold_at).toLocaleString()} {s.city ? `· ${s.city}` : ""}
                     </div>
                   </div>
-                  <span className={`text-[10px] font-bold uppercase ${saleStatusStyle[s.status] ?? ""}`}>{s.status.toLowerCase()}</span>
+                  <span className={`text-2xs font-bold uppercase ${saleStatusStyle[s.status] ?? ""}`}>{s.status.toLowerCase()}</span>
                 </div>
               ))}
             </div>
@@ -599,7 +599,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
         {/* Adjustments */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Adjustments</span>
+            <span className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold">Adjustments</span>
             {canAdjust && row.statementId && row.status !== "PAID" && (
               <button onClick={() => setAdjOpen(v => !v)} className="text-[11px] text-primary hover:underline flex items-center gap-0.5" data-testid="btn-new-adjustment">
                 <Plus className="w-3 h-3" /> New
@@ -614,7 +614,7 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
                   onChange={e => setAdjAmount(e.target.value)} className="bg-card border-border h-8 text-sm" data-testid="input-adj-amount" />
               </div>
               <div>
-                <Label className="text-[10px] text-muted-foreground">Reason (required, audited)</Label>
+                <Label className="text-2xs text-muted-foreground">Reason (required, audited)</Label>
                 <Input value={adjReason} onChange={e => setAdjReason(e.target.value)} placeholder="e.g. Customer cancelled install — clawback per policy"
                   className="bg-card border-border h-8 text-sm mt-1" data-testid="input-adj-reason" />
               </div>
@@ -633,14 +633,14 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, onClose }: {
                 <div key={a.id} className="px-3 py-2 bg-card text-sm">
                   <div className="flex items-center justify-between">
                     <span className="tabular-nums font-semibold">{usdSigned(a.amount_cents)}</span>
-                    <span className={`text-[10px] font-bold uppercase ${a.status === "APPROVED" ? "text-emerald-400" : a.status === "REJECTED" ? "text-red-400" : "text-amber-400"}`}>{a.status.toLowerCase()}</span>
+                    <span className={`text-2xs font-bold uppercase ${a.status === "APPROVED" ? "text-emerald-400" : a.status === "REJECTED" ? "text-red-400" : "text-amber-400"}`}>{a.status.toLowerCase()}</span>
                   </div>
                   <div className="text-[11px] text-muted-foreground mt-0.5">{a.reason}</div>
                   {canAdjust && a.status === "PENDING" && (
                     <div className="flex gap-1.5 mt-1.5">
-                      <Button size="sm" variant="outline" className="h-6 text-[10px] border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
+                      <Button size="sm" variant="outline" className="h-6 text-2xs border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "APPROVE" })} data-testid={`btn-approve-adj-${a.id}`}>Approve</Button>
-                      <Button size="sm" variant="ghost" className="h-6 text-[10px] text-muted-foreground"
+                      <Button size="sm" variant="ghost" className="h-6 text-2xs text-muted-foreground"
                         disabled={decideAdj.isPending} onClick={() => decideAdj.mutate({ id: a.id, decision: "REJECT" })}>Reject</Button>
                     </div>
                   )}
@@ -794,7 +794,7 @@ function PayoutHistory() {
               </div>
               <div className="text-right flex-shrink-0">
                 <div className="text-sm font-semibold tabular-nums text-foreground">{usd(row.amountCents)}</div>
-                <div className={`text-[10px] font-semibold uppercase ${row.status === "paid" ? "text-emerald-400" : row.status === "failed" ? "text-red-400" : "text-amber-400"}`}>{row.status}</div>
+                <div className={`text-2xs font-semibold uppercase ${row.status === "paid" ? "text-emerald-400" : row.status === "failed" ? "text-red-400" : "text-amber-400"}`}>{row.status}</div>
               </div>
             </div>
           ))}
@@ -931,7 +931,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
                       <td className="px-4 py-2.5">
                         <div className="font-medium text-foreground">{r.repName}</div>
                         {!r.eligible && r.payoutStatus !== "paid" && r.blockReason && (
-                          <div className="text-[10px] text-muted-foreground mt-0.5">{r.blockReason}</div>
+                          <div className="text-2xs text-muted-foreground mt-0.5">{r.blockReason}</div>
                         )}
                       </td>
                       <td className="px-2 py-2.5 text-right tabular-nums font-semibold text-foreground">{usd(r.finalCommissionCents)}</td>
@@ -958,7 +958,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
           {/* Per-rep results of the latest run (paid / failed / skipped) */}
           {results && results.length > 0 && (
             <div className="border-t border-border" data-testid="pay-reps-results">
-              <div className="px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold bg-secondary/20">
+              <div className="px-4 py-2 text-2xs uppercase tracking-wider text-muted-foreground font-semibold bg-secondary/20">
                 Latest payout run
               </div>
               <div className="divide-y divide-border">
@@ -982,7 +982,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
           <div className="border-t border-border p-3 flex items-center gap-3 flex-wrap bg-secondary/10">
             <div className="text-xs text-muted-foreground mr-auto" data-testid="pay-reps-summary">
               <strong className="text-foreground">{payableCount}</strong> rep{payableCount === 1 ? "" : "s"} · <strong className="text-foreground tabular-nums">{usd(payableCents)}</strong> ready to pay
-              {payableCount > 0 && <div className="text-[10px] mt-0.5">Estimated Stripe fee for this run: {usd(estimatedCost.payoutRunFeeCents)}*</div>}
+              {payableCount > 0 && <div className="text-2xs mt-0.5">Estimated Stripe fee for this run: {usd(estimatedCost.payoutRunFeeCents)}*</div>}
             </div>
             {canPay && (
               <Button size="sm" className="h-8 bg-primary hover:bg-primary/90 text-white text-xs"
@@ -1024,7 +1024,7 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
             <p className="text-xs text-muted-foreground">
               This sends each eligible rep their commission to their connected Stripe account for bank payout. It moves real money and can't be undone from here. Only reps marked <span className="text-emerald-400 font-medium">Ready</span> are paid; blocked reps are skipped.
             </p>
-            <p className="text-[10px] text-muted-foreground">*Estimate uses Stripe's published standard US Connect rate: 0.25% + 25¢ per payout. Active accounts may add $2 per paid rep each month; confirm your account's contracted pricing.</p>
+            <p className="text-2xs text-muted-foreground">*Estimate uses Stripe's published standard US Connect rate: 0.25% + 25¢ per payout. Active accounts may add $2 per paid rep each month; confirm your account's contracted pricing.</p>
           </div>
           <DialogFooter>
             <Button variant="outline" className="border-border" onClick={() => setConfirmOpen(false)} disabled={pay.isPending}>Cancel</Button>

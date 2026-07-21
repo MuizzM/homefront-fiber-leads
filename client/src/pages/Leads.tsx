@@ -48,14 +48,16 @@ const STATUS_LABEL: Record<string, string> = {
 // ONE status color language — the SALES RABBIT palette, matched to the map's
 // STATE_COLORS / PIN_COLORS so a status looks identical on the list and the map:
 // Prospect RED, Contacted slate, Interested purple, Sold green, Not Interested
-// black/charcoal (dead), Follow-up orange.
+// black/charcoal (dead), Follow-up orange. Each hue uses the LeadCard light/dark
+// pairing (-600 on a /10 tint in light, -400 on /15 in dark) so chips clear AA
+// in BOTH themes; the generic "good" green rides the semantic success token.
 const STATUS_COLOR: Record<string, string> = {
-  prospect:      "bg-red-500/15 text-red-400",
-  contacted:     "bg-slate-500/15 text-slate-300",
-  interested:    "bg-violet-500/15 text-violet-400",
-  sold:          "bg-emerald-500/15 text-emerald-400",
-  not_interested:"bg-slate-700/40 text-slate-300",
-  follow_up:     "bg-orange-500/15 text-orange-400",
+  prospect:      "bg-red-500/10 text-red-600 dark:bg-red-500/15 dark:text-red-400",
+  contacted:     "bg-slate-500/10 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300",
+  interested:    "bg-violet-500/10 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
+  sold:          "bg-success/10 text-success",
+  not_interested:"bg-slate-600/15 text-slate-700 dark:bg-slate-700/40 dark:text-slate-300",
+  follow_up:     "bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400",
 };
 
 const OUTCOME_ICONS: Record<string, React.ElementType> = {
@@ -68,10 +70,10 @@ const OUTCOME_ICONS: Record<string, React.ElementType> = {
 
 const OUTCOME_COLORS: Record<string, string> = {
   not_home:      "text-muted-foreground",
-  not_interested:"text-red-400",
-  interested:    "text-violet-400",
-  callback:      "text-amber-400",
-  sold:          "text-green-400",
+  not_interested:"text-red-600 dark:text-red-400",
+  interested:    "text-violet-600 dark:text-violet-400",
+  callback:      "text-amber-600 dark:text-amber-400",
+  sold:          "text-success",
 };
 
 // The manager's quick-log uses the SAME one-tap outcome model as the rep's
@@ -291,7 +293,7 @@ function KnockLogger({ lead, team }: {
                     <div className="flex-1 min-w-0">
                       <span className={`font-medium ${color}`}>{k.outcome.replace("_", " ")}</span>
                       <span className="text-muted-foreground ml-1">· {repName}</span>
-                      {k.callbackDate && <span className="text-amber-400 ml-1">Callback {k.callbackDate}</span>}
+                      {k.callbackDate && <span className="text-amber-600 dark:text-amber-400 ml-1">Callback {k.callbackDate}</span>}
                       {k.notes && <div className="text-muted-foreground italic truncate">{k.notes}</div>}
                     </div>
                     <span className="text-muted-foreground flex-shrink-0">
@@ -493,10 +495,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <X className="w-4 h-4" />
           </button>
           <div className="flex items-center gap-2 pr-8">
-            <Badge className={`text-[10px] px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
+            <Badge className={`text-2xs px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
               {STATUS_LABEL[current.leadStatus] ?? current.leadStatus}
             </Badge>
-            {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-orange-500/10 text-orange-400 text-[10px]">High priority</Badge>}
+            {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400 text-2xs">High priority</Badge>}
           </div>
           <SheetTitle className="text-lg font-semibold tracking-tight mt-2">{current.address}</SheetTitle>
           <p className="text-xs text-muted-foreground">{current.city}, {current.state} {current.zip}</p>
@@ -512,18 +514,18 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <Navigation className="w-3.5 h-3.5" /> Navigate
           </a>
           {canAssign && <button onClick={onAssign} className="h-9 rounded-md border border-border bg-background text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-muted"><UserCheck className="w-3.5 h-3.5" />{current.assignedRepId ? "Reassign" : "Assign"}</button>}
-          {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-9 rounded-md border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-emerald-500/15"><CheckCircle2 className="w-3.5 h-3.5" /> Qualify</button>}
+          {canEdit && current.leadStatus !== "interested" && current.leadStatus !== "sold" && <button onClick={onQualify} className="h-9 rounded-md border border-success/30 bg-success/10 text-success text-xs font-semibold flex items-center justify-center gap-1.5 hover:bg-success/15"><CheckCircle2 className="w-3.5 h-3.5" /> Qualify</button>}
         </div>
 
         <div className="px-5 py-5">
           <div className="grid grid-cols-2 gap-3 mb-5">
             <div className="rounded-lg border border-border bg-background px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Assigned rep</div>
+              <div className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold">Assigned rep</div>
               <div className="text-sm font-medium mt-1">{assignedRep?.name ?? (current.assignedRepId ? `Rep #${current.assignedRepId}` : "Unassigned")}</div>
-              {onboardingStage && <div className="text-[10px] text-primary mt-1">Onboarding · {ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage.replace(/_/g, " ")}</div>}
+              {onboardingStage && <div className="text-2xs text-primary mt-1">Onboarding · {ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage.replace(/_/g, " ")}</div>}
             </div>
             <div className="rounded-lg border border-border bg-background px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Territory</div>
+              <div className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold">Territory</div>
               <div className="text-sm font-medium mt-1">{current.city}, {current.state}</div>
             </div>
           </div>
@@ -550,7 +552,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         {/* Competition Section */}
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            <Building2 className="w-3.5 h-3.5 text-amber-400" />
+            <Building2 className="w-3.5 h-3.5 text-warning" />
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Competition at This Address</span>
           </div>
           {isLoading ? (
@@ -562,9 +564,9 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
               {enrich.competitorTech && <InfoRow icon={Info} label="Their Technology" value={enrich.competitorTech} />}
             </div>
           ) : (
-            <div className="bg-green-500/10 border border-green-500/20 rounded-lg px-3 py-3 flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-green-400" />
-              <span className="text-xs text-green-400 font-medium">No competitor ISP detected at this address</span>
+            <div className="bg-success/10 border border-success/20 rounded-lg px-3 py-3 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-success" />
+              <span className="text-xs text-success font-medium">No competitor ISP detected at this address</span>
             </div>
           )}
         </div>
@@ -574,7 +576,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         {/* Neighborhood Income Section */}
         <div className="mb-4">
           <div className="flex items-center gap-2 mb-2">
-            <DollarSign className="w-3.5 h-3.5 text-green-400" />
+            <DollarSign className="w-3.5 h-3.5 text-success" />
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Neighborhood Data (ZIP {lead.zip})</span>
             <button onClick={() => refetch()} disabled={isFetching}
               className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
@@ -662,7 +664,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
                     {item.type === "status_change" ? `Status changed to ${(item.status ?? "updated").replace(/_/g, " ")}` : item.type === "assignment" ? `Assigned to ${item.assignedTo ?? "team"}` : "Note added"}
                   </div>
                   {item.notePreview && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.notePreview}</div>}
-                  <div className="text-[10px] text-muted-foreground mt-1">{item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}</div>
+                  <div className="text-2xs text-muted-foreground mt-1">{item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}</div>
                 </div>
               ))}
             </div>
@@ -695,10 +697,10 @@ const formatActivity = (value: string | null | undefined) => {
 const leadSource = (lead: Lead) => lead.dfAddressId ? "Fiber scan" : lead.assignmentSource === "territory-sync" ? "Territory sync" : "Direct intake";
 
 const nextAction = (lead: Lead) => {
-  if (!lead.assignedRepId) return { label: "Assign owner", tone: "text-amber-400" };
+  if (!lead.assignedRepId) return { label: "Assign owner", tone: "text-warning" };
   if (lead.leadStatus === "prospect") return { label: "First contact", tone: "text-primary" };
-  if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-orange-400" };
-  if (lead.leadStatus === "interested") return { label: "Close sale", tone: "text-emerald-400" };
+  if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-orange-600 dark:text-orange-400" };
+  if (lead.leadStatus === "interested") return { label: "Close sale", tone: "text-success" };
   if (lead.leadStatus === "sold") return { label: "Complete", tone: "text-muted-foreground" };
   return { label: "Review", tone: "text-muted-foreground" };
 };
@@ -905,17 +907,17 @@ export default function Leads() {
 
       {isRep && (
         <div className="grid grid-cols-3 gap-2 md:hidden" data-testid="rep-leads-summary">
-          <div className="rounded-xl border border-border bg-card p-3"><div className="text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Assigned</div></div>
-          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-orange-400">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
-          <div className="rounded-xl border border-violet-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-violet-400">{bs.interested ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Interested</div></div>
+          <div className="rounded-xl border border-border bg-card p-3"><div className="text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Assigned</div></div>
+          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-orange-600 dark:text-orange-400">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
+          <div className="rounded-xl border border-violet-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-violet-600 dark:text-violet-400">{bs.interested ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Interested</div></div>
         </div>
       )}
       <div className={`${isRep ? "hidden md:flex" : "flex"} gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`} data-testid="leads-kpi">
         <EnterpriseKpi label="Total leads" value={leadStats?.total ?? 0} helper="All active records" icon={Users} />
-        <EnterpriseKpi label="Qualified" value={leadStats?.qualified ?? 0} helper="Interested or sold" icon={CheckCircle2} tone="text-emerald-400" />
-        <EnterpriseKpi label="Assigned" value={leadStats?.assigned ?? 0} helper="Owned by a field rep" icon={UserCheck} tone="text-violet-400" />
-        <EnterpriseKpi label="Unassigned" value={leadStats?.unassigned ?? 0} helper="Requires an owner" icon={CircleDot} tone="text-amber-400" warning={(leadStats?.unassigned ?? 0) > 0} />
-        <EnterpriseKpi label="Stale" value={leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-rose-400" warning={(leadStats?.stale ?? 0) > 0} />
+        <EnterpriseKpi label="Qualified" value={leadStats?.qualified ?? 0} helper="Interested or sold" icon={CheckCircle2} tone="text-success" />
+        <EnterpriseKpi label="Assigned" value={leadStats?.assigned ?? 0} helper="Owned by a field rep" icon={UserCheck} tone="text-violet-600 dark:text-violet-400" />
+        <EnterpriseKpi label="Unassigned" value={leadStats?.unassigned ?? 0} helper="Requires an owner" icon={CircleDot} tone="text-warning" warning={(leadStats?.unassigned ?? 0) > 0} />
+        <EnterpriseKpi label="Stale" value={leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-rose-600 dark:text-rose-400" warning={(leadStats?.stale ?? 0) > 0} />
       </div>
 
       <section className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">
@@ -928,18 +930,18 @@ export default function Leads() {
         </div>
 
         <div className="px-4 py-3 border-b border-border bg-background/40 space-y-3">
-          <div className="flex flex-col xl:flex-row gap-2.5">
+          <div className="flex flex-col lg:flex-row gap-2.5">
             <div className="relative flex-1 min-w-[240px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-9" data-testid="input-search-leads" />
               {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
             </div>
-            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="xl:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" />Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-[10px] text-primary">On</span>}</button>
-            <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 xl:flex gap-2`}>
-              {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
-              <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
-              <Select value={filterCity} onValueChange={handleCityChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[145px]" data-testid="filter-city"><SelectValue placeholder="Territory" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="all">All territories</SelectItem>{cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
-              <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber states</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>
+            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="lg:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" />Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
+            <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 lg:flex gap-2`}>
+              {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
+              <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
+              <Select value={filterCity} onValueChange={handleCityChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]" data-testid="filter-city"><SelectValue placeholder="Territory" /></SelectTrigger><SelectContent className="max-h-64"><SelectItem value="all">All territories</SelectItem>{cities.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent></Select>
+              <Select value={filterFiber} onValueChange={handleFiberChange}><SelectTrigger className="h-10 bg-card lg:h-9 lg:w-[145px]"><SelectValue placeholder="Fiber status" /></SelectTrigger><SelectContent><SelectItem value="all">All fiber states</SelectItem>{fiberStatuses.map(status => <SelectItem key={status} value={status}>{status.replace(/_/g, " ")}</SelectItem>)}</SelectContent></Select>
             </div>
           </div>
 
@@ -947,35 +949,48 @@ export default function Leads() {
             {["all", ...LEAD_STATUSES].map(status => {
               const active = filterStatus === status;
               const count = status === "all" ? (leadStats?.total ?? 0) : (bs[status] ?? 0);
-              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-7 px-2.5 rounded-md text-[11px] font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
+              return <button key={status} onClick={() => handleStatusChange(status)} className={`h-9 px-3 text-[12px] lg:h-7 lg:px-2.5 lg:text-2xs rounded-md font-semibold whitespace-nowrap border transition-colors ${active ? "bg-primary/10 text-primary border-primary/25" : "border-transparent text-muted-foreground hover:bg-muted hover:text-foreground"}`}>{status === "all" ? "All leads" : STATUS_LABEL[status]} <span className="ml-1 tabular-nums opacity-70">{count}</span></button>;
             })}
-            {activeFilters && <button onClick={clearAllFilters} className="h-7 px-2 ml-auto text-[11px] font-semibold text-muted-foreground hover:text-foreground whitespace-nowrap">Clear filters</button>}
+            {activeFilters && <button onClick={clearAllFilters} className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-2xs ml-auto font-semibold text-muted-foreground hover:text-foreground whitespace-nowrap">Clear filters</button>}
           </div>
         </div>
 
         {isLoading ? (
-          <div className="divide-y divide-border">{Array.from({ length: 8 }).map((_, i) => <div key={i} className="grid grid-cols-[2fr_1fr_1fr_1fr] gap-6 px-4 py-4"><Skeleton className="h-8" /><Skeleton className="h-8" /><Skeleton className="h-8" /><Skeleton className="h-8" /></div>)}</div>
+          <>
+            {/* Desktop: 8-column row skeletons mirroring the real table grid. */}
+            <div className="hidden lg:block divide-y divide-border">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="grid grid-cols-[27%_1fr_1fr_1fr_1fr_1fr_1fr_1fr] items-center gap-3 px-4 py-3">
+                  {Array.from({ length: 8 }).map((_, j) => <Skeleton key={j} className="h-8" />)}
+                </div>
+              ))}
+            </div>
+            {/* Mobile: stacked card skeletons matching the card list. */}
+            <div className="lg:hidden space-y-3 px-4 py-4">
+              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 w-full rounded-xl" />)}
+            </div>
+          </>
         ) : isError ? (
-          <div className="py-16 px-6 text-center"><AlertTriangle className="w-7 h-7 text-rose-400 mx-auto" /><div className="text-sm font-semibold mt-3">Lead data could not be loaded</div><div className="text-xs text-muted-foreground mt-1">Your filters are preserved. Retry when the connection is restored.</div><Button variant="outline" size="sm" onClick={() => refetchLeads()} className="mt-4 h-8"><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry</Button></div>
+          <div className="py-16 px-6 text-center"><AlertTriangle className="w-7 h-7 text-rose-600 dark:text-rose-400 mx-auto" /><div className="text-sm font-semibold mt-3">Lead data could not be loaded</div><div className="text-xs text-muted-foreground mt-1">Your filters are preserved. Retry when the connection is restored.</div><Button variant="outline" size="sm" onClick={() => refetchLeads()} className="mt-4 h-8"><RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry</Button></div>
         ) : filtered.length === 0 ? (
           <div className="py-16 px-6 text-center"><div className="w-11 h-11 rounded-lg bg-primary/10 flex items-center justify-center mx-auto"><Users className="w-5 h-5 text-primary" /></div><div className="text-sm font-semibold mt-3">{activeFilters ? "No leads match this operational view" : "No leads have been added"}</div><div className="text-xs text-muted-foreground mt-1 max-w-sm mx-auto">{activeFilters ? "Clear one or more filters to broaden the pipeline." : "Add a lead or run a market scan to start building the pipeline."}</div>{activeFilters && <Button variant="outline" size="sm" onClick={clearAllFilters} className="mt-4 h-8"><X className="w-3.5 h-3.5 mr-1" />Clear filters</Button>}</div>
         ) : (
           <>
             <div className="hidden lg:block overflow-x-auto">
               <table className="w-full min-w-[1050px] border-collapse text-left">
-                <thead><tr className="border-b border-border bg-muted/20 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
+                <thead><tr className="border-b border-border bg-muted/20 text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
                 <tbody className="divide-y divide-border">
                   {filtered.map(lead => {
                     const next = nextAction(lead);
                     const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
                     return (
                       <tr key={lead.id} data-testid={`card-lead-${lead.id}`} className="group hover:bg-muted/35 transition-colors">
-                        <td className="px-4 py-3"><button onClick={() => setIntelLead(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate">{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
-                        <td className="px-3 py-3"><Badge className={`border-0 text-[10px] font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus}</Badge></td>
-                        <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-[10px] text-muted-foreground">{lead.state} {lead.zip}</div></td>
-                        <td className="px-3 py-3"><button onClick={() => canAssign && setAssignLead(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-amber-400"}`}>{assignmentName(lead)}</button><div className="text-[10px] text-muted-foreground mt-0.5">{lead.assignedRepId && onboardingByRep.get(lead.assignedRepId) ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingByRep.get(lead.assignedRepId)!] ?? onboardingByRep.get(lead.assignedRepId)}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
-                        <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-emerald-400" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-[10px] text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
-                        <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-[10px] text-muted-foreground mt-0.5">Record updated</div></td>
+                        <td className="px-4 py-3"><button onClick={() => setIntelLead(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate">{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+                        <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus}</Badge></td>
+                        <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
+                        <td className="px-3 py-3"><button onClick={() => canAssign && setAssignLead(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignmentName(lead)}</button><div className="text-2xs text-muted-foreground mt-0.5">{lead.assignedRepId && onboardingByRep.get(lead.assignedRepId) ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingByRep.get(lead.assignedRepId)!] ?? onboardingByRep.get(lead.assignedRepId)}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
+                        <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-success" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
+                        <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-600 dark:text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
                         <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
                         <td className="px-3 py-3">
                           <div className="flex items-center justify-end gap-0.5">
@@ -983,7 +998,7 @@ export default function Leads() {
                             {canAssign && <button onClick={() => setAssignLead(lead)} title="Assign" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><UserCheck className="w-3.5 h-3.5" /></button>}
                             <button onClick={() => setIntelLead(lead)} title="Open details" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-primary"><ArrowUpRight className="w-3.5 h-3.5" /></button>
                             {canEdit && <button onClick={() => setEditLead(lead)} title="Edit" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground opacity-0 group-hover:opacity-100 focus:opacity-100"><Edit2 className="w-3.5 h-3.5" /></button>}
-                            {canDelete && <button onClick={() => setDeleteId(lead.id)} title="Delete" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>}
+                            {canDelete && <button onClick={() => setDeleteId(lead.id)} title="Delete" className="w-8 h-8 rounded-md inline-flex items-center justify-center text-muted-foreground hover:bg-rose-500/10 hover:text-rose-600 dark:hover:text-rose-400 opacity-0 group-hover:opacity-100 focus:opacity-100"><Trash2 className="w-3.5 h-3.5" /></button>}
                           </div>
                         </td>
                       </tr>
@@ -1007,12 +1022,12 @@ export default function Leads() {
                           <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
                           <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground"><MapPin className="h-3.5 w-3.5 shrink-0" />{lead.city}, {lead.state} {lead.zip}</div>
                         </div>
-                        <Badge className={`shrink-0 border-0 text-[10px] ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
+                        <Badge className={`shrink-0 border-0 text-2xs ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
                       </div>
                       <div className="mt-3 grid grid-cols-3 rounded-lg border border-border bg-background/45">
-                        <div className="px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
-                        <div className="border-x border-border px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
-                        <div className="px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
+                        <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
+                        <div className="border-x border-border px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
+                        <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
                       </div>
                     </button>
                     <div className="mt-3 grid grid-cols-3 gap-2">
@@ -1027,7 +1042,7 @@ export default function Leads() {
           </>
         )}
 
-        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-7 px-2 text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
+        {!isLoading && !isError && filtered.length > 0 && <div className="px-4 py-3 border-t border-border flex items-center justify-between gap-3"><span className="text-[11px] text-muted-foreground tabular-nums">Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, totalLeads)} of {totalLeads.toLocaleString()}</span><div className="flex items-center gap-1"><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft className="w-3.5 h-3.5" />Prev</Button><span className="text-[11px] text-muted-foreground px-2">Page {page + 1} of {Math.max(totalPages, 1)}</span><Button size="sm" variant="outline" className="h-9 px-3 text-[12px] lg:h-7 lg:px-2 lg:text-xs" disabled={page >= totalPages - 1} onClick={() => setPage(p => p + 1)}>Next<ChevronRight className="w-3.5 h-3.5" /></Button></div></div>}
       </section>
 
       {/* Dialogs */}

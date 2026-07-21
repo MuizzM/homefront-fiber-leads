@@ -52,6 +52,10 @@ export default {
           border: "var(--destructive-border)",
         },
         ring: "hsl(var(--ring) / <alpha-value>)",
+        // Semantic status colors — replaces ad-hoc raw emerald/amber usage so
+        // both themes stay AA (tokens defined in index.css :root/.light).
+        success: "hsl(var(--success) / <alpha-value>)",
+        warning: "hsl(var(--warning) / <alpha-value>)",
         chart: {
           "1": "hsl(var(--chart-1) / <alpha-value>)",
           "2": "hsl(var(--chart-2) / <alpha-value>)",
@@ -81,6 +85,13 @@ export default {
           busy: "rgb(239 68 68)",
           offline: "rgb(156 163 175)",
         },
+      },
+      // Legibility floor: 11px is the smallest sanctioned text size (reps read
+      // this on phones in sunlight). Size-only — no line-height override — so
+      // sweeping arbitrary text-[9px]/text-[10px] to text-2xs never reflows
+      // line boxes. Do not introduce arbitrary sizes below this.
+      fontSize: {
+        "2xs": "0.6875rem",
       },
       fontFamily: {
         /* Real stacks — the old var(--font-*) custom properties were never defined */

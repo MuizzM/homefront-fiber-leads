@@ -19,7 +19,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Navigation, Clock, WifiOff, RefreshCw, ChevronRight, MapPin as MapPinIcon,
-  Zap, Flame, Repeat, DollarSign, Trophy, Sun, CalendarClock,
+  Zap, Flame, Repeat, DollarSign, Trophy, Sun, CalendarClock, SkipForward,
 } from "lucide-react";
 
 // Visible keyboard focus for outdoor + accessibility — one ring, teal, everywhere.
@@ -120,7 +120,9 @@ export default function Today() {
   }, [pins, myLoc, skip]);
 
   const [sheetLead, setSheetLead] = useState<Pin | null>(null);
-  const loading = pinsQ.isLoading || boardQ.isLoading;
+  // Follow-ups included in the gate so the banner doesn't pop in above the hero
+  // after first paint (it would shift "Log outcome" as the rep taps).
+  const loading = pinsQ.isLoading || boardQ.isLoading || followupsQ.isLoading;
   const offline = snap.online === false;
 
   // Callbacks due today or earlier (still owed) — the top of the follow-up loop.
@@ -155,7 +157,7 @@ export default function Today() {
               disabled={clockOut.isPending}
               data-testid="today-clock-out"
               aria-label={confirmOut ? "Tap again to clock out" : "On the clock — tap to clock out"}
-              className={`shrink-0 mt-1 inline-flex items-center gap-1.5 rounded-full border px-3 py-2 text-[11px] font-semibold active:scale-95 transition disabled:opacity-60 ${FOCUS} ${confirmOut ? "bg-red-500/15 text-red-500 border-red-500/30" : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"}`}
+              className={`shrink-0 mt-1 inline-flex items-center gap-1.5 rounded-full border min-h-11 px-3.5 text-[12px] font-semibold active:scale-95 transition disabled:opacity-60 ${FOCUS} ${confirmOut ? "bg-red-500/15 text-red-500 border-red-500/30" : "bg-emerald-500/15 text-emerald-400 border-emerald-500/25"}`}
             >
               {clockOut.isPending
                 ? <><RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />Clocking out…</>
@@ -176,6 +178,9 @@ export default function Today() {
           </div>
         )}
 
+        {/* Reserve the clock-in card's slot while its status loads, so the card
+            doesn't pop in above the hero and shift the tap targets. */}
+        {clockQ.isLoading && <Skeleton className="mt-3 h-[62px] w-full rounded-xl" />}
         {clockQ.data && !clockQ.data.clockedIn && (
           <button onClick={() => clockIn.mutate()} disabled={clockIn.isPending} data-testid="today-clock-in"
             className={`mt-3 w-full flex items-center gap-3 rounded-xl bg-card border border-border px-4 py-3 text-left active:scale-[.99] transition-transform disabled:opacity-60 hover:border-primary/30 ${FOCUS}`}>
@@ -187,9 +192,9 @@ export default function Today() {
 
         <div className="mt-4 rounded-xl border border-border bg-card overflow-hidden">
           <div className="grid grid-cols-3">
-            <Stat label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)} tone="text-foreground" accent="bg-primary" />
-            <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-emerald-400" accent="bg-emerald-500" border />
-            <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" accent="bg-sky-400" border />
+            <Stat label="Doors today" value={loading ? null : (myRow?.knocksToday ?? 0)} tone="text-foreground" accent="bg-primary" error={boardQ.isError} />
+            <Stat label="Sales today" value={loading ? null : (myRow?.salesToday ?? 0)} tone="text-emerald-400" accent="bg-emerald-500" border error={boardQ.isError} />
+            <Stat label="Doors left" value={loading ? null : route.openCount} tone="text-primary" accent="bg-sky-400" border error={pinsQ.isError} />
           </div>
           {!loading && routeTotal > 0 && (
             <div className="border-t border-border px-3.5 py-3">
@@ -239,7 +244,7 @@ export default function Today() {
             <HeroCard p={route.hero} loc={myLoc}
               onLog={() => setSheetLead(route.hero!)}
               onOpen={() => navigate(`/lead/${route.hero!.id}`)}
-              onSkip={() => setSkip(s => new Set(s).add(route.hero!.id))} />
+              onSkip={() => { setSkip(s => new Set(s).add(route.hero!.id)); toast({ title: "Door skipped" }); }} />
           )}
         </div>
 
@@ -281,13 +286,15 @@ export default function Today() {
   );
 }
 
-function Stat({ label, value, tone, accent = "bg-muted-foreground/50", border }: { label: string; value: number | null; tone: string; accent?: string; border?: boolean }) {
+function Stat({ label, value, tone, accent = "bg-muted-foreground/50", border, error }: { label: string; value: number | null; tone: string; accent?: string; border?: boolean; error?: boolean }) {
   return (
     <div className={`px-3 py-3.5 ${border ? "border-l border-border" : ""}`}>
       <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wide text-muted-foreground">
         <span className={`w-1.5 h-1.5 rounded-full ${accent}`} aria-hidden="true" />{label}
       </div>
-      {value == null ? <Skeleton className="h-7 w-10 mt-1.5" /> : <div className={`text-[25px] font-bold tabular-nums leading-none mt-1.5 ${tone}`}>{value}</div>}
+      {/* A failed query must not render as a real "0" — show an honest em-dash. */}
+      {error ? <div className="text-[25px] font-bold tabular-nums leading-none mt-1.5 text-muted-foreground/60" aria-label={`${label} unavailable`}>—</div>
+        : value == null ? <Skeleton className="h-7 w-10 mt-1.5" /> : <div className={`text-[25px] font-bold tabular-nums leading-none mt-1.5 ${tone}`}>{value}</div>}
     </div>
   );
 }
@@ -331,7 +338,7 @@ function HeroCard({ p, loc, onLog, onOpen, onSkip }: { p: Pin; loc: LatLng | nul
       <div className="flex gap-2.5 mt-4">
         <button onClick={onLog} data-testid="hero-log" className={`flex-1 h-12 rounded-xl bg-primary text-primary-foreground font-semibold text-[15px] shadow-sm active:scale-95 transition-transform hover:bg-primary/90 ${FOCUS}`}>Log outcome</button>
         <a href={directionsUrl(p)} target="_blank" rel="noreferrer" aria-label="Navigate to this address" className={`w-12 h-12 rounded-xl bg-secondary border border-border flex items-center justify-center active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><Navigation className="w-5 h-5 text-foreground" aria-hidden="true" /></a>
-        <button onClick={onSkip} aria-label="Skip this door" className={`w-12 h-12 rounded-xl bg-secondary border border-border flex items-center justify-center text-muted-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><ChevronRight className="w-5 h-5" aria-hidden="true" /></button>
+        <button onClick={onSkip} aria-label="Skip this door" className={`w-12 h-12 rounded-xl bg-secondary border border-border flex items-center justify-center text-muted-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}><SkipForward className="w-5 h-5" aria-hidden="true" /></button>
       </div>
     </div>
   );

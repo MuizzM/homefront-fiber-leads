@@ -67,7 +67,7 @@ const STATUS: Record<OnboardingDocumentStatus, { label: string; className: strin
 
 function StatusPill({ status }: { status: OnboardingDocumentStatus }) {
   const item = STATUS[status];
-  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold ${item.className}`}>{item.label}</span>;
+  return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-2xs font-semibold ${item.className}`}>{item.label}</span>;
 }
 
 function LegalCheckbox({ checked, onChange, children, testId }: { checked: boolean; onChange: (checked: boolean) => void; children: React.ReactNode; testId: string }) {
@@ -153,7 +153,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
             <span className="w-8 h-8 rounded-xl bg-primary/10 text-primary flex items-center justify-center"><FileSignature className="w-4 h-4" /></span>
             {snapshot?.title || "Loading agreement"}
           </DialogTitle>
-          {content.data && <p className="text-[10px] text-muted-foreground font-mono mt-1">Document SHA-256 {content.data.contentSha256}</p>}
+          {content.data && <p className="text-2xs text-muted-foreground font-mono mt-1">Document SHA-256 {content.data.contentSha256}</p>}
         </DialogHeader>
 
         {content.isLoading && <div className="flex-1 p-5 space-y-3"><div className="h-7 bg-secondary rounded animate-pulse" /><div className="h-52 bg-secondary/60 rounded animate-pulse" /></div>}
@@ -175,13 +175,13 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
             >
               <div className="max-w-2xl mx-auto rounded-xl bg-white text-slate-800 border border-slate-200 shadow-sm px-5 sm:px-8 py-7">
                 <div className="text-center border-b border-slate-200 pb-5">
-                  <p className="text-[10px] font-bold tracking-[0.18em] uppercase text-teal-700">Home Front Sign</p>
+                  <p className="text-2xs font-bold tracking-[0.18em] uppercase text-teal-700">Home Front Sign</p>
                   <h2 className="text-xl font-bold text-slate-900 mt-2">{snapshot.title}</h2>
                   <p className="text-xs text-slate-500 mt-2">Version {snapshot.documentVersion} • Issued {new Date(snapshot.issuedAt).toLocaleDateString()}</p>
                 </div>
                 <div className="grid sm:grid-cols-2 gap-3 py-5 text-xs">
-                  <div className="rounded-lg bg-slate-50 p-3"><span className="font-bold block text-[10px] text-slate-500 uppercase">Company</span>{snapshot.companyName}</div>
-                  <div className="rounded-lg bg-slate-50 p-3"><span className="font-bold block text-[10px] text-slate-500 uppercase">Signer</span>{snapshot.signerName}<br />{snapshot.signerEmail}</div>
+                  <div className="rounded-lg bg-slate-50 p-3"><span className="font-bold block text-2xs text-slate-500 uppercase">Company</span>{snapshot.companyName}</div>
+                  <div className="rounded-lg bg-slate-50 p-3"><span className="font-bold block text-2xs text-slate-500 uppercase">Signer</span>{snapshot.signerName}<br />{snapshot.signerEmail}</div>
                 </div>
                 <div className="space-y-5">
                   {snapshot.sections.map(section => (
