@@ -1,6 +1,41 @@
 import crypto from "node:crypto";
 import { rawDb } from "./db";
 
+// ── Audit-log retention (2026-07-21) ─────────────────────────────────────────
+// fiber_job_events and fiber_job_failures are append-only diagnostics that had NO
+// retention. At production scan volume they grew ~1.1M rows/DAY and reached 7.7M +
+// 6.3M rows — 78% of a 7.4GB database. That one fact cascaded into every outage
+// class we hit: backup snapshots too large for the disk (4 of 5 deploys failed), a
+// 2.6GB WAL, and enough write volume to contend for SQLite's single writer and
+// starve the web tier. A manual prune is not a fix — they refill in ~12 days. So
+// each writer now amortizes a BOUNDED trim: every PRUNE_EVERY inserts, delete the
+// oldest rows beyond MAX_ROWS in one small capped statement — never a giant DELETE
+// that would hold the write lock. FIBER_LOG_MAX_ROWS=0 disables.
+const FIBER_LOG_MAX_ROWS = Math.max(0, Number(process.env.FIBER_LOG_MAX_ROWS ?? 750_000) || 0);
+const FIBER_LOG_PRUNE_EVERY = Math.max(100, Number(process.env.FIBER_LOG_PRUNE_EVERY ?? 5_000) || 5_000);
+const FIBER_LOG_PRUNE_CHUNK = Math.max(100, Number(process.env.FIBER_LOG_PRUNE_CHUNK ?? 5_000) || 5_000);
+const _sinceTrim: Record<string, number> = { fiber_job_events: 0, fiber_job_failures: 0 };
+
+/** Amortized, bounded retention for an append-only log table. Called after an
+ *  insert; does real work only once every FIBER_LOG_PRUNE_EVERY calls. Trims toward
+ *  the newest MAX_ROWS, at most PRUNE_CHUNK rows per pass, so it never holds the
+ *  single SQLite writer long enough to stall the web tier. Best-effort. */
+function trimFiberLog(table: "fiber_job_events" | "fiber_job_failures", pk: "sequence" | "id"): void {
+  if (FIBER_LOG_MAX_ROWS <= 0) return;
+  if (++_sinceTrim[table] < FIBER_LOG_PRUNE_EVERY) return;
+  _sinceTrim[table] = 0;
+  try {
+    const cutoff = rawDb.prepare(
+      `SELECT "${pk}" AS v FROM "${table}" ORDER BY "${pk}" DESC LIMIT 1 OFFSET ?`,
+    ).get(FIBER_LOG_MAX_ROWS) as any;
+    if (!cutoff?.v) return; // under the cap — nothing to trim
+    rawDb.prepare(
+      `DELETE FROM "${table}" WHERE "${pk}" IN (
+         SELECT "${pk}" FROM "${table}" WHERE "${pk}" <= ? LIMIT ${FIBER_LOG_PRUNE_CHUNK})`,
+    ).run(cutoff.v);
+  } catch { /* retention is best-effort — never break a scan over diagnostics */ }
+}
+
 export type FiberEventType =
   | "job.started" | "job.progress" | "job.paused" | "job.resumed" | "job.cancelled"
   | "job.completed" | "job.failed" | "address.completed" | "address.failed" | "address.requeued"
@@ -35,6 +70,7 @@ export function appendFiberEvent(input: {
         input.runId, input.tenantId, sequence,
         Number(input.payload?.completedTargets ?? 0), JSON.stringify(input.payload ?? {}),
       );
+  trimFiberLog("fiber_job_events", "sequence");
   return sequence;
 }
 
@@ -110,6 +146,7 @@ export function recordFiberFailure(input: {
           input.tenantId, input.runId, input.targetId, input.category, input.message.slice(0, 500),
           input.attempt, JSON.stringify({ correlationId: cid }),
         );
+  trimFiberLog("fiber_job_failures", "id");
 }
 
 export function retryDeadLetter(tenantId: number, id: number, userId: number): { runId: string; targetId: number } | null {

@@ -22,8 +22,13 @@ AGE_RECIPIENT="${AGE_RECIPIENT:?AGE_RECIPIENT is required}"
 #  1) age-based retention (default 14 days, KEEP_MIN newest always survive)
 #  2) space guard — if free space < 3x the DB size, delete oldest backups
 #     until there is room (or only KEEP_MIN remain).
-RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
-KEEP_MIN="${BACKUP_KEEP_MIN:-5}"
+# Sized to the ACTUAL artifact: the DB is ~5GB compacted, so each encrypted
+# backup is ~5GB on a 38GB disk. The old defaults (keep 5-6) reserved up to 30GB
+# and refilled the disk within a few deploys — which is what made backups fail and
+# blocked deploys. Keep 3 generations (~15GB worst case) and let the space guard
+# fall back to 1 when the disk is genuinely tight.
+RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
+KEEP_MIN="${BACKUP_KEEP_MIN:-1}"
 
 # Newest-first list of existing backups (epoch mtime + path, sorted).
 backups_newest_first() {
@@ -46,7 +51,7 @@ fi
 # Count cap — deploys back up several times a day at ~GB scale, so an age
 # window alone still accumulates days × deploys × size (observed: 28 backups,
 # 21GB, 87% disk). Keep the newest KEEP_MAX regardless of age.
-KEEP_MAX="${BACKUP_KEEP_MAX:-6}"
+KEEP_MAX="${BACKUP_KEEP_MAX:-3}"
 if [ "$KEEP_MAX" -gt 0 ] 2>/dev/null; then
   idx=0
   while IFS= read -r f; do
