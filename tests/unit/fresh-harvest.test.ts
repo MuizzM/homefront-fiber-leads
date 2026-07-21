@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -102,7 +102,9 @@ describe("fresh harvest tiers", () => {
     expect(rows).toContain(11);
     expect(rows).not.toContain(12); // coldtown has no fresh leads
   });
-  it("Tier D picks only stale negative verdicts", () => {
+  it("Tier D picks only stale negative verdicts (gate inactive → fail-open)", () => {
+    // No state_fiber_markets table exists yet → footprint_city fails open →
+    // every stale NC/SC negative is eligible, exactly as before the gate.
     const rows = tierD(1, 100).map((r: any) => r.id);
     expect(rows).toEqual([13]);
   });
@@ -143,5 +145,53 @@ describe("fresh harvest tiers", () => {
     expect(streetKeyOf("123")).toBe("");
     expect(streetKeyOf("")).toBe("");
     expect(streetKeyOf(null)).toBe("");
+  });
+});
+
+// ── Footprint gate: Tier D never re-burns proxy on non-Kinetic cities ─────────
+describe("footprint gate (Tier D)", () => {
+  let gate: any;
+  beforeAll(async () => {
+    gate = await import("../../server/footprintGate");
+    // A stale no_service in a real footprint city (Salisbury) alongside the
+    // existing stale negative in the non-footprint coldtown (id 13).
+    rawDb.prepare("INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,last_scanned_at,last_fiber_status) VALUES (?,1,?,?,?,?,?,?,?,?)")
+      .run(200,"200 Salisbury Rd","salisbury","nc","28144",35.67,-80.47,"2026-06-15 00:00:00","no_service");
+    rawDb.exec(`CREATE TABLE IF NOT EXISTS state_fiber_markets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT, city TEXT, auto_scan_eligible INTEGER DEFAULT 0
+    )`);
+  });
+
+  it("stays fail-open while no market is eligible (empty footprint)", () => {
+    gate._resetFootprintGateForTests();
+    expect(gate.footprintGateActive()).toBe(false);
+    expect(gate.isFootprintCity("nc", "coldtown")).toBe(true);   // fail-open: everything passes
+    const rows = tierD(1, 100).map((r: any) => r.id);
+    expect(rows).toEqual(expect.arrayContaining([13, 200]));     // both stale negatives kept
+  });
+
+  it("once the footprint loads, Tier D drops stale negatives outside it", () => {
+    rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible) VALUES ('NC','Salisbury',1)").run();
+    gate._resetFootprintGateForTests();
+    expect(gate.footprintGateActive()).toBe(true);
+    expect(gate.isFootprintCity("nc", "salisbury")).toBe(true);
+    expect(gate.isFootprintCity("nc", "coldtown")).toBe(false);  // not a Kinetic market
+    const rows = tierD(1, 100).map((r: any) => r.id);
+    expect(rows).toEqual([200]);   // Salisbury kept, coldtown (id 13) no longer re-burned
+  });
+
+  it("matches catalog city names through the same normalization (hyphens/Mt/St)", () => {
+    rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible) VALUES ('NC','Winston-Salem',1)").run();
+    rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible) VALUES ('NC','Mount Pleasant',1)").run();
+    gate._resetFootprintGateForTests();
+    expect(gate.isFootprintCity("nc", "winston salem")).toBe(true);   // geocoder spelling
+    expect(gate.isFootprintCity("NC", "Winston-Salem")).toBe(true);
+    expect(gate.isFootprintCity("nc", "Mt Pleasant")).toBe(true);     // Mt → Mount
+    expect(gate.isFootprintCity("nc", "raleigh")).toBe(false);
+  });
+
+  afterAll(() => {
+    rawDb.exec("DROP TABLE IF EXISTS state_fiber_markets; DELETE FROM scan_targets WHERE id=200;");
+    gate._resetFootprintGateForTests();
   });
 });

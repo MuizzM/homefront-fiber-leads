@@ -45,6 +45,7 @@ import { startTargetRun } from "./scanService";
 import { structuredLog } from "./structuredLog";
 import { bandwidthBudgetScale, governorStats, isProxyCircuitOpen } from "./bandwidthGovernor";
 import { canonicalAddressPart } from "./addressKey";
+import { registerFootprintSqlFunctions } from "./footprintGate";
 
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
@@ -243,9 +244,17 @@ export function tierC(tenantId: number, limit: number): TierRow[] {
   ).all(tenantId, tenantId, ...stateArgs(), limit) as TierRow[];
 }
 
-/** Tier D: stale no_service/copper verdicts, oldest first. */
+/** Tier D: stale no_service/copper verdicts, oldest first — FOOTPRINT-GATED.
+ *  A negative verdict outside the Kinetic footprint can never flip to fiber, so
+ *  re-checking it every 30 days is pure proxy waste. Only re-scan stale
+ *  negatives in auto_scan_eligible markets. Fail-open: until the footprint is
+ *  loaded (footprintGateActive false) the tier behaves as before. Tiers
+ *  B/B2/C/C0/D1 are already implicitly footprint-gated (they join fresh-lead
+ *  density or explicit priority cities); D is the only tier that would otherwise
+ *  re-burn addresses in towns Kinetic will never serve. */
 export function tierD(tenantId: number, limit: number): TierRow[] {
   if (limit <= 0) return [];
+  registerFootprintSqlFunctions();
   return rawDb.prepare(
     `SELECT s.id
        FROM scan_targets s
@@ -254,6 +263,7 @@ export function tierD(tenantId: number, limit: number): TierRow[] {
         AND s.last_scanned_at < datetime('now','-${TIER_D_STALE_DAYS} days')
         AND COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
         AND lower(s.state) IN (${STATE_IN})
+        AND footprint_city(s.state, s.city)=1
       ORDER BY s.last_scanned_at ASC
       LIMIT ?`,
   ).all(tenantId, ...stateArgs(), limit) as TierRow[];
