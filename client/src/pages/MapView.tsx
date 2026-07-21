@@ -113,6 +113,7 @@ import {
   isTerminalDiscoveryJob,
   type DiscoveryEvent,
 } from "@/lib/discoveryApi";
+import { dedupeLeads, leadKey } from "@/lib/dedupeLeads";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -134,6 +135,10 @@ interface MapPin {
   knockCount?: number;
   lastOutcome?: string | null;
   lastKnockedAt?: string | null;
+  // Set by dedupeLeads when >1 record collapsed onto this house (survivor
+  // carries every underlying lead id, itself first) so a popup can surface all.
+  mergedLeadIds?: string[];
+  mergedCount?: number;
 }
 
 // Mapbox token is fetched from /api/config/map at runtime — not in bundle
@@ -1188,7 +1193,11 @@ export default function MapView() {
       if (refreshTimer) clearTimeout(refreshTimer);
     };
   }, [user?.id, qc]);
-  const leads: MapPin[] = mapPinData?.pins ?? [];
+  // Dedupe to ONE pin per physical house before anything renders (pins, the
+  // in-view panel, and search all derive from this). Memoized so it only re-runs
+  // when the fetched pin set actually changes, not every render.
+  const rawLeads: MapPin[] = mapPinData?.pins ?? [];
+  const leads: MapPin[] = useMemo(() => dedupeLeads(rawLeads), [rawLeads]);
   // O(1) id→lead map — the hot paths (pin tap, knock, card swap) never scan the
   // array. Declared HERE, above the effects that reference it (dep arrays are
   // read during render — a later declaration is a TDZ crash under native ESM).
@@ -4463,7 +4472,7 @@ export default function MapView() {
                         : null;
                       return (
                         <button
-                          key={l.id}
+                          key={leadKey(l)}
                           onClick={() => {
                             flyToLead(l);
                             setSearchOpen(false);

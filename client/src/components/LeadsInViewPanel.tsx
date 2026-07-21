@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { X, List, Maximize2 } from "lucide-react";
 import { pinDisplayState, STATE_COLORS, STATE_LABELS } from "@shared/knock";
+import { leadKey } from "@/lib/dedupeLeads";
 
 export interface PanelLead {
   id: number;
@@ -171,7 +172,7 @@ export function LeadsInViewPanel({
                   const color = STATE_COLORS[ds];
                   const rep = l.assignedRepId ? repNameById.get(l.assignedRepId) : null;
                   return (
-                    <li key={l.id} role="listitem" aria-setsize={leads.length} aria-posinset={start + i + 1}>
+                    <li key={leadKey(l)} role="listitem" aria-setsize={leads.length} aria-posinset={start + i + 1}>
                       <button
                         type="button"
                         onClick={() => onRowTap(l.id)}
