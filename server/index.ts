@@ -681,8 +681,10 @@ app.use((req, res, next) => {
       const { startNewBuildRadar } = await import("./newBuildRadar");
       deferBoot(startNewBuildRadar, "newbuild-radar");
     } catch (e: any) { console.warn("[newbuild-radar] start skipped:", e?.message); }
-    // Lead-triggered CRITICAL cluster expansion — fans out from every confirmed
-    // green FRESH_LEAD. Kill-switch: EXPANSION_ENABLED=off.
+    // Lead-triggered cluster expansion — fans out from every confirmed green
+    // FRESH_LEAD. Rings admit in the NORMAL band (below the reserved CRITICAL
+    // slots, so rep-facing checks always win), bounded by the engine's own
+    // maxActive/ring/cluster budgets. Kill-switch: EXPANSION_ENABLED=off.
     try {
       const { startExpansionEngine } = await import("./clusterExpansion");
       deferBoot(startExpansionEngine, "expansion");

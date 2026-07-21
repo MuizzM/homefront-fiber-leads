@@ -254,23 +254,31 @@ export function evaluatePromotions(): Array<{ city: string; state: string; reaso
   }
   // Fresh-drop clusters from our own scanner. Guarded: a bare replay/test DB
   // may not have the leads table — signal-based promotion must still work.
+  // datetime(created_at) normalizes the column's two live formats ('YYYY-MM-DD
+  // HH:MM:SS' from the projector, ISO-with-T from createLead) before the window
+  // compare — a raw string compare over-includes ISO rows on the boundary day.
   try {
     const dropWindow = CFG.dropWindowDays();
+    // A city already promoted this run (e.g. by an OFFICIAL signal with its
+    // longer TTL) is not re-upserted by the drop rule — last-writer-wins on
+    // expires_at would silently shorten the official promotion's TTL.
+    const already = new Set(promoted.map((p) => `${p.city}:${p.state}`));
     const drops = rawDb.prepare(
       `SELECT lower(city) AS city, lower(state) AS state, COUNT(*) AS n
          FROM leads
         WHERE lead_tag='fresh_fiber_confirmed'
-          AND created_at >= datetime('now', ?)
+          AND datetime(created_at) >= datetime('now', ?)
           AND lower(state) IN ('nc','sc','ga')
           AND city IS NOT NULL AND city <> ''
         GROUP BY lower(city), lower(state)
        HAVING COUNT(*) >= ?`,
     ).all(`-${dropWindow} days`, CFG.dropMin()) as any[];
     for (const d of drops) {
+      if (already.has(`${d.city}:${d.state}`)) continue;
       const evidence = rawDb.prepare(
         `SELECT 'drop' AS kind, 'scanner' AS source, address AS title FROM leads
           WHERE lead_tag='fresh_fiber_confirmed' AND lower(city)=? AND lower(state)=?
-            AND created_at >= datetime('now', ?)
+            AND datetime(created_at) >= datetime('now', ?)
           ORDER BY created_at DESC LIMIT 10`,
       ).all(d.city, d.state, `-${dropWindow} days`);
       upsertPromotion(d.city, d.state, `fresh-drop cluster (${d.n}/${dropWindow}d)`, evidence, CFG.ttlDays(), promoted);
