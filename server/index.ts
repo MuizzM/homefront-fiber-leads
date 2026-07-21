@@ -880,6 +880,61 @@ app.use((req, res, next) => {
       }
     } catch (e: any) { console.warn("[hot-market] skipped:", e?.message); }
   };
+  // ── KEEP-WARM continuous scan (2026-07-21) ───────────────────────────────
+  // The moat is fresh leads, but the periodic HOT/PRIORITY bursts (5k/city every
+  // 20 min) leave the pipeline IDLE between cycles while 180k+ never-scanned Kinetic
+  // targets sit in the priority cities (Concord 59k, Mooresville 52k, Lexington 10k).
+  // This keeps the scan CONTINUOUSLY fed from that EXISTING inventory — SCAN-ONLY via
+  // startTargetRun (NO OSM harvest, so the harvest write-storm that took the site down
+  // cannot happen), and it only tops up when the claimable queue is DRAINING, so total
+  // queued work is bounded (oscillates KW_LOW..KW_LOW+KW_REFILL) and never exceeds the
+  // global concurrency cap (admission gates in-flight at SCAN_GLOBAL_CONCURRENCY=24).
+  // Safe under the write-contention fixes now live (scan_events batching, WAL guard,
+  // log retention). Never-scanned first (highest-yield). Control worker only (this is
+  // inside the IS_CONTROL_ROLE producer block). KEEPWARM_SCAN=off disables.
+  const keepWarmCities = (process.env.PRIORITY_CITIES ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  if (process.env.KEEPWARM_SCAN !== "off" && keepWarmCities.length) {
+    const KW_LOW = Math.max(500, Number(process.env.KEEPWARM_LOW ?? 3000) || 3000);        // top up when claimable dips below this
+    const KW_PER_CITY = Math.max(250, Number(process.env.KEEPWARM_PER_CITY ?? 2000) || 2000);
+    const KW_REFILL = Math.max(1000, Number(process.env.KEEPWARM_REFILL ?? 8000) || 8000); // cap enqueued per top-up
+    const KW_MS = Math.max(30_000, Number(process.env.KEEPWARM_MS ?? 90_000) || 90_000);
+    const runKeepWarm = async () => {
+      try {
+        const { rawDb } = await import("./db");
+        const { startTargetRun } = await import("./scanService");
+        const { getDefaultTenantId } = await import("./storage");
+        const tid = getDefaultTenantId();
+        if (tid == null) return;
+        // Only refill when the pipeline is draining — this is what bounds total work.
+        const claimable = Number((rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id
+          WHERE r.status='running' AND t.state='queued' AND (t.next_attempt_at IS NULL OR t.next_attempt_at<=datetime('now'))`).get() as any).c);
+        if (claimable >= KW_LOW) return;
+        let enqueued = 0;
+        for (const entry of keepWarmCities) {
+          if (enqueued >= KW_REFILL) break;
+          const [city, st = "nc"] = entry.split(":").map((s) => s.trim());
+          if (!city) continue;
+          const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=? AND lower(state)=?
+            AND (carrier IS NULL OR carrier='kinetic')
+            AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours'))
+            ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT ?`)
+            .all(city, st, KW_PER_CITY) as any[]).map((r) => Number(r.id));
+          if (ids.length) {
+            // startTargetRun dedups against already-queued/inflight targets, so an
+            // overlap with a hot-market run is skipped, never double-scanned.
+            startTargetRun({ tenantId: tid, city, state: st.toUpperCase(), targetIds: ids, runKind: "discovery", label: `KEEPWARM: ${city} ${st.toUpperCase()}` });
+            enqueued += ids.length;
+          }
+        }
+        if (enqueued) structuredLog("keepwarm.topup", { claimableWas: claimable, enqueued });
+      } catch (e: any) { console.warn("[keepwarm] skipped:", e?.message); }
+    };
+    deferBoot(() => {
+      const t = setInterval(() => { void runKeepWarm(); }, KW_MS);
+      if (typeof (t as any).unref === "function") (t as any).unref();
+      void runKeepWarm();
+    }, "keepwarm-scan");
+  }
   if ((process.env.HOT_MARKETS ?? DEFAULT_HOT_MARKETS) !== "off") {
     // First burst 90s after boot — hot markets start pumping almost immediately.
     setTimeout(() => { void runHotBurst(); }, 90 * 1000);
