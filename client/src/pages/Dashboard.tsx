@@ -192,7 +192,7 @@ export default function Dashboard() {
   const isRep = user?.role === "rep";
   const isManager = user?.role === "admin" || user?.role === "manager";
 
-  const { data: stats, isLoading: statsLoading } = useQuery<SaasStats>({
+  const { data: stats, isLoading: statsLoading, isError: statsError, refetch: refetchStats } = useQuery<SaasStats>({
     queryKey: ["/api/stats/saas"],
     queryFn: () => apiRequest("GET", "/api/stats/saas").then(r => r.json()),
     refetchInterval: 30000,
@@ -205,7 +205,7 @@ export default function Dashboard() {
     refetchInterval: 15000,
   });
 
-  const { data: clockSessions = [] } = useQuery<any[]>({
+  const { data: clockSessions = [], isLoading: clockLoading } = useQuery<any[]>({
     queryKey: ["/api/clock/sessions"],
     queryFn: () => apiRequest("GET", "/api/clock/sessions").then(r => r.json()),
     enabled: isManager,
@@ -221,13 +221,13 @@ export default function Dashboard() {
     queryFn: () => apiRequest("GET", "/api/stats").then(r => r.json()),
     staleTime: 30_000,
   });
-  const { data: newFiber, isLoading: newFiberLoading } = useQuery<FirstSeenLive>({
+  const { data: newFiber, isLoading: newFiberLoading, isError: newFiberError, refetch: refetchNewFiber } = useQuery<FirstSeenLive>({
     queryKey: ["/api/scan/first-seen-live"],
     queryFn: () => apiRequest("GET", "/api/scan/first-seen-live?hours=24").then(r => r.json()),
     enabled: isManager,
     staleTime: 60_000,
   });
-  const { data: board = [] } = useQuery<LeaderRow[]>({
+  const { data: board = [], isLoading: boardLoading } = useQuery<LeaderRow[]>({
     queryKey: ["/api/leaderboard"],
     queryFn: () => apiRequest("GET", "/api/leaderboard").then(r => r.json()),
     enabled: canSeeTeam,
@@ -280,7 +280,7 @@ export default function Dashboard() {
         <h2 className={EYEBROW}>{isRep ? "Your day" : "Today at a glance"}</h2>
         <div className="-mx-6 flex gap-2.5 overflow-x-auto px-6 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pill-row-fade"
           data-testid="field-tiles">
-          <FieldTile label="Knocks today" value={stats?.knocks.today ?? "—"} loading={statsLoading && !stats} tone="text-primary" icon={Zap} chip="bg-primary/15" accent="bg-primary" />
+          <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? "—"} loading={statsLoading && !stats} tone="text-amber-400" icon={AlertCircle} chip="bg-amber-500/15" accent="bg-amber-500" />
           <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
           <FieldTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="text-sky-400" icon={Activity} chip="bg-sky-500/15" accent="bg-sky-500" />
           <FieldTile label="Sold" value={leadStats?.byStatus?.sold ?? 0} loading={leadStatsLoading && !leadStats} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
@@ -289,12 +289,32 @@ export default function Dashboard() {
       </section>
 
       {/* ── Team today — one row per rep; tap for their recent doors ── */}
-      {canSeeTeam && board.length > 0 && (
+      {canSeeTeam && (
         <section data-testid="rep-rows">
           <div className="mb-2 flex items-center justify-between">
             <h2 className={EYEBROW}>Team today</h2>
-            <span className="text-[11px] tabular-nums text-muted-foreground">{board.length} rep{board.length !== 1 ? "s" : ""}</span>
+            {board.length > 0 && (
+              <span className="text-[11px] tabular-nums text-muted-foreground">{board.length} rep{board.length !== 1 ? "s" : ""}</span>
+            )}
           </div>
+          {boardLoading && board.length === 0 ? (
+            <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card" data-testid="rep-rows-skeleton">
+              {[0, 1, 2].map(i => (
+                <div key={i} className="flex h-14 items-center gap-3 px-4">
+                  <Skeleton className="h-9 w-9 shrink-0 rounded-full" />
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <Skeleton className="h-3.5 w-2/5" />
+                    <Skeleton className="h-2.5 w-1/4" />
+                  </div>
+                  <Skeleton className="h-3.5 w-8 shrink-0" />
+                </div>
+              ))}
+            </div>
+          ) : board.length === 0 ? (
+            <div className="rounded-2xl border border-border bg-card px-4 py-5 text-[13px] italic text-muted-foreground">
+              No team activity yet today.
+            </div>
+          ) : (
           <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card">
             {board.map(row => (
               <button
@@ -319,6 +339,7 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
+          )}
         </section>
       )}
       {openRepId != null && <RepActivityCard repId={openRepId} onClose={() => setOpenRepId(null)} />}
@@ -332,7 +353,14 @@ export default function Dashboard() {
               <span className="text-[11px] tabular-nums text-muted-foreground">{newFiber.confirmed} confirmed · {newFiber.provisional} provisional</span>
             )}
           </div>
-          {(newFiberLoading && !newFiber) || !newFiber ? (
+          {newFiberError ? (
+            <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3" data-testid="new-fiber-error">
+              <span className="text-2xs text-muted-foreground">Couldn't load fiber changes.</span>
+              <button type="button" onClick={() => refetchNewFiber()} className="text-2xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
+                Retry
+              </button>
+            </div>
+          ) : (newFiberLoading && !newFiber) || !newFiber ? (
             <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card" data-testid="new-fiber-skeleton">
               {[0, 1, 2].map(i => (
                 <div key={i} className="flex min-w-0 items-center gap-3 px-4 py-3">
@@ -352,7 +380,12 @@ export default function Dashboard() {
           ) : (
             <div className="divide-y divide-border overflow-hidden rounded-2xl border border-orange-500/25 bg-card">
               {newFiber.addresses.slice(0, 5).map(a => (
-                <div key={a.id} className="flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-secondary/40" data-testid={`new-fiber-row-${a.id}`}>
+                <a
+                  key={a.id}
+                  href={a.leadId ? `#/leads?id=${a.leadId}` : "#/city-scan"}
+                  className="group flex min-w-0 items-center gap-3 px-4 py-3 transition-colors hover:bg-secondary/60 active:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                  data-testid={`new-fiber-row-${a.id}`}
+                >
                   <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-orange-400" />
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
@@ -364,7 +397,8 @@ export default function Dashboard() {
                     ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>
                     {a.confidence === "cross_verified" ? "Cross-verified" : "Provisional"}
                   </span>
-                </div>
+                  <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
+                </a>
               ))}
               {newFiber.count > 5 && (
                 <div className="px-4 py-2 text-[11px] text-muted-foreground">+{newFiber.count - 5} more in the last 24h</div>
@@ -377,6 +411,14 @@ export default function Dashboard() {
       {/* KPI metric bar — one clean hairline grid (Cal.com / Intercom), not eight cards */}
       <section className="space-y-2.5">
         <h2 className={EYEBROW}>{isManager ? "Performance overview" : "Overview"}</h2>
+        {statsError ? (
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-border bg-card px-4 py-3" data-testid="stats-error">
+            <span className="text-2xs text-muted-foreground">Couldn't load stats.</span>
+            <button type="button" onClick={() => refetchStats()} className="text-2xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded">
+              Retry
+            </button>
+          </div>
+        ) : (
         <MetricStrip
           loading={statsLoading}
           items={[
@@ -394,6 +436,7 @@ export default function Dashboard() {
               value: isManager ? `${Math.floor(todayHours / 60)}h ${todayHours % 60}m` : "—", sub: "clocked today" },
           ]}
         />
+        )}
       </section>
 
       {/* Quick Actions — admin/manager only */}
@@ -507,7 +550,19 @@ export default function Dashboard() {
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
-              {clockSessions.filter((s: any) => s.date === today).length === 0 ? (
+              {clockLoading ? (
+                <div className="divide-y divide-border" data-testid="clock-sessions-skeleton">
+                  {[0, 1, 2].map(i => (
+                    <div key={i} className="flex items-center justify-between px-4 py-3">
+                      <div className="space-y-1.5">
+                        <Skeleton className="h-4 w-28" />
+                        <Skeleton className="h-3 w-40" />
+                      </div>
+                      <Skeleton className="h-[22px] w-16 rounded-full" />
+                    </div>
+                  ))}
+                </div>
+              ) : clockSessions.filter((s: any) => s.date === today).length === 0 ? (
                 <div className="flex items-center gap-2 px-4 pb-4 text-muted-foreground">
                   <AlertCircle className="h-4 w-4" />
                   <p className="text-sm">No reps clocked in today</p>
