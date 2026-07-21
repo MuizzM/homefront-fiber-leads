@@ -660,12 +660,27 @@ function reconcile(): void {
   }
 }
 
+// A contested SQLite lock (scan firehose + resume storms) makes better-sqlite3
+// throw SQLITE_BUSY after busy_timeout expires. That must NEVER escape this
+// scheduler: it runs on a microtask, so an uncaught busy error takes the whole
+// cluster worker down (exit 1) → respawn → resume storm → more contention.
+// Treat busy as "no work right now" — the next wake/processTile completion
+// re-runs the scheduler and the claim retried.
+function isSqliteBusy(e: any): boolean {
+  return e?.code === "SQLITE_BUSY" || String(e?.message ?? "").includes("database is locked");
+}
+
 function schedule(): void {
   if (scheduling) return;
   scheduling = true;
   try {
     while (running < maxWorkers) {
-      const boundary = claimBoundaryJob(workerId);
+      let boundary: ReturnType<typeof claimBoundaryJob>; 
+      try { boundary = claimBoundaryJob(workerId); }
+      catch (e: any) {
+        if (isSqliteBusy(e)) { structuredLog("address_discovery.claim_busy", { kind: "boundary" }); break; }
+        throw e;
+      }
       if (boundary) {
         running++;
         void processBoundary(boundary).finally(() => {
@@ -674,7 +689,12 @@ function schedule(): void {
         });
         continue;
       }
-      const claimed = claimNextTile(workerId);
+      let claimed: ReturnType<typeof claimNextTile>; 
+      try { claimed = claimNextTile(workerId); }
+      catch (e: any) {
+        if (isSqliteBusy(e)) { structuredLog("address_discovery.claim_busy", { kind: "tile" }); break; }
+        throw e;
+      }
       if (!claimed) break;
       running++;
       void processTile(claimed.job, claimed.tile).finally(() => {

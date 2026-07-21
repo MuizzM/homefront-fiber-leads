@@ -176,6 +176,15 @@ services:
       # health, so it runs 24/7 with zero site impact. off to disable.
       FRESH_HARVEST: "on"
       FRESH_HARVEST_BUDGET: "4000"
+      # SQLite write contention: the scan firehose + boot resume storms can
+      # hold the write lock well past the 15s default, crashing workers with
+      # SQLITE_BUSY. 120s matches the resilience of our ops scripts.
+      SQLITE_BUSY_TIMEOUT_MS: "120000"
+      # BANDWIDTH GOVERNOR — strategic Decodo spend: 25GB plan, 10% reserve,
+      # cycle resets on the 1st. Harvest budgets auto-pace against the pool.
+      DECODO_BUDGET_GB: "25"
+      DECODO_RESERVE_PCT: "10"
+      DECODO_BILLING_DAY: "1"
       ADAPTIVE_PACE: "on"
       FRONTIER_BUILD_ZONES: "off"
       # Priority build cities: OSM-ingested daily (free), always scanned first
