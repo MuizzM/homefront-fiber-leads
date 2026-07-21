@@ -250,7 +250,7 @@ export default function Billing() {
                         <td className="px-3 py-2.5 text-foreground">
                           {REASON_LABEL[e.reason] ?? e.reason}
                           {e.leadId != null && <span className="text-muted-foreground"> · #{e.leadId}</span>}
-                          {!!e.overage && <span className="ml-1.5 inline-flex items-center h-4 px-1.5 rounded bg-amber-500/15 text-amber-400 text-[10px] font-medium">overage</span>}
+                          {!!e.overage && <span className="ml-1.5 inline-flex items-center h-4 px-1.5 rounded bg-amber-500/15 text-amber-400 text-2xs font-medium">overage</span>}
                         </td>
                         <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${e.delta < 0 ? "text-foreground" : e.delta > 0 ? "text-emerald-400" : "text-muted-foreground"}`}>
                           {e.delta > 0 ? `+${e.delta}` : e.delta}
@@ -287,7 +287,7 @@ function PlanGrid({ plans, current, stripeOn, onChoose }: { plans: Plan[]; curre
               data-testid={`plan-${p.key}`}>
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[14px] font-semibold tracking-tight text-foreground">{p.name}</span>
-                {isCurrent && <span className="inline-flex items-center h-5 px-2 rounded-full bg-primary text-primary-foreground text-[10px] font-semibold uppercase tracking-wide">Current</span>}
+                {isCurrent && <span className="inline-flex items-center h-5 px-2 rounded-full bg-primary text-primary-foreground text-2xs font-semibold uppercase tracking-wide">Current</span>}
               </div>
               <div className="mt-1.5 text-[17px] font-semibold tracking-tight text-foreground">{fmtPrice(p.monthlyPriceUsd)}</div>
               <div className="mt-2 text-[12.5px] text-muted-foreground tabular-nums">

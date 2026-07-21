@@ -214,8 +214,8 @@ function FreshNow() {
                     <div className="truncate text-[14px] font-medium text-foreground">{a.address}, {a.city}</div>
                     <div className="text-[11px] text-muted-foreground">Detected {fmtTime(a.firstSeenLiveAt)}</div>
                   </div>
-                  {a.carrier === "frontier" && <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-red-400">Frontier</span>}
-                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
+                  {a.carrier === "frontier" && <span className="shrink-0 rounded-full bg-red-500/15 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-red-400">Frontier</span>}
+                  <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${a.confidence === "cross_verified" ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>{a.confidence === "cross_verified" ? "Verified" : "Provisional"}</span>
                   {a.leadId != null
                     ? <Link href={`/lead/${a.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>
                     : <Link href="/map" className="shrink-0 rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
@@ -246,7 +246,7 @@ function FreshNow() {
                   <div className="truncate text-[14px] font-medium text-foreground">{c.address}, {c.city}, {c.state}</div>
                   <div className="text-[11px] text-muted-foreground">{fmtTime(c.at)}</div>
                 </div>
-                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${KIND_STYLE[c.kind]?.cls ?? ""}`}>{KIND_STYLE[c.kind]?.label ?? c.kind}</span>
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${KIND_STYLE[c.kind]?.cls ?? ""}`}>{KIND_STYLE[c.kind]?.label ?? c.kind}</span>
                 {c.leadId != null && <Link href={`/lead/${c.leadId}`} className="shrink-0 rounded-lg bg-primary px-2 py-1 text-[11px] font-semibold text-primary-foreground hover:opacity-90">Open lead</Link>}
               </div>
             ))}
@@ -319,7 +319,7 @@ function Coverage({ isAdmin }: { isAdmin: boolean }) {
               <div className="truncate text-[13px] font-medium text-foreground">{s.currentCity ? `Scanning ${s.currentCity}` : s.status}</div>
               <div className="text-[11px] text-muted-foreground">{s.citiesCompleted}/{s.citiesTotal} cities · {s.checked} checked · {s.freshLeads} fresh</div>
             </div>
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${s.status === "running" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{s.status}</span>
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${s.status === "running" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{s.status}</span>
           </div>
         ))}
       </div>
@@ -445,7 +445,7 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
               <div className="flex items-center gap-2">
                 <span className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-emerald-400" />
                 <span className="truncate text-[13px] font-medium text-foreground">{String(e.origin.address).split(",")[0]}, {e.origin.city}</span>
-                <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${e.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{e.status}</span>
+                <span className={`ml-auto shrink-0 rounded-full px-2 py-0.5 text-2xs font-semibold uppercase ${e.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-muted text-muted-foreground"}`}>{e.status}</span>
               </div>
               <div className="pl-4 text-[11px] text-muted-foreground">
                 radius {(e.radiusM / 1000).toFixed(1)}km · ring {e.ring} · {e.addressesChecked} checked · <span className="font-medium text-emerald-600 dark:text-emerald-400">{e.newLeads.length} new green leads</span>{e.emptyStreak > 0 ? ` · ${e.emptyStreak} empty ring${e.emptyStreak > 1 ? "s" : ""}` : ""}
@@ -487,16 +487,16 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
                     <span>{r.state}{r.zip ? ` ${r.zip}` : ""}</span>
                     <span>· {r.sources.map((s) => SOURCE_LABEL[s] ?? s).join(", ")}</span>
                     <span>· {relMs(r.detectedAt)}</span>
-                    {r.clusterId && isManager && <span className="rounded bg-primary/10 px-1 text-[10px] text-primary">cluster</span>}
+                    {r.clusterId && isManager && <span className="rounded bg-primary/10 px-1 text-2xs text-primary">cluster</span>}
                   </div>
                 </div>
                 {/* status */}
                 <div className="flex shrink-0 items-center gap-2">
-                  {r.leadId ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-400">Lead</span>
-                    : r.actionable ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-400">Fresh fiber</span>
-                    : r.monitored ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-400">Monitoring</span>
-                    : r.checkedAt ? <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">{(r.fiberStatus ?? "checked").replace(/_/g, " ")}</span>
-                    : <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-sky-300">Checking</span>}
+                  {r.leadId ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-2xs font-bold uppercase text-emerald-400">Lead</span>
+                    : r.actionable ? <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-2xs font-bold uppercase text-emerald-400">Fresh fiber</span>
+                    : r.monitored ? <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs font-semibold uppercase text-amber-400">Monitoring</span>
+                    : r.checkedAt ? <span className="rounded-full bg-muted px-2 py-0.5 text-2xs font-semibold uppercase text-muted-foreground">{(r.fiberStatus ?? "checked").replace(/_/g, " ")}</span>
+                    : <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-2xs font-semibold uppercase text-sky-300">Checking</span>}
                   {r.address && <Link href="/map" className="rounded-lg border border-border px-2 py-1 text-[11px] font-semibold text-muted-foreground hover:bg-secondary"><MapPin className="mr-0.5 inline h-3 w-3" />Map</Link>}
                 </div>
               </div>

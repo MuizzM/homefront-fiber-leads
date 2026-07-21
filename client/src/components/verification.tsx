@@ -90,7 +90,7 @@ export function DistanceDiagram({
         )}
       </svg>
       {/* Iconography for the pins (screen-reader hidden; the <title> carries meaning) */}
-      <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground" aria-hidden>
+      <div className="mt-1 flex items-center justify-between text-2xs text-muted-foreground" aria-hidden>
         <span className="inline-flex items-center gap-1"><Navigation className="h-3 w-3" /> Rep position</span>
         {within != null && (
           <span className={within ? "text-emerald-400" : "text-amber-400"}>

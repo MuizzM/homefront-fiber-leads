@@ -143,9 +143,9 @@ export function OpportunityMap({ focusCity, onBack }: { focusCity?: { city: stri
         {clusters.length > 0 && (
           <div className="absolute left-3 rounded-lg bg-black/75 backdrop-blur border border-white/10 px-2.5 py-2 text-white z-30 bottom-[132px] md:bottom-3"
             style={{ }}>
-            <div className="text-[10px] uppercase tracking-wider text-white/60 font-semibold mb-1">Opportunity score</div>
+            <div className="text-2xs uppercase tracking-wider text-white/60 font-semibold mb-1">Opportunity score</div>
             <div className="h-2 w-24 rounded-full" style={{ background: `linear-gradient(to right, ${RAMP.map(r => r[1]).join(",")})` }} />
-            <div className="flex justify-between text-[9px] text-white/50 mt-0.5 w-24"><span>low</span><span>high</span></div>
+            <div className="flex justify-between text-2xs text-white/50 mt-0.5 w-24"><span>low</span><span>high</span></div>
           </div>
         )}
       </div>
@@ -196,7 +196,7 @@ function ClusterRow({ c, active, onClick }: { c: OppCluster; active: boolean; on
       <div className="min-w-0 flex-1">
         <div className="text-[13px] font-semibold text-foreground">{c.unworked} unworked doors</div>
         <div className="text-[11px] text-muted-foreground truncate">{c.reasons[0] ?? `${c.size} verified`}</div>
-        <div className="text-[10px] text-muted-foreground/70 mt-0.5">{c.confidence} confidence · {c.size} verified</div>
+        <div className="text-2xs text-muted-foreground/70 mt-0.5">{c.confidence} confidence · {c.size} verified</div>
       </div>
       <ChevronRight className="w-4 h-4 text-muted-foreground/50 mt-1.5 flex-shrink-0" />
     </button>
@@ -311,6 +311,6 @@ function DeployPanel({ cluster, onClose }: { cluster: OppCluster; onClose: () =>
 }
 
 function Metric({ v, l }: { v: React.ReactNode; l: string }) {
-  return <div className="rounded-lg bg-card/60 p-2"><div className="text-[16px] font-bold text-foreground tabular-nums">{v}</div><div className="text-[10px] uppercase tracking-wide text-muted-foreground">{l}</div></div>;
+  return <div className="rounded-lg bg-card/60 p-2"><div className="text-[16px] font-bold text-foreground tabular-nums">{v}</div><div className="text-2xs uppercase tracking-wide text-muted-foreground">{l}</div></div>;
 }
 function emptyFC() { return { type: "FeatureCollection", features: [] }; }

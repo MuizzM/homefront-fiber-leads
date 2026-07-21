@@ -115,7 +115,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           )}
           <span
             data-testid="territory-status"
-            className={`inline-block mt-1 text-[10px] font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${STATUS_STYLE[territory.status] ?? STATUS_STYLE.draft}`}
+            className={`inline-block mt-1 text-2xs font-semibold uppercase tracking-wide px-2 py-0.5 rounded-full ${STATUS_STYLE[territory.status] ?? STATUS_STYLE.draft}`}
           >
             {territory.status}
           </span>
@@ -124,7 +124,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
 
       {/* Assignees */}
       <div className="mt-3">
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground mb-1.5">
+        <div className="text-2xs uppercase tracking-wide text-muted-foreground mb-1.5">
           {territory.repIds.length > 1 ? "Assigned reps" : "Assigned rep"}
         </div>
         {territory.repIds.length === 0 ? (
@@ -150,7 +150,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
         <div className="mt-3.5">
           <div className="flex items-baseline justify-between">
             <span
-              className="text-[10px] uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1"
+              className="text-2xs uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1"
               title="Area Worked = verified worked leads ÷ total leads. Only activities that pass location verification count."
             >
               Area Worked
@@ -182,15 +182,15 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           <div className="mt-3 grid grid-cols-3 gap-1.5" data-testid="verification-summary">
             <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2 py-1.5 text-center">
               <div className="inline-flex items-center gap-1 text-emerald-400"><ShieldCheck className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.verified}</span></div>
-              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Verified</div>
+              <div className="text-2xs uppercase tracking-wide text-muted-foreground">Verified</div>
             </div>
             <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 px-2 py-1.5 text-center">
               <div className="inline-flex items-center gap-1 text-amber-400"><AlertTriangle className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.needsReview}</span></div>
-              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Review</div>
+              <div className="text-2xs uppercase tracking-wide text-muted-foreground">Review</div>
             </div>
             <div className="rounded-lg border border-red-500/25 bg-red-500/10 px-2 py-1.5 text-center">
               <div className="inline-flex items-center gap-1 text-red-400"><Ban className="h-3 w-3" /><span className="text-sm font-bold tabular-nums">{progress.invalid}</span></div>
-              <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Invalid</div>
+              <div className="text-2xs uppercase tracking-wide text-muted-foreground">Invalid</div>
             </div>
           </div>
 
@@ -208,12 +208,12 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
         <div className="mt-3 flex items-center gap-4">
           <div>
             <div data-testid="lead-count" className="text-lg font-bold text-foreground tabular-nums">{territory.leadCount}</div>
-            <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Leads</div>
+            <div className="text-2xs text-muted-foreground uppercase tracking-wide">Leads</div>
           </div>
           {territory.workedCount != null && (
             <div>
               <div className="text-lg font-bold text-foreground tabular-nums">{territory.workedCount}</div>
-              <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Worked</div>
+              <div className="text-2xs text-muted-foreground uppercase tracking-wide">Worked</div>
             </div>
           )}
         </div>

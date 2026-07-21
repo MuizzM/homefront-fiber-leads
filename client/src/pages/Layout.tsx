@@ -247,7 +247,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
               const items = visibleNav.filter(item => (item.group ?? "Other") === group);
               return (
                 <div key={group} className="mb-1">
-                  <div className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/50">
+                  <div className="px-3 pt-3 pb-1 text-2xs font-semibold uppercase tracking-widest text-muted-foreground/50">
                     {group}
                   </div>
                   {items.map(({ href, label, icon: Icon }) => {
@@ -270,7 +270,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                         <Icon className={cn("w-[18px] h-[18px] md:w-4 md:h-4 flex-shrink-0", isActive && "text-primary")} />
                         <span className="flex-1">{label}</span>
                         {badgeCount > 0 && (
-                          <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-[10px] font-bold text-black flex items-center justify-center px-1">
+                          <span className="min-w-[18px] h-[18px] rounded-full bg-amber-500 text-2xs font-bold text-black flex items-center justify-center px-1">
                             {badgeCount}
                           </span>
                         )}
@@ -348,7 +348,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </button>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold tracking-tight text-foreground">{mobileTitle}</div>
-            <div className="truncate text-[10px] text-muted-foreground">{orgName}</div>
+            <div className="truncate text-2xs text-muted-foreground">{orgName}</div>
           </div>
           <button type="button" onClick={() => setMobileOpen(true)} aria-label="Open account navigation"
             className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-bold text-white ring-2 ring-border ${avatarBg(role)}`}>

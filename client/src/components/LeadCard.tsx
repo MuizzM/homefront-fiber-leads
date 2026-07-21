@@ -277,7 +277,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
               ].map((cell) => (
                 <div key={cell.label} className="px-2 py-2.5 text-center">
                   <div className={`truncate text-[14px] font-semibold tabular-nums ${cell.tone}`}>{cell.value}</div>
-                  <div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{cell.label}</div>
+                  <div className="mt-0.5 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">{cell.label}</div>
                 </div>
               ))}
             </div>

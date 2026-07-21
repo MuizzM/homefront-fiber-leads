@@ -175,7 +175,7 @@ function Row({ f, today, overdue, onOpen, onLog }: { f: FollowUp; today: string;
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[14px] font-semibold text-foreground truncate">{f.address}</span>
-            {hot && <span className="shrink-0 text-[9.5px] font-bold uppercase tracking-wide text-rose-400 bg-rose-500/15 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5"><Flame className="w-2.5 h-2.5" />Hot</span>}
+            {hot && <span className="shrink-0 text-2xs font-bold uppercase tracking-wide text-rose-400 bg-rose-500/15 rounded-full px-1.5 py-0.5 inline-flex items-center gap-0.5"><Flame className="w-2.5 h-2.5" />Hot</span>}
             {!hot && newFiber && <span className="shrink-0 text-cyan-400"><Zap className="w-3 h-3" /></span>}
           </div>
           <div className="text-[12px] text-muted-foreground truncate flex items-center gap-1.5">

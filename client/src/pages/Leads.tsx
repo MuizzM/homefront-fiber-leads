@@ -493,10 +493,10 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
             <X className="w-4 h-4" />
           </button>
           <div className="flex items-center gap-2 pr-8">
-            <Badge className={`text-[10px] px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
+            <Badge className={`text-2xs px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
               {STATUS_LABEL[current.leadStatus] ?? current.leadStatus}
             </Badge>
-            {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-orange-500/10 text-orange-400 text-[10px]">High priority</Badge>}
+            {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-orange-500/10 text-orange-400 text-2xs">High priority</Badge>}
           </div>
           <SheetTitle className="text-lg font-semibold tracking-tight mt-2">{current.address}</SheetTitle>
           <p className="text-xs text-muted-foreground">{current.city}, {current.state} {current.zip}</p>
@@ -518,12 +518,12 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
         <div className="px-5 py-5">
           <div className="grid grid-cols-2 gap-3 mb-5">
             <div className="rounded-lg border border-border bg-background px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Assigned rep</div>
+              <div className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold">Assigned rep</div>
               <div className="text-sm font-medium mt-1">{assignedRep?.name ?? (current.assignedRepId ? `Rep #${current.assignedRepId}` : "Unassigned")}</div>
-              {onboardingStage && <div className="text-[10px] text-primary mt-1">Onboarding · {ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage.replace(/_/g, " ")}</div>}
+              {onboardingStage && <div className="text-2xs text-primary mt-1">Onboarding · {ONBOARDING_STAGE_LABEL[onboardingStage] ?? onboardingStage.replace(/_/g, " ")}</div>}
             </div>
             <div className="rounded-lg border border-border bg-background px-3 py-2.5">
-              <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Territory</div>
+              <div className="text-2xs uppercase tracking-wider text-muted-foreground font-semibold">Territory</div>
               <div className="text-sm font-medium mt-1">{current.city}, {current.state}</div>
             </div>
           </div>
@@ -662,7 +662,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
                     {item.type === "status_change" ? `Status changed to ${(item.status ?? "updated").replace(/_/g, " ")}` : item.type === "assignment" ? `Assigned to ${item.assignedTo ?? "team"}` : "Note added"}
                   </div>
                   {item.notePreview && <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{item.notePreview}</div>}
-                  <div className="text-[10px] text-muted-foreground mt-1">{item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}</div>
+                  <div className="text-2xs text-muted-foreground mt-1">{item.actor ?? item.assignedBy ?? "System"} · {new Date(item.changedAt).toLocaleString()}</div>
                 </div>
               ))}
             </div>
@@ -905,9 +905,9 @@ export default function Leads() {
 
       {isRep && (
         <div className="grid grid-cols-3 gap-2 md:hidden" data-testid="rep-leads-summary">
-          <div className="rounded-xl border border-border bg-card p-3"><div className="text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Assigned</div></div>
-          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-orange-400">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
-          <div className="rounded-xl border border-violet-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-violet-400">{bs.interested ?? 0}</div><div className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Interested</div></div>
+          <div className="rounded-xl border border-border bg-card p-3"><div className="text-xl font-semibold tabular-nums">{leadStats?.total ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Assigned</div></div>
+          <div className="rounded-xl border border-orange-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-orange-400">{bs.follow_up ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Follow-ups</div></div>
+          <div className="rounded-xl border border-violet-500/20 bg-card p-3"><div className="text-xl font-semibold tabular-nums text-violet-400">{bs.interested ?? 0}</div><div className="mt-0.5 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Interested</div></div>
         </div>
       )}
       <div className={`${isRep ? "hidden md:flex" : "flex"} gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`} data-testid="leads-kpi">
@@ -934,7 +934,7 @@ export default function Leads() {
               <Input value={search} onChange={e => handleSearchChange(e.target.value)} placeholder="Search address, city, ZIP, or contact" className="pl-9 pr-9 bg-card border-input text-sm h-9" data-testid="input-search-leads" />
               {(searching || (isFetching && !isLoading)) && <RefreshCw className="absolute right-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground animate-spin" />}
             </div>
-            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="xl:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" />Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-[10px] text-primary">On</span>}</button>
+            <button type="button" onClick={() => setMobileFiltersOpen(open => !open)} aria-expanded={mobileFiltersOpen} className="xl:hidden h-10 rounded-lg border border-border bg-card px-3 text-[12px] font-semibold text-foreground inline-flex items-center justify-center gap-2"><SlidersHorizontal className="w-4 h-4 text-primary" />Filters{activeFilters && <span className="grid min-w-5 h-5 place-items-center rounded-full bg-primary/15 px-1 text-2xs text-primary">On</span>}</button>
             <div className={`${mobileFiltersOpen ? "grid" : "hidden"} grid-cols-2 sm:grid-cols-3 xl:flex gap-2`}>
               {!isRep && <Select value={filterRep} onValueChange={handleRepChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[150px]"><SelectValue placeholder="Rep" /></SelectTrigger><SelectContent><SelectItem value="all">All reps</SelectItem><SelectItem value="unassigned">Unassigned</SelectItem>{team.filter(m => m.active).map(m => <SelectItem key={m.id} value={String(m.id)}>{m.name}</SelectItem>)}</SelectContent></Select>}
               <Select value={filterState} onValueChange={handleStateChange}><SelectTrigger className="h-10 bg-card xl:h-9 xl:w-[115px]" data-testid="filter-state"><SelectValue placeholder="State" /></SelectTrigger><SelectContent><SelectItem value="all">All states</SelectItem>{states.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent></Select>
@@ -963,19 +963,19 @@ export default function Leads() {
           <>
             <div className="hidden lg:block overflow-x-auto">
               <table className="w-full min-w-[1050px] border-collapse text-left">
-                <thead><tr className="border-b border-border bg-muted/20 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
+                <thead><tr className="border-b border-border bg-muted/20 text-2xs font-semibold uppercase tracking-[0.08em] text-muted-foreground"><th className="px-4 py-2.5 w-[27%]">Lead</th><th className="px-3 py-2.5">Stage</th><th className="px-3 py-2.5">Territory</th><th className="px-3 py-2.5">Assigned to</th><th className="px-3 py-2.5">Qualification</th><th className="px-3 py-2.5">Last activity</th><th className="px-3 py-2.5">Next action</th><th className="px-3 py-2.5 text-right">Actions</th></tr></thead>
                 <tbody className="divide-y divide-border">
                   {filtered.map(lead => {
                     const next = nextAction(lead);
                     const stale = Date.now() - Date.parse(lead.updatedAt || lead.createdAt) > 14 * 86_400_000 && !["sold", "not_interested"].includes(lead.leadStatus);
                     return (
                       <tr key={lead.id} data-testid={`card-lead-${lead.id}`} className="group hover:bg-muted/35 transition-colors">
-                        <td className="px-4 py-3"><button onClick={() => setIntelLead(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate">{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
-                        <td className="px-3 py-3"><Badge className={`border-0 text-[10px] font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus}</Badge></td>
-                        <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-[10px] text-muted-foreground">{lead.state} {lead.zip}</div></td>
-                        <td className="px-3 py-3"><button onClick={() => canAssign && setAssignLead(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-amber-400"}`}>{assignmentName(lead)}</button><div className="text-[10px] text-muted-foreground mt-0.5">{lead.assignedRepId && onboardingByRep.get(lead.assignedRepId) ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingByRep.get(lead.assignedRepId)!] ?? onboardingByRep.get(lead.assignedRepId)}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
-                        <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-emerald-400" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-[10px] text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
-                        <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-[10px] text-muted-foreground mt-0.5">Record updated</div></td>
+                        <td className="px-4 py-3"><button onClick={() => setIntelLead(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate">{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
+                        <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus}</Badge></td>
+                        <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
+                        <td className="px-3 py-3"><button onClick={() => canAssign && setAssignLead(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-amber-400"}`}>{assignmentName(lead)}</button><div className="text-2xs text-muted-foreground mt-0.5">{lead.assignedRepId && onboardingByRep.get(lead.assignedRepId) ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingByRep.get(lead.assignedRepId)!] ?? onboardingByRep.get(lead.assignedRepId)}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
+                        <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-emerald-400" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>
+                        <td className="px-3 py-3"><div className={`text-xs font-medium ${stale ? "text-rose-400" : "text-foreground"}`}>{formatActivity(lead.updatedAt || lead.createdAt)}</div><div className="text-2xs text-muted-foreground mt-0.5">Record updated</div></td>
                         <td className="px-3 py-3"><span className={`text-xs font-semibold ${next.tone}`}>{next.label}</span></td>
                         <td className="px-3 py-3">
                           <div className="flex items-center justify-end gap-0.5">
@@ -1007,12 +1007,12 @@ export default function Leads() {
                           <div className="truncate text-[15px] font-semibold leading-snug text-foreground">{lead.address}</div>
                           <div className="mt-1 flex items-center gap-1.5 text-[12px] text-muted-foreground"><MapPin className="h-3.5 w-3.5 shrink-0" />{lead.city}, {lead.state} {lead.zip}</div>
                         </div>
-                        <Badge className={`shrink-0 border-0 text-[10px] ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
+                        <Badge className={`shrink-0 border-0 text-2xs ${STATUS_COLOR[lead.leadStatus]}`}>{STATUS_LABEL[lead.leadStatus]}</Badge>
                       </div>
                       <div className="mt-3 grid grid-cols-3 rounded-lg border border-border bg-background/45">
-                        <div className="px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
-                        <div className="border-x border-border px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
-                        <div className="px-2.5 py-2"><div className="text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
+                        <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Priority</div><div className="mt-0.5 text-[12px] font-semibold">{lead.leadScore ?? 0}/100</div></div>
+                        <div className="border-x border-border px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</div><div className="mt-0.5 truncate text-[12px] font-semibold">{formatActivity(lead.updatedAt || lead.createdAt)}</div></div>
+                        <div className="px-2.5 py-2"><div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Next</div><div className={`mt-0.5 truncate text-[12px] font-semibold ${next.tone}`}>{next.label}</div></div>
                       </div>
                     </button>
                     <div className="mt-3 grid grid-cols-3 gap-2">

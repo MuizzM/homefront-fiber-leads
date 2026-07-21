@@ -22,7 +22,7 @@ export function CallingChrome({ children }: { children: React.ReactNode }) {
           </span>
           <div className="min-w-0 flex-1">
             <div className="truncate text-[15px] font-semibold tracking-tight">Calling</div>
-            <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <div className="flex items-center gap-1 text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
               <LockKeyhole className="h-3 w-3" aria-hidden="true" /> Manual, gated pilot
             </div>
           </div>

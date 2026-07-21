@@ -66,7 +66,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
     >
       {/* Oversized rank numeral, Netflix-top-10 style — pure background texture. */}
       <span aria-hidden className="pointer-events-none absolute -right-1 -top-6 select-none text-[110px] font-black leading-none text-emerald-400/10">1</span>
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.14em] text-emerald-600 dark:text-emerald-400">
+      <div className="mb-1.5 flex items-center gap-1.5 text-2xs font-bold uppercase tracking-[0.14em] text-emerald-600 dark:text-emerald-400">
         <Flame className="h-3 w-3" /> Knock this door first
       </div>
       <div className="relative flex items-center gap-3">
@@ -77,7 +77,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
           {lead.reasons.length > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1">
               {lead.reasons.slice(0, 3).map((r) => (
-                <span key={r} className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300">{r}</span>
+                <span key={r} className="rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-2xs font-medium text-emerald-300">{r}</span>
               ))}
             </div>
           )}
@@ -85,7 +85,7 @@ function HeroLead({ lead, onOpen }: { lead: RankedLead; onOpen: () => void }) {
         <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
       </div>
       {lead.clusterSize > 1 && (
-        <div className="relative mt-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+        <div className="relative mt-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-primary">
           <Layers className="h-2.5 w-2.5" /> {lead.clusterSize} hot leads in this cluster
         </div>
       )}
@@ -156,7 +156,7 @@ export default function RankedLeads() {
                   <div className="flex min-w-0 items-center gap-1.5">
                     <span className="truncate text-[14px] font-medium text-foreground">{l.address}, {l.city}</span>
                     {l.clusterSize > 1 && (
-                      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary" title={`${l.clusterSize} ranked leads in this cluster`}>
+                      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-2xs font-semibold text-primary" title={`${l.clusterSize} ranked leads in this cluster`}>
                         <Layers className="h-2.5 w-2.5" /> ×{l.clusterSize}
                       </span>
                     )}
@@ -164,9 +164,9 @@ export default function RankedLeads() {
                   {l.reasons.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-1">
                       {l.reasons.slice(0, 3).map((r) => (
-                        <span key={r} className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">{r}</span>
+                        <span key={r} className="rounded-full bg-secondary px-1.5 py-0.5 text-2xs text-muted-foreground">{r}</span>
                       ))}
-                      {l.reasons.length > 3 && <span className="rounded-full px-1 py-0.5 text-[10px] text-muted-foreground">+{l.reasons.length - 3}</span>}
+                      {l.reasons.length > 3 && <span className="rounded-full px-1 py-0.5 text-2xs text-muted-foreground">+{l.reasons.length - 3}</span>}
                     </div>
                   )}
                 </div>

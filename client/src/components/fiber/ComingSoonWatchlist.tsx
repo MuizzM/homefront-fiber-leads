@@ -141,8 +141,8 @@ export default function ComingSoonWatchlist() {
                   </div>
                 </div>
                 {cd
-                  ? <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${cd.tone}`}>{cd.label}</span>
-                  : <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${URGENCY_CHIP[it.urgency]}`}>{it.urgency}</span>}
+                  ? <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${cd.tone}`}>{cd.label}</span>
+                  : <span className={`shrink-0 rounded-full px-2 py-0.5 text-2xs font-bold uppercase tracking-wide ${URGENCY_CHIP[it.urgency]}`}>{it.urgency}</span>}
               </div>
             );
           })}

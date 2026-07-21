@@ -40,7 +40,7 @@ export function BottomTabs({ onMore, moreOpen = false, moreButtonRef }: { onMore
               : `grid h-7 w-9 place-items-center rounded-lg ${active ? "bg-primary/[0.12] text-primary" : "text-muted-foreground"}`}>
               <Icon className={primary ? "w-5 h-5" : "w-[19px] h-[19px]"} strokeWidth={active ? 2.4 : 2} />
             </span>
-            <span className={`text-[10px] font-semibold ${active ? "text-primary" : "text-muted-foreground"}`}>
+            <span className={`text-2xs font-semibold ${active ? "text-primary" : "text-muted-foreground"}`}>
               {label}
             </span>
             {active && !primary && <span className="absolute bottom-0.5 h-0.5 w-4 rounded-full bg-primary" aria-hidden="true" />}
@@ -58,7 +58,7 @@ export function BottomTabs({ onMore, moreOpen = false, moreButtonRef }: { onMore
         className="flex flex-col items-center justify-center gap-0.5 active:scale-95"
       >
         <span className={`grid h-7 w-9 place-items-center rounded-lg ${moreOpen ? "bg-primary/[0.12] text-primary" : "text-muted-foreground"}`}><Menu className="w-[19px] h-[19px]" /></span>
-        <span className={`text-[10px] font-semibold ${moreOpen ? "text-primary" : "text-muted-foreground"}`}>More</span>
+        <span className={`text-2xs font-semibold ${moreOpen ? "text-primary" : "text-muted-foreground"}`}>More</span>
       </button>
       </div>
     </nav>

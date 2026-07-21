@@ -129,11 +129,11 @@ function ActiveRunBanner({ run, isAdmin, onOpen }: { run: ScanRun; isAdmin: bool
   return (
     <div className="flex items-center gap-3 px-4 py-2 bg-primary/[0.08] border-b border-primary/20 flex-shrink-0" data-testid="scan-active-run">
       {r.status === "running" ? (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary flex-shrink-0">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide text-primary flex-shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" /> Live
         </span>
       ) : (
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-400 flex-shrink-0">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide text-amber-400 flex-shrink-0">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500" /> Paused
         </span>
       )}
@@ -220,7 +220,7 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h3 className="text-[15px] font-semibold tracking-tight text-foreground truncate">{m.city}</h3>
-            <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full font-semibold" style={{ background: tint + "1f", color: tint }}>
+            <span className="inline-flex items-center gap-1 text-2xs uppercase tracking-wide px-2 py-0.5 rounded-full font-semibold" style={{ background: tint + "1f", color: tint }}>
               <span className="w-1.5 h-1.5 rounded-full" style={{ background: tint }} /> {m.priorityBand}
             </span>
           </div>
@@ -252,7 +252,7 @@ function MarketTile({ m, isAdmin, onScan, onOpportunity }: { m: MarketCard; isAd
           <div className="text-[22px] font-bold leading-none tabular-nums" style={{ color: tint }}>
             {m.estRemainingOpportunity.toLocaleString()}
           </div>
-          <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-1">est. opportunity</div>
+          <div className="text-2xs uppercase tracking-wide text-muted-foreground mt-1">est. opportunity</div>
         </div>
         <div className="text-right text-[11px] text-muted-foreground leading-tight">
           <div className="tabular-nums">{m.unworkedLeads.toLocaleString()} unworked</div>
@@ -538,7 +538,7 @@ function DiscoveryOperations() {
                         <span className="truncate">{source.name}</span>
                       </div>
                       <div className="mt-1 text-[11px] text-muted-foreground tabular-nums">{source.records.toLocaleString()} records · {source.warning ? `${source.warning} warning` : "healthy"}</div>
-                      {source.error && <div className="mt-1 truncate text-[10px] text-amber-500">{source.error}</div>}
+                      {source.error && <div className="mt-1 truncate text-2xs text-amber-500">{source.error}</div>}
                     </div>
                   ))}
                 </div>
@@ -578,7 +578,7 @@ function DiscoveryOperations() {
 }
 
 function DiscoveryMetric({ label, value, tone }: { label: string; value: number; tone?: string }) {
-  return <div className="rounded-xl border border-border bg-card p-3"><div className={`text-2xl font-bold tabular-nums ${tone ?? "text-foreground"}`}>{value.toLocaleString()}</div><div className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div></div>;
+  return <div className="rounded-xl border border-border bg-card p-3"><div className={`text-2xl font-bold tabular-nums ${tone ?? "text-foreground"}`}>{value.toLocaleString()}</div><div className="mt-1 text-2xs uppercase tracking-wide text-muted-foreground">{label}</div></div>;
 }
 
 function DiscoveryJobCard({ job, busy, onCancel, onRetry, onInspect }: { job: DiscoveryJob; busy: boolean; onCancel: () => void; onRetry: () => void; onInspect: () => void }) {
@@ -597,16 +597,16 @@ function DiscoveryJobCard({ job, busy, onCancel, onRetry, onInspect }: { job: Di
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${statusTone}`}>{discoveryStageLabel(job.status)}</span>
+            <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold ${statusTone}`}>{discoveryStageLabel(job.status)}</span>
             <span className="truncate text-sm font-semibold">{job.city ? `${job.city}${job.state ? `, ${job.state}` : ""}` : `Drawn area · ${job.id.slice(0, 8)}`}</span>
-            <span className="text-[10px] text-muted-foreground">{job.coverageStatus || "processing"}</span>
+            <span className="text-2xs text-muted-foreground">{job.coverageStatus || "processing"}</span>
           </div>
           <div className="mt-2 grid grid-cols-4 gap-1.5 sm:grid-cols-8">
             {[
               ["Raw", job.discoveredCount], ["Unique", job.uniqueCandidateCount], ["Validated", job.validatedCount],
               ["Checked", job.checkedCount], ["Qualified", job.qualifiedCount], ["Cached", job.cachedCount],
               ["Duplicates", duplicates], ["Failed", job.failedCount],
-            ].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-secondary/50 px-2 py-1.5"><div className="text-xs font-semibold tabular-nums">{Number(value).toLocaleString()}</div><div className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div></div>)}
+            ].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-secondary/50 px-2 py-1.5"><div className="text-xs font-semibold tabular-nums">{Number(value).toLocaleString()}</div><div className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</div></div>)}
           </div>
         </div>
         <div className="flex shrink-0 flex-col gap-1.5">
@@ -614,9 +614,9 @@ function DiscoveryJobCard({ job, busy, onCancel, onRetry, onInspect }: { job: Di
             <Eye className="h-4 w-4" />
           </button>
           {active ? (
-            <button onClick={onCancel} disabled={busy} className="h-9 rounded-lg border border-rose-500/25 px-2 text-[10px] font-semibold text-rose-500 disabled:opacity-50">Cancel</button>
+            <button onClick={onCancel} disabled={busy} className="h-9 rounded-lg border border-rose-500/25 px-2 text-2xs font-semibold text-rose-500 disabled:opacity-50">Cancel</button>
           ) : (job.status === "partial" || job.status === "failed") && (
-            <button onClick={onRetry} disabled={busy || !job.geometry} className="h-9 rounded-lg border border-border px-2 text-[10px] font-semibold disabled:opacity-50">Retry</button>
+            <button onClick={onRetry} disabled={busy || !job.geometry} className="h-9 rounded-lg border border-border px-2 text-2xs font-semibold disabled:opacity-50">Retry</button>
           )}
         </div>
       </div>
@@ -674,8 +674,8 @@ function DiscoverySourcesPanel() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="truncate text-sm font-semibold">{source.label}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${source.authoritative ? "bg-sky-500/10 text-sky-500" : source.evidenceOnly ? "bg-violet-500/10 text-violet-500" : "bg-secondary text-muted-foreground"}`}>{source.coverageClass.replaceAll("_", " ")}</span>
-                  <span className={`inline-flex items-center gap-1 text-[10px] ${degraded ? "text-amber-500" : "text-emerald-500"}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-2xs font-semibold uppercase tracking-wide ${source.authoritative ? "bg-sky-500/10 text-sky-500" : source.evidenceOnly ? "bg-violet-500/10 text-violet-500" : "bg-secondary text-muted-foreground"}`}>{source.coverageClass.replaceAll("_", " ")}</span>
+                  <span className={`inline-flex items-center gap-1 text-2xs ${degraded ? "text-amber-500" : "text-emerald-500"}`}>
                     <span className={`h-1.5 w-1.5 rounded-full ${degraded ? "bg-amber-500" : "bg-emerald-500"}`} />
                     {!source.available ? "not configured" : source.healthStatus}
                   </span>
@@ -684,7 +684,7 @@ function DiscoverySourcesPanel() {
                   <span className="tabular-nums">{source.records.toLocaleString()} records · {source.requests.toLocaleString()} requests</span>
                   {source.licenseUrl ? <> · <a href={source.licenseUrl} target="_blank" rel="noreferrer" className="underline underline-offset-2">{source.licenseName}</a></> : <> · {source.licenseName}</>}
                 </div>
-                {source.lastError && <div className="mt-1 text-[10px] text-amber-500">{source.lastError}</div>}
+                {source.lastError && <div className="mt-1 text-2xs text-amber-500">{source.lastError}</div>}
               </div>
               <label className="flex min-h-11 shrink-0 cursor-pointer items-center gap-2 text-xs font-medium">
                 <span>{draft.enabled ? "On" : "Off"}</span>
@@ -693,7 +693,7 @@ function DiscoverySourcesPanel() {
               </label>
             </div>
             <div className="mt-3 flex items-end gap-2">
-              <label className="min-w-0 flex-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <label className="min-w-0 flex-1 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">
                 Priority
                 <input type="number" min={1} max={999} value={draft.priority}
                   onChange={event => setDrafts(current => ({ ...current, [source.id]: { ...draft, priority: Math.max(1, Math.min(999, Number(event.target.value) || 1)) } }))}
@@ -765,16 +765,16 @@ function DiscoveryUploadPanel({ isAdmin }: { isAdmin: boolean }) {
         <input ref={inputRef} type="file" accept=".csv,.json,.geojson,application/json,text/csv,application/geo+json" onChange={event => selectFile(event.target.files?.[0] ?? null)} className="sr-only" />
         <button type="button" onClick={() => inputRef.current?.click()} className="mt-4 flex min-h-14 w-full items-center gap-3 rounded-xl border border-dashed border-border px-3 text-left hover:bg-secondary/50">
           <FileSearch className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{file?.name ?? "Choose CSV or GeoJSON"}</span><span className="block text-[10px] text-muted-foreground">UTF-8 · 10 MB maximum · stored per organization</span></span>
-          {file && <span className="text-[10px] tabular-nums text-muted-foreground">{(file.size / 1024).toFixed(0)} KB</span>}
+          <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium">{file?.name ?? "Choose CSV or GeoJSON"}</span><span className="block text-2xs text-muted-foreground">UTF-8 · 10 MB maximum · stored per organization</span></span>
+          {file && <span className="text-2xs tabular-nums text-muted-foreground">{(file.size / 1024).toFixed(0)} KB</span>}
         </button>
 
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
-          <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">License / permission name
+          <label className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">License / permission name
             <input value={licenseName} onChange={event => setLicenseName(event.target.value)} maxLength={120} placeholder="County open-data license"
               className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-sm normal-case tracking-normal text-foreground outline-none focus:ring-2 focus:ring-primary/30" />
           </label>
-          <label className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">License URL
+          <label className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">License URL
             <input value={licenseUrl} onChange={event => setLicenseUrl(event.target.value)} maxLength={500} inputMode="url" placeholder="https://data.example.gov/license"
               className="mt-1 h-11 w-full rounded-lg border border-border bg-background px-3 text-sm normal-case tracking-normal text-foreground outline-none focus:ring-2 focus:ring-primary/30" />
           </label>
@@ -783,7 +783,7 @@ function DiscoveryUploadPanel({ isAdmin }: { isAdmin: boolean }) {
         {isAdmin && (
           <label className="mt-3 flex min-h-11 items-start gap-2 rounded-lg bg-secondary/50 p-3 text-xs">
             <input type="checkbox" checked={authoritative} onChange={event => setAuthoritative(event.target.checked)} className="mt-0.5 h-4 w-4 accent-primary" />
-            <span><b className="font-semibold">Mark as authoritative</b><span className="mt-0.5 block text-[10px] leading-relaxed text-muted-foreground">Use only for a licensed government address-point, parcel, or E911 source whose coverage and terms you verified.</span></span>
+            <span><b className="font-semibold">Mark as authoritative</b><span className="mt-0.5 block text-2xs leading-relaxed text-muted-foreground">Use only for a licensed government address-point, parcel, or E911 source whose coverage and terms you verified.</span></span>
           </label>
         )}
 
@@ -859,7 +859,7 @@ function DiscoveryJobInspector({ job, onClose, onChanged }: { job: DiscoveryJob;
     <div className="fixed inset-0 z-[80] bg-black/55 sm:flex sm:items-center sm:justify-center sm:p-4" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
       <aside role="dialog" aria-modal="true" aria-label={`Discovery job ${job.id}`} className="absolute inset-x-0 bottom-0 flex max-h-[88dvh] flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-2xl sm:relative sm:inset-auto sm:max-h-[85vh] sm:w-full sm:max-w-3xl sm:rounded-2xl">
         <header className="flex items-start gap-2 border-b border-border px-4 py-3">
-          <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">Coverage & evidence</span><span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">{discoveryStageLabel(job.status)}</span></div><div className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground">{job.id}</div></div>
+          <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">Coverage & evidence</span><span className="rounded-full bg-primary/10 px-2 py-0.5 text-2xs font-semibold text-primary">{discoveryStageLabel(job.status)}</span></div><div className="mt-0.5 truncate font-mono text-2xs text-muted-foreground">{job.id}</div></div>
           <button ref={closeRef} type="button" onClick={onClose} aria-label="Close job inspector" className="grid h-11 w-11 place-items-center rounded-xl hover:bg-secondary"><X className="h-4 w-4" /></button>
         </header>
 
@@ -874,7 +874,7 @@ function DiscoveryJobInspector({ job, onClose, onChanged }: { job: DiscoveryJob;
           </div>
 
           <section className="rounded-xl border border-border bg-card p-3">
-            <div className="mb-2 flex items-center gap-2"><MapIcon className="h-4 w-4 text-primary" /><h3 className="flex-1 text-xs font-semibold uppercase tracking-wide">Coverage by tile</h3>{coverage && <span className="text-[10px] text-muted-foreground">{lowCoverage.length}/{coverage.features.length} need attention</span>}</div>
+            <div className="mb-2 flex items-center gap-2"><MapIcon className="h-4 w-4 text-primary" /><h3 className="flex-1 text-xs font-semibold uppercase tracking-wide">Coverage by tile</h3>{coverage && <span className="text-2xs text-muted-foreground">{lowCoverage.length}/{coverage.features.length} need attention</span>}</div>
             {isLoading ? <div className="grid h-36 place-items-center"><Loader2 className="h-5 w-5 animate-spin text-primary" /></div>
               : error ? <UnavailablePanel title="Coverage detail unavailable" error={error} />
               : coverage && coverage.features.length ? (
@@ -951,16 +951,16 @@ function AddressEvidence({ evidence }: { evidence: DiscoveryAddressExplanation }
   const label = address.full_address ?? address.fullAddress ?? address.canonical_address ?? address.canonicalAddress ?? `Address ${address.id ?? ""}`;
   return (
     <div className="mt-3 space-y-2" data-testid="address-evidence">
-      <div className="rounded-lg bg-secondary/50 p-3"><div className="text-sm font-semibold">{String(label)}</div><div className="mt-0.5 text-[10px] text-muted-foreground">Coordinate quality: {String(address.coordinate_quality ?? address.coordinateQuality ?? "unknown")} · Confidence: {Number(address.confidence ?? 0).toFixed(2)}</div></div>
-      <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{evidence.evidence.length} source record{evidence.evidence.length === 1 ? "" : "s"}</div>
+      <div className="rounded-lg bg-secondary/50 p-3"><div className="text-sm font-semibold">{String(label)}</div><div className="mt-0.5 text-2xs text-muted-foreground">Coordinate quality: {String(address.coordinate_quality ?? address.coordinateQuality ?? "unknown")} · Confidence: {Number(address.confidence ?? 0).toFixed(2)}</div></div>
+      <div className="text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{evidence.evidence.length} source record{evidence.evidence.length === 1 ? "" : "s"}</div>
       {evidence.evidence.map((item, index) => (
         <div key={String(item.id ?? index)} className="rounded-lg border border-border px-3 py-2 text-[11px]">
-          <div className="flex items-center gap-2"><b className="min-w-0 flex-1 truncate">{String(item.sourceId ?? item.source ?? "source")}</b>{item.authoritative ? <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[9px] font-semibold text-sky-500">authoritative</span> : null}<span className="tabular-nums text-muted-foreground">{Number(item.confidence ?? 0).toFixed(2)}</span></div>
-          <div className="mt-1 text-[10px] text-muted-foreground">{String(item.evidenceKind ?? item.method ?? (item.inferred ? "inferred" : "observed"))}{item.licenseName ? ` · ${item.licenseName}` : ""}</div>
+          <div className="flex items-center gap-2"><b className="min-w-0 flex-1 truncate">{String(item.sourceId ?? item.source ?? "source")}</b>{item.authoritative ? <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-2xs font-semibold text-sky-500">authoritative</span> : null}<span className="tabular-nums text-muted-foreground">{Number(item.confidence ?? 0).toFixed(2)}</span></div>
+          <div className="mt-1 text-2xs text-muted-foreground">{String(item.evidenceKind ?? item.method ?? (item.inferred ? "inferred" : "observed"))}{item.licenseName ? ` · ${item.licenseName}` : ""}</div>
         </div>
       ))}
       {!evidence.evidence.length && <div className="rounded-lg bg-amber-500/5 p-3 text-[11px] text-amber-500">No retained source evidence was returned for this address.</div>}
-      <div className="grid grid-cols-2 gap-2 text-[10px] text-muted-foreground"><div className="rounded-lg bg-secondary/50 p-2"><b className="block text-xs text-foreground">{evidence.coordinates.length}</b>coordinate observations</div><div className="rounded-lg bg-secondary/50 p-2"><b className="block text-xs text-foreground">{evidence.memberships.length}</b>job / qualification records</div></div>
+      <div className="grid grid-cols-2 gap-2 text-2xs text-muted-foreground"><div className="rounded-lg bg-secondary/50 p-2"><b className="block text-xs text-foreground">{evidence.coordinates.length}</b>coordinate observations</div><div className="rounded-lg bg-secondary/50 p-2"><b className="block text-xs text-foreground">{evidence.memberships.length}</b>job / qualification records</div></div>
     </div>
   );
 }
@@ -1015,8 +1015,8 @@ function FiberSystemView() {
             {(providers.data?.providers ?? []).map(provider => (
               <div key={provider.provider} className="flex min-h-12 items-center gap-3 rounded-xl bg-secondary/50 px-3 py-2">
                 <span className={`h-2.5 w-2.5 rounded-full ${provider.enabled && provider.healthStatus !== "down" ? "bg-emerald-500" : "bg-slate-400"}`} />
-                <div className="min-w-0 flex-1"><div className="text-sm font-semibold">{provider.displayName}</div><div className="text-[10px] text-muted-foreground">{provider.mode} · {provider.rateLimitPerMinute}/min</div></div>
-                <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${provider.enabled ? "bg-emerald-500/10 text-emerald-500" : "bg-secondary text-muted-foreground"}`}>{provider.enabled ? provider.healthStatus : "disabled"}</span>
+                <div className="min-w-0 flex-1"><div className="text-sm font-semibold">{provider.displayName}</div><div className="text-2xs text-muted-foreground">{provider.mode} · {provider.rateLimitPerMinute}/min</div></div>
+                <span className={`rounded-full px-2 py-1 text-2xs font-semibold ${provider.enabled ? "bg-emerald-500/10 text-emerald-500" : "bg-secondary text-muted-foreground"}`}>{provider.enabled ? provider.healthStatus : "disabled"}</span>
               </div>
             ))}
             {!providers.isLoading && !(providers.data?.providers.length) && <div className="py-5 text-center text-xs text-muted-foreground">No provider is configured for this organization.</div>}
@@ -1029,8 +1029,8 @@ function FiberSystemView() {
             {data.workers.map(worker => (
               <div key={worker.workerId} className="flex min-h-12 items-center gap-3 rounded-xl bg-secondary/50 px-3 py-2">
                 <span className={`h-2.5 w-2.5 rounded-full ${worker.healthy ? "bg-emerald-500" : "bg-rose-500"}`} />
-                <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold">{worker.runId ?? worker.workerId}</div><div className="text-[10px] text-muted-foreground">{worker.status} · concurrency {worker.concurrency}</div></div>
-                <span className="text-[10px] text-muted-foreground">{worker.healthy ? "healthy" : "stale"}</span>
+                <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold">{worker.runId ?? worker.workerId}</div><div className="text-2xs text-muted-foreground">{worker.status} · concurrency {worker.concurrency}</div></div>
+                <span className="text-2xs text-muted-foreground">{worker.healthy ? "healthy" : "stale"}</span>
               </div>
             ))}
             {!data.workers.length && <div className="py-5 text-center text-xs text-muted-foreground">No worker heartbeat yet. Start a scan to initialize the worker ledger.</div>}
@@ -1043,7 +1043,7 @@ function FiberSystemView() {
             {(failures.data?.deadLetters ?? []).map(item => (
               <div key={item.id} className="flex items-center gap-3 rounded-xl border border-rose-500/15 bg-rose-500/5 p-3">
                 <AlertTriangle className="h-4 w-4 shrink-0 text-rose-500" />
-                <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold">{item.category.replaceAll("_", " ")}</div><div className="truncate text-[10px] text-muted-foreground">Target {item.target_id ?? "unknown"} · {item.message}</div></div>
+                <div className="min-w-0 flex-1"><div className="truncate text-xs font-semibold">{item.category.replaceAll("_", " ")}</div><div className="truncate text-2xs text-muted-foreground">Target {item.target_id ?? "unknown"} · {item.message}</div></div>
                 <button onClick={() => void retry(item.id)} disabled={retrying === item.id} className="h-11 rounded-xl border border-border px-3 text-xs font-semibold hover:bg-secondary disabled:opacity-50">
                   {retrying === item.id ? <Loader2 className="h-4 w-4 animate-spin" /> : "Retry"}
                 </button>
@@ -1110,7 +1110,7 @@ function RunRow({ run }: { run: ScanRun }) {
     <div className="rounded-xl border border-border bg-card p-3 flex items-center gap-3" data-testid={`scan-run-${run.id}`}>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-semibold capitalize flex-shrink-0 ${pill}`}>
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-2xs font-semibold capitalize flex-shrink-0 ${pill}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${dot}`} /> {run.status}
           </span>
           <span className="text-[13px] font-medium text-foreground truncate">{run.label}</span>
@@ -1124,7 +1124,7 @@ function RunRow({ run }: { run: ScanRun }) {
       </div>
       <div className="text-right flex-shrink-0">
         <div className="text-[13px] font-semibold text-foreground tabular-nums">{usdCompact(run.costUsd)}</div>
-        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">proxy cost</div>
+        <div className="text-2xs uppercase tracking-wide text-muted-foreground">proxy cost</div>
       </div>
     </div>
   );
@@ -1135,7 +1135,7 @@ function MetricCell({ label, value, tone }: { label: string; value: string; tone
   return (
     <div className="px-4 py-2 first:pl-4">
       <div className={`text-[17px] font-bold tabular-nums leading-none ${tone ?? "text-foreground"}`}>{value}</div>
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground mt-1 whitespace-nowrap">{label}</div>
+      <div className="text-2xs uppercase tracking-wide text-muted-foreground mt-1 whitespace-nowrap">{label}</div>
     </div>
   );
 }

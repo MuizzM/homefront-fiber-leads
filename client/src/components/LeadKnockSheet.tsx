@@ -608,7 +608,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
               </div>
               {renderedLead.leadTag === "fresh_fiber_confirmed" && (
-                <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-300">
+                <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-emerald-300">
                   Confirmed fresh fiber
                 </div>
               )}
@@ -720,7 +720,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 Notes
               </span>
               {noteState !== "idle" && (
-                <span data-testid="note-save-state" data-state={noteState} className="text-[10px] font-medium"
+                <span data-testid="note-save-state" data-state={noteState} className="text-2xs font-medium"
                   style={{ color: noteState === "saved" ? "#34d399" : MUTED }}>
                   {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : "Saved to history"}
                 </span>

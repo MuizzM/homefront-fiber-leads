@@ -354,7 +354,7 @@ export default function ScanInspector() {
                     {stale ? <AlertTriangle className="h-3 w-3" /> : r.stage === "classified" ? <CheckCircle2 className="h-3 w-3" /> : null}
                     {stale ? `Blocked at ${STAGE_LABEL[r.stage] ?? r.stage}` : STAGE_LABEL[r.stage] ?? r.stage}
                   </span>
-                  {r.classification && <span className="pl-0.5 text-[10px] text-muted-foreground">{r.classification}</span>}
+                  {r.classification && <span className="pl-0.5 text-2xs text-muted-foreground">{r.classification}</span>}
                 </div>
                 <div className="text-right text-[12px] tabular-nums text-muted-foreground">{r.latencyMs != null ? `${r.latencyMs}ms` : "—"}{r.httpStatus ? ` · ${r.httpStatus}` : ""}</div>
                 <div className="text-right text-[11px] tabular-nums text-muted-foreground">{rel(r.updatedAt)}</div>
@@ -368,13 +368,13 @@ export default function ScanInspector() {
                     onClick={() => { void navigator.clipboard?.writeText(r.addressKey); }}
                     title="Copy correlation id"
                     data-testid="insp-correlation-id"
-                    className="mb-2 inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"
+                    className="mb-2 inline-flex items-center gap-1 rounded bg-secondary px-1.5 py-0.5 font-mono text-2xs text-muted-foreground transition-colors hover:bg-secondary/70 hover:text-foreground"
                   >correlation: {r.addressKey}</button>
                   {timeline.length === 0 ? <div className="text-[12px] text-muted-foreground">Loading timeline…</div> : (
                     <ol className="space-y-1.5">
                       {timeline.map((t) => (
                         <li key={t.id} className="flex items-start gap-2 text-[12px]">
-                          <span className={`mt-0.5 inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] font-semibold ${STAGE_TONE[t.stage] ?? "bg-muted text-muted-foreground border-border"}`}>{STAGE_LABEL[t.stage] ?? t.stage}</span>
+                          <span className={`mt-0.5 inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-2xs font-semibold ${STAGE_TONE[t.stage] ?? "bg-muted text-muted-foreground border-border"}`}>{STAGE_LABEL[t.stage] ?? t.stage}</span>
                           <div className="min-w-0 flex-1">
                             <span className="text-muted-foreground">
                               {new Date(t.tsEpoch).toLocaleTimeString()} ·

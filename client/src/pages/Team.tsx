@@ -401,14 +401,14 @@ export default function Team() {
           {/* Column header (desktop) — aligns to the metric columns below */}
           <div className="hidden md:flex items-center gap-3 px-4 py-2 border-b border-border bg-muted/30">
             <div className="w-10 flex-shrink-0" />
-            <div className="flex-1 min-w-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Member</div>
+            <div className="flex-1 min-w-0 text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Member</div>
             <div className="flex items-center gap-5 flex-shrink-0">
               {metricCols.map(label => (
-                <div key={label} className="w-14 text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+                <div key={label} className="w-14 text-right text-2xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
               ))}
             </div>
             {showActions && (
-              <div className="w-[124px] flex-shrink-0 text-right text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Actions</div>
+              <div className="w-[124px] flex-shrink-0 text-right text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</div>
             )}
           </div>
 
@@ -462,7 +462,7 @@ export default function Team() {
                       {member.email && (
                         <span className="inline-flex items-center gap-1">
                           <Mail className="w-3 h-3" /> {member.email}
-                          <span className="text-[10px] font-medium px-1.5 py-0 rounded-full bg-primary/15 text-primary">login</span>
+                          <span className="text-2xs font-medium px-1.5 py-0 rounded-full bg-primary/15 text-primary">login</span>
                         </span>
                       )}
                     </div>
@@ -472,7 +472,7 @@ export default function Team() {
                       {metrics.map(({ label, val, highlight }) => (
                         <div key={label} className="flex items-baseline gap-1">
                           <span className={`text-sm font-semibold tabular-nums ${highlight && val > 0 ? "text-emerald-400" : "text-foreground"}`}>{val.toLocaleString()}</span>
-                          <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</span>
+                          <span className="text-2xs uppercase tracking-wide text-muted-foreground">{label}</span>
                         </div>
                       ))}
                     </div>
@@ -824,24 +824,24 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
             className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${structure === "TIERED" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
             data-testid="btn-team-structure-tiered">
             <Layers className={`w-4 h-4 mt-0.5 ${structure === "TIERED" ? "text-primary" : "text-muted-foreground"}`} />
-            <span><span className="block text-xs font-semibold">Tiered</span><span className="block text-[10px] text-muted-foreground leading-tight">Retroactive weekly</span></span>
+            <span><span className="block text-xs font-semibold">Tiered</span><span className="block text-2xs text-muted-foreground leading-tight">Retroactive weekly</span></span>
           </button>
           <button type="button" onClick={() => setStructure("FLAT")}
             aria-pressed={structure === "FLAT"}
             className={`flex items-start gap-2 rounded-xl border p-2.5 text-left transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/50 ${structure === "FLAT" ? "border-primary/60 bg-primary/10 ring-1 ring-primary/40" : "border-border bg-secondary/40 hover:bg-secondary/70"}`}
             data-testid="btn-team-structure-flat">
             <DollarSign className={`w-4 h-4 mt-0.5 ${structure === "FLAT" ? "text-primary" : "text-muted-foreground"}`} />
-            <span><span className="block text-xs font-semibold">Flat</span><span className="block text-[10px] text-muted-foreground leading-tight">Per qualified sale</span></span>
+            <span><span className="block text-xs font-semibold">Flat</span><span className="block text-2xs text-muted-foreground leading-tight">Per qualified sale</span></span>
           </button>
         </div>
 
         {structure === "TIERED" ? (
           <div className="rounded-xl bg-secondary/30 border border-border p-2.5 mt-1">
-            <p className="text-[10px] text-muted-foreground mb-2">Total weekly sales set one rate for every sale:</p>
+            <p className="text-2xs text-muted-foreground mb-2">Total weekly sales set one rate for every sale:</p>
             <div className="grid grid-cols-4 gap-1.5">
               {TIER_LADDER.map(t => (
                 <div key={t.range} className="rounded-lg bg-card border border-border px-1 py-1.5 text-center">
-                  <div className="text-[9px] text-muted-foreground">{t.range}</div>
+                  <div className="text-2xs text-muted-foreground">{t.range}</div>
                   <div className="text-xs font-bold text-primary">{t.rate}</div>
                 </div>
               ))}

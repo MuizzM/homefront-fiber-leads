@@ -313,7 +313,7 @@ export default function Dashboard() {
                 </div>
                 <div className="shrink-0 text-right">
                   <div className="text-[15px] font-bold tabular-nums text-emerald-400">{row.salesToday}</div>
-                  <div className="text-[10px] text-muted-foreground">sold today</div>
+                  <div className="text-2xs text-muted-foreground">sold today</div>
                 </div>
                 <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-colors group-hover:text-muted-foreground" />
               </button>
@@ -360,7 +360,7 @@ export default function Dashboard() {
                       First observed live {new Date(a.firstSeenLiveAt.includes("T") ? a.firstSeenLiveAt : `${a.firstSeenLiveAt.replace(" ", "T")}Z`).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
                     </div>
                   </div>
-                  <span className={`h-[20px] shrink-0 rounded-full px-2 text-[10px] font-bold uppercase leading-[20px] tracking-wide ${a.confidence === "cross_verified"
+                  <span className={`h-[20px] shrink-0 rounded-full px-2 text-2xs font-bold uppercase leading-[20px] tracking-wide ${a.confidence === "cross_verified"
                     ? "bg-emerald-500/15 text-emerald-400" : "bg-orange-500/15 text-orange-400"}`}>
                     {a.confidence === "cross_verified" ? "Cross-verified" : "Provisional"}
                   </span>
