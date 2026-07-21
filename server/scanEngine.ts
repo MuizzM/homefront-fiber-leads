@@ -464,6 +464,14 @@ export async function runScanWorker(
         batch.map((target) => target.targetId),
       );
       if (projected.published > 0) {
+        // Wake the harvest: these new drops just made their cell/street
+        // neighbours immediately due (flip-proximity), so scan them within
+        // seconds rather than waiting for the next periodic cycle. Debounced +
+        // rate-limited, so a whole street lighting at once coalesces to one wake.
+        try {
+          const { wakeHarvest } = await import("./harvestScheduler");
+          wakeHarvest("fresh_drop");
+        } catch { /* scheduler optional */ }
         const alertHook = (globalThis as any).__flushFreshFiberAlerts;
         if (typeof alertHook === "function") {
           void Promise.resolve(alertHook(tenantId)).catch((error: any) => {

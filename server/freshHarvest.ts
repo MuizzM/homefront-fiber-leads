@@ -55,7 +55,8 @@ import { startTargetRun } from "./scanService";
 import { structuredLog } from "./structuredLog";
 import { bandwidthBudgetScale, governorStats, isProxyCircuitOpen } from "./bandwidthGovernor";
 import { canonicalAddressPart } from "./addressKey";
-import { registerFootprintSqlFunctions } from "./footprintGate";
+import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
+import { budgetShapeFactor } from "./harvestScheduler";
 
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
@@ -110,7 +111,7 @@ export function streetKeyOf(address: string | null | undefined): string {
 // query instead of the naive substr-after-first-space it used before (which
 // broke on unit suffixes and on "Fiber Street" vs "Fiber St").
 let sqlFnsRegistered = false;
-function registerHarvestSqlFunctions(): void {
+export function registerHarvestSqlFunctions(): void {
   if (sqlFnsRegistered) return;
   try {
     (rawDb as any).function("harvest_street_key", { deterministic: true },
@@ -310,6 +311,7 @@ export function tierC(tenantId: number, limit: number): TierRow[] {
 export function tierD(tenantId: number, limit: number): TierRow[] {
   if (limit <= 0) return [];
   registerFootprintSqlFunctions();
+  warmFootprintGate(); // snapshot before the query — an in-query cold read fails open
   return rawDb.prepare(
     `SELECT s.id
        FROM scan_targets s
@@ -335,10 +337,8 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
     structuredLog("fresh_harvest.cycle", { b: 0, b2: 0, e1: 0, c0: 0, c: 0, e2: 0, d1: 0, d: 0, skipped: "proxy circuit open" });
     return { b: 0, b2: 0, e1: 0, c0: 0, c: 0, e2: 0, d1: 0, d: 0 };
   }
-  // Time-of-day budget shaping: proxy spend follows idle capacity.
-  const hour = new Date().getHours();
-  if (hour >= 0 && hour < 6) budget = Math.round(budget * 1.5);        // overnight push
-  else if (hour >= 9 && hour < 17) budget = Math.round(budget * 0.5);  // business hours: gentle
+  // Time-of-day budget shaping (Eastern time): proxy spend follows idle capacity.
+  budget = Math.round(budget * budgetShapeFactor());
   // Bandwidth governor: pace spend against the monthly Decodo pool. When the
   // pool runs ahead of pace the budget shrinks; when we're behind pace it
   // grows (max ×1.5). Strategic cut order under scarcity: D2 dies first

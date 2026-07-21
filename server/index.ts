@@ -942,13 +942,15 @@ app.use((req, res, next) => {
         }
       } catch (e: any) { console.warn("[fresh-harvest] skipped:", e?.message); }
     };
-    // First cycle 4 min after boot (after Kinetic hot burst + Frontier burst).
-    setTimeout(() => { void harvestTick(); }, 4 * 60_000);
-    const harvestInterval = setInterval(
-      () => { void harvestTick(); },
-      Math.max(5, Number(process.env.FRESH_HARVEST_INTERVAL_MIN) || 15) * 60_000,
-    );
-    if (typeof (harvestInterval as any).unref === "function") harvestInterval.unref();
+    // Periodic baseline coverage (first cycle 4 min after boot, after the Kinetic
+    // hot burst + Frontier burst) PLUS on-demand wakes: a confirmed fresh drop
+    // wakes the harvest so its now-due cell/street neighbours scan within seconds
+    // (see wakeHarvest in the projection path), instead of waiting a full interval.
+    const { startHarvestScheduler } = await import("./harvestScheduler");
+    startHarvestScheduler(harvestTick, {
+      intervalMs: Math.max(5, Number(process.env.FRESH_HARVEST_INTERVAL_MIN) || 15) * 60_000,
+      firstDelayMs: 4 * 60_000,
+    });
 
     // ECONOMY REPORT — every 6h, log proxy-call efficiency: checks, block
     // rate, fresh verdicts, fresh leads, and calls-per-fresh-lead so we can
