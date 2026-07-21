@@ -7,6 +7,8 @@
  * residential gateway hands out a fresh egress IP. This obtains a new authorized
  * session per the provider agreement; it never bypasses an actual upstream denial. */
 
+import { noteProxyAuthFailure, noteProxySuccess, recordProxyResponse } from "./bandwidthGovernor";
+
 let _ProxyAgent: any = null;
 let _undiciFetch: any = null;
 let _proxyLoaded = false;
@@ -123,13 +125,28 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
       void rotateProxySession("proactive");
     }
     try {
-      return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
+      const res = await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
+      // Bandwidth governor: ledger every proxied response; a 407 from the
+      // Decodo gateway means auth/limit denial — feed the circuit breaker so
+      // scanning suspends instead of hammering a dead account.
+      try {
+        const cl = Number((res as any).headers?.get?.("content-length") ?? 0) || 0;
+        if (res.status === 407) noteProxyAuthFailure();
+        else { noteProxySuccess(); recordProxyResponse(cl); }
+      } catch { /* metrics must never break the transport */ }
+      return res;
     } catch (err: any) {
       if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
         rebuildDispatcher(proxyUrl);
         console.log("[proxy-fetch] Pool rebuilt after socket reset");
         return await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
       }
+      // Decodo rejects the CONNECT tunnel itself on auth/limit denials, so a
+      // 407 surfaces here as a thrown error, never as a response above.
+      try {
+        const msg = String(err?.message ?? "") + String(err?.cause?.message ?? "");
+        if (msg.includes("407")) noteProxyAuthFailure();
+      } catch { /* metrics must never break the transport */ }
       throw err; // fail closed — do NOT go direct
     }
   }

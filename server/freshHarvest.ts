@@ -34,6 +34,7 @@
 import { rawDb } from "./db";
 import { startTargetRun } from "./scanService";
 import { structuredLog } from "./structuredLog";
+import { bandwidthBudgetScale, governorStats, isProxyCircuitOpen } from "./bandwidthGovernor";
 
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
@@ -209,10 +210,23 @@ export function tierD(tenantId: number, limit: number): TierRow[] {
  * repeat work that isn't due again.
  */
 export function runHarvestCycle(tenantId: number, budget = Number(process.env.FRESH_HARVEST_BUDGET) || 4000): { a: number; b: number; b2: number; c0: number; c: number; d1: number; d: number; runId?: string } {
+  // Circuit breaker: proxy auth/limit denials → freeze the cycle entirely.
+  if (isProxyCircuitOpen()) {
+    structuredLog("fresh_harvest.cycle", { a: 0, b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0, skipped: "proxy circuit open" });
+    return { a: 0, b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 };
+  }
   // Time-of-day budget shaping: proxy spend follows idle capacity.
   const hour = new Date().getHours();
   if (hour >= 0 && hour < 6) budget = Math.round(budget * 1.5);        // overnight push
   else if (hour >= 9 && hour < 17) budget = Math.round(budget * 0.5);  // business hours: gentle
+  // Bandwidth governor: pace spend against the monthly Decodo pool. When the
+  // pool runs ahead of pace the budget shrinks; when we're behind pace it
+  // grows (max ×1.5). Strategic cut order under scarcity: D2 dies first
+  // (scale<0.5), then D1 (scale<0.25) — fresh-hunting tiers never starve.
+  const bwScale = bandwidthBudgetScale();
+  budget = Math.round(budget * bwScale);
+  const d1Cap = bwScale < 0.25 ? 0 : budget;
+  const dCap = bwScale < 0.5 ? 0 : budget;
   const seen = new Set<number>();
   const pick = (rows: TierRow[]) => rows.filter((r) => !seen.has(r.id)).map((r) => { seen.add(r.id); return r.id; });
 
@@ -221,8 +235,8 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
   const b2 = pick(tierB2(tenantId, budget - a.length - b.length));
   const c0 = pick(tierC0(tenantId, budget - a.length - b.length - b2.length));
   const c = pick(tierC(tenantId, budget - a.length - b.length - b2.length - c0.length));
-  const d1 = pick(tierD1(tenantId, budget - a.length - b.length - b2.length - c0.length - c.length));
-  const d = pick(tierD(tenantId, budget - a.length - b.length - b2.length - c0.length - c.length - d1.length));
+  const d1 = pick(tierD1(tenantId, Math.min(d1Cap, budget - a.length - b.length - b2.length - c0.length - c.length)));
+  const d = pick(tierD(tenantId, Math.min(dCap, budget - a.length - b.length - b2.length - c0.length - c.length - d1.length)));
   const ids = [...a, ...b, ...b2, ...c0, ...c, ...d1, ...d];
 
   const counts = { a: a.length, b: b.length, b2: b2.length, c0: c0.length, c: c.length, d1: d1.length, d: d.length };
@@ -238,7 +252,7 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
     runKind: "fresh_harvest",
     label: `FRESH HARVEST a${counts.a}/b${counts.b}/b2:${counts.b2}/c0:${counts.c0}/c${counts.c}/d1:${counts.d1}/d${counts.d}`,
   });
-  structuredLog("fresh_harvest.cycle", { ...counts, runId, total: ids.length });
+  structuredLog("fresh_harvest.cycle", { ...counts, runId, total: ids.length, bwScale });
   return { ...counts, runId };
 }
 
@@ -251,6 +265,7 @@ export function emitEconomyReport(tenantId: number): void {
     const l = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads
       WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND created_at > datetime('now','-1 day')`).get(tenantId) as any;
     const checks = Number(s?.checks ?? 0), fresh = Number(s?.fresh ?? 0), leads = Number(l?.c ?? 0);
+    const bw = governorStats();
     structuredLog("fresh_harvest.economy", {
       checks24h: checks,
       blocked24h: Number(s?.blocked ?? 0),
@@ -258,6 +273,15 @@ export function emitEconomyReport(tenantId: number): void {
       freshVerdicts24h: fresh,
       freshLeads24h: leads,
       callsPerFreshLead: leads ? +(checks / leads).toFixed(1) : null,
+      // bandwidth governor: the true Decodo cost of the operation
+      requests24h: bw.requests24h,
+      mbToday: bw.mbToday,
+      gbCycle: bw.gbCycle,
+      cyclePctUsed: bw.cyclePctUsed,
+      projectedCycleGb: bw.projectedCycleGb,
+      budgetGb: bw.budgetGb,
+      bwScale: bw.scale,
+      kbPerFreshLead: leads && bw.requests24h ? +((bw.mbToday * 1000) / leads).toFixed(1) : null,
     });
   } catch { /* best-effort metrics */ }
 }
