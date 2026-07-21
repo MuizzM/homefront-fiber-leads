@@ -86,6 +86,6 @@ describe("bandwidth governor", () => {
     for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
     const { runHarvestCycle } = await import("../../server/freshHarvest");
     const counts = runHarvestCycle(1, 100);
-    expect(counts).toMatchObject({ a: 0, b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 });
+    expect(counts).toMatchObject({ b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 });
   });
 });

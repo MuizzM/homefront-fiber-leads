@@ -4,9 +4,12 @@
  * Every cycle ranks ALL due work by expected fresh-lead yield and spends the
  * budget top-down (no blind backlog sweeping):
  *
- *   Tier A — COMING-SOON FLIP WATCH with age-tightened cadence: fresh entries
- *            (<48h old) re-checked every 12h; mature entries every 2h (flips
- *            cluster at days 3–14) — we catch the flip within hours.
+ *   (Coming-soon flip watching is NOT a harvest tier: the comingSoonWatchlist
+ *    engine is the sole scheduler of those rechecks — governor-paced, with
+ *    flip-window cadence tightening. A harvest tier here dispatched them under
+ *    runKind 'fresh_harvest', which the engine's 18h dedup silently skipped —
+ *    burning budget slots without ever producing the tight cadence.)
+ *
  *   Tier B — CLUSTER NEIGHBORS, conversion-weighted: never-scanned addresses
  *            in ~1.1km cells of fresh leads, ranked by the cell's hit rate
  *            (fresh leads per scanned address) — the fleet concentrates where
@@ -104,25 +107,6 @@ function registerHarvestSqlFunctions(): void {
   } catch { /* re-registration or exotic driver — Tier B2 will fail loudly if truly absent */ }
 }
 registerHarvestSqlFunctions();
-
-/** Tier A: coming-soon watchlist entries due for re-check. */
-export function tierA(tenantId: number, limit: number): TierRow[] {
-  if (limit <= 0) return [];
-  const now = Date.now();
-  const freshCut = now - 12 * 3_600_000;   // young entries: 12h cadence
-  const matureCut = now - 2 * 3_600_000;   // mature entries (48h+): 2h cadence
-  const matureAge = now - 48 * 3_600_000;
-  return rawDb.prepare(
-    `SELECT w.scan_target_id AS id
-       FROM coming_soon_watchlist w
-      WHERE w.tenant_id=? AND w.status='active'
-        AND (w.last_checked_at IS NULL
-             OR (w.first_seen_at >  ? AND w.last_checked_at < ?)
-             OR (w.first_seen_at <= ? AND w.last_checked_at < ?))
-      ORDER BY (w.last_checked_at IS NULL) DESC, w.last_checked_at ASC
-      LIMIT ?`,
-  ).all(tenantId, matureAge, freshCut, matureAge, matureCut, limit) as TierRow[];
-}
 
 /** Tier B: never-scanned targets in ~1.1km cells containing a fresh lead.
  *  Cells rank by empirical-Bayes smoothed hit rate: observed hits/scans blended
@@ -280,11 +264,11 @@ export function tierD(tenantId: number, limit: number): TierRow[] {
  * structured-logged). Daily-safe: selection is due-based, so cycles never
  * repeat work that isn't due again.
  */
-export function runHarvestCycle(tenantId: number, budget = Number(process.env.FRESH_HARVEST_BUDGET) || 4000): { a: number; b: number; b2: number; c0: number; c: number; d1: number; d: number; runId?: string } {
+export function runHarvestCycle(tenantId: number, budget = Number(process.env.FRESH_HARVEST_BUDGET) || 4000): { b: number; b2: number; c0: number; c: number; d1: number; d: number; runId?: string } {
   // Circuit breaker: proxy auth/limit denials → freeze the cycle entirely.
   if (isProxyCircuitOpen()) {
-    structuredLog("fresh_harvest.cycle", { a: 0, b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0, skipped: "proxy circuit open" });
-    return { a: 0, b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 };
+    structuredLog("fresh_harvest.cycle", { b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0, skipped: "proxy circuit open" });
+    return { b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 };
   }
   // Time-of-day budget shaping: proxy spend follows idle capacity.
   const hour = new Date().getHours();
@@ -301,16 +285,15 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
   const seen = new Set<number>();
   const pick = (rows: TierRow[]) => rows.filter((r) => !seen.has(r.id)).map((r) => { seen.add(r.id); return r.id; });
 
-  const a = pick(tierA(tenantId, budget));
-  const b = pick(tierB(tenantId, budget - a.length));
-  const b2 = pick(tierB2(tenantId, budget - a.length - b.length));
-  const c0 = pick(tierC0(tenantId, budget - a.length - b.length - b2.length));
-  const c = pick(tierC(tenantId, budget - a.length - b.length - b2.length - c0.length));
-  const d1 = pick(tierD1(tenantId, Math.min(d1Cap, budget - a.length - b.length - b2.length - c0.length - c.length)));
-  const d = pick(tierD(tenantId, Math.min(dCap, budget - a.length - b.length - b2.length - c0.length - c.length - d1.length)));
-  const ids = [...a, ...b, ...b2, ...c0, ...c, ...d1, ...d];
+  const b = pick(tierB(tenantId, budget));
+  const b2 = pick(tierB2(tenantId, budget - b.length));
+  const c0 = pick(tierC0(tenantId, budget - b.length - b2.length));
+  const c = pick(tierC(tenantId, budget - b.length - b2.length - c0.length));
+  const d1 = pick(tierD1(tenantId, Math.min(d1Cap, budget - b.length - b2.length - c0.length - c.length)));
+  const d = pick(tierD(tenantId, Math.min(dCap, budget - b.length - b2.length - c0.length - c.length - d1.length)));
+  const ids = [...b, ...b2, ...c0, ...c, ...d1, ...d];
 
-  const counts = { a: a.length, b: b.length, b2: b2.length, c0: c0.length, c: c.length, d1: d1.length, d: d.length };
+  const counts = { b: b.length, b2: b2.length, c0: c0.length, c: c.length, d1: d1.length, d: d.length };
   if (!ids.length) {
     structuredLog("fresh_harvest.cycle", { ...counts, skipped: "nothing due" });
     return counts;
@@ -321,7 +304,7 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
     state: "multi",
     targetIds: ids,
     runKind: "fresh_harvest",
-    label: `FRESH HARVEST a${counts.a}/b${counts.b}/b2:${counts.b2}/c0:${counts.c0}/c${counts.c}/d1:${counts.d1}/d${counts.d}`,
+    label: `FRESH HARVEST b${counts.b}/b2:${counts.b2}/c0:${counts.c0}/c${counts.c}/d1:${counts.d1}/d${counts.d}`,
   });
   structuredLog("fresh_harvest.cycle", { ...counts, runId, total: ids.length, bwScale });
   return { ...counts, runId };

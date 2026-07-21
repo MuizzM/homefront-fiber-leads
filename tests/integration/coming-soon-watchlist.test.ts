@@ -211,9 +211,12 @@ describe("coming-soon watchlist rows", () => {
 
 // ── Due selection by urgency + bounded enqueue through startTargetRun ─────────
 describe("watchlist tick", () => {
-  function watched(opts: { source?: string; eta?: string | null; lastChecked?: number } = {}): number {
+  // First observed 20 days ago — OUTSIDE the 2–14d flip window, so these rows
+  // exercise the base hot/soon/watch cadences (flip-window escalation has its
+  // own tests below).
+  function watched(opts: { source?: string; eta?: string | null; lastChecked?: number; firstSeen?: number } = {}): number {
     const t = target({ source: opts.source });
-    snap(t, { checkedAt: NOW - 5 * DAY, fiberStatus: "unknown", householdSegmentType: "COMING SOON" });
+    snap(t, { checkedAt: opts.firstSeen ?? NOW - 20 * DAY, fiberStatus: "unknown", householdSegmentType: "COMING SOON" });
     rawDb.prepare(`UPDATE coming_soon_watchlist SET estimated_completion=?, last_checked_at=?, updated_at=? WHERE scan_target_id=?`)
       .run(opts.eta ?? null, opts.lastChecked ?? NOW, NOW, t);
     return t;
@@ -297,6 +300,65 @@ describe("GET /api/coming-soon/watchlist", () => {
     expect(payload.items[0]).toHaveProperty("estimatedCompletion");
     expect(payload.items[0]).toHaveProperty("firstSeenAt");
     expect(payload.items[0]).toHaveProperty("lastCheckedAt");
+  });
+});
+
+// ── Flip-window cadence escalation (days 2–14 after first observation) ────────
+describe("flip-window escalation", () => {
+  it("urgencyOf escalates one band inside the window and relaxes outside it", () => {
+    const base = { estimated_completion: null, source: "scanner" };
+    expect(watch.urgencyOf({ ...base, first_seen_at: NOW - 1 * DAY }, NOW)).toBe("watch");  // too young
+    expect(watch.urgencyOf({ ...base, first_seen_at: NOW - 5 * DAY }, NOW)).toBe("soon");   // in window: watch→soon
+    expect(watch.urgencyOf({ ...base, source: "new_build", first_seen_at: NOW - 5 * DAY }, NOW)).toBe("hot"); // soon→hot
+    expect(watch.urgencyOf({ ...base, first_seen_at: NOW - 20 * DAY }, NOW)).toBe("watch"); // past window
+    // An ETA-hot row is already at the tightest band — unchanged.
+    expect(watch.urgencyOf({ estimated_completion: new Date(NOW + 3 * DAY).toISOString().slice(0, 10), source: "scanner", first_seen_at: NOW - 5 * DAY }, NOW)).toBe("hot");
+  });
+
+  it("the tick rechecks an in-window generic watch at the soon cadence", () => {
+    const t = target();
+    snap(t, { checkedAt: NOW - 5 * DAY, fiberStatus: "unknown", householdSegmentType: "COMING SOON" });
+    // 13h stale: base watch cadence (24h) would skip it; escalated soon (12h) is due.
+    rawDb.prepare(`UPDATE coming_soon_watchlist SET last_checked_at=?, updated_at=? WHERE scan_target_id=?`)
+      .run(NOW - 13 * HOUR, NOW, t);
+    const result = watch.runComingSoonTick(NOW);
+    expect(result.due).toBe(1);
+    expect(startTargetRun.mock.calls[0][0].targetIds).toContain(t);
+  });
+});
+
+// ── Bandwidth-governor pacing of the tick ─────────────────────────────────────
+describe("governor pacing", () => {
+  it("governedBatch scales the cap with a 25% floor and never exceeds the cap", () => {
+    expect(watch.governedBatch(200, 1)).toBe(200);
+    expect(watch.governedBatch(200, 1.5)).toBe(200);  // surplus never grows the cap
+    expect(watch.governedBatch(200, 0.5)).toBe(100);
+    expect(watch.governedBatch(200, 0.1)).toBe(50);   // floor: top-yield work never starves
+    expect(watch.governedBatch(1, 0.1)).toBe(1);
+  });
+
+  it("suspends dispatch (but not housekeeping) while the proxy circuit is open", async () => {
+    const gov = await import("../../server/bandwidthGovernor");
+    gov._resetGovernorForTests();
+    try {
+      const due = target();
+      snap(due, { checkedAt: NOW - 20 * DAY, fiberStatus: "unknown", householdSegmentType: "COMING SOON" });
+      rawDb.prepare(`UPDATE coming_soon_watchlist SET last_checked_at=?, updated_at=? WHERE scan_target_id=?`)
+        .run(NOW - 30 * HOUR, NOW, due);
+      const stale = target();
+      snap(stale, { checkedAt: NOW - 20 * DAY, fiberStatus: "unknown", householdSegmentType: "COMING SOON" });
+      rawDb.prepare(`UPDATE coming_soon_watchlist SET updated_at=? WHERE scan_target_id=?`)
+        .run(NOW - 91 * DAY, stale);
+
+      for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
+      const result = watch.runComingSoonTick(NOW);
+      expect(result.circuitOpen).toBe(true);
+      expect(result.enqueued).toBe(0);
+      expect(startTargetRun).not.toHaveBeenCalled();
+      expect(result.expired).toBe(1);               // DB-only housekeeping still ran
+    } finally {
+      gov._resetGovernorForTests();
+    }
   });
 });
 

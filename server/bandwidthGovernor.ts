@@ -17,8 +17,10 @@
  *        burn < pace  → scale grows up to 1.50 (hunt harder while we're ahead)
  *
  *   3. CUT ORDER — when scale < 0.5 the harvester drops Tier D2 entirely;
- *      when scale < 0.25 it also drops Tier D1. Tiers A/B2/B (fresh hunting)
- *      are never starved — they produce the verified fresh leads.
+ *      when scale < 0.25 it also drops Tier D1. Tiers B/B2 (fresh hunting)
+ *      are never starved — they produce the verified fresh leads. The
+ *      coming-soon watchlist tick paces its own batch by scale with a 25%
+ *      floor (flip watching is the top-yield channel).
  *
  *   4. CIRCUIT BREAKER — a run of auth/limit denials (407) opens the circuit
  *      for CIRCUIT_OPEN_MS (30 min): scanning suspends instead of hammering

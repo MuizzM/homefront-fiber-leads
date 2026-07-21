@@ -996,10 +996,11 @@ app.use((req, res, next) => {
   const frontierZoneCycle = setInterval(() => { void runFrontierBuildZones(); }, 30 * 60_000);
   if (typeof (frontierZoneCycle as any).unref === "function") frontierZoneCycle.unref();
 
-  // COMING SOON PROGRAM — the overarching always-on watch system. The built-in
-  // worker sweeps the durable watchlist every 15 minutes on an opportunity-
-  // weighted cadence and promotes COMING_SOON → AVAILABLE into a green assignable
-  // Fresh Lead with nearby expansion. Set COMING_SOON_PROGRAM=off to disable.
+  // COMING SOON PROGRAM — opportunity metadata + promotion surface. The worker
+  // bridges legacy watches into the comingSoonWatchlist engine (the sole
+  // scheduler of coming-soon rechecks), detects promotions, and refreshes
+  // opportunity scores for the board. DB-only; no provider dispatch here.
+  // Set COMING_SOON_PROGRAM=off to disable.
   if (process.env.COMING_SOON_PROGRAM !== "off") {
     void (async () => {
       try {

@@ -7,15 +7,14 @@ import fs from "node:fs";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hf-harvest-"));
 vi.mock("../../server/scanService", () => ({ startTargetRun: vi.fn(() => ({ runId: "run_test", queued: 0, budget: 0 })) }));
 
-let tierA: any, tierB: any, tierB2: any, tierC: any, tierD: any, tierC0: any, tierD1: any, streetKeyOf: any, rawDb: any;
+let tierB: any, tierB2: any, tierC: any, tierD: any, tierC0: any, tierD1: any, streetKeyOf: any, rawDb: any;
 
 beforeAll(async () => {
   ({ rawDb } = await import("../../server/db"));
-  ({ tierA, tierB, tierB2, tierC, tierD, tierC0, tierD1, streetKeyOf } = await import("../../server/freshHarvest"));
+  ({ tierB, tierB2, tierC, tierD, tierC0, tierD1, streetKeyOf } = await import("../../server/freshHarvest"));
   rawDb.exec(`
     DROP TABLE IF EXISTS leads;
     DROP TABLE IF EXISTS scan_targets;
-    DROP TABLE IF EXISTS coming_soon_watchlist;
     CREATE TABLE scan_targets (
       id INTEGER PRIMARY KEY, tenant_id INTEGER, address TEXT, city TEXT, state TEXT, zip TEXT,
       lat REAL, lng REAL, last_scanned_at TEXT, last_fiber_status TEXT, carrier TEXT DEFAULT 'kinetic'
@@ -23,10 +22,6 @@ beforeAll(async () => {
     CREATE TABLE leads (
       id INTEGER PRIMARY KEY, tenant_id INTEGER, address TEXT, city TEXT, state TEXT,
       lat REAL, lng REAL, lead_tag TEXT, created_at TEXT
-    );
-    CREATE TABLE coming_soon_watchlist (
-      id INTEGER PRIMARY KEY, tenant_id INTEGER, scan_target_id INTEGER, status TEXT DEFAULT 'active',
-      last_checked_at INTEGER, first_seen_at INTEGER
     );
   `);
   const insT = rawDb.prepare("INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,last_scanned_at,last_fiber_status) VALUES (?,1,?,?,?,?,?,?,?,?)");
@@ -41,13 +36,9 @@ beforeAll(async () => {
   insT.run(12,"12 Cold Ave","coldtown","nc","27501",34.0,-80.0,null,null);
   // Target 13: stale no_service → Tier D
   insT.run(13,"13 Old St","coldtown","nc","27501",34.1,-80.1,"2026-06-01 00:00:00","no_service");
-  // Target 14: watchlist due (mature entry, 7h stale → 2h cadence) → Tier A
+  // Target 14: never scanned, hotville far cell (coming-soon rechecks are the
+  // watchlist engine's job now, not a harvest tier) → Tier C only
   insT.run(14,"14 Watch Dr","hotville","nc","27501",35.01,-79.01,null,null);
-  rawDb.prepare("INSERT INTO coming_soon_watchlist (tenant_id,scan_target_id,status,last_checked_at,first_seen_at) VALUES (1,14,'active',?,?)")
-    .run(Date.now()-7*3600_000, Date.now()-72*3600_000);
-  // Watchlist row 99: YOUNG entry (1h old → 12h cadence), only 7h stale → NOT due
-  rawDb.prepare("INSERT INTO coming_soon_watchlist (tenant_id,scan_target_id,status,last_checked_at,first_seen_at) VALUES (1,99,'active',?,?)")
-    .run(Date.now()-7*3600_000, Date.now()-1*3600_000);
   // Target 15: never scanned, PRIORITY city (davidson) → Tier C0
   insT.run(15,"15 Davidson Rd","davidson","nc","28035",35.49,-80.84,null,null);
   // Target 16: COPPER in hotville, 10 days stale → Tier D1 (copper-flip watch)
@@ -82,11 +73,6 @@ beforeAll(async () => {
 
 
 describe("fresh harvest tiers", () => {
-  it("Tier A returns due coming-soon watchlist entries only (age-tightened cadence)", () => {
-    const rows = tierA(1, 100).map((r: any) => r.id);
-    expect(rows).toEqual([14]);       // mature entry, 7h stale → due (2h cadence)
-    expect(rows).not.toContain(99);   // young entry needs 12h staleness — excluded
-  });
   it("Tier B picks never-scanned neighbors of fresh leads (cluster cells)", () => {
     const rows = tierB(1, 100).map((r: any) => r.id);
     expect(rows).toContain(10);  // same ~1.1km cell as the fresh lead
@@ -128,22 +114,21 @@ describe("fresh harvest tiers", () => {
     const rows = tierD1(1, 100).map((r: any) => r.id);
     expect(rows).toEqual([16]);
   });
-  it("budget top-down: A → B → B2 → C0 → C → D1 → D, no duplicates", async () => {
+  it("budget top-down: B → B2 → C0 → C → D1 → D, no duplicates", async () => {
     // Pick a raw budget that shapes to exactly 8 at the current hour
     // (×1.5 overnight 00–06, ×0.5 business hours 09–17, ×1 otherwise).
     const h = new Date().getHours();
     const raw = h < 6 ? 16 / 3 : (h >= 9 && h < 17 ? 16 : 8);
     const { runHarvestCycle } = await import("../../server/freshHarvest");
     const counts = runHarvestCycle(1, raw);
-    expect(counts.a).toBe(1);   // 14
     expect(counts.b).toBe(3);   // 20 (proven), 10 (hotville), 21 (noisy)
     expect(counts.b2).toBe(2);  // 17, 18
     expect(counts.c0).toBe(1);  // 15
-    // Last slot: Tier C's top-ranked row (gemtown, id 20) was already taken by
-    // Tier B, so C contributes nothing and D1 gets the slot.
+    // Tier C's top-ranked rows (gemtown ids 20, 21) were already taken by
+    // Tier B, so C contributes nothing and the last slots fall to D1 and D.
     expect(counts.c).toBe(0);
     expect(counts.d1).toBe(1);  // 16
-    expect(counts.d).toBe(0);
+    expect(counts.d).toBe(1);   // 13
   });
   it("streetKeyOf canonicalizes street identity", () => {
     expect(streetKeyOf("17 Fiber St")).toBe("FIBER ST");
