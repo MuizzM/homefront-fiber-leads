@@ -84,6 +84,34 @@ describe("area scan machine — refresh mid-scan vs crash/zombie", () => {
   });
 });
 
+describe("area scan machine — reconnect verification (persisted state is never the sole truth)", () => {
+  // Refresh mid-scan resumes DISPLAY, then the caller verifies with the backend.
+  const resumed = (): AreaScanState =>
+    areaScanReducer(IDLE, { type: "HYDRATE", persisted: { status: "running", jobId: "job1", boxKey: "b1", startedAt: at }, now: at + 60_000 });
+
+  it("backend confirms RUNNING → stays running with fresh counts (reconnect, never a new job)", () => {
+    const s = areaScanReducer(resumed(), { type: "JOB_UPDATE", jobId: "job1", active: true, found: 4, checked: 120 });
+    expect(s).toMatchObject({ status: "running", jobId: "job1", found: 4, checked: 120 });
+  });
+
+  it("backend says the job finished while the page was closed → terminal summary, not phantom scanning", () => {
+    const s = areaScanReducer(resumed(), { type: "JOB_UPDATE", jobId: "job1", active: false, terminal: "completed", found: 2 });
+    expect(s.status).toBe("completed");
+  });
+
+  it("backend does not know the job (404) → JOB_GONE resolves to idle", () => {
+    expect(areaScanReducer(resumed(), { type: "JOB_GONE", jobId: "job1" })).toEqual(IDLE);
+  });
+
+  it("JOB_GONE for a different job is ignored; a terminal summary is not wiped", () => {
+    const r = resumed();
+    expect(areaScanReducer(r, { type: "JOB_GONE", jobId: "OTHER" })).toBe(r);
+    const done = run({ status: "completed" });
+    expect(areaScanReducer(done, { type: "JOB_GONE", jobId: "job1" })).toBe(done); // summary has real counts to show
+    expect(areaScanReducer(IDLE, { type: "JOB_GONE", jobId: "job1" })).toBe(IDLE);
+  });
+});
+
 describe("area scan machine — stop, dismiss, persistence", () => {
   it("STOP cancels a running scan", () => {
     expect(areaScanReducer(run(), { type: "STOP" }).status).toBe("cancelled");

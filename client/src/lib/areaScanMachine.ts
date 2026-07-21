@@ -59,6 +59,10 @@ export type AreaScanEvent =
   // A status update for the OWNED job (from SSE or a targeted fetch). Ignored
   // unless jobId matches — a background/other job can never drive this machine.
   | { type: "JOB_UPDATE"; jobId: string; active: boolean; terminal?: "completed" | "failed" | "cancelled"; found?: number; checked?: number }
+  // Backend verification says the owned job DOES NOT EXIST (404/purged). A
+  // missing job must resolve to idle — there is no outcome to summarize, and a
+  // phantom job must never keep "Scanning fiber" up.
+  | { type: "JOB_GONE"; jobId: string }
   // Operator tapped Stop (optimistic; the caller also cancels server-side).
   | { type: "STOP" }
   // Operator dismissed the terminal summary.
@@ -102,6 +106,12 @@ export function areaScanReducer(state: AreaScanState, event: AreaScanEvent): Are
       // Not active and not explicitly terminal → the job finished; complete it.
       return { ...state, status: "completed", found: event.found ?? state.found, checked: event.checked ?? state.checked };
     }
+
+    case "JOB_GONE":
+      // Only the owned job, and only while we're showing it as active. A
+      // terminal summary stays up (it has real counts to show).
+      if (!state.jobId || event.jobId !== state.jobId || !isActive(state.status)) return state;
+      return IDLE;
 
     case "STOP":
       if (!isActive(state.status)) return state;

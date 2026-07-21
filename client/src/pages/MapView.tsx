@@ -109,6 +109,7 @@ import { unpackMapPins } from "@shared/mapPinsWire";
 import { useCan } from "@/lib/capabilities";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
+  discoveryApi,
   discoveryIdempotencyKey,
   isActiveDiscoveryJob,
   isTerminalDiscoveryJob,
@@ -753,9 +754,15 @@ export default function MapView() {
   // Mount reconcile — cold launch / navigation / remount / refresh / foreground
   // all replay HYDRATE. With no fresh persisted running scan this resolves to
   // idle, so the map never auto-starts or auto-resumes "Scanning fiber". A
-  // recent persisted running scan resumes DISPLAY only; a stale one is a zombie
-  // (its process died) → idle, and we cancel its server job so the boot
-  // reconciler stops resuming it and it can never light up again.
+  // recent persisted running scan resumes DISPLAY only — and is then VERIFIED
+  // against the backend: persisted local state is never the sole source of
+  // truth for "running". If the backend says the job finished/was cancelled
+  // while the page was closed, the machine goes terminal/idle instead of
+  // sitting on a phantom "Scanning fiber" panel; if the job no longer exists,
+  // it resolves to idle. A stale persisted running scan is a zombie (its
+  // process died) → idle, and we cancel its server job so the boot reconciler
+  // stops resuming it and it can never light up again. Reconnecting NEVER
+  // creates or starts a job — the only submit lives in startBoxScan.
   const scanHydratedRef = useRef(false);
   useEffect(() => {
     if (scanHydratedRef.current) return;
@@ -773,7 +780,45 @@ export default function MapView() {
       // eslint-disable-next-line no-console
       console.info("[areaScan] cancelling stale persisted scan", persisted.jobId);
       void discovery.cancel(persisted.jobId).catch(() => {});
+      return;
     }
+    // Reconnect verification for the fresh-resume path (read-only GET).
+    const resumedJobId =
+      persisted && persisted.status === "running" && persisted.jobId ? persisted.jobId : null;
+    if (!resumedJobId) return;
+    let disposed = false;
+    void discoveryApi
+      .get(resumedJobId)
+      .then((job) => {
+        if (disposed) return;
+        const terminal = isTerminalDiscoveryJob(job)
+          ? job.status === "failed"
+            ? ("failed" as const)
+            : job.status === "cancelled"
+              ? ("cancelled" as const)
+              : ("completed" as const)
+          : undefined;
+        // eslint-disable-next-line no-console
+        console.info("[areaScan] reconnect verified", resumedJobId, job.status);
+        dispatchScan({
+          type: "JOB_UPDATE",
+          jobId: resumedJobId,
+          active: isActiveDiscoveryJob(job),
+          terminal,
+          found: job.newLeadsCount,
+          checked: job.checkedCount,
+        });
+      })
+      .catch(() => {
+        if (disposed) return;
+        // 404/error — the backend does not know this job. Phantom → idle.
+        // eslint-disable-next-line no-console
+        console.info("[areaScan] reconnect: job gone, resolving to idle", resumedJobId);
+        dispatchScan({ type: "JOB_GONE", jobId: resumedJobId });
+      });
+    return () => {
+      disposed = true;
+    };
   }, [discovery.cancel]);
   // Persist identity/lifecycle only (never counts) so a refresh mid-scan can
   // resume the DISPLAY, and a terminal/idle state clears the record.
