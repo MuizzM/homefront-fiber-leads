@@ -661,8 +661,21 @@ app.use((req, res, next) => {
     };
     const sst = setTimeout(() => { void startStateSweeps(); }, stateSweepDelay);
     if (typeof (sst as any).unref === "function") (sst as any).unref();
-    // New Build Radar — continuously watch free NC/SC sources for newly-appearing
-    // addresses/buildings and feed valid ones straight into the scan pipeline.
+  }
+  // ── New-build discovery + cluster expansion — DECOUPLED from the statewide
+  // sweep ─────────────────────────────────────────────────────────────────────
+  // These were nested under STATEWIDE_SCAN_ON_DEPLOY, so neither could run
+  // without also paying the heavy statewide OSM boot-sweep (the documented
+  // single biggest wedge risk). They are now governed ONLY by their own
+  // kill-switches. Cluster expansion is the street-level "we found a new build
+  // → the surrounding area turns on" engine: every confirmed NEW FIBER +
+  // billing-N result seeds a bounded ring crawl around the drop (scanEngine →
+  // triggerExpansionForTargets), capped by maxActive/ring/cluster budgets +
+  // generation backpressure. Production-only so tests/dev never poll external
+  // feeds; both starts no-op when their flag is off.
+  if (process.env.NODE_ENV === "production") {
+    // New Build Radar — continuously watch free NC/SC/GA sources for newly-
+    // appearing addresses/buildings and feed valid ones into the scan pipeline.
     // Kill-switch: NEWBUILD_RADAR=off.
     try {
       const { startNewBuildRadar } = await import("./newBuildRadar");

@@ -37,10 +37,20 @@ const CFG = {
   enabled: () => process.env.BUILD_INTEL !== "off",
   newsIntervalMs: () => bounded(process.env.BUILD_INTEL_NEWS_INTERVAL_H, 6, 1, 48) * HOUR_MS,
   permitIntervalMs: () => bounded(process.env.BUILD_INTEL_PERMIT_INTERVAL_H, 24, 1, 168) * HOUR_MS,
+  // Promotion re-evaluation (pure local SQL — no fetch): catches fresh-drop
+  // clusters within minutes of the scanner confirming them, instead of waiting
+  // for the next news pull.
+  promoIntervalMs: () => bounded(process.env.BUILD_INTEL_PROMO_INTERVAL_MIN, 30, 5, 24 * 60) * 60_000,
   // Promotion rules
   newsMinArticles: () => bounded(process.env.BUILD_INTEL_NEWS_MIN, 2, 1, 10),
   permitMin: () => bounded(process.env.BUILD_INTEL_PERMIT_MIN, 25, 1, 10_000),
   windowDays: () => bounded(process.env.BUILD_INTEL_WINDOW_DAYS, 30, 7, 120),
+  // OUR OWN drops: a cluster of confirmed fresh drops in a city is the
+  // strongest possible "they are building here" signal — stronger than any
+  // article. This many fresh_fiber_confirmed leads in a city within the drop
+  // window promotes the WHOLE city into the hot zone.
+  dropMin: () => bounded(process.env.BUILD_INTEL_DROP_MIN, 3, 1, 100),
+  dropWindowDays: () => bounded(process.env.BUILD_INTEL_DROP_WINDOW_DAYS, 14, 1, 60),
   officialTtlDays: () => bounded(process.env.BUILD_INTEL_OFFICIAL_TTL_DAYS, 45, 7, 365),
   ttlDays: () => bounded(process.env.BUILD_INTEL_TTL_DAYS, 30, 7, 365),
   fetchTimeoutMs: () => bounded(process.env.BUILD_INTEL_FETCH_TIMEOUT_MS, 15_000, 2_000, 60_000),
@@ -188,11 +198,31 @@ export function recordSignal(input: {
   return info.changes > 0;
 }
 
+function upsertPromotion(
+  city: string, state: string, reason: string, evidence: unknown[], ttlDays: number,
+  promoted: Array<{ city: string; state: string; reason: string }>,
+): void {
+  rawDb.prepare(
+    `INSERT INTO hot_zone_dynamic (city,state,reason,evidence_json,promoted_at,expires_at)
+     VALUES (?,?,?,?,datetime('now'),datetime('now', ?))
+     ON CONFLICT(city,state) DO UPDATE SET
+       reason=excluded.reason, evidence_json=excluded.evidence_json,
+       promoted_at=excluded.promoted_at, expires_at=excluded.expires_at`,
+  ).run(city, state, reason, JSON.stringify(evidence), `+${ttlDays} days`);
+  promoted.push({ city, state, reason });
+  structuredLog("build_intel.promoted", { city, state, reason });
+}
+
 /**
  * Promotion rules over the signal window:
  *   official ≥1 → promote (long TTL) — Windstream said so.
  *   news ≥ newsMinArticles distinct URLs → promote.
  *   permit count ≥ permitMin → promote (construction surge).
+ *   OUR OWN drops ≥ dropMin fresh_fiber_confirmed leads in a city within the
+ *     drop window → promote — "we found new builds, the surrounding city turns
+ *     on". The scanner's own confirmed drops are the strongest signal of all;
+ *     the street-level counterpart (ring fan-out around each drop) is the
+ *     cluster-expansion engine.
  * Re-promotion refreshes the TTL. Returns newly-promoted/refreshed entries.
  */
 export function evaluatePromotions(): Array<{ city: string; state: string; reason: string }> {
@@ -220,16 +250,32 @@ export function evaluatePromotions(): Array<{ city: string; state: string; reaso
         WHERE city=? AND state=? AND seen_at >= datetime('now', ?)
         ORDER BY seen_at DESC LIMIT 10`,
     ).all(r.city, r.state, `-${windowDays} days`);
-    rawDb.prepare(
-      `INSERT INTO hot_zone_dynamic (city,state,reason,evidence_json,promoted_at,expires_at)
-       VALUES (?,?,?,?,datetime('now'),datetime('now', ?))
-       ON CONFLICT(city,state) DO UPDATE SET
-         reason=excluded.reason, evidence_json=excluded.evidence_json,
-         promoted_at=excluded.promoted_at, expires_at=excluded.expires_at`,
-    ).run(r.city, r.state, reason, JSON.stringify(evidence), `+${ttl} days`);
-    promoted.push({ city: r.city, state: r.state, reason });
-    structuredLog("build_intel.promoted", { city: r.city, state: r.state, reason });
+    upsertPromotion(r.city, r.state, reason, evidence, ttl, promoted);
   }
+  // Fresh-drop clusters from our own scanner. Guarded: a bare replay/test DB
+  // may not have the leads table — signal-based promotion must still work.
+  try {
+    const dropWindow = CFG.dropWindowDays();
+    const drops = rawDb.prepare(
+      `SELECT lower(city) AS city, lower(state) AS state, COUNT(*) AS n
+         FROM leads
+        WHERE lead_tag='fresh_fiber_confirmed'
+          AND created_at >= datetime('now', ?)
+          AND lower(state) IN ('nc','sc','ga')
+          AND city IS NOT NULL AND city <> ''
+        GROUP BY lower(city), lower(state)
+       HAVING COUNT(*) >= ?`,
+    ).all(`-${dropWindow} days`, CFG.dropMin()) as any[];
+    for (const d of drops) {
+      const evidence = rawDb.prepare(
+        `SELECT 'drop' AS kind, 'scanner' AS source, address AS title FROM leads
+          WHERE lead_tag='fresh_fiber_confirmed' AND lower(city)=? AND lower(state)=?
+            AND created_at >= datetime('now', ?)
+          ORDER BY created_at DESC LIMIT 10`,
+      ).all(d.city, d.state, `-${dropWindow} days`);
+      upsertPromotion(d.city, d.state, `fresh-drop cluster (${d.n}/${dropWindow}d)`, evidence, CFG.ttlDays(), promoted);
+    }
+  } catch { /* leads table absent — external-signal promotion unaffected */ }
   return promoted;
 }
 
@@ -355,6 +401,7 @@ export async function runPermitTick(): Promise<{ signals: number; promoted: numb
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 let newsTimer: ReturnType<typeof setInterval> | null = null;
 let permitTimer: ReturnType<typeof setInterval> | null = null;
+let promoTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Wire from the orchestrator on boot (control worker). BUILD_INTEL=off disables. */
 export function startBuildIntel(): void {
@@ -371,8 +418,14 @@ export function startBuildIntel(): void {
   if (typeof (newsTimer as any).unref === "function") (newsTimer as any).unref();
   permitTimer = setInterval(() => { void runPermitTick().catch(() => {}); }, CFG.permitIntervalMs());
   if (typeof (permitTimer as any).unref === "function") (permitTimer as any).unref();
+  // Local promotion re-evaluation — no network. Its purpose is the fresh-drop
+  // rule: a city where our scanner just confirmed a drop cluster goes hot on
+  // the NEXT hot-market cycle, not after the next 6h news pull.
+  promoTimer = setInterval(() => { try { evaluatePromotions(); } catch { /* logged upstream */ } }, CFG.promoIntervalMs());
+  if (typeof (promoTimer as any).unref === "function") (promoTimer as any).unref();
   structuredLog("build_intel.started", {
     newsIntervalH: CFG.newsIntervalMs() / HOUR_MS, permitIntervalH: CFG.permitIntervalMs() / HOUR_MS,
+    promoIntervalMin: CFG.promoIntervalMs() / 60_000,
     permitFeeds: permitFeeds().length,
   });
 }
@@ -380,4 +433,5 @@ export function startBuildIntel(): void {
 export function stopBuildIntel(): void {
   if (newsTimer) { clearInterval(newsTimer); newsTimer = null; }
   if (permitTimer) { clearInterval(permitTimer); permitTimer = null; }
+  if (promoTimer) { clearInterval(promoTimer); promoTimer = null; }
 }

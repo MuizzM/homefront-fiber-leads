@@ -214,7 +214,9 @@ services:
       # Landrum + Spartanburg), the Columbia pair (West Columbia + Lexington),
       # and Kershaw / Cameron / Saint Matthews. cameron:sc (Calhoun Co) is
       # distinct from the NC Cameron; the burst keys every city by (city, state).
-      HOT_MARKETS: "dalton:ga,inman:sc,spartanburg:sc,west columbia:sc,campobello:sc,landrum:sc,lexington:sc,kershaw:sc,cameron:sc,saint matthews:sc,broadway:nc,sanford:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
+      # lexington:nc (Davidson Co — verified_expanding, Q4-2025 + Q1-2026 build
+      # releases) is distinct from lexington:sc above; both are hot.
+      HOT_MARKETS: "dalton:ga,inman:sc,spartanburg:sc,west columbia:sc,campobello:sc,landrum:sc,lexington:sc,kershaw:sc,cameron:sc,saint matthews:sc,broadway:nc,sanford:nc,lexington:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
       # BUILD INTELLIGENCE — news + county-permit signals auto-promote cities
       # into the hot zone (TTL'd, evidence-logged). Official Windstream release
       # naming a city → immediate promotion; ≥2 independent news articles/30d →
@@ -259,7 +261,16 @@ services:
       COMING_SOON_WATCHLIST: "off"
       DAILY_MARKET_REFRESH: "on"
       NEWBUILD_RADAR: "off"
-      EXPANSION_ENABLED: "off"
+      # CLUSTER EXPANSION — ON (operator, 2026-07-21: "if we found new builds
+      # the surrounding is turned on"). Every confirmed NEW FIBER + billing-N
+      # result seeds a bounded ring crawl around the drop (800m rings, <=6
+      # rings, 60 addr/ring, 600/cluster, <=8 concurrent clusters, generation
+      # backpressure at 25k pending, city-boundary stop) — the street-level
+      # "surrounding turns on". The city-level counterpart is build-intel's
+      # fresh-drop promotion (>=3 drops/14d -> whole city into the hot zone).
+      # De-nested from STATEWIDE_SCAN_ON_DEPLOY in code, so this flag works
+      # without the statewide boot sweep.
+      EXPANSION_ENABLED: "on"
       # Proactive Decodo rotation cadence. 10 was too aggressive: under a 403
       # rolling-window storm it rotated the session hundreds of times/sec (runaway
       # CPU). 40 is the previously-proven value — 403s are a refilling throttle, so

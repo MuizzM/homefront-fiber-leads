@@ -14,6 +14,8 @@ let rawDb: import("better-sqlite3").Database;
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-build-intel-"));
   ({ rawDb } = await import("../../server/db"));
+  const storage = await import("../../server/storage");
+  storage.runMigrations(); // real schema — the drop rule reads the real leads table
   bi = await import("../../server/buildIntel");
   bi.ensureBuildIntelSchema();
 });
@@ -105,5 +107,25 @@ describe("build intel — signals, promotion rules, TTL, hot-zone union", () => 
     expect(list.filter((e) => e.city === "broadway").length).toBe(1); // env+dynamic dedupe
     expect(list).toContainEqual({ city: "concord", state: "nc" }); // news-promoted
     expect(list).toContainEqual({ city: "midland", state: "nc" }); // permit-promoted
+  });
+
+  it("OUR OWN fresh-drop cluster promotes the surrounding city (>= dropMin within the window)", () => {
+    // The scanner's confirmed drops are the strongest "they're building here"
+    // signal: finding new builds turns the whole surrounding city hot.
+    const L = (addr: string, city: string, ageDays: number, tag = "fresh_fiber_confirmed") =>
+      rawDb.prepare(`INSERT INTO leads (tenant_id,address,city,state,zip,lead_tag,created_at,updated_at)
+        VALUES (1,?,?,'nc','27292',?,datetime('now',?),datetime('now'))`).run(addr, city, tag, `-${ageDays} days`);
+    // Lexington: 3 fresh drops inside the 14d window → promoted.
+    L("10 Uptown Dr", "lexington", 1); L("12 Uptown Dr", "lexington", 2); L("14 Uptown Dr", "lexington", 3);
+    // Denton: only 2 recent (third is stale-out-of-window) → NOT promoted.
+    L("1 Quiet Ln", "denton", 1); L("3 Quiet Ln", "denton", 2); L("5 Quiet Ln", "denton", 40);
+    // Norwood: 3 recent rows but not fresh-confirmed → NOT promoted.
+    L("1 Old Rd", "norwood", 1, "stale"); L("2 Old Rd", "norwood", 1, "stale"); L("3 Old Rd", "norwood", 1, "stale");
+    const promoted = bi.evaluatePromotions();
+    expect(promoted).toContainEqual(expect.objectContaining({ city: "lexington", state: "nc", reason: expect.stringContaining("fresh-drop cluster") }));
+    expect(promoted.find((p) => p.city === "denton")).toBeUndefined();
+    expect(promoted.find((p) => p.city === "norwood")).toBeUndefined();
+    // …and the promoted city reaches the hot-market union.
+    expect(bi.listHotMarkets("dalton:ga")).toContainEqual({ city: "lexington", state: "nc" });
   });
 });
