@@ -63,6 +63,11 @@ export interface AddressSourceContext {
   state: string;
   cursor?: string | null;
   signal: AbortSignal;
+  // True for an operator-ELECTED area scan (a box drawn on the field map): a
+  // deliberate, bounded request that gets the densest, highest-capped address
+  // enumeration. False/undefined for background market/town harvests, which
+  // stay on the conservative cap. Set by the engine from the job.
+  thorough?: boolean;
 }
 
 export interface AddressSourceAdapter {

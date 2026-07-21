@@ -434,16 +434,32 @@ export function createMapboxAddressSource(
     async discover(ctx) {
       const accessToken = token();
       if (!accessToken) throw new Error("Mapbox token is not configured");
+      // ELECTED area scans (a box the operator drew) get the aggressive tier:
+      // a much higher auto-grid cap (so a neighbourhood-plus box never silently
+      // SKIPS the paid augmentation and misses new builds) + a denser sample
+      // spacing + a higher hard harvest ceiling. Background market/town harvests
+      // keep the conservative defaults. A hard cap always remains — Mapbox
+      // geocoding is separately billed and has a documented runaway-cost
+      // history, so "no limits" is a raised ceiling, never an absent one.
+      const elected = ctx.thorough === true;
       const plan = planUnifiedAreaScan(ctx.bbox, {
         hasMapboxToken: true,
         autoGridMaxPoints: Math.max(
           25,
-          Number(process.env.AREA_AUTO_GRID_POINTS) || 900,
+          elected
+            ? Number(process.env.AREA_ELECTED_GRID_POINTS) || 8_000
+            : Number(process.env.AREA_AUTO_GRID_POINTS) || 900,
         ),
         harvestCap: Math.max(
           25,
-          Number(process.env.MAPBOX_HARVEST_CAP) || 5_000,
+          elected
+            ? Number(process.env.MAPBOX_ELECTED_HARVEST_CAP) || 12_000
+            : Number(process.env.MAPBOX_HARVEST_CAP) || 5_000,
         ),
+        ceilDeg: elected
+          ? Number(process.env.AREA_ELECTED_GRID_STEP) || 0.0008
+          : undefined,
+        minSamplesPerSide: elected ? 10 : undefined,
       });
       if (!plan.gridEnabled) {
         return {

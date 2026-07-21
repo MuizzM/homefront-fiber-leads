@@ -12,6 +12,7 @@ import { createScanRun, enqueueRunTargets, getRun } from "../scanIntelStore";
 import { runScanWorker } from "../scanEngine";
 import { structuredLog } from "../structuredLog";
 import { resolvePointLocality, resolveTownBoundary } from "./boundary";
+import { isElectedAreaJob } from "./electedJob";
 import { addressSources, stableSourceCacheKey } from "./sources";
 import type { SourcePage } from "./types";
 import { bboxPolygon, parseJson } from "./types";
@@ -262,6 +263,7 @@ async function processTile(
         city: job.townName,
         state: job.state,
         signal: controller.signal,
+        thorough: isElectedAreaJob(job),
       };
       const key = stableSourceCacheKey(source.metadata.id, ctx);
       const cached = cacheGet(job.tenantId, source.metadata.id, key);
