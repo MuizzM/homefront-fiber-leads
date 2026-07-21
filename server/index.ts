@@ -931,9 +931,15 @@ app.use((req, res, next) => {
     const harvestTick = async () => {
       try {
         const { getDefaultTenantId } = await import("./storage");
-        const { runHarvestCycle } = await import("./freshHarvest");
         const tid = getDefaultTenantId();
-        if (tid != null) runHarvestCycle(tid);
+        if (tid == null) return;
+        if (process.env.YIELD_ENGINE !== "off") {
+          const { runYieldCycle } = await import("./yieldEngine");
+          runYieldCycle(tid);
+        } else {
+          const { runHarvestCycle } = await import("./freshHarvest");
+          runHarvestCycle(tid);
+        }
       } catch (e: any) { console.warn("[fresh-harvest] skipped:", e?.message); }
     };
     // First cycle 4 min after boot (after Kinetic hot burst + Frontier burst).
@@ -958,6 +964,38 @@ app.use((req, res, next) => {
     setTimeout(() => { void economyTick(); }, 10 * 60_000);
     const economyInterval = setInterval(() => { void economyTick(); }, 6 * 3_600_000);
     if (typeof (economyInterval as any).unref === "function") economyInterval.unref();
+
+    // NIGHTLY LEARNING — recompute the yield weights from realized conversion
+    // (which signals actually produced fresh leads in the last 14 days). The
+    // engine measurably gets smarter every night. First pass at boot +12min.
+    const learnTick = async () => {
+      try {
+        const { getDefaultTenantId } = await import("./storage");
+        const { learnYieldWeights } = await import("./yieldEngine");
+        const tid = getDefaultTenantId();
+        if (tid != null) learnYieldWeights(tid);
+      } catch (e: any) { console.warn("[yield-engine] learn skipped:", e?.message); }
+    };
+    setTimeout(() => { void learnTick(); }, 12 * 60_000);
+    const learnInterval = setInterval(() => { void learnTick(); }, 24 * 3_600_000);
+    if (typeof (learnInterval as any).unref === "function") learnInterval.unref();
+  }
+
+  // CITY INGEST — free OSM address discovery for the priority cities
+  // (Davidson/Lake Norman). Idempotent: skips cities ingested in the last 7d.
+  // First pass at boot +5min, then daily. CITY_INGEST=off disables.
+  if (process.env.CITY_INGEST !== "off") {
+    const ingestTick = async () => {
+      try {
+        const { getDefaultTenantId } = await import("./storage");
+        const { runCityIngest } = await import("./cityIngest");
+        const tid = getDefaultTenantId();
+        if (tid != null) await runCityIngest(tid);
+      } catch (e: any) { console.warn("[city-ingest] skipped:", e?.message); }
+    };
+    setTimeout(() => { void ingestTick(); }, 5 * 60_000);
+    const ingestInterval = setInterval(() => { void ingestTick(); }, 24 * 3_600_000);
+    if (typeof (ingestInterval as any).unref === "function") ingestInterval.unref();
   }
 
   // FRONTIER BUILD ZONES — controlNumber serving-area clustering (the Fiber Focus
