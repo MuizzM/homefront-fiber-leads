@@ -1,23 +1,26 @@
-// ── Coming Soon Program — the overarching, always-on watch system ─────────────
-// ONE durable watchlist + ONE built-in worker loop. Every COMING_SOON signal the
-// Kinetic search path returns (NEW FIBER segment with billing still active, or an
-// explicit coming-soon flag) lands here with coordinates, first/last seen, source,
-// expected completion date (when the provider returns one), confidence and the
-// next scheduled check. The worker rechecks due addresses on an OPPORTUNITY-
-// WEIGHTED cadence — the closer the expected completion date (or the hotter the
-// surrounding fresh-lead cluster), the more frequently the address is re-verified.
+// ── Coming Soon Program — opportunity metadata + promotion surface ────────────
+// Every COMING_SOON signal the Kinetic search path returns (NEW FIBER segment
+// with billing still active) lands here with coordinates, first/last seen,
+// source, expected completion date (when known), confidence, and an
+// OPPORTUNITY SCORE (ETA proximity + nearby fresh-lead cluster heat) that
+// orders the /api/coming-soon/program board.
 //
-// PROMOTION: a watch address that comes back NEW FIBER + billing inactive + fiber
-// qualified is promoted instantly — the normal scan-run pipeline publishes the
-// deduplicated green assignable Field Map lead and seeds the nearby expansion
-// scan (same street → subdivision → nearby roads → ZIP corridor → neighboring
-// markets). The watch row is then marked promoted with its lead id. Nothing is
-// ever lost: a failed recheck simply reschedules.
+// SCHEDULING LIVES ELSEWHERE: the comingSoonWatchlist engine is the sole
+// dispatcher of coming-soon rechecks (governor-paced, urgency cadences, queued-
+// target dedup). This worker used to dispatch its own recheck runs off a
+// private next_check_at clock the rest of the system never updated — every
+// dispatch was a potential duplicate of a watchlist-tick check. It now only:
+//   1. BRIDGES any watching row missing from the canonical coming_soon_watchlist
+//      (rows predating the watchlist, or whose target was never re-observed)
+//      so every watch is scheduled by exactly one engine, and
+//   2. Detects PROMOTIONS (watch address became a confirmed fresh lead — the
+//      lead/pin/expansion already happened in the scan pipeline) and refreshes
+//      opportunity scores for the board.
 import crypto from "node:crypto";
 import { rawDb } from "./db";
 import { storage } from "./storage";
-import * as scanService from "./scanService";
 import { structuredLog } from "./structuredLog";
+import { normalizeKineticAddressKey } from "./addressKey";
 
 export type WatchStatus = "watching" | "promoted" | "retired";
 
@@ -138,44 +141,75 @@ export function watchComingSoon(tenantId: number, input: {
       `+${cadenceHours} hours`);
 }
 
-/** The built-in worker sweep: recheck every due watch address, highest-opportunity
- * first, through the normal durable scan-run pipeline (which publishes the green
- * lead + seeds nearby expansion the moment one promotes). */
-export async function runComingSoonSweep(tenantId: number): Promise<{ due: number; dispatched: number; promoted: number }> {
+// Legacy first_seen_at is TEXT `datetime('now')` (UTC, no zone marker).
+function epochOf(value: string | null | undefined): number {
+  if (!value) return Date.now();
+  const t = Date.parse(String(value).includes("T") ? String(value) : `${String(value).replace(" ", "T")}Z`);
+  return Number.isFinite(t) ? t : Date.now();
+}
+
+/** Bridge watching rows into the canonical coming_soon_watchlist so the
+ * watchlist engine schedules them. Idempotent and self-quenching: once a row's
+ * target has a watchlist entry it no longer matches. last_checked_at is NULL so
+ * a bridged watch is immediately due for its first engine-owned recheck. */
+export function bridgeLegacyWatches(tenantId: number, limit = 500): number {
+  // The canonical watchlist is created by recordAvailabilitySnapshot's schema
+  // pass; in a DB with no conclusive scan yet there is nothing to bridge into.
+  if (!rawDb.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='coming_soon_watchlist'`).get()) return 0;
+  const unbridged = rawDb.prepare(
+    `SELECT w.* FROM coming_soon_watch w
+      WHERE w.tenant_id=? AND w.status='watching'
+        AND NOT EXISTS (
+          SELECT 1 FROM scan_targets t
+            JOIN coming_soon_watchlist cw ON cw.scan_target_id = t.id
+           WHERE t.tenant_id = w.tenant_id AND lower(t.address)=lower(w.address)
+             AND lower(t.city)=lower(w.city) AND t.state=w.state)
+      LIMIT ?`,
+  ).all(tenantId, limit) as any[];
+  if (!unbridged.length) return 0;
+  storage.upsertScanTargets(unbridged.map((row) => ({
+    tenantId, address: row.address, city: row.city, state: row.state, zip: row.zip,
+    lat: row.lat, lng: row.lng, source: "coming-soon-watch",
+  } as any)));
+  const lookup = rawDb.prepare(
+    `SELECT id FROM scan_targets WHERE tenant_id=? AND lower(address)=lower(?) AND lower(city)=lower(?) AND state=? LIMIT 1`,
+  );
+  const insert = rawDb.prepare(
+    `INSERT OR IGNORE INTO coming_soon_watchlist
+       (tenant_id, scan_target_id, address_key, first_seen_at, last_checked_at,
+        estimated_completion, source, confidence, cluster_id, status, created_at, updated_at)
+     VALUES (?,?,?,?,NULL,?,?,?,NULL,'active',?,?)`,
+  );
+  let bridged = 0;
+  rawDb.transaction(() => {
+    const now = Date.now();
+    for (const row of unbridged) {
+      const t = lookup.get(tenantId, row.address, row.city, row.state) as any;
+      if (!t?.id) continue;
+      bridged += insert.run(
+        tenantId, Number(t.id),
+        normalizeKineticAddressKey(row.address, row.city, row.state, row.zip ?? ""),
+        epochOf(row.first_seen_at), row.expected_completion_at ?? null,
+        row.source ?? "coming-soon-program", row.confidence ?? "medium",
+        now, now,
+      ).changes;
+    }
+  })();
+  return bridged;
+}
+
+/** The built-in worker sweep: bridge un-bridged watches to the scheduling
+ * engine, detect promotions, and refresh opportunity scores for the board.
+ * No provider dispatch happens here — the watchlist engine owns rechecks. */
+export async function runComingSoonSweep(tenantId: number): Promise<{ due: number; dispatched: number; promoted: number; bridged: number }> {
   ensureComingSoonSchema();
-  // Refresh opportunity scores/cadences before picking (dates move, clusters heat up).
+  const bridged = bridgeLegacyWatches(tenantId);
+  // Refresh opportunity scores/cadences for rows past their rescore time
+  // (dates move, clusters heat up) — board ordering stays truthful.
   const due = rawDb.prepare(
     `SELECT * FROM coming_soon_watch WHERE tenant_id=? AND status='watching' AND next_check_at <= datetime('now')
      ORDER BY opportunity_score DESC, first_seen_at ASC LIMIT 2_000`,
   ).all(tenantId) as any[];
-  let dispatched = 0;
-  if (due.length) {
-    // Ensure every watch address exists as a scan target, then check them in one
-    // durable run so a deploy never loses the batch. BULK: one upsert + one
-    // lookup query for the whole batch (was a query per address — N+1).
-    storage.upsertScanTargets(due.map((row) => ({
-      tenantId, address: row.address, city: row.city, state: row.state, zip: row.zip,
-      lat: row.lat, lng: row.lng, source: "coming-soon-watch",
-    } as any)));
-    const ids: number[] = [];
-    const lookup = rawDb.prepare(
-      `SELECT id FROM scan_targets WHERE tenant_id=? AND lower(address)=lower(?) AND lower(city)=lower(?) AND state=? LIMIT 1`,
-    );
-    rawDb.transaction(() => {
-      for (const row of due) {
-        const t = lookup.get(tenantId, row.address, row.city, row.state) as any;
-        if (t?.id) ids.push(Number(t.id));
-      }
-    })();
-    for (let i = 0; i < ids.length; i += 1_000) {
-      const batch = ids.slice(i, i + 1_000);
-      scanService.startTargetRun({
-        tenantId, city: "(watchlist)", state: "", targetIds: batch,
-        runKind: "coming_soon", label: `Coming Soon watchlist recheck (${batch.length})`,
-      });
-      dispatched += batch.length;
-    }
-  }
   // Promotion detector: a watch address whose target lit up as a confirmed fresh
   // lead is marked promoted (the lead + green pin + expansion already happened in
   // the scan pipeline).
@@ -189,11 +223,9 @@ export async function runComingSoonSweep(tenantId: number): Promise<{ due: numbe
     rawDb.prepare(`UPDATE coming_soon_watch SET status='promoted', promoted_lead_id=?, promoted_at=datetime('now'), updated_at=datetime('now') WHERE id=?`)
       .run(row.leadId, row.watchId);
   }
-  // Reschedule everything that was checked (whether due this sweep or not). All
-  // rescore + reschedule writes happen inside ONE transaction (was N+1 fsyncs).
+  // Rescore + set the next RESCORE time (next_check_at is the board-refresh
+  // clock now, not a provider-recheck clock). One transaction, no N+1 fsyncs.
   if (due.length) {
-    rawDb.prepare(`UPDATE coming_soon_watch SET checks=checks+1, updated_at=datetime('now') WHERE tenant_id=? AND status='watching' AND id IN (${due.map(() => "?").join(",")})`)
-      .run(tenantId, ...due.map((r) => r.id));
     const reschedule = rawDb.prepare(`UPDATE coming_soon_watch SET opportunity_score=?, next_check_at=datetime('now', ?), updated_at=datetime('now') WHERE id=? AND status='watching'`);
     rawDb.transaction(() => {
       for (const row of due) {
@@ -202,10 +234,10 @@ export async function runComingSoonSweep(tenantId: number): Promise<{ due: numbe
       }
     })();
   }
-  if (due.length || promotedRows.length) {
-    structuredLog("coming_soon.sweep", { tenantId, due: due.length, dispatched, promoted: promotedRows.length });
+  if (due.length || promotedRows.length || bridged) {
+    structuredLog("coming_soon.sweep", { tenantId, due: due.length, dispatched: 0, promoted: promotedRows.length, bridged });
   }
-  return { due: due.length, dispatched, promoted: promotedRows.length };
+  return { due: due.length, dispatched: 0, promoted: promotedRows.length, bridged };
 }
 
 export function getComingSoonWatchlist(tenantId: number): {
@@ -228,9 +260,9 @@ export function getComingSoonWatchlist(tenantId: number): {
   };
 }
 
-// Built-in worker: sweeps on boot and every 15 minutes forever. Unlimited budget —
-// the watchlist can never starve: the coordinator's NEW_BUILD admission class
-// (coming_soon priority) outranks statewide/expansion bulk.
+// Built-in worker: bridge + promotion detection + board rescore, every 10
+// minutes. DB-only — provider rechecks are dispatched exclusively by the
+// comingSoonWatchlist engine.
 let timer: ReturnType<typeof setInterval> | null = null;
 export function startComingSoonProgram(getTenantId: () => number | null, intervalMs = 10 * 60_000): void {
   if (timer) return;

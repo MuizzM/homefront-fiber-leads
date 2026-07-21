@@ -160,6 +160,19 @@ export function isTerminalDiscoveryJob(job: DiscoveryJob): boolean {
   return !isActiveDiscoveryJob(job);
 }
 
+/**
+ * Server-initiated market harvests — the recurring hot-market / frontier town
+ * jobs and any other town-based (no drawn area) refresh. They run around the
+ * clock, so the field map must never bind its scan sheet to them: a rep only
+ * cares about the box THEY drew. A field scan always carries the drawn
+ * geometry; background jobs are town-keyed with none.
+ */
+export function isBackgroundDiscoveryJob(job: DiscoveryJob): boolean {
+  const key = String(job.idempotencyKey ?? "");
+  if (key.startsWith("hot:") || key.startsWith("frontier:")) return true;
+  return job.geometry == null;
+}
+
 function finiteCount(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : 0;

@@ -17,8 +17,10 @@
  *        burn < pace  → scale grows up to 1.50 (hunt harder while we're ahead)
  *
  *   3. CUT ORDER — when scale < 0.5 the harvester drops Tier D2 entirely;
- *      when scale < 0.25 it also drops Tier D1. Tiers A/B2/B (fresh hunting)
- *      are never starved — they produce the verified fresh leads.
+ *      when scale < 0.25 it also drops Tier D1. Tiers B/B2 (fresh hunting)
+ *      are never starved — they produce the verified fresh leads. The
+ *      coming-soon watchlist tick paces its own batch by scale with a 25%
+ *      floor (flip watching is the top-yield channel).
  *
  *   4. CIRCUIT BREAKER — a run of auth/limit denials (407) opens the circuit
  *      for CIRCUIT_OPEN_MS (30 min): scanning suspends instead of hammering
@@ -43,10 +45,14 @@ const CIRCUIT_FAILS = 8;                 // 407s inside the window to trip
 const CIRCUIT_WINDOW_MS = 5 * 60_000;
 const CIRCUIT_OPEN_MS = 30 * 60_000;
 
-// Measured fallback when a response carries no content-length. Kinetic
-// availability JSON is small; 24KB covers body + TLS/header overhead both
-// directions. Refined automatically once real samples accumulate.
-const DEFAULT_REQ_BYTES = 24_000;
+// Fallback when a response carries no content-length: an EMA over the sizes we
+// DO observe, seeded at 24KB (body + TLS/header overhead both directions) and
+// clamped to a sane band so one giant or tiny response can't skew accounting.
+const SEED_REQ_BYTES = 24_000;
+const EST_REQ_MIN = 2_000;
+const EST_REQ_MAX = 256_000;
+const EST_REQ_ALPHA = 0.05;
+let estReqBytes = SEED_REQ_BYTES;
 
 let ensured = false;
 function ensureTable(): void {
@@ -88,7 +94,14 @@ function scheduleFlush(): void {
 /** Record one proxied response. `contentLength` from headers, or 0 → estimate. */
 export function recordProxyResponse(contentLength: number): void {
   pendingReqs++;
-  pendingBytes += contentLength > 0 ? contentLength : DEFAULT_REQ_BYTES;
+  if (contentLength > 0) {
+    const sample = Math.min(contentLength, EST_REQ_MAX);
+    estReqBytes = Math.min(EST_REQ_MAX, Math.max(EST_REQ_MIN,
+      estReqBytes + EST_REQ_ALPHA * (sample - estReqBytes)));
+    pendingBytes += contentLength;
+  } else {
+    pendingBytes += Math.round(estReqBytes);
+  }
   scheduleFlush();
   if (pendingReqs >= 200) flushBandwidthLedger(); // high-rate safety valve
 }
@@ -165,12 +178,14 @@ export function bandwidthBudgetScale(): number {
 
 export interface GovernorStats {
   requests24h: number;
+  mb24h: number;
   mbToday: number;
   gbCycle: number;
   budgetGb: number;
   usableGb: number;
   cyclePctUsed: number;
   projectedCycleGb: number;
+  estReqBytes: number;
   scale: number;
   circuitOpen: boolean;
 }
@@ -180,17 +195,20 @@ export function governorStats(): GovernorStats {
   const now = Date.now();
   const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
   const today = sumSince(dayStart.getTime());
+  const last24h = sumSince(now - 24 * 3_600_000);
   const cycle = sumSince(start);
   const elapsedFrac = Math.max(0.02, (now - start) / (end - start));
   const cycleGb = cycle.bytes / 1e9;
   return {
-    requests24h: sumSince(now - 24 * 3_600_000).requests,
+    requests24h: last24h.requests,
+    mb24h: +(last24h.bytes / 1e6).toFixed(1),
     mbToday: +(today.bytes / 1e6).toFixed(1),
     gbCycle: +cycleGb.toFixed(3),
     budgetGb: BUDGET_GB,
     usableGb: +(USABLE_BYTES / 1e9).toFixed(1),
     cyclePctUsed: +(100 * cycle.bytes / USABLE_BYTES).toFixed(1),
     projectedCycleGb: +(cycleGb / elapsedFrac).toFixed(2),
+    estReqBytes: Math.round(estReqBytes),
     scale: +bandwidthBudgetScale().toFixed(2),
     circuitOpen: isProxyCircuitOpen(),
   };
@@ -200,4 +218,5 @@ export function governorStats(): GovernorStats {
 export function _resetGovernorForTests(): void {
   pendingBytes = 0; pendingReqs = 0;
   failTimes = []; circuitOpenUntil = 0; circuitLogAt = 0;
+  estReqBytes = SEED_REQ_BYTES;
 }

@@ -25,18 +25,36 @@ beforeEach(() => {
 describe("bandwidth governor", () => {
   it("ledgers proxied bytes (batched) and reports stats", () => {
     gov.recordProxyResponse(10_000);
-    gov.recordProxyResponse(0);            // unknown size → default estimate
+    // Unknown size → adaptive estimate: the 24KB seed has already moved toward
+    // the observed 10KB sample (24000 + 0.05·(10000−24000) = 23300).
+    gov.recordProxyResponse(0);
     gov.recordProxyResponse(20_000);
     gov.flushBandwidthLedger();
     const rows = rawDb.prepare("SELECT bytes, requests FROM bandwidth_ledger").all();
     const totalB = rows.reduce((a: number, r: any) => a + r.bytes, 0);
     const totalR = rows.reduce((a: number, r: any) => a + r.requests, 0);
     expect(totalR).toBe(3);
-    expect(totalB).toBe(10_000 + 24_000 + 20_000);
+    expect(totalB).toBe(10_000 + 23_300 + 20_000);
     const stats = gov.governorStats();
     expect(stats.budgetGb).toBe(1);
     expect(stats.requests24h).toBe(3);
+    expect(stats.mb24h).toBeGreaterThan(0);   // rolling-24h window sees the flushed bytes
     expect(stats.circuitOpen).toBe(false);
+  });
+
+  it("per-request estimate converges toward observed sizes and stays clamped", () => {
+    expect(gov.governorStats().estReqBytes).toBe(24_000);   // seed
+    for (let i = 0; i < 200; i++) gov.recordProxyResponse(6_000);
+    const est = gov.governorStats().estReqBytes;
+    expect(est).toBeGreaterThanOrEqual(6_000);
+    expect(est).toBeLessThan(7_000);                        // converged near 6KB
+    // A pathological giant response can't blow up the estimate…
+    for (let i = 0; i < 500; i++) gov.recordProxyResponse(50_000_000);
+    expect(gov.governorStats().estReqBytes).toBeLessThanOrEqual(256_000);
+    // …and a flood of tiny ones can't drive it below the floor.
+    gov._resetGovernorForTests();
+    for (let i = 0; i < 500; i++) gov.recordProxyResponse(1);
+    expect(gov.governorStats().estReqBytes).toBeGreaterThanOrEqual(2_000);
   });
 
   it("scale is neutral (1) with no burn, and collapses when the pool is torched", () => {
@@ -68,6 +86,6 @@ describe("bandwidth governor", () => {
     for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
     const { runHarvestCycle } = await import("../../server/freshHarvest");
     const counts = runHarvestCycle(1, 100);
-    expect(counts).toMatchObject({ a: 0, b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 });
+    expect(counts).toMatchObject({ b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 });
   });
 });

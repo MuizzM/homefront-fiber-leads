@@ -585,9 +585,10 @@ function applyCheck(
   // active-service NEW FIBER addresses stay in the monitoring inventory.
   if (result.isNewFiber && ["N", "Y", "A"].includes(String(result.billingStatus))) {
     // COMING SOON PROGRAM: NEW FIBER with billing still active = fiber built,
-    // service not yet orderable. Add it to the durable watchlist — the built-in
-    // worker rechecks it on an opportunity-weighted cadence and promotes it to a
-    // green Fresh Lead the moment billing flips to inactive.
+    // service not yet orderable. Record it on the program board (opportunity
+    // score, expected completion). Rechecks are scheduled exclusively by the
+    // comingSoonWatchlist engine, whose row this same conclusive result also
+    // upserts via recordAvailabilitySnapshot's choke point.
     if (String(result.billingStatus) === "Y") {
       try {
         watchComingSoon(tenantId, {

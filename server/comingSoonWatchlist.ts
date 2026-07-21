@@ -20,6 +20,17 @@
 //   hot   — estimated_completion known and near/past → COMING_SOON_HOT_HOURS (6)
 //   soon  — construction/new-build provenance        → COMING_SOON_CONSTRUCTION_HOURS (12)
 //   watch — no date, generic provenance              → COMING_SOON_WATCH_HOURS (24)
+// FLIP WINDOW: switch-ons cluster in the first ~2 weeks after an address is
+// first observed coming-soon. Watches aged COMING_SOON_FLIP_WINDOW_FROM_DAYS–
+// _TO_DAYS (2–14) escalate one urgency band (watch→soon, soon→hot) so the flip
+// is caught within hours, then relax back to their base cadence.
+//
+// SPEND CONTROL: this engine is the SOLE scheduler of coming-soon rechecks
+// (fresh-harvest Tier A and the legacy program worker no longer dispatch).
+// Every tick is paced by the bandwidth governor — the batch shrinks when the
+// Decodo pool runs ahead of pace (floor 25%: flip-watching is top-yield work
+// and never starves) and dispatch suspends entirely while the proxy circuit
+// breaker is open.
 //
 // AGED lifecycle: applied here as a cheap periodic pass (one indexed UPDATE per
 // tick) rather than computed lazily at read time — the durable column stays
@@ -30,6 +41,7 @@ import { rawDb } from "./db";
 import { getDefaultTenantId } from "./storage";
 import { startTargetRun } from "./scanService";
 import { structuredLog } from "./structuredLog";
+import { bandwidthBudgetScale, isProxyCircuitOpen } from "./bandwidthGovernor";
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -53,6 +65,10 @@ const CFG = {
   // (project cancelled / mis-signal) — expired, visible, never silently deleted.
   expireDays: () => bounded(process.env.COMING_SOON_EXPIRE_DAYS, 90, 7, 3650),
   agedDays: () => bounded(process.env.LIFECYCLE_AGED_DAYS, 30, 1, 3650),
+  // The post-observation window in which fiber switch-ons cluster: watches this
+  // old escalate one urgency band so the flip is caught within hours.
+  flipWindowFromDays: () => bounded(process.env.COMING_SOON_FLIP_WINDOW_FROM_DAYS, 2, 0, 120),
+  flipWindowToDays: () => bounded(process.env.COMING_SOON_FLIP_WINDOW_TO_DAYS, 14, 1, 365),
 };
 
 export type WatchUrgency = "hot" | "soon" | "watch";
@@ -82,7 +98,10 @@ export function hotCitySet(env: NodeJS.ProcessEnv = process.env): Set<string> {
 
 /** Urgency of one watch row — shared by the tick's due-selection and the API. */
 export function urgencyOf(
-  row: { estimated_completion?: string | null; source?: string | null; city?: string | null; state?: string | null },
+  row: {
+    estimated_completion?: string | null; source?: string | null;
+    city?: string | null; state?: string | null; first_seen_at?: number | null;
+  },
   now = Date.now(),
   hotCities?: Set<string>,
 ): WatchUrgency {
@@ -90,8 +109,17 @@ export function urgencyOf(
       && hotCities.has(`${String(row.city).trim().toLowerCase()}:${String(row.state ?? "nc").trim().toLowerCase()}`)) return "hot";
   const eta = parseDateMs(row.estimated_completion);
   if (eta != null && eta <= now + CFG.hotWindowDays() * DAY_MS) return "hot";
-  if (CONSTRUCTION_SOURCE_RE.test(String(row.source ?? ""))) return "soon";
-  return "watch";
+  let urgency: WatchUrgency = CONSTRUCTION_SOURCE_RE.test(String(row.source ?? "")) ? "soon" : "watch";
+  // Flip window: escalate one band while the watch is in the age range where
+  // switch-ons actually cluster (default days 2–14 after first observation).
+  const first = row.first_seen_at;
+  if (first != null && Number.isFinite(first)) {
+    const ageMs = now - Number(first);
+    if (ageMs >= CFG.flipWindowFromDays() * DAY_MS && ageMs <= CFG.flipWindowToDays() * DAY_MS) {
+      urgency = urgency === "watch" ? "soon" : "hot";
+    }
+  }
+  return urgency;
 }
 
 function cadenceMs(urgency: WatchUrgency): number {
@@ -170,7 +198,8 @@ function backfillEstimatedCompletion(limit = 100): number {
 // ── Due selection + enqueue ───────────────────────────────────────────────────
 interface DueRow {
   id: number; tenant_id: number; scan_target_id: number;
-  last_checked_at: number | null; estimated_completion: string | null; source: string | null;
+  last_checked_at: number | null; first_seen_at: number | null;
+  estimated_completion: string | null; source: string | null;
   city: string; state: string;
 }
 
@@ -179,8 +208,8 @@ interface DueRow {
 // slow provider window can't stack duplicate checks tick after tick.
 function selectDue(now: number, limit: number): DueRow[] {
   const rows = rawDb.prepare(
-    `SELECT w.id, w.tenant_id, w.scan_target_id, w.last_checked_at, w.estimated_completion, w.source,
-            s.city, s.state
+    `SELECT w.id, w.tenant_id, w.scan_target_id, w.last_checked_at, w.first_seen_at,
+            w.estimated_completion, w.source, s.city, s.state
        FROM coming_soon_watchlist w JOIN scan_targets s ON s.id = w.scan_target_id
       WHERE w.status='active'
         AND (w.last_checked_at IS NULL OR w.last_checked_at <= ?)
@@ -202,8 +231,15 @@ function selectDue(now: number, limit: number): DueRow[] {
 
 export interface ComingSoonTickResult {
   disabled?: boolean;
+  circuitOpen?: boolean;
   aged: number; expired: number; backfilled: number;
   due: number; enqueued: number; runs: string[];
+}
+
+/** Per-tick dispatch cap, paced by the bandwidth governor. Floor 25%: coming-
+ * soon flips are the highest-yield checks, so scarcity slows them last. */
+export function governedBatch(cap: number, scale: number): number {
+  return Math.max(1, Math.round(cap * Math.min(1, Math.max(0.25, scale))));
 }
 
 export function runComingSoonTick(now = Date.now()): ComingSoonTickResult {
@@ -213,7 +249,11 @@ export function runComingSoonTick(now = Date.now()): ComingSoonTickResult {
   result.expired = applyExpiredPass(now);
   result.backfilled = backfillEstimatedCompletion();
 
-  const due = selectDue(now, CFG.batch());
+  // Housekeeping above is DB-only and always runs; provider dispatch below is
+  // proxy spend and suspends while the circuit breaker is open.
+  if (isProxyCircuitOpen()) return { ...result, circuitOpen: true };
+
+  const due = selectDue(now, governedBatch(CFG.batch(), bandwidthBudgetScale()));
   result.due = due.length;
   if (!due.length) return result;
 
@@ -312,7 +352,7 @@ export function registerComingSoonRoutes(app: Express, deps: ComingSoonRouteDeps
       estimatedCompletion: r.estimated_completion,
       source: r.source, confidence: r.confidence, clusterId: r.clusterId,
       status: r.status,
-      urgency: urgencyOf({ estimated_completion: r.estimated_completion, source: r.source }, now),
+      urgency: urgencyOf({ estimated_completion: r.estimated_completion, source: r.source, first_seen_at: r.firstSeenAt }, now),
     }));
     // Active first, then hot > soon > watch, then nearest completion, then oldest watch.
     const statusRank: Record<string, number> = { active: 0, promoted: 1, expired: 2 };
