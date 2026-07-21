@@ -209,7 +209,12 @@ services:
       # governor + SCAN_GLOBAL_CONCURRENCY cap total Decodo pressure.
       # NOTE: build-intel (below) UNIONS news/permit-promoted cities into this
       # list dynamically — env entries are the always-on floor, not the ceiling.
-      HOT_MARKETS: "dalton:ga,inman:sc,spartanburg:sc,west columbia:sc,broadway:nc,sanford:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
+      # SC focus (operator, 2026-07-21): ALL nine carrier-listed SC fiber
+      # markets are hot — the Spartanburg-county cluster (Inman + Campobello +
+      # Landrum + Spartanburg), the Columbia pair (West Columbia + Lexington),
+      # and Kershaw / Cameron / Saint Matthews. cameron:sc (Calhoun Co) is
+      # distinct from the NC Cameron; the burst keys every city by (city, state).
+      HOT_MARKETS: "dalton:ga,inman:sc,spartanburg:sc,west columbia:sc,campobello:sc,landrum:sc,lexington:sc,kershaw:sc,cameron:sc,saint matthews:sc,broadway:nc,sanford:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
       # BUILD INTELLIGENCE — news + county-permit signals auto-promote cities
       # into the hot zone (TTL'd, evidence-logged). Official Windstream release
       # naming a city → immediate promotion; ≥2 independent news articles/30d →
