@@ -150,9 +150,9 @@ function ActiveRunBanner({ run, isAdmin, onOpen }: { run: ScanRun; isAdmin: bool
         </div>
       </div>
       <button onClick={onOpen} className="text-[12px] text-primary hover:underline font-medium hidden sm:block">Watch on map</button>
-      {isAdmin && r.status === "running" && <button onClick={() => control("pause")} aria-label="Pause scan" className="w-8 h-8 rounded-lg hover:bg-black/10 flex items-center justify-center text-muted-foreground"><Pause className="w-4 h-4" /></button>}
-      {isAdmin && r.status === "paused" && <button onClick={() => control("resume")} aria-label="Resume scan" className="w-8 h-8 rounded-lg hover:bg-black/10 flex items-center justify-center text-primary"><Play className="w-4 h-4" /></button>}
-      {isAdmin && <button onClick={() => control("cancel")} aria-label="Cancel scan" className="w-8 h-8 rounded-lg hover:bg-black/10 flex items-center justify-center text-muted-foreground"><Square className="w-4 h-4" /></button>}
+      {isAdmin && r.status === "running" && <button onClick={() => control("pause")} aria-label="Pause scan" className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg hover:bg-secondary flex items-center justify-center text-muted-foreground"><Pause className="w-4 h-4" /></button>}
+      {isAdmin && r.status === "paused" && <button onClick={() => control("resume")} aria-label="Resume scan" className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg hover:bg-secondary flex items-center justify-center text-primary"><Play className="w-4 h-4" /></button>}
+      {isAdmin && <button onClick={() => control("cancel")} aria-label="Cancel scan" className="w-11 h-11 sm:w-9 sm:h-9 rounded-lg hover:bg-secondary flex items-center justify-center text-muted-foreground"><Square className="w-4 h-4" /></button>}
     </div>
   );
 }
