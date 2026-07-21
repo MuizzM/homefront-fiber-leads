@@ -53,17 +53,26 @@ const FLIP_PROXIMITY_DAYS = Math.max(1, Number(process.env.FLIP_PROXIMITY_DAYS) 
 // …but never re-check the same address more than once per this window, so the
 // override tightens cadence to hours, not to every 15-min cycle.
 const FLIP_MIN_COOLDOWN_HOURS = Math.max(1, Number(process.env.FLIP_MIN_COOLDOWN_HOURS) || 12);
+// BUILD MOMENTUM: the cell hit-RATE says how likely a scan converts; momentum
+// says how ACTIVELY fiber is being lit here right now. A cell's momentum is the
+// recency-weighted count of its confirmed drops — each drop weighted
+// 2^(-age/halflife) — so five drops all this week outscore five spread over a
+// month. Surfaces the live build front, not last month's finished subdivision.
+const MOMENTUM_HALFLIFE_DAYS = Math.max(0.5, Number(process.env.MOMENTUM_HALFLIFE_DAYS) || 7);
+const MOMENTUM_WINDOW_DAYS = Math.max(1, Number(process.env.MOMENTUM_WINDOW_DAYS) || 21);
+const LN2 = 0.6931471805599453;
 
 const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc")
   .split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
 const STATE_IN = FOCUS_STATES.map(() => "?").join(",");
 const stateArgs = () => [...FOCUS_STATES];
 
-interface Weights { cell: number; street: number; city: number; watch: number; new: number; prox: number; expand: number }
+interface Weights { cell: number; street: number; city: number; watch: number; new: number; prox: number; expand: number; momentum: number }
 // prox sits just under watch: a fresh drop next door is nearly as strong a
 // signal as a provider-confirmed coming-soon. expand gives announced-build
-// cities cold-start lift before their first lead exists.
-const DEFAULT_WEIGHTS: Weights = { cell: 1.0, street: 0.9, city: 0.35, watch: 2.0, new: 0.25, prox: 1.6, expand: 0.6 };
+// cities cold-start lift before their first lead exists. momentum favours the
+// live build front (recency-weighted drop density).
+const DEFAULT_WEIGHTS: Weights = { cell: 1.0, street: 0.9, city: 0.35, watch: 2.0, new: 0.25, prox: 1.6, expand: 0.6, momentum: 0.8 };
 
 // state_fiber_markets is created by the market catalog on boot; a bare replay/
 // test DB may lack it. footprint_city() fails open without it, but the
@@ -234,6 +243,16 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
           AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
         GROUP BY clat, clng
      ),
+     cell_momentum AS (
+       -- recency-weighted drop count per cell: each drop counts 2^(-age/halflife)
+       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng,
+              SUM(exp(-${LN2} * MAX(0, julianday('now')-julianday(l.created_at)) / ${MOMENTUM_HALFLIFE_DAYS})) AS momentum
+         FROM leads l
+        WHERE l.tenant_id=${tid} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+          AND l.lead_tag='fresh_fiber_confirmed'
+          AND l.created_at >= datetime('now','-${MOMENTUM_WINDOW_DAYS} days')
+        GROUP BY clat, clng
+     ),
      cell_scans AS (
        SELECT ROUND(s.lat,2) AS clat, ROUND(s.lng,2) AS clng, COUNT(*) AS scanned
          FROM scan_targets s
@@ -286,12 +305,14 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
             + ${w.watch}  * (dw.id IS NOT NULL)
             + ${w.new}    * (s.created_at >= datetime('now','-7 days'))
             + ${w.prox}   * ((rc.clat IS NOT NULL) OR (rs.street IS NOT NULL))
+            + ${w.momentum} * COALESCE(ln(1+cm.momentum), 0)
             ${expandTerm}
             ) AS score
        FROM scan_targets s
        CROSS JOIN prior pr
        LEFT JOIN fresh_cells fc ON fc.clat=ROUND(s.lat,2) AND fc.clng=ROUND(s.lng,2)
        LEFT JOIN recent_cells rc ON rc.clat=ROUND(s.lat,2) AND rc.clng=ROUND(s.lng,2)
+       LEFT JOIN cell_momentum cm ON cm.clat=ROUND(s.lat,2) AND cm.clng=ROUND(s.lng,2)
        LEFT JOIN cell_scans cs ON cs.clat=fc.clat AND cs.clng=fc.clng
        LEFT JOIN fresh_streets fs
          ON fs.street=harvest_street_key(s.address)
@@ -387,7 +408,7 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
   structuredLog("yield_engine.cycle", {
     exploit: exploit.length, explore: explore.length, runId, total: ids.length,
     bwScale, topScore: +(scored[0]?.score ?? 0).toFixed(3), medianScore: +(scored[Math.floor(scored.length / 2)]?.score ?? 0).toFixed(3),
-    wCell: w.cell, wStreet: w.street, wCity: w.city, wProx: w.prox, wExpand: w.expand,
+    wCell: w.cell, wStreet: w.street, wCity: w.city, wProx: w.prox, wExpand: w.expand, wMomentum: w.momentum,
   });
   return { exploit: exploit.length, explore: explore.length, runId };
 }
