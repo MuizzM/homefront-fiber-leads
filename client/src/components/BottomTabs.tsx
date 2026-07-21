@@ -6,16 +6,25 @@ import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { Home, Map, DollarSign, MapPin, Menu } from "lucide-react";
 import type { Ref } from "react";
+import { can, type Role } from "@shared/capabilities";
 
+// Each tab is capability-gated: roles without field.app.use (e.g. calling-only
+// or audit roles) never see dead field tabs, and Pay only shows when the role
+// can read its own commission.
 const TABS = [
-  { href: "/today", label: "Today", icon: Home },
-  { href: "/leads", label: "Leads", icon: MapPin },
-  { href: "/map", label: "Map", icon: Map, primary: true },
-  { href: "/my-commission", label: "Pay", icon: DollarSign },
+  { href: "/today", label: "Today", icon: Home, cap: "field.app.use" },
+  { href: "/leads", label: "Leads", icon: MapPin, cap: "field.app.use" },
+  { href: "/map", label: "Map", icon: Map, primary: true, cap: "field.app.use" },
+  { href: "/my-commission", label: "Pay", icon: DollarSign, cap: "commission.read.self" },
 ] as const;
 
-export function BottomTabs({ onMore, moreOpen = false, moreButtonRef }: { onMore?: () => void; moreOpen?: boolean; moreButtonRef?: Ref<HTMLButtonElement> }) {
+// Tailwind needs static class names — one entry per possible cell count
+// (visible tabs + the always-present More button).
+const GRID_COLS = ["grid-cols-1", "grid-cols-2", "grid-cols-3", "grid-cols-4", "grid-cols-5"] as const;
+
+export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef }: { role: Role; onMore?: () => void; moreOpen?: boolean; moreButtonRef?: Ref<HTMLButtonElement> }) {
   const [location] = useHashLocation();
+  const visibleTabs = TABS.filter(tab => can(role, tab.cap));
   return (
     <nav
       data-testid="bottom-tabs"
@@ -23,9 +32,11 @@ export function BottomTabs({ onMore, moreOpen = false, moreButtonRef }: { onMore
       className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/70 bg-card/92 shadow-[0_-10px_32px_rgba(0,0,0,0.22)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/78"
       style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)" }}
     >
-      <div className="grid grid-cols-5 h-[58px] px-1">
-      {TABS.map(({ href, label, icon: Icon, ...tab }) => {
-        const active = location === href;
+      <div className={`grid ${GRID_COLS[visibleTabs.length]} h-[58px] px-1`}>
+      {visibleTabs.map(({ href, label, icon: Icon, ...tab }) => {
+        // Reps land on "/" (App redirects to /today) — light the Today tab for
+        // either location so the home screen always has an active tab.
+        const active = href === "/today" ? location === "/today" || location === "/" : location === href;
         const primary = "primary" in tab && tab.primary;
         return (
           <Link
