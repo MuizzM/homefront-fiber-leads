@@ -198,7 +198,26 @@ services:
       #      paceMs/loopLagP95). If it doesn't, flip HOT_MARKETS/DAILY_MARKET_REFRESH
       #      back to off — that is the kill-switch, no redeploy of code needed.
       STATEWIDE_SCAN_ON_DEPLOY: "off"
-      HOT_MARKETS: "dalton:ga,inman:sc,spartanburg:sc,west columbia:sc"
+      # HOT ZONE (20-min bursts + hourly address discovery per city).
+      # NC additions (operator, 2026-07-21): the Lee-corridor pair (Broadway +
+      # Sanford — live multi-gig builds), the Rowan/"Rockwell area" cluster
+      # (Rockwell, Salisbury, Granite Quarry, Gold Hill, Faith, China Grove,
+      # Landis), and the Cabarrus build zone (Concord + Kannapolis). Granite
+      # Quarry/Concord/Kannapolis are verified_expanding in the market catalog
+      # (Q4-2025/Q1-2026 official build releases). Spend stays bounded: the
+      # bursts only claim due targets (30-min stale window) and the bandwidth
+      # governor + SCAN_GLOBAL_CONCURRENCY cap total Decodo pressure.
+      # NOTE: build-intel (below) UNIONS news/permit-promoted cities into this
+      # list dynamically — env entries are the always-on floor, not the ceiling.
+      HOT_MARKETS: "dalton:ga,inman:sc,spartanburg:sc,west columbia:sc,broadway:nc,sanford:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
+      # BUILD INTELLIGENCE — news + county-permit signals auto-promote cities
+      # into the hot zone (TTL'd, evidence-logged). Official Windstream release
+      # naming a city → immediate promotion; ≥2 independent news articles/30d →
+      # promotion; permit surge (≥BUILD_INTEL_PERMIT_MIN in 30d) → promotion.
+      # Free public sources (Google News RSS + optional ArcGIS county permit
+      # feeds via BUILD_INTEL_PERMIT_FEEDS JSON) — zero proxy spend. This is the
+      # "know where they're building before the first drop lights" feed.
+      BUILD_INTEL: "on"
       # FRESH HARVEST — continuous Kinetic scanning ranked by expected yield
       # (coming-soon flips → fresh-cluster neighbors → hot-city frontier →
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website

@@ -173,7 +173,21 @@ export function learnYieldWeights(tenantId: number): void {
   } catch (e: any) { console.warn("[yield-engine] learn skipped:", e?.message); }
 }
 
-interface ScoredRow { id: number; score: number }
+interface ScoredRow {
+  id: number;
+  score: number;
+  // Change-detection classes that must bypass the 18h bulk dedup window when
+  // dispatched (see runYieldCycle's split): a due coming-soon watch member, and
+  // a flip-proximity negative (a drop just lit its cell/street).
+  isWatch?: number;
+  isFlip?: number;
+}
+
+// Negative-recheck floor for verified_expanding markets: the adaptive backoff
+// (7→56d) is right for settled towns, but in an ANNOUNCED build market the
+// builders are actively flipping addresses — a chronic negative there must
+// never back off past this many days, or we discover the build weeks late.
+const EXPANSION_NEG_MAX_DAYS = Math.max(1, Number(process.env.EXPANSION_NEG_MAX_DAYS) || 7);
 
 /**
  * Score every due address in the focus states, footprint-gated to Kinetic
@@ -206,15 +220,22 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
        )`
     : "";
   const negJoin = adaptive ? `LEFT JOIN neg_streak ns ON ns.id = s.id` : "";
-  // Effective cadence in days = min(MAX, BASE × 2^min(streak-1, cap)).
+  const expand = marketsTableReady();
+  // Effective cadence in days = min(MAX, BASE × 2^min(streak-1, cap)) — but a
+  // verified_expanding market gets a FLOOR (EXPANSION_NEG_MAX_DAYS): builders
+  // are actively flipping addresses there, so a chronic negative never backs
+  // off past ~a week in the exact towns where flips are most likely.
+  const adaptiveDays = `${NEG_BASE_DAYS} * (1 << MIN(COALESCE(ns.streak,1)-1, ${NEG_SHIFT_CAP}))`;
+  const negCadenceDays = expand
+    ? `CASE WHEN ex.city IS NOT NULL
+            THEN MIN(${EXPANSION_NEG_MAX_DAYS}, MIN(${NEG_MAX_DAYS}, ${adaptiveDays}))
+            ELSE MIN(${NEG_MAX_DAYS}, ${adaptiveDays}) END`
+    : `MIN(${NEG_MAX_DAYS}, ${adaptiveDays})`;
   const negDueClause = adaptive
     ? `(COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
-        AND s.last_scanned_at < datetime('now','-' ||
-              MIN(${NEG_MAX_DAYS}, ${NEG_BASE_DAYS} * (1 << MIN(COALESCE(ns.streak,1)-1, ${NEG_SHIFT_CAP})))
-              || ' days'))`
+        AND s.last_scanned_at < datetime('now','-' || (${negCadenceDays}) || ' days'))`
     : `((COALESCE(s.last_fiber_status,'')='copper' AND s.last_scanned_at < datetime('now','-7 days'))
         OR (COALESCE(s.last_fiber_status,'')='no_service' AND s.last_scanned_at < datetime('now','-30 days')))`;
-  const expand = marketsTableReady();
   // Expansion signal + CTE only when the market table exists (fail-safe on replay DBs).
   const expandCte = expand
     ? `, expanding AS (
@@ -298,6 +319,9 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
                OR (w.first_seen_at <= ? AND w.last_checked_at < ?))
      )${expandCte}${negStreakCte}
      SELECT s.id,
+            (dw.id IS NOT NULL) AS isWatch,
+            (COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+             AND (rc.clat IS NOT NULL OR rs.street IS NOT NULL)) AS isFlip,
             ( ${w.cell}   * COALESCE((CAST(fc.hits AS REAL) + ${CELL_PRIOR}*pr.p0)
                                      / (COALESCE(cs.scanned,0) + ${CELL_PRIOR}), 0)
             + ${w.street} * (fs.street IS NOT NULL)
@@ -396,17 +420,43 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
     structuredLog("yield_engine.cycle", { exploit: 0, explore: 0, skipped: "nothing due", bwScale });
     return { exploit: 0, explore: 0 };
   }
-  const { runId } = startTargetRun({
-    tenantId,
-    city: "yield-engine",
-    state: "multi",
-    targetIds: ids,
-    runKind: "fresh_harvest",
-    label: `YIELD ENGINE x${exploit.length}/e${explore.length} bw${bwScale.toFixed(2)}`,
-  });
+  // SPLIT DISPATCH — change-detection targets must not go out as bulk harvest.
+  // A single 'fresh_harvest' run put every target behind the 18h dedup window,
+  // silently swallowing the 2h/12h coming-soon watch cadence and the 12h
+  // flip-proximity cooldown this engine just computed. Watch members ship under
+  // a 'coming_soon…watch' kind (dedup-exempt + reserved coming_soon class) and
+  // flip-proximity negatives under a '…recheck' kind (dedup-exempt, discovery
+  // class), so their tight cadences are real. Everything else stays bulk.
+  const watchIds = scored.filter((r) => r.isWatch).map((r) => r.id);
+  const flipIds = scored.filter((r) => !r.isWatch && r.isFlip).map((r) => r.id);
+  const changeSet = new Set([...watchIds, ...flipIds]);
+  const bulkIds = ids.filter((id) => !changeSet.has(id));
+  let runId: string | undefined;
+  if (watchIds.length) {
+    runId = startTargetRun({
+      tenantId, city: "yield-engine", state: "multi", targetIds: watchIds,
+      runKind: "coming_soon_watch_yield",
+      label: `YIELD WATCH x${watchIds.length}`,
+    }).runId ?? runId;
+  }
+  if (flipIds.length) {
+    runId = startTargetRun({
+      tenantId, city: "yield-engine", state: "multi", targetIds: flipIds,
+      runKind: "fresh_flip_recheck",
+      label: `YIELD FLIP-PROX x${flipIds.length}`,
+    }).runId ?? runId;
+  }
+  if (bulkIds.length) {
+    runId = startTargetRun({
+      tenantId, city: "yield-engine", state: "multi", targetIds: bulkIds,
+      runKind: "fresh_harvest",
+      label: `YIELD ENGINE x${exploit.length}/e${explore.length} bw${bwScale.toFixed(2)}`,
+    }).runId ?? runId;
+  }
   const w = getWeights();
   structuredLog("yield_engine.cycle", {
     exploit: exploit.length, explore: explore.length, runId, total: ids.length,
+    watch: watchIds.length, flip: flipIds.length, bulk: bulkIds.length,
     bwScale, topScore: +(scored[0]?.score ?? 0).toFixed(3), medianScore: +(scored[Math.floor(scored.length / 2)]?.score ?? 0).toFixed(3),
     wCell: w.cell, wStreet: w.street, wCity: w.city, wProx: w.prox, wExpand: w.expand, wMomentum: w.momentum,
   });
