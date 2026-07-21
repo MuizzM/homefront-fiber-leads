@@ -11,8 +11,14 @@
  *            in ~1.1km cells of fresh leads, ranked by the cell's hit rate
  *            (fresh leads per scanned address) — the fleet concentrates where
  *            fiber is actively being lit, not just where it was lit once.
+ *            The rate is empirical-Bayes smoothed toward the tenant-wide
+ *            conversion rate (FRESH_HARVEST_CELL_PRIOR pseudo-scans, default
+ *            12) so a lucky 1-hit/1-scan cell can't outrank a proven
+ *            8-hits/20-scans cell.
  *   Tier B2— STREET COMPLETION: builders light whole streets at once. Every
  *            never-scanned address sharing a street with a fresh lead (21d).
+ *            Streets match on a canonical key (house number + unit stripped,
+ *            suffix synonyms folded: "Fiber Street" == "Fiber St").
  *   Tier C0— PRIORITY CITIES (Davidson/Lake Norman via FRESH_HARVEST_CITIES).
  *   Tier C — NC/SC cities ranked by 21-day fresh density.
  *   Tier D1— COPPER-FLIP WATCH: stale copper in fresh-dense cities (7d).
@@ -35,10 +41,15 @@ import { rawDb } from "./db";
 import { startTargetRun } from "./scanService";
 import { structuredLog } from "./structuredLog";
 import { bandwidthBudgetScale, governorStats, isProxyCircuitOpen } from "./bandwidthGovernor";
+import { canonicalAddressPart } from "./addressKey";
 
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
 const TIER_D_STALE_DAYS = 30;
+// Empirical-Bayes prior strength for Tier B cell ranking: a cell's observed
+// hit rate is blended with the tenant-wide rate as if the cell had this many
+// extra scans at the global average. Low-evidence cells shrink to the mean.
+const CELL_PRIOR_SCANS = Math.max(1, Number(process.env.FRESH_HARVEST_CELL_PRIOR) || 12);
 
 // State focus: only these states get harvest budget (FRESH_HARVEST_STATES,
 // default NC + SC — the Kinetic build footprint). Frontier scanning is off.
@@ -48,6 +59,51 @@ const STATE_IN = FOCUS_STATES.map(() => "?").join(",");
 const stateArgs = () => [...FOCUS_STATES];
 
 interface TierRow { id: number }
+
+// ── Street identity for Tier B2 ──────────────────────────────────────────────
+// Unit designators that end the street-name portion of an address.
+const UNIT_TOKENS = new Set(["APT", "UNIT", "STE", "SUITE", "LOT", "TRLR", "BLDG", "FL", "RM", "BSMT", "DEPT", "OFC"]);
+const DIRECTIONALS = new Set(["N", "S", "E", "W"]);
+
+/**
+ * Canonical street key: house number and unit stripped, suffix/directional
+ * synonyms folded (via canonicalAddressPart), so "22 Fiber Street Apt 4",
+ * "17 Fiber St" and "Fiber Street" all key to "FIBER ST". Addresses with no
+ * leading house number (brand-new streets a geocoder hasn't numbered yet)
+ * keep their full name instead of losing their first word. Empty string when
+ * no street name survives.
+ */
+export function streetKeyOf(address: string | null | undefined): string {
+  if (!address) return "";
+  const tokens = canonicalAddressPart(String(address)).split(" ").filter(Boolean);
+  let start = 0;
+  // House number: "123", "123A", and split forms like "123 125" (ranges) or
+  // "123 1 2" (fractions — "/" folds to a space in canonical form).
+  while (start < tokens.length && /^\d+[A-Z]?$/.test(tokens[start])) start++;
+  // "123-A Main St" canonicalizes to "123 A MAIN ST" — drop the orphaned unit
+  // letter, but never a directional ("101 N Main St" keeps its N).
+  if (start > 0 && start < tokens.length - 1
+      && tokens[start].length === 1 && !DIRECTIONALS.has(tokens[start])) start++;
+  let end = tokens.length;
+  for (let i = start; i < tokens.length; i++) {
+    if (tokens[i].startsWith("#") || UNIT_TOKENS.has(tokens[i])) { end = i; break; }
+  }
+  return tokens.slice(start, end).join(" ");
+}
+
+// Registered as a SQL function so Tier B2 can match street identity inside the
+// query instead of the naive substr-after-first-space it used before (which
+// broke on unit suffixes and on "Fiber Street" vs "Fiber St").
+let sqlFnsRegistered = false;
+function registerHarvestSqlFunctions(): void {
+  if (sqlFnsRegistered) return;
+  try {
+    (rawDb as any).function("harvest_street_key", { deterministic: true },
+      (addr: unknown) => streetKeyOf(typeof addr === "string" ? addr : ""));
+    sqlFnsRegistered = true;
+  } catch { /* re-registration or exotic driver — Tier B2 will fail loudly if truly absent */ }
+}
+registerHarvestSqlFunctions();
 
 /** Tier A: coming-soon watchlist entries due for re-check. */
 export function tierA(tenantId: number, limit: number): TierRow[] {
@@ -68,7 +124,10 @@ export function tierA(tenantId: number, limit: number): TierRow[] {
   ).all(tenantId, matureAge, freshCut, matureAge, matureCut, limit) as TierRow[];
 }
 
-/** Tier B: never-scanned targets in ~1.1km cells containing a fresh lead. */
+/** Tier B: never-scanned targets in ~1.1km cells containing a fresh lead.
+ *  Cells rank by empirical-Bayes smoothed hit rate: observed hits/scans blended
+ *  with the tenant-wide conversion rate at CELL_PRIOR_SCANS pseudo-scans, so a
+ *  cell needs real evidence to rank above the global average. */
 export function tierB(tenantId: number, limit: number): TierRow[] {
   if (limit <= 0) return [];
   return rawDb.prepare(
@@ -87,39 +146,51 @@ export function tierB(tenantId: number, limit: number): TierRow[] {
           AND s.lat IS NOT NULL AND s.lng IS NOT NULL
         GROUP BY clat, clng
      )
+     , prior AS (
+       SELECT CAST((SELECT COUNT(*) FROM leads l2
+                     WHERE l2.tenant_id=? AND l2.lead_tag='fresh_fiber_confirmed'
+                       AND l2.created_at >= datetime('now','-${TIER_B_FRESH_WINDOW_DAYS} days')) AS REAL)
+              / (1 + (SELECT COUNT(*) FROM scan_targets s2
+                       WHERE s2.tenant_id=? AND s2.last_scanned_at IS NOT NULL)) AS p0
+     )
      SELECT s.id
        FROM scan_targets s
        JOIN fresh_cells fc
          ON ROUND(s.lat,2)=fc.clat AND ROUND(s.lng,2)=fc.clng
        LEFT JOIN cell_scans cs ON cs.clat=fc.clat AND cs.clng=fc.clng
+      CROSS JOIN prior pr
       WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
         AND s.lat IS NOT NULL AND s.lng IS NOT NULL
         AND lower(s.state) IN (${STATE_IN})
-      ORDER BY CAST(fc.hits AS REAL)/(1+COALESCE(cs.scanned,0)) DESC, fc.hits DESC, s.id ASC
+      ORDER BY (CAST(fc.hits AS REAL) + ${CELL_PRIOR_SCANS}*pr.p0)
+               / (COALESCE(cs.scanned,0) + ${CELL_PRIOR_SCANS}) DESC,
+               fc.hits DESC, s.id ASC
       LIMIT ?`,
-  ).all(tenantId, tenantId, tenantId, ...stateArgs(), limit) as TierRow[];
+  ).all(tenantId, tenantId, tenantId, tenantId, tenantId, ...stateArgs(), limit) as TierRow[];
 }
 
 /** Tier B2: street completion — every never-scanned address sharing a street
- *  with a fresh lead (builders light whole streets at once). */
+ *  with a fresh lead (builders light whole streets at once). Streets match on
+ *  the canonical harvest_street_key: house number + unit stripped, suffix
+ *  synonyms folded — "22 Fiber Street Apt 4" completes "17 Fiber St". */
 export function tierB2(tenantId: number, limit: number): TierRow[] {
   if (limit <= 0) return [];
+  registerHarvestSqlFunctions();
   return rawDb.prepare(
     `WITH fresh_streets AS (
-       SELECT DISTINCT lower(substr(l.address, instr(l.address,' ')+1)) AS street,
+       SELECT DISTINCT harvest_street_key(l.address) AS street,
               lower(l.city) AS city, lower(l.state) AS state
          FROM leads l
         WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
           AND l.created_at >= datetime('now','-${TIER_B_FRESH_WINDOW_DAYS} days')
-          AND instr(l.address,' ') > 0
+          AND harvest_street_key(l.address) <> ''
      )
      SELECT s.id
        FROM scan_targets s
        JOIN fresh_streets fs
-         ON lower(substr(s.address, instr(s.address,' ')+1))=fs.street
+         ON harvest_street_key(s.address)=fs.street
         AND lower(s.city)=fs.city AND lower(s.state)=fs.state
       WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
-        AND instr(s.address,' ') > 0
         AND lower(s.state) IN (${STATE_IN})
       ORDER BY s.id ASC
       LIMIT ?`,
@@ -275,13 +346,16 @@ export function emitEconomyReport(tenantId: number): void {
       callsPerFreshLead: leads ? +(checks / leads).toFixed(1) : null,
       // bandwidth governor: the true Decodo cost of the operation
       requests24h: bw.requests24h,
+      mb24h: bw.mb24h,
       mbToday: bw.mbToday,
       gbCycle: bw.gbCycle,
       cyclePctUsed: bw.cyclePctUsed,
       projectedCycleGb: bw.projectedCycleGb,
       budgetGb: bw.budgetGb,
+      estReqBytes: bw.estReqBytes,
       bwScale: bw.scale,
-      kbPerFreshLead: leads && bw.requests24h ? +((bw.mbToday * 1000) / leads).toFixed(1) : null,
+      // rolling-24h bytes over rolling-24h leads: the windows must match
+      kbPerFreshLead: leads && bw.requests24h ? +((bw.mb24h * 1000) / leads).toFixed(1) : null,
     });
   } catch { /* best-effort metrics */ }
 }
