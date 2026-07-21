@@ -7,11 +7,11 @@ import fs from "node:fs";
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "hf-harvest-"));
 vi.mock("../../server/scanService", () => ({ startTargetRun: vi.fn(() => ({ runId: "run_test", queued: 0, budget: 0 })) }));
 
-let tierB: any, tierB2: any, tierC: any, tierD: any, tierC0: any, tierD1: any, streetKeyOf: any, rawDb: any;
+let tierB: any, tierB2: any, tierC: any, tierD: any, tierC0: any, tierD1: any, tierE1: any, tierE2: any, streetKeyOf: any, rawDb: any;
 
 beforeAll(async () => {
   ({ rawDb } = await import("../../server/db"));
-  ({ tierB, tierB2, tierC, tierD, tierC0, tierD1, streetKeyOf } = await import("../../server/freshHarvest"));
+  ({ tierB, tierB2, tierC, tierD, tierC0, tierD1, tierE1, tierE2, streetKeyOf } = await import("../../server/freshHarvest"));
   rawDb.exec(`
     DROP TABLE IF EXISTS leads;
     DROP TABLE IF EXISTS scan_targets;
@@ -68,6 +68,22 @@ beforeAll(async () => {
   // regime where smoothing must prefer evidence over small-sample luck.
   for (let i = 0; i < 300; i++)
     insT.run(1000+i,`${i} Filler Rd`,"coldtown","nc","27501",34.5,-80.5,"2026-07-10 00:00:00","new_fiber");
+
+  // ── Expansion markets (Tier E) + footprint ──
+  // boomtown: officially announced build (verified_expanding) with no fresh
+  // leads yet — the cold-start case. coldtown stays auto_scan_eligible so the
+  // footprint gate keeps Tier D's stale negative (id 13) selectable.
+  rawDb.exec(`
+    DROP TABLE IF EXISTS state_fiber_markets;
+    CREATE TABLE state_fiber_markets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT, city TEXT,
+      auto_scan_eligible INTEGER DEFAULT 0, kinetic_status TEXT
+    );
+  `);
+  rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible,kinetic_status) VALUES ('NC','boomtown',1,'verified_expanding')").run();
+  rawDb.prepare("INSERT INTO state_fiber_markets (state,city,auto_scan_eligible,kinetic_status) VALUES ('NC','coldtown',1,'verified_served')").run();
+  insT.run(300,"300 Boom Blvd","boomtown","nc","28001",35.35,-80.2,null,null);                          // Tier E1: never scanned
+  insT.run(301,"301 Boom Blvd","boomtown","nc","28001",35.35,-80.21,"2026-07-11 00:00:00","no_service"); // Tier E2: 10d stale negative
   process.env.PRIORITY_CITIES = "davidson:nc";
 });
 
@@ -102,11 +118,25 @@ describe("fresh harvest tiers", () => {
     expect(rows).toContain(11);
     expect(rows).not.toContain(12); // coldtown has no fresh leads
   });
-  it("Tier D picks only stale negative verdicts (gate inactive → fail-open)", () => {
-    // No state_fiber_markets table exists yet → footprint_city fails open →
-    // every stale NC/SC negative is eligible, exactly as before the gate.
+  it("Tier D picks only stale negative verdicts in footprint markets", () => {
+    // The footprint gate is ACTIVE (boomtown/coldtown eligible); coldtown's
+    // stale negative stays selectable, and boomtown's 10-day negative is
+    // Tier E2's job (not yet 30 days stale).
     const rows = tierD(1, 100).map((r: any) => r.id);
     expect(rows).toEqual([13]);
+  });
+  it("Tier E1 scans never-scanned addresses in announced expansion markets (cold start)", () => {
+    const rows = tierE1(1, 100).map((r: any) => r.id);
+    expect(rows).toEqual([300]);      // boomtown, no leads yet — density tiers would skip it
+    expect(rows).not.toContain(11);   // hotville is not an expansion market
+    expect(rows).not.toContain(301);  // already scanned
+  });
+  it("Tier E2 rechecks stale negatives in expansion markets at the 7-day cadence", () => {
+    const rows = tierE2(1, 100).map((r: any) => r.id);
+    expect(rows).toEqual([301]);      // 10 days stale — far too fresh for Tier D's 30d
+    expect(rows).not.toContain(13);   // coldtown is served, not expanding
+    expect(rows).not.toContain(16);   // hotville copper is Tier D1's job
+    expect(rows).not.toContain(300);  // never scanned → Tier E1
   });
   it("Tier C0 picks never-scanned in priority cities", () => {
     const rows = tierC0(1, 100).map((r: any) => r.id);
@@ -116,19 +146,21 @@ describe("fresh harvest tiers", () => {
     const rows = tierD1(1, 100).map((r: any) => r.id);
     expect(rows).toEqual([16]);
   });
-  it("budget top-down: B → B2 → C0 → C → D1 → D, no duplicates", async () => {
-    // Pick a raw budget that shapes to exactly 8 at the current hour
+  it("budget top-down: B → B2 → E1 → C0 → C → E2 → D1 → D, no duplicates", async () => {
+    // Pick a raw budget that shapes to exactly 10 at the current hour
     // (×1.5 overnight 00–06, ×0.5 business hours 09–17, ×1 otherwise).
     const h = new Date().getHours();
-    const raw = h < 6 ? 16 / 3 : (h >= 9 && h < 17 ? 16 : 8);
+    const raw = h < 6 ? 20 / 3 : (h >= 9 && h < 17 ? 20 : 10);
     const { runHarvestCycle } = await import("../../server/freshHarvest");
     const counts = runHarvestCycle(1, raw);
     expect(counts.b).toBe(3);   // 20 (proven), 10 (hotville), 21 (noisy)
     expect(counts.b2).toBe(2);  // 17, 18
+    expect(counts.e1).toBe(1);  // 300 (boomtown cold start)
     expect(counts.c0).toBe(1);  // 15
-    // Tier C's top-ranked rows (gemtown ids 20, 21) were already taken by
-    // Tier B, so C contributes nothing and the last slots fall to D1 and D.
+    // Tier C's top-ranked rows (gemtown 20/21, hotville 10) were already taken
+    // by Tier B, so C contributes nothing; the last slots go to E2, D1 and D.
     expect(counts.c).toBe(0);
+    expect(counts.e2).toBe(1);  // 301 (expansion flip watch)
     expect(counts.d1).toBe(1);  // 16
     expect(counts.d).toBe(1);   // 13
   });
@@ -157,9 +189,8 @@ describe("footprint gate (Tier D)", () => {
     // existing stale negative in the non-footprint coldtown (id 13).
     rawDb.prepare("INSERT INTO scan_targets (id,tenant_id,address,city,state,zip,lat,lng,last_scanned_at,last_fiber_status) VALUES (?,1,?,?,?,?,?,?,?,?)")
       .run(200,"200 Salisbury Rd","salisbury","nc","28144",35.67,-80.47,"2026-06-15 00:00:00","no_service");
-    rawDb.exec(`CREATE TABLE IF NOT EXISTS state_fiber_markets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT, state TEXT, city TEXT, auto_scan_eligible INTEGER DEFAULT 0
-    )`);
+    // Empty the footprint so the fail-open behavior is observable from scratch.
+    rawDb.exec("DELETE FROM state_fiber_markets");
   });
 
   it("stays fail-open while no market is eligible (empty footprint)", () => {

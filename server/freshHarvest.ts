@@ -22,10 +22,20 @@
  *            never-scanned address sharing a street with a fresh lead (21d).
  *            Streets match on a canonical key (house number + unit stripped,
  *            suffix synonyms folded: "Fiber Street" == "Fiber St").
+ *   Tier E1— EXPANSION PUSH: never-scanned addresses in officially announced
+ *            Kinetic build markets (state_fiber_markets verified_expanding).
+ *            Solves the cold start: density tiers ignore a city until its
+ *            first lead exists, but announced builds are where the next wave
+ *            WILL light up — scan them before the first lead, not after.
  *   Tier C0— PRIORITY CITIES (Davidson/Lake Norman via FRESH_HARVEST_CITIES).
  *   Tier C — NC/SC cities ranked by 21-day fresh density.
+ *   Tier E2— EXPANSION FLIP WATCH: stale negatives in announced build markets
+ *            re-checked at 7 days (builds actively flip addresses; the 30-day
+ *            stale tier is far too slow there, and the copper watch only
+ *            covers cities that already produced a lead).
  *   Tier D1— COPPER-FLIP WATCH: stale copper in fresh-dense cities (7d).
- *   Tier D2— STALE REFRESH: 30-day negative verdicts, NC/SC only.
+ *   Tier D2— STALE REFRESH: 30-day negative verdicts, NC/SC only,
+ *            footprint-gated to auto_scan_eligible Kinetic markets.
  *
  * BALANCED CADENCE:
  *   - Budget shapes by time of day: ×1.5 overnight (00–06), ×0.5 business
@@ -50,6 +60,7 @@ import { registerFootprintSqlFunctions } from "./footprintGate";
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
 const TIER_D_STALE_DAYS = 30;
+const TIER_E2_STALE_DAYS = Math.max(1, Number(process.env.EXPANSION_RESCAN_DAYS) || 7);
 // Empirical-Bayes prior strength for Tier B cell ranking: a cell's observed
 // hit rate is blended with the tenant-wide rate as if the cell had this many
 // extra scans at the global average. Low-evidence cells shrink to the mean.
@@ -182,6 +193,50 @@ export function tierB2(tenantId: number, limit: number): TierRow[] {
   ).all(tenantId, tenantId, ...stateArgs(), limit) as TierRow[];
 }
 
+// Expansion tiers read state_fiber_markets, which a bare replay/test DB may
+// not have yet — no markets known means no expansion work, not a crash.
+function marketsTableReady(): boolean {
+  return !!rawDb.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_fiber_markets'`).get();
+}
+
+/** Tier E1: never-scanned targets in officially announced expansion markets.
+ *  Cold-start coverage — these cities may have zero fresh leads yet, so the
+ *  density-driven tiers ignore them; the announced build is the evidence. */
+export function tierE1(tenantId: number, limit: number): TierRow[] {
+  if (limit <= 0 || !marketsTableReady()) return [];
+  return rawDb.prepare(
+    `SELECT s.id
+       FROM scan_targets s
+       JOIN state_fiber_markets m
+         ON m.kinetic_status='verified_expanding' AND m.auto_scan_eligible=1
+        AND lower(m.state)=lower(s.state) AND lower(m.city)=lower(s.city)
+      WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
+        AND lower(s.state) IN (${STATE_IN})
+      ORDER BY s.id ASC
+      LIMIT ?`,
+  ).all(tenantId, ...stateArgs(), limit) as TierRow[];
+}
+
+/** Tier E2: stale negatives in expansion markets, re-checked at 7 days —
+ *  active builds flip addresses weekly, not monthly. */
+export function tierE2(tenantId: number, limit: number): TierRow[] {
+  if (limit <= 0 || !marketsTableReady()) return [];
+  return rawDb.prepare(
+    `SELECT s.id
+       FROM scan_targets s
+       JOIN state_fiber_markets m
+         ON m.kinetic_status='verified_expanding' AND m.auto_scan_eligible=1
+        AND lower(m.state)=lower(s.state) AND lower(m.city)=lower(s.city)
+      WHERE s.tenant_id=?
+        AND s.last_scanned_at IS NOT NULL
+        AND s.last_scanned_at < datetime('now','-${TIER_E2_STALE_DAYS} days')
+        AND COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+        AND lower(s.state) IN (${STATE_IN})
+      ORDER BY s.last_scanned_at ASC
+      LIMIT ?`,
+  ).all(tenantId, ...stateArgs(), limit) as TierRow[];
+}
+
 /** Tier C0: never-scanned targets in explicitly configured priority cities. */
 export function tierC0(tenantId: number, limit: number): TierRow[] {
   if (limit <= 0) return [];
@@ -274,11 +329,11 @@ export function tierD(tenantId: number, limit: number): TierRow[] {
  * structured-logged). Daily-safe: selection is due-based, so cycles never
  * repeat work that isn't due again.
  */
-export function runHarvestCycle(tenantId: number, budget = Number(process.env.FRESH_HARVEST_BUDGET) || 4000): { b: number; b2: number; c0: number; c: number; d1: number; d: number; runId?: string } {
+export function runHarvestCycle(tenantId: number, budget = Number(process.env.FRESH_HARVEST_BUDGET) || 4000): { b: number; b2: number; e1: number; c0: number; c: number; e2: number; d1: number; d: number; runId?: string } {
   // Circuit breaker: proxy auth/limit denials → freeze the cycle entirely.
   if (isProxyCircuitOpen()) {
-    structuredLog("fresh_harvest.cycle", { b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0, skipped: "proxy circuit open" });
-    return { b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 };
+    structuredLog("fresh_harvest.cycle", { b: 0, b2: 0, e1: 0, c0: 0, c: 0, e2: 0, d1: 0, d: 0, skipped: "proxy circuit open" });
+    return { b: 0, b2: 0, e1: 0, c0: 0, c: 0, e2: 0, d1: 0, d: 0 };
   }
   // Time-of-day budget shaping: proxy spend follows idle capacity.
   const hour = new Date().getHours();
@@ -295,15 +350,22 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
   const seen = new Set<number>();
   const pick = (rows: TierRow[]) => rows.filter((r) => !seen.has(r.id)).map((r) => { seen.add(r.id); return r.id; });
 
-  const b = pick(tierB(tenantId, budget));
-  const b2 = pick(tierB2(tenantId, budget - b.length));
-  const c0 = pick(tierC0(tenantId, budget - b.length - b2.length));
-  const c = pick(tierC(tenantId, budget - b.length - b2.length - c0.length));
-  const d1 = pick(tierD1(tenantId, Math.min(d1Cap, budget - b.length - b2.length - c0.length - c.length)));
-  const d = pick(tierD(tenantId, Math.min(dCap, budget - b.length - b2.length - c0.length - c.length - d1.length)));
-  const ids = [...b, ...b2, ...c0, ...c, ...d1, ...d];
+  let left = budget;
+  const spend = (rows: TierRow[]) => { const ids = pick(rows); left -= ids.length; return ids; };
 
-  const counts = { b: b.length, b2: b2.length, c0: c0.length, c: c.length, d1: d1.length, d: d.length };
+  const b = spend(tierB(tenantId, left));
+  const b2 = spend(tierB2(tenantId, left));
+  const e1 = spend(tierE1(tenantId, left));
+  const c0 = spend(tierC0(tenantId, left));
+  const c = spend(tierC(tenantId, left));
+  // Expansion flip watch is never scarcity-capped: announced builds are the
+  // top-yield rechecks. D1/D keep the strategic cut order.
+  const e2 = spend(tierE2(tenantId, left));
+  const d1 = spend(tierD1(tenantId, Math.min(d1Cap, left)));
+  const d = spend(tierD(tenantId, Math.min(dCap, left)));
+  const ids = [...b, ...b2, ...e1, ...c0, ...c, ...e2, ...d1, ...d];
+
+  const counts = { b: b.length, b2: b2.length, e1: e1.length, c0: c0.length, c: c.length, e2: e2.length, d1: d1.length, d: d.length };
   if (!ids.length) {
     structuredLog("fresh_harvest.cycle", { ...counts, skipped: "nothing due" });
     return counts;
@@ -314,7 +376,7 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
     state: "multi",
     targetIds: ids,
     runKind: "fresh_harvest",
-    label: `FRESH HARVEST b${counts.b}/b2:${counts.b2}/c0:${counts.c0}/c${counts.c}/d1:${counts.d1}/d${counts.d}`,
+    label: `FRESH HARVEST b${counts.b}/b2:${counts.b2}/e1:${counts.e1}/c0:${counts.c0}/c${counts.c}/e2:${counts.e2}/d1:${counts.d1}/d${counts.d}`,
   });
   structuredLog("fresh_harvest.cycle", { ...counts, runId, total: ids.length, bwScale });
   return { ...counts, runId };
