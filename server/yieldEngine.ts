@@ -34,6 +34,7 @@ import { structuredLog } from "./structuredLog";
 import { bandwidthBudgetScale, isProxyCircuitOpen } from "./bandwidthGovernor";
 import { registerHarvestSqlFunctions } from "./freshHarvest";
 import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
+import { budgetShapeFactor } from "./harvestScheduler";
 
 const FRESH_WINDOW_DAYS = 21;
 const EXPLORE_FRACTION = 0.15;
@@ -299,9 +300,7 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
     structuredLog("yield_engine.cycle", { exploit: 0, explore: 0, skipped: "proxy circuit open" });
     return { exploit: 0, explore: 0 };
   }
-  const hour = new Date().getHours();
-  if (hour >= 0 && hour < 6) budget = Math.round(budget * 1.5);
-  else if (hour >= 9 && hour < 17) budget = Math.round(budget * 0.5);
+  budget = Math.round(budget * budgetShapeFactor()); // Eastern-time idle-capacity shaping
   const bwScale = bandwidthBudgetScale();
   budget = Math.round(budget * bwScale);
   if (budget <= 0) {

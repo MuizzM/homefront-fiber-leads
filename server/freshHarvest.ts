@@ -56,6 +56,7 @@ import { structuredLog } from "./structuredLog";
 import { bandwidthBudgetScale, governorStats, isProxyCircuitOpen } from "./bandwidthGovernor";
 import { canonicalAddressPart } from "./addressKey";
 import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
+import { budgetShapeFactor } from "./harvestScheduler";
 
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
@@ -336,10 +337,8 @@ export function runHarvestCycle(tenantId: number, budget = Number(process.env.FR
     structuredLog("fresh_harvest.cycle", { b: 0, b2: 0, e1: 0, c0: 0, c: 0, e2: 0, d1: 0, d: 0, skipped: "proxy circuit open" });
     return { b: 0, b2: 0, e1: 0, c0: 0, c: 0, e2: 0, d1: 0, d: 0 };
   }
-  // Time-of-day budget shaping: proxy spend follows idle capacity.
-  const hour = new Date().getHours();
-  if (hour >= 0 && hour < 6) budget = Math.round(budget * 1.5);        // overnight push
-  else if (hour >= 9 && hour < 17) budget = Math.round(budget * 0.5);  // business hours: gentle
+  // Time-of-day budget shaping (Eastern time): proxy spend follows idle capacity.
+  budget = Math.round(budget * budgetShapeFactor());
   // Bandwidth governor: pace spend against the monthly Decodo pool. When the
   // pool runs ahead of pace the budget shrinks; when we're behind pace it
   // grows (max ×1.5). Strategic cut order under scarcity: D2 dies first
