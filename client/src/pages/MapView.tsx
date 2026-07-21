@@ -4,6 +4,7 @@ import {
   useState,
   useCallback,
   useMemo,
+  useReducer,
   useSyncExternalStore,
   useDeferredValue,
 } from "react";
@@ -109,11 +110,22 @@ import { useCan } from "@/lib/capabilities";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
   discoveryIdempotencyKey,
-  isBackgroundDiscoveryJob,
+  isActiveDiscoveryJob,
   isTerminalDiscoveryJob,
   type DiscoveryEvent,
 } from "@/lib/discoveryApi";
 import { dedupeLeads, leadKey } from "@/lib/dedupeLeads";
+import {
+  areaScanReducer,
+  IDLE as AREA_SCAN_IDLE,
+  toPersisted as toPersistedAreaScan,
+  persistedRunningIsStale,
+  type PersistedScan,
+} from "@/lib/areaScanMachine";
+
+// localStorage key for the field map's OWN scan lifecycle. Versioned so a
+// schema change to PersistedScan never resurrects an incompatible record.
+const AREA_SCAN_LS_KEY = "hf.areaScan.v1";
 
 // Lean map-pin type from /api/leads/map — only fields needed for pins
 interface MapPin {
@@ -728,20 +740,80 @@ export default function MapView() {
   const { user } = useAuth();
   const canSubmitScan = useCan("scan.submit");
   const discovery = useDiscoveryJobs(!!user && canSubmitScan);
-  // FIELD scans only — the boxes drawn on THIS map. The server's recurring
-  // hot-market/frontier town harvests also stream through the same tenant job
-  // feed; binding the sheet to them kept "Scanning fiber" pinned up 24/7,
-  // hid the Scan Map button, and made Stop cancel a background job.
-  const activeFieldScanJobs = useMemo(
-    () => discovery.activeJobs.filter((j) => !isBackgroundDiscoveryJob(j)),
-    [discovery.activeJobs],
+  // ── AREA SCAN STATE MACHINE — the field map OWNS exactly one scan (the box
+  // the operator elected), identified by its jobId. "Scanning fiber" is driven
+  // SOLELY by this machine, NEVER inferred from the tenant-wide discovery-job
+  // feed. That feed also carries the server's around-the-clock hot-market /
+  // frontier harvests and any crash-orphaned job the boot reconciler resumes;
+  // inferring `scanning` from it lit the indicator on every launch and let Stop
+  // cancel a background job. The machine cannot be turned on by any job but the
+  // one this operator started this session (START → ATTACH its jobId).
+  const [scanState, dispatchScan] = useReducer(areaScanReducer, AREA_SCAN_IDLE);
+  const scanning = scanState.status === "running";
+  // Mount reconcile — cold launch / navigation / remount / refresh / foreground
+  // all replay HYDRATE. With no fresh persisted running scan this resolves to
+  // idle, so the map never auto-starts or auto-resumes "Scanning fiber". A
+  // recent persisted running scan resumes DISPLAY only; a stale one is a zombie
+  // (its process died) → idle, and we cancel its server job so the boot
+  // reconciler stops resuming it and it can never light up again.
+  const scanHydratedRef = useRef(false);
+  useEffect(() => {
+    if (scanHydratedRef.current) return;
+    scanHydratedRef.current = true;
+    let persisted: PersistedScan | null = null;
+    try {
+      const raw = localStorage.getItem(AREA_SCAN_LS_KEY);
+      if (raw) persisted = JSON.parse(raw) as PersistedScan;
+    } catch {
+      persisted = null;
+    }
+    const now = Date.now();
+    dispatchScan({ type: "HYDRATE", persisted, now });
+    if (persistedRunningIsStale(persisted, now) && persisted.jobId) {
+      // eslint-disable-next-line no-console
+      console.info("[areaScan] cancelling stale persisted scan", persisted.jobId);
+      void discovery.cancel(persisted.jobId).catch(() => {});
+    }
+  }, [discovery.cancel]);
+  // Persist identity/lifecycle only (never counts) so a refresh mid-scan can
+  // resume the DISPLAY, and a terminal/idle state clears the record.
+  useEffect(() => {
+    try {
+      const p = toPersistedAreaScan(scanState);
+      if (p) localStorage.setItem(AREA_SCAN_LS_KEY, JSON.stringify(p));
+      else localStorage.removeItem(AREA_SCAN_LS_KEY);
+    } catch {
+      /* private-mode / quota — the machine still works in-memory */
+    }
+  }, [scanState]);
+  // The ONLY job that drives the machine: the one we own by jobId. A background
+  // or unrelated job is structurally incapable of turning the indicator on
+  // (the reducer ignores any JOB_UPDATE whose jobId ≠ the owned one).
+  const ownedScanJob = useMemo(
+    () => (scanState.jobId ? discovery.jobs.find((j) => j.id === scanState.jobId) ?? null : null),
+    [scanState.jobId, discovery.jobs],
   );
-  const scanning = activeFieldScanJobs.length > 0;
-  // The scan whose summary the compact sheet shows: the live job while running,
-  // else the most-recent FIELD job (its terminal counts) until the sheet dismisses.
-  const scanSummaryJob = activeFieldScanJobs[0]
-    ?? discovery.jobs.find((j) => !isBackgroundDiscoveryJob(j))
-    ?? null;
+  useEffect(() => {
+    if (!ownedScanJob) return;
+    const terminal = isTerminalDiscoveryJob(ownedScanJob)
+      ? ownedScanJob.status === "failed"
+        ? ("failed" as const)
+        : ownedScanJob.status === "cancelled"
+          ? ("cancelled" as const)
+          : ("completed" as const)
+      : undefined;
+    dispatchScan({
+      type: "JOB_UPDATE",
+      jobId: ownedScanJob.id,
+      active: isActiveDiscoveryJob(ownedScanJob),
+      terminal,
+      found: ownedScanJob.newLeadsCount,
+      checked: ownedScanJob.checkedCount,
+    });
+  }, [ownedScanJob]);
+  // The scan whose summary the compact sheet shows: ONLY the owned job — its
+  // live counts while running, its terminal counts until the sheet dismisses.
+  const scanSummaryJob = ownedScanJob;
   // Six-number field summary. discovered/checked/fresh/failed come straight off
   // the durable job; serviceActive/comingSoon are optional server-provided counts
   // (present once the job payload carries them) and default to 0 meanwhile.
@@ -2870,11 +2942,20 @@ export default function MapView() {
   // the field map scans on election, never on its own.
   const startBoxScan = useCallback(
     async (bbox: BBox) => {
+      // Duplicate-scan protection, layered: the in-flight ref stops a double
+      // submit within one tick, `scanning` stops a second election while a scan
+      // runs, and the reducer's START guard ignores a redundant START even if
+      // both slip through. One elected scan at a time.
       if (!mapReady || scanStartInFlightRef.current || scanning || !canSubmitScan) return;
       scanStartInFlightRef.current = true;
+      const scopeKey = boxKeyOf(bbox)!;
+      // Explicit user action → enter `running` (optimistic, before the server
+      // returns a jobId). This is the ONE and ONLY transition into running.
+      dispatchScan({ type: "START", boxKey: scopeKey, at: Date.now() });
+      // eslint-disable-next-line no-console
+      console.info("[areaScan] START elected box", scopeKey);
       setScanSubmitting(true);
       setScanSheetHidden(false);
-      const scopeKey = boxKeyOf(bbox)!;
       const geometry = {
         type: "Polygon" as const,
         coordinates: [[
@@ -2898,7 +2979,7 @@ export default function MapView() {
       setScanOutcome(null);
       let accepted = false;
       try {
-        await discovery.submit({
+        const job = await discovery.submit({
           geometry,
           // Re-check every discovered address, including existing leads, so a
           // fresh lead that has since bought service (→ now active) or a
@@ -2907,7 +2988,14 @@ export default function MapView() {
           idempotencyKey: discoveryIdempotencyKey(geometry, user?.tenantId, nonce),
         });
         accepted = true;
+        // Server accepted — we now OWN this jobId. Only updates for it can drive
+        // the machine from here on.
+        dispatchScan({ type: "ATTACH", jobId: job.id });
+        // eslint-disable-next-line no-console
+        console.info("[areaScan] ATTACH job", job.id);
       } catch {
+        // The submit itself failed — surface it instead of hanging in running.
+        dispatchScan({ type: "SUBMIT_FAILED", error: "Scan could not start" });
         setScanOutcome({ kind: "complete", found: 0, at: Date.now(), boxKey: null });
       } finally {
         if (accepted) scanSubmissionRef.current = null;
@@ -3160,45 +3248,45 @@ export default function MapView() {
     if (changed) scheduleScanFeatureFlush();
   }, [leads, scheduleScanFeatureFlush]);
 
-  // Terminal jobs collapse to one field-friendly result. Provider diagnostics,
-  // failures and inconclusive homes remain in the server-side admin audit trail.
-  // No full-map refetch is triggered for every discovery event: the SSE lead
-  // payload already paints immediately, and the normal map stream/safety poll
-  // eventually reconciles the durable main lead source.
+  // Terminal collapse to one field-friendly result — for the OWNED scan ONLY.
+  // A background harvest or a crash-orphaned job reaching terminal must never
+  // pop a summary sheet on this map; only the box THIS operator elected does.
+  // Provider diagnostics, failures and inconclusive homes remain in the
+  // server-side admin audit trail. No full-map refetch is triggered per event:
+  // the SSE lead payload paints immediately and the normal stream/safety poll
+  // reconciles the durable main lead source.
   useEffect(() => {
-    let handled = false;
-    let found = 0;
-    let checked = 0;
-    for (const job of discovery.jobs) {
-      if (
-        isBackgroundDiscoveryJob(job) || // background harvests never pop a scan sheet
-        !isTerminalDiscoveryJob(job) ||
-        terminalJobsHandledRef.current.has(job.id)
-      )
-        continue;
-      handled = true;
-      terminalJobsHandledRef.current.add(job.id);
-      checked += job.checkedCount + job.failedCount;
-      found += publishedLeadIdsByJobRef.current.get(job.id)?.size ?? 0;
-      publishedLeadIdsByJobRef.current.delete(job.id);
-    }
-    if (handled) {
-      setScanSheetHidden(false); // a finished scan re-surfaces its summary
-      setScanOutcome({
-        kind: found > 0 ? "success" : "complete",
-        found,
-        checked,
-        at: Date.now(),
-        boxKey: null,
-      });
-    }
-  }, [discovery.jobs]);
+    const job = ownedScanJob;
+    if (
+      !job ||
+      !isTerminalDiscoveryJob(job) ||
+      terminalJobsHandledRef.current.has(job.id)
+    )
+      return;
+    terminalJobsHandledRef.current.add(job.id);
+    const checked = job.checkedCount + job.failedCount;
+    const found = publishedLeadIdsByJobRef.current.get(job.id)?.size ?? 0;
+    publishedLeadIdsByJobRef.current.delete(job.id);
+    setScanSheetHidden(false); // a finished scan re-surfaces its summary
+    setScanOutcome({
+      kind: found > 0 ? "success" : "complete",
+      found,
+      checked,
+      at: Date.now(),
+      boxKey: scanState.boxKey,
+    });
+    // eslint-disable-next-line no-console
+    console.info("[areaScan] terminal", job.id, job.status, { found, checked });
+  }, [ownedScanJob, scanState.boxKey]);
 
   // Keep the finished summary up long enough to actually read the five counts,
   // then auto-clear so the Scan Map button returns (the sheet's X dismisses sooner).
   useEffect(() => {
     if (!scanOutcome || scanning) return;
-    const timer = window.setTimeout(() => setScanOutcome(null), 30_000);
+    const timer = window.setTimeout(() => {
+      setScanOutcome(null);
+      dispatchScan({ type: "DISMISS" }); // machine → idle; clears persisted record
+    }, 30_000);
     return () => window.clearTimeout(timer);
   }, [scanOutcome, scanning]);
 
@@ -4027,8 +4115,15 @@ export default function MapView() {
                     <button
                       type="button"
                       onClick={() => {
-                        const id = activeFieldScanJobs[0]?.id;
-                        if (id) void discovery.cancel(id);
+                        // Optimistic cancel: flip the machine to `cancelled`
+                        // immediately (indicator off at once), then durably
+                        // cancel the owned server job so it stops consuming
+                        // workers/proxies and is never resumed on next boot.
+                        const id = scanState.jobId;
+                        dispatchScan({ type: "STOP" });
+                        // eslint-disable-next-line no-console
+                        console.info("[areaScan] STOP", id);
+                        if (id) void discovery.cancel(id).catch(() => {});
                       }}
                       className="h-8 shrink-0 rounded-full px-3 text-[12px] font-semibold text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
                       data-testid="scan-stop"
@@ -4049,7 +4144,12 @@ export default function MapView() {
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setScanOutcome(null)}
+                    onClick={() => {
+                      // Dismiss the terminal summary → machine back to idle, and
+                      // clear the outcome sheet. The Scan Map button returns.
+                      dispatchScan({ type: "DISMISS" });
+                      setScanOutcome(null);
+                    }}
                     aria-label="Dismiss scan summary"
                     className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
                     data-testid="scan-dismiss"
