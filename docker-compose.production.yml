@@ -168,8 +168,37 @@ services:
       # FRESH_LEAD_BOOT_BACKFILL promotes existing greens straight to the map.
       FRESH_LEAD_BOOT_BACKFILL: "off"
       ANF_BACKFILL: "off"
+      # ── GA / SC FEEDER ROLLOUT (partial: light feeders ON, heavy ones staged) ──
+      # These producers put GA/SC addresses INTO scan_targets. Paused during the
+      # single-thread era (they peg the one JS thread and starve /api); multi-core
+      # (SCAN_WORKERS=auto, live on a $74 multi-core Hetzner box) now gives HTTP its
+      # own cores. Enabling the two LIGHT, governed feeders now to get GA/SC leads
+      # flowing; keeping the two HEAVY / incident-linked ones OFF until the live box
+      # confirms the cluster forks >1 worker.
+      #
+      # ON NOW (bounded + self-throttled — adaptivePace backs off on /api latency,
+      # bandwidth governor caps Decodo spend, SCAN_GLOBAL_CONCURRENCY caps overlap):
+      #   • HOT_MARKETS below — per-city discovery+scan, 5000-target cap, 20-min
+      #     cadence. dalton:ga is the GA build zone; SC fiber markets added.
+      #   • DAILY_MARKET_REFRESH=on — daily new-address discovery for eligible cities.
+      #
+      # STILL OFF (highest portal risk — flip only AFTER the live checks below pass):
+      #   • STATEWIDE_SCAN_ON_DEPLOY — tens of thousands of synchronous OSM addresses
+      #     on boot; the single biggest wedge risk. Enable LAST.
+      #   • ENABLE_STATE_MONITORING — the literal 2026-07-19 outbox wedge; enable only
+      #     after confirming its cap + circuit-breaker + janitor fix holds and mail
+      #     quota is sorted (see top of this file / stateMonitorScheduler.ts).
+      #
+      # LIVE CHECKS before flipping the two heavy ones (this config can't prove them):
+      #   1. Launch path IS this compose (docker compose ps, not systemd — the
+      #      DEPLOY_HETZNER.md bare-metal path never sets SCAN_WORKERS → 1 core).
+      #   2. Cluster forked >1 worker: grep cluster.primary_started in logs
+      #      (workers/vcpus fields) AND nproc > 1.
+      #   3. Portal stays snappy under scan load (/api/health latency, adaptivePace
+      #      paceMs/loopLagP95). If it doesn't, flip HOT_MARKETS/DAILY_MARKET_REFRESH
+      #      back to off — that is the kill-switch, no redeploy of code needed.
       STATEWIDE_SCAN_ON_DEPLOY: "off"
-      HOT_MARKETS: "off"
+      HOT_MARKETS: "dalton:ga,inman:sc,spartanburg:sc,west columbia:sc"
       # FRESH HARVEST — continuous Kinetic scanning ranked by expected yield
       # (coming-soon flips → fresh-cluster neighbors → hot-city frontier →
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
@@ -191,11 +220,20 @@ services:
       # in every harvest cycle. Davidson + Lake Norman towns.
       CITY_INGEST: "on"
       FRESH_HARVEST_CITIES: "davidson:nc,cornelius:nc,huntersville:nc,mooresville:nc,denver:nc"
+      # States the PRIMARY yield-engine harvester scans (FOCUS_STATES). Was the
+      # code default "nc,sc" — which fenced GA out of ALL the smart tiers (cluster
+      # neighbours, street completion, expansion push/flip, momentum, copper watch,
+      # stale refresh, the 15% explore). GA now gets parity. Low risk: the
+      # footprint gate still limits GA scanning to auto_scan_eligible GA markets
+      # (Dalton + legacy watch), and the bandwidth governor + SCAN_GLOBAL_CONCURRENCY
+      # cap bound total spend regardless of state count. GA only produces work once
+      # GA inventory exists in scan_targets (see the GA/SC FEEDER rollout below).
+      FRESH_HARVEST_STATES: "nc,sc,ga"
       FRONTIER_DIRECT: "off"
       FRONTIER_MARKETS: "off"
       COMING_SOON_PROGRAM: "off"
       COMING_SOON_WATCHLIST: "off"
-      DAILY_MARKET_REFRESH: "off"
+      DAILY_MARKET_REFRESH: "on"
       NEWBUILD_RADAR: "off"
       EXPANSION_ENABLED: "off"
       # Proactive Decodo rotation cadence. 10 was too aggressive: under a 403
