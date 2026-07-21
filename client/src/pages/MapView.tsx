@@ -2862,6 +2862,12 @@ export default function MapView() {
   // address inside it (multi-source, ZIP-normalized, deduped), mints a fresh
   // authorized token, and qualifies each through the durable queue. The in-flight
   // ref + the active-scan check make a double-submit a guaranteed no-op.
+  //
+  // ELECTION-ONLY INVARIANT: this is the ONLY path that starts a field-map scan,
+  // and its only caller is the box-draw release handler below — so a scan runs
+  // if and only if the operator draws and releases an area. Nothing auto-scans
+  // on mount, pan, or zoom. Do not add another caller (a viewport/auto scan);
+  // the field map scans on election, never on its own.
   const startBoxScan = useCallback(
     async (bbox: BBox) => {
       if (!mapReady || scanStartInFlightRef.current || scanning || !canSubmitScan) return;

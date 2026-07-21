@@ -43,17 +43,20 @@ function positiveInt(value: number, fallback: number): number {
  */
 export function planUnifiedAreaScan(
   bbox: BboxLL,
-  options: { hasMapboxToken: boolean; autoGridMaxPoints?: number; harvestCap?: number },
+  options: { hasMapboxToken: boolean; autoGridMaxPoints?: number; harvestCap?: number; ceilDeg?: number; minSamplesPerSide?: number },
 ): UnifiedAreaPlan {
   const harvestCap = positiveInt(options.harvestCap ?? 5000, 5000);
   const autoGridMaxPoints = Math.min(
     positiveInt(options.autoGridMaxPoints ?? 900, 900),
     harvestCap,
   );
+  // Denser samples find more new-build rooftops OSM lacks. ceilDeg is the MAX
+  // spacing (smaller = denser); an elected box passes a tighter ceiling.
+  const ceilDeg = Number.isFinite(options.ceilDeg) && (options.ceilDeg as number) > 0 ? (options.ceilDeg as number) : 0.0012;
   const gridStep = adaptiveGridStep(bbox, {
-    minSamplesPerSide: 6,
+    minSamplesPerSide: positiveInt(options.minSamplesPerSide ?? 6, 6),
     maxPoints: harvestCap,
-    ceilDeg: 0.0012,
+    ceilDeg,
   });
   const gridPoints = bboxGridSize(bbox, gridStep);
   return {
