@@ -44,6 +44,7 @@ import {
   setJobQualification,
   setResolvedBoundary,
   setResolvedLocality,
+  terminalizeOrphanedElectedJobs,
   touchTileLease,
   updateSourceHealth,
   updateTileCheckpoint,
@@ -714,6 +715,22 @@ export function wakeDiscoveryWorkers(): void {
 }
 
 export function resumeDiscoveryJobs(): void {
+  // FIRST, terminalize crash-orphaned operator-ELECTED area scans. A stale
+  // running elected scan is a zombie, not permission to restart: mark it failed
+  // so neither the resume UPDATE below nor the tile scheduler ever re-drives it,
+  // and so `?active=true` stops returning it (a root cause of "Scanning fiber"
+  // reappearing on launch). Background market/frontier/town harvests are NOT
+  // elected and fall through to the normal resume path — they are meant to
+  // continue. Only stale-heartbeat jobs are touched, so a live worker's
+  // in-flight elected scan in a multi-core cluster is never wrongly killed.
+  const staleMinutes = Math.max(1, Number(process.env.DISCOVERY_ELECTED_STALE_MINUTES) || 5);
+  try {
+    terminalizeOrphanedElectedJobs({ staleMinutes });
+  } catch (e: any) {
+    structuredLog("address_discovery.orphaned_elected_terminalize_failed", {
+      error: String(e?.message ?? e),
+    });
+  }
   rawDb
     .prepare(
       `UPDATE discovery_jobs SET status='queued',updated_at=datetime('now')

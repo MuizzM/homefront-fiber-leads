@@ -661,15 +661,30 @@ app.use((req, res, next) => {
     };
     const sst = setTimeout(() => { void startStateSweeps(); }, stateSweepDelay);
     if (typeof (sst as any).unref === "function") (sst as any).unref();
-    // New Build Radar — continuously watch free NC/SC sources for newly-appearing
-    // addresses/buildings and feed valid ones straight into the scan pipeline.
+  }
+  // ── New-build discovery + cluster expansion — DECOUPLED from the statewide
+  // sweep ─────────────────────────────────────────────────────────────────────
+  // These were nested under STATEWIDE_SCAN_ON_DEPLOY, so neither could run
+  // without also paying the heavy statewide OSM boot-sweep (the documented
+  // single biggest wedge risk). They are now governed ONLY by their own
+  // kill-switches. Cluster expansion is the street-level "we found a new build
+  // → the surrounding area turns on" engine: every confirmed NEW FIBER +
+  // billing-N result seeds a bounded ring crawl around the drop (scanEngine →
+  // triggerExpansionForTargets), capped by maxActive/ring/cluster budgets +
+  // generation backpressure. Production-only so tests/dev never poll external
+  // feeds; both starts no-op when their flag is off.
+  if (process.env.NODE_ENV === "production") {
+    // New Build Radar — continuously watch free NC/SC/GA sources for newly-
+    // appearing addresses/buildings and feed valid ones into the scan pipeline.
     // Kill-switch: NEWBUILD_RADAR=off.
     try {
       const { startNewBuildRadar } = await import("./newBuildRadar");
       deferBoot(startNewBuildRadar, "newbuild-radar");
     } catch (e: any) { console.warn("[newbuild-radar] start skipped:", e?.message); }
-    // Lead-triggered CRITICAL cluster expansion — fans out from every confirmed
-    // green FRESH_LEAD. Kill-switch: EXPANSION_ENABLED=off.
+    // Lead-triggered cluster expansion — fans out from every confirmed green
+    // FRESH_LEAD. Rings admit in the NORMAL band (below the reserved CRITICAL
+    // slots, so rep-facing checks always win), bounded by the engine's own
+    // maxActive/ring/cluster budgets. Kill-switch: EXPANSION_ENABLED=off.
     try {
       const { startExpansionEngine } = await import("./clusterExpansion");
       deferBoot(startExpansionEngine, "expansion");
@@ -827,8 +842,20 @@ app.use((req, res, next) => {
       const { getDefaultTenantId } = await import("./storage");
       const tid = getDefaultTenantId();
       if (tid == null) return;
-      for (const entry of hotSpec.split(",").map((s) => s.trim()).filter(Boolean)) {
-        const [city, st = "ga"] = entry.split(":").map((s) => s.trim());
+      // Static env cities UNIONED with build-intel dynamic promotions (news/
+      // permit-detected build zones) — a newly-announced market starts pumping
+      // on the next 20-min cycle, no redeploy. Env entries always kept.
+      let hotEntries: Array<{ city: string; state: string }>;
+      try {
+        const { listHotMarkets } = await import("./buildIntel");
+        hotEntries = listHotMarkets(hotSpec);
+      } catch {
+        hotEntries = hotSpec.split(",").map((s) => s.trim()).filter(Boolean).map((entry) => {
+          const [city, st = "ga"] = entry.split(":").map((p) => p.trim());
+          return { city, state: st };
+        }).filter((e) => e.city);
+      }
+      for (const { city, state: st } of hotEntries) {
         if (!city) continue;
         const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=? AND lower(state)=?
           AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-30 minutes'))
@@ -859,6 +886,16 @@ app.use((req, res, next) => {
     const hotCycle = setInterval(() => { void runHotBurst(); }, 20 * 60_000);
     if (typeof (hotCycle as any).unref === "function") hotCycle.unref();
   }
+
+  // BUILD INTELLIGENCE — news + county-permit signals promote cities into the
+  // DYNAMIC hot zone the burst above unions in, so a newly-announced Kinetic
+  // build market starts scanning within one cycle of the story breaking — no
+  // redeploy. Free public sources (RSS/ArcGIS), no proxy spend; control worker
+  // only. Kill-switch: BUILD_INTEL=off.
+  try {
+    const { startBuildIntel } = await import("./buildIntel");
+    deferBoot(startBuildIntel, "build-intel");
+  } catch (e: any) { console.warn("[build-intel] start skipped:", e?.message); }
 
   // FRONTIER MARKETS — Frontier-fiber towns (default: Durham NC). Mirrors the
   // hot-market cadence but tags every target carrier='frontier' so the engine

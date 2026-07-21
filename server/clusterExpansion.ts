@@ -268,7 +268,12 @@ async function expandRingInner(expansionId: string): Promise<void> {
   tx();
   if (!targetIds.length) return;
 
-  // Enqueue as CRITICAL (runKind 'lead_expansion' → new_build priority tier).
+  // Enqueue under runKind 'lead_expansion' → the EXPANSION admission class
+  // (priority 365 — NORMAL band, deliberately BELOW the CRITICAL cutoff of 380,
+  // so a rep's manual/lasso/new-build check always out-sorts a ring). Bounded
+  // by maxActive×ringBudget offered load and the global provider-slot ceiling
+  // (SCAN_GLOBAL_CONCURRENCY, with CRITICAL slots reserved). An optional hard
+  // share cap exists via PROVIDER_EXPANSION_SHARE (default 0 = no share cap).
   let runId: string | null = null;
   try {
     const run = startTargetRun({
@@ -306,9 +311,11 @@ function enforceActiveCap(): void {
   const tx = rawDb.transaction(() => {
     for (const e of excess) {
       // PAUSE ADVANCEMENT only — do NOT cancel the in-flight ring run. The ring keeps
-      // draining (its checks are share-capped at admission so they can't monopolize),
-      // and the tick simply won't advance a paused cluster to a new ring. This avoids
-      // stranding a cancelled ring's unchecked targets (which the reaper never re-opens).
+      // draining (NORMAL-band admission under the global slot ceiling with CRITICAL
+      // slots reserved; PROVIDER_EXPANSION_SHARE adds a hard share cap if set — the
+      // default 0 means no share cap), and the tick simply won't advance a paused
+      // cluster to a new ring. This avoids stranding a cancelled ring's unchecked
+      // targets (which the reaper never re-opens).
       rawDb.prepare(`UPDATE lead_expansions SET status='paused', updated_at=? WHERE id=?`).run(now, e.id);
     }
   });

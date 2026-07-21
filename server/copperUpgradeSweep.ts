@@ -8,6 +8,7 @@
 import { rawDb } from "./db";
 import * as scanService from "./scanService";
 import { structuredLog } from "./structuredLog";
+import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
 
 const STALE_DAYS = Math.max(1, Number(process.env.COPPER_UPGRADE_STALE_DAYS) || 7);
 const BATCH = Math.max(1_000, Number(process.env.COPPER_UPGRADE_BATCH) || 20_000);
@@ -17,11 +18,21 @@ export function runCopperUpgradeSweep(tenantId: number): { queued: number } {
   // service, no service, unavailable — and that hasn't been checked within the
   // staleness window. Fresh-lead targets and already-converted addresses are
   // excluded (they're covered by the fresh-lead pipeline and lead workflow).
+  //
+  // FOOTPRINT-GATED: a copper address outside the Kinetic footprint can never
+  // flip to Kinetic fiber, yet ungated inventory (e.g. the 37k-address
+  // Hillsborough harvest — Frontier/AT&T territory) was diluting this sweep's
+  // daily budget and stretching the real copper towns' effective cadence far
+  // past STALE_DAYS. footprint_city() fails OPEN if the market table is absent,
+  // so a bare replay/test DB sweeps everything exactly as before.
+  registerFootprintSqlFunctions();
+  warmFootprintGate();
   const rows = rawDb.prepare(
     `SELECT id FROM scan_targets
      WHERE tenant_id=? AND converted_to_lead_id IS NULL
        AND COALESCE(last_is_new_fiber, 0) = 0
        AND last_fiber_status IS NOT NULL
+       AND footprint_city(state, city)=1
        AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now', ?))
      ORDER BY last_scanned_at ASC LIMIT ?`,
   ).all(tenantId, `-${STALE_DAYS} days`, BATCH) as any[];

@@ -9,6 +9,7 @@ import type {
   SourceAddressRecord,
 } from "./types";
 import { parseJson } from "./types";
+import { isElectedAreaJob } from "./electedJob";
 
 export type DiscoveryJobStatus =
   "queued" | "running" | "partial" | "completed" | "failed" | "cancelled";
@@ -1398,6 +1399,78 @@ export function cancelDiscoveryJob(tenantId: number, jobId: string): boolean {
     .run(jobId);
   appendDiscoveryEvent(tenantId, jobId, "job.cancelled", {});
   return true;
+}
+
+/**
+ * Boot/crash reconciler for operator-ELECTED area scans.
+ *
+ * An elected box scan (drawn on the field map) belongs to exactly one operator
+ * session; when the process that was running it dies, the job is a zombie. The
+ * old behaviour RESUMED any stuck job on boot, so a crash-orphaned elected scan
+ * would silently restart server-side AND keep surfacing through `?active=true` —
+ * one of the two causes of "Scanning fiber" appearing on every launch. A stale
+ * running state is NEVER permission to restart an elected scan: we terminalize
+ * it (status `failed`) so the scheduler will not re-drive it and the active
+ * feed will not return it.
+ *
+ * This deliberately does NOT touch background market/frontier/town harvests —
+ * those are the continuous engine and are meant to resume. `isElectedAreaJob`
+ * is the single, shared signal (same one the client uses) for "the operator
+ * elected this box". Only jobs whose heartbeat is stale are terminalized, so an
+ * elected scan actively processed by a still-alive worker in a multi-core
+ * cluster is never wrongly killed.
+ *
+ * Returns the number of jobs terminalized.
+ */
+export function terminalizeOrphanedElectedJobs(options?: {
+  staleMinutes?: number;
+}): number {
+  const staleMinutes = Math.max(1, Math.floor(options?.staleMinutes ?? 5));
+  // Cheap SQL pre-filter (indexable status), then the canonical JS classifier
+  // decides "elected" so this stays byte-for-byte consistent with the client.
+  const candidates = rawDb
+    .prepare(
+      `${jobSelect} WHERE status IN ('queued','running')
+        AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', ?))`,
+    )
+    .all(`-${staleMinutes} minutes`) as DiscoveryJobRow[];
+  let terminalized = 0;
+  for (const job of candidates) {
+    if (!isElectedAreaJob(job)) continue;
+    const changed = rawDb
+      .prepare(
+        `UPDATE discovery_jobs SET status='failed',
+          error_summary=COALESCE(error_summary,'interrupted: server restarted; elected area scans are not auto-resumed'),
+          completed_at=datetime('now'),heartbeat_at=datetime('now'),updated_at=datetime('now')
+        WHERE id=? AND status IN ('queued','running')`,
+      )
+      .run(job.id).changes;
+    if (!changed) continue; // another worker terminalized it first
+    rawDb
+      .prepare(
+        `UPDATE discovery_tiles SET status='cancelled',lease_owner=NULL,lease_expires_at=NULL,completed_at=datetime('now'),updated_at=datetime('now')
+        WHERE job_id=? AND status IN ('queued','running')`,
+      )
+      .run(job.id);
+    rawDb
+      .prepare(
+        `UPDATE scan_runs SET status='cancelled',completed_at=datetime('now') WHERE id IN (SELECT run_id FROM discovery_job_runs WHERE job_id=?) AND status IN ('running','paused')`,
+      )
+      .run(job.id);
+    appendDiscoveryEvent(job.tenantId, job.id, "job.interrupted", {
+      reason: "server_restart",
+      phase: job.phase,
+      note: "elected area scans are not auto-resumed",
+    });
+    terminalized += 1;
+  }
+  if (terminalized > 0) {
+    structuredLog("address_discovery.orphaned_elected_terminalized", {
+      count: terminalized,
+      staleMinutes,
+    });
+  }
+  return terminalized;
 }
 
 export function retryDiscoveryTiles(
