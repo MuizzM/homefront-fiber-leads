@@ -147,10 +147,10 @@ describe("fresh harvest tiers", () => {
     expect(rows).toEqual([16]);
   });
   it("budget top-down: B → B2 → E1 → C0 → C → E2 → D1 → D, no duplicates", async () => {
-    // Pick a raw budget that shapes to exactly 10 at the current hour
-    // (×1.5 overnight 00–06, ×0.5 business hours 09–17, ×1 otherwise).
-    const h = new Date().getHours();
-    const raw = h < 6 ? 20 / 3 : (h >= 9 && h < 17 ? 20 : 10);
+    // Shape to exactly 10 using the engine's own Eastern-time factor, so the
+    // test tracks the real budget regardless of the hour it runs.
+    const { budgetShapeFactor } = await import("../../server/harvestScheduler");
+    const raw = 10 / budgetShapeFactor();
     const { runHarvestCycle } = await import("../../server/freshHarvest");
     const counts = runHarvestCycle(1, raw);
     expect(counts.b).toBe(3);   // 20 (proven), 10 (hotville), 21 (noisy)

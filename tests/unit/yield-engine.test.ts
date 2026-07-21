@@ -121,10 +121,13 @@ describe("yield engine", () => {
     for (let i = 1; i < rows.length; i++) expect(rows[i - 1].score).toBeGreaterThanOrEqual(rows[i].score);
   });
 
-  it("cycle splits budget exploit/explore with no overlap, dispatching once", () => {
-    const h = new Date().getHours();
-    const raw = h < 6 ? 3 : (h >= 9 && h < 17 ? 8 : 4);
-    const shaped = h < 6 ? Math.round(raw * 1.5) : (h >= 9 && h < 17 ? Math.round(raw * 0.5) : raw);
+  it("cycle splits budget exploit/explore with no overlap, dispatching once", async () => {
+    // Use the engine's own Eastern-time shaping so the test tracks the real
+    // budget, not a reimplemented (and now stale) day/night formula.
+    const { budgetShapeFactor } = await import("../../server/harvestScheduler");
+    const factor = budgetShapeFactor();
+    const raw = 8 / factor;                       // shapes to ~8 whatever the hour
+    const shaped = Math.round(raw * factor);
     const counts = runYieldCycle(1, raw);
     expect(counts.exploit + counts.explore).toBeLessThanOrEqual(shaped);
     expect(counts.exploit).toBeGreaterThanOrEqual(Math.min(3, shaped - 1));

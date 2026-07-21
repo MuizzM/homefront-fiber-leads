@@ -26,6 +26,7 @@ const MIN_INTERVAL_MS = Math.max(5_000, Number(process.env.HARVEST_WAKE_MIN_MS) 
 let tickFn: Tick | null = null;
 let periodic: ReturnType<typeof setInterval> | null = null;
 let pending: ReturnType<typeof setTimeout> | null = null;
+let bootTimer: ReturnType<typeof setTimeout> | null = null;
 let running = false;
 let lastRunAt = 0;
 
@@ -68,7 +69,10 @@ export function startHarvestScheduler(tick: Tick, opts: { intervalMs: number; fi
   tickFn = tick;
   if (periodic) return;
   const first = opts.firstDelayMs ?? 4 * 60_000;
-  setTimeout(() => { void fire("boot"); }, first);
+  // Store + unref the boot timer too, so it can never keep the process (or a
+  // CI test worker) alive and is cleared by the reset hook.
+  bootTimer = setTimeout(() => { bootTimer = null; void fire("boot"); }, first);
+  if (typeof (bootTimer as any).unref === "function") (bootTimer as any).unref();
   periodic = setInterval(() => { void fire("timer"); }, opts.intervalMs);
   if (typeof (periodic as any).unref === "function") (periodic as any).unref();
 }
@@ -77,7 +81,8 @@ export function startHarvestScheduler(tick: Tick, opts: { intervalMs: number; fi
 export function _resetHarvestSchedulerForTests(): void {
   if (periodic) clearInterval(periodic);
   if (pending) clearTimeout(pending);
-  tickFn = null; periodic = null; pending = null; running = false; lastRunAt = 0;
+  if (bootTimer) clearTimeout(bootTimer);
+  tickFn = null; periodic = null; pending = null; bootTimer = null; running = false; lastRunAt = 0;
 }
 
 // ── Budget shaping (timezone-correct) ────────────────────────────────────────
