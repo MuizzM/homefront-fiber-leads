@@ -68,11 +68,24 @@ const DEFAULT_WEIGHTS: Weights = { cell: 1.0, street: 0.9, city: 0.35, watch: 2.
 // state_fiber_markets is created by the market catalog on boot; a bare replay/
 // test DB may lack it. footprint_city() fails open without it, but the
 // expansion JOIN references it directly, so guard that fragment.
-function marketsTableReady(): boolean {
+function tableReady(name: string): boolean {
   try {
-    return !!rawDb.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='state_fiber_markets'`).get();
+    return !!rawDb.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name=?`).get(name);
   } catch { return false; }
 }
+function marketsTableReady(): boolean { return tableReady("state_fiber_markets"); }
+
+// Adaptive recheck cadence for negatives: instead of a fixed cooldown, wait
+// longer the more times an address has come back unchanged-negative — the
+// change-likelihood is dropping. A fresh negative rechecks at NEG_BASE_DAYS;
+// each additional unchanged negative doubles the wait, capped at NEG_MAX_DAYS.
+// The flip-proximity override still bypasses this entirely, so a neighbour
+// flipping instantly resets a chronic-dead address to due — we never freeze a
+// high-probability neighbour for weeks. Powers of two via SQLite's << operator.
+const NEG_BASE_DAYS = Math.max(1, Number(process.env.NEG_RECHECK_BASE_DAYS) || 7);
+const NEG_MAX_DAYS = Math.max(NEG_BASE_DAYS, Number(process.env.NEG_RECHECK_MAX_DAYS) || 60);
+const NEG_STREAK_WINDOW_DAYS = 120;
+const NEG_SHIFT_CAP = 3; // 2^3 → base×8 before the MAX clamp
 
 let ensured = false;
 function ensureTable(): void {
@@ -155,9 +168,10 @@ interface ScoredRow { id: number; score: number }
 
 /**
  * Score every due address in the focus states, footprint-gated to Kinetic
- * markets. Due = never scanned, stale negative (30d), stale copper (7d), due
- * coming-soon watchlist member, OR a flip-proximity override (stale negative
- * whose cell/street just produced a fresh drop → immediately due).
+ * markets. Due = never scanned, a negative past its ADAPTIVE recheck cadence
+ * (base cadence doubled per unchanged-negative streak, capped), a due
+ * coming-soon watchlist member, OR a flip-proximity override (a negative whose
+ * cell/street just produced a fresh drop → immediately due, resetting cadence).
  */
 export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
   if (limit <= 0) return [];
@@ -169,6 +183,28 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
   const watchFreshCut = now - 12 * 3_600_000;
   const watchMatureCut = now - 2 * 3_600_000;
   const watchMatureAge = now - 48 * 3_600_000;
+  const tid = tenantId | 0; // safe numeric inline for the optional CTE
+  // Adaptive negative cadence: needs the snapshot history to count the streak.
+  // Without it (replay/test DBs), fall back to the fixed 30d/7d cooldowns.
+  const adaptive = tableReady("availability_snapshots");
+  const negStreakCte = adaptive
+    ? `, neg_streak AS (
+         SELECT scan_target_id AS id, COUNT(*) AS streak
+           FROM availability_snapshots
+          WHERE tenant_id=${tid} AND conclusive=1 AND fiber_available=0
+            AND checked_at_epoch > ${now - NEG_STREAK_WINDOW_DAYS * 86_400_000}
+          GROUP BY scan_target_id
+       )`
+    : "";
+  const negJoin = adaptive ? `LEFT JOIN neg_streak ns ON ns.id = s.id` : "";
+  // Effective cadence in days = min(MAX, BASE × 2^min(streak-1, cap)).
+  const negDueClause = adaptive
+    ? `(COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+        AND s.last_scanned_at < datetime('now','-' ||
+              MIN(${NEG_MAX_DAYS}, ${NEG_BASE_DAYS} * (1 << MIN(COALESCE(ns.streak,1)-1, ${NEG_SHIFT_CAP})))
+              || ' days'))`
+    : `((COALESCE(s.last_fiber_status,'')='copper' AND s.last_scanned_at < datetime('now','-7 days'))
+        OR (COALESCE(s.last_fiber_status,'')='no_service' AND s.last_scanned_at < datetime('now','-30 days')))`;
   const expand = marketsTableReady();
   // Expansion signal + CTE only when the market table exists (fail-safe on replay DBs).
   const expandCte = expand
@@ -241,7 +277,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
           AND (w.last_checked_at IS NULL
                OR (w.first_seen_at >  ? AND w.last_checked_at < ?)
                OR (w.first_seen_at <= ? AND w.last_checked_at < ?))
-     )${expandCte}
+     )${expandCte}${negStreakCte}
      SELECT s.id,
             ( ${w.cell}   * COALESCE((CAST(fc.hits AS REAL) + ${CELL_PRIOR}*pr.p0)
                                      / (COALESCE(cs.scanned,0) + ${CELL_PRIOR}), 0)
@@ -266,16 +302,17 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
        LEFT JOIN city_hits ch ON ch.city=lower(s.city) AND ch.state=lower(s.state)
        LEFT JOIN due_watch dw ON dw.id = s.id
        ${expandJoin}
+       ${negJoin}
       WHERE s.tenant_id=?
         AND lower(s.state) IN (${STATE_IN})
         AND footprint_city(s.state, s.city)=1
         AND (
           s.last_scanned_at IS NULL
-          OR (COALESCE(s.last_fiber_status,'')='copper' AND s.last_scanned_at < datetime('now','-7 days'))
-          OR (COALESCE(s.last_fiber_status,'')='no_service' AND s.last_scanned_at < datetime('now','-30 days'))
+          OR ${negDueClause}
           OR dw.id IS NOT NULL
-          -- Flip-proximity override: a stale negative whose cell/street just
-          -- produced a fresh drop is due NOW (past the min cooldown), not in 30d.
+          -- Flip-proximity override: a negative whose cell/street just produced
+          -- a fresh drop is due NOW (past the min cooldown), regardless of how
+          -- far its adaptive cadence had backed off.
           OR (COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
               AND (s.last_scanned_at IS NULL
                    OR s.last_scanned_at < datetime('now','-${FLIP_MIN_COOLDOWN_HOURS} hours'))
