@@ -66,6 +66,13 @@ export function isFootprintCity(state: string | null | undefined, city: string |
 // Registered as a SQL function so selectors can footprint-gate inside a query
 // (respecting LIMIT) using the exact same normalization + fail-open semantics
 // as the JS path — `... AND footprint_city(s.state, s.city)=1`.
+//
+// CRITICAL: the eligible-set snapshot MUST be warm before the function is used
+// inside a query. better-sqlite3 forbids a nested DB read from within a running
+// statement, so if the FIRST footprint_city call lands mid-query with a cold
+// cache, snapshot() throws, is caught, and the gate silently fails OPEN (no
+// filtering). Call warmFootprintGate() immediately before any query that uses
+// footprint_city so the in-query calls are pure reads of the in-memory Set.
 let sqlFnRegistered = false;
 export function registerFootprintSqlFunctions(): void {
   if (sqlFnRegistered) return;
@@ -77,6 +84,11 @@ export function registerFootprintSqlFunctions(): void {
   } catch { /* re-registration or exotic driver */ }
 }
 registerFootprintSqlFunctions();
+
+/** Populate the eligible-set snapshot OUTSIDE any running query, so in-query
+ *  footprint_city() calls never trigger a forbidden nested DB read. Idempotent
+ *  and cheap (respects the cache TTL). */
+export function warmFootprintGate(): void { snapshot(Date.now()); }
 
 /** Test hook: drop the cache so the next call re-reads the table. */
 export function _resetFootprintGateForTests(): void { cache = null; cachedAt = 0; }

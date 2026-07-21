@@ -55,7 +55,7 @@ import { startTargetRun } from "./scanService";
 import { structuredLog } from "./structuredLog";
 import { bandwidthBudgetScale, governorStats, isProxyCircuitOpen } from "./bandwidthGovernor";
 import { canonicalAddressPart } from "./addressKey";
-import { registerFootprintSqlFunctions } from "./footprintGate";
+import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
 
 const TIER_B_FRESH_WINDOW_DAYS = 21;          // cluster memory
 const TIER_D1_COPPER_DAYS = 7;           // copper→fiber flip watch
@@ -110,7 +110,7 @@ export function streetKeyOf(address: string | null | undefined): string {
 // query instead of the naive substr-after-first-space it used before (which
 // broke on unit suffixes and on "Fiber Street" vs "Fiber St").
 let sqlFnsRegistered = false;
-function registerHarvestSqlFunctions(): void {
+export function registerHarvestSqlFunctions(): void {
   if (sqlFnsRegistered) return;
   try {
     (rawDb as any).function("harvest_street_key", { deterministic: true },
@@ -310,6 +310,7 @@ export function tierC(tenantId: number, limit: number): TierRow[] {
 export function tierD(tenantId: number, limit: number): TierRow[] {
   if (limit <= 0) return [];
   registerFootprintSqlFunctions();
+  warmFootprintGate(); // snapshot before the query — an in-query cold read fails open
   return rawDb.prepare(
     `SELECT s.id
        FROM scan_targets s
