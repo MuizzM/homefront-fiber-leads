@@ -1,0 +1,93 @@
+// Team-hierarchy authority model — the single source of truth for WHO may act
+// on WHOM in the field org, shared by the server routes and the client UI so
+// the page never offers a kick/edit the API will reject.
+//
+// The rule is strictly-above: an actor may offboard/reactivate/edit/delete a
+// member only when the actor's login role ranks strictly higher than the
+// member's field role. Team leads act on reps; managers act on team leads and
+// reps; admins act on managers and below. Peers can never remove each other,
+// and nobody can act upward. Unknown roles fail closed on both sides.
+
+/** Field-org member roles, lowest to highest. team_members.role only ever
+ * holds these three (HIRABLE_ROLES caps creation at manager). */
+export const MEMBER_ROLES = ["rep", "team_lead", "manager"] as const;
+export type MemberRole = (typeof MEMBER_ROLES)[number];
+
+/** Rank shared by login roles and member roles. Calling/compliance roles are
+ * deliberately absent — they have no field-org authority and fail closed. */
+const HIERARCHY_RANK: Record<string, number> = {
+  rep: 0,
+  team_lead: 1,
+  manager: 2,
+  admin: 3,
+  super_admin: 4,
+};
+
+export function hierarchyRank(role: string | undefined | null): number | null {
+  if (!role) return null;
+  const rank = HIERARCHY_RANK[role];
+  return rank == null ? null : rank;
+}
+
+/**
+ * May `actorRole` perform a lifecycle action (offboard, reactivate, delete,
+ * edit) on a member whose field role is `targetRole`? Strictly-above only:
+ * equal rank (peers) is refused, as is anything upward. Unknown roles on
+ * either side refuse.
+ */
+export function canActOnMember(actorRole: string | undefined | null, targetRole: string | undefined | null): boolean {
+  const actor = hierarchyRank(actorRole);
+  const target = hierarchyRank(targetRole);
+  if (actor == null || target == null) return false;
+  return actor > target;
+}
+
+/** Which member roles each login role may create or promote to. Mirrors the
+ * strictly-above rule: you can only hire people you could also offboard. */
+export const HIRABLE_ROLES: Record<string, MemberRole[]> = {
+  admin: ["rep", "team_lead", "manager"],
+  manager: ["rep", "team_lead"],
+  team_lead: ["rep"],
+};
+
+export function canHireRole(actorRole: string | undefined | null, memberRole: string | undefined | null): boolean {
+  if (!actorRole || !memberRole) return false;
+  return (HIRABLE_ROLES[actorRole] ?? []).includes(memberRole as MemberRole);
+}
+
+/**
+ * Would setting `memberId`'s supervisor to `supervisorId` create a reporting
+ * cycle? Pure over an id → reportsToId map so it is unit-testable and cannot
+ * touch the DB. Walks upward from the proposed supervisor; if the walk reaches
+ * `memberId` the edge closes a loop. A hop budget guards against pre-existing
+ * corrupt cycles in the chain (treated as a cycle — fail closed).
+ */
+export function wouldCreateReportsCycle(
+  memberId: number,
+  supervisorId: number | null | undefined,
+  reportsTo: ReadonlyMap<number, number | null>,
+  maxHops = 100,
+): boolean {
+  if (supervisorId == null) return false;      // top-level — never a cycle
+  if (supervisorId === memberId) return true;  // self-report is the trivial cycle
+  let cursor: number | null | undefined = supervisorId;
+  for (let hop = 0; hop < maxHops; hop++) {
+    cursor = reportsTo.get(cursor as number);
+    if (cursor == null) return false;          // reached a top-level member
+    if (cursor === memberId) return true;      // walked back to the member
+  }
+  return true; // hop budget exhausted → chain already corrupt → fail closed
+}
+
+/**
+ * Is `supervisorRole` a valid supervisor for a member holding `memberRole`?
+ * A supervisor must rank strictly above the member (reps report to team
+ * leads or managers; team leads report to managers; managers report to
+ * nobody but the org itself, i.e. reportsToId null).
+ */
+export function isValidSupervisorRole(memberRole: string | undefined | null, supervisorRole: string | undefined | null): boolean {
+  const member = hierarchyRank(memberRole);
+  const supervisor = hierarchyRank(supervisorRole);
+  if (member == null || supervisor == null) return false;
+  return supervisor > member;
+}

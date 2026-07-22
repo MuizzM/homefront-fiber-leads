@@ -49,6 +49,7 @@ import { colorForRep } from "@shared/repColors";
 import { pointInPolygon } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
+import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
 import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
@@ -3087,11 +3088,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   // Which member roles each account role may create/promote to.
   // Admin hires managers; managers hire team leads + reps; team leads hire reps only.
-  const HIRABLE_ROLES: Record<string, string[]> = {
-    admin: ["rep", "team_lead", "manager"],
-    manager: ["rep", "team_lead"],
-    team_lead: ["rep"],
-  };
+  // Single source of truth in @shared/teamHierarchy — the client renders from
+  // the same map, so the UI never offers a hire the API refuses.
+  const HIRABLE_ROLES: Record<string, readonly string[]> = SHARED_HIRABLE_ROLES;
   // Team lead, manager, and admin can add/edit reps
   // Team members with an email automatically get a login account (OTP by email).
   // The Team page is the ONE place to manage people — no separate Accounts page.
@@ -3216,6 +3215,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     catch (error) { return sendTeamLoginSyncError(res, error); }
     const conflict = teamLoginEmailConflict({ tenantId, memberRole: newRole, email });
     if (conflict) return sendTeamLoginSyncError(res, conflict);
+    // SUPERVISOR VALIDATION — same rule as PATCH: the reports-to edge must stay
+    // inside the creator's tenant and point at an active member who ranks
+    // strictly above the new member. (A new member has no subordinates, so a
+    // cycle is impossible here.)
+    if (parsed.data.reportsToId != null) {
+      const supervisor = storage.getTeamMembers(tenantId).find((member) => member.id === Number(parsed.data.reportsToId));
+      if (!supervisor || !supervisor.active) {
+        return res.status(400).json({ error: "Supervisor must be an active member of your organization", code: "INVALID_SUPERVISOR" });
+      }
+      if (!isValidSupervisorRole(newRole, supervisor.role)) {
+        return res.status(400).json({ error: "A supervisor must rank above the member they manage", code: "INVALID_SUPERVISOR" });
+      }
+    }
     // Tenancy is NEVER client-supplied: a new member always joins the creator's
     // org (overrides any tenantId smuggled into the body).
     try {
@@ -3244,17 +3256,54 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (req.body?.reportsToId != null && Number(req.body.reportsToId) === id) {
       return res.status(400).json({ error: "A member cannot report to themselves" });
     }
+    const actor = (req as any).user;
+    const members = storage.getTeamMembers(tenantId);
+    const existing = members.find((member) => member.id === id);
+    if (!existing) return res.status(404).json({ error: "Not found" });
+    // HIERARCHY: you may only edit members strictly below your own rank —
+    // peers can never edit each other (a manager cannot rewrite a fellow
+    // manager's email/role/status), and nobody edits upward. The one
+    // exception is your own row, restricted to harmless profile fields below.
+    const isSelfEdit = actor.teamMemberId === id;
+    // Authority is decided by the member's EFFECTIVE role (max of field role and
+    // linked login role) so a low field-role can never shield a higher login.
+    if (!isSelfEdit && !canActOnMember(actor.role, effectiveMemberRole(tenantId, existing))) {
+      return res.status(403).json({ error: "You can only manage members below your own role", code: "HIERARCHY_FORBIDDEN" });
+    }
+    // Activation is NOT a PATCH field: flipping `active` here would disable the
+    // linked login without revoking sessions, re-homing reports, or checking the
+    // last-admin guard (a manager could PATCH the sole admin's member inactive
+    // and lock the org out). Status changes go through /offboard and /reactivate.
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "active")) {
+      return res.status(400).json({
+        error: "Use Offboard or Reactivate to change a member's status",
+        code: "USE_LIFECYCLE_ENDPOINT",
+      });
+    }
     // Role changes obey the same hiring hierarchy as creation
     if (req.body?.role) {
-      const creatorRole = (req as any).user.role as string;
-      if (!(HIRABLE_ROLES[creatorRole] ?? []).includes(req.body.role)) {
+      if (!(HIRABLE_ROLES[actor.role as string] ?? []).includes(req.body.role)) {
         return res.status(403).json({ error: `Your role cannot set a member to ${String(req.body.role).replace("_", " ")}` });
       }
     }
     // Allowlist fields — tenantId is NEVER client-settable (mass-assignment of it
     // would move a member/login into another tenant = cross-tenant takeover). Match
-    // the /api/leads and /api/users PATCH pattern.
-    const ALLOWED_TEAM_FIELDS = new Set(["name", "phone", "email", "role", "reportsToId", "active"]);
+    // the /api/leads and /api/users PATCH pattern. Self-edits are limited to
+    // profile fields: changing your own role/supervisor (or login email, which a
+    // hijacked session could use to make a takeover permanent) requires someone
+    // above you.
+    const ALLOWED_TEAM_FIELDS = new Set(isSelfEdit
+      ? ["name", "phone"]
+      : ["name", "phone", "email", "role", "reportsToId"]);
+    const rejectedSelfFields = isSelfEdit
+      ? Object.keys(req.body ?? {}).filter((k) => ["email", "role", "reportsToId"].includes(k))
+      : [];
+    if (rejectedSelfFields.length > 0) {
+      return res.status(403).json({
+        error: "You cannot change your own role, supervisor, or login email — ask someone above you",
+        code: "SELF_LIFECYCLE_FORBIDDEN",
+      });
+    }
     const safeUpdate: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(req.body ?? {})) {
       if (ALLOWED_TEAM_FIELDS.has(k)) safeUpdate[k] = v;
@@ -3262,8 +3311,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (Object.keys(safeUpdate).length === 0) {
       return res.status(400).json({ error: "No valid fields to update" });
     }
-    const existing = storage.getTeamMembers(tenantId).find((member) => member.id === id);
-    if (!existing) return res.status(404).json({ error: "Not found" });
+    // SUPERVISOR VALIDATION — a reports-to edge must stay inside the tenant
+    // (the roster lookup above is tenant-scoped), point at an active member
+    // who ranks strictly above this member, and never close a reporting loop.
+    if (Object.prototype.hasOwnProperty.call(safeUpdate, "reportsToId") && safeUpdate.reportsToId != null) {
+      const supervisorId = Number(safeUpdate.reportsToId);
+      const supervisor = members.find((member) => member.id === supervisorId);
+      const roleAfterUpdate = typeof safeUpdate.role === "string" ? safeUpdate.role : existing.role;
+      if (!supervisor || !supervisor.active) {
+        return res.status(400).json({ error: "Supervisor must be an active member of your organization", code: "INVALID_SUPERVISOR" });
+      }
+      if (!isValidSupervisorRole(roleAfterUpdate, supervisor.role)) {
+        return res.status(400).json({ error: "A supervisor must rank above the member they manage", code: "INVALID_SUPERVISOR" });
+      }
+      const chain = new Map<number, number | null>(members.map((member) => [member.id, (member as any).reportsToId ?? null]));
+      if (wouldCreateReportsCycle(id, supervisorId, chain)) {
+        return res.status(400).json({ error: "That change would create a reporting loop", code: "REPORTS_TO_CYCLE" });
+      }
+    }
     let email: string | null;
     try { email = normalizeTeamEmail(Object.prototype.hasOwnProperty.call(safeUpdate, "email") ? safeUpdate.email : existing.email); }
     catch (error) { return sendTeamLoginSyncError(res, error); }
@@ -3276,6 +3341,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const updated = storage.updateTeamMember(id, safeUpdate, tenantId);
         if (!updated) return null;
         syncLoginAccount(updated as any);
+        // A demotion can leave direct reports pointing at a supervisor who no
+        // longer outranks them (reps reporting to a rep). Re-home those
+        // subordinates to the edited member's own supervisor so the org chart
+        // never holds an invalid edge.
+        if (typeof safeUpdate.role === "string" && safeUpdate.role !== existing.role) {
+          const invalidated = members.filter((member) =>
+            (member as any).reportsToId === id && !isValidSupervisorRole(member.role, safeUpdate.role as string));
+          for (const subordinate of invalidated) {
+            storage.updateTeamMember(subordinate.id, { reportsToId: (existing as any).reportsToId ?? null } as any, tenantId);
+          }
+        }
         return updated;
       });
       const updated = tx.immediate();
@@ -3285,18 +3361,175 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return sendTeamLoginSyncError(res, error);
     }
   });
-  // Only manager+ can delete reps
-  app.delete("/api/team/:id", requireManager, (req, res) => {
-    const tenantId = (req as any).user?.tenantId;
+
+  /** The role that actually governs authority over a member: the HIGHER of
+   * their field role (team_members.role) and their linked login role
+   * (users.role). A member row can read "rep" while its login is an admin
+   * (e.g. an admin who also carries a field profile) — the authority decision
+   * must use the login's real power, or a manager could offboard/edit an admin
+   * by exploiting the low field-role. Falls back to the field role. */
+  function effectiveMemberRole(tenantId: number, member: { id: number; role: string }): string {
+    const login = storage.getAllUsers(tenantId).find((u) => u.teamMemberId === member.id);
+    const memberRank = hierarchyRank(member.role) ?? -1;
+    const loginRank = hierarchyRank(login?.role) ?? -1;
+    return loginRank > memberRank ? (login!.role as string) : member.role;
+  }
+
+  /** Last-line-of-defense: refuse a lifecycle action that would leave the
+   * organization without a single active admin login. */
+  function wouldOrphanTenantAdmins(tenantId: number, targetMemberId: number): boolean {
+    const users = storage.getAllUsers(tenantId);
+    const linked = users.find((u) => u.teamMemberId === targetMemberId);
+    if (!linked || linked.role !== "admin" || !linked.active) return false;
+    const activeAdmins = users.filter((u) => u.role === "admin" && u.active);
+    return activeAdmins.length <= 1;
+  }
+
+  // ── OFFBOARDING — the hierarchy "kick" ──────────────────────────────────────
+  // Team leads offboard their reps; managers offboard team leads (and reps);
+  // admins offboard managers (and below). Strictly-above only: peers can never
+  // remove each other, nobody removes upward, and nobody offboards themselves.
+  // Offboarding is a soft removal that keeps every record: the member is
+  // deactivated, their login is disabled, every live session is revoked so
+  // access ends NOW (not at next login), and their direct reports are re-homed
+  // to the offboarded member's own supervisor. Fully audited.
+  app.post("/api/team/:id/offboard", requireTeamLead, (req, res) => {
+    const actor = (req as any).user;
+    const tenantId = actor?.tenantId;
     if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
     const id = Number(req.params.id);
-    if (!storage.deleteTeamMember(id, tenantId)) return res.status(404).json({ error: "Not found" });
-    // Member removed → disable their login (account kept for knock history)
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid member id" });
+    // Team leads may only act inside their own team; managers/admins pass org-wide.
+    if (!repInVisibilityScope(actor, id)) {
+      return res.status(403).json({ error: "That member is not on your team", code: "OUT_OF_SCOPE" });
+    }
+    const members = storage.getTeamMembers(tenantId);
+    const target = members.find((member) => member.id === id);
+    if (!target) return res.status(404).json({ error: "Not found" });
+    if (actor.teamMemberId === id) {
+      return res.status(400).json({ error: "You cannot offboard yourself", code: "CANNOT_OFFBOARD_SELF" });
+    }
+    if (!canActOnMember(actor.role, effectiveMemberRole(tenantId, target))) {
+      return res.status(403).json({ error: "You can only offboard members below your own role", code: "HIERARCHY_FORBIDDEN" });
+    }
+    if (!target.active) {
+      return res.status(409).json({ error: "That member is already offboarded", code: "ALREADY_INACTIVE" });
+    }
+    if (wouldOrphanTenantAdmins(tenantId, id)) {
+      return res.status(409).json({ error: "The organization must keep at least one active admin", code: "LAST_ADMIN" });
+    }
     try {
+      const tx = rawDb.transaction(() => {
+        const updated = storage.updateTeamMember(id, { active: false } as any, tenantId);
+        if (!updated) return null;
+        // Mirrors active:false onto the linked login (or leaves it absent).
+        syncLoginAccount(updated as any);
+        // Re-home direct reports to the offboarded member's own supervisor so
+        // nobody is left reporting to a deactivated member.
+        const newSupervisorId = (target as any).reportsToId ?? null;
+        const reassigned = rawDb.prepare(
+          "UPDATE team_members SET reports_to_id = ? WHERE reports_to_id = ? AND tenant_id = ?",
+        ).run(newSupervisorId, id, tenantId).changes;
+        // Kill every live session immediately — a kicked member's open app
+        // stops working on the next request, not at the next login.
+        const linked = storage.getAllUsers(tenantId).find((u) => u.teamMemberId === id);
+        const sessionsRevoked = linked ? storage.deleteSessionsByUser(linked.id) : 0;
+        return { updated, reassigned, loginDisabled: Boolean(linked), sessionsRevoked };
+      });
+      const result = tx.immediate();
+      if (!result) return res.status(404).json({ error: "Not found" });
+      storage.logActivity(actor.id, "team.member.offboarded", "team_member", id, {
+        name: target.name, role: target.role, by: actor.role,
+        reassignedReports: result.reassigned, sessionsRevoked: result.sessionsRevoked,
+      }, req.ip);
+      res.json({
+        success: true,
+        member: result.updated,
+        reassignedReports: result.reassigned,
+        loginDisabled: result.loginDisabled,
+        sessionsRevoked: result.sessionsRevoked,
+      });
+    } catch (error) {
+      return sendTeamLoginSyncError(res, error);
+    }
+  });
+
+  // Reactivation follows the same authority rule as the kick: only someone
+  // strictly above the member can bring them back, inside their scope.
+  app.post("/api/team/:id/reactivate", requireTeamLead, (req, res) => {
+    const actor = (req as any).user;
+    const tenantId = actor?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) return res.status(400).json({ error: "Invalid member id" });
+    if (!repInVisibilityScope(actor, id)) {
+      return res.status(403).json({ error: "That member is not on your team", code: "OUT_OF_SCOPE" });
+    }
+    const target = storage.getTeamMembers(tenantId).find((member) => member.id === id);
+    if (!target) return res.status(404).json({ error: "Not found" });
+    if (!canActOnMember(actor.role, effectiveMemberRole(tenantId, target))) {
+      return res.status(403).json({ error: "You can only reactivate members below your own role", code: "HIERARCHY_FORBIDDEN" });
+    }
+    if (target.active) {
+      return res.status(409).json({ error: "That member is already active", code: "ALREADY_ACTIVE" });
+    }
+    try {
+      const tx = rawDb.transaction(() => {
+        const updated = storage.updateTeamMember(id, { active: true } as any, tenantId);
+        if (!updated) return null;
+        syncLoginAccount(updated as any); // re-enables the linked login when an email exists
+        return updated;
+      });
+      const updated = tx.immediate();
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      storage.logActivity(actor.id, "team.member.reactivated", "team_member", id,
+        { name: target.name, role: target.role, by: actor.role }, req.ip);
+      res.json({ success: true, member: updated });
+    } catch (error) {
+      return sendTeamLoginSyncError(res, error);
+    }
+  });
+
+  // Only manager+ can hard-delete members — and only members strictly below
+  // their own rank (a manager cannot delete a fellow manager). The row is
+  // removed but knock history stays; the login is disabled and its live
+  // sessions are revoked, and direct reports are re-homed first.
+  app.delete("/api/team/:id", requireManager, (req, res) => {
+    const actor = (req as any).user;
+    const tenantId = actor?.tenantId;
+    if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
+    const id = Number(req.params.id);
+    const target = storage.getTeamMembers(tenantId).find((member) => member.id === id);
+    if (!target) return res.status(404).json({ error: "Not found" });
+    if (actor.teamMemberId === id) {
+      return res.status(400).json({ error: "You cannot remove yourself", code: "CANNOT_REMOVE_SELF" });
+    }
+    if (!canActOnMember(actor.role, effectiveMemberRole(tenantId, target))) {
+      return res.status(403).json({ error: "You can only remove members below your own role", code: "HIERARCHY_FORBIDDEN" });
+    }
+    if (wouldOrphanTenantAdmins(tenantId, id)) {
+      return res.status(409).json({ error: "The organization must keep at least one active admin", code: "LAST_ADMIN" });
+    }
+    const tx = rawDb.transaction(() => {
+      const reassigned = rawDb.prepare(
+        "UPDATE team_members SET reports_to_id = ? WHERE reports_to_id = ? AND tenant_id = ?",
+      ).run((target as any).reportsToId ?? null, id, tenantId).changes;
+      if (!storage.deleteTeamMember(id, tenantId)) return null;
+      // Member removed → disable their login (account kept for knock history)
+      // and revoke live sessions so access ends immediately.
+      let sessionsRevoked = 0;
       const linked = storage.getAllUsers(tenantId).find(u => u.teamMemberId === id);
-      if (linked) storage.updateUser(linked.id, { active: false } as any, tenantId);
-    } catch {}
-    res.json({ success: true });
+      if (linked) {
+        storage.updateUser(linked.id, { active: false } as any, tenantId);
+        sessionsRevoked = storage.deleteSessionsByUser(linked.id);
+      }
+      return { reassigned, sessionsRevoked };
+    });
+    const result = tx.immediate();
+    if (!result) return res.status(404).json({ error: "Not found" });
+    storage.logActivity(actor.id, "team.member.removed", "team_member", id,
+      { name: target.name, role: target.role, by: actor.role, reassignedReports: result.reassigned }, req.ip);
+    res.json({ success: true, reassignedReports: result.reassigned, sessionsRevoked: result.sessionsRevoked });
   });
 
   // ── Lead → Assign rep ─────────────────────────────────────────────────────────
