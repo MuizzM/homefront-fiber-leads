@@ -54,3 +54,21 @@ export function normalizeKineticAddressKey(address: string, city: string, state:
   return [canonicalAddressPart(address), canonicalAddressPart(city), canonicalAddressPart(state), String(zip).match(/\d{5}/)?.[0] ?? ""]
     .join("|");
 }
+
+/**
+ * The dedup key for a LEAD's UNIQUE(tenant_id, canonical_key) index — but NULL
+ * when there is no reliable street address to key on.
+ *
+ * The plain key above joins address|city|state|zip, so a blank/garbage address
+ * collapses to "|CHARLOTTE|NC|28202". Two DIFFERENT addresses that both lack a
+ * usable street part would then share that key and the leads UNIQUE index would
+ * MERGE them — silently destroying a real, distinct fresh lead. Under high-volume
+ * pumping from noisy discovery sources, degenerate addresses are common enough
+ * that this matters. Returning NULL for a keyless address disables dedup for it
+ * (the partial index is `WHERE canonical_key IS NOT NULL`), so at worst we get a
+ * duplicate pin — recoverable — instead of a lost lead — not.
+ */
+export function kineticLeadKeyOrNull(address: string, city: string, state: string, zip: string): string | null {
+  if (canonicalAddressPart(address) === "") return null; // no street identity → do not dedup
+  return normalizeKineticAddressKey(address, city, state, zip);
+}
