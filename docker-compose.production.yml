@@ -254,7 +254,7 @@ services:
       # (Dalton + legacy watch), and the bandwidth governor + SCAN_GLOBAL_CONCURRENCY
       # cap bound total spend regardless of state count. GA only produces work once
       # GA inventory exists in scan_targets (see the GA/SC FEEDER rollout below).
-      FRESH_HARVEST_STATES: "nc,sc,ga"
+      FRESH_HARVEST_STATES: "nc,sc,ga,va"
       FRONTIER_DIRECT: "off"
       FRONTIER_MARKETS: "off"
       COMING_SOON_PROGRAM: "off"

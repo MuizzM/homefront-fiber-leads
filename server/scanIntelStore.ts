@@ -357,6 +357,17 @@ export function resetInflightTargets(runId: string): number {
   return rawDb.prepare(`UPDATE scan_run_targets SET state='queued' WHERE run_id=? AND state='inflight'`).run(runId).changes;
 }
 
+// Terminalize a run's remaining queued/inflight tail (e.g. when the run's
+// budget is already exhausted). Without this the tail stays 'queued' forever
+// and the stranded-tail drain re-opens the run every tick — an infinite
+// re-open livelock that stalls all scanning (observed live, 43 runs).
+export function terminalizeQueuedTail(runId: string, reason: string): number {
+  return rawDb.prepare(
+    `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
+      WHERE run_id=? AND state IN ('queued','inflight')`,
+  ).run(reason, runId).changes;
+}
+
 // One-shot boot backfill: terminalize the ALREADY-EXHAUSTED needs-fix tail
 // (queued targets at attemptCap+ attempts whose last error is the needs-fix
 // family) WITHOUT burning one more check each — the recorded history IS the

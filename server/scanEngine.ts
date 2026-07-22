@@ -43,6 +43,7 @@ import {
   getResumableRuns,
   getStrandedDoneRuns,
   resetInflightTargets,
+  terminalizeQueuedTail,
   ANF_QUIET_DAYS,
   type ScanRunRow,
 } from "./scanIntelStore";
@@ -270,6 +271,9 @@ export async function runScanWorker(
       if (!run) return;
       if (run.status !== "running") return; // paused / cancelled / done — stops the pump
       if (run.verified + run.failed >= run.budget) {
+        // Budget spent — close the leftover queued tail so the stranded-tail
+        // drain can't re-open this run into an infinite livelock.
+        try { terminalizeQueuedTail(runId, "superseded: run budget exhausted"); } catch { /* next tick covers it */ }
         finish(run, "done");
         return;
       }
@@ -886,6 +890,17 @@ export function resumeInterruptedRuns(): void {
     // makes the re-opened run converge, not spin. ('cancelled' stays closed.)
     for (const run of getStrandedDoneRuns(10)) {
       if (isRunActive(run.id)) continue;
+      // BUDGET-EXHAUSTED TAIL: the run already spent its full budget
+      // (verified+failed >= budget), so a worker would finish 'done' on the
+      // budget check WITHOUT claiming — leaving the queued tail stranded, and
+      // this drain re-opening the same runs every tick forever (observed live:
+      // 43 runs in a re-open livelock, scanning fully stalled). Terminalize
+      // the leftover tail instead of re-opening.
+      if (run.verified + run.failed >= run.budget) {
+        const closed = terminalizeQueuedTail(run.id, "superseded: run budget exhausted");
+        if (closed > 0) console.log(`[scan-engine] closed budget-exhausted tail on ${run.id} (${closed} skipped)`);
+        continue;
+      }
       resetInflightTargets(run.id);
       setRunStatus(run.id, "running");
       console.log(`[scan-engine] re-opening stranded '${run.status}' run ${run.id} (${countQueued(run.id)} claimable pending)`);
