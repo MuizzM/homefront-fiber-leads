@@ -431,8 +431,8 @@ const configuredCacheTtlMs = Number(process.env.SCAN_RESULT_CACHE_MS ?? 5 * 60_0
 // migration can reuse it without importing the heavy scanner graph. Imported as a
 // local binding (scanner.ts uses it internally) AND re-exported so every existing
 // `import { normalizeKineticAddressKey } from "./scanner"` keeps working.
-import { normalizeKineticAddressKey, canonicalAddressPart } from "./addressKey";
-export { normalizeKineticAddressKey, canonicalAddressPart };
+import { normalizeKineticAddressKey, canonicalAddressPart, kineticLeadKeyOrNull } from "./addressKey";
+export { normalizeKineticAddressKey, canonicalAddressPart, kineticLeadKeyOrNull };
 
 function logQueueEvent(event: QueueEvent): void {
   // Per-check started/completed lines are the app's largest log stream (~50% of all

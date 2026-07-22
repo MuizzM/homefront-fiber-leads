@@ -3,7 +3,7 @@ import { decideFreshFiberConfirmation, type FreshFiberConfirmationDecision, type
 import { structuredLog } from "./structuredLog";
 import { pointInPolygon } from "@shared/geo";
 import { meterQualifiedLead } from "./billingStore";
-import { normalizeKineticAddressKey } from "./scanner";
+import { normalizeKineticAddressKey, kineticLeadKeyOrNull } from "./scanner";
 
 interface ProjectionCandidate {
   id: number;
@@ -246,8 +246,9 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
           (candidate as any).frontier_control ?? null,
           // Canonical key — a concurrent projector (multi-process) that already
           // created this address resolves via ON CONFLICT to the SAME id instead
-          // of a duplicate pin.
-          normalizeKineticAddressKey(candidate.address, candidate.city, candidate.state, candidate.zip ?? ""),
+          // of a duplicate pin. NULL for a keyless (blank/garbage) address so two
+          // DIFFERENT such leads can't false-merge into one and lose a real lead.
+          kineticLeadKeyOrNull(candidate.address, candidate.city, candidate.state, candidate.zip ?? ""),
         ) as { id: number } | undefined;
         leadId = created?.id ?? undefined;
         if (leadId == null) { result.rejected++; continue; } // conflict returned no row — skip safely

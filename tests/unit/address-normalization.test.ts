@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { canonicalAddressPart, normalizeKineticAddressKey, NORMALIZATION_VERSION } from "../../server/addressKey";
+import { canonicalAddressPart, normalizeKineticAddressKey, kineticLeadKeyOrNull, NORMALIZATION_VERSION } from "../../server/addressKey";
 
 // The canonical key is the dedup identity. Two spellings of the same address
 // MUST normalize equal; two different addresses must not.
@@ -51,5 +51,32 @@ describe("address normalization (expanded suffix/directional/unit folding)", () 
   it("exports a normalization version so the re-key migration can gate on it", () => {
     expect(Number.isInteger(NORMALIZATION_VERSION)).toBe(true);
     expect(NORMALIZATION_VERSION).toBeGreaterThanOrEqual(2);
+  });
+
+  // The LEAD dedup key must never false-merge two DIFFERENT keyless addresses.
+  describe("kineticLeadKeyOrNull — no false-merge for blank/garbage addresses", () => {
+    it("returns NULL when there is no usable street address (so the UNIQUE index doesn't apply)", () => {
+      expect(kineticLeadKeyOrNull("", "Charlotte", "NC", "28202")).toBeNull();
+      expect(kineticLeadKeyOrNull("   ", "Charlotte", "NC", "28202")).toBeNull();
+      expect(kineticLeadKeyOrNull("!!!", "Charlotte", "NC", "28202")).toBeNull(); // punctuation-only → empty part
+    });
+
+    it("two DIFFERENT blank-address leads in the same city both key to NULL — never merge onto one", () => {
+      // Before the fix both were "|CHARLOTTE|NC|28202" → the leads UNIQUE index
+      // merged them and LOST a real distinct lead.
+      const a = kineticLeadKeyOrNull("", "Charlotte", "NC", "28202");
+      const b = kineticLeadKeyOrNull("", "Charlotte", "NC", "28202");
+      expect(a).toBeNull();
+      expect(b).toBeNull(); // NULL != NULL under a partial `WHERE canonical_key IS NOT NULL` index → no dedup
+    });
+
+    it("a REAL address still gets its dedup key, identical to the plain normalizer", () => {
+      const key = kineticLeadKeyOrNull("123 Oak Cir", "Charlotte", "NC", "28202");
+      expect(key).not.toBeNull();
+      expect(key).toBe(normalizeKineticAddressKey("123 Oak Cir", "Charlotte", "NC", "28202"));
+      // and two spellings of the same real address still collapse (dedup preserved)
+      expect(kineticLeadKeyOrNull("123 Oak Circle", "Charlotte", "NC", "28202"))
+        .toBe(kineticLeadKeyOrNull("123 Oak Cir", "Charlotte", "NC", "28202"));
+    });
   });
 });
