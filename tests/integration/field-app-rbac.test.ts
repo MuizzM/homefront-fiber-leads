@@ -223,7 +223,12 @@ describe("field rep scope", () => {
     expect(response.status).toBe(200);
     const body = await response.json() as any;
     expect(body.job).toMatchObject({ checkedCount: 7, failedCount: 0, noServiceCount: 0, sourceWarnings: [], error: null });
-    expect(JSON.stringify(body)).not.toMatch(/provider timeout|401|token detail/i);
+    // \b401\b (not bare 401) so the redaction check matches a real, delimited
+    // HTTP-status leak in error_summary — never an incidental "401" inside the
+    // job's random hex UUID (e.g. ...-401e-...), which flaked this test ~0.7%
+    // of runs. UUID groups are 8/4/4/4/12 hex chars, so "401" can never be
+    // hyphen-isolated: word boundaries kill the collision without weakening intent.
+    expect(JSON.stringify(body)).not.toMatch(/provider timeout|\b401\b|token detail/i);
   });
 
   it("can read the safe roster projection, without roster PII", async () => {
