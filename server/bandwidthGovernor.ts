@@ -159,21 +159,41 @@ function sumSince(ts: number): { bytes: number; requests: number } {
   }
 }
 
+function ledgerSpanDays(): number {
+  try {
+    ensureTable();
+    const row = rawDb.prepare("SELECT MIN(ts) AS first FROM bandwidth_ledger").get() as any;
+    if (!row?.first) return 0;
+    return Math.max(0.25, (Date.now() - Number(row.first)) / 86_400_000);
+  } catch { return 0; }
+}
+
 /**
- * Budget scale 0.10–1.50: compares cycle-elapsed fraction with budget-burned
- * fraction. No data yet → 1 (neutral). When the circuit is open → 0 (frozen).
+ * Budget scale 0.10–1.50 — paces the REMAINING pool against the REMAINING
+ * cycle days using the ledger's own observed burn rate:
+ *
+ *   scale = (remainingBytes / daysLeft) / observedDailyBurn
+ *
+ * Correct even when the ledger starts mid-cycle (plan upgraded or deployed
+ * mid-month): the old elapsed-vs-burned math compared a 1-day-old ledger
+ * against a 20-day-old cycle and boosted x1.5 while the pool was actually
+ * burning 6x over pace (observed live: 5GB in <24h of a 25GB plan).
+ * No data yet -> 1 (neutral). Circuit open -> 0 (frozen).
  */
 export function bandwidthBudgetScale(): number {
   if (isProxyCircuitOpen()) return 0;
   const { start, end } = cycleBounds();
   const now = Date.now();
-  const elapsed = Math.max(0.02, (now - start) / (end - start)); // cycle fraction
   const { bytes } = sumSince(start);
   if (bytes <= 0) return 1;
-  const burned = bytes / USABLE_BYTES;
-  if (burned <= 0) return 1;
-  const ratio = elapsed / burned;
-  return Math.min(1.5, Math.max(0.1, ratio));
+  const remaining = USABLE_BYTES - bytes;
+  if (remaining <= 0) return 0.1;
+  const span = ledgerSpanDays() || Math.max(0.25, (now - start) / 86_400_000);
+  const dailyRate = bytes / span;                          // observed burn/day
+  if (dailyRate <= 0) return 1;
+  const daysLeft = Math.max(0.5, (end - now) / 86_400_000);
+  const allowedDaily = remaining / daysLeft;               // sustainable rate
+  return Math.min(1.5, Math.max(0.1, allowedDaily / dailyRate));
 }
 
 export interface GovernorStats {
