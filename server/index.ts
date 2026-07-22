@@ -34,6 +34,7 @@ import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPol
 //   explicit integer pins it; 0/unset stays single-process. Shared parser
 //   (scanWorkers.ts) so index/db/scanner can never drift.
 import { resolveScanWorkerCount } from "./scanWorkers";
+import { startPrimaryElection, isPrimaryNode } from "./primaryNodeLease";
 const SCAN_WORKERS = resolveScanWorkerCount();
 // The control role runs the work-PRODUCING singletons (statewide sweep, radar,
 // expansion, hot/frontier markets, discovery, daily refresh). True in single-process
@@ -611,10 +612,13 @@ app.use((req, res, next) => {
       resumeInterruptedRuns();
       startScanReaper(); // periodic reaper — started only now so its 60s tick can't fire during the health gate
     } catch (e: any) { console.warn("[scan-engine] resume skipped:", e?.message); }
-    // SWEEP DRIVERS — control worker only. These advance the statewide-sweep
-    // checkpoint / re-drive sweep jobs (work PRODUCERS); driving them from every
-    // worker would race the checkpoint and double-create per-city runs.
-    if (IS_CONTROL_ROLE) {
+    // SWEEP DRIVERS — control worker of the PRIMARY node only. These advance the
+    // statewide-sweep checkpoint / re-drive sweep jobs (work PRODUCERS); driving
+    // them from every worker would race the checkpoint, and driving them from a
+    // second NODE would double-create per-city runs. isPrimaryNode() gates the
+    // fleet down to one producer (single box → always true; see the producer
+    // block below where the lease is acquired).
+    if (IS_CONTROL_ROLE && isPrimaryNode()) {
       try {
         const { resumeSweepJobs, resumeStateSweeps } = await import("./sweepService");
         resumeSweepJobs();
@@ -623,15 +627,22 @@ app.use((req, res, next) => {
     }
   })(); }, resumeDelay);
   if (typeof (deferredResume as any).unref === "function") (deferredResume as any).unref();
-  // ── WORK PRODUCERS — CONTROL WORKER ONLY ──────────────────────────────────────
+  // ── WORK PRODUCERS — CONTROL WORKER OF THE PRIMARY NODE ONLY ──────────────────
   // Everything below SCHEDULES or CREATES scan work (statewide sweep, new-build
   // radar, cluster expansion, priority/hot/frontier bursts, discovery, coming-soon,
   // daily refresh) or fires external-API cadences (OSM/OneMap/Mapbox). Running these
-  // in every cluster worker would multiply external-API spend and double-create runs.
-  // The runs they produce are consumed by ALL workers via the reaper above, so one
-  // producer feeds every core. In single-process IS_CONTROL_ROLE is always true, so
-  // this is unchanged today.
-  if (IS_CONTROL_ROLE) {
+  // in every cluster worker would multiply external-API spend and double-create runs;
+  // running them on a SECOND NODE would do the same across the fleet. The runs they
+  // produce are consumed by ALL workers on ALL nodes via the shared DB queue + reaper,
+  // so ONE producer feeds the whole fleet.
+  //
+  // MULTI-NODE: startPrimaryElection() acquires a DB lease so producers run on
+  // exactly one node. On a lone box that node always wins the lease → byte-for-byte
+  // unchanged from today. Point a second app node at the same DB and it becomes a
+  // pure serve/consume replica (no double-scanning). NOTE: producer FAILOVER to a
+  // surviving node currently needs that node to (re)boot as primary — the lease
+  // makes multi-node SAFE now; automatic producer-failover is the next step.
+  if (IS_CONTROL_ROLE && startPrimaryElection()) {
   // Alert-outbox janitor — supersede the runaway pending backlog (1.25M rows
   // observed) down to the cap, chunked with yields so it can never block /api.
   // Control worker only (one writer), deferred past the health gate. Kill-switch:
