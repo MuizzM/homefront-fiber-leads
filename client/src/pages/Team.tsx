@@ -8,9 +8,11 @@ import {
   UserPlus, Edit2, Trash2, Phone, Mail,
   User, CheckCircle2, Users, Crown, Star, ChevronUp,
   Wallet, Layers, DollarSign,
-  DoorOpen, Handshake, PhoneCall, TrendingUp, FileSignature
+  DoorOpen, Handshake, PhoneCall, TrendingUp, FileSignature,
+  UserMinus, UserCheck, ShieldAlert, KeyRound, GitBranch, Archive
 } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
+import { canActOnMember, HIRABLE_ROLES, isValidSupervisorRole, type MemberRole } from "@shared/teamHierarchy";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -55,7 +57,7 @@ export const ROLES = [
   },
 ] as const;
 
-export type RepRole = "rep" | "team_lead" | "manager";
+export type RepRole = MemberRole;
 
 export function roleInfo(role: string) {
   return ROLES.find(r => r.value === role) ?? ROLES[0];
@@ -94,19 +96,12 @@ function fromMember(m: TeamMember): MemberForm {
   };
 }
 
-// Org rank — a member reports to someone strictly above them.
-const ROLE_RANK: Record<string, number> = { rep: 1, team_lead: 2, manager: 3 };
-
-// Which member roles each account role may create — mirrors the server check.
-// Admin hires managers; managers hire team leads + reps; team leads hire reps only.
-const HIRABLE_ROLES: Record<string, RepRole[]> = {
-  admin: ["rep", "team_lead", "manager"],
-  manager: ["rep", "team_lead"],
-  team_lead: ["rep"],
-};
+// Hierarchy rules (who hires/kicks/edits whom, valid supervisor edges) come
+// from @shared/teamHierarchy — the SAME module the server enforces with, so
+// this page never renders an action the API would refuse.
 
 // ── Role picker card ──────────────────────────────────────────────────────────
-function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v: RepRole) => void; allowed: RepRole[] }) {
+function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v: RepRole) => void; allowed: readonly RepRole[] }) {
   return (
     <div className="space-y-2">
       <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Role *</Label>
@@ -150,7 +145,7 @@ function RolePicker({ value, onChange, allowed }: { value: RepRole; onChange: (v
 
 // ── Member form UI ────────────────────────────────────────────────────────────
 function MemberFormUI({
-  form, setForm, onSave, onCancel, saving, isEdit, team, selfId, creatorRole
+  form, setForm, onSave, onCancel, saving, isEdit, selfEdit, team, selfId, creatorRole
 }: {
   form: MemberForm;
   setForm: (f: MemberForm) => void;
@@ -158,6 +153,8 @@ function MemberFormUI({
   onCancel: () => void;
   saving: boolean;
   isEdit?: boolean;
+  /** Editing your own row — the server only accepts name/phone, so only offer those. */
+  selfEdit?: boolean;
   team: TeamMember[];
   selfId?: number;
   creatorRole: string;
@@ -166,12 +163,13 @@ function MemberFormUI({
     setForm({ ...form, [k]: v });
 
   // Only offer roles the current user is allowed to hire (admin → managers too)
-  const allowedRoles = HIRABLE_ROLES[creatorRole] ?? ["rep"];
+  const allowedRoles = (HIRABLE_ROLES[creatorRole] ?? ["rep"]) as readonly RepRole[];
 
   // Managers report to Admin (no picker). Reps → team lead/manager; team leads → manager.
+  // Only ACTIVE members who rank strictly above can supervise (server-enforced).
   const showReportsTo = form.role === "rep" || form.role === "team_lead";
   const supervisors = team.filter(
-    m => m.id !== selfId && (ROLE_RANK[m.role] ?? 0) > (ROLE_RANK[form.role] ?? 0)
+    m => m.id !== selfId && m.active && isValidSupervisorRole(form.role, m.role)
   );
 
   return (
@@ -198,27 +196,39 @@ function MemberFormUI({
             data-testid="form-rep-phone"
           />
         </div>
-        <div className="space-y-1.5">
-          <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email (login)</Label>
-          <Input
-            value={form.email}
-            onChange={e => set("email", e.target.value)}
-            className="h-9 bg-secondary border-input"
-            placeholder="rep@email.com"
-            data-testid="form-rep-email"
-          />
-        </div>
+        {!selfEdit && (
+          <div className="space-y-1.5">
+            <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Email (login)</Label>
+            <Input
+              value={form.email}
+              onChange={e => set("email", e.target.value)}
+              className="h-9 bg-secondary border-input"
+              placeholder="rep@email.com"
+              data-testid="form-rep-email"
+            />
+          </div>
+        )}
       </div>
-      <p className="text-[11px] text-muted-foreground -mt-1.5 flex items-center gap-1.5">
-        <Mail className="w-3 h-3 flex-shrink-0" />
-        Members with an email can log in with a one-time code sent to that address.
-      </p>
+      {!selfEdit && (
+        <p className="text-[11px] text-muted-foreground -mt-1.5 flex items-center gap-1.5">
+          <Mail className="w-3 h-3 flex-shrink-0" />
+          Members with an email can log in with a one-time code sent to that address.
+        </p>
+      )}
+      {selfEdit && (
+        <p className="text-[11px] text-muted-foreground -mt-1.5 flex items-center gap-1.5">
+          <KeyRound className="w-3 h-3 flex-shrink-0" />
+          Your role, status, supervisor, and login email can only be changed by someone above you.
+        </p>
+      )}
 
       {/* Role picker — changing role resets the supervisor (eligibility changes) */}
-      <RolePicker value={form.role} onChange={v => setForm({ ...form, role: v, reportsToId: null })} allowed={allowedRoles} />
+      {!selfEdit && (
+        <RolePicker value={form.role} onChange={v => setForm({ ...form, role: v, reportsToId: null })} allowed={allowedRoles} />
+      )}
 
       {/* Reports To — who this member is under in the org chart */}
-      {showReportsTo && (
+      {!selfEdit && showReportsTo && (
         <div className="space-y-1.5">
           <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Reports To {form.role === "rep" ? "(Team Lead or Manager)" : "(Manager)"}
@@ -247,20 +257,14 @@ function MemberFormUI({
         </div>
       )}
 
-      {/* Status toggle (edit only) */}
-      {isEdit && (
-        <div className="space-y-1.5">
-          <Label className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Status</Label>
-          <Select value={form.active ? "active" : "inactive"} onValueChange={v => set("active", v === "active")}>
-            <SelectTrigger className="h-9 bg-secondary border-input" data-testid="form-rep-status">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent className="bg-card border-border">
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      {/* Lifecycle (offboard / reactivate) is deliberately NOT a form field —
+          it runs through the dedicated flows that also disable the login,
+          revoke live sessions, and re-home direct reports. */}
+      {isEdit && !selfEdit && (
+        <p className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+          <ShieldAlert className="w-3 h-3 flex-shrink-0" />
+          To deactivate or restore this member, use Offboard / Reactivate on their row.
+        </p>
       )}
 
       <div className="flex gap-2 pt-2">
@@ -285,6 +289,7 @@ export default function Team() {
   const [addOpen, setAddOpen] = useState(false);
   const [editMember, setEditMember] = useState<TeamMember | null>(null);
   const [deleteId, setDeleteId] = useState<number | null>(null);
+  const [offboardMember, setOffboardMember] = useState<TeamMember | null>(null);
   const [addForm, setAddForm] = useState<MemberForm>(emptyForm());
   const [editForm, setEditForm] = useState<MemberForm>(emptyForm());
   const [commissionMember, setCommissionMember] = useState<TeamMember | null>(null);
@@ -352,6 +357,44 @@ export default function Team() {
     },
   });
 
+  const offboardMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/team/${id}/offboard`);
+      return res.json() as Promise<{ reassignedReports: number; sessionsRevoked: number; loginDisabled: boolean }>;
+    },
+    onSuccess: (result, id) => {
+      const who = team.find(m => m.id === id)?.name ?? "Member";
+      const bits = [
+        result.loginDisabled ? "login disabled" : null,
+        result.sessionsRevoked > 0 ? "signed out everywhere" : null,
+        result.reassignedReports > 0 ? `${result.reassignedReports} report${result.reassignedReports === 1 ? "" : "s"} re-homed` : null,
+      ].filter(Boolean).join(" · ");
+      toast({ title: `${who} offboarded`, description: bits || "Access removed." });
+      qc.invalidateQueries({ queryKey: ["/api/team"] });
+      qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
+      setOffboardMember(null);
+    },
+    onError: (err: any) => {
+      toast({ title: err.message || "Failed to offboard", variant: "destructive" });
+    },
+  });
+
+  const reactivateMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/team/${id}/reactivate`);
+      return res.json();
+    },
+    onSuccess: (_r, id) => {
+      const who = team.find(m => m.id === id)?.name ?? "Member";
+      toast({ title: `${who} reactivated`, description: "Their login works again." });
+      qc.invalidateQueries({ queryKey: ["/api/team"] });
+      qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
+    },
+    onError: (err: any) => {
+      toast({ title: err.message || "Failed to reactivate", variant: "destructive" });
+    },
+  });
+
   const statsFor = (repId: number) =>
     leaderboard.find(l => l.rep.id === repId) ?? { knocks: 0, contacts: 0, callbacks: 0, sales: 0 };
 
@@ -360,17 +403,30 @@ export default function Team() {
     setEditMember(m);
   };
 
-  // Permission check — team_lead, manager, admin can add members
-  const canAddMembers = user?.role && ["admin", "manager", "team_lead"].includes(user.role);
-  const canDeleteMembers = user?.role && ["admin", "manager"].includes(user.role);
+  // Permission checks — the hierarchy rule (strictly above) comes from the
+  // SAME shared module the server enforces, so buttons only render when the
+  // API would say yes.
+  const myRole = user?.role ?? "";
+  const myMemberId = user?.teamMemberId ?? null;
+  const canAddMembers = ["admin", "manager", "team_lead"].includes(myRole);
+  /** Lifecycle authority over a member: outrank them, and never yourself. */
+  const canLifecycle = (m: TeamMember) => m.id !== myMemberId && canActOnMember(myRole, m.role);
+  const canEditMember = (m: TeamMember) => canLifecycle(m) || m.id === myMemberId;
+  const canHardDelete = (m: TeamMember) => ["admin", "manager"].includes(myRole) && canLifecycle(m);
 
-  // Group by role for display
-  const managers = team.filter(m => m.role === "manager");
-  const leads = team.filter(m => m.role === "team_lead");
-  const reps = team.filter(m => m.role === "rep");
+  // Group by role for display — active members in the org sections; inactive
+  // members live in the Former Members section below.
+  const activeMembers = team.filter(m => m.active);
+  const formerMembers = team.filter(m => !m.active);
+  const managers = activeMembers.filter(m => m.role === "manager");
+  const leads = activeMembers.filter(m => m.role === "team_lead");
+  const reps = activeMembers.filter(m => m.role === "rep");
+  /** Active direct reports of a member — shown as a chip, and listed in the
+   * offboard dialog since they get re-homed. */
+  const directReportsOf = (id: number) => activeMembers.filter(m => (m as any).reportsToId === id);
 
   // Team totals for the metric strip (derived from leaderboard/team — no new calls)
-  const activeCount = team.filter(m => m.active).length;
+  const activeCount = activeMembers.length;
   const totalKnocks = leaderboard.reduce((a, l) => a + l.knocks, 0);
   const totalContacts = leaderboard.reduce((a, l) => a + l.contacts, 0);
   const totalCallbacks = leaderboard.reduce((a, l) => a + l.callbacks, 0);
@@ -378,7 +434,7 @@ export default function Team() {
 
   // Whether any per-member action is available to this viewer (reserves the
   // actions column so the metric columns stay aligned across every row).
-  const showActions = Boolean(canAddMembers || canDeleteMembers || canManageCommission || canManageDocuments);
+  const showActions = Boolean(canAddMembers || canManageCommission || canManageDocuments);
   const metricCols = ["Knocks", "Contacts", "Callbacks", "Sales"];
 
   const RoleSection = ({ title, members, role }: { title: string; members: TeamMember[]; role: string }) => {
@@ -408,7 +464,7 @@ export default function Team() {
               ))}
             </div>
             {showActions && (
-              <div className="w-[124px] flex-shrink-0 text-right text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</div>
+              <div className="w-[156px] flex-shrink-0 text-right text-2xs font-semibold uppercase tracking-wide text-muted-foreground">Actions</div>
             )}
           </div>
 
@@ -454,6 +510,12 @@ export default function Team() {
                           <ChevronUp className="w-3 h-3" /> Reports to <span className="text-foreground/80 font-medium">{sup.name}</span>
                         </span>
                       )}
+                      {directReportsOf(member.id).length > 0 && (
+                        <span className="inline-flex items-center gap-1" data-testid={`chip-reports-${member.id}`}>
+                          <GitBranch className="w-3 h-3" />
+                          <span className="tabular-nums font-medium text-foreground/80">{directReportsOf(member.id).length}</span> direct report{directReportsOf(member.id).length === 1 ? "" : "s"}
+                        </span>
+                      )}
                       {member.phone && (
                         <span className="inline-flex items-center gap-1">
                           <Phone className="w-3 h-3" /> {member.phone}
@@ -489,7 +551,7 @@ export default function Team() {
 
                   {/* Row actions */}
                   {showActions && (
-                    <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[124px]">
+                    <div className="flex items-center justify-end gap-1 flex-shrink-0 w-[156px]">
                       {canManageDocuments && member.role === "rep" && (
                         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                           onClick={() => navigate("/applications")} data-testid={`btn-documents-rep-${member.id}`}
@@ -506,17 +568,24 @@ export default function Team() {
                           <Wallet className="w-3.5 h-3.5" />
                         </Button>
                       )}
-                      {canAddMembers && (
+                      {canEditMember(member) && (
                         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground hover:bg-secondary"
                           onClick={() => openEdit(member)} data-testid={`btn-edit-rep-${member.id}`}
-                          aria-label={`Edit ${member.name}`} title="Edit member">
+                          aria-label={`Edit ${member.name}`} title={member.id === myMemberId ? "Edit your profile" : "Edit member"}>
                           <Edit2 className="w-3.5 h-3.5" />
                         </Button>
                       )}
-                      {canDeleteMembers && (
+                      {canLifecycle(member) && member.active && (
+                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-amber-400 hover:bg-amber-500/10"
+                          onClick={() => setOffboardMember(member)} data-testid={`btn-offboard-rep-${member.id}`}
+                          aria-label={`Offboard ${member.name}`} title="Offboard — remove access, keep records">
+                          <UserMinus className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                      {canHardDelete(member) && (
                         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
                           onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
-                          aria-label={`Remove ${member.name}`} title="Remove member">
+                          aria-label={`Remove ${member.name}`} title="Delete member record">
                           <Trash2 className="w-3.5 h-3.5" />
                         </Button>
                       )}
@@ -654,8 +723,135 @@ export default function Team() {
           <RoleSection title="Managers" members={managers} role="manager" />
           <RoleSection title="Team Leads" members={leads} role="team_lead" />
           <RoleSection title="Sales Reps" members={reps} role="rep" />
+
+          {/* Former members — offboarded people keep their records but lose all
+              access. Anyone who outranks them can bring them back. */}
+          {formerMembers.length > 0 && (
+            <div>
+              <div className="flex items-center gap-2.5 mb-2.5 px-0.5">
+                <div className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 bg-muted text-muted-foreground">
+                  <Archive className="w-3 h-3" />
+                </div>
+                <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Former Members</h2>
+                <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-muted text-[11px] font-medium text-muted-foreground tabular-nums">{formerMembers.length}</span>
+                <div className="flex-1 h-px bg-border" />
+              </div>
+              <Card className="bg-card border-border overflow-hidden rounded-xl">
+                <div className="divide-y divide-border">
+                  {formerMembers.map(member => {
+                    const ri2 = roleInfo(member.role);
+                    return (
+                      <div key={member.id} data-testid={`card-former-${member.id}`}
+                        className="flex items-center gap-3 p-4 hover:bg-secondary/40 transition-colors">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ring-1 ring-inset ring-black/5 dark:ring-white/10 opacity-50 grayscale ${ri2.avatarColor}`}>
+                          {initials(member.name)}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-semibold text-sm text-muted-foreground leading-tight truncate">{member.name}</span>
+                            <Badge className={`h-5 gap-1 px-1.5 rounded-full border-0 text-[11px] font-medium opacity-60 ${ri2.color}`}>
+                              <ri2.Icon className="w-2.5 h-2.5" />
+                              {ri2.short}
+                            </Badge>
+                            <span className="inline-flex items-center gap-1 h-5 pl-1.5 pr-2 rounded-full text-[11px] font-medium bg-muted text-muted-foreground">
+                              <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/50" />
+                              Offboarded
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-muted-foreground mt-1">
+                            Login disabled · records retained{member.email ? ` · ${member.email}` : ""}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-end gap-1 flex-shrink-0">
+                          {canLifecycle(member) && (
+                            <Button variant="outline" size="sm"
+                              className="h-8 border-border text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                              onClick={() => reactivateMutation.mutate(member.id)}
+                              disabled={reactivateMutation.isPending}
+                              data-testid={`btn-reactivate-rep-${member.id}`}
+                              aria-label={`Reactivate ${member.name}`} title="Restore access">
+                              <UserCheck className="w-3.5 h-3.5 mr-1.5" />
+                              {reactivateMutation.isPending ? "Restoring…" : "Reactivate"}
+                            </Button>
+                          )}
+                          {canHardDelete(member) && (
+                            <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-red-400 hover:bg-red-500/10"
+                              onClick={() => setDeleteId(member.id)} data-testid={`btn-delete-rep-${member.id}`}
+                              aria-label={`Remove ${member.name}`} title="Delete member record">
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Offboard confirm — spells out exactly what the kick does before it happens */}
+      <Dialog open={!!offboardMember} onOpenChange={v => !v && setOffboardMember(null)}>
+        <DialogContent className="bg-card border-border text-foreground max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <span className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center">
+                <UserMinus className="w-3.5 h-3.5" />
+              </span>
+              Offboard {offboardMember?.name}?
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground -mt-1">
+            This removes their access immediately, but keeps every record. You can reactivate them later.
+          </p>
+          <div className="rounded-xl bg-secondary/40 border border-border divide-y divide-border text-sm">
+            <div className="flex items-start gap-2.5 px-3 py-2.5">
+              <KeyRound className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
+              <div>
+                <div className="font-medium text-foreground">Login disabled &amp; signed out everywhere</div>
+                <div className="text-xs text-muted-foreground">Every live session ends now — not at their next login.</div>
+              </div>
+            </div>
+            {offboardMember && directReportsOf(offboardMember.id).length > 0 && (
+              <div className="flex items-start gap-2.5 px-3 py-2.5">
+                <GitBranch className="w-4 h-4 mt-0.5 text-amber-400 flex-shrink-0" />
+                <div>
+                  <div className="font-medium text-foreground">
+                    {directReportsOf(offboardMember.id).length} direct report{directReportsOf(offboardMember.id).length === 1 ? "" : "s"} re-homed
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {directReportsOf(offboardMember.id).map(r => r.name).join(", ")} will report to {
+                      (offboardMember as any).reportsToId
+                        ? (team.find(t => t.id === (offboardMember as any).reportsToId)?.name ?? "their next supervisor")
+                        : "the organization admin"
+                    }.
+                  </div>
+                </div>
+              </div>
+            )}
+            <div className="flex items-start gap-2.5 px-3 py-2.5">
+              <ShieldAlert className="w-4 h-4 mt-0.5 text-muted-foreground flex-shrink-0" />
+              <div>
+                <div className="font-medium text-foreground">Knocks, sales &amp; documents retained</div>
+                <div className="text-xs text-muted-foreground">History stays for commissions and audit. The action itself is logged.</div>
+              </div>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOffboardMember(null)} className="h-9 border-border">Cancel</Button>
+            <Button
+              onClick={() => offboardMember && offboardMutation.mutate(offboardMember.id)}
+              disabled={offboardMutation.isPending}
+              className="h-9 bg-amber-600 hover:bg-amber-600/90 text-white"
+              data-testid="btn-confirm-offboard"
+            >
+              {offboardMutation.isPending ? "Offboarding…" : "Offboard Member"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Member Dialog */}
       <Dialog open={addOpen} onOpenChange={setAddOpen}>
@@ -695,10 +891,22 @@ export default function Team() {
             <MemberFormUI
               form={editForm}
               setForm={setEditForm}
-              onSave={() => updateMutation.mutate({ id: editMember.id, data: editForm as Partial<InsertTeamMember> })}
+              onSave={() => {
+                // Self-edits may only carry profile fields; other edits send the
+                // editable fields but never `active` — lifecycle changes go
+                // through Offboard/Reactivate so sessions and reports are handled.
+                const data: Partial<InsertTeamMember> = editMember.id === myMemberId
+                  ? { name: editForm.name, phone: editForm.phone }
+                  : {
+                      name: editForm.name, phone: editForm.phone, email: editForm.email,
+                      role: editForm.role, reportsToId: editForm.reportsToId,
+                    } as Partial<InsertTeamMember>;
+                updateMutation.mutate({ id: editMember.id, data });
+              }}
               onCancel={() => setEditMember(null)}
               saving={updateMutation.isPending}
               isEdit
+              selfEdit={editMember.id === myMemberId}
               team={team}
               selfId={editMember.id}
               creatorRole={user?.role ?? "team_lead"}
@@ -719,11 +927,13 @@ export default function Team() {
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This will remove{" "}
+            This permanently removes{" "}
             <span className="font-medium text-foreground">
               {team.find(m => m.id === deleteId)?.name ?? "this member"}
             </span>{" "}
-            from the team. Their knock history stays in the database.
+            from the roster. Their login is disabled, live sessions end, and any direct
+            reports are re-homed. Knock history stays in the database. If you might bring
+            them back, use <span className="font-medium text-foreground">Offboard</span> instead.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDeleteId(null)} className="h-9 border-border">Cancel</Button>
