@@ -102,8 +102,18 @@ function parseSseBlock(block: string): DiscoveryEvent | null {
  * hook re-hydrates active jobs with exponentially backed-off GETs until the
  * stream reconnects. Event listeners are ref-based so hundreds of address
  * events do not force hundreds of React renders.
+ *
+ * `ownedJobIdRef` (optional): when provided, count-only progress ticks for any
+ * OTHER job are dropped before they can dispatch — the server's around-the-
+ * clock background/nightly scans stop re-rendering the caller (MapView is
+ * ~6,000 lines) 4×/s. Status transitions always render (rare, and terminal
+ * events carry the full final counters). Listeners still receive every event —
+ * the scan-dot SSE bridge is unaffected.
  */
-export function useDiscoveryJobs(enabled: boolean) {
+export function useDiscoveryJobs(
+  enabled: boolean,
+  ownedJobIdRef?: { readonly current: string | null },
+) {
   const [byId, dispatch] = useReducer(reducer, {});
   const [connected, setConnected] = useState(false);
   const [hydrating, setHydrating] = useState(false);
@@ -165,6 +175,9 @@ export function useDiscoveryJobs(enabled: boolean) {
           // flush any buffered counters first so ordering is preserved.
           flushPending();
           dispatch({ type: "upsert", job: patch });
+        } else if (ownedJobIdRef && patch.id !== ownedJobIdRef.current) {
+          // Unowned job's count tick — the caller renders nothing from it.
+          // Drop it here instead of waking a 6k-line tree 4×/s.
         } else {
           // Count-only progress (checked/qualified/discovered ticks arrive many
           // times per second during a town scan): coalesce to ≤4 renders/s so the

@@ -35,6 +35,10 @@ export interface ProjectionResult {
   provisional: number;
   rejected: number;
   leadIds: number[];
+  /** Per-candidate failures. One bad door skips ONE door — it never rolls back
+   * or blocks the rest of the batch (a single tenant-conflict throw used to
+   * discard every other confirmed lead in the transaction). */
+  errors: Array<{ targetId: number; reason: string }>;
 }
 
 interface TerritoryAssignment { territoryId: number; repId: number }
@@ -102,9 +106,12 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   // "338 FARRELL RD"), and two scan targets for the same house (OSM harvest vs
   // Kinetic canonical) would otherwise mint duplicate leads (observed: lead
   // #11318 duplicating #11198). Pull the city's leads and compare normalized.
+  // Tenant-scoped: a foreign tenant's lead for the same street text must never
+  // enter the index — it used to surface here and throw LEAD_ADDRESS_TENANT_
+  // CONFLICT, which aborted the WHOLE batch (see per-candidate isolation below).
   const findByCityLeads = rawDb.prepare(`SELECT id,tenant_id,assigned_rep_id,address FROM leads
-    WHERE lower(trim(city))=lower(trim(?)) AND upper(state)=upper(?)
-    ORDER BY CASE WHEN tenant_id=? THEN 0 ELSE 1 END,id`);
+    WHERE lower(trim(city))=lower(trim(?)) AND upper(state)=upper(?) AND tenant_id=?
+    ORDER BY id`);
   // Per-CITY normalized-address index, built ONCE per city per projector call and
   // cached. The previous version re-hashed every lead in the city for EVERY
   // candidate — O(candidates × city_leads) synchronous work that pegged the single
@@ -156,9 +163,15 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const assignmentEvent = rawDb.prepare(`INSERT INTO lead_events (lead_id,type,actor,detail,at)
     VALUES (?,'assignment','Fresh Fiber Monitor',?,datetime('now'))`);
 
-  const result: ProjectionResult = { considered: candidates.length, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, leadIds: [] };
-  const tx = rawDb.transaction(() => {
-    for (const candidate of candidates) {
+  const result: ProjectionResult = { considered: candidates.length, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, leadIds: [], errors: [] };
+  // PER-CANDIDATE ISOLATION: each door publishes inside its own savepoint
+  // (better-sqlite3 nests transaction functions as SAVEPOINTs). A throw for one
+  // candidate rolls back that one door and is recorded in result.errors; every
+  // other confirmed lead in the batch still commits. The old single-transaction
+  // shape lost entire batches: one LEAD_ADDRESS_TENANT_CONFLICT (or any DB
+  // guard RAISE) discarded up to hundreds of confirmed green leads at once —
+  // observed live 2026-07-18: 72 new_fiber/N targets scanned, zero leads minted.
+  const perCandidate = rawDb.transaction((candidate: ProjectionCandidate) => {
       const evidence = evidenceStmt.all(tenantId, candidate.id) as IndependentAvailabilityEvidence[];
       const evidenceDecision = decideFreshFiberConfirmation({
         transitionFresh: !!candidate.proven_flip,
@@ -186,7 +199,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         const changed = rawDb.prepare(`UPDATE leads SET lead_status='now_active', updated_at=datetime('now')
           WHERE id=? AND tenant_id=? AND lead_status<>'now_active'`).run(candidate.converted_to_lead_id, tenantId).changes;
         if (changed) result.leadIds.push(candidate.converted_to_lead_id);
-        continue;
+        return;
       }
       const authoritativeFresh = seg === "NEW FIBER" && billing === "N" && fiberAvail !== false;
       const decision: FreshFiberConfirmationDecision = evidenceDecision.confirmed
@@ -194,8 +207,8 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         : authoritativeFresh
           ? { status: "confirmed", confirmed: true, reasons: ["NEW FIBER + billing N (authoritative Fresh Lead rule)."], sources: ["kinetic"], confirmedAt: candidate.first_seen_fiber_at ?? new Date().toISOString() }
           : evidenceDecision;
-      if (decision.status === "provisional") { result.provisional++; continue; }
-      if (!decision.confirmed || !decision.confirmedAt) { result.rejected++; continue; }
+      if (decision.status === "provisional") { result.provisional++; return; }
+      if (!decision.confirmed || !decision.confirmedAt) { result.rejected++; return; }
       // Honest confidence: cross_verified only with >=2 independent sources; a
       // single-source authoritative lead is labelled kinetic_new_fiber.
       const confidence = decision.sources.length >= 2 ? "cross_verified" : "kinetic_new_fiber";
@@ -208,7 +221,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       if (candidate.converted_to_lead_id != null && leadId === candidate.converted_to_lead_id) {
         result.linkedExisting++;
         result.leadIds.push(leadId);
-        continue;
+        return;
       }
       result.published++;
       const assignment = territoryAssignmentFor(tenantId, candidate.lat, candidate.lng);
@@ -251,7 +264,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
           kineticLeadKeyOrNull(candidate.address, candidate.city, candidate.state, candidate.zip ?? ""),
         ) as { id: number } | undefined;
         leadId = created?.id ?? undefined;
-        if (leadId == null) { result.rejected++; continue; } // conflict returned no row — skip safely
+        if (leadId == null) { result.rejected++; return; } // conflict returned no row — skip safely
         // Keep the in-memory index current so a later candidate for the SAME
         // normalized address in this call attaches instead of minting a duplicate.
         rememberNewLead({ id: leadId, tenant_id: tenantId, assigned_rep_id: assignment?.repId ?? null }, candidate.address, candidate.city, candidate.state);
@@ -274,6 +287,17 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         }));
       }
       result.leadIds.push(leadId);
+  });
+  const tx = rawDb.transaction(() => {
+    for (const candidate of candidates) {
+      try {
+        perCandidate(candidate);
+      } catch (error: any) {
+        // The savepoint already rolled this one door back; record and move on.
+        const reason = String(error?.message ?? error).slice(0, 200);
+        result.errors.push({ targetId: candidate.id, reason });
+        structuredLog("fresh_fiber.candidate_failed", { tenantId, targetId: candidate.id, reason }, "warn");
+      }
     }
   });
   tx.immediate();

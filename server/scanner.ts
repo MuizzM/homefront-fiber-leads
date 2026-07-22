@@ -6,6 +6,7 @@ import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
 import { parseKineticResponse, selectReliableAddressSuggestion } from "./kineticResponseParser";
+import { isActiveBilling } from "@shared/billingStatus";
 import {
   ProviderRequestQueue,
   type ProviderQueueSnapshot,
@@ -244,16 +245,25 @@ export function setManualToken(token: string) {
   providerQueue.resume();
 }
 
-/** Mint/lease a fresh Braze token. Called at the start of every scan run. */
+/** Lease a valid token — minting ONLY when none is ready. Called at the start
+ * of scan runs and by the admin refresh route. A healthy READY token is
+ * returned as-is: force-refreshing here threw away a perfectly good token on
+ * every run start (one needless Decodo mint per run, and the batch then
+ * re-spread across fresh slots instead of draining one token). The pool
+ * self-heals invalid tokens via the 401/403 invalidate path. */
 export async function refreshTokenFromApi(): Promise<string> {
-  const beforeRefresh = authorizedTokenPool.snapshot();
   const lease = await authorizedTokenPool.lease();
-  try {
-    // lease() already minted a fresh token when the pool was empty. Avoid
-    // immediately replacing a just-minted token.
-    if (beforeRefresh.ready === 0) return lease.token;
-    return await authorizedTokenPool.refreshLease(lease);
-  }
+  try { return lease.token; }
+  finally { lease.release(); }
+}
+
+/** Force a genuinely FRESH mint, discarding any healthy token. Use ONLY where a
+ * new token is contractually required — the Live Test diagnostic ("fresh mint ·
+ * no cache"), the per-address auth-retry remint after a 401/403, and the admin
+ * "refresh token" action. The run-start path uses refreshTokenFromApi (reuse). */
+export async function forceFreshTokenFromApi(): Promise<string> {
+  const lease = await authorizedTokenPool.lease();
+  try { return await authorizedTokenPool.refreshLease(lease); }
   finally { lease.release(); }
 }
 
@@ -597,7 +607,11 @@ export interface LiveTestResult {
 // concurrency inside the pool guarantee this issues no duplicate mint requests.
 async function mintThroughApprovedFlow(invalidateFirst?: string): Promise<string> {
   if (invalidateFirst) invalidateAuthorizedToken(invalidateFirst);
-  return refreshTokenFromApi();
+  // Always a fresh mint: this path is the Live Test diagnostic and the auth
+  // retry after a provider denial, both of which require a brand-new token, not
+  // a reused one (a reused token here would silently skip the mint the retry
+  // depends on and never rotate the Decodo session).
+  return forceFreshTokenFromApi();
 }
 
 // A `blocked` ScanResult is an AUTH block (401/403 — retry after re-mint) rather
@@ -696,7 +710,7 @@ export async function liveTestAddress(
   const isTarget = result.isNewFiber && billing === "N" && isFiber;
   const classification = result.fiberStatus === "no_service" || !isFiber ? "no_service"
     : isTarget ? "fresh_fiber"
-    : billing === "Y" && result.isNewFiber ? "coming_soon"
+    : isActiveBilling(billing) && result.isNewFiber ? "coming_soon"
     : "service_active";
   out.classification = classification;
   out.wouldSaveLead = isTarget;
@@ -1062,7 +1076,7 @@ async function scanAddressDirect(
       // billingStatus "N" = no active account → non-subscriber with fiber available (prime target).
       // billingStatus "Y" = active account → already a customer (low priority).
       // dfAddressId on TENURED addresses is significantly lower (older record) than NEW FIBER.
-      const hasBilling = data.address?.billingStatus === "Y";
+      const hasBilling = isActiveBilling(data.address?.billingStatus);
       base.notes = hasBilling
         ? `TENURED — long-established fiber address, already a Kinetic subscriber. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`
         : `TENURED — long-established fiber address, NOT a current subscriber. Prime upgrade target. Tech: ${base.techType}. ${base.maxDownloadMbps} Mbps qualified.`;
@@ -1089,11 +1103,11 @@ async function scanAddressDirect(
     base.leadTag = score.leadTag;
     base.leadScore = score.leadScore;
 
-    const billingY = String(base.billingStatus ?? "").toUpperCase() === "Y";
+    const billingActive = isActiveBilling(base.billingStatus);
     const cls = base.fiberStatus === "new_fiber"
-      ? (billingY ? "already_customer" : "fresh_fiber")
+      ? (billingActive ? "already_customer" : "fresh_fiber")
       : base.fiberStatus === "tenured_fiber"
-        ? (billingY ? "already_customer" : "tenured_fiber")
+        ? (billingActive ? "already_customer" : "tenured_fiber")
         : base.fiberAvailable ? "fiber_available" : "copper";
     emit("classified", {
       status: "ok", httpStatus: 200, latencyMs: Date.now() - searchStart, sessionId: getProxySessionId(),
@@ -1103,10 +1117,12 @@ async function scanAddressDirect(
   } catch (err: any) {
     // PRODUCT LAW: a failed check (timeout / network / no-token) carries NO
     // availability signal and NEVER aborts the run or becomes a "no fiber". These
-    // are TRANSIENT — mark blocked so the worker requeues the address and retries
-    // it with a fresh token. A stale/errored lease token is invalidated so the
-    // pool re-mints on the next attempt.
-    if (tokenLease?.token) authorizedTokenPool.invalidate(tokenLease.token);
+    // are TRANSIENT — mark blocked so the worker requeues the address and retries.
+    // The TOKEN IS KEPT: a bearer JWT is valid regardless of egress — a timeout
+    // means no response was seen, not that the token is bad. Burning it here made
+    // every network blip cost a Decodo mint AND re-spread the next batch across
+    // fresh slots (the 40-50-checks-one-token directive). Only a provider 401/403
+    // (handled above) invalidates.
     // A timeout/socket error usually means THIS Decodo egress is black-holing —
     // rotating (single-flight coalesced) moves the retry to a fresh residential IP
     // instead of feeding the same dead egress for minutes. Observed live: a stalled

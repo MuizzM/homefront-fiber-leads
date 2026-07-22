@@ -11,6 +11,8 @@
  *   null             — everything else (copper/DSL, no service)
  */
 
+import { isActiveBilling } from "@shared/billingStatus";
+
 export interface LeadScoreResult {
   leadTag: string | null;
   leadScore: number;
@@ -68,7 +70,7 @@ export function scoreLead(params: {
   // ── COMING SOON: NEW FIBER + has subscriber ──────────────────────────────────
   // Someone already has service here — likely a new customer on a newly built line.
   // Still worth knocking — they may want to upgrade speed tier or it's a household with multiple adults.
-  if (segment === "NEW FIBER" && billingStatus === "Y") {
+  if (segment === "NEW FIBER" && isActiveBilling(billingStatus)) {
     let score = 60;
     if (techType === "FIBER") score += 5;
 
@@ -98,7 +100,7 @@ export function scoreLead(params: {
   }
 
   // ── TENURED + subscriber — low priority ──────────────────────────────────────
-  if (segment === "TENURED" && billingStatus === "Y") {
+  if (segment === "TENURED" && isActiveBilling(billingStatus)) {
     return {
       leadTag: null,
       leadScore: 20,

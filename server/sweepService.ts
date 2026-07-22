@@ -456,13 +456,15 @@ function aggregateState(id: string) {
 }
 
 // Coming Soon = Kinetic reports NEW FIBER at an address that already has an active
-// account (billing_status='Y') — a planned/soon build to watch, stored separately
-// in kinetic_addresses (is_coming_soon) by the scan engine and rechecked nightly.
+// account — a planned/soon build to watch, stored separately in kinetic_addresses
+// (is_coming_soon) by the scan engine and rechecked nightly. The provider's active
+// value is 'A' (never 'Y' in 5,778 recorded responses); this counter matched only
+// 'Y' and so read 0 forever. Accept BOTH via the canonical predicate's values.
 function comingSoonCount(sweepId: string): number {
   const row = rawDb.prepare(
     `SELECT COUNT(*) n FROM sweep_job_targets j JOIN scan_targets s ON s.id=j.target_id
      JOIN availability_snapshots a ON a.id=(SELECT a2.id FROM availability_snapshots a2 WHERE a2.scan_target_id=s.id ORDER BY a2.checked_at_epoch DESC, a2.id DESC LIMIT 1)
-     WHERE j.sweep_job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND COALESCE(a.billing_status,'')='Y'`,
+     WHERE j.sweep_job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND upper(COALESCE(a.billing_status,'')) IN ('A','Y')`,
   ).get(sweepId) as any;
   return Number(row?.n ?? 0);
 }

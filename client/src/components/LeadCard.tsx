@@ -33,6 +33,8 @@ export interface CardProperty {
 
 // Which layout to render. Works with the SPA's hash router: the param may sit
 // before the hash (?cardVariant=2#/map) or inside it (#/map?cardVariant=2).
+// TOUCH devices default to V3 "Hero-accent" (h-14 primary action — gloved-thumb
+// sizing); mouse/trackpad keeps V1. ?cardVariant= always overrides for testing.
 export type CardVariant = 1 | 2 | 3;
 export function readCardVariant(): CardVariant {
   try {
@@ -43,7 +45,8 @@ export function readCardVariant(): CardVariant {
       : null;
     const fromSearch = new URLSearchParams(window.location.search).get("cardVariant");
     const v = Number(fromHash ?? fromSearch);
-    return v === 2 || v === 3 ? v : 1;
+    if (v === 1 || v === 2 || v === 3) return v;
+    return window.matchMedia?.("(pointer: coarse)")?.matches ? 3 : 1;
   } catch {
     return 1;
   }

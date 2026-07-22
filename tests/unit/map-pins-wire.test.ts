@@ -18,6 +18,16 @@ describe("packed map-pin wire format", () => {
     expect(unpackMapPins<typeof pins[number]>(packed)).toEqual({ pins, total: 2 });
   });
 
+  it("carries carrier through pack/unpack so a Frontier lead can paint red", () => {
+    const pins = [
+      { id: 1, lat: 35.8, lng: -80.2, leadStatus: "prospect", address: "1 A St", city: "X", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed", carrier: "frontier" },
+      { id: 2, lat: 35.7, lng: -80.3, leadStatus: "prospect", address: "2 A St", city: "X", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed", carrier: "kinetic" },
+    ];
+    const { pins: out } = unpackMapPins<typeof pins[number]>(packMapPins(pins));
+    expect(out[0].carrier).toBe("frontier");
+    expect(out[1].carrier).toBe("kinetic");
+  });
+
   it("rejects unknown versions and malformed rows", () => {
     expect(() => unpackMapPins({ v: 99, total: 0, rows: [] })).toThrow(/Unsupported/);
     expect(() => unpackMapPins({ v: MAP_PINS_WIRE_VERSION, total: 1, rows: [[1]] })).toThrow(/Invalid map row 0/);

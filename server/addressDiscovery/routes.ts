@@ -188,13 +188,13 @@ export function publicJob(
         const latest = `a.id=(SELECT a2.id FROM availability_snapshots a2 WHERE a2.scan_target_id=q.scan_target_id ORDER BY a2.checked_at_epoch DESC, a2.id DESC LIMIT 1)`;
         const coming = rawDb.prepare(
           `SELECT COUNT(*) n FROM qualification_checks q JOIN availability_snapshots a ON ${latest}
-           WHERE q.job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND COALESCE(a.billing_status,'')='Y'`,
+           WHERE q.job_id=? AND upper(COALESCE(a.household_segment_type,'')) LIKE '%NEW FIBER%' AND upper(COALESCE(a.billing_status,'')) IN ('A','Y')`,
         ).get(job.id) as any;
         const active = rawDb.prepare(
           `SELECT COUNT(*) n FROM qualification_checks q
            JOIN leads l ON l.source_scan_target_id=q.scan_target_id AND l.tenant_id=q.tenant_id AND l.lead_tag='fresh_fiber_confirmed'
            JOIN availability_snapshots a ON ${latest}
-           WHERE q.job_id=? AND COALESCE(a.billing_status,'')='Y'`,
+           WHERE q.job_id=? AND upper(COALESCE(a.billing_status,'')) IN ('A','Y')`,
         ).get(job.id) as any;
         const fresh = rawDb.prepare(
           `SELECT SUM(CASE WHEN datetime(l.created_at)>=datetime(?) THEN 1 ELSE 0 END) newLeads,

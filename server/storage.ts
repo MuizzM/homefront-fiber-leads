@@ -96,6 +96,7 @@ export interface IStorage {
     opts: { status?: string; zip?: string; city?: string; state?: string; assignedRepId?: number | "unassigned"; fiberStatus?: string; limit: number; offset: number },
   ): { rows: Lead[]; total: number };
   getLeadById(id: number): Lead | undefined;
+  findLeadByAddress(tenantId: number | null, address: string, city: string, state: string, zip: string): Lead | undefined;
   createLead(lead: InsertLead): Lead;
   upsertLeadByAddress(lead: InsertLead & LegacyScanFields): { lead: Lead; created: boolean };
   updateLead(id: number, updates: Partial<InsertLead>, tenantId?: number): Lead | undefined;
@@ -345,8 +346,17 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_rep_applications_tenant_status_source ON rep_applications(tenant_id, status, application_source, created_at DESC)`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
-    // Persistent address pool — harvest once, re-scan for fiber-status changes
-    `CREATE TABLE IF NOT EXISTS scan_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL UNIQUE, city TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'NC', zip TEXT NOT NULL, lat REAL, lng REAL, tenant_id INTEGER, source TEXT, last_fiber_status TEXT, last_is_new_fiber INTEGER NOT NULL DEFAULT 0, last_billing_status TEXT, df_address_id TEXT, scan_count INTEGER NOT NULL DEFAULT 0, last_scanned_at TEXT, converted_to_lead_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    // Persistent address pool — harvest once, re-scan for fiber-status changes.
+    // NOTE: no column-level UNIQUE(address). A global unique-by-address made a
+    // real "104 Oak St, Broadway" collide with an existing "104 Oak St, Sanford"
+    // — the second city's house was thrown away (route 409, sweep INSERT OR
+    // IGNORE), losing a genuine NEW FIBER + N lead. Uniqueness is now
+    // (address, city, state) via the functional index below; existing DBs with
+    // the old constraint are rebuilt after the migration loop.
+    `CREATE TABLE IF NOT EXISTS scan_targets (id INTEGER PRIMARY KEY AUTOINCREMENT, address TEXT NOT NULL, city TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'NC', zip TEXT NOT NULL, lat REAL, lng REAL, tenant_id INTEGER, source TEXT, last_fiber_status TEXT, last_is_new_fiber INTEGER NOT NULL DEFAULT 0, last_billing_status TEXT, df_address_id TEXT, scan_count INTEGER NOT NULL DEFAULT 0, last_scanned_at TEXT, converted_to_lead_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    // The UNIQUE-by-(address,city,state) index is created imperatively AFTER the
+    // migration loop (migrateScanTargetsAddressUniqueness) — it must dedup the
+    // existing case/whitespace-variant rows FIRST, or a UNIQUE index build fails.
     `ALTER TABLE scan_targets ADD COLUMN first_seen_live_at TEXT`,
     `ALTER TABLE scan_targets ADD COLUMN last_availability_status TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`,
@@ -1751,6 +1761,11 @@ export function runMigrations() {
       }
     } catch (e: any) { console.warn(`Migration warning (${table} GA CHECK):`, e.message); }
   }
+  // scan_targets UNIQUE(address) → UNIQUE(address, city, state). Dedups the
+  // case/whitespace address variants first, so the new unique index can build.
+  try { migrateScanTargetsAddressUniqueness(raw); }
+  catch (e: any) { console.warn("[migration] scan_targets addr-city-state uniqueness:", e?.message); }
+
   // Seed default commission rate if none exist
   try {
     const existing = raw.prepare("SELECT id FROM commission_rates LIMIT 1").get();
@@ -1767,6 +1782,74 @@ export function runMigrations() {
   catch (e: any) { console.warn("[migration] leads canonical_key merge failed:", e?.message); }
 
   bootstrapDefaultTenant(raw);
+}
+
+// ── scan_targets: one house per (address, city, state) ─────────────────────────
+// The historical `address TEXT NOT NULL UNIQUE` made a real "104 Oak St,
+// Broadway" collide with an existing "104 Oak St, Sanford" — the second city's
+// house was thrown away (route 409 / sweep INSERT OR IGNORE), losing a genuine
+// NEW FIBER + N lead. This drops that constraint and enforces uniqueness on
+// (address, city, state) instead. Two steps, both required before the UNIQUE
+// index can build on a live DB:
+//   1. DEDUP the existing case/whitespace address variants (the audit found
+//      ~28,525) down to one survivor per normalized (address, city, state),
+//      keeping the row that already links to a lead, else the most-recently
+//      scanned, else the lowest id.
+//   2. Rebuild the table without UNIQUE(address) if it still carries it, then
+//      create the UNIQUE index.
+// Idempotent: once the index exists and the table has no old constraint, it's a
+// no-op. Runs inside ONE transaction so a partial state is never observable.
+function migrateScanTargetsAddressUniqueness(raw: import("better-sqlite3").Database): void {
+  const tableRow = raw.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='scan_targets'`).get() as any;
+  if (!tableRow?.sql) return; // table not created yet — a later boot handles it
+  const hasOldUnique = /address\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i.test(tableRow.sql);
+  const hasIndex = !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_scan_targets_addr_city_state'`).get();
+  if (!hasOldUnique && hasIndex) return; // already migrated
+
+  const recreateIndexes = () => {
+    raw.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_targets_addr_city_state ON scan_targets(lower(trim(address)), lower(trim(city)), upper(trim(state)))`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_scanned ON scan_targets(last_scanned_at)`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_reprobe ON scan_targets(last_scanned_at, inconclusive_attempts)`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_green_unlinked ON scan_targets(tenant_id, last_fiber_status, last_billing_status) WHERE converted_to_lead_id IS NULL`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_fresh_opportunity ON scan_targets(first_seen_fiber_at, last_customer_segment)`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_canonical ON scan_targets(tenant_id, canonical_key)`);
+    raw.exec(`CREATE INDEX IF NOT EXISTS idx_scan_targets_lifecycle ON scan_targets(lifecycle_state, lifecycle_changed_at)`);
+  };
+
+  raw.transaction(() => {
+    // Step 1 — collapse duplicate spellings to ONE survivor per normalized
+    // key (a lead-linked row wins, then most-recent scan, then lowest id).
+    // ROW_NUMBER over a single partition sort is O(n log n); a correlated
+    // per-row subquery was O(n^2) and hung the boot on 300k+ rows.
+    const removed = raw.prepare(`
+      DELETE FROM scan_targets WHERE id IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY lower(trim(address)), lower(trim(city)), upper(trim(state))
+            ORDER BY (converted_to_lead_id IS NOT NULL) DESC, last_scanned_at DESC, id ASC
+          ) AS rn FROM scan_targets
+        ) WHERE rn > 1
+      )`).run().changes;
+    if (removed > 0) console.log(`[migration] scan_targets: merged ${removed} duplicate address spellings`);
+
+    if (hasOldUnique) {
+      // Step 2 — rebuild without UNIQUE(address). newSql keeps the exact column
+      // set (derived from the live table SQL) so INSERT ... SELECT * matches.
+      const newSql = tableRow.sql
+        .replace(/address\s+TEXT\s+NOT\s+NULL\s+UNIQUE/i, "address TEXT NOT NULL")
+        .replace(/CREATE TABLE\s+["'`]?scan_targets["'`]?/i, "CREATE TABLE scan_targets_rebuild");
+      raw.exec(newSql);
+      raw.exec(`INSERT INTO scan_targets_rebuild SELECT * FROM scan_targets`);
+      raw.exec(`DROP TABLE scan_targets`);
+      raw.exec(`ALTER TABLE scan_targets_rebuild RENAME TO scan_targets`);
+      recreateIndexes();
+      console.log("[migration] scan_targets: rebuilt without UNIQUE(address); now unique by (address, city, state)");
+    } else {
+      // Table already lacks the old constraint (fresh DB, or a prior partial
+      // run) — just ensure the unique index exists now that dups are gone.
+      recreateIndexes();
+    }
+  })();
 }
 
 // ── One-time (idempotent) duplicate-lead merge + canonical uniqueness ──────────
@@ -2088,7 +2171,7 @@ export class Storage implements IStorage {
       SELECT
         s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
         s.leadStatus, s.fiberStatus, s.assignedRepId, s.leadScore,
-        s.leadTag, s.freshConfidence,
+        s.leadTag, s.freshConfidence, s.carrier,
         rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
       FROM scoped s
       LEFT JOIN ranked_visits rv ON rv.leadId = s.id AND rv.rowNumber = 1
@@ -2171,6 +2254,13 @@ export class Storage implements IStorage {
     const countQ = db.select({ c: sql<number>`count(*)` }).from(leads);
     const total = Number((where ? countQ.where(where) : countQ).get()?.c ?? 0);
     return { rows, total };
+  }
+  // Canonical-key lookup so a route can distinguish "already existed" from
+  // "created" (createLead silently returns the existing row on duplicates).
+  findLeadByAddress(tenantId: number | null, address: string, city: string, state: string, zip: string): Lead | undefined {
+    const canonicalKey = normalizeKineticAddressKey(address ?? "", city ?? "", state ?? "", String(zip ?? ""));
+    return rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND canonical_key = ? LIMIT 1")
+      .get(tenantId ?? getDefaultTenantId(), canonicalKey) as Lead | undefined;
   }
   createLead(lead: InsertLead): Lead {
     const now = new Date().toISOString();
@@ -2831,8 +2921,10 @@ export class Storage implements IStorage {
       .run(key, city.trim(), state.trim().toUpperCase(), addressCount);
   }
   // ── Scan targets (persistent address pool) ───────────────────────────────────
-  // Insert harvested addresses once; duplicates are ignored (address is UNIQUE),
-  // so the pool grows without re-geocoding. Returns how many NEW rows were added.
+  // Insert harvested addresses once; duplicates are ignored (unique by
+  // address + city + state — a same-street-name house in ANOTHER city is now a
+  // distinct row, not silently dropped), so the pool grows without re-geocoding.
+  // Returns how many NEW rows were added.
   // Insert new pool addresses AND enrich existing ones. A row discovered from
   // Provider observations may arrive with an address identifier,
   // provider coords, and current status — so it lands complete and needs no

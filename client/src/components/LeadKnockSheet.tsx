@@ -22,7 +22,7 @@ import {
   DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle,
   type LucideIcon,
 } from "lucide-react";
-import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx } from "@/lib/mapPins";
+import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
@@ -255,17 +255,23 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const peekY = Math.max(0, sheetH - (peekBasePx + safeBottom));
 
   // ── Drag (handle + header only) ──────────────────────────────────────────────
+  // Per-frame drag position lives in a REF and is written straight to
+  // sheetRef.style.transform — React renders exactly twice per drag (start: drop
+  // the transition class; end: snap), never once per pointermove. A stray
+  // re-render mid-drag is harmless: the render-time transform reads dragYRef.
   const [dragging, setDragging] = useState(false);
-  const [dragY, setDragY] = useState(0);
+  const dragYRef = useRef(0);
   const dragRef = useRef<{
     pointerId: number; startClientY: number; startOffset: number;
     lastY: number; lastT: number; vy: number; moved: boolean;
   } | null>(null);
   const suppressClick = useRef(false);
+  // Never leave the pulse loop paused if the sheet unmounts mid-drag.
+  useEffect(() => () => setSheetDragActive(false), []);
 
   const currentOffset = () => {
     if (closing) return sheetH;
-    if (dragging) return dragY;
+    if (dragging) return dragYRef.current;
     return snap === "expanded" ? 0 : peekY;
   };
 
@@ -283,12 +289,20 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (!d || e.pointerId !== d.pointerId) return;
     const total = e.clientY - d.startClientY;
     if (!d.moved && Math.abs(total) < TAP_SLOP_PX) return; // still a tap
-    if (!d.moved) { d.moved = true; setDragging(true); suppressClick.current = true; }
+    if (!d.moved) {
+      d.moved = true;
+      dragYRef.current = Math.max(0, d.startOffset + total);
+      setDragging(true); // ONE render: drops the transition class
+      setSheetDragActive(true); // pauses the map pulse loop for the drag
+      suppressClick.current = true;
+    }
     const dt = e.timeStamp - d.lastT;
     if (dt > 0) d.vy = (e.clientY - d.lastY) / dt;
     d.lastY = e.clientY;
     d.lastT = e.timeStamp;
-    setDragY(Math.max(0, d.startOffset + total));
+    // Per-frame position: ref + direct style write, zero React work.
+    dragYRef.current = Math.max(0, d.startOffset + total);
+    if (sheetRef.current) sheetRef.current.style.transform = `translateY(${dragYRef.current}px)`;
   };
 
   const endDrag = (e: React.PointerEvent, cancelled: boolean) => {
@@ -297,7 +311,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     dragRef.current = null;
     try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch { /* jsdom */ }
     if (!d.moved) return; // tap — let the click reach its target
-    setDragging(false);
+    setDragging(false); // ONE render: restores the transition class + snap transform
+    setSheetDragActive(false);
     if (cancelled) return; // spring back to the current snap
     const y = Math.max(0, d.startOffset + (d.lastY - d.startClientY));
     if (y > peekY + CLOSE_OVERDRAG_PX) { onClose(); return; }
@@ -515,7 +530,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     : closing
       ? "translateY(100%)"
       : dragging
-        ? `translateY(${dragY}px)`
+        ? `translateY(${dragYRef.current}px)`
         : snap === "expanded"
           ? "translateY(0px)"
           : `translateY(${peekY}px)`;
@@ -594,7 +609,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                   data-testid="knock-copy-address"
                   aria-label="Copy address"
                   onClick={copyAddress}
-                  className="shrink-0 mt-[2px] h-7 w-7 flex items-center justify-center rounded-md text-white/45 hover:text-white active:scale-90 transition"
+                  className="relative shrink-0 mt-[2px] h-7 w-7 flex items-center justify-center rounded-md text-white/45 hover:text-white active:scale-90 transition after:absolute after:-inset-2"
                 >
                   {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-[15px] h-[15px]" />}
                 </button>
@@ -618,7 +633,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               data-testid="knock-sheet-close"
               aria-label="Close"
               onClick={onClose}
-              className="shrink-0 -mr-1 -mt-0.5 h-8 w-8 flex items-center justify-center rounded-full text-white/50 hover:text-white hover:bg-white/10 active:scale-90 transition"
+              className="relative shrink-0 -mr-1 -mt-0.5 h-8 w-8 flex items-center justify-center rounded-full text-white/50 hover:text-white hover:bg-white/10 active:scale-90 transition after:absolute after:-inset-2"
             >
               <X className="w-[18px] h-[18px]" />
             </button>
@@ -758,7 +773,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     data-testid="note-add-btn"
                     // Fires before blur (pointerdown) so this never double-commits.
                     onPointerDown={(e) => { e.preventDefault(); commitNote(note); }}
-                    className="absolute right-2 bottom-2.5 h-9 px-3.5 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
+                    className="absolute right-2 bottom-2 h-11 px-4 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
                   >
                     Add
                   </button>
@@ -780,7 +795,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                 value={renderedLead.assignedRepId ?? ""}
                 onChange={e => assignLead(e.target.value ? Number(e.target.value) : null)}
                 data-testid="card-assign-select"
-                className="flex-1 h-9 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60"
+                className="flex-1 h-11 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60"
               >
                 <option value="" className="text-slate-900">Unassigned</option>
                 {(teamQuery.data ?? []).filter(m => m.active).map(m => (

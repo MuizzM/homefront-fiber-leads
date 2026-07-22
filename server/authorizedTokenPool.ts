@@ -94,6 +94,7 @@ export class AuthorizedTokenPool {
   private readonly slots: TokenSlot[] = [];
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
   private warmInFlight: Promise<void> | null = null;
+  private warmFirstReady: Promise<void> | null = null;
   private leaseSequence = 0;
   private activeRefreshes = 0;
   private readonly refreshWaiters: Array<() => void> = [];
@@ -134,10 +135,20 @@ export class AuthorizedTokenPool {
   }
 
   async lease(addressKey?: string): Promise<AuthorizedTokenLease> {
-    await this.ensureWarm();
-    await this.refreshDueSlots();
     const normalizedAddressKey = addressKey?.trim() || null;
+    // FAST PATH — an interactive check must never queue behind pool husbandry.
+    // If ANY ready token exists, take it now: no ensureWarm, no due-slot
+    // refresh wave (a burst that emptied 10 slots used to make the next field
+    // tap wait ~10 serialized mints before its own search dispatched). pickReady
+    // filters on real expiry, so a stale slot can never be returned here.
     let slot = this.pickReady(normalizedAddressKey);
+    if (!slot) {
+      await this.ensureWarm();
+      // Bounded: mint at most ONE due slot synchronously for this lease; the
+      // maintenance tick refreshes the rest in the background.
+      await this.refreshDueSlots(1);
+      slot = this.pickReady(normalizedAddressKey);
+    }
     if (slot && slot.leases >= this.maxLeasesPerToken && this.slots.length < this.maxSize) {
       const expanded = this.createSlot();
       await this.refreshSlot(expanded.id, true);
@@ -317,36 +328,63 @@ export class AuthorizedTokenPool {
   }
 
   private async ensureWarm(): Promise<void> {
-    if (this.warmInFlight) return this.warmInFlight;
-    this.warmInFlight = (async () => {
-      this.updateStates();
-      // When mints are FAILING, bound the synchronous wave to one concurrency
-      // window: a lease must never sit through dozens of doomed mints before
-      // concluding the pool is empty (the maintenance timer keeps retrying in
-      // the background). Healthy pools warm fully, immediately.
-      const wave = this.consecutiveMintFailures > 0 ? this.maxConcurrentRefreshes : Number.MAX_SAFE_INTEGER;
-      const needed = Math.min(wave, this.maxSize - this.slots.length, Math.max(0, this.warmMinimum - this.slots.length));
-      const created = Array.from({ length: needed }, () => this.createSlot());
-      await Promise.allSettled(created.map(slot => this.refreshSlot(slot.id, true)));
+    // A leaser needs exactly ONE ready token — never the whole warm pool.
+    if (this.pickReady()) return;
+    if (this.warmInFlight) {
+      await (this.warmFirstReady ?? this.warmInFlight);
+      return;
+    }
+    this.updateStates();
+    // When mints are FAILING, bound the synchronous wave to one concurrency
+    // window: a lease must never sit through dozens of doomed mints before
+    // concluding the pool is empty (the maintenance timer keeps retrying in
+    // the background). Healthy pools warm fully, immediately.
+    const wave = this.consecutiveMintFailures > 0 ? this.maxConcurrentRefreshes : Number.MAX_SAFE_INTEGER;
+    const needed = Math.min(wave, this.maxSize - this.slots.length, Math.max(0, this.warmMinimum - this.slots.length));
+    const created = Array.from({ length: needed }, () => this.createSlot());
+    const refreshes = created.map(slot => this.refreshSlot(slot.id, true));
+    const full = (async () => {
+      await Promise.allSettled(refreshes);
       if (!this.pickReady()) {
         const reusable = this.slots.find(slot => slot.state === "EMPTY" || slot.state === "EXPIRED");
-        if (reusable) await this.refreshSlot(reusable.id, true);
+        if (reusable) await this.refreshSlot(reusable.id, true).catch(() => {});
       }
     })();
-    try { await this.warmInFlight; }
-    finally { this.warmInFlight = null; }
+    this.warmInFlight = full;
+    // COLD-START FIX: the caller unblocks on the FIRST successful mint (~one
+    // Decodo RTT) while the rest of the pool warms in the background. The old
+    // allSettled-only shape made the first post-boot check wait for EVERY warm
+    // mint serialized through the 100ms mint gate (~6-16s after a redeploy).
+    this.warmFirstReady = refreshes.length
+      ? Promise.race([Promise.any(refreshes).then(() => undefined, () => undefined), full])
+      : full;
+    void full.finally(() => {
+      this.warmInFlight = null;
+      this.warmFirstReady = null;
+    });
+    await this.warmFirstReady;
   }
 
-  private async refreshDueSlots(): Promise<void> {
+  private async refreshDueSlots(maxWave?: number): Promise<void> {
     const now = this.now();
     this.updateStates();
+    // Demand-driven: refresh only enough slots to keep warmMinimum READY.
+    // The old shape re-minted EVERY empty/expired slot on every 10s tick —
+    // with a grown pool that was ~40 perpetual mints per token window at zero
+    // traffic, and a transient failure burst permanently raised the rate
+    // (slots are never removed). Excess dead slots now just sit idle.
+    const ready = this.slots.filter(slot =>
+      slot.state === "READY" && !!slot.token && slot.expiresAt > now + this.refreshMarginMs).length;
+    const deficit = Math.max(0, this.warmMinimum - ready);
+    if (deficit === 0) return;
     const due = this.slots.filter(slot =>
       (slot.state === "READY" && slot.expiresAt <= now + this.refreshMarginMs) ||
       slot.state === "EXPIRED" ||
       slot.state === "EMPTY");
     // Same failure-aware bound as ensureWarm: when the endpoint is down, one
     // wave per lease; the maintenance timer sweeps the rest.
-    const wave = this.consecutiveMintFailures > 0 ? this.maxConcurrentRefreshes : due.length;
+    const failureWave = this.consecutiveMintFailures > 0 ? this.maxConcurrentRefreshes : due.length;
+    const wave = Math.min(deficit, maxWave ?? failureWave);
     await Promise.allSettled(due.slice(0, wave).map(slot => this.refreshSlot(slot.id, true)));
   }
 
@@ -374,7 +412,13 @@ export class AuthorizedTokenPool {
         const existingDelta = Number(!a.addressKeys.has(addressKey)) - Number(!b.addressKeys.has(addressKey));
         if (existingDelta) return existingDelta;
       }
-      return a.addressKeys.size - b.addressKeys.size
+      // STICKY REUSE (owner directive: "if I scan 40-50 and it works, do NOT
+      // fetch a new token"): drain the MOST-used token toward its per-token
+      // check budget before touching the next one. The old least-used-first
+      // order round-robined a batch across every warm slot, so 45 checks
+      // burned ~10 tokens instead of 1. Capped slots are already excluded by
+      // the filter above, so a full token hands off to the next automatically.
+      return b.addressKeys.size - a.addressKeys.size
         || a.leases - b.leases
         || a.lastLeaseSequence - b.lastLeaseSequence
         || a.id - b.id;

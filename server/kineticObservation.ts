@@ -212,12 +212,16 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
   let customer!: ReturnType<typeof classifyCustomerOpportunity>;
 
   rawDb.transaction(() => {
+    // Resolve the target by the FULL identity (address + city + state), not the
+    // street text alone. Keying on address only made "104 Oak St, Broadway"
+    // resolve to (and then 409 against) an existing "104 Oak St, Sanford" — a
+    // real house in the second city was thrown away, proxy money spent, no lead.
+    // scan_targets is now unique by (address, city, state), so this returns the
+    // ACTUAL row for this house, or none (a genuinely new house is inserted).
     let target = rawDb.prepare(`SELECT id,address,city,state,tenant_id,last_scanned_at,last_fiber_available,
         last_fiber_status,last_is_new_fiber,last_billing_status,last_availability_status
-      FROM scan_targets WHERE lower(trim(address))=lower(trim(?)) LIMIT 1`).get(address) as TargetState | undefined;
-    if (target && (target.city.trim().toLowerCase() !== city.toLowerCase() || target.state.trim().toUpperCase() !== state)) {
-      throw new Error(`KINETIC_OBSERVATION_ADDRESS_COLLISION: ${target.id}`);
-    }
+      FROM scan_targets WHERE lower(trim(address))=lower(trim(?))
+        AND lower(trim(city))=lower(trim(?)) AND upper(trim(state))=upper(trim(?)) LIMIT 1`).get(address, city, state) as TargetState | undefined;
     if (target && (target.tenant_id == null || Number(target.tenant_id) !== Number(tenantId))) {
       throw new Error(`KINETIC_OBSERVATION_TENANT_CONFLICT: ${target.id}`);
     }
@@ -355,7 +359,18 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
     }
   }).immediate();
 
-  const projection = projectConfirmedFreshLeads(Number(tenantId), [targetId]);
+  // GUARDED: the observation above is already durably persisted — a projection
+  // failure must not turn a recorded provider answer into a caller-facing 500.
+  // The next projector pass over this target republishes it.
+  let projection: ReturnType<typeof projectConfirmedFreshLeads>;
+  try {
+    projection = projectConfirmedFreshLeads(Number(tenantId), [targetId]);
+  } catch (error: any) {
+    structuredLog("fresh_fiber.projection_failed", {
+      tenantId: Number(tenantId), targetId, error: String(error?.message ?? error),
+    }, "warn");
+    projection = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, leadIds: [], errors: [] };
+  }
   if (projection.published > 0) requestImmediateAlert(Number(tenantId));
   return {
     tenantId: Number(tenantId), targetId, targetCreated, conclusive, fiberAvailable,

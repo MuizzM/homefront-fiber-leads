@@ -49,9 +49,16 @@ describe("AuthorizedTokenPool", () => {
       },
     });
     const leases = await Promise.all(Array.from({ length: 6 }, () => pool.lease()));
-    expect(calls).toBe(6);
+    // Leases unblock on the FIRST ready token (cold-start fix) while the rest
+    // of the pool warms in the background — so all 6 leases are served, the
+    // storm cap held, and the full warm completes shortly after.
     expect(peakMints).toBe(2);
-    expect(pool.snapshot()).toMatchObject({ ready: 6, activeLeases: 6, activeRefreshes: 0 });
+    expect(leases).toHaveLength(6);
+    await vi.waitFor(() => {
+      expect(calls).toBe(6);
+      expect(pool.snapshot()).toMatchObject({ ready: 6, activeLeases: 6, activeRefreshes: 0 });
+    });
+    expect(peakMints).toBe(2); // background warm respected the cap too
     leases.forEach(lease => lease.release());
     pool.stop();
   });
@@ -93,7 +100,26 @@ describe("AuthorizedTokenPool", () => {
     expect(pool.snapshot()).not.toHaveProperty("disabled");
   });
 
-  it("distributes unique addresses evenly and enforces per-token batch capacity", async () => {
+  it("drains one token at a time across a sequential batch — 45 checks ride ONE token (sticky reuse)", async () => {
+    const mint = vi.fn(async (slotId: number) => ({ token: `token-${slotId}`, expiresAt: Date.now() + 120_000 }));
+    const pool = new AuthorizedTokenPool({
+      maxSize: 100, warmMinimum: 4, maxChecksPerToken: 250, maxLeasesPerToken: 1_000,
+      refreshMarginMs: 10_000, mint,
+    });
+    for (let index = 0; index < 45; index++) {
+      const lease = await pool.lease(`address-${index}`);
+      lease.release();
+    }
+    // Owner directive: a working token is REUSED for the whole 40-50 batch —
+    // exactly one slot carries every check, and no mint beyond the warm pool.
+    const used = pool.snapshot().slots.filter(slot => slot.checksUsed > 0);
+    expect(used).toHaveLength(1);
+    expect(used[0].checksUsed).toBe(45);
+    await vi.waitFor(() => expect(mint.mock.calls.length).toBe(4)); // warm mints only
+    pool.stop();
+  });
+
+  it("hands off token-by-token at capacity and enforces per-token batch capacity", async () => {
     const pool = new AuthorizedTokenPool({
       maxSize: 3,
       warmMinimum: 3,

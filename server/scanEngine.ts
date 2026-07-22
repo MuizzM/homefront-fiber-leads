@@ -51,6 +51,7 @@ import { projectConfirmedFreshLeads } from "./freshFiberProjector";
 import { watchComingSoon } from "./comingSoonProgram";
 import { structuredLog } from "./structuredLog";
 import { calculateFiberFreshness } from "@shared/fiberFreshness";
+import { isActiveBilling } from "@shared/billingStatus";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
 import { ensureKineticScannerSchema, upsertKineticAddress } from "./kineticScannerStore";
 import { hashKineticEvidence } from "./kineticProviderAdapter";
@@ -463,10 +464,21 @@ export async function runScanWorker(
       // licensed FCC/partner batch loaded earlier in the day). Project after
       // every completed batch so pre-existing evidence unlocks a confirmed lead
       // immediately instead of waiting for the evidence to be re-imported.
-      const projected = projectConfirmedFreshLeads(
-        tenantId,
-        batch.map((target) => target.targetId),
-      );
+      // GUARDED: a projection failure must never flip an otherwise-healthy run
+      // to status='error' — the evidence is durably persisted, so the next
+      // projector pass (any trigger) republishes what this one missed.
+      let projected: ReturnType<typeof projectConfirmedFreshLeads>;
+      try {
+        projected = projectConfirmedFreshLeads(
+          tenantId,
+          batch.map((target) => target.targetId),
+        );
+      } catch (error: any) {
+        structuredLog("fresh_fiber.projection_failed", {
+          tenantId, batch: batch.length, error: String(error?.message ?? error),
+        }, "warn");
+        projected = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, leadIds: [], errors: [] };
+      }
       if (projected.published > 0) {
         // Wake the harvest: these new drops just made their cell/street
         // neighbours immediately due (flip-proximity), so scan them within
@@ -601,7 +613,7 @@ function applyCheck(
     // score, expected completion). Rechecks are scheduled exclusively by the
     // comingSoonWatchlist engine, whose row this same conclusive result also
     // upserts via recordAvailabilitySnapshot's choke point.
-    if (String(result.billingStatus) === "Y") {
+    if (isActiveBilling(result.billingStatus)) {
       try {
         watchComingSoon(tenantId, {
           address: result.address || t.address,
@@ -637,7 +649,7 @@ function applyCheck(
         maximumQualification: result.maxDownloadMbps,
         estimatedCompletionDate: null,
         isLive: result.fiberAvailable,
-        isComingSoon: result.billingStatus === "Y",
+        isComingSoon: isActiveBilling(result.billingStatus),
         isCopperUpgradeCandidate: null,
         billingStatus: result.billingStatus,
         householdSegmentType: result.householdSegmentType,

@@ -208,6 +208,49 @@ describe("scan verdict API", () => {
     expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE address=?`).get(address) as any).n).toBe(1);
   });
 
+  it("field-map scan-house: a NEW FIBER + N tap creates a green lead and returns isFreshLead + leadId", async () => {
+    const address = "500 Field Tap St";
+    scanAddressMock.mockResolvedValue({
+      ...resultFor("100 x"), address, city: "Lexington", state: "NC", zip: "27292",
+      fiberStatus: "new_fiber", isNewFiber: true, fiberAvailable: true, billingStatus: "N",
+      householdSegmentType: "NEW FIBER", techType: "FTTP", apiSource: "kinetic_live",
+      // lat/lng absent from the provider answer → the tapped coords must be the fallback.
+      lat: null, lng: null,
+    });
+    const response = await api("/api/leads/scan-house", {
+      method: "POST",
+      body: JSON.stringify({ address, city: "Lexington", state: "NC", zip: "27292", lat: 35.9, lng: -80.3 }),
+    });
+    const body = await response.json() as any;
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(body.isFreshLead).toBe(true);
+    expect(body.leadId).toBeGreaterThan(0);
+    expect(body.unresolved).toBe(false);
+    // A real, single green lead — created via the projector (never a direct
+    // insert), located at the TAPPED point so the pin can't be filtered out.
+    const lead = rawDb.prepare(`SELECT lead_tag,lat,lng FROM leads WHERE address=?`).get(address) as any;
+    expect(lead).toMatchObject({ lead_tag: "fresh_fiber_confirmed", lat: 35.9, lng: -80.3 });
+  });
+
+  it("field-map scan-house: a blocked/failed answer is UNRESOLVED, never a false 'no fiber'", async () => {
+    const address = "600 Throttled St";
+    scanAddressMock.mockResolvedValue({
+      ...resultFor("300 x"), address, city: "Lexington", state: "NC", zip: "27292",
+      fiberStatus: "unknown", isNewFiber: false, fiberAvailable: false,
+      apiSource: "failed", blocked: true,
+    });
+    const response = await api("/api/leads/scan-house", {
+      method: "POST",
+      body: JSON.stringify({ address, city: "Lexington", state: "NC", zip: "27292", lat: 35.9, lng: -80.31 }),
+    });
+    const body = await response.json() as any;
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(body.unresolved).toBe(true);
+    expect(body.isFreshLead).toBe(false);
+    expect(body.verdict).not.toBe("not_fresh"); // a throttle must never read as a No
+    expect((rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE address=?`).get(address) as any).n).toBe(0);
+  });
+
   it("rejects malformed one-address checks before spending a provider request", async () => {
     const response = await api("/api/check-fiber", {
       method: "POST",

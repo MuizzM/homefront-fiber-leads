@@ -10,6 +10,7 @@ import {
   type KineticPostalAddress,
   type NormalizedKineticAddress,
 } from "./kineticProviderAdapter";
+import { isActiveBilling } from "@shared/billingStatus";
 
 const PARSER_VERSION = "authorized-address-search-v1";
 
@@ -57,7 +58,7 @@ export class KineticAuthorizedSearchAdapter implements KineticEvidenceSourceAdap
         estimatedCompletionDate: null,
         isLive: result.fiberAvailable,
         isComingSoon: result.isNewFiber
-          ? result.billingStatus === "Y"
+          ? isActiveBilling(result.billingStatus)
           : null,
         isCopperUpgradeCandidate: null,
         billingStatus: result.billingStatus,

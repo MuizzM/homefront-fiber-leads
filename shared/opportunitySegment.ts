@@ -1,3 +1,5 @@
+import { isActiveBilling } from "./billingStatus";
+
 export type CustomerSegment = "new_opportunity" | "existing_customer" | "unknown";
 export type SegmentConfidence = "medium" | "low";
 
@@ -19,7 +21,7 @@ export function classifyCustomerOpportunity(input: {
   const segment = String(input.householdSegmentType ?? "").trim().toUpperCase();
   const signals = [
     input.fiberAvailable ? "provider_fiber_available" : "provider_fiber_unavailable",
-    billing === "N" ? "provider_billing_no_active_account" : billing === "Y" ? "provider_billing_active_account" : "provider_billing_unknown",
+    billing === "N" ? "provider_billing_no_active_account" : isActiveBilling(billing) ? "provider_billing_active_account" : "provider_billing_unknown",
     segment ? `provider_segment_${segment.toLowerCase().replace(/\s+/g, "_")}` : "provider_segment_unknown",
   ];
   if (!input.fiberAvailable) return {
@@ -30,7 +32,7 @@ export function classifyCustomerOpportunity(input: {
     segment: "new_opportunity", confidence: "medium", confirmed: false, signals,
     reason: "Kinetic indicates fiber serviceability and no active billing account. Provider-indicated, not independently confirmed.",
   };
-  if (billing === "Y") return {
+  if (isActiveBilling(billing)) return {
     segment: "existing_customer", confidence: "medium", confirmed: false, signals,
     reason: "Kinetic indicates an active billing account. Provider-indicated, not independently confirmed.",
   };

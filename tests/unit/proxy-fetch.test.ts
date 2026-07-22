@@ -1,26 +1,37 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { proxyUrlFromEnv, rotateProxySession, getProxySessionId } from "../../server/proxy-fetch";
+import { proxyUrlFromEnv, rotateProxySession, getProxySessionId, __resetRotationStateForTests } from "../../server/proxy-fetch";
 
 describe("Decodo session rotation (single-flight reset)", () => {
   afterAll(() => { delete process.env.PROXY_URL; });
 
-  it("rebuilds the dispatcher on EVERY sequential call — not pinned after the first", async () => {
+  it("is not pinned after the first rotation — resumes rotating once the min-interval passes", async () => {
     // A dummy proxy URL: undici's ProxyAgent is lazy, so building one never
     // connects here. Regression guard for the sync-async-IIFE bug where the
-    // in-flight guard stayed pinned to a resolved promise and disabled all
-    // rotations after the first (which stalled the production scan at 0 checked).
+    // in-flight guard stayed pinned to a resolved promise and disabled ALL
+    // future rotations (which stalled the production scan at 0 checked).
+    //
+    // Rotations are now throttled by ROTATE_MIN_INTERVAL_MS so a transient-error
+    // burst can't strip every warm connection. __resetRotationStateForTests()
+    // simulates the window elapsing; the key guarantee is that after it, a
+    // rotation STILL advances the session (proving the guard is never pinned).
     process.env.PROXY_URL = "http://u:p@127.0.0.1:1";
     await new Promise(r => setTimeout(r, 50)); // let module-level undici load settle
+    __resetRotationStateForTests();
     const before = getProxySessionId();
     await rotateProxySession("t1");
     const after1 = getProxySessionId();
-    await rotateProxySession("t2");
-    const after2 = getProxySessionId();
-    await rotateProxySession("t3");
-    const after3 = getProxySessionId();
     expect(after1).not.toBe(before);   // 1st rotation advanced the session
-    expect(after2).not.toBe(after1);   // 2nd rotation advanced it again (bug would pin here)
-    expect(after3).not.toBe(after2);   // 3rd too
+
+    // Within the min-interval window a second rotation is suppressed (keep-alive
+    // pool survives) — the session does NOT advance.
+    await rotateProxySession("t2-throttled");
+    expect(getProxySessionId()).toBe(after1);
+
+    // Window elapsed → rotation works again (the guard was never permanently
+    // pinned — the original bug would leave it stuck here forever).
+    __resetRotationStateForTests();
+    await rotateProxySession("t3");
+    expect(getProxySessionId()).not.toBe(after1);
   });
 });
 

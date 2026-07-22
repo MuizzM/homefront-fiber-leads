@@ -148,7 +148,7 @@ function isAutoAreaName(name?: string | null): boolean {
   const n = name.trim();
   return /'s area$/.test(n) || n === "Unassigned area";
 }
-import { scanAddress, setManualToken, getTokenStatus, refreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, pauseScanning, resumeScanning, isScanningPaused, type ScanResult } from "./scanner";
+import { scanAddress, setManualToken, getTokenStatus, forceFreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, pauseScanning, resumeScanning, isScanningPaused, type ScanResult } from "./scanner";
 import { getInspectorSnapshot, getAddressTimeline, onScanEvent } from "./scanEvents";
 import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
@@ -930,6 +930,35 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // forever (street coordinates don't move), so repeat lookups cost nothing.
   // Mapbox includes 100k free geocoding requests/month; this uses a handful.
   const geocodeCache = new Map<string, { lng: number; lat: number; placeName: string }>();
+  // ONE bounded, cache-first forward geocode for server-side use (lead create
+  // fallback). Never a silent bulk path — a single call per unique address,
+  // null on any failure (the caller keeps the lead without coordinates rather
+  // than erroring). Shares the route cache above so repeats cost nothing.
+  async function forwardGeocodeOnce(q: string): Promise<{ lng: number; lat: number; placeName: string } | null> {
+    const trimmed = q.trim();
+    if (trimmed.length < 3) return null;
+    const key = trimmed.toLowerCase();
+    const cached = geocodeCache.get(key);
+    if (cached) return cached;
+    const token = process.env.MAPBOX_TOKEN ?? process.env.MAPBOX_PUBLIC_TOKEN ?? "";
+    if (!token) return null;
+    try {
+      const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(trimmed)}.json` +
+        `?access_token=${token}&country=us&limit=1&types=address`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (!r.ok) return null;
+      const data = await r.json();
+      const f = data.features?.[0];
+      if (!f) return null;
+      const [lng, lat] = f.center;
+      const result = { lng, lat, placeName: f.place_name ?? trimmed };
+      geocodeCache.set(key, result);
+      if (geocodeCache.size > 2000) geocodeCache.delete(geocodeCache.keys().next().value!); // FIFO bound
+      return result;
+    } catch {
+      return null;
+    }
+  }
   app.get("/api/geocode", requireCapability("scan.submit"), async (req, res) => {
     const q = String(req.query.q ?? "").trim();
     if (q.length < 3) return res.status(400).json({ error: "query too short" });
@@ -1355,7 +1384,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // a confirmed operational lead is actually published.
   (globalThis as any).__bustMapCache = bustMapCache;
 
-  app.post("/api/leads", requireTeamLead, (req: any, res: any) => {
+  app.post("/api/leads", requireTeamLead, async (req: any, res: any) => {
     if (req.body?.contactPhone != null || req.body?.ownerPhone != null) {
       return res.status(400).json({
         error: "Phone data must be added through the Calling compliance module.",
@@ -1363,7 +1392,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
     }
     const parsed = insertLeadSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ error: parsed.error });
+    if (!parsed.success) {
+      // A human-readable first issue ("zip: String must contain at least 5
+      // character(s)"), never the raw ZodError object — the client used to
+      // render "[object Object]" in the toast.
+      const issue = parsed.error.issues[0];
+      const field = issue?.path?.length ? `${issue.path.join(".")}: ` : "";
+      return res.status(400).json({ error: `${field}${issue?.message ?? "Invalid lead"}` });
+    }
     // Fresh-fiber provenance is server-authored by freshFiberProjector only.
     // A browser-created ordinary prospect must never forge the confirmation
     // badge, evidence sources, source target, or a provider-fresh classification.
@@ -1375,6 +1411,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     // Tenancy is never client-supplied: the lead belongs to the creator's org.
     const tenantId = req.user?.tenantId ?? getDefaultTenantId();
+    // Duplicate address → 200 + existed:true with the winning row, so the map
+    // can fly to the existing pin instead of ghost-inserting a second feature.
+    const existing = storage.findLeadByAddress(
+      tenantId,
+      parsed.data.address ?? "",
+      parsed.data.city ?? "",
+      parsed.data.state ?? "",
+      String((parsed.data as any).zip ?? ""),
+    );
+    if (existing) {
+      return res.status(200).json({ ...stripProviderIds(existing, req.user), existed: true });
+    }
     const safeLead = {
       ...parsed.data,
       tenantId,
@@ -1384,6 +1432,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       freshConfidence: undefined,
       freshSources: undefined,
     };
+    // Invisible-pin fix: a typed-in lead with no coordinates never rendered on
+    // the map (the pin feed skips null lat/lng). ONE bounded forward geocode
+    // fills them; on failure the lead still saves (list views show it).
+    if ((safeLead as any).lat == null || (safeLead as any).lng == null) {
+      const q = [safeLead.address, safeLead.city, safeLead.state, (safeLead as any).zip]
+        .filter(Boolean).join(", ");
+      const geo = await forwardGeocodeOnce(q);
+      if (geo) {
+        (safeLead as any).lat = geo.lat;
+        (safeLead as any).lng = geo.lng;
+      }
+    }
     res.status(201).json(stripProviderIds(storage.createLead(safeLead as any), req.user));
   });
   app.patch("/api/leads/:id", requireManager, (req, res) => {
@@ -1771,9 +1831,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Token is stored server-side; never returned to client
   app.post("/api/internal/refresh-token", requireAdmin, async (_req, res) => {
     try {
-      // Mint a fresh Braze token on demand. There is no halt/wedge to clear —
-      // scanning self-heals via per-run mint + per-401 remint + AIMD pacing.
-      await refreshTokenFromApi();
+      // Mint a genuinely fresh Braze token on demand (admin action — force, not
+      // reuse). There is no halt/wedge to clear — scanning self-heals via
+      // per-run mint + per-401 remint + AIMD pacing.
+      await forceFreshTokenFromApi();
       res.json({ success: true });
     } catch (e: any) {
       res.status(500).json({ error: `Refresh failed: ${e.message}` });
@@ -1829,6 +1890,80 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // Strip internal/proprietary fields before sending to client
     res.json(sanitizeFiberResult(result, persisted));
+  });
+
+  // ── Field-map per-house scan — the rep taps a rooftop and gets a live fiber
+  // verdict + a green pin if it's a FRESH_LEAD. Gated on scan.submit (reps hold
+  // it), NOT requireManager, so a field rep can qualify a door in the field.
+  // Routes through addressScanner (source "manual" → IMMEDIATE priority with the
+  // CRITICAL reservation, + the in-process/SQLite result cache) so a rep's tap
+  // never queues behind the statewide sweep and a repeat tap of the same house
+  // returns instantly. Persists via the same canonical writer + projector as
+  // every other surface — the pin is a real, cross-verified lead, never a direct
+  // insert. The tapped coords are the geo fallback so a lead can't be dropped by
+  // the null-lat/lng pin filter.
+  app.post("/api/leads/scan-house", requireCapability("scan.submit"), requireScanningAllowed, authorizedScanAdmission, async (req: any, res) => {
+    const parsed = z.object({
+      address: z.string().trim().min(3).max(180),
+      city: z.string().trim().min(2).max(100),
+      state: z.string().trim().length(2).transform(value => value.toUpperCase()).default("NC"),
+      zip: z.string().trim().regex(/^\d{5}(?:-\d{4})?$/),
+      lat: z.number().finite().optional(),
+      lng: z.number().finite().optional(),
+    }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Enter a valid street address, city, two-letter state, and ZIP code." });
+    const { address, city, state, zip, lat, lng } = parsed.data;
+
+    const startedAtMs = Date.now();
+    const result = await addressScanner(address, city, state, zip, { source: "manual" });
+    const tenantId = req.user?.tenantId ?? getDefaultTenantId();
+
+    storage.createFiberCheck({
+      tenantId,
+      address: `${address}, ${city}, ${state} ${zip}`,
+      lat: result.lat ?? lat ?? null, lng: result.lng ?? lng ?? null,
+      result: JSON.stringify(result.rawResponse ?? result),
+      fiberAvailable: result.fiberAvailable,
+      isNewFiber: result.isNewFiber,
+      isTenured: result.isTenured,
+      householdSegmentType: result.householdSegmentType,
+      billingStatus: result.billingStatus,
+      techType: result.techType,
+      speedTier: result.speedTier,
+      maxDownload: result.maxDownloadMbps,
+      competitorName: result.competitorName,
+      addressCatalogDate: result.addressCatalogDate,
+      apiSource: result.apiSource,
+    });
+
+    let persisted: PersistKineticObservationResult;
+    try {
+      // Pass the tapped coords as the geo fallback so a confirmed lead always
+      // has a location and can never be filtered out of the map-pin feed.
+      persisted = persistRouteKineticObservation("route-field-scan", tenantId, result, { lat: lat ?? null, lng: lng ?? null }, startedAtMs);
+    } catch (error) {
+      logObservationFailure("route-field-scan", result, error);
+      const code = String((error as any)?.message ?? "");
+      return res.status(code.includes("TENANT_CONFLICT") ? 409 : 500).json({
+        error: "The provider answered, but the result could not be recorded safely. No lead was created.",
+      });
+    }
+
+    const decision = sanitizeFiberResult(result, persisted);
+    // A blocked/failed provider answer is UNRESOLVED, never "no fiber" — the rep
+    // must see Retry, not a false negative that reads as "not a lead".
+    const unresolved = result.blocked === true || result.apiSource === "failed" || !persisted.conclusive;
+    const leadId = persisted.projection.leadIds[0] ?? null;
+    res.json({
+      ...decision,
+      // The rep-facing extras the sanitized business verdict omits: enough to
+      // drop the optimistic pin and show a clear result, nothing proprietary.
+      unresolved,
+      leadId,
+      isFreshLead: decision.isFreshFiber && leadId != null,
+      lat: result.lat ?? lat ?? null,
+      lng: result.lng ?? lng ?? null,
+    });
   });
 
   // Draw-area scan — accepts a bounding box {minLat, maxLat, minLng, maxLng}

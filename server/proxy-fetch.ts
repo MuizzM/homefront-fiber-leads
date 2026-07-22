@@ -26,6 +26,14 @@ let _rotateInFlight: Promise<void> | null = null;
 // no usage cap: fresh IPs are free, throttled IPs are not.
 const PROACTIVE_ROTATE_EVERY = boundedInt(process.env.PROXY_ROTATE_EVERY, 10, 0, 100_000);
 let _reqSinceRotate = 0;
+// Minimum spacing between session rotations. rebuildDispatcher throws away every
+// warm keep-alive connection, so a rotation storm (sequential 403s/timeouts, each
+// past the single-flight window) made every following request pay a cold
+// TCP+CONNECT+TLS handshake against the 5s search timeout — pushing checks into
+// the abort path, which rotated again. The single-flight guard only coalesces
+// CONCURRENT callers; this also throttles SEQUENTIAL ones.
+const ROTATE_MIN_INTERVAL_MS = boundedInt(process.env.ROTATE_MIN_INTERVAL_MS, 4_000, 0, 120_000);
+let _lastRotateAt = 0;
 
 // Sized to support the raised global search window. The distributed
 // coordinator, not this socket pool, remains the authoritative system ceiling.
@@ -114,16 +122,15 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
     // closed rather than ever sending an unproxied direct request.
     if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing an unconfigured direct request");
     if (!_sharedDispatcher) _sharedDispatcher = buildAgent(proxyUrl);
-    // Proactive session rotation: refresh the Decodo egress every N requests so no
-    // single residential IP is driven past Kinetic's rolling-window rate limit
-    // before it is retired. Verified in prod: a fresh dispatcher searches 200 while
-    // a long-lived one 403s. Single-flight rotateProxySession coalesces concurrent
-    // triggers into one rebuild, and this fires only when the counter trips — so it
-    // is cheap. Reactive rotation on 403 (in the scanner) still catches the rest.
-    if (PROACTIVE_ROTATE_EVERY > 0 && ++_reqSinceRotate >= PROACTIVE_ROTATE_EVERY) {
-      _reqSinceRotate = 0;
-      void rotateProxySession("proactive");
-    }
+    // Count this request toward the proactive-rotation cadence, but DON'T rotate
+    // before dispatching it — the request that trips the counter must run on the
+    // existing WARM dispatcher, and the rotation happens AFTER the response so
+    // the fresh (connectionless) session is paid for by the NEXT request, not
+    // this interactive one. Verified in prod: a fresh dispatcher searches 200
+    // while a long-lived one 403s; we retire the IP set, just not mid-request.
+    const shouldProactiveRotate =
+      PROACTIVE_ROTATE_EVERY > 0 && ++_reqSinceRotate >= PROACTIVE_ROTATE_EVERY;
+    if (shouldProactiveRotate) _reqSinceRotate = 0;
     try {
       const res = await _undiciFetch(url, { ...opts, dispatcher: _sharedDispatcher } as any) as unknown as Response;
       // Bandwidth governor: ledger every proxied response; a 407 from the
@@ -134,6 +141,8 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
         if (res.status === 407) noteProxyAuthFailure();
         else { noteProxySuccess(); recordProxyResponse(cl); }
       } catch { /* metrics must never break the transport */ }
+      // Rotate for the NEXT request, off the hot path.
+      if (shouldProactiveRotate) void rotateProxySession("proactive");
       return res;
     } catch (err: any) {
       if (err?.message?.includes("destroyed") || err?.message?.includes("closed") || err?.message?.includes("reset")) {
@@ -197,10 +206,26 @@ export async function rotateProxySession(reason?: string): Promise<void> {
   const proxyUrl = configuredProxyUrl();
   if (!proxyUrl) return;
   if (_rotateInFlight) return _rotateInFlight;
+  // Min-interval throttle for SEQUENTIAL callers (single-flight above only
+  // covers concurrent ones). Within the window we skip the rebuild entirely so
+  // the warm keep-alive pool survives — a burst of transient errors can't strip
+  // every connection and make the next check pay a cold handshake. A 401/403
+  // that lands inside the window still leaves that specific token invalidated
+  // by the caller; only the (redundant) session rebuild is suppressed.
+  const now = Date.now();
+  if (ROTATE_MIN_INTERVAL_MS > 0 && now - _lastRotateAt < ROTATE_MIN_INTERVAL_MS) return;
+  _lastRotateAt = now;
   const done = doRotate(proxyUrl, reason);
   _rotateInFlight = done;
   void done.catch(() => {}).finally(() => { if (_rotateInFlight === done) _rotateInFlight = null; });
   return done;
+}
+
+/** Test-only: reset rotation throttle state between cases. */
+export function __resetRotationStateForTests(): void {
+  _lastRotateAt = 0;
+  _reqSinceRotate = 0;
+  _rotateInFlight = null;
 }
 
 // In unlimited-plan mode the bandwidth governor rotates (instead of freezing) on

@@ -5,8 +5,11 @@
     <!-- viewport-fit=cover: the knock sheet hugs the bottom edge and pads itself
          with env(safe-area-inset-bottom) on notched phones. No maximum-scale /
          user-scalable=no: blocking pinch-zoom fails WCAG 2.2 AA (1.4.4 Resize
-         Text). iOS focus-zoom is prevented instead by ≥16px form controls (CSS). -->
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+         Text). iOS focus-zoom is prevented instead by ≥16px form controls (CSS).
+         interactive-widget=resizes-content: Android Chrome resizes the layout
+         when the keyboard opens, so a form's ZIP field + submit button stay
+         visible while typing instead of hiding under the keyboard. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
     <title>Home Front Solutions</title>
     <meta name="description" content="Home Front Solutions team portal — field map, leads, and territory management." />
     <link rel="icon" type="image/png" href="/hfs-logo.png" />

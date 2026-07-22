@@ -55,12 +55,17 @@ export function reconcileLeadFeatures(
   created: number;
   reused: number;
   removed: number;
+  /** When EXACTLY one feature changed and none were added/removed, its lead id.
+   * Lets the knock path skip the follow-up full setData when it already painted
+   * that one pin imperatively. */
+  soleChangedId: number | null;
 } {
   const features: LeadPointFeature[] = [];
   const byId = new Map<number, LeadPointFeature>();
   const seen = new Set<number>();
   let created = 0;
   let reused = 0;
+  let lastCreatedId: number | null = null;
 
   for (const lead of leads) {
     if (!Number.isFinite(lead.lat) || !Number.isFinite(lead.lng)) continue;
@@ -88,6 +93,7 @@ export function reconcileLeadFeatures(
       };
       cache.set(lead.id, cached);
       created++;
+      lastCreatedId = lead.id;
     } else {
       reused++;
     }
@@ -103,5 +109,12 @@ export function reconcileLeadFeatures(
     }
   }
 
-  return { data: { type: "FeatureCollection", features }, byId, created, reused, removed };
+  return {
+    data: { type: "FeatureCollection", features },
+    byId,
+    created,
+    reused,
+    removed,
+    soleChangedId: created === 1 && removed === 0 ? lastCreatedId : null,
+  };
 }

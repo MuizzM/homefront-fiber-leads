@@ -82,6 +82,7 @@ import {
   readCachedFix,
   writeCachedFix,
   ensureHousenumLayer,
+  isSheetDragActive,
 } from "@/lib/mapPins";
 import {
   createFollowState,
@@ -449,6 +450,10 @@ function inBBox(lat: number, lng: number, b: BBox) {
   );
 }
 
+// Stable empty pin array — `mapPinData?.pins ?? EMPTY_PINS` must not allocate a
+// fresh [] per render, or every downstream useMemo re-runs until data lands.
+const EMPTY_PINS: MapPin[] = [];
+
 const SEARCH_RESULT_SOURCE = "search-result";
 const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
 const SEARCH_RESULT_POINT_LAYER = "search-result-point";
@@ -690,6 +695,14 @@ export default function MapView() {
 
   // Filter
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  // Last non-"all" status the user filtered by — a LONG-PRESS on the legend
+  // pill re-applies it in one tap ("show unworked again" mid-walk).
+  const lastFilterStatusRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (filterStatus !== "all") lastFilterStatusRef.current = filterStatus;
+  }, [filterStatus]);
+  const legendLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const legendLongPressFired = useRef(false);
 
   // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -740,7 +753,12 @@ export default function MapView() {
   const qc = useQueryClient();
   const { user } = useAuth();
   const canSubmitScan = useCan("scan.submit");
-  const discovery = useDiscoveryJobs(!!user && canSubmitScan);
+  // Owned-job isolation: background/nightly discovery jobs must not re-render
+  // this 6k-line tree on every count tick — only the scan THIS operator owns
+  // may. The ref mirrors scanState.jobId (assigned right after the reducer
+  // below); the hook reads it per-event.
+  const ownedJobIdRef = useRef<string | null>(null);
+  const discovery = useDiscoveryJobs(!!user && canSubmitScan, ownedJobIdRef);
   // ── AREA SCAN STATE MACHINE — the field map OWNS exactly one scan (the box
   // the operator elected), identified by its jobId. "Scanning fiber" is driven
   // SOLELY by this machine, NEVER inferred from the tenant-wide discovery-job
@@ -750,6 +768,7 @@ export default function MapView() {
   // cancel a background job. The machine cannot be turned on by any job but the
   // one this operator started this session (START → ATTACH its jobId).
   const [scanState, dispatchScan] = useReducer(areaScanReducer, AREA_SCAN_IDLE);
+  ownedJobIdRef.current = scanState.jobId ?? null;
   const scanning = scanState.status === "running";
   // Mount reconcile — cold launch / navigation / remount / refresh / foreground
   // all replay HYDRATE. With no fresh persisted running scan this resolves to
@@ -902,26 +921,98 @@ export default function MapView() {
     (window as any).__tapAddressMode = addMode;
     (window as any).__onTapAddress = async (lat: number, lng: number) => {
       setTapResolving(true);
+      // In-flight feedback AT the tapped rooftop (not just the FAB spinner):
+      // light the search-result halo on the exact point while we resolve.
+      const map = mapRef.current;
+      try {
+        (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData({
+          type: "FeatureCollection",
+          features: [{ type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: {} }],
+        });
+      } catch { /* transient layer state */ }
+      let resolved: { address: string; city: string; state: string; zip: string; lat: number; lng: number } | null = null;
       try {
         const a = await reverseGeocode(lat, lng);
-        setCardProperty({
-          address: a.address,
-          city: a.city,
-          state: a.state,
-          zip: a.zip,
-          lat: a.lat,
-          lng: a.lng,
-          source: "tap",
-        });
+        resolved = { address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng };
       } catch {
+        // Failure keeps the mode armed — the rep just aims again.
         toast({
           title: "No address there",
           description: "Tap directly on a rooftop and try again.",
           variant: "destructive",
         });
+        setTapResolving(false);
+        try { (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(emptyFeatureCollection()); } catch { /* noop */ }
+        return;
+      }
+
+      // THE CORE ASK: tapping a house SCANS it for fiber (Kinetic via Decodo) and
+      // drops a GREEN pin the instant it's a NEW FIBER + billing N lead — the rep
+      // never leaves the map. Reps hold scan.submit; the server routes this at
+      // IMMEDIATE priority so it never queues behind the statewide sweep.
+      try {
+        const scanRes = await apiRequest("POST", "/api/leads/scan-house", resolved);
+        const verdict = await scanRes.json();
+        if (verdict.isFreshLead && verdict.leadId != null) {
+          // Optimistic green pin: insert the confirmed-fresh lead so it paints
+          // immediately (fresh halo keyed on the fresh_fiber_confirmed tag),
+          // then reconcile against the server. Select it + flash + haptic.
+          qc.setQueryData(["/api/leads/map"], (old: any) => {
+            if (!old?.pins || old.pins.some((pin: any) => pin.id === verdict.leadId)) return old;
+            return {
+              ...old,
+              total: (old.total ?? old.pins.length) + 1,
+              pins: [...old.pins, {
+                id: verdict.leadId, address: resolved!.address, city: resolved!.city,
+                state: resolved!.state, zip: resolved!.zip,
+                lat: verdict.lat ?? resolved!.lat, lng: verdict.lng ?? resolved!.lng,
+                leadStatus: "prospect", visited: false, assignedRepId: null,
+                leadTag: "fresh_fiber_confirmed", fiberStatus: "new_fiber",
+              }],
+            };
+          });
+          qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+          try { navigator.vibrate?.([12, 40, 12]); } catch { /* no haptics */ }
+          setSelectedLeadId(verdict.leadId);
+          try {
+            ringFlashRef.current = { at: performance.now(), color: STATE_COLORS.sold };
+          } catch { /* flash best-effort */ }
+          toast({ title: "🟢 New fiber lead!", description: `${resolved.address} — added to the map` });
+        } else if (verdict.unresolved) {
+          // NEVER a false "no fiber": a throttle/timeout is unresolved — retry.
+          toast({
+            title: "Couldn't verify",
+            description: "The check didn't complete. Tap the house again to retry.",
+            variant: "destructive",
+          });
+        } else {
+          // Conclusive, but not a fresh lead. If the rep can add leads, offer to
+          // log it as an ordinary prospect (prefilled) so the tap is never a
+          // dead end; a plain rep just sees the verdict.
+          toast({
+            title: verdict.label ?? "No fiber lead here",
+            description: canAssign
+              ? "Not a fresh-fiber lead. Opening add-lead so you can still log it."
+              : "Not a fresh-fiber lead.",
+          });
+          if (canAssign) setAddLeadInitial({ ...resolved, source: "tap" });
+        }
+      } catch {
+        // The scan call itself failed (network/gate) — keep the address; if the
+        // rep can add leads, let them do it manually. Mode stays armed.
+        toast({
+          title: "Scan unavailable",
+          description: canAssign
+            ? "Couldn't reach the fiber check. Opening add-lead instead."
+            : "Couldn't reach the fiber check. Try again.",
+          variant: "destructive",
+        });
+        if (canAssign) setAddLeadInitial({ ...resolved, source: "tap" });
       } finally {
         setTapResolving(false);
-        setAddMode(false);
+        try {
+          (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(emptyFeatureCollection());
+        } catch { /* transient layer state */ }
       }
     };
     const map = mapRef.current;
@@ -933,7 +1024,7 @@ export default function MapView() {
     return () => {
       (window as any).__tapAddressMode = false;
     };
-  }, [addMode, toast]);
+  }, [addMode, toast, canAssign, qc]);
 
   // ── Rep knocking workflow (bottom sheet + offline queue + next door) ────────
   // Reps always get the sheet; admins/managers get it on mobile (desktop keeps
@@ -1164,6 +1255,17 @@ export default function MapView() {
 
   // Reclaim / pull-back an area with one of the 3 modes.
   const [reclaimMenuId, setReclaimMenuId] = useState<number | null>(null);
+  // Two-tap territory delete: first × arms "Sure?" for 3s, second tap deletes.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const confirmDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const armDeleteConfirm = (id: number) => {
+    if (confirmDeleteTimer.current) clearTimeout(confirmDeleteTimer.current);
+    setConfirmDeleteId(id);
+    confirmDeleteTimer.current = setTimeout(() => setConfirmDeleteId(null), 3000);
+  };
+  useEffect(() => () => {
+    if (confirmDeleteTimer.current) clearTimeout(confirmDeleteTimer.current);
+  }, []);
   const reclaimMutation = useMutation({
     mutationFn: async ({
       id,
@@ -1244,6 +1346,24 @@ export default function MapView() {
     refetchOnWindowFocus: !isRep,
   });
 
+  // Reps have refetchOnWindowFocus OFF (they flip to the dialer/camera
+  // constantly — a full refetch on every focus is wasteful). But if the
+  // map-changed SSE dropped while backgrounded, a fresh lead could sit invisible
+  // for up to 60s. A visibilitychange→visible invalidation closes that gap: the
+  // /api/leads/map GET is ETag-backed (304 zero-body when unchanged), so a
+  // foreground that changed nothing costs almost nothing. Managers already get
+  // focus-refetch, so this is rep-only.
+  useEffect(() => {
+    if (!isRep) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [isRep, qc]);
+
   // Server-pushed invalidation keeps confirmed fresh-fiber territory leads from
   // waiting for the 60s safety poll. The stream contains no lead data; the
   // subsequent role-scoped GET remains the only source of map rows.
@@ -1285,12 +1405,16 @@ export default function MapView() {
               // Coalesce a burst of lead-created events into one durable-source
               // reconciliation. Discovery SSE already paints each new qualified
               // lead immediately, so a town scan never downloads the full map
-              // once per address.
+              // once per address. While the operator's OWN area scan is live the
+              // window widens 1s → 5s: the SSE dot bridge keeps painting every
+              // hit incrementally, so the full refetch + re-cluster only needs
+              // to reconcile occasionally instead of hitching the map every
+              // second of a hot scan.
               if (refreshTimer) clearTimeout(refreshTimer);
               refreshTimer = setTimeout(() => {
                 refreshTimer = null;
                 void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-              }, 1_000);
+              }, ownedJobIdRef.current != null ? 5_000 : 1_000);
             }
           }
         }
@@ -1313,7 +1437,7 @@ export default function MapView() {
   // Dedupe to ONE pin per physical house before anything renders (pins, the
   // in-view panel, and search all derive from this). Memoized so it only re-runs
   // when the fetched pin set actually changes, not every render.
-  const rawLeads: MapPin[] = mapPinData?.pins ?? [];
+  const rawLeads: MapPin[] = mapPinData?.pins ?? EMPTY_PINS;
   const leads: MapPin[] = useMemo(() => dedupeLeads(rawLeads), [rawLeads]);
   // O(1) id→lead map — the hot paths (pin tap, knock, card swap) never scan the
   // array. Declared HERE, above the effects that reference it (dep arrays are
@@ -2007,7 +2131,24 @@ export default function MapView() {
           return;
         }
         if (drawToolActive()) return;
-        const feats = map.queryRenderedFeatures(e.point);
+        // Layer-filtered hit test: the old catch-all query walked EVERY style
+        // layer (basemap labels/roads included) on each tap; we only ever act
+        // on pins, clusters, and territory fills.
+        const hitLayers = [
+          "lead-unclustered",
+          STATUS_ICON_LAYER,
+          "lead-clusters",
+          ...territoryLayersRef.current,
+        ].filter((id) => {
+          try {
+            return !!map.getLayer(id);
+          } catch {
+            return false;
+          }
+        });
+        const feats = hitLayers.length
+          ? map.queryRenderedFeatures(e.point, { layers: hitLayers })
+          : [];
         if (
           feats.some(
             (f: any) =>
@@ -2018,8 +2159,9 @@ export default function MapView() {
         )
           return;
         // Fat-finger forgiveness: pins are 16px dots — before treating this as an
-        // empty-map tap, look for a pin within a ±12px box. A near-miss opens the
-        // door the rep aimed at instead of dismissing their sheet mid-flow.
+        // empty-map tap, look for a pin within a ±16px box (a gloved/moving thumb
+        // lands wider than a mouse). A near-miss opens the door the rep aimed at
+        // instead of dismissing their sheet mid-flow.
         const openSheet = (window as any).__openLeadSheet;
         if (openSheet) {
           try {
@@ -2030,8 +2172,8 @@ export default function MapView() {
               : ["lead-unclustered"];
             const near = map.queryRenderedFeatures(
               [
-                [e.point.x - 12, e.point.y - 12],
-                [e.point.x + 12, e.point.y + 12],
+                [e.point.x - 16, e.point.y - 16],
+                [e.point.x + 16, e.point.y + 16],
               ],
               { layers: pinLayers },
             );
@@ -2172,6 +2314,9 @@ export default function MapView() {
     features: [],
   });
   const featureByIdRef = useRef(new Map<number, any>());
+  // Set by the knock handler after its imperative one-pin paint; consumed once
+  // by the cluster reconcile effect to skip the duplicate full setData.
+  const pendingKnockPaintRef = useRef<number | null>(null);
 
   // ── Leads panel: viewport bounds lifecycle ────────────────────────────────
   // Attach once per map instance ([mapReady, styleEpoch] — handlers survive
@@ -2264,7 +2409,15 @@ export default function MapView() {
     );
     geoJsonDataRef.current = reconciled.data;
     featureByIdRef.current = reconciled.byId;
-    src.setData(reconciled.data);
+    // Knock skip-guard: the knock handler already recolored this ONE pin
+    // imperatively (mutate + setData). When the optimistic query update rolls
+    // back through here and the sole change is that same pin, the second full
+    // setData + re-cluster is pure duplicate work — skip the paint, keep refs.
+    const skipId = pendingKnockPaintRef.current;
+    pendingKnockPaintRef.current = null;
+    if (skipId == null || reconciled.soleChangedId !== skipId) {
+      src.setData(reconciled.data);
+    }
     // NOTE: this dep array must NEVER gain selection/sheet state — a pin tap must
     // rebuild zero GeoJSON. Selection is a setFilter on its own effect below.
     // It must also stay free of poll-churned identities (team, territories, user):
@@ -2325,6 +2478,69 @@ export default function MapView() {
   // label "Area name / Rep knocked/total". Reps see ONLY their own areas as a
   // quiet outline + the area name — enough to know where they're working
   // without cluttering the pins they knock.
+  //
+  // SPLIT into geometry vs label passes: the 30s progress poll used to key the
+  // whole effect, tearing down and re-adding 5 layers/sources per territory on
+  // every tick (a visible hitch on manager phones). Now geometry re-runs only
+  // when the territory SET changes; progress/team ticks update the label
+  // text-field in place — a pure style-thread write, no layer churn.
+  const visibleTerritories = useMemo(() => {
+    // Rep view: only areas they own (single or shared assignment).
+    const myId = user?.teamMemberId ?? null;
+    const mine = canAssign
+      ? territories
+      : territories.filter((t) => {
+          if (myId == null) return false;
+          if (t.repId === myId) return true;
+          try {
+            const a = JSON.parse((t as any).assigneeIds || "[]");
+            return Array.isArray(a) && a.includes(myId);
+          } catch {
+            return false;
+          }
+        });
+    return mine.filter((t) => {
+      const status = (t as any).status ?? "active";
+      if (status === "archived") return false; // archived areas never render
+      if (
+        !canAssign &&
+        (status === "unassigned" ||
+          status === "reclaimed" ||
+          status === "completed")
+      )
+        return false;
+      return true;
+    });
+  }, [territories, canAssign, user?.teamMemberId]);
+
+  // Centroid label. Reps: the area NAME only. Managers: name + owner line
+  // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's name
+  // must NOT linger on the area).
+  const territoryLabelFor = (t: (typeof territories)[number]): string => {
+    const status = (t as any).status ?? "active";
+    const isPool = status === "unassigned" || status === "reclaimed";
+    const isDone = status === "completed";
+    const areaName = (t.name ?? "").trim();
+    if (!canAssign) return areaName;
+    const prog = territoryProgress.find((p) => p.id === t.id);
+    const repName =
+      team.find((m) => m.id === t.repId)?.name?.split(" ")[0] ?? "";
+    const ownerLine = isPool
+      ? "Unassigned"
+      : isDone
+        ? `Done — ${repName}`
+        : prog
+          ? `${repName}  ${prog.knocked}/${prog.total}`
+          : repName;
+    return areaName && ownerLine && areaName !== ownerLine
+      ? `${areaName}\n${ownerLine}`
+      : areaName || ownerLine;
+  };
+  const territoryLabelForRef = useRef(territoryLabelFor);
+  territoryLabelForRef.current = territoryLabelFor;
+
+  // Pass 1 — GEOMETRY: sources + fill/outline/label layers. Keyed on the
+  // territory set only, never on the progress poll.
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
@@ -2353,32 +2569,9 @@ export default function MapView() {
     // Managers can hide the layer from the rail; reps' own areas always show.
     if (canAssign && !showTerritories) return;
 
-    // Rep view: only areas they own (single or shared assignment).
-    const myId = user?.teamMemberId ?? null;
-    const visible = canAssign
-      ? territories
-      : territories.filter((t) => {
-          if (myId == null) return false;
-          if (t.repId === myId) return true;
-          try {
-            const a = JSON.parse((t as any).assigneeIds || "[]");
-            return Array.isArray(a) && a.includes(myId);
-          } catch {
-            return false;
-          }
-        });
-
-    visible.forEach((t) => {
+    visibleTerritories.forEach((t) => {
       try {
         const status = (t as any).status ?? "active";
-        if (status === "archived") return; // archived areas never render
-        if (
-          !canAssign &&
-          (status === "unassigned" ||
-            status === "reclaimed" ||
-            status === "completed")
-        )
-          return;
         const coords = JSON.parse(t.polygon) as [number, number][];
         if (coords.length < 3) return;
         const closed = [...coords, coords[0]];
@@ -2426,30 +2619,12 @@ export default function MapView() {
             },
           });
         }
-        // Centroid label. Reps: the area NAME only. Managers: name + owner line
-        // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's
-        // name must NOT linger on the area).
         const cx = coords.reduce((s, p) => s + p[0], 0) / coords.length;
         const cy = coords.reduce((s, p) => s + p[1], 0) / coords.length;
-        const areaName = (t.name ?? "").trim();
-        let label = areaName;
-        if (canAssign) {
-          const prog = territoryProgress.find((p) => p.id === t.id);
-          const repName =
-            team.find((m) => m.id === t.repId)?.name?.split(" ")[0] ?? "";
-          const ownerLine = isPool
-            ? "Unassigned"
-            : isDone
-              ? `Done — ${repName}`
-              : prog
-                ? `${repName}  ${prog.knocked}/${prog.total}`
-                : repName;
-          label =
-            areaName && ownerLine && areaName !== ownerLine
-              ? `${areaName}\n${ownerLine}`
-              : areaName || ownerLine;
-        }
-        if (label && !map.getSource(srcId + "-label-src")) {
+        // Label layer is ALWAYS created (empty text renders nothing) so the
+        // label pass below can fill it in the moment team/progress data lands
+        // without ever re-running this geometry pass.
+        if (!map.getSource(srcId + "-label-src")) {
           map.addSource(srcId + "-label-src", {
             type: "geojson",
             data: {
@@ -2463,7 +2638,7 @@ export default function MapView() {
             type: "symbol",
             source: srcId + "-label-src",
             layout: {
-              "text-field": label,
+              "text-field": territoryLabelForRef.current(t),
               "text-size": 12,
               "text-line-height": 1.3,
               "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
@@ -2481,15 +2656,25 @@ export default function MapView() {
       } catch {}
     });
   }, [
-    territories,
-    territoryProgress,
-    team,
+    visibleTerritories,
     mapReady,
     showTerritories,
     canAssign,
-    user?.teamMemberId,
     styleEpoch,
   ]);
+
+  // Pass 2 — LABELS: progress/team ticks rewrite text-field in place.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    visibleTerritories.forEach((t) => {
+      const layerId = `territory-${t.id}-label`;
+      try {
+        if (!map.getLayer(layerId)) return;
+        map.setLayoutProperty(layerId, "text-field", territoryLabelForRef.current(t));
+      } catch {}
+    });
+  }, [visibleTerritories, territoryProgress, team, mapReady, canAssign, styleEpoch]);
 
   // ── Lead-layer visibility (control-rail toggle) ─────────────────────────────
   useEffect(() => {
@@ -3039,16 +3224,24 @@ export default function MapView() {
         // eslint-disable-next-line no-console
         console.info("[areaScan] ATTACH job", job.id);
       } catch {
-        // The submit itself failed — surface it instead of hanging in running.
+        // The submit itself failed — surface it LOUDLY instead of silently
+        // hiding the Scan button for 30s and announcing "complete" (a rep read
+        // that as "the box had no leads"). A destructive toast + no phantom
+        // outcome so the Scan Map button returns immediately for a retry.
         dispatchScan({ type: "SUBMIT_FAILED", error: "Scan could not start" });
-        setScanOutcome({ kind: "complete", found: 0, at: Date.now(), boxKey: null });
+        setScanOutcome(null);
+        toast({
+          title: "Scan couldn't start",
+          description: "The area scan didn't launch. Draw the box again to retry.",
+          variant: "destructive",
+        });
       } finally {
         if (accepted) scanSubmissionRef.current = null;
         scanStartInFlightRef.current = false;
         setScanSubmitting(false);
       }
     },
-    [mapReady, scanning, canSubmitScan, discovery.submit, user?.tenantId],
+    [mapReady, scanning, canSubmitScan, discovery.submit, user?.tenantId, toast],
   );
 
   // Box-draw capture — active only while Scan Map is armed. Drag two corners; on
@@ -3690,8 +3883,13 @@ export default function MapView() {
         ? user?.teamMemberId
         : (lead.assignedRepId ?? user?.teamMemberId);
       if (!credit) {
+        // Managers without a team-member row can't self-credit a knock; the
+        // card's Assign menu (visible to lead.assign holders, right on this
+        // sheet) is the one-tap fix — point straight at it.
         toast({
-          title: "Assign a rep to this lead first, then log the knock",
+          title: "Pick a rep to credit first",
+          description:
+            "Use the Assign menu on this card, then tap the outcome again.",
           variant: "destructive",
         });
         return;
@@ -3716,6 +3914,9 @@ export default function MapView() {
           (mapRef.current?.getSource("leads-cluster") as any)?.setData(
             geoJsonDataRef.current,
           );
+          // This pin is now painted; let the reconcile effect skip its
+          // duplicate full setData when the optimistic update lands.
+          pendingKnockPaintRef.current = lead.id;
         } catch {
           /* source can disappear during a style switch; query cache still updates below */
         }
@@ -3898,9 +4099,26 @@ export default function MapView() {
     const setStroke = (c: string) => {
       map.setPaintProperty("lead-selected-ring", "circle-stroke-color", c);
     };
+    let lastIdleFrame = 0;
     const tick = (now: number) => {
       const flash = ringFlashRef.current;
       const fe = flash ? (now - flash.at) / FLASH_MS : 1; // 0..1 through the pop
+      // The rep dragging the knock sheet owns the frame budget — pause every
+      // pulse paint-write for the whole drag (the ring simply freezes).
+      if (isSheetDragActive()) {
+        raf = requestAnimationFrame(tick);
+        return;
+      }
+      // Full-rate rAF only during the ~380ms confirm-pop. The idle breathing is
+      // a slow 2.8s ease — ~20fps is visually identical at a third of the
+      // forced-GL-repaint cost on a phone.
+      if (!(flash && fe < 1)) {
+        if (now - lastIdleFrame < 50) {
+          raf = requestAnimationFrame(tick);
+          return;
+        }
+        lastIdleFrame = now;
+      }
       try {
         if (flash && fe < 1) {
           const pop = Math.sin(fe * Math.PI); // 0→1→0 ease
@@ -3970,6 +4188,25 @@ export default function MapView() {
   // it stays until the operator dismisses it (or the auto-clear timer fires).
   const scanStale = false;
 
+  // ── bottomSlot — ONE bottom-center surface at a time ────────────────────────
+  // The seven bottom-center surfaces used to each carry their own ad-hoc
+  // exclusion flags, and pairs could still collide (scan sheet under an open
+  // knock sheet; lasso bar over a running scan's sheet). One derived priority
+  // decides who owns the bottom-center: knock sheet > lasso bar > scan sheet >
+  // armed hints > Live Test > the resting Scan FAB pair.
+  const bottomSlot: "knock" | "lasso" | "scan" | "hint" | "livetest" | "fabs" =
+    selectedLeadId != null
+      ? "knock"
+      : lassoMode
+        ? "lasso"
+        : canSubmitScan && (scanSubmitting || scanning || (scanOutcome && !scanStale))
+          ? "scan"
+          : scanDrawMode || addMode
+            ? "hint"
+            : liveTestOpen && canSubmitScan
+              ? "livetest"
+              : "fabs";
+
   return (
     <div
       className="flex flex-col relative"
@@ -4000,7 +4237,7 @@ export default function MapView() {
              this area" pattern). Tap to arm, then drag a box over the houses to
              scan exactly inside it. Hidden while a scan/summary sheet is up and
              during Assign Area, so nothing collides. ── */}
-      {canSubmitScan && !scanDrawMode && !scanning && !scanSubmitting && !scanOutcome && !lassoMode && !liveTestOpen && (
+      {canSubmitScan && bottomSlot === "fabs" && (
         <div
           style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
           className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2"
@@ -4009,6 +4246,7 @@ export default function MapView() {
             type="button"
             onClick={() => {
               exitLasso();
+              setAddMode(false); // draw tools and add-mode are mutually exclusive
               setScanDrawMode(true);
             }}
             data-testid="scan-map-btn"
@@ -4032,7 +4270,7 @@ export default function MapView() {
       )}
 
       {/* Live Test panel — trace one address, right on the field scanner. */}
-      {liveTestOpen && canSubmitScan && (
+      {liveTestOpen && canSubmitScan && bottomSlot === "livetest" && (
         <div
           style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
           className="absolute left-1/2 z-30 w-[min(456px,calc(100vw-24px))] -translate-x-1/2"
@@ -4041,15 +4279,15 @@ export default function MapView() {
             <div className="flex items-center gap-2">
               <Crosshair className="h-4 w-4 text-emerald-400" />
               <span className="text-[13px] font-semibold text-white">Live Test — trace one address</span>
-              <button onClick={() => { setLiveTestOpen(false); setLtResult(null); }} className="ml-auto grid h-8 w-8 place-items-center rounded-full text-white/60 hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button>
+              <button onClick={() => { setLiveTestOpen(false); setLtResult(null); }} className="ml-auto grid h-11 w-11 place-items-center rounded-full text-white/60 hover:text-white" aria-label="Close"><X className="h-4 w-4" /></button>
             </div>
             <div className="grid grid-cols-[1fr_1fr_44px_72px] gap-1.5">
-              <input value={ltAddr.address} onChange={e => setLtAddr({ ...ltAddr, address: e.target.value })} placeholder="123 Main St" className="h-10 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-              <input value={ltAddr.city} onChange={e => setLtAddr({ ...ltAddr, city: e.target.value })} placeholder="City" className="h-10 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-              <input value={ltAddr.state} onChange={e => setLtAddr({ ...ltAddr, state: e.target.value.toUpperCase().slice(0, 2) })} placeholder="NC" className="h-10 rounded-lg bg-white/10 px-1 text-center text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-              <input value={ltAddr.zip} onChange={e => setLtAddr({ ...ltAddr, zip: e.target.value })} placeholder="ZIP" className="h-10 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input value={ltAddr.address} onChange={e => setLtAddr({ ...ltAddr, address: e.target.value })} placeholder="123 Main St" className="h-11 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input value={ltAddr.city} onChange={e => setLtAddr({ ...ltAddr, city: e.target.value })} placeholder="City" className="h-11 rounded-lg bg-white/10 px-2.5 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input value={ltAddr.state} onChange={e => setLtAddr({ ...ltAddr, state: e.target.value.toUpperCase().slice(0, 2) })} placeholder="NC" className="h-11 rounded-lg bg-white/10 px-1 text-center text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+              <input value={ltAddr.zip} onChange={e => setLtAddr({ ...ltAddr, zip: e.target.value })} placeholder="ZIP" className="h-11 rounded-lg bg-white/10 px-2 text-[13px] text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
             </div>
-            <button disabled={ltRunning || ltAddr.address.trim().length < 3} onClick={() => void runLiveTest()} data-testid="live-test-run" className="h-10 rounded-lg bg-emerald-500 text-[13px] font-bold text-[#04241f] transition hover:bg-emerald-400 disabled:opacity-50">
+            <button disabled={ltRunning || ltAddr.address.trim().length < 3} onClick={() => void runLiveTest()} data-testid="live-test-run" className="h-11 rounded-lg bg-emerald-500 text-[13px] font-bold text-[#04241f] transition hover:bg-emerald-400 disabled:opacity-50">
               {ltRunning ? <Loader2 className="mx-auto h-4 w-4 animate-spin" /> : "Run Live Test (fresh mint · no cache)"}
             </button>
             {ltResult && (ltResult.stages ? (
@@ -4072,7 +4310,7 @@ export default function MapView() {
       )}
 
       {/* Armed: drag-a-box hint + cancel, in the same bottom-center spot. */}
-      {canSubmitScan && scanDrawMode && !lassoMode && (
+      {canSubmitScan && scanDrawMode && bottomSlot === "hint" && (
         <div
           style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
           className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2"
@@ -4103,7 +4341,7 @@ export default function MapView() {
              live progress then the summary. Never a full-screen takeover; the
              map stays visible behind it. ── */}
       {/* Minimized: the scan keeps running server-side; a small pill restores the sheet. */}
-      {scanSheetHidden && (scanning || scanSubmitting) && canSubmitScan && (
+      {scanSheetHidden && bottomSlot === "scan" && (scanning || scanSubmitting) && (
         <button
           type="button"
           onClick={() => setScanSheetHidden(false)}
@@ -4119,9 +4357,8 @@ export default function MapView() {
         </button>
       )}
 
-      {(scanSubmitting || scanning || (scanOutcome && !scanStale)) &&
+      {bottomSlot === "scan" &&
         !scanSheetHidden &&
-        canSubmitScan &&
         scanSummary && (
           <div
             style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
@@ -4170,7 +4407,7 @@ export default function MapView() {
                         console.info("[areaScan] STOP", id);
                         if (id) void discovery.cancel(id).catch(() => {});
                       }}
-                      className="h-8 shrink-0 rounded-full px-3 text-[12px] font-semibold text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+                      className="h-11 shrink-0 rounded-full px-4 text-[12px] font-semibold text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
                       data-testid="scan-stop"
                     >
                       Stop
@@ -4180,7 +4417,7 @@ export default function MapView() {
                       onClick={() => setScanSheetHidden(true)}
                       aria-label="Minimize scan progress (scan keeps running)"
                       title="Minimize — the scan keeps running"
-                      className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
+                      className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
                       data-testid="scan-minimize"
                     >
                       <X className="h-4 w-4" />
@@ -4196,7 +4433,7 @@ export default function MapView() {
                       setScanOutcome(null);
                     }}
                     aria-label="Dismiss scan summary"
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
+                    className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-white/55 transition hover:bg-white/10 hover:text-white"
                     data-testid="scan-dismiss"
                   >
                     <X className="h-4 w-4" />
@@ -4249,7 +4486,7 @@ export default function MapView() {
                     >
                       {c.value.toLocaleString()}
                     </div>
-                    <div className="mt-1 whitespace-nowrap text-[9.5px] font-medium uppercase leading-none tracking-wider text-white/45">
+                    <div className="mt-1 whitespace-nowrap text-2xs font-medium uppercase leading-none tracking-wider text-white/45">
                       {c.label}
                     </div>
                   </div>
@@ -4286,7 +4523,11 @@ export default function MapView() {
              The right inset clears the top-right control cluster on manager
              roles. This is the canvasser's at-a-glance board of where the
              territory stands. ── */}
-      {mapReady && leads.length > 0 && !lassoMode && (
+      {/* Status-chip row — MANAGER surface. On rep phones the top strip is
+          passive: the same status filter lives in the bottom legend pill
+          (thumb zone), and an active filter shows as the passive indicator
+          below instead of a row of top-of-screen touch targets. */}
+      {mapReady && leads.length > 0 && !lassoMode && !(isRep && isMobile) && (
         <div
           style={{
             // Same top inset as the floating menu button; the row is 44px tall
@@ -4314,7 +4555,7 @@ export default function MapView() {
               className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-2.5 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition active:scale-[0.97] ${
                 filterStatus === "all"
                   ? "bg-white text-slate-900 shadow"
-                  : "glass-surface text-white/85 hover:text-white"
+                  : "glass-surface glass-opaque text-white/85 hover:text-white"
               }`}
             >
               All
@@ -4335,7 +4576,7 @@ export default function MapView() {
                   onClick={() => setFilterStatus(active ? "all" : c.key)}
                   data-testid={`status-chip-${c.key}`}
                   title={`${c.label} · ${c.count}`}
-                  className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-2.5 pr-2 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition active:scale-[0.97] glass-surface ${active ? "ring-2" : "text-white/85 hover:text-white"}`}
+                  className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-2.5 pr-2 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition active:scale-[0.97] glass-surface ${active ? "ring-2" : "glass-opaque text-white/85 hover:text-white"}`}
                   style={
                     active
                       ? {
@@ -4359,6 +4600,27 @@ export default function MapView() {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {/* Rep phones: PASSIVE top-center filter indicator — display only, zero
+          touch targets in the thumb-hostile strip. Renders only while a status
+          filter is active; the interactive filter is the bottom legend pill. */}
+      {mapReady && isRep && isMobile && !lassoMode && filterStatus !== "all" && (
+        <div
+          style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
+          className="glass-capsule glass-opaque absolute left-1/2 z-20 flex h-9 -translate-x-1/2 items-center gap-1.5 px-3 pointer-events-none"
+          data-testid="rep-filter-indicator"
+          aria-live="polite"
+        >
+          <span
+            className="w-2.5 h-2.5 rounded-full shrink-0"
+            style={{ background: PIN_COLORS[filterStatus]?.bg ?? "#0d9488" }}
+          />
+          <span className="text-[12px] font-semibold text-white whitespace-nowrap">
+            Showing: {PIN_COLORS[filterStatus]?.label ?? filterStatus} ·{" "}
+            {statusCounts[filterStatus] ?? 0}
+          </span>
         </div>
       )}
 
@@ -4404,7 +4666,7 @@ export default function MapView() {
                     )}
                     <Button
                       size="sm"
-                      className="h-5 text-[10px] px-1.5 bg-purple-600 hover:bg-purple-700 text-white"
+                      className="relative min-h-9 text-[12px] px-3 after:absolute after:-inset-1.5 bg-purple-600 hover:bg-purple-700 text-white"
                       disabled={fulfillRequestMutation.isPending}
                       onClick={() =>
                         fulfillRequestMutation.mutate({
@@ -4418,7 +4680,7 @@ export default function MapView() {
                     <Button
                       size="sm"
                       variant="ghost"
-                      className="h-5 text-[10px] px-1.5 text-muted-foreground"
+                      className="relative min-h-9 text-[12px] px-3 after:absolute after:-inset-1.5 text-muted-foreground"
                       disabled={fulfillRequestMutation.isPending}
                       onClick={() =>
                         fulfillRequestMutation.mutate({
@@ -4568,10 +4830,10 @@ export default function MapView() {
                 role="dialog"
                 aria-label="Search locations"
                 aria-modal="false"
-                // Phone: pinned left-3 → right-[72px] so the field AND its close
-                // button clear the control cluster (they underlapped it — tapping
-                // the ghosted × opened the leads drawer; review finding).
-                className="absolute top-[60px] md:top-3 left-3 right-[72px] md:left-1/2 md:right-auto md:-translate-x-1/2 z-30 md:w-[min(440px,calc(100vw-24px))]"
+                // Phone: BOTTOM-anchored above the keyboard — the input sits at
+                // the thumb and results grow UPWARD (flex-col-reverse), nearest
+                // match closest to the finger. Desktop keeps the top bar.
+                className="absolute bottom-[calc(env(safe-area-inset-bottom)+0.75rem)] md:bottom-auto md:top-3 left-3 right-3 md:left-1/2 md:right-auto md:-translate-x-1/2 z-30 md:w-[min(440px,calc(100vw-24px))] flex flex-col-reverse md:flex-col gap-1.5"
                 onClick={(e) => e.stopPropagation()}
               >
                 <div className="relative">
@@ -4612,7 +4874,9 @@ export default function MapView() {
                 {searchMatches.length > 0 && (
                   // glass-opaque: text-dense + keeps the worst-case simultaneous
                   // blur count at ≤5 surfaces (review measured 6 with it blurred).
-                  <div className="glass-surface glass-opaque mt-1.5 overflow-hidden max-h-[min(60vh,360px)] overflow-y-auto">
+                  // Phone: column-reverse puts the BEST match at the bottom,
+                  // right above the input — one thumb-length away.
+                  <div className="glass-surface glass-opaque overflow-hidden max-h-[min(60vh,360px)] overflow-y-auto flex flex-col-reverse md:flex-col">
                     {searchMatches.map((l) => {
                       // TRUE pin hue/label (pinDisplayState) — a callback door
                       // shows cyan "Callback" here exactly as painted on the map.
@@ -4662,7 +4926,7 @@ export default function MapView() {
                 )}
                 {sidebarSearch.trim().length >= 3 &&
                   searchMatches.length === 0 && (
-                    <div className="glass-surface glass-opaque mt-1.5 overflow-hidden">
+                    <div className="glass-surface glass-opaque overflow-hidden">
                       <div className="px-3 py-2.5 text-[12px] text-white/50">
                         No lead in your org matches “{sidebarSearch}”
                       </div>
@@ -4685,7 +4949,7 @@ export default function MapView() {
                   )}
                 {sidebarSearch.trim().length > 0 &&
                   sidebarSearch.trim().length < 3 && (
-                    <div className="glass-surface glass-opaque mt-1.5 px-3 py-2 text-[12px] text-white/55">
+                    <div className="glass-surface glass-opaque px-3 py-2 text-[12px] text-white/55">
                       Keep typing…
                     </div>
                   )}
@@ -4719,7 +4983,7 @@ export default function MapView() {
 
           {/* ── Assign-Area floating action bar — bottom-center, thumb-reachable,
                  clear of the home-indicator gesture zone (safe-area). ── */}
-          {lassoMode && (
+          {lassoMode && bottomSlot === "lasso" && (
             <div
               style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.5rem)" }}
               className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100vw-24px)]"
@@ -4772,7 +5036,7 @@ export default function MapView() {
                             })
                           }
                           data-testid={`lasso-chip-${ds}`}
-                          className="h-7 inline-flex items-center gap-1.5 rounded-full pl-1.5 pr-2.5 text-[11px] font-semibold border transition"
+                          className="h-11 inline-flex items-center gap-1.5 rounded-full pl-2.5 pr-3.5 text-[11px] font-semibold border transition"
                           style={
                             on
                               ? {
@@ -4815,7 +5079,7 @@ export default function MapView() {
                         onClick={() => setLassoAction(key)}
                         data-testid={`lasso-action-${key}`}
                         aria-pressed={lassoAction === key}
-                        className={`flex-1 h-8 rounded-full text-[12px] font-semibold transition ${lassoAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
+                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition ${lassoAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
                       >
                         {label}
                       </button>
@@ -5171,19 +5435,23 @@ export default function MapView() {
                  not four disconnected buttons. Each glyph is transparent until
                  active; the panel supplies the surface, blur, and lift. */}
               <div className="glass-surface flex flex-col gap-1 p-1.5">
-                <MapIconBtn
-                  icon={<Search className="w-5 h-5" />}
-                  label="Search leads &amp; places"
-                  testid="ctl-search"
-                  active={searchOpen}
-                  btnRef={searchBtnRef}
-                  disclosure="dialog"
-                  onClick={() => {
-                    setSearchOpen((o) => !o);
-                    setLayersOpen(false);
-                    setLeadsOpen(false);
-                  }}
-                />
+                {/* Phones get the bottom-right Search FAB instead (thumb zone) —
+                    same state, same focus-restore ref, one rendered at a time. */}
+                {!isMobile && (
+                  <MapIconBtn
+                    icon={<Search className="w-5 h-5" />}
+                    label="Search leads &amp; places"
+                    testid="ctl-search"
+                    active={searchOpen}
+                    btnRef={searchBtnRef}
+                    disclosure="dialog"
+                    onClick={() => {
+                      setSearchOpen((o) => !o);
+                      setLayersOpen(false);
+                      setLeadsOpen(false);
+                    }}
+                  />
+                )}
                 <MapIconBtn
                   icon={<List className="w-5 h-5" />}
                   label="Leads in view"
@@ -5213,6 +5481,7 @@ export default function MapView() {
                         exitLasso();
                       } else {
                         exitLasso();
+                        setAddMode(false); // draw tools and add-mode are mutually exclusive
                         setLassoMode(true);
                         setSearchOpen(false);
                         setLayersOpen(false);
@@ -5380,7 +5649,12 @@ export default function MapView() {
               style={{
                 height: 52,
                 width: 52,
-                bottom: "calc(env(safe-area-inset-bottom) + 2rem)",
+                // Rides the knock sheet's measured peek height so Locate stays
+                // reachable above the sheet lip instead of buried behind it.
+                bottom:
+                  bottomSlot === "knock" && sheetPeekPx
+                    ? `calc(env(safe-area-inset-bottom) + ${sheetPeekPx + 12}px)`
+                    : "calc(env(safe-area-inset-bottom) + 2rem)",
                 boxShadow: "var(--glass-shadow-1)",
               }}
               className="absolute right-3 z-20 rounded-full ring-1 ring-inset ring-white/[0.18] flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform bg-primary text-white hover:bg-primary/90"
@@ -5392,11 +5666,11 @@ export default function MapView() {
           {/* ── Add-lead FAB — team_lead+ (matches POST /api/leads permission).
                  Toggles tap-a-house: tap a rooftop → reverse-geocode → property
                  card → add. Stacked ABOVE the locate FAB (bottom-right). ── */}
-          {mapReady && canAssign && (
+          {mapReady && canSubmitScan && bottomSlot !== "knock" && (
             <button
               onClick={() => setAddMode((v) => !v)}
               aria-label={
-                addMode ? "Cancel add-lead" : "Add a lead — tap a house"
+                addMode ? "Cancel scan mode" : "Scan a house for fiber"
               }
               aria-pressed={addMode}
               data-testid="add-lead-fab"
@@ -5411,37 +5685,73 @@ export default function MapView() {
               {tapResolving ? (
                 <Loader2 className="w-6 h-6 animate-spin" />
               ) : addMode ? (
-                <Crosshair className="w-6 h-6" />
+                <Radar className="w-6 h-6" />
               ) : (
                 <Plus className="w-6 h-6" />
               )}
             </button>
           )}
 
-          {/* Tap-a-house hint — shown while add mode is armed. */}
-          {mapReady && canAssign && addMode && (
+          {/* ── Search FAB — MOBILE ONLY, bottom-right stack above the Add FAB.
+                 The top-right cluster button hides on phones; this is the same
+                 toggle in thumb reach, opening the bottom-anchored search. ── */}
+          {mapReady && isMobile && bottomSlot !== "knock" && (
+            <button
+              ref={searchBtnRef}
+              onClick={() => {
+                setSearchOpen((o) => !o);
+                setLayersOpen(false);
+                setLeadsOpen(false);
+              }}
+              aria-label="Search leads &amp; places"
+              aria-pressed={searchOpen}
+              data-testid="search-fab"
+              style={{
+                height: 52,
+                width: 52,
+                bottom: `calc(env(safe-area-inset-bottom) + ${canAssign ? "9.5rem" : "6rem"})`,
+                boxShadow: "var(--glass-shadow-1)",
+              }}
+              className={`absolute right-3 z-20 rounded-full ring-1 ring-inset flex items-center justify-center active:scale-[0.97] transform-gpu transition ${searchOpen ? "bg-teal-500 text-[#04241f] ring-white/20" : "glass-capsule glass-opaque text-white/85 ring-white/[0.18]"}`}
+            >
+              <Search className="w-6 h-6" />
+            </button>
+          )}
+
+          {/* Scan-a-house hint — shown while scan mode is ARMED (sticky: it stays
+              armed across scans so a rep can walk a street door after door).
+              Full-height segments, 44px targets. */}
+          {mapReady && canSubmitScan && addMode && bottomSlot === "hint" && (
             <div
-              className="absolute left-1/2 -translate-x-1/2 z-30 glass-surface glass-opaque px-3 py-2 flex items-center gap-2 text-[12px] text-white/85"
+              className="absolute left-1/2 -translate-x-1/2 z-30 glass-surface glass-opaque flex items-stretch overflow-hidden text-[12.5px] text-white/85"
               style={{ bottom: "calc(env(safe-area-inset-bottom) + 5.5rem)" }}
               data-testid="tap-hint"
             >
-              <Crosshair className="w-3.5 h-3.5 text-orange-400" />
-              Tap a house to grab its address
+              <div className="flex items-center gap-2 pl-3.5 pr-2 py-2 min-h-11">
+                <Radar className="w-4 h-4 text-orange-400 shrink-0" />
+                <span className="font-medium whitespace-nowrap">
+                  Tap houses to scan for fiber
+                </span>
+              </div>
+              {canAssign && (
+                <button
+                  className="min-h-11 px-3 font-semibold text-teal-300 hover:text-teal-200 hover:bg-white/[0.06] border-l border-white/10 transition"
+                  data-testid="tap-hint-type-it"
+                  onClick={() => {
+                    setAddMode(false);
+                    setAddLeadInitial({});
+                  }}
+                >
+                  Type it
+                </button>
+              )}
               <button
-                className="ml-1 underline underline-offset-2 text-white/70 hover:text-white"
-                onClick={() => {
-                  setAddMode(false);
-                  setAddLeadInitial({});
-                }}
-              >
-                Type it
-              </button>
-              <button
-                className="text-white/50 hover:text-white"
-                aria-label="Cancel"
+                className="min-h-11 w-11 grid place-items-center text-white/60 hover:text-white hover:bg-white/[0.06] border-l border-white/10 transition"
+                aria-label="Cancel scan mode"
+                data-testid="tap-hint-cancel"
                 onClick={() => setAddMode(false)}
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-4 h-4" />
               </button>
             </div>
           )}
@@ -5470,15 +5780,43 @@ export default function MapView() {
             </button>
           )}
 
-          {/* Pin legend + filter — bottom left, admin/manager only. Collapsed
-                 to a quiet dot-strip by default; one tap expands the full
-                 status filter + assigned-areas manager panel. */}
-          {mapReady && !isRep && leads.length > 0 && !legendOpen && (
+          {/* Pin legend + filter — bottom left, ALL ROLES (the rep's status
+                 filter lives here in the thumb zone; the manager panel adds
+                 rep-select + assigned areas). Collapsed to a quiet dot-strip
+                 by default; one tap expands. LONG-PRESS re-applies the last
+                 status filter without opening the panel. Reps: anchored above
+                 the Next-door pill. */}
+          {mapReady && leads.length > 0 && !legendOpen && bottomSlot !== "knock" && (
             <button
-              onClick={() => setLegendOpen(true)}
+              onClick={() => {
+                if (legendLongPressFired.current) {
+                  legendLongPressFired.current = false;
+                  return; // long-press already acted — swallow the click
+                }
+                setLegendOpen(true);
+              }}
+              onPointerDown={() => {
+                legendLongPressFired.current = false;
+                if (legendLongPressTimer.current) clearTimeout(legendLongPressTimer.current);
+                legendLongPressTimer.current = setTimeout(() => {
+                  const last = lastFilterStatusRef.current;
+                  if (!last) return;
+                  legendLongPressFired.current = true;
+                  setFilterStatus((cur) => (cur === last ? "all" : last));
+                  try { navigator.vibrate?.(10); } catch { /* no haptics */ }
+                }, 500);
+              }}
+              onPointerUp={() => {
+                if (legendLongPressTimer.current) clearTimeout(legendLongPressTimer.current);
+              }}
+              onPointerLeave={() => {
+                if (legendLongPressTimer.current) clearTimeout(legendLongPressTimer.current);
+              }}
               data-testid="legend-collapsed"
-              aria-label="Open legend, status filter and assigned areas"
-              style={{ bottom: "calc(env(safe-area-inset-bottom) + 2rem)" }}
+              aria-label="Open legend and status filter"
+              style={{
+                bottom: `calc(env(safe-area-inset-bottom) + ${isRep ? "5.75rem" : "2rem"})`,
+              }}
               className="glass-capsule absolute left-3 z-10 flex items-center gap-1.5 h-11 px-3 active:scale-[0.97] transform-gpu transition"
             >
               {Object.values(PIN_COLORS).map((pin, i) => (
@@ -5495,10 +5833,10 @@ export default function MapView() {
               )}
             </button>
           )}
-          {mapReady && !isRep && legendOpen && (
+          {mapReady && legendOpen && bottomSlot !== "knock" && (
             <div
               style={{
-                bottom: "calc(env(safe-area-inset-bottom) + 2rem)",
+                bottom: `calc(env(safe-area-inset-bottom) + ${isRep ? "5.75rem" : "2rem"})`,
                 maxHeight: "min(60vh, 460px)",
               }}
               className="glass-surface absolute left-3 p-3 z-10 min-w-[170px] max-w-[240px] overflow-y-auto"
@@ -5514,7 +5852,7 @@ export default function MapView() {
                     onChange={(e) => setFilterRep(e.target.value)}
                     data-testid="map-filter-rep"
                     title="Show only leads for a rep"
-                    className="w-full h-9 bg-white/10 border border-white/20 rounded-lg px-1.5 text-[12px] text-white focus:outline-none focus:ring-1 focus:ring-teal-400"
+                    className="w-full h-11 bg-white/10 border border-white/20 rounded-lg px-1.5 text-[12px] text-white focus:outline-none focus:ring-1 focus:ring-teal-400"
                   >
                     <option value="all">All reps</option>
                     <option value="unassigned">
@@ -5606,6 +5944,35 @@ export default function MapView() {
                   </button>
                 );
               })}
+              {/* Rep basemap switch — reps had no Layers button (top-right is
+                  manager chrome), so satellite↔streets lives here. Streets is
+                  also the lighter GPU basemap on old phones. */}
+              {isRep && (
+                <div className="pt-2 mt-1 border-t border-white/10">
+                  <span className="block text-[10px] text-white/40 uppercase tracking-wider font-semibold mb-1">
+                    Basemap
+                  </span>
+                  <div className="flex items-center gap-1 rounded-full bg-white/10 p-0.5">
+                    {(
+                      [
+                        ["satellite", "Satellite"],
+                        ["streets", "Streets"],
+                      ] as const
+                    ).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setMapStyleMode(key)}
+                        aria-pressed={mapStyleMode === key}
+                        data-testid={`rep-basemap-${key}`}
+                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition ${mapStyleMode === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {canAssign && territories.length > 0 && (
                 <div className="pt-2 mt-1 border-t border-white/10">
                   <div className="flex items-center justify-between mb-1">
@@ -5666,7 +6033,7 @@ export default function MapView() {
                                 )
                               }
                               aria-label={`Assign ${repName}'s area to a rep`}
-                              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-teal-400 w-7 h-7 inline-flex items-center justify-center rounded hover:bg-white/10"
+                              className="relative opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-teal-400 w-9 h-9 inline-flex items-center justify-center rounded hover:bg-white/10 after:absolute after:-inset-1.5"
                               data-testid={`assign-${t.id}`}
                             >
                               ＋
@@ -5680,21 +6047,37 @@ export default function MapView() {
                                 )
                               }
                               aria-label={`Reclaim ${repName}'s area`}
-                              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-amber-400 w-7 h-7 inline-flex items-center justify-center rounded hover:bg-white/10"
+                              className="relative opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-amber-400 w-9 h-9 inline-flex items-center justify-center rounded hover:bg-white/10 after:absolute after:-inset-1.5"
                               data-testid={`reclaim-${t.id}`}
                             >
                               ↩
                             </button>
                           )}
                           {canManage && (
+                            // Two-tap destructive confirm: first tap arms
+                            // "Sure?" (3s revert), second tap deletes. A stray
+                            // thumb can no longer erase an area in one hit.
                             <button
-                              onClick={() =>
-                                deleteTerritoryMutation.mutate(t.id)
+                              onClick={() => {
+                                if (confirmDeleteId === t.id) {
+                                  setConfirmDeleteId(null);
+                                  deleteTerritoryMutation.mutate(t.id);
+                                } else {
+                                  armDeleteConfirm(t.id);
+                                }
+                              }}
+                              aria-label={
+                                confirmDeleteId === t.id
+                                  ? `Confirm deleting ${repName}'s area`
+                                  : `Delete ${repName}'s area`
                               }
-                              aria-label={`Delete ${repName}'s area`}
-                              className="opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-red-400/80 hover:text-red-400 w-7 h-7 inline-flex items-center justify-center rounded hover:bg-white/10"
+                              className={
+                                confirmDeleteId === t.id
+                                  ? "relative h-9 px-2 inline-flex items-center justify-center rounded-lg bg-red-500/20 text-red-300 text-[11px] font-bold after:absolute after:-inset-1.5"
+                                  : "relative opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-red-400/80 hover:text-red-400 w-9 h-9 inline-flex items-center justify-center rounded hover:bg-white/10 after:absolute after:-inset-1.5"
+                              }
                             >
-                              ×
+                              {confirmDeleteId === t.id ? "Sure?" : "×"}
                             </button>
                           )}
                         </div>
@@ -5834,8 +6217,11 @@ export default function MapView() {
         {/* ── Leads-in-view panel — right rail (desktop) / slide-in drawer (phone).
                A flex SIBLING of the map div on ≥1024px: opening it shrinks the
                map, whose ResizeObserver fires resize → moveend → the viewport
-               bounds (and therefore the list) self-correct. ── */}
-        {!isRep && (
+               bounds (and therefore the list) self-correct.
+               ALL ROLES: the rep List button used to be a dead control — the
+               panel behind it was manager-gated. Row actions inside remain
+               capability-gated. ── */}
+        {(
           <LeadsInViewPanel
             open={leadsOpen}
             onClose={() => {
@@ -5878,6 +6264,29 @@ export default function MapView() {
         <AddLeadSheet
           initial={addLeadInitial}
           onClose={() => setAddLeadInitial(null)}
+          onCreated={(leadId) => {
+            // Confirmation the rep can SEE: select the new/existing pin, fly the
+            // camera to it (padded above the knock sheet), pop the ring flash.
+            // The pin itself is already in the map cache (optimistic insert or
+            // the existing feature), so this is pure camera + selection work.
+            setSelectedLeadId(leadId);
+            try {
+              ringFlashRef.current = {
+                at: performance.now(),
+                color: STATE_COLORS.unworked,
+              };
+            } catch { /* flash is best-effort */ }
+            // The lead may not be in `leadById` yet (cache write settles this
+            // tick) — retry the fly on the next frame with the fresh map data.
+            requestAnimationFrame(() => {
+              const pin =
+                leadById.get(leadId) ??
+                (qc.getQueryData<any>(["/api/leads/map"])?.pins ?? []).find(
+                  (p: MapPin) => p.id === leadId,
+                );
+              if (pin?.lat && pin?.lng) flyToLead(pin);
+            });
+          }}
         />
       </div>
     </div>

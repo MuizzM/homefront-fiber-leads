@@ -121,6 +121,16 @@ export function setMeasuredPeekPx(px: number | null): void {
   measuredPeekPx = px != null && Number.isFinite(px) && px > 0 ? px : null;
 }
 
+// Live "the rep's finger is dragging the sheet" flag, published by
+// LeadKnockSheet on the same channel as the measured peek height. MapView's
+// selected-pin pulse loop reads it to PAUSE its rAF paint-writes for the whole
+// drag — a sheet drag must never compete with a forced full-GL repaint.
+let sheetDragActive = false;
+export function setSheetDragActive(active: boolean): void {
+  sheetDragActive = !!active;
+}
+export const isSheetDragActive = (): boolean => sheetDragActive;
+
 // Fallback ONLY (before the first measure, or when no sheet is mounted). Sized
 // to the new peek layout: status-dot header + hero address + status line +
 // action-pill row + wrapped 7-pill grid + recent line + the "+ Add note" chip.
