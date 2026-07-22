@@ -39,11 +39,40 @@ const BUDGET_GB = Math.max(1, Number(process.env.DECODO_BUDGET_GB) || 25);
 const RESERVE = Math.min(0.9, Math.max(0, (Number(process.env.DECODO_RESERVE_PCT) || 10) / 100));
 const BILLING_DAY = Math.min(28, Math.max(1, Number(process.env.DECODO_BILLING_DAY) || 1));
 const USABLE_BYTES = BUDGET_GB * (1 - RESERVE) * 1e9;
+// UNLIMITED PLAN MODE (DECODO_UNLIMITED=on): the Decodo plan is metered as
+// unlimited, so budget pacing must NEVER throttle down and an auth/limit-denial
+// burst must NOT freeze scanning. Instead of a cooldown we ROTATE to a fresh
+// residential IP set and keep making requests (fresh IPs are free; a throttled
+// IP is the only thing that costs us) — matching the proxy layer's rotate-don't-
+// back-off philosophy. The single-flight rotate hook is injected by proxy-fetch
+// to avoid a circular import.
+const UNLIMITED = process.env.DECODO_UNLIMITED === "on";
+let rotateHook: ((reason: string) => void) | null = null;
+let lastRotateAt = 0;
+const ROTATE_MIN_INTERVAL_MS = Math.max(1_000, Number(process.env.PROXY_DENIAL_ROTATE_MIN_MS) || 3_000);
+/** proxy-fetch registers its session-rotation here so the governor can rotate on
+ *  a denial burst without importing the transport (circular). */
+export function setProxyRotateHook(fn: (reason: string) => void): void {
+  rotateHook = fn;
+}
+export function isUnlimitedProxyMode(): boolean {
+  return UNLIMITED;
+}
 
 const FLUSH_MS = 15_000;
 const CIRCUIT_FAILS = 8;                 // 407s inside the window to trip
 const CIRCUIT_WINDOW_MS = 5 * 60_000;
-const CIRCUIT_OPEN_MS = 30 * 60_000;
+// GRADUATED breaker (replaces the old 30-min hard blackout): a trip is a BRIEF
+// full stop (COOLDOWN) to let Decodo's rolling window refill, then the circuit
+// enters RECOVERING — a probe trickle at RECOVER_FLOOR of normal budget that
+// auto-ramps back to full as probes succeed. The system never blacks out for
+// 30 minutes on a throttle burst; it self-heals in proportion to real recovery.
+const CIRCUIT_COOLDOWN_MS = Math.max(5_000, Number(process.env.PROXY_CIRCUIT_COOLDOWN_MS) || 20_000);
+const RECOVER_FLOOR = Math.min(0.5, Math.max(0.01, Number(process.env.PROXY_RECOVER_FLOOR) || 0.05));
+// Probe steps the trickle ramps through on sustained success; last step = closed.
+const RECOVER_STEPS = [RECOVER_FLOOR, 0.2, 0.5, 1] as const;
+// Consecutive successful probes needed to climb one step.
+const PROBES_PER_STEP = Math.max(1, Number(process.env.PROXY_PROBES_PER_STEP) || 3);
 
 // Fallback when a response carries no content-length: an EMA over the sizes we
 // DO observe, seeded at 24KB (body + TLS/header overhead both directions) and
@@ -106,36 +135,102 @@ export function recordProxyResponse(contentLength: number): void {
   if (pendingReqs >= 200) flushBandwidthLedger(); // high-rate safety valve
 }
 
-// ── Circuit breaker ──────────────────────────────────────────────────────────
+// ── Graduated circuit breaker ────────────────────────────────────────────────
+// States: CLOSED (recoverStep<0) → COOLDOWN (now<cooldownUntil, hard 0 for a few
+// seconds) → RECOVERING (recoverStep≥0, probe trickle ramping RECOVER_STEPS).
 let failTimes: number[] = [];
-let circuitOpenUntil = 0;
+let cooldownUntil = 0;      // brief full-stop right after a trip
+let recoverStep = -1;       // -1 = closed; else index into RECOVER_STEPS
+let probeStreak = 0;        // consecutive successful probes at the current step
 let circuitLogAt = 0;
+
+function tripCircuit(now: number, reason: string): void {
+  cooldownUntil = now + CIRCUIT_COOLDOWN_MS;
+  recoverStep = 0;          // enter recovery at the floor after cooldown
+  probeStreak = 0;
+  failTimes = [];
+  structuredLog("bandwidth.circuit_trip", {
+    reason, cooldownMs: CIRCUIT_COOLDOWN_MS, recoverFloor: RECOVER_FLOOR,
+  });
+}
 
 export function noteProxyAuthFailure(): void {
   const now = Date.now();
+  if (UNLIMITED) {
+    // Unlimited plan: never freeze. On a denial burst, rotate to a fresh IP set
+    // (rate-limited so a storm triggers ONE rotation, not thousands) and keep
+    // scanning. The circuit never opens; budget never throttles.
+    failTimes = failTimes.filter((t) => now - t < CIRCUIT_WINDOW_MS);
+    failTimes.push(now);
+    if (failTimes.length >= CIRCUIT_FAILS && now - lastRotateAt >= ROTATE_MIN_INTERVAL_MS) {
+      lastRotateAt = now;
+      failTimes = [];
+      structuredLog("bandwidth.denial_rotate", { reason: "unlimited-mode denial burst → rotate, no freeze" });
+      try { rotateHook?.("denial burst"); } catch { /* rotation best-effort */ }
+    }
+    return;
+  }
+  if (recoverStep >= 0) {
+    // A failure while recovering: don't blackout — drop back to the floor and
+    // re-arm a short cooldown so we keep probing, never hammering.
+    recoverStep = 0;
+    probeStreak = 0;
+    cooldownUntil = now + CIRCUIT_COOLDOWN_MS;
+    return;
+  }
   failTimes = failTimes.filter((t) => now - t < CIRCUIT_WINDOW_MS);
   failTimes.push(now);
-  if (failTimes.length >= CIRCUIT_FAILS && circuitOpenUntil < now) {
-    circuitOpenUntil = now + CIRCUIT_OPEN_MS;
-    failTimes = [];
-    structuredLog("bandwidth.circuit_open", {
-      reason: "proxy auth/limit denials", openMs: CIRCUIT_OPEN_MS,
-    });
-  }
+  if (failTimes.length >= CIRCUIT_FAILS) tripCircuit(now, "proxy auth/limit denials");
 }
 
 export function noteProxySuccess(): void {
+  if (recoverStep >= 0) {
+    // Probe succeeded — climb the recovery ramp; on the last step, close.
+    probeStreak += 1;
+    if (probeStreak >= PROBES_PER_STEP) {
+      probeStreak = 0;
+      recoverStep += 1;
+      if (recoverStep >= RECOVER_STEPS.length) {
+        recoverStep = -1;   // fully closed / healthy
+        structuredLog("bandwidth.circuit_closed", { reason: "probes recovered" });
+      } else {
+        structuredLog("bandwidth.circuit_recover_step", { scale: RECOVER_STEPS[recoverStep] });
+      }
+    }
+    return;
+  }
   if (failTimes.length) failTimes = [];
 }
 
-/** True while the circuit is open — callers must NOT issue proxied requests. */
+/** True ONLY during the brief post-trip cooldown — the one window where callers
+ *  must issue NO proxied requests. Bounded to CIRCUIT_COOLDOWN_MS (seconds), so
+ *  scanning is never suspended for 30 minutes again. During RECOVERING this is
+ *  false and a probe trickle flows (see proxyThrottleScale / budgetScale). */
 export function isProxyCircuitOpen(): boolean {
-  const open = Date.now() < circuitOpenUntil;
-  if (open && Date.now() - circuitLogAt > 60_000) {
+  if (UNLIMITED) return false; // unlimited plan → scanning is never suspended
+  // Only meaningful while tripped/recovering; a closed circuit is never "open"
+  // even if a stale cooldown timestamp is still nominally in the future (probes
+  // may have recovered us early).
+  const open = recoverStep >= 0 && Date.now() < cooldownUntil;
+  if (open && Date.now() - circuitLogAt > 30_000) {
     circuitLogAt = Date.now();
-    console.warn(`[bandwidth] circuit OPEN — proxy suspended for ${Math.round((circuitOpenUntil - Date.now()) / 60000)}m (auth/limit denials)`);
+    console.warn(`[bandwidth] circuit COOLDOWN — proxy paused ${Math.round((cooldownUntil - Date.now()) / 1000)}s, then probe-recovers (auth/limit denials)`);
   }
   return open;
+}
+
+/** Circuit contribution to the budget, [0,1]. 1 when healthy, 0 during the
+ *  brief post-trip cooldown, the current probe-ramp fraction while recovering. */
+export function proxyThrottleScale(now = Date.now()): number {
+  if (UNLIMITED) return 1;              // unlimited plan → never throttled
+  if (recoverStep < 0) return 1;        // closed / healthy
+  if (now < cooldownUntil) return 0;    // brief cooldown — the one full stop
+  return RECOVER_STEPS[recoverStep];    // probe trickle, ramping to full
+}
+
+/** Test-only reset of the breaker state. */
+export function _resetCircuitForTests(): void {
+  failTimes = []; cooldownUntil = 0; recoverStep = -1; probeStreak = 0; circuitLogAt = 0; lastRotateAt = 0;
 }
 
 // ── Billing cycle + pacing ───────────────────────────────────────────────────
@@ -178,22 +273,37 @@ function ledgerSpanDays(): number {
  * mid-month): the old elapsed-vs-burned math compared a 1-day-old ledger
  * against a 20-day-old cycle and boosted x1.5 while the pool was actually
  * burning 6x over pace (observed live: 5GB in <24h of a 25GB plan).
- * No data yet -> 1 (neutral). Circuit open -> 0 (frozen).
+ * No data yet -> 1 (neutral). Cooldown -> 0 (brief). Recovering -> the pace
+ * multiplied by the probe-trickle fraction (RECOVER_FLOOR ramping to 1), so a
+ * throttle burst self-heals instead of blacking out for 30 minutes.
  */
 export function bandwidthBudgetScale(): number {
-  if (isProxyCircuitOpen()) return 0;
+  // Unlimited plan: full throttle, always. Never pace down on burn, never
+  // freeze — the plan can't run out, so hunt at max (up to the 1.5 hunt-harder
+  // ceiling the harvester already understands).
+  if (UNLIMITED) return 1.5;
+  const throttle = proxyThrottleScale();
+  if (throttle <= 0) return 0; // cooldown — the one true full stop
   const { start, end } = cycleBounds();
   const now = Date.now();
   const { bytes } = sumSince(start);
-  if (bytes <= 0) return 1;
-  const remaining = USABLE_BYTES - bytes;
-  if (remaining <= 0) return 0.1;
-  const span = ledgerSpanDays() || Math.max(0.25, (now - start) / 86_400_000);
-  const dailyRate = bytes / span;                          // observed burn/day
-  if (dailyRate <= 0) return 1;
-  const daysLeft = Math.max(0.5, (end - now) / 86_400_000);
-  const allowedDaily = remaining / daysLeft;               // sustainable rate
-  return Math.min(1.5, Math.max(0.1, allowedDaily / dailyRate));
+  let pace = 1;
+  if (bytes > 0) {
+    const remaining = USABLE_BYTES - bytes;
+    if (remaining <= 0) pace = 0.1;
+    else {
+      const span = ledgerSpanDays() || Math.max(0.25, (now - start) / 86_400_000);
+      const dailyRate = bytes / span;                        // observed burn/day
+      if (dailyRate > 0) {
+        const daysLeft = Math.max(0.5, (end - now) / 86_400_000);
+        const allowedDaily = remaining / daysLeft;           // sustainable rate
+        pace = Math.min(1.5, Math.max(0.1, allowedDaily / dailyRate));
+      }
+    }
+  }
+  // The circuit trickle can pull below the 0.1 pacing floor (it is a recovery
+  // probe, not a budget decision), so apply it as a separate multiplier.
+  return throttle >= 1 ? pace : pace * throttle;
 }
 
 export interface GovernorStats {
@@ -237,6 +347,6 @@ export function governorStats(): GovernorStats {
 /** Test hook: reset in-memory state (ledger rows persist per test DB). */
 export function _resetGovernorForTests(): void {
   pendingBytes = 0; pendingReqs = 0;
-  failTimes = []; circuitOpenUntil = 0; circuitLogAt = 0;
   estReqBytes = SEED_REQ_BYTES;
+  _resetCircuitForTests();
 }

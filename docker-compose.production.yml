@@ -239,8 +239,15 @@ services:
       # hold the write lock well past the 15s default, crashing workers with
       # SQLITE_BUSY. 120s matches the resilience of our ops scripts.
       SQLITE_BUSY_TIMEOUT_MS: "120000"
-      # BANDWIDTH GOVERNOR — strategic Decodo spend: 25GB plan, 10% reserve,
-      # cycle resets on the 1st. Harvest budgets auto-pace against the pool.
+      # UNLIMITED DECODO PLAN (operator, 2026-07-21): the plan is metered as
+      # unlimited, so budget pacing NEVER throttles down and an auth/limit-denial
+      # (407) burst does NOT freeze scanning. Instead the governor rotates to a
+      # fresh residential IP set (single-flight, rate-limited) and keeps making
+      # requests — fresh IPs are free; only a throttled IP costs us. This makes
+      # scanning truly uninterrupted. The budget vars below are left for the
+      # economy report / diagnostics only; they no longer gate throughput.
+      DECODO_UNLIMITED: "on"
+      # BANDWIDTH GOVERNOR — reporting only while DECODO_UNLIMITED=on.
       DECODO_BUDGET_GB: "25"
       DECODO_RESERVE_PCT: "10"
       DECODO_BILLING_DAY: "1"

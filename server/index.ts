@@ -6,6 +6,7 @@ import { serveStatic } from "./static";
 import { createServer } from "node:http";
 import cluster from "node:cluster";
 import os from "node:os";
+import { decideRespawn } from "./clusterRespawnPolicy";
 import { runMigrations } from "./storage";
 import { rawDb } from "./db";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
@@ -408,9 +409,19 @@ app.use((req, res, next) => {
     try { const { runCallingMigrations } = await import("./calling/migrations"); runCallingMigrations(); }
     catch (e: any) { console.error("[cluster] calling migrations failed in primary:", e?.message); process.exit(1); }
     let primaryDown = false;
+    // Per-index crash-loop state: a worker that dies almost immediately after
+    // fork is crash-looping (bad boot state, unrunnable migration). Respawning
+    // it every 1s forever pegs the box and floods the logs. We back off
+    // exponentially on RAPID crashes and PARK a hopelessly-looping index, while
+    // resetting the backoff the moment a worker proves it can stay up.
+    const CRASH_MIN_HEALTHY_MS = Math.max(5_000, Number(process.env.SCAN_WORKER_MIN_HEALTHY_MS) || 60_000);
+    const CRASH_MAX_RAPID = Math.max(2, Number(process.env.SCAN_WORKER_MAX_RAPID_CRASHES) || 8);
+    const CRASH_BACKOFF_CAP_MS = 60_000;
+    const crashState = new Map<number, { rapid: number; parkedLogged: boolean }>();
     const forkWorker = (index: number) => {
       const w = cluster.fork({ HF_ROLE: index === 0 ? "control" : "scan", HF_WORKER_INDEX: String(index) });
       (w as any).__hfIndex = index;
+      (w as any).__hfForkedAt = Date.now();
       return w;
     };
     for (let i = 0; i < SCAN_WORKERS; i++) forkWorker(i);
@@ -433,9 +444,25 @@ app.use((req, res, next) => {
           .run(Date.now(), `${w.process.pid}-%`);
       } catch { /* table may not exist on a fresh DB — the staleness reaper covers it */ }
       if (!primaryDown) {
-        // Respawn after a short delay so a crash-loop can't peg the box. Preserves the
-        // worker's index → the control role is always re-created if worker 0 dies.
-        const t = setTimeout(() => { if (!primaryDown) forkWorker(index); }, 1_000);
+        const uptime = Date.now() - ((w as any).__hfForkedAt ?? 0);
+        const st = crashState.get(index) ?? { rapid: 0, parkedLogged: false };
+        const decision = decideRespawn(index, uptime, { rapid: st.rapid }, {
+          minHealthyMs: CRASH_MIN_HEALTHY_MS, maxRapid: CRASH_MAX_RAPID, backoffCapMs: CRASH_BACKOFF_CAP_MS,
+        });
+        st.rapid = decision.rapid;
+        crashState.set(index, st);
+        if (decision.action === "park") {
+          if (!st.parkedLogged) {
+            st.parkedLogged = true;
+            structuredLog("cluster.worker_parked", { index, rapidCrashes: st.rapid, reason: "crash loop" });
+            console.error(`[cluster] worker index=${index} PARKED after ${st.rapid} rapid crashes — not respawning (SCAN_WORKER_MAX_RAPID_CRASHES to tune)`);
+          }
+          return; // stop respawning this hopeless index; the rest of the fleet runs on
+        }
+        if (st.rapid > 0) {
+          structuredLog("cluster.worker_backoff", { index, rapidCrashes: st.rapid, delayMs: decision.delayMs });
+        }
+        const t = setTimeout(() => { if (!primaryDown) forkWorker(index); }, decision.delayMs);
         if (typeof (t as any).unref === "function") (t as any).unref();
       }
     });

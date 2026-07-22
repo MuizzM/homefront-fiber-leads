@@ -82,10 +82,57 @@ describe("bandwidth governor", () => {
     expect(gov.isProxyCircuitOpen()).toBe(false); // never hit 8 consecutive-in-window
   });
 
-  it("harvest cycle freezes when the circuit is open", async () => {
+  it("harvest cycle freezes during the circuit cooldown", async () => {
     for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
     const { runHarvestCycle } = await import("../../server/freshHarvest");
     const counts = runHarvestCycle(1, 100);
     expect(counts).toMatchObject({ b: 0, b2: 0, c0: 0, c: 0, d1: 0, d: 0 });
+  });
+});
+
+describe("graduated circuit breaker — probe-recover, never a 30-minute blackout", () => {
+  beforeEach(() => gov._resetGovernorForTests());
+
+  it("a trip is a BRIEF cooldown, then a probe trickle — not a hard freeze", () => {
+    for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
+    // Cooldown: fully paused, but for seconds (bounded by CIRCUIT_COOLDOWN_MS),
+    // not the old 30 minutes.
+    expect(gov.isProxyCircuitOpen()).toBe(true);
+    expect(gov.proxyThrottleScale()).toBe(0);
+    // Past the cooldown window the circuit is RECOVERING: a trickle flows, and
+    // scanning is no longer suspended (isProxyCircuitOpen === false).
+    const past = Date.now() + 25_000;
+    expect(gov.proxyThrottleScale(past)).toBeGreaterThan(0);
+    expect(gov.proxyThrottleScale(past)).toBeLessThan(1); // floor, not full
+  });
+
+  it("consecutive successful probes ramp the trickle back to full, then close", () => {
+    for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
+    const past = Date.now() + 25_000;
+    const floor = gov.proxyThrottleScale(past);
+    // 3 successes per step, 4 steps (floor→0.2→0.5→1) → 12 successes to close.
+    for (let i = 0; i < 3; i++) gov.noteProxySuccess();
+    const step2 = gov.proxyThrottleScale(past);
+    expect(step2).toBeGreaterThan(floor);
+    for (let i = 0; i < 9; i++) gov.noteProxySuccess();
+    expect(gov.proxyThrottleScale(past)).toBe(1); // fully recovered / closed
+    expect(gov.isProxyCircuitOpen()).toBe(false);
+  });
+
+  it("a failure while recovering drops back to the floor + re-arms cooldown, never blacks out", () => {
+    for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
+    const past = Date.now() + 25_000;
+    for (let i = 0; i < 6; i++) gov.noteProxySuccess(); // climbed a couple steps
+    expect(gov.proxyThrottleScale(past)).toBeGreaterThan(0.05);
+    gov.noteProxyAuthFailure(); // Decodo still flaky
+    // Re-armed cooldown (brief) — NOT a 30-min open — then back to the floor.
+    expect(gov.isProxyCircuitOpen()).toBe(true);
+    expect(gov.proxyThrottleScale(Date.now() + 25_000)).toBeCloseTo(0.05, 5);
+  });
+
+  it("budget scale carries the trickle: below the 0.1 pacing floor while recovering", () => {
+    for (let i = 0; i < 8; i++) gov.noteProxyAuthFailure();
+    // During cooldown → 0. (No ledger rows → pace neutral 1 otherwise.)
+    expect(gov.bandwidthBudgetScale()).toBe(0);
   });
 });
