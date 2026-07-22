@@ -230,7 +230,11 @@ services:
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
       # health, so it runs 24/7 with zero site impact. off to disable.
       FRESH_HARVEST: "on"
-      FRESH_HARVEST_BUDGET: "4000"
+      FRESH_HARVEST_BUDGET: "8000"
+      FRESH_HARVEST_INTERVAL_MIN: "10"
+      # PUMP MODE: keep-warm feeder tops up harder so the queue never drains
+      KEEPWARM_REFILL: "12000"
+      KEEPWARM_PER_CITY: "3000"
       # SQLite write contention: the scan firehose + boot resume storms can
       # hold the write lock well past the 15s default, crashing workers with
       # SQLITE_BUSY. 120s matches the resilience of our ops scripts.
