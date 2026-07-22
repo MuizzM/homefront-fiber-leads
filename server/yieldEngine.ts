@@ -419,14 +419,24 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
   if (exploreBudget > 0) {
     registerFootprintSqlFunctions();
     warmFootprintGate();
+    // Explore = NEIGHBORHOOD SATURATION (operator directive: full fresh
+    // neighborhoods, not scattered): sweep the densest never-scanned ~1.1km
+    // cells first so reps get whole untouched streets to knock.
     explore = (rawDb.prepare(
-      `SELECT s.id FROM scan_targets s
+      `WITH cold_cells AS (
+         SELECT ROUND(lat,2) AS clat, ROUND(lng,2) AS clng, COUNT(*) AS unscanned
+           FROM scan_targets
+          WHERE tenant_id=? AND last_scanned_at IS NULL AND lat IS NOT NULL AND lng IS NOT NULL
+          GROUP BY clat, clng
+       )
+       SELECT s.id FROM scan_targets s
+       JOIN cold_cells cc ON ROUND(s.lat,2)=cc.clat AND ROUND(s.lng,2)=cc.clng
         WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
           AND lower(s.state) IN (${STATE_IN})
           AND footprint_city(s.state, s.city)=1
           AND ${NOT_PARKED_ANF}
-        ORDER BY RANDOM() LIMIT ?`,
-    ).all(tenantId, ...stateArgs(), exploreBudget + seen.size) as any[])
+        ORDER BY cc.unscanned DESC, s.id ASC LIMIT ?`,
+    ).all(tenantId, tenantId, ...stateArgs(), exploreBudget + seen.size) as any[])
       .map((r) => r.id).filter((id) => !seen.has(id)).slice(0, exploreBudget);
   }
 

@@ -974,22 +974,35 @@ app.use((req, res, next) => {
             enqueued += ids.length;
           }
         }
-        // STATEWIDE FEEDER — operator directive: NO city limitation, we need
-        // ALL Kinetic leads. If the priority cities didn't fill the refill
-        // cap, top up from anywhere in the harvest footprint (never-scanned
-        // first, parked ANF excluded, 24h recheck guard).
-        if (enqueued < refillCap) {
+        // STATEWIDE FEEDER — NEIGHBORHOOD SATURATION MODE (operator directive:
+        // "full fresh neighborhoods where no one's been before, NOT scattered").
+        // Rank ~1.1km cells by their NEVER-SCANNED density and sweep the
+        // densest untouched neighborhoods COMPLETELY before moving on — every
+        // rep gets a whole fresh street map to knock, not a scatter plot.
+        if (enqueued < refillCap && process.env.VITEST !== "true") {
           const wideStates = (process.env.FRESH_HARVEST_STATES ?? "nc,sc,ga").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
           const inClause = wideStates.map(() => "?").join(",");
-          const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(state) IN (${inClause})
-            AND (carrier IS NULL OR carrier='kinetic')
-            AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours'))
-            AND NOT (last_scanned_at IS NULL AND inconclusive_attempts >= 3
-                     AND last_inconclusive_at IS NOT NULL AND last_inconclusive_at > datetime('now','-14 days'))
-            ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT ?`)
-            .all(...wideStates, refillCap - enqueued) as any[]).map((r) => Number(r.id));
+          const ids = (rawDb.prepare(`
+            WITH cold_cells AS (
+              SELECT ROUND(lat,2) AS clat, ROUND(lng,2) AS clng, COUNT(*) AS unscanned
+                FROM scan_targets
+               WHERE tenant_id=? AND last_scanned_at IS NULL AND lat IS NOT NULL AND lng IS NOT NULL
+                 AND (carrier IS NULL OR carrier='kinetic')
+                 AND lower(state) IN (${inClause})
+               GROUP BY clat, clng
+            )
+            SELECT s.id FROM scan_targets s
+            JOIN cold_cells cc ON ROUND(s.lat,2)=cc.clat AND ROUND(s.lng,2)=cc.clng
+            WHERE s.tenant_id=? AND lower(s.state) IN (${inClause})
+              AND (s.carrier IS NULL OR s.carrier='kinetic')
+              AND (s.last_scanned_at IS NULL OR s.last_scanned_at < datetime('now','-24 hours'))
+              AND NOT (s.last_scanned_at IS NULL AND s.inconclusive_attempts >= 3
+                       AND s.last_inconclusive_at IS NOT NULL AND s.last_inconclusive_at > datetime('now','-14 days'))
+            ORDER BY cc.unscanned DESC, (s.last_scanned_at IS NULL) DESC, s.id ASC
+            LIMIT ?`)
+            .all(tid, ...wideStates, tid, ...wideStates, refillCap - enqueued) as any[]).map((r) => Number(r.id));
           if (ids.length) {
-            startTargetRun({ tenantId: tid, city: "statewide", state: wideStates.join("/").toUpperCase(), targetIds: ids, runKind: "discovery", label: `KEEPWARM: STATEWIDE ${wideStates.join("/").toUpperCase()}` });
+            startTargetRun({ tenantId: tid, city: "statewide", state: wideStates.join("/").toUpperCase(), targetIds: ids, runKind: "discovery", label: `KEEPWARM: SATURATE ${wideStates.join("/").toUpperCase()}` });
             enqueued += ids.length;
           }
         }
