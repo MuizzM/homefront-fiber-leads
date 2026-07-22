@@ -4667,7 +4667,7 @@ export default function MapView() {
                     <Button
                       size="sm"
                       className="relative min-h-9 text-[12px] px-3 after:absolute after:-inset-1.5 bg-purple-600 hover:bg-purple-700 text-white"
-                      disabled={fulfillRequestMutation.isPending}
+                      disabled={fulfillRequestMutation.isPending && fulfillRequestMutation.variables?.id === req.id}
                       onClick={() =>
                         fulfillRequestMutation.mutate({
                           id: req.id,
@@ -4681,7 +4681,7 @@ export default function MapView() {
                       size="sm"
                       variant="ghost"
                       className="relative min-h-9 text-[12px] px-3 after:absolute after:-inset-1.5 text-muted-foreground"
-                      disabled={fulfillRequestMutation.isPending}
+                      disabled={fulfillRequestMutation.isPending && fulfillRequestMutation.variables?.id === req.id}
                       onClick={() =>
                         fulfillRequestMutation.mutate({
                           id: req.id,

@@ -156,16 +156,21 @@ export default function CommissionConsole() {
         >
           Overview
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={section === "pay"}
-          onClick={() => setSection("pay")}
-          className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "pay" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-          data-testid="commission-tab-pay"
-        >
-          <Landmark className="w-3.5 h-3.5" /> Pay reps
-        </button>
+        {/* "Pay reps" is finalize/export/adjust — only roles with
+            commission.read.all can act there. Hiding it for team leads (who get
+            a read-only Overview) avoids a tab that opens a blank panel. */}
+        {canClose && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={section === "pay"}
+            onClick={() => setSection("pay")}
+            className={`h-9 flex-1 sm:flex-none px-4 rounded-lg text-xs font-semibold transition-colors inline-flex items-center justify-center gap-1.5 ${section === "pay" ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            data-testid="commission-tab-pay"
+          >
+            <Landmark className="w-3.5 h-3.5" /> Pay reps
+          </button>
+        )}
       </div>
 
       {isError && (
