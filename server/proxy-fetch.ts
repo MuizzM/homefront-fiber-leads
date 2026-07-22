@@ -7,7 +7,7 @@
  * residential gateway hands out a fresh egress IP. This obtains a new authorized
  * session per the provider agreement; it never bypasses an actual upstream denial. */
 
-import { noteProxyAuthFailure, noteProxySuccess, recordProxyResponse } from "./bandwidthGovernor";
+import { noteProxyAuthFailure, noteProxySuccess, recordProxyResponse, setProxyRotateHook } from "./bandwidthGovernor";
 
 let _ProxyAgent: any = null;
 let _undiciFetch: any = null;
@@ -202,6 +202,11 @@ export async function rotateProxySession(reason?: string): Promise<void> {
   void done.catch(() => {}).finally(() => { if (_rotateInFlight === done) _rotateInFlight = null; });
   return done;
 }
+
+// In unlimited-plan mode the bandwidth governor rotates (instead of freezing) on
+// an auth/limit-denial burst. Register the single-flight rotation here so it can
+// do that without importing this transport (circular). Registered once at load.
+setProxyRotateHook((reason) => { void rotateProxySession(reason); });
 
 /** Masked, safe session identifier for diagnostics — no IP, no credentials. */
 export function getProxySessionId(): string {

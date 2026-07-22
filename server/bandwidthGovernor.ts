@@ -39,6 +39,25 @@ const BUDGET_GB = Math.max(1, Number(process.env.DECODO_BUDGET_GB) || 25);
 const RESERVE = Math.min(0.9, Math.max(0, (Number(process.env.DECODO_RESERVE_PCT) || 10) / 100));
 const BILLING_DAY = Math.min(28, Math.max(1, Number(process.env.DECODO_BILLING_DAY) || 1));
 const USABLE_BYTES = BUDGET_GB * (1 - RESERVE) * 1e9;
+// UNLIMITED PLAN MODE (DECODO_UNLIMITED=on): the Decodo plan is metered as
+// unlimited, so budget pacing must NEVER throttle down and an auth/limit-denial
+// burst must NOT freeze scanning. Instead of a cooldown we ROTATE to a fresh
+// residential IP set and keep making requests (fresh IPs are free; a throttled
+// IP is the only thing that costs us) — matching the proxy layer's rotate-don't-
+// back-off philosophy. The single-flight rotate hook is injected by proxy-fetch
+// to avoid a circular import.
+const UNLIMITED = process.env.DECODO_UNLIMITED === "on";
+let rotateHook: ((reason: string) => void) | null = null;
+let lastRotateAt = 0;
+const ROTATE_MIN_INTERVAL_MS = Math.max(1_000, Number(process.env.PROXY_DENIAL_ROTATE_MIN_MS) || 3_000);
+/** proxy-fetch registers its session-rotation here so the governor can rotate on
+ *  a denial burst without importing the transport (circular). */
+export function setProxyRotateHook(fn: (reason: string) => void): void {
+  rotateHook = fn;
+}
+export function isUnlimitedProxyMode(): boolean {
+  return UNLIMITED;
+}
 
 const FLUSH_MS = 15_000;
 const CIRCUIT_FAILS = 8;                 // 407s inside the window to trip
@@ -137,6 +156,20 @@ function tripCircuit(now: number, reason: string): void {
 
 export function noteProxyAuthFailure(): void {
   const now = Date.now();
+  if (UNLIMITED) {
+    // Unlimited plan: never freeze. On a denial burst, rotate to a fresh IP set
+    // (rate-limited so a storm triggers ONE rotation, not thousands) and keep
+    // scanning. The circuit never opens; budget never throttles.
+    failTimes = failTimes.filter((t) => now - t < CIRCUIT_WINDOW_MS);
+    failTimes.push(now);
+    if (failTimes.length >= CIRCUIT_FAILS && now - lastRotateAt >= ROTATE_MIN_INTERVAL_MS) {
+      lastRotateAt = now;
+      failTimes = [];
+      structuredLog("bandwidth.denial_rotate", { reason: "unlimited-mode denial burst → rotate, no freeze" });
+      try { rotateHook?.("denial burst"); } catch { /* rotation best-effort */ }
+    }
+    return;
+  }
   if (recoverStep >= 0) {
     // A failure while recovering: don't blackout — drop back to the floor and
     // re-arm a short cooldown so we keep probing, never hammering.
@@ -174,6 +207,7 @@ export function noteProxySuccess(): void {
  *  scanning is never suspended for 30 minutes again. During RECOVERING this is
  *  false and a probe trickle flows (see proxyThrottleScale / budgetScale). */
 export function isProxyCircuitOpen(): boolean {
+  if (UNLIMITED) return false; // unlimited plan → scanning is never suspended
   // Only meaningful while tripped/recovering; a closed circuit is never "open"
   // even if a stale cooldown timestamp is still nominally in the future (probes
   // may have recovered us early).
@@ -188,6 +222,7 @@ export function isProxyCircuitOpen(): boolean {
 /** Circuit contribution to the budget, [0,1]. 1 when healthy, 0 during the
  *  brief post-trip cooldown, the current probe-ramp fraction while recovering. */
 export function proxyThrottleScale(now = Date.now()): number {
+  if (UNLIMITED) return 1;              // unlimited plan → never throttled
   if (recoverStep < 0) return 1;        // closed / healthy
   if (now < cooldownUntil) return 0;    // brief cooldown — the one full stop
   return RECOVER_STEPS[recoverStep];    // probe trickle, ramping to full
@@ -195,7 +230,7 @@ export function proxyThrottleScale(now = Date.now()): number {
 
 /** Test-only reset of the breaker state. */
 export function _resetCircuitForTests(): void {
-  failTimes = []; cooldownUntil = 0; recoverStep = -1; probeStreak = 0; circuitLogAt = 0;
+  failTimes = []; cooldownUntil = 0; recoverStep = -1; probeStreak = 0; circuitLogAt = 0; lastRotateAt = 0;
 }
 
 // ── Billing cycle + pacing ───────────────────────────────────────────────────
@@ -243,6 +278,10 @@ function ledgerSpanDays(): number {
  * throttle burst self-heals instead of blacking out for 30 minutes.
  */
 export function bandwidthBudgetScale(): number {
+  // Unlimited plan: full throttle, always. Never pace down on burn, never
+  // freeze — the plan can't run out, so hunt at max (up to the 1.5 hunt-harder
+  // ceiling the harvester already understands).
+  if (UNLIMITED) return 1.5;
   const throttle = proxyThrottleScale();
   if (throttle <= 0) return 0; // cooldown — the one true full stop
   const { start, end } = cycleBounds();
