@@ -974,6 +974,25 @@ app.use((req, res, next) => {
             enqueued += ids.length;
           }
         }
+        // STATEWIDE FEEDER — operator directive: NO city limitation, we need
+        // ALL Kinetic leads. If the priority cities didn't fill the refill
+        // cap, top up from anywhere in the harvest footprint (never-scanned
+        // first, parked ANF excluded, 24h recheck guard).
+        if (enqueued < refillCap) {
+          const wideStates = (process.env.FRESH_HARVEST_STATES ?? "nc,sc,ga").split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
+          const inClause = wideStates.map(() => "?").join(",");
+          const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(state) IN (${inClause})
+            AND (carrier IS NULL OR carrier='kinetic')
+            AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours'))
+            AND NOT (last_scanned_at IS NULL AND inconclusive_attempts >= 3
+                     AND last_inconclusive_at IS NOT NULL AND last_inconclusive_at > datetime('now','-14 days'))
+            ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT ?`)
+            .all(...wideStates, refillCap - enqueued) as any[]).map((r) => Number(r.id));
+          if (ids.length) {
+            startTargetRun({ tenantId: tid, city: "statewide", state: wideStates.join("/").toUpperCase(), targetIds: ids, runKind: "discovery", label: `KEEPWARM: STATEWIDE ${wideStates.join("/").toUpperCase()}` });
+            enqueued += ids.length;
+          }
+        }
         if (enqueued) structuredLog("keepwarm.topup", { claimableWas: claimable, enqueued, bwScale });
       } catch (e: any) { console.warn("[keepwarm] skipped:", e?.message); }
     };
@@ -1121,6 +1140,19 @@ app.use((req, res, next) => {
     setTimeout(() => { void learnTick(); }, 12 * 60_000);
     const learnInterval = setInterval(() => { void learnTick(); }, 24 * 3_600_000);
     if (typeof (learnInterval as any).unref === "function") learnInterval.unref();
+
+    // NIGHTLY DB PRUNE — the scan firehose grows the DB ~1GB/day; un-pruned
+    // it bloats the WAL (10GB observed) and fails every deploy backup.
+    // Batched deletes keep the write lock free. First pass at boot +30min.
+    const pruneTick = async () => {
+      try {
+        const { runDbPrune } = await import("./dbPrune");
+        runDbPrune();
+      } catch (e: any) { console.warn("[db-prune] skipped:", e?.message); }
+    };
+    setTimeout(() => { void pruneTick(); }, 30 * 60_000);
+    const pruneInterval = setInterval(() => { void pruneTick(); }, 24 * 3_600_000);
+    if (typeof (pruneInterval as any).unref === "function") pruneInterval.unref();
   }
 
   // CITY INGEST — free OSM address discovery for the priority cities
