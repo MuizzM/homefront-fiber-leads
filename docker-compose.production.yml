@@ -260,6 +260,20 @@ services:
       # global provider-slot ceiling — no concurrency increase.
       EXPANSION_MAX_RINGS: "10"
       EXPANSION_MAX_EMPTY_RINGS: "3"
+      # MAPBOX SPEND GOVERNOR — the hard ceiling that neutralizes the "real-dollar
+      # runaway" risk. Mapbox geocoding is separately METERED (unlike the
+      # unlimited Decodo plan) and has a documented runaway-cost history, so a
+      # persistent daily/monthly request budget bounds spend REGARDLESS of how
+      # dense any scan's grid is. When the ceiling is hit, paid calls stop and the
+      # scan falls back to the free OSM enumeration — never a billing surprise.
+      # This is what makes the per-box grid caps safe to raise. 0 = unlimited.
+      MAPBOX_DAILY_REQUEST_CAP: "100000"
+      MAPBOX_MONTHLY_REQUEST_CAP: "2000000"
+      # Now that SPEND is governed above, the elected-box grid caps can be
+      # generous (denser scans of a drawn area) without billing risk — the daily
+      # ceiling is the real limit, not these per-box counts.
+      AREA_ELECTED_GRID_POINTS: "16000"
+      MAPBOX_ELECTED_HARVEST_CAP: "20000"
       # SQLite write contention: the scan firehose + boot resume storms can
       # hold the write lock well past the 15s default, crashing workers with
       # SQLITE_BUSY. 120s matches the resilience of our ops scripts.

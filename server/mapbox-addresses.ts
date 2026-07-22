@@ -14,6 +14,7 @@
  */
 
 import { adaptiveGridStep } from "./bboxScan";
+import { mapboxFetch, canSpendMapbox } from "./mapboxBudget";
 
 interface AddressResult {
   address: string;
@@ -84,7 +85,7 @@ export async function harvestRockwellAddresses(
           `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
           `?access_token=${mapboxToken}&types=address&limit=5&country=US`;
         try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+          const res = await mapboxFetch(url, { signal: AbortSignal.timeout(8000) });
           if (!res.ok) return;
           const data = await res.json();
 
@@ -184,7 +185,7 @@ export async function harvestCityAddresses(
     `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(`${city}, ${state}`)}.json` +
     `?access_token=${mapboxToken}&types=place,locality,neighborhood&country=us&limit=1`;
 
-  const geoRes = await fetch(geoUrl, { signal: AbortSignal.timeout(12000) });
+  const geoRes = await mapboxFetch(geoUrl, { signal: AbortSignal.timeout(12000) });
   if (!geoRes.ok) throw new Error(`Mapbox geocoding failed: ${geoRes.status}`);
   const geoData = await geoRes.json();
   if (!geoData.features?.length)
@@ -267,7 +268,7 @@ export async function harvestCityAddresses(
           `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json` +
           `?access_token=${mapboxToken}&types=address&limit=5&country=US`;
         try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+          const res = await mapboxFetch(url, { signal: AbortSignal.timeout(8000) });
           if (!res.ok) return;
           const data = await res.json();
           for (const feat of data.features ?? []) {
@@ -383,6 +384,16 @@ export async function harvestBboxAddresses(
   for (let i = 0; i < gridPoints.length; i += BATCH) {
     if (signal?.aborted)
       throw signal.reason ?? new Error("Mapbox address harvest cancelled");
+    // SPEND CEILING: stop paid Mapbox calls at the daily/monthly budget and
+    // return what we have — the box's OSM addresses still stand. This is what
+    // makes the grid-point cap safe to raise: spend is bounded here, not by a
+    // per-box guess.
+    if (!canSpendMapbox()) {
+      console.warn(
+        `[deep-harvest] Mapbox budget exhausted — stopping paid enumeration at ${done}/${gridPoints.length}, returning ${seen.size} address(es)`,
+      );
+      break;
+    }
     const batch = gridPoints.slice(i, i + BATCH);
     await Promise.all(
       batch.map(async ([lng, lat]) => {
@@ -395,7 +406,7 @@ export async function harvestBboxAddresses(
             signal && typeof AbortSignal.any === "function"
               ? AbortSignal.any([signal, timeout])
               : timeout;
-          const res = await fetch(url, { signal: requestSignal });
+          const res = await mapboxFetch(url, { signal: requestSignal });
           if (res.status === 401 || res.status === 403) {
             throw new Error(
               `MAPBOX_ACCESS_DENIED: address enumeration stopped (${res.status})`,

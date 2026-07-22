@@ -27,6 +27,23 @@ async function upsertHarvestChunked(rows: Array<Parameters<typeof storage.upsert
   }
   return inserted;
 }
+
+// Normalize a large OSM harvest into upsert rows WITHOUT one blocking loop. A
+// big-city harvest can be 30k+ addresses; mapping them all in a single synchronous
+// pass (tenantId/source spread per row) adds to the loop-block budget that starves
+// /api on boot. Chunk the map and yield every SWEEP_NORMALIZE_CHUNK rows (default
+// 500) so health always answers even mid-normalization. Order is preserved.
+async function normalizeHarvestRows<T extends object>(
+  addresses: readonly T[], tenantId: number, source: string,
+): Promise<Array<T & { tenantId: number; source: string }>> {
+  const yieldEvery = Math.max(100, Number(process.env.SWEEP_NORMALIZE_CHUNK ?? 500) || 500);
+  const rows: Array<T & { tenantId: number; source: string }> = [];
+  for (let i = 0; i < addresses.length; i++) {
+    rows.push({ ...addresses[i], tenantId, source });
+    if ((i + 1) % yieldEvery === 0 && i + 1 < addresses.length) await new Promise((r) => setImmediate(r));
+  }
+  return rows;
+}
 // No cap — a sweep checks every discovered address in the market. Outbound
 // provider rate stays governed by the scheduler + 403/429 backoff (correctness).
 const MAX_SWEEP_CHECKS = () => Number.MAX_SAFE_INTEGER;
@@ -90,7 +107,7 @@ export async function searchAddressArea(input: { tenantId: number; query: string
   const latDelta = input.radiusMeters / 111_320;
   const lngDelta = input.radiusMeters / (111_320 * Math.cos(lat * Math.PI / 180));
   const addresses = await pullAddressesFromOverpass({ south: lat - latDelta, north: lat + latDelta, west: lng - lngDelta, east: lng + lngDelta }, city, state);
-  const inserted = await upsertHarvestChunked(addresses.map((a) => ({ ...a, tenantId: input.tenantId, source: "osm-address-radius" })));
+  const inserted = await upsertHarvestChunked(await normalizeHarvestRows(addresses, input.tenantId, "osm-address-radius"));
   return { match: { displayName: hit.display_name, lat, lng, city, state, zip: hit.address?.postcode ?? "" }, radiusMeters: input.radiusMeters, addresses, inserted };
 }
 
@@ -297,9 +314,37 @@ export function startStateSweep(input: StartStateSweepInput) {
   return getStateSweep(id, input.tenantId)!;
 }
 
+// ── Single-lane gate: one statewide city-loop at a time ───────────────────────
+// A deploy starts NC+SC+GA at once (index.ts) — three runStateSweep drivers, each
+// its own city loop. Run concurrently that is 3× the OSM harvest + scan load on
+// the single event-loop thread the deploy health-gate is probing on boot — exactly
+// the burst that starved /api and rolled the release back. Serialize the drivers:
+// each waits its turn on this one-lane queue, so only ONE city loop does heavy work
+// at any instant. The sweeps are idempotent + checkpoint-resumed, so serialized
+// ordering loses no coverage — NC finishes its pass, then SC, then GA, and each
+// re-arms its own next cycle independently.
+let stateSweepLane: Promise<unknown> = Promise.resolve();
+export function enqueueStateSweepLane<T>(task: () => Promise<T>): Promise<T> {
+  const run = stateSweepLane.then(task, task);
+  // Chain the NEXT waiter off a settled tail so one task's rejection can never
+  // poison the lane (a failed state sweep must not block the others forever).
+  stateSweepLane = run.then(() => {}, () => {});
+  return run;
+}
+/** Test-only: reset the lane so a pending/failed task can't bleed across tests. */
+export function __resetStateSweepLane() { stateSweepLane = Promise.resolve(); }
+
 async function runStateSweep(id: string) {
+  // Dedup a driver for THIS sweep, then queue behind the single lane so a boot
+  // that started NC+SC+GA never runs three heavy city loops simultaneously.
   if (activeState.has(id)) return; activeState.add(id);
-  try {
+  return enqueueStateSweepLane(() => driveStateSweep(id)).finally(() => activeState.delete(id));
+}
+
+// Drive ONE statewide sweep's city loop to completion. Serialized by the lane in
+// runStateSweep so only one of these does heavy OSM harvest + scan work at a time.
+async function driveStateSweep(id: string) {
+  {
     for (;;) {
       const parent = rawDb.prepare(`SELECT * FROM state_sweeps WHERE id=?`).get(id) as any;
       if (!parent || parent.status !== "running") return;
@@ -362,7 +407,7 @@ async function runStateSweep(id: string) {
         await sleep(400); // fast poll — city turnover must never idle
       }
     }
-  } finally { activeState.delete(id); }
+  }
 }
 
 // After a city is swept, its addresses' last_scanned_at advanced, so recompute the
@@ -573,7 +618,7 @@ async function runSweep(id: string) {
         updateJob(id, { city: job.city, state: job.state });
       } else {
         const cityHarvest = await getCityAddresses(job.city, job.state);
-        const inserted = await upsertHarvestChunked(cityHarvest.addresses.map((a) => ({ ...a, tenantId: job.tenant_id, source: "osm-city-sweep" })));
+        const inserted = await upsertHarvestChunked(await normalizeHarvestRows(cityHarvest.addresses, job.tenant_id, "osm-city-sweep"));
         harvested = { addresses: cityHarvest.addresses, inserted };
         targets = rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=lower(?) AND state=? ORDER BY (last_scanned_at IS NOT NULL),last_scanned_at LIMIT ?`).all(job.city, job.state, job.max_checks) as Array<{ id: number }>;
       }
