@@ -404,6 +404,9 @@ app.use((req, res, next) => {
   // supervises them (respawn on crash, forward SIGTERM). It does NOT serve HTTP or
   // scan. Only entered when SCAN_WORKERS>0; single-process falls straight through.
   if (SCAN_WORKERS > 0 && cluster.isPrimary) {
+    // Defer the heavy scan_targets uniqueness rebuild until workers are
+    // already serving (health gate safe); everything else runs here as before.
+    process.env.DEFER_ADDR_UNIQUENESS_MIGRATION = "on";
     runMigrations();
     try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
@@ -426,6 +429,10 @@ app.use((req, res, next) => {
       return w;
     };
     for (let i = 0; i < SCAN_WORKERS; i++) forkWorker(i);
+    const heavyTimer = setTimeout(() => {
+      void import("./storage").then((m) => m.runDeferredMigrations());
+    }, 150_000);
+    if (typeof heavyTimer.unref === "function") heavyTimer.unref();
     structuredLog("cluster.primary_started", {
       workers: SCAN_WORKERS, pid: process.pid,
       vcpus: os.availableParallelism?.() ?? os.cpus().length,

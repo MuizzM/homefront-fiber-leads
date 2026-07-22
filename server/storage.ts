@@ -1763,8 +1763,13 @@ export function runMigrations() {
   }
   // scan_targets UNIQUE(address) → UNIQUE(address, city, state). Dedups the
   // case/whitespace address variants first, so the new unique index can build.
-  try { migrateScanTargetsAddressUniqueness(raw); }
-  catch (e: any) { console.warn("[migration] scan_targets addr-city-state uniqueness:", e?.message); }
+  // HEAVY on large DBs (full table rebuild + 7 index builds): production defers
+  // it via runDeferredMigrations() AFTER workers are up + healthy, so a slow
+  // rebuild can never fail the deploy health gate again (observed live).
+  if (process.env.DEFER_ADDR_UNIQUENESS_MIGRATION !== "on") {
+    try { migrateScanTargetsAddressUniqueness(raw); }
+    catch (e: any) { console.warn("[migration] scan_targets addr-city-state uniqueness:", e?.message); }
+  }
 
   // Seed default commission rate if none exist
   try {
@@ -3251,3 +3256,21 @@ export class Storage implements IStorage {
 }
 
 export const storage = new Storage();
+
+/**
+ * Deferred heavy migrations — called post-boot (workers already healthy).
+ * Idempotent: each step no-ops fast when already applied.
+ */
+export function runDeferredMigrations(): void {
+  const t0 = Date.now();
+  try {
+    rawDb.pragma("synchronous = OFF");
+    rawDb.pragma("cache_size = -2000000"); // ~2GB page cache for the rebuild
+    migrateScanTargetsAddressUniqueness(rawDb);
+    console.log(`[migration] deferred addr-city-state uniqueness done in ${Date.now() - t0}ms`);
+  } catch (e: any) {
+    console.warn("[migration] deferred addr-city-state uniqueness:", e?.message);
+  } finally {
+    try { rawDb.pragma("synchronous = FULL"); } catch { /* */ }
+  }
+}
