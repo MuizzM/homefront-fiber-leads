@@ -37,7 +37,12 @@ import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGat
 import { budgetShapeFactor } from "./harvestScheduler";
 
 const FRESH_WINDOW_DAYS = 21;
-const EXPLORE_FRACTION = 0.15;
+// Fraction of each cycle's budget spent on random NEVER-scanned footprint
+// addresses (discovery) vs. the highest-yield scored targets (exploit). Raising
+// it reaches full coverage of enumerated inventory faster — worthwhile under an
+// unlimited plan where breadth costs nothing. Env-tunable; clamped [0, 0.9] so
+// exploit is never fully starved. Default 0.15.
+const EXPLORE_FRACTION = Math.min(0.9, Math.max(0, Number(process.env.YIELD_EXPLORE_FRACTION) || 0.15));
 const LEARN_MIN_SAMPLES = 200;         // don't learn from noise
 // Empirical-Bayes prior strength for the cell hit-rate: a cell's observed
 // hits/scans is blended with the tenant-wide conversion rate as if it had this

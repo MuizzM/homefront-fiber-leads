@@ -230,11 +230,36 @@ services:
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
       # health, so it runs 24/7 with zero site impact. off to disable.
       FRESH_HARVEST: "on"
+      # PUMP MODE: 2x harvest budget (8k/10min) and the keep-warm feeder tops up
+      # harder so the queue never drains.
       FRESH_HARVEST_BUDGET: "8000"
       FRESH_HARVEST_INTERVAL_MIN: "10"
-      # PUMP MODE: keep-warm feeder tops up harder so the queue never drains
       KEEPWARM_REFILL: "12000"
       KEEPWARM_PER_CITY: "3000"
+      # REACH FURTHER (operator, 2026-07-21: "keep reaching and removing
+      # limitations"). Under the unlimited Decodo plan, breadth is free, so the
+      # coverage caps are loosened. These redistribute the SAME governed
+      # throughput (SCAN_GLOBAL_CONCURRENCY still bounds Decodo pressure and the
+      # single-thread load) — they do NOT raise concurrency, so there is no
+      # thread-wedge risk; the app-health knobs are untouched.
+      #   • FRESH_HARVEST_BUDGET 4000→8000 — set above with PUMP mode; more
+      #     inventory selected per cycle, so more never-scanned addresses enter
+      #     flight each pass.
+      #   • YIELD_EXPLORE_FRACTION 0.15→0.25 — spend a quarter of each cycle on
+      #     never-scanned footprint discovery → full coverage of enumerated
+      #     inventory reached faster.
+      #   • NEG_RECHECK_MAX_DAYS 60→21 — nothing sleeps more than 3 weeks, so a
+      #     copper→fiber flip on even a chronic-dead address is caught within 21d
+      #     everywhere (the flip-proximity override still catches neighbours in
+      #     hours; verified_expanding markets keep their 7d floor).
+      YIELD_EXPLORE_FRACTION: "0.25"
+      NEG_RECHECK_MAX_DAYS: "21"
+      # Cluster expansion reaches further from every confirmed drop: more rings
+      # (6→10, ~5km radius) and one extra tolerance for an empty ring before it
+      # stops (2→3). Still bounded by maxActive×ringBudget offered load + the
+      # global provider-slot ceiling — no concurrency increase.
+      EXPANSION_MAX_RINGS: "10"
+      EXPANSION_MAX_EMPTY_RINGS: "3"
       # SQLite write contention: the scan firehose + boot resume storms can
       # hold the write lock well past the 15s default, crashing workers with
       # SQLITE_BUSY. 120s matches the resilience of our ops scripts.
