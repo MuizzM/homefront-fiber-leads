@@ -30,6 +30,7 @@ beforeAll(async () => {
     CREATE TABLE scan_targets (
       id INTEGER PRIMARY KEY, tenant_id INTEGER, address TEXT, city TEXT, state TEXT, zip TEXT,
       lat REAL, lng REAL, last_scanned_at TEXT, last_fiber_status TEXT, carrier TEXT DEFAULT 'kinetic',
+      inconclusive_attempts INTEGER NOT NULL DEFAULT 0, last_inconclusive_at TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE TABLE leads (

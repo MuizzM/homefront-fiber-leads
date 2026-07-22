@@ -917,6 +917,8 @@ app.use((req, res, next) => {
           const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=? AND lower(state)=?
             AND (carrier IS NULL OR carrier='kinetic')
             AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours'))
+            AND NOT (last_scanned_at IS NULL AND inconclusive_attempts >= 3
+                     AND last_inconclusive_at IS NOT NULL AND last_inconclusive_at > datetime('now','-14 days'))
             ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT ?`)
             .all(city, st, KW_PER_CITY) as any[]).map((r) => Number(r.id));
           if (ids.length) {

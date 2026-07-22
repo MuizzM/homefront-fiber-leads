@@ -62,6 +62,14 @@ const MOMENTUM_HALFLIFE_DAYS = Math.max(0.5, Number(process.env.MOMENTUM_HALFLIF
 const MOMENTUM_WINDOW_DAYS = Math.max(1, Number(process.env.MOMENTUM_WINDOW_DAYS) || 21);
 const LN2 = 0.6931471805599453;
 
+// Parked address_not_found targets (INCONCLUSIVE_GIVEUP+ needs-fix non-answers
+// inside the quiet window) are NOT eligible: the claim layer skips them, so
+// picking them burns queue slots and produces 0 checks (observed live: 8,229
+// enqueued → all skipped → zero checks).
+const ANF_QUIET_DAYS = Math.max(1, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_QUIET_DAYS ?? 14) || 14));
+const ANF_GIVEUP = 3; // mirrors shared/scanPolicy INCONCLUSIVE_GIVEUP
+const NOT_PARKED_ANF = `NOT (s.last_scanned_at IS NULL AND s.inconclusive_attempts >= ${ANF_GIVEUP} AND s.last_inconclusive_at IS NOT NULL AND s.last_inconclusive_at > datetime('now','-${ANF_QUIET_DAYS} days'))`;
+
 const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc")
   .split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);
 const STATE_IN = FOCUS_STATES.map(() => "?").join(",");
@@ -351,6 +359,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
       WHERE s.tenant_id=?
         AND lower(s.state) IN (${STATE_IN})
         AND footprint_city(s.state, s.city)=1
+        AND ${NOT_PARKED_ANF}
         AND (
           s.last_scanned_at IS NULL
           OR ${negDueClause}
@@ -410,6 +419,7 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
         WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
           AND lower(s.state) IN (${STATE_IN})
           AND footprint_city(s.state, s.city)=1
+          AND ${NOT_PARKED_ANF}
         ORDER BY RANDOM() LIMIT ?`,
     ).all(tenantId, ...stateArgs(), exploreBudget + seen.size) as any[])
       .map((r) => r.id).filter((id) => !seen.has(id)).slice(0, exploreBudget);
