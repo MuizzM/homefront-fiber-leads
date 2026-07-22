@@ -943,13 +943,21 @@ app.use((req, res, next) => {
         const { getDefaultTenantId } = await import("./storage");
         const tid = getDefaultTenantId();
         if (tid == null) return;
+        // BANDWIDTH GOVERNOR — keep-warm is the main call-volume driver, so it
+        // must respect the Decodo pool pace: scale the refill by bwScale
+        // (and skip entirely while the proxy circuit is open).
+        const { bandwidthBudgetScale, isProxyCircuitOpen } = await import("./bandwidthGovernor");
+        if (isProxyCircuitOpen()) return;
+        const bwScale = bandwidthBudgetScale();
+        const refillCap = Math.max(500, Math.round(KW_REFILL * bwScale));
+        const perCityCap = Math.max(250, Math.round(KW_PER_CITY * bwScale));
         // Only refill when the pipeline is draining — this is what bounds total work.
         const claimable = Number((rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id
           WHERE r.status='running' AND t.state='queued' AND (t.next_attempt_at IS NULL OR t.next_attempt_at<=datetime('now'))`).get() as any).c);
         if (claimable >= KW_LOW) return;
         let enqueued = 0;
         for (const entry of keepWarmCities) {
-          if (enqueued >= KW_REFILL) break;
+          if (enqueued >= refillCap) break;
           const [city, st = "nc"] = entry.split(":").map((s) => s.trim());
           if (!city) continue;
           const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=? AND lower(state)=?
@@ -958,7 +966,7 @@ app.use((req, res, next) => {
             AND NOT (last_scanned_at IS NULL AND inconclusive_attempts >= 3
                      AND last_inconclusive_at IS NOT NULL AND last_inconclusive_at > datetime('now','-14 days'))
             ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT ?`)
-            .all(city, st, KW_PER_CITY) as any[]).map((r) => Number(r.id));
+            .all(city, st, perCityCap) as any[]).map((r) => Number(r.id));
           if (ids.length) {
             // startTargetRun dedups against already-queued/inflight targets, so an
             // overlap with a hot-market run is skipped, never double-scanned.
@@ -966,7 +974,7 @@ app.use((req, res, next) => {
             enqueued += ids.length;
           }
         }
-        if (enqueued) structuredLog("keepwarm.topup", { claimableWas: claimable, enqueued });
+        if (enqueued) structuredLog("keepwarm.topup", { claimableWas: claimable, enqueued, bwScale });
       } catch (e: any) { console.warn("[keepwarm] skipped:", e?.message); }
     };
     deferBoot(() => {
