@@ -261,10 +261,29 @@ services:
       FRESH_HARVEST_STATES: "nc,sc,ga"
       FRONTIER_DIRECT: "off"
       FRONTIER_MARKETS: "off"
-      COMING_SOON_PROGRAM: "off"
-      COMING_SOON_WATCHLIST: "off"
+      # FULL SCAN (operator, 2026-07-21) — every safe coverage producer ON so we
+      # scan the entire Kinetic-serviceable surface continuously:
+      #   • COMING_SOON_WATCHLIST — the tight-cadence flip engine: coming-soon
+      #     addresses recheck at the configured 3h/6h/12h (hot/construction/
+      #     watch) under reserved coming_soon capacity, so a go-live is caught in
+      #     hours, not the ~18h yield floor. Governor-paced + circuit-broken; no
+      #     wedge risk flagged.
+      #   • COMING_SOON_PROGRAM — legacy→watchlist bridge + promotion board.
+      #   • NEWBUILD_RADAR — authoritative NEW-address discovery across ALL 100
+      #     NC counties (OneMap) + SC E911/GIS + OSM `newer:`, feeding fresh
+      #     rooftops straight into the pipeline. Free gov sources, incremental
+      #     (not a boot burst), control-worker only. De-nested from the statewide
+      #     gate in code, so this flag works on its own.
+      # Together with the full-footprint yield engine (132 markets), daily
+      # refresh, hot zone, build-intel promotion, and cluster expansion, this is
+      # full coverage of everything Kinetic can light up. The ONE lever still off
+      # is STATEWIDE_SCAN_ON_DEPLOY (every address statewide incl. non-Kinetic
+      # territory) — the documented boot-wedge risk; flip that only after the
+      # live checks above pass.
+      COMING_SOON_PROGRAM: "on"
+      COMING_SOON_WATCHLIST: "on"
       DAILY_MARKET_REFRESH: "on"
-      NEWBUILD_RADAR: "off"
+      NEWBUILD_RADAR: "on"
       # CLUSTER EXPANSION — ON (operator, 2026-07-21: "if we found new builds
       # the surrounding is turned on"). Every confirmed NEW FIBER + billing-N
       # result seeds a bounded ring crawl around the drop (800m rings, <=6
