@@ -230,11 +230,50 @@ services:
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
       # health, so it runs 24/7 with zero site impact. off to disable.
       FRESH_HARVEST: "on"
+      # PUMP MODE: 2x harvest budget (8k/10min) and the keep-warm feeder tops up
+      # harder so the queue never drains.
       FRESH_HARVEST_BUDGET: "8000"
       FRESH_HARVEST_INTERVAL_MIN: "10"
-      # PUMP MODE: keep-warm feeder tops up harder so the queue never drains
       KEEPWARM_REFILL: "12000"
       KEEPWARM_PER_CITY: "3000"
+      # REACH FURTHER (operator, 2026-07-21: "keep reaching and removing
+      # limitations"). Under the unlimited Decodo plan, breadth is free, so the
+      # coverage caps are loosened. These redistribute the SAME governed
+      # throughput (SCAN_GLOBAL_CONCURRENCY still bounds Decodo pressure and the
+      # single-thread load) — they do NOT raise concurrency, so there is no
+      # thread-wedge risk; the app-health knobs are untouched.
+      #   • FRESH_HARVEST_BUDGET 4000→8000 — set above with PUMP mode; more
+      #     inventory selected per cycle, so more never-scanned addresses enter
+      #     flight each pass.
+      #   • YIELD_EXPLORE_FRACTION 0.15→0.25 — spend a quarter of each cycle on
+      #     never-scanned footprint discovery → full coverage of enumerated
+      #     inventory reached faster.
+      #   • NEG_RECHECK_MAX_DAYS 60→21 — nothing sleeps more than 3 weeks, so a
+      #     copper→fiber flip on even a chronic-dead address is caught within 21d
+      #     everywhere (the flip-proximity override still catches neighbours in
+      #     hours; verified_expanding markets keep their 7d floor).
+      YIELD_EXPLORE_FRACTION: "0.25"
+      NEG_RECHECK_MAX_DAYS: "21"
+      # Cluster expansion reaches further from every confirmed drop: more rings
+      # (6→10, ~5km radius) and one extra tolerance for an empty ring before it
+      # stops (2→3). Still bounded by maxActive×ringBudget offered load + the
+      # global provider-slot ceiling — no concurrency increase.
+      EXPANSION_MAX_RINGS: "10"
+      EXPANSION_MAX_EMPTY_RINGS: "3"
+      # MAPBOX SPEND GOVERNOR — the hard ceiling that neutralizes the "real-dollar
+      # runaway" risk. Mapbox geocoding is separately METERED (unlike the
+      # unlimited Decodo plan) and has a documented runaway-cost history, so a
+      # persistent daily/monthly request budget bounds spend REGARDLESS of how
+      # dense any scan's grid is. When the ceiling is hit, paid calls stop and the
+      # scan falls back to the free OSM enumeration — never a billing surprise.
+      # This is what makes the per-box grid caps safe to raise. 0 = unlimited.
+      MAPBOX_DAILY_REQUEST_CAP: "100000"
+      MAPBOX_MONTHLY_REQUEST_CAP: "2000000"
+      # Now that SPEND is governed above, the elected-box grid caps can be
+      # generous (denser scans of a drawn area) without billing risk — the daily
+      # ceiling is the real limit, not these per-box counts.
+      AREA_ELECTED_GRID_POINTS: "16000"
+      MAPBOX_ELECTED_HARVEST_CAP: "20000"
       # SQLite write contention: the scan firehose + boot resume storms can
       # hold the write lock well past the 15s default, crashing workers with
       # SQLITE_BUSY. 120s matches the resilience of our ops scripts.
@@ -268,10 +307,29 @@ services:
       FRESH_HARVEST_STATES: "nc,sc,ga"
       FRONTIER_DIRECT: "off"
       FRONTIER_MARKETS: "off"
-      COMING_SOON_PROGRAM: "off"
-      COMING_SOON_WATCHLIST: "off"
+      # FULL SCAN (operator, 2026-07-21) — every safe coverage producer ON so we
+      # scan the entire Kinetic-serviceable surface continuously:
+      #   • COMING_SOON_WATCHLIST — the tight-cadence flip engine: coming-soon
+      #     addresses recheck at the configured 3h/6h/12h (hot/construction/
+      #     watch) under reserved coming_soon capacity, so a go-live is caught in
+      #     hours, not the ~18h yield floor. Governor-paced + circuit-broken; no
+      #     wedge risk flagged.
+      #   • COMING_SOON_PROGRAM — legacy→watchlist bridge + promotion board.
+      #   • NEWBUILD_RADAR — authoritative NEW-address discovery across ALL 100
+      #     NC counties (OneMap) + SC E911/GIS + OSM `newer:`, feeding fresh
+      #     rooftops straight into the pipeline. Free gov sources, incremental
+      #     (not a boot burst), control-worker only. De-nested from the statewide
+      #     gate in code, so this flag works on its own.
+      # Together with the full-footprint yield engine (132 markets), daily
+      # refresh, hot zone, build-intel promotion, and cluster expansion, this is
+      # full coverage of everything Kinetic can light up. The ONE lever still off
+      # is STATEWIDE_SCAN_ON_DEPLOY (every address statewide incl. non-Kinetic
+      # territory) — the documented boot-wedge risk; flip that only after the
+      # live checks above pass.
+      COMING_SOON_PROGRAM: "on"
+      COMING_SOON_WATCHLIST: "on"
       DAILY_MARKET_REFRESH: "on"
-      NEWBUILD_RADAR: "off"
+      NEWBUILD_RADAR: "on"
       # CLUSTER EXPANSION — ON (operator, 2026-07-21: "if we found new builds
       # the surrounding is turned on"). Every confirmed NEW FIBER + billing-N
       # result seeds a bounded ring crawl around the drop (800m rings, <=6
