@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
 import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION } from "./addressKey";
+import { streetKeyOf } from "@shared/addressKey";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -3163,6 +3164,22 @@ export class Storage implements IStorage {
     const twinStmt = rawDb.prepare(
       `SELECT id FROM scan_targets WHERE tenant_id IS @tenantId AND canonical_key = @canonicalKey LIMIT 1`,
     );
+    // POSTAL-CITY ALIAS twin (the Stonewyck Salisbury/Lexington split): the
+    // SAME premise geocoded under two postal cities has two canonical keys
+    // (city is in the key), so the guard above misses it and spend/coverage
+    // split. Identity-first-geo-second: same normalized street (street_key) +
+    // same state + same leading house number + coordinates within ~25m. Never
+    // rounded-coordinate-only — genuine neighbors survive; distinct units
+    // differ in street_key's retained unit token and never merge.
+    const cityAliasTwinStmt = rawDb.prepare(
+      `SELECT id FROM scan_targets
+        WHERE tenant_id IS @tenantId AND street_key = @streetKey
+          AND upper(trim(state)) = upper(trim(@state))
+          AND (address = @houseNum OR address LIKE @houseNum || ' %')
+          AND lat BETWEEN @lat - 0.00023 AND @lat + 0.00023
+          AND lng BETWEEN @lng - 0.00028 AND @lng + 0.00028
+        LIMIT 1`,
+    );
     const enrichByIdStmt = rawDb.prepare(
       `UPDATE scan_targets SET
          df_address_id = COALESCE(df_address_id, @df),
@@ -3210,6 +3227,26 @@ export class Storage implements IStorage {
             }
             if (scanned) baselineByIdStmt.run({ id: twin.id, fs: params.fs, nf: params.nf, bs: params.bs, scannedAt: params.scannedAt });
             continue;
+          }
+          // Same premise filed under an ALIAS postal city → attach, never insert.
+          const houseNum = r.address.trim().split(/\s+/)[0] ?? "";
+          if (/^\d+[A-Za-z]?$/.test(houseNum) && r.lat != null && r.lng != null) {
+            try {
+              const aliasTwin = cityAliasTwinStmt.get({
+                tenantId: r.tenantId ?? null,
+                streetKey: streetKeyOf(r.address),
+                state: r.state ?? "NC",
+                houseNum,
+                lat: r.lat, lng: r.lng,
+              }) as { id: number } | undefined;
+              if (aliasTwin) {
+                if (r.dfAddressId || r.zip) {
+                  enrichByIdStmt.run({ id: aliasTwin.id, df: r.dfAddressId ?? null, lat: null, lng: null, zip: r.zip ?? "" });
+                }
+                if (scanned) baselineByIdStmt.run({ id: aliasTwin.id, fs: params.fs, nf: params.nf, bs: params.bs, scannedAt: params.scannedAt });
+                continue;
+              }
+            } catch { /* street_key column absent on bare replay DBs — alias guard is best-effort */ }
           }
         }
         const inserted = insertStmt.run(params).changes;

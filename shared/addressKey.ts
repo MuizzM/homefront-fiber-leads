@@ -164,3 +164,32 @@ export function kineticLeadKeyOrNull(address: string, city: string, state: strin
   if (canonicalAddressPart(address) === "") return null; // no street identity → do not dedup
   return normalizeKineticAddressKey(address, city, state, zip);
 }
+
+// ── Street identity (moved from server/freshHarvest — pure, dependency-free) ──
+const STREET_DIRECTIONALS = new Set(["N", "S", "E", "W"]);
+const STREET_UNIT_TOKENS = new Set(["APT", "UNIT", "STE", "SUITE", "LOT", "TRLR", "BLDG", "FL", "RM", "BSMT", "DEPT", "OFC"]);
+/**
+ * Canonical street key: house number and unit stripped, suffix/directional
+ * synonyms folded (via canonicalAddressPart), so "22 Fiber Street Apt 4",
+ * "17 Fiber St" and "Fiber Street" all key to "FIBER ST". Addresses with no
+ * leading house number (brand-new streets a geocoder hasn't numbered yet)
+ * keep their full name instead of losing their first word. Empty string when
+ * no street name survives.
+ */
+export function streetKeyOf(address: string | null | undefined): string {
+  if (!address) return "";
+  const tokens = canonicalAddressPart(String(address)).split(" ").filter(Boolean);
+  let start = 0;
+  // House number: "123", "123A", and split forms like "123 125" (ranges) or
+  // "123 1 2" (fractions — "/" folds to a space in canonical form).
+  while (start < tokens.length && /^\d+[A-Z]?$/.test(tokens[start])) start++;
+  // "123-A Main St" canonicalizes to "123 A MAIN ST" — drop the orphaned unit
+  // letter, but never a directional ("101 N Main St" keeps its N).
+  if (start > 0 && start < tokens.length - 1
+      && tokens[start].length === 1 && !STREET_DIRECTIONALS.has(tokens[start])) start++;
+  let end = tokens.length;
+  for (let i = start; i < tokens.length; i++) {
+    if (tokens[i].startsWith("#") || STREET_UNIT_TOKENS.has(tokens[i])) { end = i; break; }
+  }
+  return tokens.slice(start, end).join(" ");
+}

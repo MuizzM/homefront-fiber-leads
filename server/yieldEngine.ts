@@ -44,6 +44,14 @@ const FRESH_WINDOW_DAYS = 21;
 // unlimited plan where breadth costs nothing. Env-tunable; clamped [0, 0.9] so
 // exploit is never fully starved. Default 0.15.
 const EXPLORE_FRACTION = Math.min(0.9, Math.max(0, Number(process.env.YIELD_EXPLORE_FRACTION) || 0.15));
+// GUARANTEED DISCOVERY LANE (the Stonewyck fairness fix): a reserved share of
+// EVERY cycle goes to the OLDEST never-scanned in-footprint targets,
+// partitioned round-robin by city so one hot metro cannot consume the lane.
+// Unlike explore (density-ranked, dies first under scarcity), this lane is
+// never cut — an eligible address must not stay never-scanned indefinitely.
+const DISCOVERY_FRACTION = Math.min(0.5, Math.max(0.05, Number(process.env.YIELD_DISCOVERY_FRACTION) || 0.2));
+// First-scan SLA: never-scanned older than this logs a violation alert.
+const FIRST_SCAN_SLA_DAYS = Math.max(1, Number(process.env.YIELD_FIRST_SCAN_SLA_DAYS) || 14);
 const LEARN_MIN_SAMPLES = 200;         // don't learn from noise
 // Empirical-Bayes prior strength for the cell hit-rate: a cell's observed
 // hits/scans is blended with the tenant-wide conversion rate as if it had this
@@ -654,18 +662,61 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
     return { exploit: 0, explore: 0 };
   }
 
-  // Scarcity cut order under a shrinking bandwidth pool: explore dies first.
+  // GUARANTEED DISCOVERY LANE — reserved BEFORE exploit/explore and never
+  // zeroed by the scarcity cut. Oldest never-scanned first, one queue per
+  // city (ROW_NUMBER round-robin) so a 40k-address metro cannot starve a
+  // 60-house street. Emits the fairness metrics + SLA alert every cycle.
+  const discoveryBudget = Math.max(1, Math.floor(budget * DISCOVERY_FRACTION));
+  let discovery: number[] = [];
+  try {
+    registerFootprintSqlFunctions();
+    warmFootprintGate();
+    discovery = (rawDb.prepare(
+      `WITH ranked AS (
+         SELECT s.id, s.created_at,
+                ROW_NUMBER() OVER (PARTITION BY lower(s.city), lower(s.state)
+                                   ORDER BY s.created_at ASC, s.id ASC) AS cityRank
+           FROM scan_targets s
+          WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
+            AND lower(s.state) IN (${STATE_IN})
+            AND ${KINETIC_ONLY}
+            AND footprint_city(s.state, s.city)=1
+            AND ${NOT_PARKED_ANF}
+       )
+       SELECT id FROM ranked ORDER BY cityRank ASC, created_at ASC, id ASC LIMIT ?`,
+    ).all(tenantId, ...stateArgs(), discoveryBudget) as any[]).map((r) => r.id);
+    const oldest = rawDb.prepare(
+      `SELECT MIN(created_at) o, COUNT(*) n FROM scan_targets s
+        WHERE s.tenant_id=? AND s.last_scanned_at IS NULL AND lower(s.state) IN (${STATE_IN})
+          AND ${KINETIC_ONLY} AND footprint_city(s.state, s.city)=1 AND ${NOT_PARKED_ANF}`,
+    ).get(tenantId, ...stateArgs()) as any;
+    const oldestDays = oldest?.o ? Math.floor((Date.now() - Date.parse(oldest.o + "Z")) / 86_400_000) : 0;
+    const neverScanned = Number(oldest?.n ?? 0);
+    const admittedPct = neverScanned > 0 ? +(100 * discovery.length / neverScanned).toFixed(2) : 100;
+    structuredLog("yield_engine.discovery_lane", {
+      admitted: discovery.length, neverScanned, oldestDays, admittedPct, slaDays: FIRST_SCAN_SLA_DAYS,
+    }, oldestDays > FIRST_SCAN_SLA_DAYS ? "warn" : "info");
+    if (oldestDays > FIRST_SCAN_SLA_DAYS) {
+      structuredLog("yield_engine.first_scan_sla_violation", { oldestDays, neverScanned }, "warn");
+    }
+  } catch (e: any) {
+    structuredLog("yield_engine.discovery_lane_error", { error: String(e?.message ?? e).slice(0, 140) }, "error");
+  }
+  const seen = new Set(discovery);
+  const remaining = Math.max(0, budget - discovery.length);
+  // Scarcity cut order under a shrinking bandwidth pool: explore dies first
+  // (the guaranteed lane above is already funded).
   const exploreFrac = bwScale < 0.5 ? 0 : EXPLORE_FRACTION;
-  const exploitBudget = Math.floor(budget * (1 - exploreFrac));
-  const scored = scoreDueTargets(tenantId, exploitBudget);
+  const exploitBudget = Math.floor(remaining * (1 - exploreFrac));
+  const scored = scoreDueTargets(tenantId, exploitBudget).filter((r) => !seen.has(r.id));
   const exploit = scored.map((r) => r.id);
-  const seen = new Set(exploit);
+  for (const id of exploit) seen.add(id);
 
   // Explore: random never-scanned in focus states — discover NEW build zones.
   // Footprint-gated: exploration stays inside the Kinetic footprint so the 15%
   // discovery budget can never burn on towns Kinetic will not serve.
   let explore: number[] = [];
-  const exploreBudget = budget - exploit.length;
+  const exploreBudget = remaining - exploit.length;
   if (exploreBudget > 0) {
     registerFootprintSqlFunctions();
     warmFootprintGate();
@@ -696,7 +747,7 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
       .map((r) => r.id).filter((id) => !seen.has(id)).slice(0, exploreBudget);
   }
 
-  const ids = [...exploit, ...explore];
+  const ids = [...discovery, ...exploit, ...explore];
   if (!ids.length) {
     structuredLog("yield_engine.cycle", { exploit: 0, explore: 0, skipped: "nothing due", bwScale });
     return { exploit: 0, explore: 0 };
@@ -736,7 +787,7 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
   }
   const w = getWeights();
   structuredLog("yield_engine.cycle", {
-    exploit: exploit.length, explore: explore.length, runId, total: ids.length,
+    exploit: exploit.length, explore: explore.length, discovery: discovery.length, runId, total: ids.length,
     watch: watchIds.length, flip: flipIds.length, bulk: bulkIds.length,
     bwScale, topScore: +(scored[0]?.score ?? 0).toFixed(3), medianScore: +(scored[Math.floor(scored.length / 2)]?.score ?? 0).toFixed(3),
     wCell: w.cell, wStreet: w.street, wCity: w.city, wProx: w.prox, wExpand: w.expand, wMomentum: w.momentum,
