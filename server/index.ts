@@ -421,6 +421,12 @@ app.use((req, res, next) => {
       // Interval-driven (first tick 30s out); nothing heavy runs at boot.
       const { startResourceSentinel } = await import("./resourcePressure");
       startResourceSentinel();
+      // Yield-rollup maintenance (index builds + street_key/neg_streak
+      // backfill) — chunked, sentinel-gated, interval-only. Runs in the
+      // PRIMARY: its near-idle loop can absorb the one-time blocking index
+      // builds that would stall an HTTP-serving worker.
+      const { startYieldRollupMaintenance } = await import("./yieldRollups");
+      startYieldRollupMaintenance();
     }
     try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
@@ -1305,6 +1311,8 @@ app.use((req, res, next) => {
     startWalGuard();
     const { startResourceSentinel } = await import("./resourcePressure");
     startResourceSentinel();
+    const { startYieldRollupMaintenance } = await import("./yieldRollups");
+    startYieldRollupMaintenance();
   }
 
   await registerRoutes(httpServer, app);

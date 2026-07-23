@@ -1793,6 +1793,27 @@ export function runMigrations() {
     catch (e: any) { console.warn("[migration] scan_targets addr-city-state uniqueness:", e?.message); }
   }
 
+  // Yield-rollup columns (street_key / neg_streak / generated cell cols) —
+  // instant ADD COLUMNs only, inlined here like every other scan_targets
+  // ALTER (a lazy require of yieldRollups breaks under the ESM transform, and
+  // a static import would close an init-time module cycle). The heavy parts
+  // (index builds, backfills) run POST-LISTEN in the primary's maintenance
+  // loop (yieldRollups.ts), never here. The generated cells are EXACTLY the
+  // ROUND(lat,2)/ROUND(lng,2) expressions the yield engine groups on.
+  try {
+    // table_xinfo, NOT table_info: plain table_info omits generated columns.
+    const stCols = new Set(
+      (raw.prepare(`PRAGMA table_xinfo(scan_targets)`).all() as Array<{ name: string }>).map((c) => c.name),
+    );
+    raw.exec(`CREATE TABLE IF NOT EXISTS yield_rollup_state (
+      k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL
+    )`);
+    if (!stCols.has("street_key")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN street_key TEXT`);
+    if (!stCols.has("neg_streak")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN neg_streak INTEGER NOT NULL DEFAULT 0`);
+    if (!stCols.has("cell_lat")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN cell_lat REAL GENERATED ALWAYS AS (ROUND(lat, 2)) VIRTUAL`);
+    if (!stCols.has("cell_lng")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN cell_lng REAL GENERATED ALWAYS AS (ROUND(lng, 2)) VIRTUAL`);
+  } catch (e: any) { console.warn("[migration] yield rollup schema:", e?.message); }
+
   // Seed default commission rate if none exist
   try {
     const existing = raw.prepare("SELECT id FROM commission_rates LIMIT 1").get();
@@ -3178,6 +3199,14 @@ export class Storage implements IStorage {
          -- a conclusive answer clears the inconclusive streak (belt-and-suspenders:
          -- the row also leaves the never-scanned pool now that last_scanned_at is set)
          inconclusive_attempts=0,
+         -- Unchanged-negative streak for the yield engine's adaptive recheck
+         -- cadence (yieldRollups.ts): +1 per conclusive negative, reset by a
+         -- conclusive positive, untouched otherwise. Maintained HERE — in the
+         -- same UPDATE every conclusive result already flows through — so no
+         -- separate query ever has to derive it from availability_snapshots.
+         neg_streak=CASE WHEN @fiberAvailable=0 THEN neg_streak+1
+                         WHEN @fiberAvailable=1 THEN 0
+                         ELSE neg_streak END,
          last_scanned_at=datetime('now'), scan_count=scan_count+1 WHERE id=@id`
     ).run({
       id, fs: r.fiberStatus ?? null, nf: r.isNewFiber ? 1 : 0, bs: r.billingStatus ?? null,

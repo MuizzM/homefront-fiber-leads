@@ -35,6 +35,7 @@ import { bandwidthBudgetScale, isProxyCircuitOpen } from "./bandwidthGovernor";
 import { registerHarvestSqlFunctions } from "./freshHarvest";
 import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
 import { budgetShapeFactor } from "./harvestScheduler";
+import { yieldRollupsReady } from "./yieldRollups";
 
 const FRESH_WINDOW_DAYS = 21;
 // Fraction of each cycle's budget spent on random NEVER-scanned footprint
@@ -150,7 +151,11 @@ export function learnYieldWeights(tenantId: number): void {
 
     // Street-signal conversion: fresh verdicts on addresses whose street
     // shared a 21d fresh lead at check time (approximated by current join).
+    // With rollups ready, the target's street is the precomputed column — the
+    // nightly pass stops evaluating the street UDF across the whole join, and
+    // idx_availability_snapshots_epoch turns the 14d filter into a range scan.
     registerHarvestSqlFunctions();
+    const targetStreet = yieldRollupsReady() ? "t.street_key" : "harvest_street_key(t.address)";
     const street = rawDb.prepare(
       `WITH fs AS (
          SELECT DISTINCT harvest_street_key(l.address) AS street, lower(l.city) AS city
@@ -162,7 +167,7 @@ export function learnYieldWeights(tenantId: number): void {
        SELECT COUNT(*) AS n, SUM(s.fresh) AS f
          FROM availability_snapshots s
          JOIN scan_targets t ON t.id = s.scan_target_id
-         JOIN fs ON fs.street = harvest_street_key(t.address) AND fs.city = lower(t.city)
+         JOIN fs ON fs.street = ${targetStreet} AND fs.city = lower(t.city)
         WHERE s.checked_at_epoch > ?`,
     ).get(tenantId, Date.now() - 14 * 86_400_000) as any;
 
@@ -211,6 +216,13 @@ const EXPANSION_NEG_MAX_DAYS = Math.max(1, Number(process.env.EXPANSION_NEG_MAX_
  */
 export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
   if (limit <= 0) return [];
+  // ROLLUP-BACKED PATH (yieldRollups.ts): once street_key/neg_streak/cell
+  // columns + indexes are in place, score WITHOUT the per-row JS UDF calls and
+  // WITHOUT the full availability_snapshots group — the reads that held a WAL
+  // read mark for minutes and starved every checkpoint. Same signals, same
+  // scoring expression, same due semantics; the legacy query below remains the
+  // verbatim fallback until the backfill completes (and under YIELD_ROLLUPS=off).
+  if (yieldRollupsReady()) return scoreDueTargetsRollup(tenantId, limit);
   registerHarvestSqlFunctions();   // harvest_street_key(address)
   registerFootprintSqlFunctions(); // footprint_city(state, city)
   warmFootprintGate();             // snapshot the eligible set before the query reads it
@@ -387,6 +399,172 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
 }
 
 /**
+ * Rollup-backed scoring (yieldRollups.ts ready): identical signals and score
+ * expression, but every per-row recomputation is a precomputed column —
+ *   harvest_street_key(s.address)  → s.street_key   (janitor-maintained)
+ *   ROUND(s.lat,2)/ROUND(s.lng,2)  → s.cell_lat/s.cell_lng (GENERATED — the
+ *                                    exact same expressions, by construction)
+ *   neg_streak CTE over snapshots  → s.neg_streak   (maintained in the
+ *                                    conclusive-result UPDATE; reset by a
+ *                                    conclusive positive — the documented
+ *                                    "unchanged-negative streak" intent)
+ * cell_scans groups over idx_scan_targets_cell (index-only) instead of a
+ * full-table pass. footprint_city() stays: it is an in-memory Set lookup,
+ * warmed before the query. The statement is timed and logged every cycle.
+ */
+function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
+  registerFootprintSqlFunctions();
+  warmFootprintGate();
+  const w = getWeights();
+  const started = Date.now();
+  const now = started;
+  const watchFreshCut = now - 12 * 3_600_000;
+  const watchMatureCut = now - 2 * 3_600_000;
+  const watchMatureAge = now - 48 * 3_600_000;
+  const tid = tenantId | 0;
+  const expand = marketsTableReady();
+  const adaptiveDays = `${NEG_BASE_DAYS} * (1 << MIN(MAX(s.neg_streak,1)-1, ${NEG_SHIFT_CAP}))`;
+  const negCadenceDays = expand
+    ? `CASE WHEN ex.city IS NOT NULL
+            THEN MIN(${EXPANSION_NEG_MAX_DAYS}, MIN(${NEG_MAX_DAYS}, ${adaptiveDays}))
+            ELSE MIN(${NEG_MAX_DAYS}, ${adaptiveDays}) END`
+    : `MIN(${NEG_MAX_DAYS}, ${adaptiveDays})`;
+  const negDueClause = `(COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+        AND s.last_scanned_at < datetime('now','-' || (${negCadenceDays}) || ' days'))`;
+  const expandCte = expand
+    ? `, expanding AS (
+         SELECT lower(state) AS state, lower(city) AS city FROM state_fiber_markets
+          WHERE kinetic_status='verified_expanding' AND auto_scan_eligible=1
+       )`
+    : "";
+  const expandJoin = expand
+    ? `LEFT JOIN expanding ex ON ex.state=lower(s.state) AND ex.city=lower(s.city)`
+    : "";
+  const expandTerm = expand ? `+ ${w.expand} * (ex.city IS NOT NULL)` : "";
+  const rows = rawDb.prepare(
+    `WITH fresh_cells AS (
+       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng, COUNT(*) AS hits
+         FROM leads l
+        WHERE l.tenant_id=? AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+          AND l.lead_tag='fresh_fiber_confirmed'
+          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+        GROUP BY clat, clng
+     ),
+     recent_cells AS (
+       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng
+         FROM leads l
+        WHERE l.tenant_id=? AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+          AND l.lead_tag='fresh_fiber_confirmed'
+          AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+        GROUP BY clat, clng
+     ),
+     cell_momentum AS (
+       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng,
+              SUM(exp(-${LN2} * MAX(0, julianday('now')-julianday(l.created_at)) / ${MOMENTUM_HALFLIFE_DAYS})) AS momentum
+         FROM leads l
+        WHERE l.tenant_id=${tid} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+          AND l.lead_tag='fresh_fiber_confirmed'
+          AND l.created_at >= datetime('now','-${MOMENTUM_WINDOW_DAYS} days')
+        GROUP BY clat, clng
+     ),
+     cell_scans AS (
+       SELECT s.cell_lat AS clat, s.cell_lng AS clng, COUNT(*) AS scanned
+         FROM scan_targets s
+        WHERE s.tenant_id=? AND s.last_scanned_at IS NOT NULL
+          AND s.cell_lat IS NOT NULL AND s.cell_lng IS NOT NULL
+        GROUP BY s.cell_lat, s.cell_lng
+     ),
+     prior AS (
+       SELECT CAST((SELECT COUNT(*) FROM leads l2
+                     WHERE l2.tenant_id=? AND l2.lead_tag='fresh_fiber_confirmed'
+                       AND l2.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')) AS REAL)
+              / (1 + (SELECT COUNT(*) FROM scan_targets s2
+                       WHERE s2.tenant_id=? AND s2.last_scanned_at IS NOT NULL)) AS p0
+     ),
+     fresh_streets AS (
+       SELECT DISTINCT harvest_street_key(l.address) AS street,
+              lower(l.city) AS city, lower(l.state) AS state
+         FROM leads l
+        WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
+          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+          AND harvest_street_key(l.address) <> ''
+     ),
+     recent_streets AS (
+       SELECT DISTINCT harvest_street_key(l.address) AS street,
+              lower(l.city) AS city, lower(l.state) AS state
+         FROM leads l
+        WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
+          AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+          AND harvest_street_key(l.address) <> ''
+     ),
+     city_hits AS (
+       SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
+         FROM leads l
+        WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
+          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+        GROUP BY lower(l.city), lower(l.state)
+     ),
+     due_watch AS (
+       SELECT w.scan_target_id AS id FROM coming_soon_watchlist w
+        WHERE w.tenant_id=? AND w.status='active'
+          AND (w.last_checked_at IS NULL
+               OR (w.first_seen_at >  ? AND w.last_checked_at < ?)
+               OR (w.first_seen_at <= ? AND w.last_checked_at < ?))
+     )${expandCte}
+     SELECT s.id,
+            (dw.id IS NOT NULL) AS isWatch,
+            (COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+             AND (rc.clat IS NOT NULL OR rs.street IS NOT NULL)) AS isFlip,
+            ( ${w.cell}   * COALESCE((CAST(fc.hits AS REAL) + ${CELL_PRIOR}*pr.p0)
+                                     / (COALESCE(cs.scanned,0) + ${CELL_PRIOR}), 0)
+            + ${w.street} * (fs.street IS NOT NULL)
+            + ${w.city}   * COALESCE(ln(1+ch.hits), 0)
+            + ${w.watch}  * (dw.id IS NOT NULL)
+            + ${w.new}    * (s.created_at >= datetime('now','-7 days'))
+            + ${w.prox}   * ((rc.clat IS NOT NULL) OR (rs.street IS NOT NULL))
+            + ${w.momentum} * COALESCE(ln(1+cm.momentum), 0)
+            ${expandTerm}
+            ) AS score
+       FROM scan_targets s
+       CROSS JOIN prior pr
+       LEFT JOIN fresh_cells fc ON fc.clat=s.cell_lat AND fc.clng=s.cell_lng
+       LEFT JOIN recent_cells rc ON rc.clat=s.cell_lat AND rc.clng=s.cell_lng
+       LEFT JOIN cell_momentum cm ON cm.clat=s.cell_lat AND cm.clng=s.cell_lng
+       LEFT JOIN cell_scans cs ON cs.clat=fc.clat AND cs.clng=fc.clng
+       LEFT JOIN fresh_streets fs
+         ON fs.street=s.street_key
+        AND fs.city=lower(s.city) AND fs.state=lower(s.state) AND COALESCE(s.street_key,'') <> ''
+       LEFT JOIN recent_streets rs
+         ON rs.street=s.street_key
+        AND rs.city=lower(s.city) AND rs.state=lower(s.state) AND COALESCE(s.street_key,'') <> ''
+       LEFT JOIN city_hits ch ON ch.city=lower(s.city) AND ch.state=lower(s.state)
+       LEFT JOIN due_watch dw ON dw.id = s.id
+       ${expandJoin}
+      WHERE s.tenant_id=?
+        AND lower(s.state) IN (${STATE_IN})
+        AND footprint_city(s.state, s.city)=1
+        AND ${NOT_PARKED_ANF}
+        AND (
+          s.last_scanned_at IS NULL
+          OR ${negDueClause}
+          OR dw.id IS NOT NULL
+          OR (COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+              AND (s.last_scanned_at IS NULL
+                   OR s.last_scanned_at < datetime('now','-${FLIP_MIN_COOLDOWN_HOURS} hours'))
+              AND (rc.clat IS NOT NULL OR rs.street IS NOT NULL))
+        )
+      ORDER BY score DESC, s.id ASC
+      LIMIT ?`,
+  ).all(
+    tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId,
+    watchMatureAge, watchFreshCut, watchMatureAge, watchMatureCut,
+    tenantId, ...stateArgs(), limit,
+  ) as ScoredRow[];
+  structuredLog("yield_engine.score_ms", { ms: Date.now() - started, rows: rows.length, rollups: 1 });
+  return rows;
+}
+
+/**
  * One yield cycle: score → exploit top 85% → explore 15% random never-scanned
  * → dispatch. Same guards as the classic harvester (circuit, day/night,
  * bandwidth governor, scarcity cut: explore dies first, then low scores).
@@ -421,16 +599,21 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
     warmFootprintGate();
     // Explore = NEIGHBORHOOD SATURATION (operator directive: full fresh
     // neighborhoods, not scattered): sweep the densest never-scanned ~1.1km
-    // cells first so reps get whole untouched streets to knock.
+    // cells first so reps get whole untouched streets to knock. With the
+    // rollup columns ready, both passes ride idx_scan_targets_cell instead of
+    // full-table ROUND() groups (the generated cells ARE ROUND(lat,2)).
+    const cellExpr = yieldRollupsReady()
+      ? { cell: "cell_lat", cellNotNull: "cell_lat IS NOT NULL AND cell_lng IS NOT NULL", join: "s.cell_lat=cc.clat AND s.cell_lng=cc.clng", cellLng: "cell_lng" }
+      : { cell: "ROUND(lat,2)", cellNotNull: "lat IS NOT NULL AND lng IS NOT NULL", join: "ROUND(s.lat,2)=cc.clat AND ROUND(s.lng,2)=cc.clng", cellLng: "ROUND(lng,2)" };
     explore = (rawDb.prepare(
       `WITH cold_cells AS (
-         SELECT ROUND(lat,2) AS clat, ROUND(lng,2) AS clng, COUNT(*) AS unscanned
+         SELECT ${cellExpr.cell} AS clat, ${cellExpr.cellLng} AS clng, COUNT(*) AS unscanned
            FROM scan_targets
-          WHERE tenant_id=? AND last_scanned_at IS NULL AND lat IS NOT NULL AND lng IS NOT NULL
+          WHERE tenant_id=? AND last_scanned_at IS NULL AND ${cellExpr.cellNotNull}
           GROUP BY clat, clng
        )
        SELECT s.id FROM scan_targets s
-       JOIN cold_cells cc ON ROUND(s.lat,2)=cc.clat AND ROUND(s.lng,2)=cc.clng
+       JOIN cold_cells cc ON ${cellExpr.join}
         WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
           AND lower(s.state) IN (${STATE_IN})
           AND footprint_city(s.state, s.city)=1
