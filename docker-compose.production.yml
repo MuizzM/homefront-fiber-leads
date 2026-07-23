@@ -290,6 +290,7 @@ services:
       DECODO_BUDGET_GB: "25"
       DECODO_RESERVE_PCT: "10"
       DECODO_BILLING_DAY: "1"
+      DEFERRED_MIGRATIONS: "off"
       ADAPTIVE_PACE: "on"
       FRONTIER_BUILD_ZONES: "off"
       # Priority build cities: OSM-ingested daily (free), always scanned first

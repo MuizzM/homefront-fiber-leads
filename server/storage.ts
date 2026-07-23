@@ -3287,6 +3287,13 @@ export const storage = new Storage();
  * Idempotent: each step no-ops fast when already applied.
  */
 export function runDeferredMigrations(): void {
+  // Kill switch: DEFERRED_MIGRATIONS=off skips heavy post-boot migrations.
+  // The addr-city-state rebuild wedged production twice (event-loop/lock
+  // starvation on 950k rows) — keep it off in prod until an offline window.
+  if (process.env.DEFERRED_MIGRATIONS === "off") {
+    console.log("[migration] deferred migrations disabled (DEFERRED_MIGRATIONS=off)");
+    return;
+  }
   const t0 = Date.now();
   try {
     rawDb.pragma("synchronous = OFF");
