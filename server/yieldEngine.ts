@@ -33,7 +33,7 @@ import { startTargetRun } from "./scanService";
 import { structuredLog } from "./structuredLog";
 import { bandwidthBudgetScale, isProxyCircuitOpen } from "./bandwidthGovernor";
 import { registerHarvestSqlFunctions } from "./freshHarvest";
-import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGate";
+import { registerFootprintSqlFunctions, warmFootprintGate, footprintGateActive, isFootprintCity } from "./footprintGate";
 import { budgetShapeFactor } from "./harvestScheduler";
 import { yieldRollupsReady } from "./yieldRollups";
 
@@ -425,19 +425,118 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
   const w = getWeights();
   const started = Date.now();
   const now = started;
+  // INDEXED TEMP TABLES for the lead-side signal sets. As plain CTEs, SQLite
+  // materialized them but then FULL-SCANNED each one PER OUTER ROW for five of
+  // the seven joins (EXPLAIN: "SCAN fc LEFT-JOIN" …) — ~949k × five small
+  // scans ≈ billions of comparisons; observed live as a 14-minute 97%-CPU
+  // statement. Temp tables are per-connection, live in temp_store=MEMORY (zero
+  // WAL), rebuild in milliseconds from the small leads table, and their
+  // explicit indexes turn every join into a point lookup.
+  rawDb.exec(`
+    DROP TABLE IF EXISTS temp.yf_fresh_cells;
+    CREATE TEMP TABLE yf_fresh_cells AS
+      SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng, COUNT(*) AS hits
+        FROM leads l
+       WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+         AND l.lead_tag='fresh_fiber_confirmed'
+         AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+       GROUP BY clat, clng;
+    CREATE INDEX idx_yf_fresh_cells ON yf_fresh_cells(clat, clng);
+    DROP TABLE IF EXISTS temp.yf_recent_cells;
+    CREATE TEMP TABLE yf_recent_cells AS
+      SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng
+        FROM leads l
+       WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+         AND l.lead_tag='fresh_fiber_confirmed'
+         AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+       GROUP BY clat, clng;
+    CREATE INDEX idx_yf_recent_cells ON yf_recent_cells(clat, clng);
+    DROP TABLE IF EXISTS temp.yf_cell_momentum;
+    CREATE TEMP TABLE yf_cell_momentum AS
+      SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng,
+             SUM(exp(-${LN2} * MAX(0, julianday('now')-julianday(l.created_at)) / ${MOMENTUM_HALFLIFE_DAYS})) AS momentum
+        FROM leads l
+       WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+         AND l.lead_tag='fresh_fiber_confirmed'
+         AND l.created_at >= datetime('now','-${MOMENTUM_WINDOW_DAYS} days')
+       GROUP BY clat, clng;
+    CREATE INDEX idx_yf_cell_momentum ON yf_cell_momentum(clat, clng);
+    DROP TABLE IF EXISTS temp.yf_fresh_streets;
+    CREATE TEMP TABLE yf_fresh_streets AS
+      SELECT DISTINCT harvest_street_key(l.address) AS street,
+             lower(l.city) AS city, lower(l.state) AS state
+        FROM leads l
+       WHERE l.tenant_id=${tenantId | 0} AND l.lead_tag='fresh_fiber_confirmed'
+         AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+         AND harvest_street_key(l.address) <> '';
+    CREATE INDEX idx_yf_fresh_streets ON yf_fresh_streets(street, city, state);
+    DROP TABLE IF EXISTS temp.yf_recent_streets;
+    CREATE TEMP TABLE yf_recent_streets AS
+      SELECT DISTINCT harvest_street_key(l.address) AS street,
+             lower(l.city) AS city, lower(l.state) AS state
+        FROM leads l
+       WHERE l.tenant_id=${tenantId | 0} AND l.lead_tag='fresh_fiber_confirmed'
+         AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
+         AND harvest_street_key(l.address) <> '';
+    CREATE INDEX idx_yf_recent_streets ON yf_recent_streets(street, city, state);
+    DROP TABLE IF EXISTS temp.yf_city_hits;
+    CREATE TEMP TABLE yf_city_hits AS
+      SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
+        FROM leads l
+       WHERE l.tenant_id=${tenantId | 0} AND l.lead_tag='fresh_fiber_confirmed'
+         AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
+       GROUP BY lower(l.city), lower(l.state);
+    CREATE INDEX idx_yf_city_hits ON yf_city_hits(city, state);
+  `);
+  // FOOTPRINT AS DATA, NOT A UDF: footprint_city() is an in-memory Set lookup,
+  // but crossing the JS boundary ~1M times per cycle is real time. Evaluate it
+  // ONCE per distinct (state, city) pair (a few hundred) into an indexed temp
+  // table and JOIN — identical verdicts (same isFootprintCity, same
+  // normalization), zero per-row JS. Fail-open stays: gate inactive → no join.
+  const gateActive = footprintGateActive();
+  if (gateActive) {
+    rawDb.exec(`DROP TABLE IF EXISTS temp.yf_footprint;
+      CREATE TEMP TABLE yf_footprint (state TEXT NOT NULL, city TEXT NOT NULL, PRIMARY KEY (state, city)) WITHOUT ROWID;`);
+    const pairs = rawDb.prepare(
+      `SELECT DISTINCT lower(state) AS state, lower(city) AS city FROM scan_targets WHERE tenant_id=?`,
+    ).all(tenantId) as Array<{ state: string; city: string }>;
+    const ins = rawDb.prepare(`INSERT OR IGNORE INTO temp.yf_footprint (state, city) VALUES (?, ?)`);
+    const tx = rawDb.transaction((list: typeof pairs) => {
+      for (const p of list) if (isFootprintCity(p.state, p.city)) ins.run(p.state, p.city);
+    });
+    tx(pairs);
+  }
+  const footprintClause = gateActive
+    ? `AND EXISTS (SELECT 1 FROM temp.yf_footprint fp WHERE fp.state=lower(s.state) AND fp.city=lower(s.city))`
+    : "";
+  // DATETIME CUTOFFS AS STRINGS: datetime('now', …) is non-deterministic, so
+  // SQLite re-evaluates it PER ROW — several string parses × ~1M rows. All
+  // cutoffs are hoisted to UTC 'YYYY-MM-DD HH:MM:SS' literals (exactly what
+  // datetime() emits and what every timestamp column stores); the adaptive
+  // negative cadence has only 4 possible shift values per branch, so it
+  // becomes a static CASE over neg_streak with precomputed cutoff literals.
+  const expand = marketsTableReady();
+  const tsMinusDays = (days: number) =>
+    new Date(now - days * 86_400_000).toISOString().slice(0, 19).replace("T", " ");
+  const tsMinusHours = (hours: number) =>
+    new Date(now - hours * 3_600_000).toISOString().slice(0, 19).replace("T", " ");
+  const negCut = [0, 1, 2, 3].map((n) => tsMinusDays(Math.min(NEG_MAX_DAYS, NEG_BASE_DAYS * (1 << n))));
+  const negCutExp = [0, 1, 2, 3].map((n) =>
+    tsMinusDays(Math.min(EXPANSION_NEG_MAX_DAYS, Math.min(NEG_MAX_DAYS, NEG_BASE_DAYS * (1 << n)))));
+  const caseOf = (cuts: string[]) =>
+    `CASE MIN(MAX(s.neg_streak,1)-1, ${NEG_SHIFT_CAP}) WHEN 0 THEN '${cuts[0]}' WHEN 1 THEN '${cuts[1]}' WHEN 2 THEN '${cuts[2]}' ELSE '${cuts[3]}' END`;
+  const newDiscoveryCut = tsMinusDays(7);
+  const flipCooldownCut = tsMinusHours(FLIP_MIN_COOLDOWN_HOURS);
+  const anfQuietCut = tsMinusDays(ANF_QUIET_DAYS);
+  const notParkedAnf = `NOT (s.last_scanned_at IS NULL AND s.inconclusive_attempts >= ${ANF_GIVEUP} AND s.last_inconclusive_at IS NOT NULL AND s.last_inconclusive_at > '${anfQuietCut}')`;
+  const negDueClause = expand
+    ? `(COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+        AND s.last_scanned_at < CASE WHEN ex.city IS NOT NULL THEN ${caseOf(negCutExp)} ELSE ${caseOf(negCut)} END)`
+    : `(COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
+        AND s.last_scanned_at < ${caseOf(negCut)})`;
   const watchFreshCut = now - 12 * 3_600_000;
   const watchMatureCut = now - 2 * 3_600_000;
   const watchMatureAge = now - 48 * 3_600_000;
-  const tid = tenantId | 0;
-  const expand = marketsTableReady();
-  const adaptiveDays = `${NEG_BASE_DAYS} * (1 << MIN(MAX(s.neg_streak,1)-1, ${NEG_SHIFT_CAP}))`;
-  const negCadenceDays = expand
-    ? `CASE WHEN ex.city IS NOT NULL
-            THEN MIN(${EXPANSION_NEG_MAX_DAYS}, MIN(${NEG_MAX_DAYS}, ${adaptiveDays}))
-            ELSE MIN(${NEG_MAX_DAYS}, ${adaptiveDays}) END`
-    : `MIN(${NEG_MAX_DAYS}, ${adaptiveDays})`;
-  const negDueClause = `(COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
-        AND s.last_scanned_at < datetime('now','-' || (${negCadenceDays}) || ' days'))`;
   const expandCte = expand
     ? `, expanding AS (
          SELECT lower(state) AS state, lower(city) AS city FROM state_fiber_markets
@@ -449,32 +548,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
     : "";
   const expandTerm = expand ? `+ ${w.expand} * (ex.city IS NOT NULL)` : "";
   const rows = rawDb.prepare(
-    `WITH fresh_cells AS (
-       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng, COUNT(*) AS hits
-         FROM leads l
-        WHERE l.tenant_id=? AND l.lat IS NOT NULL AND l.lng IS NOT NULL
-          AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
-        GROUP BY clat, clng
-     ),
-     recent_cells AS (
-       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng
-         FROM leads l
-        WHERE l.tenant_id=? AND l.lat IS NOT NULL AND l.lng IS NOT NULL
-          AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
-        GROUP BY clat, clng
-     ),
-     cell_momentum AS (
-       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng,
-              SUM(exp(-${LN2} * MAX(0, julianday('now')-julianday(l.created_at)) / ${MOMENTUM_HALFLIFE_DAYS})) AS momentum
-         FROM leads l
-        WHERE l.tenant_id=${tid} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
-          AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${MOMENTUM_WINDOW_DAYS} days')
-        GROUP BY clat, clng
-     ),
-     cell_scans AS (
+    `WITH cell_scans AS (
        SELECT s.cell_lat AS clat, s.cell_lng AS clng, COUNT(*) AS scanned
          FROM scan_targets s
         WHERE s.tenant_id=? AND s.last_scanned_at IS NOT NULL
@@ -487,29 +561,6 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
                        AND l2.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')) AS REAL)
               / (1 + (SELECT COUNT(*) FROM scan_targets s2
                        WHERE s2.tenant_id=? AND s2.last_scanned_at IS NOT NULL)) AS p0
-     ),
-     fresh_streets AS (
-       SELECT DISTINCT harvest_street_key(l.address) AS street,
-              lower(l.city) AS city, lower(l.state) AS state
-         FROM leads l
-        WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
-          AND harvest_street_key(l.address) <> ''
-     ),
-     recent_streets AS (
-       SELECT DISTINCT harvest_street_key(l.address) AS street,
-              lower(l.city) AS city, lower(l.state) AS state
-         FROM leads l
-        WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FLIP_PROXIMITY_DAYS} days')
-          AND harvest_street_key(l.address) <> ''
-     ),
-     city_hits AS (
-       SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
-         FROM leads l
-        WHERE l.tenant_id=? AND l.lead_tag='fresh_fiber_confirmed'
-          AND l.created_at >= datetime('now','-${FRESH_WINDOW_DAYS} days')
-        GROUP BY lower(l.city), lower(l.state)
      ),
      due_watch AS (
        SELECT w.scan_target_id AS id FROM coming_soon_watchlist w
@@ -527,44 +578,46 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
             + ${w.street} * (fs.street IS NOT NULL)
             + ${w.city}   * COALESCE(ln(1+ch.hits), 0)
             + ${w.watch}  * (dw.id IS NOT NULL)
-            + ${w.new}    * (s.created_at >= datetime('now','-7 days'))
+            + ${w.new}    * (s.created_at >= '${newDiscoveryCut}')
             + ${w.prox}   * ((rc.clat IS NOT NULL) OR (rs.street IS NOT NULL))
             + ${w.momentum} * COALESCE(ln(1+cm.momentum), 0)
             ${expandTerm}
             ) AS score
        FROM scan_targets s NOT INDEXED
        CROSS JOIN prior pr
-       LEFT JOIN fresh_cells fc ON fc.clat=s.cell_lat AND fc.clng=s.cell_lng
-       LEFT JOIN recent_cells rc ON rc.clat=s.cell_lat AND rc.clng=s.cell_lng
-       LEFT JOIN cell_momentum cm ON cm.clat=s.cell_lat AND cm.clng=s.cell_lng
+       LEFT JOIN temp.yf_fresh_cells fc INDEXED BY idx_yf_fresh_cells ON fc.clat=s.cell_lat AND fc.clng=s.cell_lng
+       LEFT JOIN temp.yf_recent_cells rc INDEXED BY idx_yf_recent_cells ON rc.clat=s.cell_lat AND rc.clng=s.cell_lng
+       LEFT JOIN temp.yf_cell_momentum cm INDEXED BY idx_yf_cell_momentum ON cm.clat=s.cell_lat AND cm.clng=s.cell_lng
        LEFT JOIN cell_scans cs ON cs.clat=fc.clat AND cs.clng=fc.clng
-       LEFT JOIN fresh_streets fs
+       LEFT JOIN temp.yf_fresh_streets fs
          ON fs.street=s.street_key
         AND fs.city=lower(s.city) AND fs.state=lower(s.state) AND COALESCE(s.street_key,'') <> ''
-       LEFT JOIN recent_streets rs
+       LEFT JOIN temp.yf_recent_streets rs
          ON rs.street=s.street_key
         AND rs.city=lower(s.city) AND rs.state=lower(s.state) AND COALESCE(s.street_key,'') <> ''
-       LEFT JOIN city_hits ch ON ch.city=lower(s.city) AND ch.state=lower(s.state)
+       LEFT JOIN temp.yf_city_hits ch ON ch.city=lower(s.city) AND ch.state=lower(s.state)
        LEFT JOIN due_watch dw ON dw.id = s.id
        ${expandJoin}
       WHERE s.tenant_id=?
         AND lower(s.state) IN (${STATE_IN})
         AND ${KINETIC_ONLY}
-        AND footprint_city(s.state, s.city)=1
-        AND ${NOT_PARKED_ANF}
+        ${footprintClause}
+        AND ${notParkedAnf}
         AND (
           s.last_scanned_at IS NULL
           OR ${negDueClause}
           OR dw.id IS NOT NULL
           OR (COALESCE(s.last_fiber_status,'') IN ('no_service','copper')
               AND (s.last_scanned_at IS NULL
-                   OR s.last_scanned_at < datetime('now','-${FLIP_MIN_COOLDOWN_HOURS} hours'))
+                   OR s.last_scanned_at < '${flipCooldownCut}')
               AND (rc.clat IS NOT NULL OR rs.street IS NOT NULL))
         )
       ORDER BY score DESC, s.id ASC
       LIMIT ?`,
   ).all(
-    tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId,
+    // WITH params: cell_scans(1) + prior(2) + due_watch(1 tenant + 4 cuts) —
+    // the six lead-side signal sets are indexed TEMP tables now, zero params.
+    tenantId, tenantId, tenantId, tenantId,
     watchMatureAge, watchFreshCut, watchMatureAge, watchMatureCut,
     tenantId, ...stateArgs(), limit,
   ) as ScoredRow[];
