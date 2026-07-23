@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap, RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/lib/auth";
 import type { TeamMember } from "@shared/schema";
 
@@ -201,12 +202,12 @@ export default function Leaderboard() {
         </Card>
       ) : board.length === 0 ? (
         <Card className="bg-card border-border">
-          <CardContent className="py-12 text-center">
-            <Trophy className="w-10 h-10 mx-auto mb-3 text-muted-foreground opacity-30" />
-            <div className="text-sm text-muted-foreground">
-              No reps yet. Add team members and start logging door knocks to see rankings.
-            </div>
-          </CardContent>
+          <EmptyState
+            testId="leaderboard-empty"
+            icon={Trophy}
+            title="No rankings yet"
+            description="Add team members and start logging door knocks to see reps climb the board."
+          />
         </Card>
       ) : (
         <Card className="bg-card border-border overflow-hidden">
