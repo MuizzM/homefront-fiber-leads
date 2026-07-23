@@ -240,6 +240,22 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         structuredLog("yield_rollups.analyze_done", { ms: Date.now() - t });
         return;
       }
+      // 5) Canonical cleanup (Slice 1): merge postal-city alias twins (live
+      // manifest: 152 pairs) then promote the canonical index to UNIQUE —
+      // bounded, idempotent, invariant-guarded, halts on any failure.
+      // Kill-switch SCAN_TARGET_MERGE=off.
+      if (process.env.SCAN_TARGET_MERGE !== "off" && getState("alias_merge_done") !== "1") {
+        const { mergeCityAliasTwins, promoteCanonicalUnique, dryRunManifest } =
+          require("./scanTargetCanonicalMerge") as typeof import("./scanTargetCanonicalMerge");
+        const res = mergeCityAliasTwins({ apply: true, maxPairs: 500 });
+        if (res.halted) return; // logged inside; retry next tick unless integrity-halted
+        if (res.pairsFound === 0) {
+          const uq = promoteCanonicalUnique();
+          structuredLog("yield_rollups.alias_merge_done", { ...dryRunManifest(), uniquePromoted: uq.promoted, reason: uq.reason ?? "" });
+          setState("alias_merge_done", "1");
+        }
+        return;
+      }
       // Steady-state: keep stats fresh the recommended way (cheap no-op when
       // nothing changed enough to matter).
       try { rawDb.exec("PRAGMA optimize"); } catch { /* advisory */ }
