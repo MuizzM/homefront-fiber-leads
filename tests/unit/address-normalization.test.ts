@@ -42,10 +42,16 @@ describe("address normalization (expanded suffix/directional/unit folding)", () 
     expect(canonicalAddressPart("123 Main St Apt 2")).not.toBe(canonicalAddressPart("123 Main St Apt 4"));
   });
 
-  it("normalizeKineticAddressKey collapses whole-record variants and takes zip5", () => {
+  it("normalizeKineticAddressKey collapses whole-record variants and IGNORES zip (v3)", () => {
+    // Same house, different/blank zip → SAME key. Zip used to split one house
+    // into two identities (blank OSM row vs zip-full Kinetic row → dup pins).
     expect(normalizeKineticAddressKey("123 Oak Circle", "Terrace", "NC", "28110-1234"))
-      .toBe(normalizeKineticAddressKey("123 N. Oak Cir".replace("N. ", ""), "Terrace", "NC", "28110"));
-    expect(normalizeKineticAddressKey("1 A St", "X", "NC", "28110").endsWith("|28110")).toBe(true);
+      .toBe(normalizeKineticAddressKey("123 Oak Cir", "Terrace", "NC", ""));
+    // Key ends at state — no trailing zip component.
+    expect(normalizeKineticAddressKey("1 A St", "X", "NC", "28110").endsWith("|NC")).toBe(true);
+    // "Tr" now folds to TRL (was a confirmed duplicate-green-arrow vector).
+    expect(normalizeKineticAddressKey("106 Poplar Tr", "Rockwell", "NC", "28138"))
+      .toBe(normalizeKineticAddressKey("106 Poplar Trl", "Rockwell", "NC", ""));
   });
 
   it("exports a normalization version so the re-key migration can gate on it", () => {

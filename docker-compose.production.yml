@@ -290,6 +290,14 @@ services:
       DECODO_BUDGET_GB: "25"
       DECODO_RESERVE_PCT: "10"
       DECODO_BILLING_DAY: "1"
+      # ── Heavy-migration gates — BOTH required to keep the app off the
+      # scan_targets table rebuild (949k rows) that wedged the event loop twice.
+      # The rebuild runs in TWO places: the boot-time call (gated here by
+      # DEFER_ADDR_UNIQUENESS_MIGRATION=on) AND the post-listen deferred call
+      # (gated by DEFERRED_MIGRATIONS=off). Setting only one leaves the other
+      # path live. Run the rebuild OUT OF BAND in a maintenance window via the
+      # offline dedup script; never on boot. ──
+      DEFER_ADDR_UNIQUENESS_MIGRATION: "on"
       DEFERRED_MIGRATIONS: "off"
       ADAPTIVE_PACE: "on"
       FRONTIER_BUILD_ZONES: "off"

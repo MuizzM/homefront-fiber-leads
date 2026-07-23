@@ -4,6 +4,7 @@ import { recordAvailabilitySnapshot } from "./availabilitySnapshot";
 import { getDefaultTenantId, storage } from "./storage";
 import { projectConfirmedFreshLeads, type ProjectionResult } from "./freshFiberProjector";
 import { classifyCustomerOpportunity, classifyFiberAvailabilityTransition } from "@shared/opportunitySegment";
+import { normalizeKineticAddressKey } from "./addressKey";
 import { structuredLog } from "./structuredLog";
 
 export interface KineticObservation {
@@ -211,6 +212,7 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
   let transition!: ReturnType<typeof classifyFiberAvailabilityTransition>;
   let customer!: ReturnType<typeof classifyCustomerOpportunity>;
 
+  const canonicalKey = normalizeKineticAddressKey(address, city, state, zip);
   rawDb.transaction(() => {
     // Resolve the target by the FULL identity (address + city + state), not the
     // street text alone. Keying on address only made "104 Oak St, Broadway"
@@ -222,16 +224,28 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
         last_fiber_status,last_is_new_fiber,last_billing_status,last_availability_status
       FROM scan_targets WHERE lower(trim(address))=lower(trim(?))
         AND lower(trim(city))=lower(trim(?)) AND upper(trim(state))=upper(trim(?)) LIMIT 1`).get(address, city, state) as TargetState | undefined;
+    // CANONICAL fallback — the #2 duplicate factory (forensics: ~11.6k rows).
+    // A scan dispatched for the pooled spelling ("Haileys Ferry Road") comes
+    // back with Kinetic's own spelling ("Haileys Ferry Rd"); the trim-only
+    // lookup misses and a SECOND row used to be minted — the paid result
+    // attached to the new row while the original stayed "never-scanned" and
+    // was re-queued (paying twice for one house). The canonical key folds
+    // suffix/directional variants, so the echo-spelling attaches instead.
+    if (!target) {
+      target = rawDb.prepare(`SELECT id,address,city,state,tenant_id,last_scanned_at,last_fiber_available,
+          last_fiber_status,last_is_new_fiber,last_billing_status,last_availability_status
+        FROM scan_targets WHERE tenant_id IS ? AND canonical_key = ? LIMIT 1`).get(tenantId, canonicalKey) as TargetState | undefined;
+    }
     if (target && (target.tenant_id == null || Number(target.tenant_id) !== Number(tenantId))) {
       throw new Error(`KINETIC_OBSERVATION_TENANT_CONFLICT: ${target.id}`);
     }
     if (!target) {
       const inserted = rawDb.prepare(`INSERT INTO scan_targets
-        (address,city,state,zip,lat,lng,tenant_id,source,df_address_id,access_id,service_key,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).run(
+        (address,city,state,zip,lat,lng,tenant_id,source,df_address_id,access_id,service_key,canonical_key,created_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))`).run(
         address, city, state, zip, observation.lat ?? null, observation.lng ?? null,
         tenantId, `live-${source}`, observation.dfAddressId ?? null,
-        observation.accessId ?? null, observation.serviceKey ?? null,
+        observation.accessId ?? null, observation.serviceKey ?? null, canonicalKey,
       );
       targetId = Number(inserted.lastInsertRowid);
       targetCreated = true;
@@ -243,10 +257,11 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
       rawDb.prepare(`UPDATE scan_targets SET
           df_address_id=COALESCE(df_address_id,?),access_id=COALESCE(access_id,?),service_key=COALESCE(service_key,?),
           lat=COALESCE(lat,?),lng=COALESCE(lng,?),
-          zip=CASE WHEN zip IS NULL OR zip='' THEN ? ELSE zip END
+          zip=CASE WHEN zip IS NULL OR zip='' THEN ? ELSE zip END,
+          canonical_key=COALESCE(canonical_key,?)
         WHERE id=? AND tenant_id=?`).run(
         observation.dfAddressId ?? null, observation.accessId ?? null, observation.serviceKey ?? null,
-        observation.lat ?? null, observation.lng ?? null, zip, targetId, tenantId);
+        observation.lat ?? null, observation.lng ?? null, zip, canonicalKey, targetId, tenantId);
     }
 
     // The newest CONCLUSIVE prior snapshot, strictly before this observation, by the

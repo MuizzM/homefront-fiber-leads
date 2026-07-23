@@ -40,6 +40,19 @@ export const UNCLUSTERED_PAINT: any = {
 // doubling the unclustered draw cost at 5.5k+ leads for a barely-visible halo.
 // The zoom-scaled radius + white stroke give enough pop at a fraction of the cost.)
 
+// ── Confirmed-fresh halo ──────────────────────────────────────────────────────
+// ONE paint definition shared by the map-init block AND the style.load re-add
+// block. They used to carry two hand-copied versions that drifted: the re-add
+// copy lost the carrier case, so after any basemap toggle a Frontier fresh lead
+// silently reverted to the Kinetic-green halo. Kinetic fresh = green ring,
+// Frontier fresh = red ring — always, on every style.
+export const FRESH_HALO_PAINT: any = {
+  "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 10, 18, 16],
+  "circle-color": ["case", ["==", ["get", "carrier"], "frontier"], "rgba(239,68,68,0.16)", "rgba(34,197,94,0.16)"],
+  "circle-stroke-width": 2.5,
+  "circle-stroke-color": ["case", ["==", ["get", "carrier"], "frontier"], "#ef4444", "#22c55e"],
+};
+
 // ── Selected-pin ring ─────────────────────────────────────────────────────────
 // A dedicated layer driven by setFilter — NOT feature-state: on a cluster:true
 // source, cluster ids regenerate on every setData/zoom so state attaches

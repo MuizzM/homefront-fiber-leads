@@ -49,7 +49,7 @@ describe("coming soon program sweep", () => {
         WHERE t.address='77 Legacy Ln'`,
     ).get() as any;
     expect(row).toMatchObject({ tenant_id: TENANT, status: "active", last_checked_at: null });
-    expect(row.address_key).toContain("77 LEGACY LN|CONCORD|NC|28025");
+    expect(row.address_key).toContain("77 LEGACY LN|CONCORD|NC");
   });
 
   it("is idempotent: a second sweep bridges nothing and keeps one watchlist row", async () => {

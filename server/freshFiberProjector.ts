@@ -233,6 +233,28 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         leadId = addressMatch?.id as number | undefined;
         found = addressMatch;
       }
+      // GEO GUARD — cross-city twin catch. OSM/Kinetic/Mapbox legitimately
+      // assign different postal cities to boundary houses; city is part of the
+      // canonical key AND the city-scoped lead index, so the same rooftop filed
+      // under the other city name is invisible to both layers. Forensics found
+      // confirmed dup pairs 0–1.4m apart. Before minting, attach to any
+      // existing lead within ~15m that shares the house number.
+      if (!leadId && candidate.lat != null && candidate.lng != null) {
+        const houseNum = String(candidate.address ?? "").trim().split(/\s+/)[0] ?? "";
+        if (/^\d+$/.test(houseNum)) {
+          const geoHit = rawDb.prepare(`SELECT id, tenant_id, assigned_rep_id, address FROM leads
+            WHERE tenant_id=? AND lat BETWEEN ?-0.00015 AND ?+0.00015 AND lng BETWEEN ?-0.0002 AND ?+0.0002
+              AND (address = ? OR address LIKE ? || ' %')
+            ORDER BY id LIMIT 1`).get(
+            tenantId, candidate.lat, candidate.lat, candidate.lng, candidate.lng,
+            houseNum, houseNum,
+          ) as any;
+          if (geoHit) {
+            leadId = Number(geoHit.id);
+            found = geoHit;
+          }
+        }
+      }
       const wasUnassigned = !found?.assigned_rep_id;
       if (!leadId) {
         // Persist segment/billing that satisfy the DB fresh-lead guard even when the

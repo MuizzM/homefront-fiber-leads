@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { db, rawDb } from "./db";
-import { normalizeKineticAddressKey, NORMALIZATION_VERSION } from "./addressKey";
+import { normalizeKineticAddressKey, canonicalAddressPart, NORMALIZATION_VERSION } from "./addressKey";
 import { recordTransition } from "./fiberTransitions";
 import {
   leads, fiberChecks, teamMembers, knockLog,
@@ -3005,15 +3005,45 @@ export class Storage implements IStorage {
        WHERE address = @address AND lower(city) = lower(@city) AND lower(state) = lower(@state)
          AND last_scanned_at IS NULL`
     );
+    // CANONICAL-TWIN guard — the #1 duplicate factory (forensics: 14,759 rows).
+    // Two OSM-fed pipelines spell the same house differently ("New Cut Road" vs
+    // "NEW CUT RD"); the raw-string unique index sees two strings and a second
+    // row was minted. The canonical key folds spelling variants, so a re-spelled
+    // house now ENRICHES the existing row instead of inserting a twin. The key
+    // is computed HERE (callers can no longer forget it) and stamped on every
+    // new row so the canonical lookup keeps getting stronger.
+    const twinStmt = rawDb.prepare(
+      `SELECT id FROM scan_targets WHERE tenant_id IS @tenantId AND canonical_key = @canonicalKey LIMIT 1`,
+    );
+    const enrichByIdStmt = rawDb.prepare(
+      `UPDATE scan_targets SET
+         df_address_id = COALESCE(df_address_id, @df),
+         lat = COALESCE(lat, @lat),
+         lng = COALESCE(lng, @lng),
+         zip = CASE WHEN (zip IS NULL OR zip='') THEN @zip ELSE zip END
+       WHERE id = @id`,
+    );
+    const baselineByIdStmt = rawDb.prepare(
+      `UPDATE scan_targets SET
+         last_fiber_status = @fs, last_is_new_fiber = @nf, last_billing_status = @bs,
+         last_scanned_at = @scannedAt, scan_count = 1, inconclusive_attempts = 0
+       WHERE id = @id AND last_scanned_at IS NULL`,
+    );
     const tx = rawDb.transaction((rows: typeof addrs) => {
       let n = 0;
       for (const r of rows) {
         if (!r.address) continue;
         const scanned = !!r.scannedNow;
+        // Compute the canonical identity in ONE place. A blank street part
+        // yields a degenerate key ("|city|state") — never dedupe on that.
+        const streetPart = canonicalAddressPart(r.address);
+        const canonicalKey = streetPart
+          ? (r.canonicalKey ?? normalizeKineticAddressKey(r.address, r.city ?? "", r.state ?? "NC", r.zip ?? ""))
+          : (r.canonicalKey ?? null);
         const params = {
           address: r.address, city: r.city ?? "", state: r.state ?? "NC", zip: r.zip ?? "",
           lat: r.lat ?? null, lng: r.lng ?? null, source: r.source ?? null, tenantId: r.tenantId ?? null,
-          canonicalKey: r.canonicalKey ?? null,
+          canonicalKey,
           df: r.dfAddressId ?? null,
           fs: scanned ? (r.fiberStatus ?? null) : null,
           nf: scanned && r.isNewFiber ? 1 : 0,
@@ -3021,13 +3051,26 @@ export class Storage implements IStorage {
           scannedAt: scanned ? new Date().toISOString() : null,
           scanCount: scanned ? 1 : 0,
         };
+        // A canonical twin under a DIFFERENT raw spelling → enrich it, never
+        // insert. (The raw-string INSERT OR IGNORE below only catches exact
+        // spelling matches.)
+        if (streetPart && canonicalKey) {
+          const twin = twinStmt.get({ tenantId: r.tenantId ?? null, canonicalKey }) as { id: number } | undefined;
+          if (twin) {
+            if (r.dfAddressId || r.lat != null || r.lng != null || r.zip) {
+              enrichByIdStmt.run({ id: twin.id, df: r.dfAddressId ?? null, lat: r.lat ?? null, lng: r.lng ?? null, zip: r.zip ?? "" });
+            }
+            if (scanned) baselineByIdStmt.run({ id: twin.id, fs: params.fs, nf: params.nf, bs: params.bs, scannedAt: params.scannedAt });
+            continue;
+          }
+        }
         const inserted = insertStmt.run(params).changes;
         n += inserted;
         if (!inserted) {
           const key = { address: r.address, city: r.city ?? "", state: r.state ?? "NC" };
           // Backfill identity (df/coords/zip) — same-city only.
           if (r.dfAddressId || r.lat != null || r.lng != null || r.zip) {
-            enrichStmt.run({ ...key, canonicalKey: r.canonicalKey ?? null, df: r.dfAddressId ?? null,
+            enrichStmt.run({ ...key, canonicalKey, df: r.dfAddressId ?? null,
               lat: r.lat ?? null, lng: r.lng ?? null, zip: r.zip ?? "" });
           }
           // Record a baseline status for a never-scanned existing row.

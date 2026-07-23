@@ -6,15 +6,30 @@ const lead = (over: Partial<Parameters<typeof dedupeLeads>[0][number]> & { id: n
 });
 
 describe("houseKey", () => {
-  it("keys by rounded coordinate (5 decimals) so rooftop jitter collapses but neighbours don't", () => {
-    // ~0.6 m apart → same key
+  // ADDRESS-FIRST identity (v2 contract): the address is the house. The old
+  // coord-primary key claimed neighbours never collide at 5 decimals — the
+  // real DB proved 29 lead-cells (58 leads) did, hiding real houses.
+  it("is address-first: geocoder jitter on the same address never splits the house", () => {
     expect(houseKey(lead({ id: 1, lat: 35.400001, lng: -80.500002 })))
-      .toBe(houseKey(lead({ id: 2, lat: 35.400003, lng: -80.500001 })));
-    // ~15 m apart (5th decimal differs) → different key
-    expect(houseKey(lead({ id: 1, lat: 35.40010, lng: -80.5 })))
-      .not.toBe(houseKey(lead({ id: 2, lat: 35.40025, lng: -80.5 })));
+      .toBe(houseKey(lead({ id: 2, lat: 35.40030, lng: -80.50021 }))); // 30m of jitter — same house
   });
-  it("falls back to normalized address when coordinates are missing", () => {
+  it("folds spelling variants with the server's canonical alias table (Tr ≡ Trl ≡ Trail)", () => {
+    expect(houseKey(lead({ id: 1, address: "106 Poplar Tr" })))
+      .toBe(houseKey(lead({ id: 2, address: "106 Poplar Trl" })));
+    expect(houseKey(lead({ id: 1, address: "12 Oak Circle" })))
+      .toBe(houseKey(lead({ id: 2, address: "12 OAK CIR" })));
+  });
+  it("keeps real neighbours distinct even at identical coordinates (the false-merge regression)", () => {
+    expect(houseKey(lead({ id: 1, address: "1 Main St", lat: 35.4, lng: -80.5 })))
+      .not.toBe(houseKey(lead({ id: 2, address: "3 Main St", lat: 35.4, lng: -80.5 })));
+  });
+  it("keys by rounded coordinate only when there is no usable address", () => {
+    expect(houseKey(lead({ id: 1, address: "", lat: 35.400001, lng: -80.500002 })))
+      .toBe(houseKey(lead({ id: 2, address: "", lat: 35.400003, lng: -80.500001 })));
+    expect(houseKey(lead({ id: 1, address: "", lat: 35.40010, lng: -80.5 })))
+      .not.toBe(houseKey(lead({ id: 2, address: "", lat: 35.40025, lng: -80.5 })));
+  });
+  it("normalizes whitespace/case via the canonical part when coordinates are missing", () => {
     expect(houseKey(lead({ id: 1, lat: null, lng: null, address: "123  N Main  St" })))
       .toBe(houseKey(lead({ id: 2, lat: undefined, lng: undefined, address: "123 n main st" })));
   });
@@ -59,10 +74,28 @@ describe("dedupeLeads", () => {
 
   it("does NOT merge two genuinely different neighbouring houses", () => {
     const out = dedupeLeads([
-      lead({ id: 1, lat: 35.40010, lng: -80.5 }),
-      lead({ id: 2, lat: 35.40030, lng: -80.5 }), // ~22 m away — a different house
+      lead({ id: 1, address: "1 Main St", lat: 35.40010, lng: -80.5 }),
+      lead({ id: 2, address: "3 Main St", lat: 35.40030, lng: -80.5 }), // next door — a different house
     ]);
     expect(out).toHaveLength(2);
+  });
+
+  it("does NOT merge townhouse neighbours that share a rounded coordinate (the 29-cell regression)", () => {
+    const out = dedupeLeads([
+      lead({ id: 1, address: "101 Row House Ln", lat: 35.4, lng: -80.5 }),
+      lead({ id: 2, address: "103 Row House Ln", lat: 35.4, lng: -80.5 }), // same rooftop rounding, real neighbour
+    ]);
+    expect(out).toHaveLength(2);
+  });
+
+  it("merges the same rooftop filed under two postal cities (boundary-house twin)", () => {
+    const out = dedupeLeads([
+      lead({ id: 1, address: "104 Oak St", city: "Broadway", lat: 35.40001, lng: -80.50001 }),
+      lead({ id: 2, address: "104 Oak St", city: "Sanford", lat: 35.40002, lng: -80.50002, leadTag: "fresh_fiber_confirmed" }),
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].id).toBe(2); // fresh-fiber survivor wins
+    expect(out[0].mergedCount).toBe(2);
   });
 
   it("passes through records with no usable house key instead of dropping them", () => {

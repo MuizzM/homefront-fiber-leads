@@ -25,21 +25,41 @@ export interface DedupableLead {
   mergedCount?: number;
 }
 
-// A physical "house" identity. Prefer rounded coordinates (5 decimals ≈ 1.1 m,
-// tight enough that two real neighbours never collide but geocoder jitter on the
-// SAME rooftop does), and fall back to the normalized street address when
-// coordinates are missing. Returns null when neither is usable — such a record
-// can't be safely merged, so it is passed through untouched (never dropped).
+import { canonicalAddressPart } from "@shared/addressKey";
+
+// A physical "house" identity — ADDRESS-FIRST, using the server's own canonical
+// normalizer (one alias table for both sides), geo only as the fallback.
+//
+// The old key preferred rounded coordinates (5 decimals ≈ 1.1 m) with a comment
+// claiming "two real neighbours never collide" — the real DB proved 29 lead-
+// cells (58 leads) DO collide at that rounding (townhouse/duplex neighbours were
+// silently hidden behind one pin), while the same house under two spellings
+// ("Poplar Tr" vs "Poplar Trl") geocoded >1.1 m apart rendered TWO green
+// arrows. Address-first fixes both directions: neighbours differ in house
+// number (never merge), spelling variants fold to one canonical key (always
+// merge). Coordinates only identify records with NO usable street address.
 export function houseKey(lead: DedupableLead): string | null {
+  const addr = canonicalAddressPart(String(lead.address ?? ""));
+  if (addr) {
+    return `addr:${addr}|${canonicalAddressPart(String(lead.city ?? ""))}|${canonicalAddressPart(String(lead.state ?? ""))}`;
+  }
   const { lat, lng } = lead;
   if (typeof lat === "number" && typeof lng === "number" && Number.isFinite(lat) && Number.isFinite(lng)) {
     return `geo:${lat.toFixed(5)},${lng.toFixed(5)}`;
   }
-  const addr = String(lead.address ?? "").trim().toLowerCase().replace(/\s+/g, " ");
-  if (addr) {
-    return `addr:${addr}|${String(lead.city ?? "").trim().toLowerCase()}|${String(lead.state ?? "").trim().toLowerCase()}`;
-  }
   return null;
+}
+
+// Same-rooftop secondary identity: rounded coordinate + house number. Catches
+// the cross-city-name twin (same rooftop, different postal city → different
+// address keys) WITHOUT hiding real neighbours (a neighbour differs in house
+// number). Null when either part is missing.
+function rooftopKey(lead: DedupableLead): string | null {
+  const { lat, lng } = lead;
+  if (typeof lat !== "number" || typeof lng !== "number" || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const houseNum = String(lead.address ?? "").trim().split(/\s+/)[0] ?? "";
+  if (!/^\d+$/.test(houseNum)) return null;
+  return `roof:${lat.toFixed(4)},${lng.toFixed(4)}|${houseNum}`;
 }
 
 // A stable, unique React key. `id` alone can arrive as a string vs number, or
@@ -103,6 +123,31 @@ export function dedupeLeads<T extends DedupableLead>(
       ids.unshift(String(lead.id));      // survivor id first
     } else {
       ids.push(String(lead.id));
+    }
+  }
+
+  // SECOND PASS — same-rooftop merge. Two survivors whose ADDRESS keys differ
+  // (boundary houses carry different postal cities across data sources) but
+  // that sit on the same rounded rooftop with the same house number are one
+  // physical door. Group survivors by rooftopKey and collapse again.
+  const byRoof = new Map<string, string>(); // rooftopKey -> surviving houseKey
+  for (const [key, survivor] of [...survivors]) {
+    const roof = rooftopKey(survivor);
+    if (!roof) continue;
+    const winnerKey = byRoof.get(roof);
+    if (winnerKey == null) { byRoof.set(roof, key); continue; }
+    const winner = survivors.get(winnerKey)!;
+    const winnerIds = groupIds.get(winnerKey)!;
+    const loserIds = groupIds.get(key)!;
+    if (isHigherPriority(survivor, winner)) {
+      groupIds.set(key, [...loserIds, ...winnerIds]);
+      survivors.delete(winnerKey);
+      groupIds.delete(winnerKey);
+      byRoof.set(roof, key);
+    } else {
+      groupIds.set(winnerKey, [...winnerIds, ...loserIds]);
+      survivors.delete(key);
+      groupIds.delete(key);
     }
   }
 

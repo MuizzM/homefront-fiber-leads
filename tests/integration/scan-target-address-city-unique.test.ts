@@ -13,12 +13,12 @@ let rawDb: import("better-sqlite3").Database;
 let persist: typeof import("../../server/kineticObservation").persistKineticObservation;
 const TENANT = 1;
 
-function freshObs(address: string, city: string, state: string, zip: string) {
+function freshObs(address: string, city: string, state: string, zip: string, lat = 35.5, lng = -80.4) {
   return {
     tenantId: TENANT,
     source: "route-field-scan",
     observation: {
-      address, city, state, zip, lat: 35.5, lng: -80.4,
+      address, city, state, zip, lat, lng,
       fiberStatus: "new_fiber", fiberAvailable: true, isNewFiber: true, billingStatus: "N",
       householdSegmentType: "NEW FIBER", techType: "FTTP", apiSource: "kinetic_live",
       blocked: false, discoveredAt: new Date().toISOString(),
@@ -42,8 +42,10 @@ describe("scan_targets uniqueness is (address, city, state), not address alone",
 
   it("same street text in two cities → two targets, two leads (neither thrown away)", () => {
     // Broadway first, then Sanford — the second used to collide and be dropped.
-    expect(() => persist(freshObs("104 Oak St", "Broadway", "NC", "27505"))).not.toThrow();
-    expect(() => persist(freshObs("104 Oak St", "Sanford", "NC", "27330"))).not.toThrow();
+    // Real houses ~15 miles apart carry distinct coordinates (the projector's
+    // geo guard only merges same-rooftop twins, so distinct coords stay two).
+    expect(() => persist(freshObs("104 Oak St", "Broadway", "NC", "27505", 35.46, -79.05))).not.toThrow();
+    expect(() => persist(freshObs("104 Oak St", "Sanford", "NC", "27330", 35.48, -79.17))).not.toThrow();
 
     const targets = rawDb.prepare(`SELECT city FROM scan_targets WHERE lower(trim(address))='104 oak st' ORDER BY city`).all() as any[];
     expect(targets.map(t => t.city).sort()).toEqual(["Broadway", "Sanford"]);

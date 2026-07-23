@@ -83,6 +83,7 @@ import {
   writeCachedFix,
   ensureHousenumLayer,
   isSheetDragActive,
+  FRESH_HALO_PAINT,
 } from "@/lib/mapPins";
 import {
   createFollowState,
@@ -2028,21 +2029,7 @@ export default function MapView() {
             ["==", ["get", "fresh"], 1],
           ],
           minzoom: 12,
-          paint: {
-            "circle-radius": [
-              "interpolate",
-              ["linear"],
-              ["zoom"],
-              12,
-              10,
-              18,
-              16,
-            ],
-            "circle-color": ["case", ["==", ["get", "carrier"], "frontier"], "rgba(239,68,68,0.16)", "rgba(34,197,94,0.16)"],
-            "circle-stroke-width": 2.5,
-            // Carrier halo: Kinetic fresh = green ring, Frontier fresh = red ring.
-            "circle-stroke-color": ["case", ["==", ["get", "carrier"], "frontier"], "#ef4444", "#22c55e"],
-          },
+          paint: FRESH_HALO_PAINT,
         },
         "lead-unclustered",
       );
@@ -2869,20 +2856,7 @@ export default function MapView() {
               ["==", ["get", "fresh"], 1],
             ],
             minzoom: 12,
-            paint: {
-              "circle-radius": [
-                "interpolate",
-                ["linear"],
-                ["zoom"],
-                12,
-                10,
-                18,
-                16,
-              ],
-              "circle-color": "rgba(34,197,94,0.16)",
-              "circle-stroke-width": 2.5,
-              "circle-stroke-color": "#22c55e",
-            },
+            paint: FRESH_HALO_PAINT,
           },
           "lead-unclustered",
         );
