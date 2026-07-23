@@ -193,6 +193,17 @@ describe("planner statistics + placeholder integrity", () => {
     }
     expect(captured).not.toBe("");
     expect((captured.match(/\?/g) || []).length).toBe(12);
+    // AFFINITY REGRESSION (8.8-minute prod cycles): the temp signal tables
+    // must be TYPED — an untyped CREATE TABLE AS gives no affinity, SQLite
+    // cannot SEEK a REAL probe into the index, and every cell join degrades
+    // to a per-outer-row index SCAN. With rows present (this fixture seeds
+    // leads), the plan must SEARCH the cell tables, never SCAN them.
+    const plan = rawDb.prepare("EXPLAIN QUERY PLAN " + captured)
+      .all(...new Array(12).fill(1)).map((r: any) => r.detail).join(" | ");
+    expect(plan).toContain("SEARCH fc");
+    expect(plan).not.toMatch(/SCAN fc USING INDEX/);
+    expect(plan).not.toMatch(/SCAN rc USING INDEX/);
+    expect(plan).not.toMatch(/SCAN cm USING INDEX/);
   });
 });
 

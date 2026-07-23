@@ -389,7 +389,7 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
     structuredLog("fresh_fiber.projection_failed", {
       tenantId: Number(tenantId), targetId, error: String(error?.message ?? error),
     }, "warn");
-    projection = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, leadIds: [], errors: [] };
+    projection = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, addressReview: 0, leadIds: [], errors: [] };
   }
   if (projection.published > 0) requestImmediateAlert(Number(tenantId));
   return {

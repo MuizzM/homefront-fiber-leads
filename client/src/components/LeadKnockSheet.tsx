@@ -32,6 +32,7 @@ import {
   type KnockOutcome, type PinDisplayState,
 } from "@shared/knock";
 import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
+import { normalizeZip5 } from "@shared/addressKey";
 
 export type SheetSnap = "peek" | "expanded";
 
@@ -172,6 +173,44 @@ interface LeadDetail {
   id: number;
   notes?: string | null;
   updatedAt?: string | null;
+  // Verified-premise facts (GET /api/leads/:id returns the full lead; the
+  // sheet previously discarded everything but notes). All optional — older
+  // records may lack them, and the card renders honest fallbacks.
+  city?: string | null; state?: string | null; zip?: string | null;
+  fiberStatus?: string | null; householdSegmentType?: string | null;
+  billingStatus?: string | null;
+  competitorName?: string | null; competitorTech?: string | null;
+  freshConfirmedAt?: string | null; leadTag?: string | null;
+  leadStatus?: string | null;
+}
+
+// Verified-premise facts under the header: what the scanner actually proved
+// at this address. Rendered only when a fact exists — no guessed fields; the
+// review banner covers the incomplete case.
+function VerifiedPremiseFacts({ detail }: { detail: LeadDetail | undefined }): JSX.Element | null {
+  if (!detail) return null;
+  const facts: Array<[string, string]> = [];
+  if (detail.householdSegmentType) facts.push(["Segment", detail.householdSegmentType]);
+  if (detail.billingStatus) {
+    facts.push(["Occupancy", detail.billingStatus === "N" ? "No current subscriber" : `Billing ${detail.billingStatus}`]);
+  }
+  if (detail.competitorName || detail.competitorTech) {
+    facts.push(["Competitor", [detail.competitorName, detail.competitorTech].filter(Boolean).join(" · ")]);
+  }
+  if (detail.freshConfirmedAt) {
+    facts.push(["Verified", relativeTime(detail.freshConfirmedAt) || detail.freshConfirmedAt]);
+  }
+  if (!facts.length) return null;
+  return (
+    <div data-testid="knock-premise-facts" className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
+      {facts.map(([label, value]) => (
+        <span key={label} className="text-[11px] leading-tight" style={{ color: "rgba(255,255,255,0.55)" }}>
+          <span className="uppercase tracking-wide text-[9.5px] mr-1" style={{ color: "rgba(255,255,255,0.35)" }}>{label}</span>
+          {value}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
@@ -614,11 +653,22 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                   {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-[15px] h-[15px]" />}
                 </button>
               </div>
-              {(renderedLead.city || renderedLead.state || renderedLead.zip) && (
-                <div data-testid="knock-address-locality" className="text-[12px] truncate mt-0.5" style={{ color: MUTED }}>
-                  {[renderedLead.city, [renderedLead.state, renderedLead.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
-                </div>
-              )}
+              {(() => {
+                const d = detailQuery.data;
+                const city = renderedLead.city ?? d?.city;
+                const state = renderedLead.state ?? d?.state;
+                const zip5 = normalizeZip5(renderedLead.zip ?? d?.zip);
+                const complete = !!(city && state && zip5);
+                return complete ? (
+                  <div data-testid="knock-address-locality" className="text-[12px] truncate mt-0.5" style={{ color: MUTED }}>
+                    {[city, [state, zip5].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
+                  </div>
+                ) : (
+                  <div data-testid="knock-address-review" className="text-[12px] truncate mt-0.5 font-semibold text-amber-400">
+                    Address needs review{city || state ? ` · ${[city, state].filter(Boolean).join(", ")}` : ""}
+                  </div>
+                );
+              })()}
               <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1" style={{ color: statusColor }}>
                 {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
               </div>
@@ -627,6 +677,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                   Confirmed fresh fiber
                 </div>
               )}
+              {(renderedLead.leadStatus === "address_review" || detailQuery.data?.leadStatus === "address_review") && (
+                <div data-testid="knock-review-banner" className="mt-1 inline-flex items-center rounded-full border border-amber-400/35 bg-amber-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-amber-300">
+                  Address needs review
+                </div>
+              )}
+              <VerifiedPremiseFacts detail={detailQuery.data} />
             </div>
             <button
               type="button"

@@ -434,7 +434,13 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
   // explicit indexes turn every join into a point lookup.
   rawDb.exec(`
     DROP TABLE IF EXISTS temp.yf_fresh_cells;
-    CREATE TEMP TABLE yf_fresh_cells AS
+    -- TYPED columns are load-bearing: CREATE TABLE AS SELECT ROUND(…) yields
+    -- NO column affinity, and SQLite cannot SEEK a REAL probe into a
+    -- none-affinity index — the cell joins silently degrade to a full index
+    -- scan PER OUTER ROW (observed live: 8.8-minute cycles; the local repro
+    -- hid it because its signal tables were empty).
+    CREATE TEMP TABLE yf_fresh_cells (clat REAL NOT NULL, clng REAL NOT NULL, hits INTEGER NOT NULL);
+    INSERT INTO yf_fresh_cells (clat, clng, hits)
       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng, COUNT(*) AS hits
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
@@ -443,7 +449,8 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
        GROUP BY clat, clng;
     CREATE INDEX idx_yf_fresh_cells ON yf_fresh_cells(clat, clng);
     DROP TABLE IF EXISTS temp.yf_recent_cells;
-    CREATE TEMP TABLE yf_recent_cells AS
+    CREATE TEMP TABLE yf_recent_cells (clat REAL NOT NULL, clng REAL NOT NULL);
+    INSERT INTO yf_recent_cells (clat, clng)
       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
@@ -452,7 +459,8 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
        GROUP BY clat, clng;
     CREATE INDEX idx_yf_recent_cells ON yf_recent_cells(clat, clng);
     DROP TABLE IF EXISTS temp.yf_cell_momentum;
-    CREATE TEMP TABLE yf_cell_momentum AS
+    CREATE TEMP TABLE yf_cell_momentum (clat REAL NOT NULL, clng REAL NOT NULL, momentum REAL);
+    INSERT INTO yf_cell_momentum (clat, clng, momentum)
       SELECT ROUND(l.lat,2) AS clat, ROUND(l.lng,2) AS clng,
              SUM(exp(-${LN2} * MAX(0, julianday('now')-julianday(l.created_at)) / ${MOMENTUM_HALFLIFE_DAYS})) AS momentum
         FROM leads l
@@ -462,7 +470,8 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
        GROUP BY clat, clng;
     CREATE INDEX idx_yf_cell_momentum ON yf_cell_momentum(clat, clng);
     DROP TABLE IF EXISTS temp.yf_fresh_streets;
-    CREATE TEMP TABLE yf_fresh_streets AS
+    CREATE TEMP TABLE yf_fresh_streets (street TEXT NOT NULL, city TEXT NOT NULL, state TEXT NOT NULL);
+    INSERT INTO yf_fresh_streets (street, city, state)
       SELECT DISTINCT harvest_street_key(l.address) AS street,
              lower(l.city) AS city, lower(l.state) AS state
         FROM leads l
@@ -471,7 +480,8 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
          AND harvest_street_key(l.address) <> '';
     CREATE INDEX idx_yf_fresh_streets ON yf_fresh_streets(street, city, state);
     DROP TABLE IF EXISTS temp.yf_recent_streets;
-    CREATE TEMP TABLE yf_recent_streets AS
+    CREATE TEMP TABLE yf_recent_streets (street TEXT NOT NULL, city TEXT NOT NULL, state TEXT NOT NULL);
+    INSERT INTO yf_recent_streets (street, city, state)
       SELECT DISTINCT harvest_street_key(l.address) AS street,
              lower(l.city) AS city, lower(l.state) AS state
         FROM leads l
@@ -480,7 +490,8 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
          AND harvest_street_key(l.address) <> '';
     CREATE INDEX idx_yf_recent_streets ON yf_recent_streets(street, city, state);
     DROP TABLE IF EXISTS temp.yf_city_hits;
-    CREATE TEMP TABLE yf_city_hits AS
+    CREATE TEMP TABLE yf_city_hits (city TEXT NOT NULL, state TEXT NOT NULL, hits INTEGER NOT NULL);
+    INSERT INTO yf_city_hits (city, state, hits)
       SELECT lower(l.city) AS city, lower(l.state) AS state, COUNT(*) AS hits
         FROM leads l
        WHERE l.tenant_id=${tenantId | 0} AND l.lead_tag='fresh_fiber_confirmed'

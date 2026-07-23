@@ -4,6 +4,7 @@ import { structuredLog } from "./structuredLog";
 import { pointInPolygon } from "@shared/geo";
 import { meterQualifiedLead } from "./billingStore";
 import { normalizeKineticAddressKey, kineticLeadKeyOrNull } from "./scanner";
+import { addressIdentityIssues } from "@shared/addressKey";
 
 interface ProjectionCandidate {
   id: number;
@@ -38,6 +39,8 @@ export interface ProjectionResult {
   published: number;
   provisional: number;
   rejected: number;
+  /** Quarantined by the ADDRESS_REVIEW identity gate (not rep-ready). */
+  addressReview: number;
   leadIds: number[];
   /** Per-candidate failures. One bad door skips ONE door — it never rolls back
    * or blocks the rest of the batch (a single tenant-conflict throw used to
@@ -165,10 +168,20 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     assigned_at=CASE WHEN assigned_rep_id IS NULL AND ? IS NOT NULL THEN datetime('now') ELSE assigned_at END,
     updated_at=datetime('now') WHERE id=? AND tenant_id=?`);
   const link = rawDb.prepare(`UPDATE scan_targets SET converted_to_lead_id=? WHERE id=? AND tenant_id=?`);
+  // ADDRESS_REVIEW quarantine writers (identity gate below). Reasons stored on
+  // the target for audit/release; a previously-published lead flips to the
+  // review status (never deleted), leaving the rep-ready surfaces.
+  const markAddressReview = rawDb.prepare(`UPDATE scan_targets SET address_review_reason=? WHERE id=?`);
+  const reviewLead = rawDb.prepare(`UPDATE leads SET lead_status='address_review', updated_at=datetime('now')
+     WHERE id=? AND tenant_id=? AND lead_status NOT IN ('sold','now_active','competitor_suppressed','scope_suppressed','address_review')`);
+  let reviewLeadEvent: import("better-sqlite3").Statement | null = null;
+  try {
+    reviewLeadEvent = rawDb.prepare(`INSERT INTO lead_events (lead_id,type,actor,detail,at) VALUES (?,'status_change','Address Review',?,datetime('now'))`);
+  } catch { /* lead_events absent on bare replay DBs */ }
   const assignmentEvent = rawDb.prepare(`INSERT INTO lead_events (lead_id,type,actor,detail,at)
     VALUES (?,'assignment','Fresh Fiber Monitor',?,datetime('now'))`);
 
-  const result: ProjectionResult = { considered: candidates.length, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, leadIds: [], errors: [] };
+  const result: ProjectionResult = { considered: candidates.length, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, addressReview: 0, leadIds: [], errors: [] };
   // PER-CANDIDATE ISOLATION: each door publishes inside its own savepoint
   // (better-sqlite3 nests transaction functions as SAVEPOINTs). A throw for one
   // candidate rolls back that one door and is recorded in result.errors; every
@@ -255,6 +268,28 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       // single-source authoritative lead is labelled kinetic_new_fiber.
       const confidence = decision.sources.length >= 2 ? "cross_verified" : "kinetic_new_fiber";
       result.confirmed++;
+
+      // ADDRESS_REVIEW QUARANTINE — a fresh signal with a broken identity
+      // (no house number, blank city/state, missing or invalid coordinates)
+      // must never become a rep-ready pin: it renders in the wrong place or
+      // not at all, and its card shows guessed fields. Park the target with
+      // the reasons; an operator (or a later corrected echo) can release it.
+      // The evidence is preserved — nothing is deleted.
+      const identityIssues = addressIdentityIssues({
+        address: candidate.address, city: candidate.city, state: candidate.state,
+        lat: candidate.lat, lng: candidate.lng,
+      });
+      if (identityIssues.length) {
+        try {
+          markAddressReview.run(identityIssues.join("; "), candidate.id);
+          if (candidate.converted_to_lead_id != null) {
+            reviewLead.run(candidate.converted_to_lead_id, tenantId);
+            reviewLeadEvent?.run(candidate.converted_to_lead_id, JSON.stringify({ to: "address_review", issues: identityIssues }));
+          }
+        } catch { /* column may predate migration on a replay DB — quarantine is best-effort there */ }
+        result.addressReview++;
+        return;
+      }
 
       let found = findBySource.get(tenantId, candidate.id) as any;
       let leadId = found?.id as number | undefined;

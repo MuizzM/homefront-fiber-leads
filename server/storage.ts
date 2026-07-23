@@ -1809,6 +1809,7 @@ export function runMigrations() {
       k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL
     )`);
     if (!stCols.has("street_key")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN street_key TEXT`);
+    if (!stCols.has("address_review_reason")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN address_review_reason TEXT`);
     if (!stCols.has("neg_streak")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN neg_streak INTEGER NOT NULL DEFAULT 0`);
     if (!stCols.has("cell_lat")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN cell_lat REAL GENERATED ALWAYS AS (ROUND(lat, 2)) VIRTUAL`);
     if (!stCols.has("cell_lng")) raw.exec(`ALTER TABLE scan_targets ADD COLUMN cell_lng REAL GENERATED ALWAYS AS (ROUND(lng, 2)) VIRTUAL`);
@@ -1843,6 +1844,12 @@ export function runMigrations() {
     try { backfillScopeSuppression(raw); }
     catch (e: any) { console.warn("[migration] scope suppression backfill:", e?.message); }
   }
+
+  // ADDRESS_REVIEW backfill: existing leads whose identity is broken (no house
+  // number, blank city/state, missing/invalid coordinates) leave the rep-ready
+  // surfaces — status flip + audit, reversible, never deleted. Idempotent.
+  try { backfillAddressReview(raw); }
+  catch (e: any) { console.warn("[migration] address review backfill:", e?.message); }
 
   bootstrapDefaultTenant(raw);
 }
@@ -1892,7 +1899,7 @@ function backfillScopeSuppression(raw: import("better-sqlite3").Database): void 
   if (!cols.has("carrier") || !cols.has("lead_tag")) return;
   const rows = raw.prepare(
     `SELECT id, carrier, state, lead_tag FROM leads
-       WHERE lead_status NOT IN ('sold','now_active','competitor_suppressed','scope_suppressed')
+       WHERE lead_status NOT IN ('sold','now_active','competitor_suppressed','scope_suppressed','address_review')
          AND (COALESCE(carrier,'kinetic') = 'frontier'
               OR (lead_tag = 'fresh_fiber_confirmed' AND upper(COALESCE(state,'')) NOT IN ('NC','SC')))`,
   ).all() as Array<{ id: number; carrier: string | null; state: string | null; lead_tag: string | null }>;
@@ -1909,6 +1916,34 @@ function backfillScopeSuppression(raw: import("better-sqlite3").Database): void 
   });
   tx(rows);
   console.log(`[migration] scope suppression: retracted ${rows.length} lead(s) (frontier carrier / outside NC-SC)`);
+}
+
+// Flag existing leads that fail the shared address-identity validation
+// (@shared/addressKey addressIdentityIssues) as ADDRESS_REVIEW. Never touches
+// closed business or already-suppressed rows; writes the reasons to
+// lead_events for audit + release.
+function backfillAddressReview(raw: import("better-sqlite3").Database): void {
+  const { addressIdentityIssues } = require("@shared/addressKey") as typeof import("@shared/addressKey");
+  const rows = raw.prepare(
+    `SELECT id, address, city, state, lat, lng FROM leads
+      WHERE lead_status NOT IN ('sold','now_active','competitor_suppressed','scope_suppressed','address_review')`,
+  ).all() as Array<{ id: number; address: string | null; city: string | null; state: string | null; lat: number | null; lng: number | null }>;
+  if (!rows.length) return;
+  const flip = raw.prepare(`UPDATE leads SET lead_status='address_review', updated_at=datetime('now') WHERE id=?`);
+  const hasEvents = !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='lead_events'`).get();
+  const evt = hasEvents ? raw.prepare(`INSERT INTO lead_events (lead_id,type,actor,detail,at) VALUES (?,'status_change','Address Review',?,datetime('now'))`) : null;
+  let flagged = 0;
+  const tx = raw.transaction((list: typeof rows) => {
+    for (const r of list) {
+      const issues = addressIdentityIssues(r);
+      if (!issues.length) continue;
+      flip.run(r.id);
+      evt?.run(r.id, JSON.stringify({ to: "address_review", issues }));
+      flagged++;
+    }
+  });
+  tx(rows);
+  if (flagged > 0) console.log(`[migration] address review: quarantined ${flagged} lead(s) with broken address identity`);
 }
 
 // ── scan_targets: one house per (address, city, state) ─────────────────────────
@@ -2294,7 +2329,7 @@ export class Storage implements IStorage {
           -- competitor (or an unresolved competitor) was found is off the rep map.
           -- Scope gate (Kinetic-only NC/SC): frontier-carrier and out-of-state
           -- leads are suppressed (status flip, audit-logged), never deleted.
-          AND l.lead_status NOT IN ('competitor_suppressed','scope_suppressed')
+          AND l.lead_status NOT IN ('competitor_suppressed','scope_suppressed','address_review')
       ), ranked_visits AS (
         SELECT
           k.lead_id AS leadId,

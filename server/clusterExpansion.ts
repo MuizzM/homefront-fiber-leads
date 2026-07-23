@@ -441,14 +441,19 @@ export function startExpansionEngine(): void {
 }
 export function stopExpansionEngine(): void { if (_timer) { clearInterval(_timer); _timer = null; } }
 
-// Called from the scan engine right after projectConfirmedFreshLeads: any of the
-// just-checked targets that are now green (new_fiber + billing N) seed expansion.
+// Called from the scan engine after every classified batch: any just-checked
+// target that PROVES the pocket is lit seeds expansion —
+//   • new_fiber + billing N  (a fresh lead: the classic trigger), OR
+//   • new_fiber + billing A/Y (an ACTIVE CUSTOMER on new fiber — no lead, but
+//     hard evidence the drop is live; the unsold neighbors are prime fresh
+//     candidates. The Stonewyck pocket was missed exactly here: a field scan
+//     proved 1321 was a lit customer at 18:10 and nothing expanded.)
 export function triggerExpansionForTargets(tenantId: number, targetIds: number[]): number {
   if (!CFG.enabled() || !targetIds.length) return 0;
   ensureSchema();
   const rows = rawDb.prepare(`SELECT id,address,city,state,zip,lat,lng,converted_to_lead_id lead FROM scan_targets
     WHERE id IN (${targetIds.map(() => "?").join(",")})
-      AND last_fiber_status='new_fiber' AND last_billing_status='N' AND lat IS NOT NULL AND lng IS NOT NULL`).all(...targetIds) as any[];
+      AND last_fiber_status='new_fiber' AND last_billing_status IN ('N','A','Y') AND lat IS NOT NULL AND lng IS NOT NULL`).all(...targetIds) as any[];
   let started = 0;
   for (const r of rows) {
     const res = onFreshLead(tenantId, { targetId: r.id, leadId: r.lead ?? null, address: r.address, city: r.city, state: r.state, zip: r.zip, lat: r.lat, lng: r.lng });

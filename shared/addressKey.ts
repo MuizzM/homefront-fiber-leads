@@ -18,7 +18,15 @@
 // GENUINELY different zips is vanishingly rare (postal street names are unique
 // within a city), and that failure mode is a merged pin (recoverable) versus
 // today's duplicate pins + double spend (observed).
-export const NORMALIZATION_VERSION = 3;
+// v4 (2026-07): UNIT UNIFICATION — every unit designator (APT/UNIT/STE/#/
+// APARTMENT/SUITE/BLDG/FL/RM/DEPT/LOT/TRLR) folds to the ONE token "UNIT", and
+// "#4"/"# 4" tokenize as "UNIT 4". "123 Main St Apt 4", "123 Main St Unit 4",
+// and "123 Main St #4" are the SAME premise-unit (one lead, one pin);
+// "123 Main St" (no unit) and "…Unit 5" remain DISTINCT records. ZIP stays out
+// of the key (v3); ZIP+4 folding is display-side (normalizeZip5). Directional
+// ORDER is deliberately preserved ("N Main St" ≠ "Main St N" — reordering
+// false-merges real corner-lot pairs).
+export const NORMALIZATION_VERSION = 4;
 
 // SUFFIX-DOMINANT street-type folding only. Every variant maps to one canonical
 // token so "N Main Street", "North Main St", "123 Oak Circle" and "123 Oak Cir"
@@ -40,9 +48,13 @@ const DIRECTIONALS: Array<[string, string[]]> = [
   ["N", ["NORTH"]], ["S", ["SOUTH"]], ["E", ["EAST"]], ["W", ["WEST"]],
   ["NE", ["NORTHEAST"]], ["NW", ["NORTHWEST"]], ["SE", ["SOUTHEAST"]], ["SW", ["SOUTHWEST"]],
 ];
+// v4: ALL unit designators fold to the single canonical token "UNIT" — the
+// designator word never distinguishes premises ("Apt 4" ≡ "Unit 4" ≡ "Ste 4"
+// at a residential address), only the unit VALUE does. The value token stays
+// in the key, so units remain distinct records.
 const UNITS: Array<[string, string[]]> = [
-  ["APT", ["APARTMENT"]], ["STE", ["SUITE"]], ["BLDG", ["BUILDING"]],
-  ["FL", ["FLOOR"]], ["RM", ["ROOM"]], ["DEPT", ["DEPARTMENT"]], ["UNIT", []],
+  ["UNIT", ["APT", "APARTMENT", "STE", "SUITE", "BLDG", "BUILDING", "FL", "FLOOR",
+            "RM", "ROOM", "DEPT", "DEPARTMENT", "LOT", "TRLR"]],
 ];
 
 const addressTokenAliases: Record<string, string> = {};
@@ -56,8 +68,75 @@ for (const [canon, variants] of [...SUFFIXES, ...DIRECTIONALS, ...UNITS]) {
 const COMBINING_MARKS = new RegExp("[\\u0300-\\u036f]", "g");
 export function canonicalAddressPart(value: string): string {
   return value.normalize("NFKD").replace(COMBINING_MARKS, "")
-    .toUpperCase().replace(/[^A-Z0-9#]+/g, " ").trim().split(/\s+/)
+    .toUpperCase()
+    // "#4" / "# 4" are unit shorthand — fold to the canonical UNIT token
+    // BEFORE tokenizing so they key identically to "Apt 4"/"Unit 4".
+    .replace(/#\s*/g, " UNIT ")
+    .replace(/[^A-Z0-9]+/g, " ").trim().split(/\s+/)
     .filter(Boolean).map(token => addressTokenAliases[token] ?? token).join(" ");
+}
+
+/** First 5 digits of a ZIP/ZIP+4, or "" when absent/invalid — display + storage
+ *  normalization only (ZIP is not part of the canonical key since v3). */
+export function normalizeZip5(zip: string | null | undefined): string {
+  const m = String(zip ?? "").match(/\d{5}/);
+  return m ? m[0] : "";
+}
+
+/** Decompose a display address into house number, street, and unit for card
+ *  rendering + validation. Purely presentational — never used for identity. */
+export function splitDisplayAddress(address: string | null | undefined): {
+  houseNumber: string; street: string; unit: string;
+} {
+  const raw = String(address ?? "").trim().replace(/\s+/g, " ");
+  if (!raw) return { houseNumber: "", street: "", unit: "" };
+  const tokens = raw.split(" ");
+  const houseNumber = /^\d+[A-Za-z]?$/.test(tokens[0] ?? "") ? tokens[0] : "";
+  const rest = houseNumber ? tokens.slice(1) : tokens;
+  // The unit clause starts at the first unit designator or "#" token.
+  const unitIdx = rest.findIndex((t) =>
+    /^#/.test(t) || addressTokenAliases[t.toUpperCase().replace(/[^A-Z0-9]/g, "")] === "UNIT");
+  if (unitIdx >= 0) {
+    return {
+      houseNumber,
+      street: rest.slice(0, unitIdx).join(" "),
+      unit: rest.slice(unitIdx).join(" "),
+    };
+  }
+  return { houseNumber, street: rest.join(" "), unit: "" };
+}
+
+/** The premise key with any unit clause removed — building-level identity for
+ *  clustering apartment/unit records. NOT used for lead uniqueness (units are
+ *  distinct records); exported for grouping and analytics. */
+export function premiseBaseKey(address: string, city: string, state: string): string {
+  const canon = canonicalAddressPart(address);
+  const cut = canon.indexOf(" UNIT ");
+  const base = cut >= 0 ? canon.slice(0, cut) : canon;
+  return [base, canonicalAddressPart(city), canonicalAddressPart(state)].join("|");
+}
+
+/** Shared address-quality validation for the ADDRESS_REVIEW quarantine: the
+ *  reasons a record is not rep-ready. Empty array = publishable. Used by the
+ *  projector gate, the review backfill, tests, and the client review banner. */
+export function addressIdentityIssues(input: {
+  address?: string | null; city?: string | null; state?: string | null;
+  lat?: number | null; lng?: number | null;
+}): string[] {
+  const issues: string[] = [];
+  const addr = String(input.address ?? "").trim();
+  const houseNumber = addr.split(/\s+/)[0] ?? "";
+  if (!addr || canonicalAddressPart(addr) === "") issues.push("missing street address");
+  else if (!/^\d+[A-Za-z]?$/.test(houseNumber)) issues.push("missing house number");
+  if (!String(input.city ?? "").trim()) issues.push("missing city");
+  if (!String(input.state ?? "").trim()) issues.push("missing state");
+  const lat = input.lat, lng = input.lng;
+  if (lat == null || lng == null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
+    issues.push("missing coordinates");
+  } else if (Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) {
+    issues.push("invalid coordinates");
+  }
+  return issues;
 }
 
 // NOTE: `zip` is accepted for API compatibility but NO LONGER part of the key

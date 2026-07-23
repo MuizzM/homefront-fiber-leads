@@ -229,7 +229,10 @@ services:
       # (coming-soon flips → fresh-cluster neighbors → hot-city frontier →
       # stale re-checks). Self-throttled by ADAPTIVE_PACE against live website
       # health, so it runs 24/7 with zero site impact. off to disable.
-      FRESH_HARVEST: "on"
+      # Parametrized so operations can flip the yield engine off from the host
+      # .env (FRESH_HARVEST=off) without a code deploy — the sanctioned
+      # rollback lever if scoring cycles ever pathologize again.
+      FRESH_HARVEST: "${FRESH_HARVEST:-on}"
       # PUMP MODE: 2x harvest budget (8k/10min) and the keep-warm feeder tops up
       # harder so the queue never drains.
       FRESH_HARVEST_BUDGET: "8000"

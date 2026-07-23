@@ -477,7 +477,7 @@ export async function runScanWorker(
         structuredLog("fresh_fiber.projection_failed", {
           tenantId, batch: batch.length, error: String(error?.message ?? error),
         }, "warn");
-        projected = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, leadIds: [], errors: [] };
+        projected = { considered: 0, confirmed: 0, created: 0, linkedExisting: 0, published: 0, provisional: 0, rejected: 0, addressReview: 0, leadIds: [], errors: [] };
       }
       if (projected.published > 0) {
         // Wake the harvest: these new drops just made their cell/street
@@ -497,16 +497,17 @@ export async function runScanWorker(
             });
           });
         }
-        // Every address that just became a green FRESH_LEAD immediately seeds a
-        // deduplicated CRITICAL cluster-expansion scan outward from it. The lead
-        // is already published + pinned above; expansion runs independently and
-        // never blocks lead creation.
-        try {
-          const started = triggerExpansionForTargets(tenantId, batch.map((t) => t.targetId));
-          if (started) structuredLog("expansion.seeded", { tenantId, expansions: started }, "info");
-        } catch (e: any) {
-          structuredLog("expansion.seed_failed", { tenantId, error: String(e?.message ?? e).slice(0, 120) }, "warn");
-        }
+      }
+      // Every classified batch seeds deduplicated CRITICAL cluster expansion
+      // for targets that prove the pocket is lit — fresh leads (new_fiber+N)
+      // AND active customers on new fiber (new_fiber+A/Y). Runs OUTSIDE the
+      // published>0 gate: a lit-customer observation publishes no lead yet is
+      // the strongest possible signal that the unsold neighbors are due now.
+      try {
+        const started = triggerExpansionForTargets(tenantId, batch.map((t) => t.targetId));
+        if (started) structuredLog("expansion.seeded", { tenantId, expansions: started }, "info");
+      } catch (e: any) {
+        structuredLog("expansion.seed_failed", { tenantId, error: String(e?.message ?? e).slice(0, 120) }, "warn");
       }
     }
   } catch (err: any) {
