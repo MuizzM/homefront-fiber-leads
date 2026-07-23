@@ -28,6 +28,10 @@ backups/
 .deployed-tag
 .previous-tag
 .backup-age-recipient
+.backup-age-identity
+# Deploy-pipeline runtime state (host-only): flock mutex + detached-run log/status/pid
+.deploy.lock
+.deploy-run/
 
 # Local live-verification harnesses (reference proxy creds via shell env — never commit)
 verify-*.ts
