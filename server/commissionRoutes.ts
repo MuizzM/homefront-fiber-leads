@@ -96,6 +96,17 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
       return true;
     }
+    // Self-dealing guard: your own rep record is inside your read scope (so you
+    // can SEE your commission), but you may never WRITE your own commission —
+    // set a structure/plan, book a sale, or transition one — for yourself.
+    // Someone above you does that. Applies to every commission WRITE route,
+    // which all funnel through this helper. (Reads use canReadRep directly and
+    // are unaffected; the onboarding flow calls the service, not this route.)
+    const user = (req as any).user;
+    if (user?.teamMemberId != null && Number(repId) === Number(user.teamMemberId)) {
+      res.status(403).json({ error: "You cannot set your own commission", code: "COMMISSION_SELF_DEAL" });
+      return true;
+    }
     return false;
   };
 

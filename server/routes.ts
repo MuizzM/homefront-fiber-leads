@@ -154,7 +154,7 @@ import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
 import { getFiberChanges, getCopperPool } from "./fiberTransitions";
-import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter } from "./limiters";
+import { authorizedScanAdmission, ownerLookupLimiter, onboardingLimiter, geocodeLimiter } from "./limiters";
 import * as scanSvc from "./scanService";
 import {
   CORROBORATION_SOURCES, freshPoints, knockList, listMarkets, monitoringSummary,
@@ -814,6 +814,10 @@ async function qualifyAddressesViaKinetic(
 // pooledMap bounds in-flight calls; each call rotates the Decodo session and
 // retries transient failures immediately — never waits, never drops an address.
 const AREA_SCAN_CONCURRENCY = Number(process.env.AREA_SCAN_CONCURRENCY ?? 25); // unlimited budget: drawn-box scans run 25-wide (was 10)
+// Upper bound on a single bulk lead operation (lasso assign / status). Each id
+// runs synchronous SQLite work on the one event-loop thread, so this caps how
+// long one request can monopolize it. A real lasso selection is well under this.
+const MAX_BULK_LEADS = 500;
 async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateAddresses>) {
   const job = scanJobs.get(jobId);
   if (!job) return;
@@ -959,7 +963,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return null;
     }
   }
-  app.get("/api/geocode", requireCapability("scan.submit"), async (req, res) => {
+  app.get("/api/geocode", geocodeLimiter, requireCapability("scan.submit"), async (req, res) => {
     const q = String(req.query.q ?? "").trim();
     if (q.length < 3) return res.status(400).json({ error: "query too short" });
     const key = q.toLowerCase();
@@ -3699,23 +3703,34 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/leads/bulk-assign", requireCapability("lead.assign"), (req, res) => {
     const { leadIds, repId } = req.body as { leadIds: number[]; repId: number | null };
     if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
+    // Bound the batch: each id runs synchronous better-sqlite3 work on the one
+    // event-loop thread, so an unbounded array would stall the HTTP server for
+    // every user. A lasso selection is realistically well under this cap.
+    if (leadIds.length > MAX_BULK_LEADS) return res.status(400).json({ error: `Too many leads — select at most ${MAX_BULK_LEADS} at a time`, code: "BULK_TOO_LARGE" });
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
     const stamp = repId ? { assignedBy: user?.name ?? null, assignedAt: new Date().toISOString() } : { assignedBy: null, assignedAt: null };
     const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
-    let updated = 0, skipped = 0;
-    for (const id of leadIds) {
-      // A team_lead may only move unassigned or own-team leads — silently skip
-      // (don't steal) another team's; count them so the UI can be honest.
-      const lead = storage.getLeadById(id);
-      if (lead && (tid == null || lead.tenantId === tid) && !canReassignLead(user, lead)) { skipped++; continue; }
-      const result = storage.updateLead(id, { assignedRepId: repId ?? null, ...stamp }, tid);
-      if (result) {
-        updated++;
-        if (repName) storage.addLeadEvent(id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
+    // One transaction: the whole selection assigns atomically (all-or-nothing on
+    // error) instead of leaving a half-applied batch, and commits the writes in
+    // a single fsync instead of one per lead.
+    const apply = rawDb.transaction(() => {
+      let updated = 0, skipped = 0;
+      for (const id of leadIds) {
+        // A team_lead may only move unassigned or own-team leads — silently skip
+        // (don't steal) another team's; count them so the UI can be honest.
+        const lead = storage.getLeadById(id);
+        if (lead && (tid == null || lead.tenantId === tid) && !canReassignLead(user, lead)) { skipped++; continue; }
+        const result = storage.updateLead(id, { assignedRepId: repId ?? null, ...stamp }, tid);
+        if (result) {
+          updated++;
+          if (repName) storage.addLeadEvent(id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
+        }
       }
-    }
+      return { updated, skipped };
+    });
+    const { updated, skipped } = apply.immediate();
     res.json({ updated, skipped, repId });
   });
 
@@ -3729,19 +3744,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/leads/bulk-status", requireCapability("lead.disposition.update"), (req, res) => {
     const { leadIds, outcome } = req.body as { leadIds: number[]; outcome: string };
     if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
+    if (leadIds.length > MAX_BULK_LEADS) return res.status(400).json({ error: `Too many leads — select at most ${MAX_BULK_LEADS} at a time`, code: "BULK_TOO_LARGE" });
     if (!isBulkStatusOutcome(outcome)) return res.status(400).json({ error: "outcome not allowed for bulk edit" });
     const newStatus = OUTCOME_TO_STATUS[outcome as KnockOutcome];
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    let updated = 0, skipped = 0;
-    for (const raw of leadIds) {
-      const id = Number(raw);
-      const lead = storage.getLeadById(id);
-      // Silently skip cross-tenant or out-of-scope leads (don't leak, don't act) —
-      // count them so the UI can be honest about what changed.
-      if (!lead || (tid != null && lead.tenantId !== tid) || !repCanAccessLead(user, lead)) { skipped++; continue; }
-      if (storage.updateLead(id, { leadStatus: newStatus }, tid)) updated++;
-    }
+    const apply = rawDb.transaction(() => {
+      let updated = 0, skipped = 0;
+      for (const raw of leadIds) {
+        const id = Number(raw);
+        const lead = storage.getLeadById(id);
+        // Silently skip cross-tenant or out-of-scope leads (don't leak, don't act) —
+        // count them so the UI can be honest about what changed.
+        if (!lead || (tid != null && lead.tenantId !== tid) || !repCanAccessLead(user, lead)) { skipped++; continue; }
+        if (storage.updateLead(id, { leadStatus: newStatus }, tid)) updated++;
+      }
+      return { updated, skipped };
+    });
+    const { updated, skipped } = apply.immediate();
     if (updated > 0) {
       bustMapCache(tid);
       storage.logActivity(user?.id ?? null, "lead.bulk_status", "lead", undefined, { outcome, leadStatus: newStatus, updated, skipped }, req.ip);

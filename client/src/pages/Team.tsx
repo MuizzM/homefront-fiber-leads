@@ -560,7 +560,7 @@ export default function Team() {
                           <FileSignature className="w-3.5 h-3.5" />
                         </Button>
                       )}
-                      {canManageCommission && member.role !== "manager" && (
+                      {canManageCommission && member.role !== "manager" && canLifecycle(member) && (
                         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-muted-foreground hover:text-primary hover:bg-primary/10"
                           onClick={() => setCommissionMember(member)} data-testid={`btn-commission-rep-${member.id}`}
                           aria-label={`Set commission structure for ${member.name}`}
@@ -767,11 +767,11 @@ export default function Team() {
                             <Button variant="outline" size="sm"
                               className="h-8 border-border text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
                               onClick={() => reactivateMutation.mutate(member.id)}
-                              disabled={reactivateMutation.isPending}
+                              disabled={reactivateMutation.isPending && reactivateMutation.variables === member.id}
                               data-testid={`btn-reactivate-rep-${member.id}`}
                               aria-label={`Reactivate ${member.name}`} title="Restore access">
                               <UserCheck className="w-3.5 h-3.5 mr-1.5" />
-                              {reactivateMutation.isPending ? "Restoring…" : "Reactivate"}
+                              {reactivateMutation.isPending && reactivateMutation.variables === member.id ? "Restoring…" : "Reactivate"}
                             </Button>
                           )}
                           {canHardDelete(member) && (

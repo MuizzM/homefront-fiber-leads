@@ -53,3 +53,16 @@ export const inviteResolveLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many invitation checks. Try again shortly." },
 });
+
+// Forward geocode (/api/geocode) is reachable by any field user (scan.submit)
+// and is backed by the server-side secret Mapbox token. The in-memory cache
+// means only UNIQUE queries cost money — but a caller could still enumerate
+// unique strings to drive paid geocoding. A generous per-IP ceiling (120/min)
+// never blocks legitimate typeahead/search while capping enumeration abuse.
+export const geocodeLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many geocode lookups. Slow down for a moment." },
+});
