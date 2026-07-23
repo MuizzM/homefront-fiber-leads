@@ -9,6 +9,7 @@ import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet, type SheetLead } from "@/components/OutcomeSheet";
+import { EmptyState } from "@/components/EmptyState";
 import { STATE_COLORS, pinDisplayState, todayISO } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -104,14 +105,15 @@ export default function FollowUps() {
             </button>
           </div>
         ) : groups.total === 0 ? (
-          <div className="mt-6 rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.06] p-8 text-center" data-testid="followups-empty">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 flex items-center justify-center mx-auto">
-              <CheckCircle2 className="w-6 h-6 text-emerald-400" />
-            </div>
-            <div className="text-[15px] font-semibold text-foreground mt-3">You're all caught up</div>
-            <div className="text-[13px] text-muted-foreground mt-1 max-w-xs mx-auto">
-              No callbacks scheduled. When you tap "Callback" on a door, it shows up here so you never miss the second visit.
-            </div>
+          <div className="mt-6">
+            <EmptyState
+              testId="followups-empty"
+              tone="positive"
+              bordered
+              icon={CheckCircle2}
+              title="You're all caught up"
+              description={'No callbacks scheduled. When you tap "Callback" on a door, it shows up here so you never miss the second visit.'}
+            />
           </div>
         ) : (
           <div className="mt-5 space-y-5">
