@@ -27,10 +27,22 @@ sqlite.pragma(`busy_timeout = ${Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 150
 // checkpointed prefix even when the tail is pinned), so the file can't run the
 // disk out. Default 1GB; tune with SQLITE_WAL_LIMIT_BYTES.
 sqlite.pragma(`journal_size_limit = ${Math.max(64 * 1024 * 1024, Number(process.env.SQLITE_WAL_LIMIT_BYTES ?? 1_073_741_824) || 1_073_741_824)}`);
-// Auto-checkpoint every ~4000 pages (~16MB) instead of the 1000-page default so
-// committed frames flush to the main DB far more often — the periodic
-// TRUNCATE checkpointer (index.ts) then keeps the file near journal_size_limit.
-sqlite.pragma(`wal_autocheckpoint = ${Math.max(1000, Number(process.env.SQLITE_WAL_AUTOCHECKPOINT ?? 4000) || 4000)}`);
+// DEDICATED-CHECKPOINTER architecture (SQLite's recommendation for busy
+// systems). First live guard firing (2026-07-23 14:58) showed WHY: with 24
+// concurrent writers each auto-checkpointing every 4000 pages, some worker
+// holds the checkpoint lock in a reader-starved PASSIVE attempt almost
+// continuously, so the primary guard's TRUNCATE returned busy:1 while the WAL
+// kept growing. CLUSTER WORKERS (HF_ROLE is set only by the cluster fork)
+// therefore back off to a ~1GB BACKSTOP — they stop fighting the guard for
+// the checkpoint lock, yet still bound the WAL if the primary ever dies.
+// The primary guard (startWalGuard below) is the one routine checkpointer.
+// Single-process/one-shot/test connections keep the 4000-page default.
+const isClusterWorkerConn = Boolean(process.env.HF_ROLE);
+const workerBackstopPages = Math.max(50_000, Number(process.env.SQLITE_WAL_AUTOCHECKPOINT_WORKER ?? 250_000) || 250_000);
+const autoCheckpointPages = isClusterWorkerConn
+  ? workerBackstopPages
+  : Math.max(1000, Number(process.env.SQLITE_WAL_AUTOCHECKPOINT ?? 4000) || 4000);
+sqlite.pragma(`wal_autocheckpoint = ${autoCheckpointPages}`);
 
 // ── Use the box's RAM: keep the whole DB hot in memory ───────────────────────
 // The single biggest scanner-throughput lever on this workload. Node runs the
