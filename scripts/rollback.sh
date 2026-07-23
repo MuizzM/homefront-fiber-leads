@@ -19,7 +19,14 @@ TAG="${1:-$(cat .previous-tag 2>/dev/null || true)}"
 [[ "$TAG" =~ ^[0-9a-f]{7,40}$ ]] || { echo "[rollback] refusing non-immutable image tag: $TAG" >&2; exit 1; }
 
 echo "[rollback] rolling to $TAG…"
-APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" up -d app
+# One retry on the up: rollback is the LAST line of defense (the deploy's
+# failure paths all end here) and a transient dockerd hiccup must not be what
+# leaves production down.
+if ! APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" up -d app; then
+  echo "[rollback] up failed once — retrying in 10s…" >&2
+  sleep 10
+  APP_IMAGE_TAG="$TAG" "${COMPOSE[@]}" up -d app
+fi
 
 echo "[rollback] health check…"
 attempts_left=20

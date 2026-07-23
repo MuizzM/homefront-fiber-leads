@@ -56,7 +56,7 @@ jobs:
     name: Approval-gated production deploy
     needs: validate-release
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     environment:
       name: production
       url: https://portal.homefrontsolutionsllc.com
@@ -93,14 +93,25 @@ jobs:
             exit 1
           }
 
-          ssh \
-            -i "$HOME/.ssh/id_ed25519" \
-            -o BatchMode=yes \
-            -o ConnectTimeout=15 \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
-            "$DEPLOY_USER@$DEPLOY_HOST" \
+          # ServerAlive keepalives defeat idle NAT drops on the launch call.
+          # The deploy itself runs DETACHED on the box (setsid, own session):
+          # a dropped SSH pipe previously killed deploy.sh mid-offline-window —
+          # including its restore trap — which could leave production STOPPED.
+          # Detached, the box always finishes (deploy or self-rollback) no
+          # matter what happens to this runner; we poll for the result over
+          # fresh short-lived connections.
+          SSH=(ssh
+            -i "$HOME/.ssh/id_ed25519"
+            -o BatchMode=yes
+            -o ConnectTimeout=15
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=12
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+          )
+
+          "${SSH[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
             bash -s -- "$RELEASE_SHA" "$DEFAULT_BRANCH" <<'REMOTE'
           set -euo pipefail
           RELEASE_SHA="$1"
@@ -126,5 +137,49 @@ jobs:
             exit 1
           fi
 
-          scripts/deploy.sh "$RELEASE_SHA"
+          RUN_DIR=/srv/homefront/.deploy-run
+          mkdir -p "$RUN_DIR"
+          if [ -f "$RUN_DIR/pid" ] && kill -0 "$(cat "$RUN_DIR/pid")" 2>/dev/null; then
+            echo "Refusing: a deploy is already running (pid $(cat "$RUN_DIR/pid"))" >&2
+            exit 1
+          fi
+          rm -f "$RUN_DIR/status"
+          : > "$RUN_DIR/log"
+          # Own session + no inherited stdio: sshd teardown can never signal it.
+          # deploy.sh itself also holds .deploy.lock (flock) against races.
+          env RELEASE_SHA="$RELEASE_SHA" RUN_DIR="$RUN_DIR" setsid bash -c '
+            cd /srv/homefront
+            scripts/deploy.sh "$RELEASE_SHA" >> "$RUN_DIR/log" 2>&1
+            echo $? > "$RUN_DIR/status"
+          ' < /dev/null >> "$RUN_DIR/log" 2>&1 &
+          echo $! > "$RUN_DIR/pid"
+          echo "Launched detached deploy of $RELEASE_SHA (pid $(cat "$RUN_DIR/pid"))"
           REMOTE
+
+          # Poll for completion over fresh short connections (≤45 min: the
+          # detached deploy self-rolls-back on failure, so waiting is safe).
+          echo "Polling the detached deploy…"
+          LAST_LINE=""
+          for attempt in $(seq 1 180); do
+            sleep 15
+            if ! SNAP="$("${SSH[@]}" "$DEPLOY_USER@$DEPLOY_HOST" \
+              'RUN=/srv/homefront/.deploy-run; if [ -f "$RUN/status" ]; then printf "STATUS:%s\n" "$(cat "$RUN/status")"; fi; tail -n 1 "$RUN/log" 2>/dev/null || true')"; then
+              echo "[poll $attempt] transient SSH failure; retrying…"
+              continue
+            fi
+            CUR="$(printf '%s\n' "$SNAP" | grep -v '^STATUS:' | tail -n 1 || true)"
+            if [ -n "$CUR" ] && [ "$CUR" != "$LAST_LINE" ]; then
+              echo "[remote] $CUR"
+              LAST_LINE="$CUR"
+            fi
+            STATUS_LINE="$(printf '%s\n' "$SNAP" | grep '^STATUS:' | head -n 1 || true)"
+            if [ -n "$STATUS_LINE" ]; then
+              RESULT="${STATUS_LINE#STATUS:}"
+              echo "── remote deploy log (tail) ──"
+              "${SSH[@]}" "$DEPLOY_USER@$DEPLOY_HOST" 'tail -n 200 /srv/homefront/.deploy-run/log' || true
+              [[ "$RESULT" =~ ^[0-9]+$ ]] || RESULT=1
+              exit "$RESULT"
+            fi
+          done
+          echo "Deploy did not report a result within 45 minutes — inspect /srv/homefront/.deploy-run/log on the host" >&2
+          exit 1

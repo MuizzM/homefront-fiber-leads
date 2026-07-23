@@ -50,7 +50,7 @@ health_check() {
 
 # Invoked indirectly by the EXIT trap below. ShellCheck cannot infer that the
 # string-form trap is a real call, but the string is required to preserve `$?`.
-# shellcheck disable=SC2317
+# shellcheck disable=SC2317,SC2329
 cleanup() {
   local status="$1"
   trap - EXIT
@@ -86,17 +86,43 @@ trap 'cleanup "$?"' EXIT
 
 command -v sqlite3 >/dev/null 2>&1 || { echo "[restore] sqlite3 is required" >&2; exit 1; }
 
-# 1) Decrypt and/or decompress into the scratch candidate. Both .db.age and
-# .db.gz are emitted by backup.sh; .db.gz.age is accepted for older tooling.
+# 1) Decrypt and/or decompress into the scratch candidate. Deploys emit
+# .db.zst.age (quiescent compressed stream); .db.age, .db.gz, and .db.gz.age
+# come from the online/cron and legacy paths.
 PAYLOAD="$SRC"
 LOGICAL_NAME="$SRC"
 if [[ "$SRC" == *.age ]]; then
   command -v age >/dev/null 2>&1 || { echo "[restore] age is required for encrypted backups" >&2; exit 1; }
+  # Backups are encrypted to an X25519 RECIPIENT (age -r), so decryption needs
+  # the matching IDENTITY (private key) via -i — a bare `age -d` only handles
+  # passphrase files and would fail on every artifact this pipeline produces.
+  # The operator provides it via AGE_IDENTITY or the protected, git-ignored
+  # .backup-age-identity file; fail EARLY with instructions, not mid-restore.
+  if [ -z "${AGE_IDENTITY:-}" ] && [ -r .backup-age-identity ]; then
+    AGE_IDENTITY=.backup-age-identity
+  fi
+  if [ -z "${AGE_IDENTITY:-}" ] || [ ! -r "$AGE_IDENTITY" ]; then
+    echo "[restore] refusing: encrypted backup needs the age identity (private key)." >&2
+    echo "[restore]   set AGE_IDENTITY=/path/to/key or place it in .backup-age-identity (chmod 600)" >&2
+    exit 1
+  fi
   PAYLOAD="$WORK/decrypted"
-  age -d -o "$PAYLOAD" "$SRC"
+  age -d -i "$AGE_IDENTITY" -o "$PAYLOAD" "$SRC"
   LOGICAL_NAME="${SRC%.age}"
 fi
-if [[ "$LOGICAL_NAME" == *.gz ]]; then
+if [[ "$LOGICAL_NAME" == *.zst ]]; then
+  command -v zstd >/dev/null 2>&1 || { echo "[restore] zstd is required for .zst backups (apt install zstd)" >&2; exit 1; }
+  # Disk preflight: the decompressed candidate lands in the scratch dir at
+  # several times the artifact size (SQLite compresses ~3x; use 4x as a
+  # conservative bound). Fail HERE, not halfway through a 7GB decompress.
+  CAND_KB=$(( $(du -k "$PAYLOAD" | cut -f1) * 4 ))
+  FREE_KB="$(df -k --output=avail "$WORK" | tail -1 | tr -d ' ')"
+  if [ "$FREE_KB" -lt $((CAND_KB + 262144)) ]; then
+    echo "[restore] refusing: scratch dir needs ~${CAND_KB}KB (+slack) but only ${FREE_KB}KB free — set TMPDIR to a roomier filesystem" >&2
+    exit 1
+  fi
+  zstd -dc "$PAYLOAD" > "$CAND"
+elif [[ "$LOGICAL_NAME" == *.gz ]]; then
   gzip -dc "$PAYLOAD" > "$CAND"
 else
   cp "$PAYLOAD" "$CAND"

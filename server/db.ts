@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import * as schema from "@shared/schema";
+import fs from "fs";
 import path from "path";
 import { resolveScanWorkerCount } from "./scanWorkers";
 
@@ -68,6 +69,79 @@ try {
 
 export const db = drizzle(sqlite, { schema });
 export const rawDb = sqlite; // Raw better-sqlite3 instance for prepared statements
+
+// ── WAL guard: FILE-SIZE-based forced checkpoint ─────────────────────────────
+// 2026-07-23 disk-full incident: the previous guard sized the WAL from the
+// `log` column of `PRAGMA wal_checkpoint(PASSIVE)` — but under checkpoint-lock
+// contention that pragma reports busy=1/log=-1, so the guard computed a
+// NEGATIVE size and never escalated while the file grew to 12GB and filled the
+// 38GB box. Past ~95% disk the death spiral locks in: a checkpoint must grow
+// data.db, there is no disk, so every checkpoint fails and the WAL can only
+// grow. This guard measures the -wal file with fs.stat (ground truth, immune
+// to pragma result quirks), forces TRUNCATE past the threshold, and logs every
+// action AND every error — a silent catch is how the last failure hid.
+//
+// Placement matters: wal_checkpoint is synchronous and can block up to
+// busy_timeout waiting for readers to drain. Run the guard in the CLUSTER
+// PRIMARY (its event loop is a near-idle supervisor — blocking it stalls no
+// HTTP or scan work) or in the single process when SCAN_WORKERS=0.
+const walPath = `${dbPath}-wal`;
+
+function walFileMb(): number {
+  try {
+    return Math.round(fs.statSync(walPath).size / 1_048_576);
+  } catch {
+    return 0; // no WAL file → nothing to reclaim
+  }
+}
+
+function walLog(event: string, fields: Record<string, unknown>): void {
+  const level = event.endsWith("_error") ? "error" : "info";
+  console.log(JSON.stringify({ ts: new Date().toISOString(), level, event, ...fields }));
+}
+
+// One blocking TRUNCATE attempt with before/after evidence. Returns the MB
+// still in the WAL afterwards. Never throws. The wait is bounded to 30s (not
+// the connection's full busy_timeout, 120s in prod): the guard retries every
+// tick anyway, and the cluster primary must stay responsive to worker exits.
+export function forceWalTruncate(reason: string): number {
+  const beforeMb = walFileMb();
+  const prevTimeout = Number(sqlite.pragma("busy_timeout", { simple: true }) ?? 0) || 15000;
+  try {
+    sqlite.pragma(`busy_timeout = ${Math.min(prevTimeout, 30000)}`);
+    const res = sqlite.pragma("wal_checkpoint(TRUNCATE)");
+    const afterMb = walFileMb();
+    walLog("db.wal_guard", { reason, beforeMb, afterMb, result: JSON.stringify(res) });
+    return afterMb;
+  } catch (e: any) {
+    walLog("db.wal_guard_error", { reason, beforeMb, error: e?.message ?? String(e) });
+    return beforeMb;
+  } finally {
+    try { sqlite.pragma(`busy_timeout = ${prevTimeout}`); } catch { /* connection closed */ }
+  }
+}
+
+// Boot-time reclaim. Call where there is NO connection contention yet (cluster
+// primary before forking workers; single-process before listen): with no other
+// readers the TRUNCATE always wins and the WAL starts at 0 bytes.
+export function bootWalCheckpoint(): void {
+  if (walFileMb() < 16) return; // nothing worth logging
+  forceWalTruncate("boot");
+}
+
+// Periodic guard. Small WALs are left to wal_autocheckpoint+journal_size_limit;
+// past the threshold we force TRUNCATE every tick until the file shrinks.
+export function startWalGuard(): NodeJS.Timeout | null {
+  if (process.env.WAL_GUARD === "off") return null;
+  const intervalMs = Math.max(30_000, Number(process.env.WAL_CHECKPOINT_MS ?? 120_000) || 120_000);
+  const truncateMb = Math.max(64, Number(process.env.WAL_TRUNCATE_MB ?? 512) || 512);
+  const timer = setInterval(() => {
+    if (walFileMb() <= truncateMb) return;
+    forceWalTruncate("interval");
+  }, intervalMs);
+  if (typeof (timer as any).unref === "function") (timer as any).unref();
+  return timer;
+}
 
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS leads (

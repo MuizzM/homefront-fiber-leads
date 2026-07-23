@@ -408,6 +408,16 @@ app.use((req, res, next) => {
     // already serving (health gate safe); everything else runs here as before.
     process.env.DEFER_ADDR_UNIQUENESS_MIGRATION = "on";
     runMigrations();
+    // Reclaim any WAL left by the previous run NOW, while the primary is the
+    // only connection (no reader can starve the TRUNCATE), then start the
+    // file-size-based WAL guard here in the primary: its event loop is a
+    // near-idle supervisor, so a blocking checkpoint stalls no HTTP or scans.
+    // (See db.ts — the 2026-07-23 12GB-WAL disk-full incident.)
+    {
+      const { bootWalCheckpoint, startWalGuard } = await import("./db");
+      bootWalCheckpoint();
+      startWalGuard();
+    }
     try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
     try { const { runCallingMigrations } = await import("./calling/migrations"); runCallingMigrations(); }
@@ -1277,40 +1287,18 @@ app.use((req, res, next) => {
     } catch {}
   }, 6 * 60 * 60 * 1000);
 
-  // ── WAL guard: forced periodic checkpoint (2026-07-21 incident) ──────────
-  // Under continuous scan writes SQLite's auto-checkpoint never wins the race —
-  // a reader/writer is always active, so the checkpoint returns busy and the WAL
-  // grows without bound. Observed live: the WAL went 21MB → 7.1GB in ~50 minutes
-  // and took the disk to 97%, which timed out the portal and failed the deploy.
-  // A PASSIVE checkpoint on a timer drains whatever it can without ever blocking
-  // writers; when the WAL is past the high-water mark we escalate to TRUNCATE to
-  // actually reclaim the file. Control worker only (one checkpointer per box) and
-  // unref'd so it never holds the process open. WAL_GUARD=off disables.
-  if (IS_CONTROL_ROLE && process.env.WAL_GUARD !== "off") {
-    const walEveryMs = Math.max(30_000, Number(process.env.WAL_CHECKPOINT_MS ?? 120_000) || 120_000);
-    const walTruncateMb = Math.max(64, Number(process.env.WAL_TRUNCATE_MB ?? 512) || 512);
-    const walTimer = setInterval(() => {
-      try {
-        const { rawDb: raw } = require("./db");
-        // PASSIVE never blocks a writer; it flushes what it can and REPORTS the
-        // WAL size. The result row is { busy, log, checkpointed } where `log` is
-        // the total frame count currently in the WAL — that is the size signal
-        // (NOT pragma("wal_checkpoint",{simple:true}), which yields `busy`).
-        const res = raw.pragma("wal_checkpoint(PASSIVE)");
-        const row: any = Array.isArray(res) ? res[0] : res;
-        const walFrames = Number(row?.log ?? 0);
-        const pageSize = Number(raw.pragma("page_size", { simple: true }) ?? 4096);
-        const walMb = Math.round((walFrames * pageSize) / 1048576);
-        // Still large after the passive pass → writers are starving the auto-
-        // checkpoint. Force TRUNCATE to reclaim the file. Bounded by busy_timeout;
-        // if writers hold it off it simply returns busy and we retry next tick.
-        if (walMb > walTruncateMb) {
-          const r = raw.pragma("wal_checkpoint(TRUNCATE)");
-          structuredLog("db.wal_truncate", { walMb, result: JSON.stringify(r) });
-        }
-      } catch { /* best-effort: a busy checkpoint is normal, retry next tick */ }
-    }, walEveryMs);
-    if (typeof (walTimer as any).unref === "function") (walTimer as any).unref();
+  // ── WAL guard (single-process mode only) ─────────────────────────────────
+  // In cluster mode the guard runs in the PRIMARY (see the bootstrap above) —
+  // its near-idle supervisor loop can afford the blocking checkpoint. With
+  // SCAN_WORKERS=0 there is no primary, so this one process runs it. The old
+  // in-worker guard sized the WAL from wal_checkpoint(PASSIVE)'s `log` column,
+  // which reports -1 under checkpoint-lock contention — it measured a negative
+  // WAL and never escalated while the file grew to 12GB and filled the disk
+  // (2026-07-23). The shared db.ts guard stats the -wal FILE instead.
+  if (SCAN_WORKERS === 0) {
+    const { bootWalCheckpoint, startWalGuard } = await import("./db");
+    bootWalCheckpoint();
+    startWalGuard();
   }
 
   await registerRoutes(httpServer, app);

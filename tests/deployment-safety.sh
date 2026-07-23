@@ -24,6 +24,7 @@ if grep -q 'ssh-keyscan' "$WORKFLOW"; then
   fail "ssh-keyscan must not be used for production trust"
 fi
 grep -q 'scripts/deploy.sh "$RELEASE_SHA"' "$WORKFLOW" || fail "workflow does not call the guarded deploy script"
+grep -q 'ServerAliveInterval' "$WORKFLOW" || fail "deploy SSH lacks keepalives (quiet build/backup minutes drop the pipe)"
 
 if grep -q 'homefront-fiber-full_app-data' scripts/deploy.sh; then
   fail "deploy still contains the stale hard-coded volume name"
@@ -33,6 +34,30 @@ if grep -Fq '{{printf "%s|%s\n" .Type .Name}}' scripts/deploy.sh; then
   fail "Docker mount template emits a duplicate record separator"
 fi
 grep -q 'BACKUP_VOLUME="$DATA_MOUNT_NAME"' scripts/deploy.sh || fail "deploy does not back up the named production volume"
+# The offline quiescent window is the fix for the online-vacuum snapshot that
+# needed multiples of the DB size in transient disk and wedged deploys on the
+# 38GB box. Deploys must build FIRST, then stop the app, checkpoint, and
+# stream the backup. Greps anchor on CODE (pragma/flag strings), not on log
+# messages a refactor could keep while deleting the behavior.
+grep -q 'BACKUP_QUIESCENT=1 BACKUP_VOLUME' scripts/deploy.sh || fail "deploy does not use the offline quiescent backup window"
+grep -q 'pragma("wal_checkpoint(TRUNCATE)")' scripts/deploy.sh || fail "offline window lacks a real WAL-checkpoint pragma"
+if grep -q 'VACUUM INTO' scripts/deploy.sh; then
+  fail "deploy must not take an online vacuum snapshot (disk-hungry; wedged production deploys)"
+fi
+BUILD_LINE="$(grep -n '"${COMPOSE\[@\]}" build app' scripts/deploy.sh | head -n 1 | cut -d: -f1 || true)"
+STOP_LINE="$(grep -n '"${COMPOSE\[@\]}" stop app' scripts/deploy.sh | head -n 1 | cut -d: -f1 || true)"
+{ [ -n "$BUILD_LINE" ] && [ -n "$STOP_LINE" ] && [ "$BUILD_LINE" -lt "$STOP_LINE" ]; } \
+  || fail "deploy must build the app image BEFORE stopping the app (zero-downtime build, minimal window)"
+grep -q 'BACKUP_QUIESCENT' scripts/backup.sh || fail "backup helper lacks the quiescent deploy-window mode"
+grep -q 'State.Running' scripts/backup.sh || fail "quiescent backup does not verify the app container is stopped"
+grep -q 'file:\$DB_PATH?immutable=1' scripts/backup-container.sh || fail "quiescent backup cannot read a WAL-mode DB from a :ro mount without immutable=1"
+grep -q 'PRAGMA quick_check' scripts/backup-container.sh || fail "quiescent backup lacks a pre-stream verification"
+grep -q -- '-s "\$DB_PATH-wal"' scripts/backup-container.sh || fail "quiescent backup does not refuse a non-empty WAL (torn-copy guard)"
+grep -q "data-\*.db\*.age" scripts/backup-container.sh || fail "retention/space guard does not match both artifact generations (.db.age + .db.zst.age)"
+grep -q 'zstd' Dockerfile.backup || fail "backup image lacks zstd for streamed compressed backups"
+grep -q 'zstd -dc' scripts/restore.sh || fail "restore cannot decompress .zst backups"
+grep -q 'flock' scripts/deploy.sh || fail "deploy has no host-level mutual exclusion (racing deploys interleave stop/up)"
+grep -q 'setsid' "$WORKFLOW" || fail "workflow must run the deploy detached — a dropped SSH pipe once killed the offline window mid-flight"
 grep -q -- '--network none' scripts/backup.sh || fail "backup helper is not network-isolated"
 grep -q -- '--read-only' scripts/backup.sh || fail "backup helper root filesystem is writable"
 grep -q 'PRAGMA integrity_check' scripts/backup-container.sh || fail "container backup lacks an integrity check"

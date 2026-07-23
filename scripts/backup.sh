@@ -29,6 +29,42 @@ if [ -n "${BACKUP_VOLUME:-}" ]; then
   docker image inspect "$BACKUP_TOOL_IMAGE" >/dev/null
 
   BACKUP_DIR_ABS="$(cd "$BACKUP_DIR" && pwd -P)"
+
+  # ── QUIESCENT MODE (deploy window) ─────────────────────────────────────────
+  # The caller has STOPPED the app and WAL-checkpointed data.db, so the file is
+  # self-contained and nothing writes. Stream it straight from the :ro volume
+  # (quick_check → zstd|age inside the tool). No online-vacuum snapshot, no
+  # docker exec into a live app, and only ~DB/3 of transient disk — this is
+  # what fits on the 38GB production box. The online path below stays for
+  # cron/ad-hoc use while the app is live.
+  if [ "${BACKUP_QUIESCENT:-}" = "1" ]; then
+    # Quiescent means QUIESCENT: a live app would make the plain-file stream a
+    # torn copy. Refuse unless the compose app container is verifiably stopped.
+    APP_CONTAINER_NAME="${APP_CONTAINER_NAME:-homefront-app-1}"
+    if [ "$(docker inspect --format '{{.State.Running}}' "$APP_CONTAINER_NAME" 2>/dev/null || echo false)" = "true" ]; then
+      echo "[backup] refusing: BACKUP_QUIESCENT=1 but $APP_CONTAINER_NAME is RUNNING — stop the app first (deploy.sh does this)" >&2
+      exit 1
+    fi
+    docker run --rm \
+      --read-only \
+      --network none \
+      --cap-drop ALL \
+      --security-opt no-new-privileges \
+      --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m \
+      --user "$(id -u):$(id -g)" \
+      -e AGE_RECIPIENT \
+      -e BACKUP_STAMP="$STAMP" \
+      -e BACKUP_QUIESCENT=1 \
+      -e DB_PATH=/data/data.db \
+      -v "$BACKUP_VOLUME:/data:ro" \
+      -v "$BACKUP_DIR_ABS:/backups" \
+      "$BACKUP_TOOL_IMAGE"
+    OUT="$BACKUP_DIR/data-$STAMP.db.zst.age"
+    [ -s "$OUT" ] || { echo "[backup] output artifact is missing or empty" >&2; exit 1; }
+    echo "[backup] wrote $OUT"
+    exit 0
+  fi
+
   # The scanner writes continuously, so a read-only open of the LIVE db races its
   # dirty WAL ("attempt to write a readonly database") — checkpoint+retry lost that
   # race 4/4 times under real load. Instead: take an ONLINE snapshot THROUGH the

@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends age ca-certificates sqlite3 \
+  && apt-get install -y --no-install-recommends age ca-certificates sqlite3 zstd \
   && rm -rf /var/lib/apt/lists/*
 
 COPY scripts/backup-container.sh /usr/local/bin/homefront-backup

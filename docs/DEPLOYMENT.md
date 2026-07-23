@@ -43,7 +43,7 @@ Internet ──443──▶ Caddy (TLS, HTTP→HTTPS, gzip/zstd, security header
 ```bash
 ssh root@SERVER_IP
 apt update && apt -y upgrade
-apt install -y age sqlite3
+apt install -y age sqlite3 zstd
 
 # Non-root deploy user with your key
 adduser --disabled-password --gecos "" deploy && usermod -aG sudo deploy

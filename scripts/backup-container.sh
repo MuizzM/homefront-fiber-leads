@@ -31,8 +31,10 @@ RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 KEEP_MIN="${BACKUP_KEEP_MIN:-1}"
 
 # Newest-first list of existing backups (epoch mtime + path, sorted).
+# Matches both artifact generations: data-*.db.age (legacy online snapshot)
+# and data-*.db.zst.age (quiescent compressed stream).
 backups_newest_first() {
-  find "$BACKUP_DIR" -maxdepth 1 -name 'data-*.db.age' -printf '%T@ %p\n' 2>/dev/null \
+  find "$BACKUP_DIR" -maxdepth 1 -name 'data-*.db*.age' -printf '%T@ %p\n' 2>/dev/null \
     | sort -rn | cut -d' ' -f2-
 }
 
@@ -61,9 +63,15 @@ if [ "$KEEP_MAX" -gt 0 ] 2>/dev/null; then
   done < <(backups_newest_first)
 fi
 
-# Space guard — need ~3x DB size free (raw snapshot + encrypted copy + slack).
+# Space guard. Legacy online mode writes a raw snapshot + encrypted copy, so it
+# needs ~3x the DB. Quiescent mode streams zstd|age (one artifact, SQLite
+# compresses ~3x), so DB/2 + slack is already conservative.
 DB_KB=$(du -k "$DB_PATH" | cut -f1)
-NEED_KB=$((DB_KB * 3 + 65536))
+if [ "${BACKUP_QUIESCENT:-}" = "1" ]; then
+  NEED_KB=$((DB_KB / 2 + 65536))
+else
+  NEED_KB=$((DB_KB * 3 + 65536))
+fi
 while :; do
   FREE_KB=$(df -k --output=avail "$BACKUP_DIR" | tail -1 | tr -d ' ')
   [ "$FREE_KB" -ge "$NEED_KB" ] && break
@@ -75,6 +83,43 @@ while :; do
   fi
   rm -f "$OLDEST" && echo "[backup] pruned (space): $OLDEST"
 done
+
+# ── QUIESCENT MODE (deploy window) ──────────────────────────────────────────
+# The app is stopped and data.db is WAL-checkpointed (self-contained), so we
+# verify the REAL file and stream it out compressed+encrypted in one pass —
+# no raw copy on disk. immutable=1 is required: data.db is in WAL journal mode
+# and lives on a :ro mount, so a normal open would fail trying to create the
+# -shm file; immutable tells SQLite nothing can change (true: zero writers).
+if [ "${BACKUP_QUIESCENT:-}" = "1" ]; then
+  command -v zstd >/dev/null 2>&1 || { echo "[backup] zstd is required for quiescent backups" >&2; exit 1; }
+  # The stream is a plain file copy, only valid when the WAL was fully
+  # checkpoint-TRUNCATEd. A non-empty -wal file means the DB is NOT quiescent
+  # (checkpoint failed or something is still writing) — refuse rather than
+  # emit an artifact missing committed transactions.
+  if [ -s "$DB_PATH-wal" ]; then
+    echo "[backup] refusing: $DB_PATH-wal is non-empty ($(du -h "$DB_PATH-wal" | cut -f1)) — database is not quiescent" >&2
+    exit 1
+  fi
+  if [ "$(sqlite3 "file:$DB_PATH?immutable=1" 'PRAGMA quick_check;')" != "ok" ]; then
+    echo "[backup] quick_check FAILED on quiescent database" >&2
+    exit 1
+  fi
+  # Write-then-rename: a hard-killed stream must never leave a truncated file
+  # matching the backup name pattern — retention would protect the corpse as
+  # the "newest backup" and restore could pick it. Stale .part files from any
+  # earlier kill are swept first (they match no retention/restore pattern).
+  rm -f "$BACKUP_DIR"/data-*.part
+  OUT="$BACKUP_DIR/data-$STAMP.db.zst.age"
+  if ! zstd -3 -T0 -c "$DB_PATH" | age -r "$AGE_RECIPIENT" -o "$OUT.part"; then
+    rm -f "$OUT.part"
+    echo "[backup] quiescent stream failed" >&2
+    exit 1
+  fi
+  [ -s "$OUT.part" ] || { echo "[backup] encrypted backup is missing or empty" >&2; rm -f "$OUT.part"; exit 1; }
+  mv "$OUT.part" "$OUT"
+  echo "[backup] wrote $OUT"
+  exit 0
+fi
 
 RAW="$BACKUP_DIR/data-$STAMP.db"
 OUT="$RAW.age"
