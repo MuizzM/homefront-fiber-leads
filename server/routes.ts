@@ -681,6 +681,8 @@ function persistRouteKineticObservation(
       techType: result.techType,
       speedTier: result.speedTier,
       competitorName: result.competitorName,
+      competitorTech: result.competitorTech,
+      competitorSpeedMbps: result.competitorSpeedMbps,
       addressCatalogDate: result.addressCatalogDate,
       apiSource: result.apiSource,
       blocked: result.blocked,

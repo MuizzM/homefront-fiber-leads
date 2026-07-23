@@ -1,4 +1,5 @@
 import { rawDb } from "./db";
+import { evaluateSingleCompetitor } from "@shared/competitiveEligibility";
 
 // ── The ONE availability_snapshots writer ────────────────────────────────────
 // Manual Check, Field Map, discovery, city, nightly, cluster, and Coming Soon
@@ -33,6 +34,11 @@ export interface AvailabilitySnapshotInput {
   error?: string | null;
   blocked?: boolean;
   latencyMs?: number | null;
+  /** Competitor intel from the provider payload — drives the competitive
+   * eligibility decision persisted alongside the snapshot. */
+  competitorName?: string | null;
+  competitorTech?: string | null;
+  competitorSpeedMbps?: number | null;
   /** Crash-idempotent write keyed on (tenant,run,target). */
   orIgnore?: boolean;
 }
@@ -49,10 +55,12 @@ export function toEpochMs(value: number | string | Date | null | undefined): num
 
 const COLS = `(tenant_id,scan_target_id,run_id,checked_at,checked_at_epoch,conclusive,fiber_available,fiber_status,
   max_download_mbps,service_status,household_segment_type,billing_status,customer_segment,customer_confidence,
-  customer_signals,transition_status,fresh,api_source,evidence_hash,fiber_check_id,error,blocked,latency_ms)`;
+  customer_signals,transition_status,fresh,api_source,evidence_hash,fiber_check_id,error,blocked,latency_ms,
+  competitor_name,competitor_tech,competitive_decision,competitive_version)`;
 const VALUES = `(@tenant_id,@scan_target_id,@run_id,@checked_at,@checked_at_epoch,@conclusive,@fiber_available,@fiber_status,
   @max_download_mbps,@service_status,@household_segment_type,@billing_status,@customer_segment,@customer_confidence,
-  @customer_signals,@transition_status,@fresh,@api_source,@evidence_hash,@fiber_check_id,@error,@blocked,@latency_ms)`;
+  @customer_signals,@transition_status,@fresh,@api_source,@evidence_hash,@fiber_check_id,@error,@blocked,@latency_ms,
+  @competitor_name,@competitor_tech,@competitive_decision,@competitive_version)`;
 
 let _insert: any = null;
 let _insertIgnore: any = null;
@@ -90,6 +98,12 @@ export function recordAvailabilitySnapshot(s: AvailabilitySnapshotInput): number
     error: s.error ?? null,
     blocked: s.blocked ? 1 : 0,
     latency_ms: s.latencyMs == null ? null : Math.max(0, Math.round(s.latencyMs)),
+    competitor_name: s.competitorName ?? null,
+    competitor_tech: s.competitorTech ?? null,
+    // Canonical eligibility decision, computed ONCE here (the storage choke
+    // point) so projection/delivery/recheck all read the same verdict.
+    competitive_decision: evaluateSingleCompetitor(s.competitorName, s.competitorTech, s.competitorSpeedMbps).decision,
+    competitive_version: evaluateSingleCompetitor(s.competitorName, s.competitorTech, s.competitorSpeedMbps).version,
   };
   const { insert, insertIgnore } = stmts();
   const res = (s.orIgnore ? insertIgnore : insert).run(params);

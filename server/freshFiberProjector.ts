@@ -24,6 +24,10 @@ interface ProjectionCandidate {
   household_segment_type: string | null;
   billing_status: string | null;
   carrier?: string; // 'kinetic' (default) | 'frontier' — paints the lead red
+  // Competitive eligibility (Spectrum-only gate) from the latest conclusive snapshot.
+  competitive_decision: string | null; // 'eligible' | 'excluded_fiber_competitor' | 'competitor_review'
+  competitor_name: string | null;
+  competitor_tech: string | null;
 }
 
 export interface ProjectionResult {
@@ -71,7 +75,8 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
     SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,s.last_fiber_available,
            s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,s.carrier,s.frontier_control,
            EXISTS(SELECT 1 FROM availability_snapshots f WHERE f.scan_target_id=s.id AND f.tenant_id=? AND f.fresh=1 AND f.conclusive=1) AS proven_flip,
-           latest.max_download_mbps,latest.household_segment_type,latest.billing_status,latest.service_status
+           latest.max_download_mbps,latest.household_segment_type,latest.billing_status,latest.service_status,
+      latest.competitive_decision,latest.competitor_name,latest.competitor_tech
       FROM scan_targets s
       -- Latest CONCLUSIVE snapshot, ordered by the canonical epoch (never raw text).
       -- A failed/inconclusive attempt is excluded, so it can never outrank or mask a
@@ -201,6 +206,43 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         if (changed) result.leadIds.push(candidate.converted_to_lead_id);
         return;
       }
+      // ── COMPETITIVE ELIGIBILITY GATE (Spectrum-only) ────────────────────────
+      // A Fresh Lead is deliverable ONLY when the competitive landscape is clear
+      // of non-Kinetic FIBER. The decision is precomputed at snapshot-write time
+      // (availabilitySnapshot.ts) by the canonical classifier; here we ENFORCE:
+      //  - excluded_fiber_competitor / competitor_review → never publish, and
+      //    RETRACT an already-published lead (a recheck revealed a fiber rival or
+      //    an ambiguous competitor) so it leaves the rep map + queues.
+      //  - null decision (legacy snapshot with no competitor evidence) → treated
+      //    as eligible so the historical no-competitor pool is unaffected; new
+      //    scans always carry a decision.
+      const competitiveDecision = candidate.competitive_decision;
+      const competitiveBlocked = competitiveDecision === "excluded_fiber_competitor" || competitiveDecision === "competitor_review";
+      if (competitiveBlocked) {
+        // Retract: suppress an existing lead so it never sits on the map/queue
+        // while a fiber competitor (or unresolved competitor) is present. Never
+        // deleted — flipped to a terminal non-deliverable status for audit, and
+        // the scan_target link kept so a later clear recheck can re-publish.
+        if (candidate.converted_to_lead_id != null) {
+          const changed = rawDb.prepare(`UPDATE leads SET lead_status='competitor_suppressed', updated_at=datetime('now')
+            WHERE id=? AND tenant_id=? AND lead_status NOT IN ('sold','now_active','competitor_suppressed')`)
+            .run(candidate.converted_to_lead_id, tenantId).changes;
+          if (changed) {
+            (result as any).retracted = ((result as any).retracted ?? 0) + 1;
+            try {
+              rawDb.prepare(`INSERT INTO lead_events (lead_id,type,actor,detail,at)
+                VALUES (?,'status_change','Competitive Eligibility',?,datetime('now'))`)
+                .run(candidate.converted_to_lead_id, JSON.stringify({
+                  to: "competitor_suppressed", reason: competitiveDecision,
+                  competitor: candidate.competitor_name, competitorTech: candidate.competitor_tech,
+                }));
+            } catch { /* lead_events optional on this DB */ }
+          }
+        }
+        result.rejected++;
+        return;
+      }
+
       const authoritativeFresh = seg === "NEW FIBER" && billing === "N" && fiberAvail !== false;
       const decision: FreshFiberConfirmationDecision = evidenceDecision.confirmed
         ? evidenceDecision

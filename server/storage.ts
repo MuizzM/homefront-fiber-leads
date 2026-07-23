@@ -1123,6 +1123,14 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_availability_snapshots_run ON availability_snapshots(run_id, checked_at)`,
     `ALTER TABLE availability_snapshots ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE availability_snapshots ADD COLUMN latency_ms INTEGER`,
+    // ── Competitive eligibility (Spectrum-only gate). Persist the competitor
+    //    evidence AND the canonical classifier's decision on every conclusive
+    //    snapshot so the projector can gate publication + retract a lead when a
+    //    later recheck reveals a fiber competitor. See shared/competitiveEligibility.ts.
+    `ALTER TABLE availability_snapshots ADD COLUMN competitor_name TEXT`,
+    `ALTER TABLE availability_snapshots ADD COLUMN competitor_tech TEXT`,
+    `ALTER TABLE availability_snapshots ADD COLUMN competitive_decision TEXT`,
+    `ALTER TABLE availability_snapshots ADD COLUMN competitive_version INTEGER`,
     // ── Canonical timestamp: epoch milliseconds (INTEGER). This is the ONLY column
     //    used for chronological ordering. The legacy TEXT checked_at was written in
     //    two formats (ISO 'T…Z' vs SQLite '… …'), and a raw text sort mis-ranked an
@@ -1800,7 +1808,47 @@ export function runMigrations() {
   try { migrateLeadsCanonicalKey(raw); }
   catch (e: any) { console.warn("[migration] leads canonical_key merge failed:", e?.message); }
 
+  // Competitive-eligibility backfill: suppress existing confirmed leads whose
+  // stored competitor evidence now fails the Spectrum-only gate (a non-Kinetic
+  // fiber competitor, or an unresolved competitor). Idempotent, tiny, boot-safe.
+  try { backfillCompetitiveSuppression(raw); }
+  catch (e: any) { console.warn("[migration] competitive suppression backfill:", e?.message); }
+
   bootstrapDefaultTenant(raw);
+}
+
+// One-time-per-change, idempotent: re-evaluate confirmed fresh leads against the
+// canonical competitive-eligibility classifier using their persisted competitor
+// evidence, and retract (never delete) the ones that fail — so a fiber
+// competitor or an ambiguous competitor leaves the rep map. Only touches leads
+// that are still deliverable prospects (never sold / now_active / already
+// suppressed). Re-runs cheaply once everything already matches.
+function backfillCompetitiveSuppression(raw: import("better-sqlite3").Database): void {
+  const cols = new Set((raw.prepare(`PRAGMA table_info(leads)`).all() as { name: string }[]).map(c => c.name));
+  if (!cols.has("competitor_name") || !cols.has("lead_tag")) return;
+  // Lazy import avoids pulling the shared module at every boot when unused.
+  const { evaluateSingleCompetitor } = require("@shared/competitiveEligibility") as typeof import("@shared/competitiveEligibility");
+  const rows = raw.prepare(
+    `SELECT id, competitor_name, competitor_tech FROM leads
+       WHERE lead_tag='fresh_fiber_confirmed'
+         AND lead_status NOT IN ('sold','now_active','competitor_suppressed')`,
+  ).all() as Array<{ id: number; competitor_name: string | null; competitor_tech: string | null }>;
+  if (!rows.length) return;
+  const suppress = raw.prepare(`UPDATE leads SET lead_status='competitor_suppressed', updated_at=datetime('now') WHERE id=?`);
+  const hasEvents = !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='lead_events'`).get();
+  const evt = hasEvents ? raw.prepare(`INSERT INTO lead_events (lead_id,type,actor,detail,at) VALUES (?,'status_change','Competitive Eligibility',?,datetime('now'))`) : null;
+  let suppressed = 0;
+  const tx = raw.transaction((list: typeof rows) => {
+    for (const r of list) {
+      const d = evaluateSingleCompetitor(r.competitor_name, r.competitor_tech).decision;
+      if (d === "eligible") continue;
+      suppress.run(r.id);
+      evt?.run(r.id, JSON.stringify({ to: "competitor_suppressed", reason: d, competitor: r.competitor_name, competitorTech: r.competitor_tech }));
+      suppressed++;
+    }
+  });
+  tx(rows);
+  if (suppressed > 0) console.log(`[migration] competitive suppression: retracted ${suppressed} lead(s) with a fiber/unresolved competitor`);
 }
 
 // ── scan_targets: one house per (address, city, state) ─────────────────────────
@@ -2182,6 +2230,9 @@ export class Storage implements IStorage {
           l.assign_mark AS assignMark
         FROM leads l
         WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+          -- Competitive-eligibility gate: a lead retracted because a fiber
+          -- competitor (or an unresolved competitor) was found is off the rep map.
+          AND l.lead_status <> 'competitor_suppressed'
       ), ranked_visits AS (
         SELECT
           k.lead_id AS leadId,

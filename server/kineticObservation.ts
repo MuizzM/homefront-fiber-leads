@@ -28,6 +28,8 @@ export interface KineticObservation {
   techType?: string | null;
   speedTier?: string | null;
   competitorName?: string | null;
+  competitorTech?: string | null;
+  competitorSpeedMbps?: number | null;
   addressCatalogDate?: string | null;
   apiSource?: string | null;
   blocked?: boolean | null;
@@ -350,6 +352,9 @@ export function persistKineticObservation(input: PersistKineticObservationInput)
       transitionStatus: transition.status,
       fresh: transition.fresh,
       apiSource,
+      competitorName: observation.competitorName ?? null,
+      competitorTech: observation.competitorTech ?? null,
+      competitorSpeedMbps: observation.competitorSpeedMbps ?? null,
       evidenceHash: evidenceHash(normalizedEvidence),
       error: conclusive ? null : "Provider result was inconclusive; prior state preserved.",
       blocked: observation.blocked === true,
