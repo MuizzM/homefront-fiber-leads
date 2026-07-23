@@ -18,6 +18,18 @@ sqlite.pragma("synchronous = NORMAL");
 // Longer busy timeout: under heavy scanning a writer transaction can hold the
 // lock for a moment; 15s lets readers wait rather than throw SQLITE_BUSY.
 sqlite.pragma(`busy_timeout = ${Number(process.env.SQLITE_BUSY_TIMEOUT_MS ?? 15000) || 15000}`);
+// HARD WAL FILE CAP. With ~4 worker processes always holding a read mark, a
+// PASSIVE (or even TRUNCATE) checkpoint can never advance past the pinned tail,
+// so the WAL file appended without bound and grew to 8GB — filling the 38GB box
+// and blocking the pre-deploy backup (2026-07-23). journal_size_limit truncates
+// the WAL file back to this cap after every checkpoint (reclaiming the already-
+// checkpointed prefix even when the tail is pinned), so the file can't run the
+// disk out. Default 1GB; tune with SQLITE_WAL_LIMIT_BYTES.
+sqlite.pragma(`journal_size_limit = ${Math.max(64 * 1024 * 1024, Number(process.env.SQLITE_WAL_LIMIT_BYTES ?? 1_073_741_824) || 1_073_741_824)}`);
+// Auto-checkpoint every ~4000 pages (~16MB) instead of the 1000-page default so
+// committed frames flush to the main DB far more often — the periodic
+// TRUNCATE checkpointer (index.ts) then keeps the file near journal_size_limit.
+sqlite.pragma(`wal_autocheckpoint = ${Math.max(1000, Number(process.env.SQLITE_WAL_AUTOCHECKPOINT ?? 4000) || 4000)}`);
 
 // ── Use the box's RAM: keep the whole DB hot in memory ───────────────────────
 // The single biggest scanner-throughput lever on this workload. Node runs the
