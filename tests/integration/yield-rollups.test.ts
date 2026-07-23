@@ -170,6 +170,32 @@ describe("score equivalence: legacy query vs rollup query", () => {
   });
 });
 
+describe("planner statistics + placeholder integrity", () => {
+  it("maintenance produces sqlite_stat1 (no stats → tenant-prefix index crawls)", () => {
+    rollups.runYieldRollupMaintenanceToCompletion();
+    expect(rawDb.prepare(`SELECT COUNT(*) n FROM sqlite_stat1 WHERE tbl='scan_targets'`).get()).toMatchObject({ n: expect.any(Number) });
+    const n = (rawDb.prepare(`SELECT COUNT(*) n FROM sqlite_stat1 WHERE tbl='scan_targets'`).get() as any).n;
+    expect(n).toBeGreaterThan(0);
+    expect(rollups.yieldRollupsReady()).toBe(true);
+  });
+
+  it("the rollup scorer's SQL placeholders exactly match its bound parameters (12: 4 CTE tenants + 4 watch cuts + tenant + 2 states + limit)", () => {
+    let captured = "";
+    const orig = rawDb.prepare.bind(rawDb);
+    (rawDb as any).prepare = (sql: string) => {
+      if (typeof sql === "string" && sql.includes("cell_scans") && sql.includes("ORDER BY score")) captured = sql;
+      return orig(sql);
+    };
+    try {
+      yieldEngine.scoreDueTargets(TENANT, 5); // throws "wrong number of bindings" on any mismatch
+    } finally {
+      (rawDb as any).prepare = orig;
+    }
+    expect(captured).not.toBe("");
+    expect((captured.match(/\?/g) || []).length).toBe(12);
+  });
+});
+
 describe("query plans", () => {
   it("the cell group rides idx_scan_targets_cell (no full-table ROUND scan)", () => {
     rollups.runYieldRollupMaintenanceToCompletion(); // order-independent: ensure indexes exist

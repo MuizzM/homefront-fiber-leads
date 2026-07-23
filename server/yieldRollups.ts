@@ -163,7 +163,8 @@ export function yieldRollupsReady(): boolean {
     columnExists("scan_targets", "cell_lat") &&
     INDEXES.every((i) => indexExists(i.name)) &&
     getState("streetkey_done") === "1" &&
-    getState("negstreak_done") === "1";
+    getState("negstreak_done") === "1" &&
+    getState("analyze_done") === "1";
   readyCache = { at: now, ready };
   return ready;
 }
@@ -225,6 +226,23 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         structuredLog("yield_rollups.neg_chunk", { cursor: getState("negstreak_cursor"), done });
         return;
       }
+      // 4) ANALYZE once after the indexes+backfills exist. Without sqlite_stat1
+      // the planner chose a tenant-prefixed index for ~950k-row outer scans
+      // (single tenant → the prefix matches EVERY row → an index crawl with a
+      // random rowid lookup per row). Observed live: the control worker pinned
+      // at ~100% CPU for 17+ minutes in queries that run in seconds with stats.
+      // Readiness (yieldRollupsReady) requires this flag, so the rollup scorer
+      // can never run against a stats-less planner.
+      if (getState("analyze_done") !== "1") {
+        const t = Date.now();
+        rawDb.exec("ANALYZE");
+        setState("analyze_done", "1");
+        structuredLog("yield_rollups.analyze_done", { ms: Date.now() - t });
+        return;
+      }
+      // Steady-state: keep stats fresh the recommended way (cheap no-op when
+      // nothing changed enough to matter).
+      try { rawDb.exec("PRAGMA optimize"); } catch { /* advisory */ }
     } catch (e: any) {
       structuredLog("yield_rollups.error", { error: e?.message ?? String(e) }, "error");
     }
@@ -244,6 +262,8 @@ export function runYieldRollupMaintenanceToCompletion(maxIterations = 10_000): v
   setState("streetkey_done", "1");
   i = 0;
   while (!negStreakBackfillChunk() && i++ < maxIterations) { /* drain */ }
+  rawDb.exec("ANALYZE");
+  setState("analyze_done", "1");
   _resetYieldRollupReadyForTests();
 }
 
