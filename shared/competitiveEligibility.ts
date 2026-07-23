@@ -4,11 +4,12 @@
 // projection, lead upsert, Field Map delivery, exports, and rechecks — never
 // scatter competitor string-matching anywhere else.
 //
-// BUSINESS RULE (owner directive): target Kinetic fiber where the ONLY competing
-// provider is Spectrum cable (or there is no competitor). Exclude any address
-// where the provider payload shows ANY non-Kinetic FIBER competitor — even if
-// Spectrum is also present. Cable, satellite, DSL, and fixed-wireless
-// competitors do NOT disqualify (they are not fiber competition).
+// BUSINESS RULE (owner directive, 2026-07-23 wording): ANY competitor is
+// acceptable as long as its technology is not fiber. Spectrum/Comcast/Cox or
+// any other cable, Starlink/satellite, DSL/copper, fixed wireless, and
+// cellular home internet all still qualify; the address is excluded only when
+// another provider is identified as offering FIBER. Brand does not matter —
+// TECHNOLOGY is the deciding factor; never hardcode any single accepted brand.
 //
 // FAIL CLOSED: a competitor whose technology can't be recognized is NOT
 // published — it becomes COMPETITOR_REVIEW (non-deliverable, kept for audit +
@@ -21,7 +22,7 @@
 //                     Verizon | TDS Telecom | Hotwire Communications | AT&T |
 //                     Ripple Fiber | lumos | Randolph Telephone …
 
-export const COMPETITIVE_ELIGIBILITY_VERSION = 1;
+export const COMPETITIVE_ELIGIBILITY_VERSION = 2;
 
 export type CompetitorClass = "fiber" | "cable" | "satellite" | "dsl" | "wireless" | "none" | "unknown";
 export type CompetitiveDecision = "eligible" | "excluded_fiber_competitor" | "competitor_review";
@@ -59,7 +60,7 @@ const FIBER_TECH = ["FIBER", "FIBRE", "FTTP", "FTTH", "FTTB", "FIBER TO THE", "O
 const CABLE_TECH = ["CABLE", "DOCSIS", "COAX", "HFC"];
 const SATELLITE_TECH = ["SATELLITE", "NGSO", "GEO SAT", "LEO"];
 const DSL_TECH = ["DSL", "ADSL", "VDSL", "COPPER"];
-const WIRELESS_TECH = ["FIXED WIRELESS", "WIRELESS", "LTE", "5G HOME", "WISP", "MMWAVE"];
+const WIRELESS_TECH = ["FIXED WIRELESS", "WIRELESS", "LTE", "5G HOME", "WISP", "MMWAVE", "CELLULAR", "HOME INTERNET"];
 
 // Name-based signals used ONLY when tech is missing/unrecognized. A name that
 // contains "FIBER"/"FIBRE" or is a known fiber-only brand is a fiber competitor.
@@ -131,4 +132,59 @@ export function classifyCompetitiveEligibility(competitors: readonly CompetitorS
 /** Convenience for the common single-competitor Kinetic payload. */
 export function evaluateSingleCompetitor(name?: string | null, tech?: string | null, speedMbps?: number | null): CompetitiveEligibilityResult {
   return classifyCompetitiveEligibility([{ name, tech, speedMbps }]);
+}
+
+// ── Response-level Fresh Lead gate ───────────────────────────────────────────
+// THE canonical decision for "does this authoritative Kinetic Search response
+// qualify as a Fresh Lead?", composing every condition in one place:
+//   success=true, errorCode=0, validationResult=AddressFound,
+//   Kinetic is FIBER (techType or maxQualTechnologyType),
+//   householdSegmentType=NEW FIBER, billingStatus=N,
+//   and no competitor whose technology reads as fiber (unknown → review).
+// The live pipeline enforces the same conditions at its choke points
+// (observation parse → availabilitySnapshot competitive_decision → the
+// freshFiberProjector publication gate); this function is the single reference
+// implementation fixtures and rechecks test against — keep them in lockstep.
+
+export interface KineticFreshLeadInput {
+  success?: boolean | null;
+  errorCode?: number | string | null;
+  validationResult?: string | null;
+  techType?: string | null;
+  maxQualTechnologyType?: string | null;
+  householdSegmentType?: string | null;
+  billingStatus?: string | null;
+  competitors?: readonly CompetitorSignal[];
+}
+
+export interface KineticFreshLeadResult {
+  decision: "fresh_lead" | "competitor_review" | "not_eligible";
+  eligible: boolean;
+  reasons: string[];
+  competitive: CompetitiveEligibilityResult;
+  version: number;
+}
+
+export function classifyKineticFreshLead(input: KineticFreshLeadInput): KineticFreshLeadResult {
+  const reasons: string[] = [];
+  if (input.success === false) reasons.push("success=false");
+  if (input.errorCode != null && String(input.errorCode) !== "0") reasons.push(`errorCode=${input.errorCode}`);
+  if (input.validationResult != null && up(input.validationResult) !== "ADDRESSFOUND" && up(input.validationResult) !== "ADDRESS FOUND") {
+    reasons.push(`validationResult=${input.validationResult}`);
+  }
+  const kineticFiber = hasToken(up(input.techType), FIBER_TECH) || hasToken(up(input.maxQualTechnologyType), FIBER_TECH);
+  if (!kineticFiber) reasons.push("kinetic technology is not fiber");
+  if (up(input.householdSegmentType) !== "NEW FIBER") reasons.push(`householdSegmentType=${input.householdSegmentType ?? "(none)"}`);
+  if (up(input.billingStatus) !== "N") reasons.push(`billingStatus=${input.billingStatus ?? "(none)"}`);
+
+  const competitive = classifyCompetitiveEligibility(input.competitors ?? []);
+  if (competitive.decision === "excluded_fiber_competitor") {
+    reasons.push(`fiber competitor: ${competitive.fiberCompetitors.join(", ")}`);
+  }
+
+  let decision: KineticFreshLeadResult["decision"];
+  if (reasons.length) decision = "not_eligible";
+  else if (competitive.decision === "competitor_review") decision = "competitor_review";
+  else decision = "fresh_lead";
+  return { decision, eligible: decision === "fresh_lead", reasons, competitive, version: COMPETITIVE_ELIGIBILITY_VERSION };
 }

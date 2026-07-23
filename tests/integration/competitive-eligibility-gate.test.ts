@@ -67,6 +67,30 @@ describe("competitive eligibility gate — projector enforcement", () => {
     expect(leadCount("40 Mystery Rd")).toBe(0);
   });
 
+  it("THE owner fixture: 485 Brown Acres Rd, Salisbury NC — Kinetic FIBER/NEW FIBER/N + Spectrum Cable → exactly ONE deduplicated Fresh Lead", () => {
+    // ONE canonical pool row per house (UNIQUE address+city+state); two scans
+    // of it — the real dedup flow — must yield exactly one published lead.
+    const id = Number(rawDb.prepare(`INSERT INTO scan_targets (address,city,state,zip,lat,lng,tenant_id,source) VALUES (?,?,?,?,?,?,?,'osm')`)
+      .run("485 Brown Acres Rd", "Salisbury", "NC", "28146", 35.6201, -80.4201, TENANT).lastInsertRowid);
+    const scanOnce = (attempt: number) => {
+      storage.recordScanTargetResult(id, { fiberStatus: "new_fiber", fiberAvailable: true, isNewFiber: true, billingStatus: "N", availabilityStatus: "checked_available", newlyLive: false, customerSegment: "new_opportunity", customerConfidence: "high", customerSignals: [] });
+      record({
+        tenantId: TENANT, scanTargetId: id, runId: `r-brownacres-${attempt}`, checkedAt: new Date(Date.now() + attempt * 60_000).toISOString(),
+        conclusive: true, fiberAvailable: true, fiberStatus: "new_fiber",
+        householdSegmentType: "NEW FIBER", billingStatus: "N", transitionStatus: "baseline_available",
+        apiSource: "kinetic_live", competitorName: "Spectrum", competitorTech: "Cable", evidenceHash: `h-brownacres-${attempt}`,
+      });
+      project(TENANT, [id]);
+    };
+    scanOnce(1);
+    scanOnce(2);
+    const n = (rawDb.prepare(`SELECT COUNT(*) n FROM leads WHERE lower(address)=lower('485 Brown Acres Rd') AND tenant_id=?`).get(TENANT) as any).n;
+    expect(n).toBe(1);
+    expect(leadStatus("485 Brown Acres Rd")).toBe("prospect");
+    const onMap = storage.getLeadsForMap(TENANT).some((p: any) => String(p.address).toLowerCase().includes("brown acres"));
+    expect(onMap).toBe(true);
+  });
+
   it("RETRACTS a published lead when a later recheck reveals a fiber competitor", () => {
     // First scan: clean (Spectrum cable) → publishes.
     const t = freshTarget("50 Flip Ave", "Spectrum", "Cable");

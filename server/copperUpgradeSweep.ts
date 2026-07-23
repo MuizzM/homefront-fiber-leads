@@ -13,6 +13,17 @@ import { registerFootprintSqlFunctions, warmFootprintGate } from "./footprintGat
 const STALE_DAYS = Math.max(1, Number(process.env.COPPER_UPGRADE_STALE_DAYS) || 7);
 const BATCH = Math.max(1_000, Number(process.env.COPPER_UPGRADE_BATCH) || 20_000);
 
+
+let carrierColKnown: boolean | null = null;
+function hasCarrierColumn(): boolean {
+  if (carrierColKnown != null) return carrierColKnown;
+  try {
+    carrierColKnown = (rawDb.prepare(`PRAGMA table_xinfo(scan_targets)`).all() as Array<{ name: string }>)
+      .some((c) => c.name === "carrier");
+  } catch { carrierColKnown = false; }
+  return carrierColKnown;
+}
+
 export function runCopperUpgradeSweep(tenantId: number): { queued: number } {
   // Every target whose last conclusive answer was NOT new-fiber — copper, legacy
   // service, no service, unavailable — and that hasn't been checked within the
@@ -27,9 +38,13 @@ export function runCopperUpgradeSweep(tenantId: number): { queued: number } {
   // so a bare replay/test DB sweeps everything exactly as before.
   registerFootprintSqlFunctions();
   warmFootprintGate();
+  // Kinetic-only NC/SC scope. Column-defensive like the footprint gate: a bare
+  // replay/test DB without the carrier column sweeps everything as before.
+  const kineticOnly = hasCarrierColumn() ? `AND COALESCE(carrier,'kinetic')='kinetic' AND upper(state) IN ('NC','SC')` : "";
   const rows = rawDb.prepare(
     `SELECT id FROM scan_targets
      WHERE tenant_id=? AND converted_to_lead_id IS NULL
+       ${kineticOnly}
        AND COALESCE(last_is_new_fiber, 0) = 0
        AND last_fiber_status IS NOT NULL
        AND footprint_city(state, city)=1

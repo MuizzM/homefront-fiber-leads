@@ -1835,6 +1835,15 @@ export function runMigrations() {
   try { backfillCompetitiveSuppression(raw); }
   catch (e: any) { console.warn("[migration] competitive suppression backfill:", e?.message); }
 
+  // Kinetic-only NC/SC scope (owner directive 2026-07-23): suppress frontier-
+  // carrier leads and out-of-footprint fresh leads from delivery — status flip
+  // with lead_events audit, reversible, never deleted. SCOPE_KINETIC_NC_SC=off
+  // skips (kill-switch; the map filter above is harmless either way).
+  if (process.env.SCOPE_KINETIC_NC_SC !== "off") {
+    try { backfillScopeSuppression(raw); }
+    catch (e: any) { console.warn("[migration] scope suppression backfill:", e?.message); }
+  }
+
   bootstrapDefaultTenant(raw);
 }
 
@@ -1870,6 +1879,36 @@ function backfillCompetitiveSuppression(raw: import("better-sqlite3").Database):
   });
   tx(rows);
   if (suppressed > 0) console.log(`[migration] competitive suppression: retracted ${suppressed} lead(s) with a fiber/unresolved competitor`);
+}
+
+// Kinetic-only NC/SC delivery scope. Suppress (never delete) leads that are
+// (a) frontier-carrier — any tag: frontier pins leave the map entirely — or
+// (b) pipeline fresh leads outside NC/SC. Sold / now_active / already-
+// suppressed leads are never touched. Reversal is a status flip guided by the
+// lead_events audit rows this writes. Idempotent: suppressed rows no longer
+// match the WHERE.
+function backfillScopeSuppression(raw: import("better-sqlite3").Database): void {
+  const cols = new Set((raw.prepare(`PRAGMA table_info(leads)`).all() as { name: string }[]).map(c => c.name));
+  if (!cols.has("carrier") || !cols.has("lead_tag")) return;
+  const rows = raw.prepare(
+    `SELECT id, carrier, state, lead_tag FROM leads
+       WHERE lead_status NOT IN ('sold','now_active','competitor_suppressed','scope_suppressed')
+         AND (COALESCE(carrier,'kinetic') = 'frontier'
+              OR (lead_tag = 'fresh_fiber_confirmed' AND upper(COALESCE(state,'')) NOT IN ('NC','SC')))`,
+  ).all() as Array<{ id: number; carrier: string | null; state: string | null; lead_tag: string | null }>;
+  if (!rows.length) return;
+  const suppress = raw.prepare(`UPDATE leads SET lead_status='scope_suppressed', updated_at=datetime('now') WHERE id=?`);
+  const hasEvents = !!raw.prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='lead_events'`).get();
+  const evt = hasEvents ? raw.prepare(`INSERT INTO lead_events (lead_id,type,actor,detail,at) VALUES (?,'status_change','Kinetic Scope',?,datetime('now'))`) : null;
+  const tx = raw.transaction((list: typeof rows) => {
+    for (const r of list) {
+      const reason = (r.carrier ?? "kinetic") === "frontier" ? "frontier carrier" : `outside NC/SC (${r.state ?? "?"})`;
+      suppress.run(r.id);
+      evt?.run(r.id, JSON.stringify({ to: "scope_suppressed", reason, carrier: r.carrier, state: r.state }));
+    }
+  });
+  tx(rows);
+  console.log(`[migration] scope suppression: retracted ${rows.length} lead(s) (frontier carrier / outside NC-SC)`);
 }
 
 // ── scan_targets: one house per (address, city, state) ─────────────────────────
@@ -2253,7 +2292,9 @@ export class Storage implements IStorage {
         WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
           -- Competitive-eligibility gate: a lead retracted because a fiber
           -- competitor (or an unresolved competitor) was found is off the rep map.
-          AND l.lead_status <> 'competitor_suppressed'
+          -- Scope gate (Kinetic-only NC/SC): frontier-carrier and out-of-state
+          -- leads are suppressed (status flip, audit-logged), never deleted.
+          AND l.lead_status NOT IN ('competitor_suppressed','scope_suppressed')
       ), ranked_visits AS (
         SELECT
           k.lead_id AS leadId,

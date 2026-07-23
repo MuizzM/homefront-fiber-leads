@@ -157,6 +157,20 @@ export function onFreshLead(tenantId: number, seed: LeadSeed): { expansionId: st
   return { expansionId: id, action: "started" };
 }
 
+
+// Kinetic-only ring inventory (owner directive 2026-07-23). Column-defensive:
+// bare replay/test DBs without the carrier column expand everything as before.
+let expCarrierColKnown: boolean | null = null;
+function expansionKineticOnly(): string {
+  if (expCarrierColKnown == null) {
+    try {
+      expCarrierColKnown = (rawDb.prepare(`PRAGMA table_xinfo(scan_targets)`).all() as Array<{ name: string }>)
+        .some((c) => c.name === "carrier");
+    } catch { expCarrierColKnown = false; }
+  }
+  return expCarrierColKnown ? `AND COALESCE(carrier,'kinetic')='kinetic'` : "";
+}
+
 function activeCount(): number {
   return Number((rawDb.prepare(`SELECT COUNT(*) c FROM lead_expansions WHERE status='active'`).get() as any).c);
 }
@@ -191,7 +205,8 @@ async function expandRingInner(expansionId: string): Promise<void> {
 
   // 1) Inventory candidates in the ring bbox (reuse the existing address pool).
   const invRows = rawDb.prepare(`SELECT id,address,city,state,zip,lat,lng,last_scanned_at FROM scan_targets
-    WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`).all(box.minLat, box.maxLat, box.minLng, box.maxLng) as any[];
+    WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?
+      ${expansionKineticOnly()}`).all(box.minLat, box.maxLat, box.minLng, box.maxLng) as any[];
 
   // 2) OSM ring pull for addresses not yet in inventory (upsert new ones).
   let osmRows: Array<{ address: string; city: string; state: string; zip: string; lat: number; lng: number }> = [];

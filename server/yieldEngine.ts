@@ -81,6 +81,12 @@ const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc")
 const STATE_IN = FOCUS_STATES.map(() => "?").join(",");
 const stateArgs = () => [...FOCUS_STATES];
 
+// KINETIC-ONLY (owner directive 2026-07-23): all live scanning, discovery, and
+// rechecks target Kinetic-carrier addresses only. Frontier rows stay in the
+// pool for audit/rollback but are never selected. NULL carrier = kinetic
+// (legacy rows predate the column).
+const KINETIC_ONLY = `COALESCE(s.carrier,'kinetic')='kinetic'`;
+
 interface Weights { cell: number; street: number; city: number; watch: number; new: number; prox: number; expand: number; momentum: number }
 // prox sits just under watch: a fresh drop next door is nearly as strong a
 // signal as a provider-confirmed coming-soon. expand gives announced-build
@@ -375,6 +381,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
        ${negJoin}
       WHERE s.tenant_id=?
         AND lower(s.state) IN (${STATE_IN})
+        AND ${KINETIC_ONLY}
         AND footprint_city(s.state, s.city)=1
         AND ${NOT_PARKED_ANF}
         AND (
@@ -542,6 +549,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
        ${expandJoin}
       WHERE s.tenant_id=?
         AND lower(s.state) IN (${STATE_IN})
+        AND ${KINETIC_ONLY}
         AND footprint_city(s.state, s.city)=1
         AND ${NOT_PARKED_ANF}
         AND (
@@ -616,6 +624,7 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
        JOIN cold_cells cc ON ${cellExpr.join}
         WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
           AND lower(s.state) IN (${STATE_IN})
+          AND ${KINETIC_ONLY}
           AND footprint_city(s.state, s.city)=1
           AND ${NOT_PARKED_ANF}
         ORDER BY cc.unscanned DESC, s.id ASC LIMIT ?`,
