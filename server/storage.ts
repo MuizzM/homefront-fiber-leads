@@ -199,7 +199,10 @@ export interface IStorage {
   getScanTargetsToRescan(limit: number): any[];
   getScanTargetsByCity(city: string, state: string): any[];
   recordScanTargetResult(id: number, r: { fiberStatus?: string | null; fiberAvailable?: boolean; isNewFiber?: boolean; billingStatus?: string | null; dfAddressId?: string | null; convertedToLeadId?: number | null; availabilityStatus?: string | null; newlyLive?: boolean; customerSegment?: string; customerConfidence?: string; customerSignals?: string[] }): { prevIsNewFiber: boolean };
-  bumpScanTargetInconclusive(ref: { id?: number; address?: string }): void;
+  /** Advance the needs-fix ledger; returns the updated count (0 when the
+   * address already has a conclusive answer — the ledger only counts while
+   * it has never been answered). */
+  bumpScanTargetInconclusive(ref: { id?: number; address?: string }): number;
   getScanTargetExhaustedCount(city?: string, zip?: string): number;
   getFirstSeenLive(sinceHours: number, limit?: number, tenantId?: number): any[];
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
@@ -3483,20 +3486,25 @@ export class Storage implements IStorage {
   // address isn't pooled (e.g. a fringe candidate that never got persisted) or the
   // row was already conclusively answered (last_scanned_at set) — we never park a row
   // that has a real answer. Idempotent per (address, run): callers bump once per probe.
-  bumpScanTargetInconclusive(ref: { id?: number; address?: string }): void {
-    if (ref.id != null) {
-      rawDb.prepare(
-        `UPDATE scan_targets
-           SET inconclusive_attempts = inconclusive_attempts + 1, last_inconclusive_at = datetime('now')
-         WHERE id = ? AND last_scanned_at IS NULL`
-      ).run(ref.id);
-    } else if (ref.address) {
-      rawDb.prepare(
-        `UPDATE scan_targets
-           SET inconclusive_attempts = inconclusive_attempts + 1, last_inconclusive_at = datetime('now')
-         WHERE address = ? AND last_scanned_at IS NULL`
-      ).run(ref.address);
-    }
+  bumpScanTargetInconclusive(ref: { id?: number; address?: string }): number {
+    // RETURNING gives the caller the truthful needs-fix count in the same
+    // statement — the engine's address_not_found terminal counts THESE (real
+    // needs-fix non-answers), never raw claim attempts, so throttle/fail-closed
+    // retries can no longer inflate an address toward a terminal verdict.
+    // .all() (never .get()) so the UPDATE fully completes even when the address
+    // variant matches multiple rows — an early-reset RETURNING statement can
+    // stop short of updating the rest.
+    const sql = (where: string) =>
+      `UPDATE scan_targets
+         SET inconclusive_attempts = inconclusive_attempts + 1, last_inconclusive_at = datetime('now')
+       WHERE ${where} AND last_scanned_at IS NULL
+       RETURNING inconclusive_attempts`;
+    const rows = (ref.id != null
+      ? rawDb.prepare(sql("id = ?")).all(ref.id)
+      : ref.address
+        ? rawDb.prepare(sql("address = ?")).all(ref.address)
+        : []) as Array<{ inconclusive_attempts: number }>;
+    return rows.reduce((m, r) => Math.max(m, r.inconclusive_attempts), 0);
   }
   // How many pooled addresses are exhausted (parked out of re-probe) — for honest
   // "STILL QUEUED vs GIVEN UP" reporting so a silenced address is never a silent gap.

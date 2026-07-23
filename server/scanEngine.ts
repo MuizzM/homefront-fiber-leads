@@ -328,6 +328,14 @@ export async function runScanWorker(
               // rather than blocking up to admissionMaxWaitMs.
               abort: () => { const r = getRun(runId, tenantId); return !r || r.status !== "running"; },
             });
+            // The check may have taken seconds of network time — a cancel/pause
+            // that landed MID-FLIGHT must win. Record NOTHING on a non-running
+            // run (no finalize, no requeue, no counters): the claimed target
+            // stays 'inflight' and resume/reaper returns it to the queue, same
+            // as the pre-claim law above. Without this gate a cancelled run
+            // could still accrue verified/failed from checks already in the air.
+            const postCheck = getRun(runId, tenantId);
+            if (!postCheck || postCheck.status !== "running") return;
             if (result.blocked || checkFailed) {
               // TRANSIENT non-answer (throttle, transport error, malformed body,
               // soft success=false) — REQUEUE and retry later with a fresh token.
@@ -346,13 +354,18 @@ export async function runScanWorker(
               // address is still preserved + retried, just on a slower cadence, so the
               // run can drain instead of stranding a perpetually-requeued tail.
               const addressNotReady = !result.blocked && /AddressNeedsFix|AddressSuggestions/i.test(result.notes || "");
-              if (addressNotReady) {
-                // Target-level ledger of needs-fix non-answers. Only counts while the
-                // address has never had a conclusive answer; a real answer later
-                // resets it to 0 (recordScanTargetResult).
-                storage.bumpScanTargetInconclusive({ id: t.targetId });
-              }
-              if (addressNotReady && attempt >= ANF_TERMINAL_ATTEMPTS) {
+              // Target-level ledger of needs-fix non-answers. Only counts while the
+              // address has never had a conclusive answer; a real answer later
+              // resets it to 0 (recordScanTargetResult).
+              const needsFixCount = addressNotReady ? storage.bumpScanTargetInconclusive({ id: t.targetId }) : 0;
+              // TERMINAL requires the cap in REAL needs-fix non-answers (the
+              // ledger), never in raw claim attempts: attempt_count also grows on
+              // throttles and fail-closed no-session retries, and those must not
+              // push an address toward an address_not_found verdict it never
+              // earned. Ledger 0 with addressNotReady means the address already
+              // has a conclusive answer (the ledger doesn't count then) — fall
+              // back to the per-run attempt cap so such a run can still drain.
+              if (addressNotReady && (needsFixCount >= ANF_TERMINAL_ATTEMPTS || (needsFixCount === 0 && attempt >= ANF_TERMINAL_ATTEMPTS))) {
                 // N real attempts (sessions rotate across them), every one a needs-fix
                 // non-answer with no adoptable suggestion → the ADDRESS STRING is not
                 // in Kinetic's fabric today. Conclude address_not_found — a conclusive

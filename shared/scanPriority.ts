@@ -40,18 +40,31 @@ export function rankTargets(targets: PoolTarget[], known: KnownPoint[], opts: Ra
   const nowMs = opts.nowMs ?? 0;
   const rescan = !!opts.rescan;
 
-  // Grid index of known new-fiber cells → cheap O(1) proximity lookups.
+  // Grid index of known new-fiber POINT COUNTS → cheap O(1) graded proximity.
+  // Counting (not just membership) lets evidence stack: five verified fiber homes
+  // around an address is much stronger contiguity evidence than one.
   const cellKey = (lat: number, lng: number) => `${Math.floor(lat / cellDeg)}:${Math.floor(lng / cellDeg)}`;
-  const knownCells = new Set<string>();
+  const knownCount = new Map<string, number>();
   for (const k of known) {
-    if (Number.isFinite(k.lat) && Number.isFinite(k.lng)) knownCells.add(cellKey(k.lat, k.lng));
-  }
-  const nearKnown = (lat: number, lng: number): boolean => {
-    const cy = Math.floor(lat / cellDeg), cx = Math.floor(lng / cellDeg);
-    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-      if (knownCells.has(`${cy + dy}:${cx + dx}`)) return true;
+    if (Number.isFinite(k.lat) && Number.isFinite(k.lng)) {
+      const key = cellKey(k.lat, k.lng);
+      knownCount.set(key, (knownCount.get(key) ?? 0) + 1);
     }
-    return false;
+  }
+  // Same-cell evidence counts full; the surrounding ring counts 0.4× (farther ≈
+  // weaker — and the discount keeps same-block adjacency the strongest signal
+  // even after the frontier bonus below). Returns {score, center} so the
+  // frontier test can tell "on the build edge" (ring evidence only) apart from
+  // "inside a lit block".
+  const neighborEvidence = (lat: number, lng: number): { score: number; center: number } => {
+    const cy = Math.floor(lat / cellDeg), cx = Math.floor(lng / cellDeg);
+    const center = knownCount.get(`${cy}:${cx}`) ?? 0;
+    let ring = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      if (dy === 0 && dx === 0) continue;
+      ring += knownCount.get(`${cy + dy}:${cx + dx}`) ?? 0;
+    }
+    return { score: center + 0.4 * ring, center };
   };
 
   // Spread term: penalize picking many targets from the same cell so budget maps
@@ -92,10 +105,20 @@ export function rankTargets(targets: PoolTarget[], known: KnownPoint[], opts: Ra
     }
 
     // Substance we'd gain IF we learn something: a base value plus the strongest
-    // real predictor — proximity to known new-fiber (fiber builds contiguously,
-    // so a neighbor of a live home is very likely live) — plus any field signal.
+    // real predictor — GRADED proximity to known new-fiber (fiber builds
+    // contiguously, so a neighbor of a live home is very likely live, and many
+    // live neighbors are stronger evidence than one) — plus any field signal.
+    const ev9 = neighborEvidence(t.lat, t.lng);
     let substance = 0.45;
-    if (nearKnown(t.lat, t.lng)) substance += 0.40;
+    substance += 0.40 * satur(ev9.score, 1); // 1 same-cell neighbor ≈ +0.20, dense block → +0.36
+    // FRONTIER BONUS — the build EDGE is where new fiber appears next. An address
+    // whose own cell has no verified fiber but whose ring does sits exactly on
+    // that edge: checking it maps where the build is heading, while an address
+    // deep inside a lit block mostly re-confirms what the map already shows.
+    // Sized below the ring discount so same-block adjacency still outranks the
+    // edge at everyday densities (the crossover is ~12+ known points, where a
+    // saturated block's interior genuinely is less informative than its edge).
+    if (ev9.center === 0 && ev9.score > 0) substance += 0.04;
     if (typeof t.opportunityScore === "number") substance += 0.15 * clamp01(t.opportunityScore);
     // In a rescan, a known-live address is worth watching for churn.
     if (rescan && everScanned && t.lastIsNewFiber) substance += 0.05;
