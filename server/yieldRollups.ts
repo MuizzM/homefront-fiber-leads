@@ -32,7 +32,7 @@ import fs from "fs";
 import path from "path";
 import { rawDb } from "./db";
 import { structuredLog } from "./structuredLog";
-import { readPressure } from "./resourcePressure";
+import { readPressure, PRESSURE_ORDER } from "./resourcePressure";
 import { streetKeyOf } from "./freshHarvest";
 
 const NEG_STREAK_WINDOW_DAYS = 120; // backfill parity with the old CTE window
@@ -104,8 +104,8 @@ const INDEXES: Array<{ name: string; ddl: string }> = [
   },
 ];
 
-const STREET_CHUNK = Math.max(500, Number(process.env.YIELD_STREET_CHUNK) || 3000);
-const NEG_CHUNK = Math.max(500, Number(process.env.YIELD_NEG_CHUNK) || 5000);
+const STREET_CHUNK = Math.max(500, Number(process.env.YIELD_STREET_CHUNK) || 10_000);
+const NEG_CHUNK = Math.max(500, Number(process.env.YIELD_NEG_CHUNK) || 10_000);
 
 // Fill street_key for rows that lack it (legacy rows once; brand-new inserts
 // within a couple of ticks). Returns rows processed.
@@ -179,10 +179,19 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
     return null;
   }
   const intervalMs = Math.max(10_000, Number(process.env.YIELD_ROLLUP_TICK_MS) || 30_000);
+  // Per-tick work budget: chunks loop until this much wall time is spent, so
+  // the one-time backfill of ~1M rows completes in minutes, not hours. Each
+  // chunk is its own short transaction — writers only wait chunk-sized beats.
+  const tickBudgetMs = Math.max(500, Number(process.env.YIELD_ROLLUP_TICK_BUDGET_MS) || 5_000);
   const tick = () => {
     try {
-      if (readPressure().level !== "normal") {
-        structuredLog("yield_rollups.paused", { reason: "resource_pressure" });
+      // Gate ONLY on pause/emergency. Under warn/throttle the maintenance MUST
+      // keep running — the WAL pressure is CAUSED by the legacy scoring query,
+      // and this backfill is precisely what retires it. Pausing on warn would
+      // deadlock the fix behind the symptom.
+      const level = readPressure().level;
+      if (PRESSURE_ORDER[level] >= PRESSURE_ORDER.pause) {
+        structuredLog("yield_rollups.paused", { reason: `resource_pressure_${level}` });
         return;
       }
       // 1) One-time index builds, one per tick (each is a single blocking
@@ -195,11 +204,15 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
           return;
         }
       }
+      const deadline = Date.now() + tickBudgetMs;
       // 2) street_key janitor (also the steady-state duty for new inserts).
-      const processed = streetKeyJanitorChunk();
+      let processed = 0;
+      let chunk = streetKeyJanitorChunk();
+      while (chunk > 0 && Date.now() < deadline) { processed += chunk; chunk = streetKeyJanitorChunk(); }
+      processed += chunk;
       if (processed > 0) {
         structuredLog("yield_rollups.street_chunk", { processed });
-        if (processed >= STREET_CHUNK) return; // more waiting — keep ticks small
+        if (Date.now() >= deadline) return; // budget spent — resume next tick
       }
       if (getState("streetkey_done") !== "1" && processed === 0) {
         setState("streetkey_done", "1");
@@ -207,7 +220,8 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
       }
       // 3) neg_streak backfill (one-time, resumable).
       if (getState("negstreak_done") !== "1") {
-        const done = negStreakBackfillChunk();
+        let done = false;
+        while (!done && Date.now() < deadline) done = negStreakBackfillChunk();
         structuredLog("yield_rollups.neg_chunk", { cursor: getState("negstreak_cursor"), done });
         return;
       }
