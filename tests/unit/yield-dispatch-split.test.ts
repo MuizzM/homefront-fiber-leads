@@ -68,7 +68,10 @@ describe("yield engine split dispatch", () => {
   it("routes watch → coming-soon kind, flip-prox → recheck kind, rest → bulk; no target in two runs", () => {
     startTargetRun.mockClear();
     const counts = runYieldCycle(1, 500);
-    expect(counts.exploit).toBeGreaterThanOrEqual(3);
+    // The guaranteed discovery lane admits never-scanned fixtures first; the
+    // routing below is what this test proves — total admitted must cover the
+    // three seeded targets whichever lane carried them.
+    expect(counts.exploit + (counts.discovery ?? 0)).toBeGreaterThanOrEqual(3);
 
     const calls = startTargetRun.mock.calls.map((c: any[]) => c[0]);
     const byKind = Object.fromEntries(calls.map((c: any) => [c.runKind, c.targetIds as number[]]));

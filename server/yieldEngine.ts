@@ -649,7 +649,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
  * → dispatch. Same guards as the classic harvester (circuit, day/night,
  * bandwidth governor, scarcity cut: explore dies first, then low scores).
  */
-export function runYieldCycle(tenantId: number, budget = Number(process.env.FRESH_HARVEST_BUDGET) || 4000): { exploit: number; explore: number; runId?: string } {
+export function runYieldCycle(tenantId: number, budget = Number(process.env.FRESH_HARVEST_BUDGET) || 4000): { exploit: number; explore: number; discovery?: number; runId?: string } {
   if (isProxyCircuitOpen()) {
     structuredLog("yield_engine.cycle", { exploit: 0, explore: 0, skipped: "proxy circuit open" });
     return { exploit: 0, explore: 0 };
@@ -682,6 +682,11 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
             AND ${KINETIC_ONLY}
             AND footprint_city(s.state, s.city)=1
             AND ${NOT_PARKED_ANF}
+            -- Active watchlist members must reach the scored path so they ship
+            -- under the dedup-exempt coming-soon run, never as bulk discovery
+            -- (the bulk run's 18h dedup window would swallow their tight
+            -- 2h/12h recheck cadence).
+            AND s.id NOT IN (SELECT w.scan_target_id FROM coming_soon_watchlist w WHERE w.status='active')
        )
        SELECT id FROM ranked ORDER BY cityRank ASC, created_at ASC, id ASC LIMIT ?`,
     ).all(tenantId, ...stateArgs(), discoveryBudget) as any[]).map((r) => r.id);
@@ -792,5 +797,5 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
     bwScale, topScore: +(scored[0]?.score ?? 0).toFixed(3), medianScore: +(scored[Math.floor(scored.length / 2)]?.score ?? 0).toFixed(3),
     wCell: w.cell, wStreet: w.street, wCity: w.city, wProx: w.prox, wExpand: w.expand, wMomentum: w.momentum,
   });
-  return { exploit: exploit.length, explore: explore.length, runId };
+  return { exploit: exploit.length, explore: explore.length, discovery: discovery.length, runId };
 }
