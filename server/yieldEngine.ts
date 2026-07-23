@@ -363,7 +363,7 @@ export function scoreDueTargets(tenantId: number, limit: number): ScoredRow[] {
             + ${w.momentum} * COALESCE(ln(1+cm.momentum), 0)
             ${expandTerm}
             ) AS score
-       FROM scan_targets s
+       FROM scan_targets s NOT INDEXED
        CROSS JOIN prior pr
        LEFT JOIN fresh_cells fc ON fc.clat=ROUND(s.lat,2) AND fc.clng=ROUND(s.lng,2)
        LEFT JOIN recent_cells rc ON rc.clat=ROUND(s.lat,2) AND rc.clng=ROUND(s.lng,2)
@@ -532,7 +532,7 @@ function scoreDueTargetsRollup(tenantId: number, limit: number): ScoredRow[] {
             + ${w.momentum} * COALESCE(ln(1+cm.momentum), 0)
             ${expandTerm}
             ) AS score
-       FROM scan_targets s
+       FROM scan_targets s NOT INDEXED
        CROSS JOIN prior pr
        LEFT JOIN fresh_cells fc ON fc.clat=s.cell_lat AND fc.clng=s.cell_lng
        LEFT JOIN recent_cells rc ON rc.clat=s.cell_lat AND rc.clng=s.cell_lng
@@ -620,7 +620,7 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
           WHERE tenant_id=? AND last_scanned_at IS NULL AND ${cellExpr.cellNotNull}
           GROUP BY clat, clng
        )
-       SELECT s.id FROM scan_targets s
+       SELECT s.id FROM scan_targets s NOT INDEXED
        JOIN cold_cells cc ON ${cellExpr.join}
         WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
           AND lower(s.state) IN (${STATE_IN})
