@@ -63,4 +63,10 @@ describe("WAL guard", () => {
     expect(timer).not.toBeNull();
     clearInterval(timer!);
   });
+
+  // Litestream holds a long-lived read lock and runs its own checkpoints; an
+  // active guard would spin busy against it forever. The yield is decided at
+  // module load (env is read when db.ts initializes), so it is exercised in
+  // its own test file (wal-guard-litestream.test.ts) with LITESTREAM_BUCKET
+  // set before the import.
 });

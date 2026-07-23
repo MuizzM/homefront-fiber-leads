@@ -417,6 +417,10 @@ app.use((req, res, next) => {
       const { bootWalCheckpoint, startWalGuard } = await import("./db");
       bootWalCheckpoint();
       startWalGuard();
+      // Disk/WAL pressure sampler — one per box, same owner as the guard.
+      // Interval-driven (first tick 30s out); nothing heavy runs at boot.
+      const { startResourceSentinel } = await import("./resourcePressure");
+      startResourceSentinel();
     }
     try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
@@ -1299,6 +1303,8 @@ app.use((req, res, next) => {
     const { bootWalCheckpoint, startWalGuard } = await import("./db");
     bootWalCheckpoint();
     startWalGuard();
+    const { startResourceSentinel } = await import("./resourcePressure");
+    startResourceSentinel();
   }
 
   await registerRoutes(httpServer, app);

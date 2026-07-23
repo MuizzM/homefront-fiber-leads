@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { rawDb } from "./db";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
+import { ensurePressureTable, readPressure } from "./resourcePressure";
 
 const priorityValue: Record<ProviderRequestPriority, number> = {
   manual: 500,
@@ -323,6 +324,16 @@ export class DistributedProviderCoordinator<T> {
         const control = this.control();
         const nextStartAt = Number(control.next_start_at ?? 0);
         if (nextStartAt > now) return { admitted: false, waitMs: Math.max(this.pollMs, nextStartAt - now) };
+        // RESOURCE-PRESSURE GATE (disk/WAL sentinel, resourcePressure.ts). One
+        // cached single-row read per poll; a stale/missing row FAILS OPEN to
+        // "normal" (the persisted-403-halt wedge taught us: no sticky pause may
+        // ever survive its sampler). EMERGENCY admits nothing — recover the
+        // disk before SQLite loses the room to checkpoint. PAUSE and THROTTLE
+        // are enforced below once the candidate's criticality is known.
+        const pressure = readPressure(now).level;
+        if (pressure === "emergency") {
+          return { admitted: false, waitMs: Math.max(this.pollMs * 10, 2_000) };
+        }
         // Admission head = the highest EFFECTIVE-priority queued item. Effective
         // priority ages a waiting item upward, but asymmetrically so anti-starvation
         // never defeats CRITICAL-first:
@@ -393,13 +404,26 @@ export class DistributedProviderCoordinator<T> {
           ? base + Math.min(this.agingMaxBoost, agedPoints)
           : Math.min(CRITICAL_PRIORITY_CUTOFF, base + agedPoints);
         const candidateIsCritical = effectivePriority >= CRITICAL_PRIORITY_CUTOFF;
+        // PAUSE: only CRITICAL work (field taps, manual, new-build — priority ≥
+        // cutoff, including aged-into-critical) may admit; bulk scanning waits
+        // until the sentinel demotes the level. Slow the poll — nothing will
+        // change within one pollMs.
+        if (pressure === "pause" && !candidateIsCritical) {
+          return { admitted: false, waitMs: Math.max(this.pollMs * 4, 1_000) };
+        }
         const active = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_admission_queue WHERE state='active'`).get() as any).count);
         const starts = Number((rawDb.prepare(`SELECT COUNT(*) count FROM provider_rate_events WHERE started_at>?`).get(now - this.rateWindowMs) as any).count);
         // CRITICAL (incl. aged-into-CRITICAL) may use every slot; NORMAL is held below
         // the reserved band so the reserved concurrency + per-window rate stays
         // available for CRITICAL only.
-        const concurrencyCeiling = candidateIsCritical ? this.maxConcurrency : this.maxConcurrency - this.criticalReservedConcurrency;
-        const rateCeiling = candidateIsCritical ? this.rollingAdmissionLimit : this.rollingAdmissionLimit - this.criticalReservedRate;
+        let concurrencyCeiling = candidateIsCritical ? this.maxConcurrency : this.maxConcurrency - this.criticalReservedConcurrency;
+        let rateCeiling = candidateIsCritical ? this.rollingAdmissionLimit : this.rollingAdmissionLimit - this.criticalReservedRate;
+        // THROTTLE: halve both ceilings (never below 1) for every class — scan
+        // pressure eases while CRITICAL work still moves.
+        if (pressure === "throttle" || pressure === "pause") {
+          concurrencyCeiling = Math.max(1, Math.floor(concurrencyCeiling / 2));
+          rateCeiling = Math.max(1, Math.floor(rateCeiling / 2));
+        }
         // Admit only if our priority rank fits inside the slots free under BOTH the
         // concurrency ceiling AND the rate ceiling. Using min() keeps freed RATE slots
         // priority-ordered too (with the head-only rule they trivially were; with
@@ -548,6 +572,10 @@ export function ensureSchema(): void {
     CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),next_start_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL);
     INSERT OR IGNORE INTO provider_global_control (id,updated_at) VALUES (1,0);
   `);
+  // Resource-pressure row read by every admission poll (resourcePressure.ts).
+  // Unlike the legacy halt columns below, this state is TTL'd and re-derived
+  // from live disk/WAL measurements each sampler tick — it fails open.
+  ensurePressureTable();
   // ── Migration: the scanner has NO persistent halt/pause state. Ensure
   //    next_start_at exists on older DBs, then DROP the legacy halt/pause columns
   //    so a prior 403 can never survive a restart and wedge scanning at 0 checked.

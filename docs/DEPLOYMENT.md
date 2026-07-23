@@ -122,8 +122,15 @@ address on the login page.
 
 Two options — pick one (Litestream is stronger):
 - **Litestream (continuous):** already wired in the image (`deploy/start.sh`).
-  Set `LITESTREAM_BUCKET` + S3/B2 creds in `.env`; every write streams offsite,
+  Set these four in the server's `.env` (create the bucket + key at Backblaze
+  B2 or Cloudflare R2 first):
+  `LITESTREAM_BUCKET`, `LITESTREAM_ENDPOINT` (e.g.
+  `https://s3.us-east-005.backblazeb2.com`), `LITESTREAM_ACCESS_KEY_ID`,
+  `LITESTREAM_SECRET_ACCESS_KEY` — then redeploy. Every write streams offsite
   and a fresh volume auto-restores on boot. **RPO ≈ seconds, RTO ≈ minutes.**
+  The replicate→restore→integrity path was drill-verified 2026-07-23 against an
+  S3 endpoint using this exact config shape. NOTE: with Litestream enabled the
+  in-app WAL guard stands down automatically (Litestream owns checkpointing).
 - **Nightly snapshots:** `scripts/backup.sh` (WAL-safe `.backup` → integrity
   check → age encryption, or gzip only when encryption is not configured →
   retention prune) from cron; offsite via rclone. Production releases refuse
@@ -135,6 +142,21 @@ Back up **all five**, not just the DB: `app-data` volume (DB + uploads), `.env`
 and the Docker/compose files (in git). **Run a monthly restore drill** into
 staging. Take a **pre-deploy backup** (deploy.sh does) and a **Hetzner snapshot
 before infra changes** (snapshot ≠ app backup).
+
+## 6b. Resource-pressure sentinel (in-app, on by default)
+
+One sampler per box (cluster primary) measures free disk + WAL/DB file sizes
+every 30s and publishes a TTL'd level that every scan admission reads:
+`warn` → loud log; `throttle` → scan ceilings halved; `pause` → only
+CRITICAL checks (field taps/manual/new-build) admitted; `emergency` → no
+admissions, no new enqueues, forced WAL truncate each tick. Defaults (MB,
+tuned to the 38GB box): free-disk floors 8192/6144/4096/2560, WAL caps
+1536/2048/3072/4096, hysteresis 1024/256 — override via `PRESSURE_*_FREE_MB`
+/ `PRESSURE_*_WAL_MB`; cadence `RESOURCE_SENTINEL_MS`; kill-switch
+`RESOURCE_SENTINEL=off`. The published level is re-derived from live
+measurements every tick and expires after `PRESSURE_TTL_MS` (5 min) — a dead
+sampler or a restart always FAILS OPEN (never a sticky halt). Watch
+`resource.pressure` / `resource.sentinel_error` / `db.wal_guard` log events.
 
 ## 7. Monitoring (wire these — external, ~30–60 min total)
 

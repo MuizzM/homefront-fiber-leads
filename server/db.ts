@@ -133,10 +133,20 @@ export function forceWalTruncate(reason: string): number {
   }
 }
 
+// When Litestream is enabled it OWNS checkpointing: it holds a long-lived read
+// lock specifically so no other connection can checkpoint/reset the WAL out
+// from under its replication position, and it runs its own checkpoints. Our
+// guard must stand down or it would just spin busy against that lock.
+const litestreamOwnsCheckpoints = Boolean(process.env.LITESTREAM_BUCKET);
+
 // Boot-time reclaim. Call where there is NO connection contention yet (cluster
 // primary before forking workers; single-process before listen): with no other
 // readers the TRUNCATE always wins and the WAL starts at 0 bytes.
 export function bootWalCheckpoint(): void {
+  if (litestreamOwnsCheckpoints) {
+    walLog("db.wal_guard", { reason: "boot", skipped: "litestream owns checkpointing" });
+    return;
+  }
   if (walFileMb() < 16) return; // nothing worth logging
   forceWalTruncate("boot");
 }
@@ -145,6 +155,10 @@ export function bootWalCheckpoint(): void {
 // past the threshold we force TRUNCATE every tick until the file shrinks.
 export function startWalGuard(): NodeJS.Timeout | null {
   if (process.env.WAL_GUARD === "off") return null;
+  if (litestreamOwnsCheckpoints) {
+    walLog("db.wal_guard", { reason: "start", skipped: "litestream owns checkpointing" });
+    return null;
+  }
   const intervalMs = Math.max(30_000, Number(process.env.WAL_CHECKPOINT_MS ?? 120_000) || 120_000);
   const truncateMb = Math.max(64, Number(process.env.WAL_TRUNCATE_MB ?? 512) || 512);
   const timer = setInterval(() => {

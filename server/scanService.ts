@@ -14,6 +14,8 @@ import {
   computeTerritoryOutcome, accumulateMarketOutcome, clearTerritoryFromLeads, type ScanRunRow,
 } from "./scanIntelStore";
 import { runScanWorker, isRunActive } from "./scanEngine";
+import { readPressure } from "./resourcePressure";
+import { structuredLog } from "./structuredLog";
 
 // Cost rate from env, computed once per call (cheap). Operators configure their
 // real Decodo plan via SCAN_USD_PER_GB; the byte estimate rarely needs tuning.
@@ -104,6 +106,14 @@ export function startMarketRun(opts: { tenantId: number; city: string; state: st
 }
 
 export function startTargetRun(opts: { tenantId: number; city: string; state: string; targetIds: number[]; createdBy?: number | null; runKind?: string; label?: string }): StartRunResult {
+  // EMERGENCY resource pressure (disk nearly full / WAL runaway — see
+  // resourcePressure.ts): stop QUEUE GROWTH too, not just admissions. Every
+  // producer funnels enqueues through here, so this one refusal bounds the
+  // backlog while the sentinel recovers the disk. Fails open on a stale row.
+  if (readPressure().level === "emergency") {
+    structuredLog("scan.enqueue_refused", { reason: "resource_pressure_emergency", city: opts.city, state: opts.state, targets: opts.targetIds.length }, "warn");
+    throw new Error("RESOURCE_EMERGENCY: scanning paused while disk/WAL pressure recovers");
+  }
   const ids = [...new Set(opts.targetIds.map(Number).filter(Number.isInteger))].slice(0, MAX_CHECKS_PER_RUN);
   if (!ids.length) throw new Error("NO_TARGETS: sweep batch is empty");
   const runId = `run_${opts.tenantId}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
