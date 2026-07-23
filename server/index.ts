@@ -1362,6 +1362,19 @@ app.use((req, res, next) => {
   // this serves both the API and the client.
   // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || "5000", 10);
+  // CONTROL WORKER SERVES NO HTTP (2026-07-23 portal-latency root cause): all
+  // cluster workers shared the listen socket, so ~1/4 of requests — INCLUDING
+  // the deploy health probes — landed on the control worker, whose event loop
+  // blocks 20-25s during every scoring cycle. Observed live: portal 2.9-3.8s,
+  // two deploy health gates failed while the app was actually fine. Workers
+  // 1..N-1 carry HTTP; the scorer/producers get a dedicated loop.
+  // CONTROL_SERVES_HTTP=on restores the old behavior (single-worker rigs).
+  const controlSkipsHttp = process.env.HF_ROLE === "control"
+    && SCAN_WORKERS > 1 && process.env.CONTROL_SERVES_HTTP !== "on";
+  if (controlSkipsHttp) {
+    log("control worker: HTTP disabled (dedicated producer/scorer loop)");
+    void startBackgroundServices();
+  } else {
   httpServer.listen(
     {
       port,
@@ -1375,6 +1388,7 @@ app.use((req, res, next) => {
       void startBackgroundServices();
     },
   );
+  }
 
   // ── Graceful shutdown ────────────────────────────────────────────────────────
   // A deploy/restart sends SIGTERM. Without this, the process is killed mid-flight:
