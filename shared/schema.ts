@@ -209,6 +209,9 @@ export const leads = sqliteTable("leads", {
   // ── Lead Scoring ──────────────────────────────────────────────────────────
   leadTag: text("lead_tag"),   // "hot_lead" | "coming_soon" | "upgrade_target" | null
   leadScore: integer("lead_score").default(0), // 0–100 priority score
+  // Manager/team-lead pre-assignment triage mark — "priority" | "hold" | null
+  // (see shared/leadMark.ts). Independent of lead_status and assignment.
+  assignMark: text("assign_mark"),
   // Confirmed-fresh provenance. These fields are only stamped by the
   // independent-evidence projector, never directly by a primary scan.
   sourceScanTargetId: integer("source_scan_target_id"),

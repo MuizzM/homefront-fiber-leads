@@ -49,6 +49,8 @@ import { colorForRep } from "@shared/repColors";
 import { pointInPolygon } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
+import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
+import { sameTenant } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
 import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
@@ -1451,11 +1453,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const ALLOWED_LEAD_FIELDS = new Set([
       "leadStatus", "assignedRepId", "ownerName", "ownerEmail",
       "notes", "incomeRange", "homeValue", "yearsAtAddress", "isHomeowner",
-      "deploymentNotes",
+      "deploymentNotes", "assignMark",
     ]);
+    // A bad assignMark value is rejected rather than silently stored, so the
+    // column only ever holds a known mark or null.
+    if (Object.prototype.hasOwnProperty.call(req.body, "assignMark") && !isLeadMarkOrClear(req.body.assignMark)) {
+      return res.status(400).json({ error: "Invalid mark", code: "INVALID_LEAD_MARK" });
+    }
     const safeUpdate: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(req.body)) {
-      if (ALLOWED_LEAD_FIELDS.has(k)) safeUpdate[k] = v;
+      if (ALLOWED_LEAD_FIELDS.has(k)) safeUpdate[k] = k === "assignMark" ? normalizeLeadMark(v) : v;
     }
     const tid = (req as any).user?.tenantId ?? undefined;
     const updated = storage.updateLead(Number(req.params.id), safeUpdate as any, tid);
@@ -3747,6 +3754,42 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       storage.logActivity(user?.id ?? null, "lead.bulk_status", "lead", undefined, { outcome, leadStatus: newStatus, updated, skipped }, req.ip);
     }
     res.json({ updated, skipped, outcome, leadStatus: newStatus });
+  });
+
+  // POST /api/leads/bulk-mark  { leadIds: number[], mark: "priority"|"hold"|null }
+  // "Mark leads BEFORE assignment": a manager/team-lead triages a lassoed
+  // selection (usually still in the unassigned pool) with a priority/hold mark,
+  // or clears it (mark null/""). An assigner action (lead.assign, team_lead+),
+  // scoped exactly like bulk-assign (canReassignLead so you can't mark another
+  // team's leads), bounded, and atomic. Orthogonal to status/assignment.
+  app.post("/api/leads/bulk-mark", requireCapability("lead.assign"), (req, res) => {
+    const { leadIds, mark } = req.body as { leadIds: number[]; mark: unknown };
+    if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
+    // Cap the batch: each id runs synchronous SQLite work on the one event-loop
+    // thread, so an unbounded array would stall the server for every user.
+    if (leadIds.length > 500) return res.status(400).json({ error: "Too many leads — select at most 500 at a time", code: "BULK_TOO_LARGE" });
+    if (!isLeadMarkOrClear(mark)) return res.status(400).json({ error: "Invalid mark", code: "INVALID_LEAD_MARK" });
+    const value = normalizeLeadMark(mark);
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const apply = rawDb.transaction(() => {
+      let updated = 0, skipped = 0;
+      for (const raw of leadIds) {
+        const id = Number(raw);
+        const lead = storage.getLeadById(id);
+        // Skip cross-tenant / out-of-scope leads silently (don't leak, don't act);
+        // sameTenant is the shared tenant wall, canReassignLead the bulk-assign scope.
+        if (!sameTenant(lead, tid) || !canReassignLead(user, lead!)) { skipped++; continue; }
+        if (storage.updateLead(id, { assignMark: value } as any, tid)) updated++;
+      }
+      return { updated, skipped };
+    });
+    const { updated, skipped } = apply.immediate();
+    if (updated > 0) {
+      bustMapCache(tid);
+      storage.logActivity(user?.id ?? null, "lead.bulk_mark", "lead", undefined, { mark: value, updated, skipped }, req.ip);
+    }
+    res.json({ updated, skipped, mark: value });
   });
 
   // ── Lead Enrichment ──────────────────────────────────────────────────────────

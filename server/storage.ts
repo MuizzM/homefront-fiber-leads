@@ -78,6 +78,7 @@ export interface MapPinRow {
   leadTag: string | null;
   freshConfidence: string | null;
   carrier?: string | null;
+  assignMark?: string | null;
   knockCount: number | null;
   lastOutcome: string | null;
   lastKnockedAt: string | null;
@@ -263,6 +264,11 @@ export function runMigrations() {
     // Lead scoring columns (safe to run on existing DB)
     `ALTER TABLE leads ADD COLUMN lead_tag TEXT`,
     `ALTER TABLE leads ADD COLUMN lead_score INTEGER DEFAULT 0`,
+    // Pre-assignment triage mark set by a manager/team-lead on a lead (usually
+    // while it is still in the unassigned pool): "priority" (assign first) or
+    // "hold" (don't assign yet). Orthogonal to lead_status and assignment — it
+    // rides straight through a later assign. NULL = unmarked.
+    `ALTER TABLE leads ADD COLUMN assign_mark TEXT`,
     `ALTER TABLE leads ADD COLUMN source_scan_target_id INTEGER`,
     `ALTER TABLE leads ADD COLUMN fresh_confirmed_at TEXT`,
     `ALTER TABLE leads ADD COLUMN fresh_confidence TEXT`,
@@ -525,6 +531,14 @@ export function runMigrations() {
     // Serves MAX(updated_at) per tenant for the map data-version (cross-process
     // ETag) without scanning the tenant's rows.
     `CREATE INDEX IF NOT EXISTS idx_leads_tenant_updated ON leads(tenant_id, updated_at)`,
+    // (tenant_id, assign_mark): the pre-assignment triage board / "marked leads"
+    // filter seeks straight to a tenant's marked pool instead of scanning.
+    `CREATE INDEX IF NOT EXISTS idx_leads_tenant_mark ON leads(tenant_id, assign_mark)`,
+    // Tenant-scoped hot reads that lacked a covering index (filtered scans today,
+    // linear in tenant count as the org multiplies). All additive + idempotent.
+    `CREATE INDEX IF NOT EXISTS idx_team_members_tenant_name ON team_members(tenant_id, name)`,
+    `CREATE INDEX IF NOT EXISTS idx_territories_tenant ON territories(tenant_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_tenant_time ON knock_log(tenant_id, knocked_at DESC)`,
 
     // ── SCAN INTELLIGENCE — persistent, resumable, budgeted verification runs ──
     // A scan is no longer an in-memory job that dies on restart. Each run is a
@@ -2099,8 +2113,14 @@ export class Storage implements IStorage {
       ? q.where(conditions.length === 1 ? conditions[0] : and(...conditions))
       : q).orderBy(desc(leads.createdAt)).all();
   }
-  getLeadById(id: number): Lead | undefined {
-    return db.select().from(leads).where(eq(leads.id, id)).get();
+  // Tenant-aware by option: pass tenantId and the lookup is walled to that
+  // tenant in SQL, so a new call site is cross-tenant-safe BY DEFAULT instead of
+  // relying on the caller to remember an out-of-band `row.tenantId !== tid`
+  // check. Omitting tenantId preserves the original unscoped behaviour (every
+  // existing call site is unchanged). Mirrors updateTeamMember's shape.
+  getLeadById(id: number, tenantId?: number): Lead | undefined {
+    const condition = tenantId != null ? and(eq(leads.id, id), eq(leads.tenantId, tenantId)) : eq(leads.id, id);
+    return db.select().from(leads).where(condition).get();
   }
   // Distinct city/state pairs for the Leads filter dropdowns — replaces fetching
   // the ENTIRE map pin set (every lead, hydrated) just to build two selects.
@@ -2158,7 +2178,8 @@ export class Storage implements IStorage {
           l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
           l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
           l.assigned_rep_id AS assignedRepId, l.lead_score AS leadScore,
-          l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier
+          l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
+          l.assign_mark AS assignMark
         FROM leads l
         WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
       ), ranked_visits AS (
@@ -2176,7 +2197,7 @@ export class Storage implements IStorage {
       SELECT
         s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
         s.leadStatus, s.fiberStatus, s.assignedRepId, s.leadScore,
-        s.leadTag, s.freshConfidence, s.carrier,
+        s.leadTag, s.freshConfidence, s.carrier, s.assignMark,
         rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
       FROM scoped s
       LEFT JOIN ranked_visits rv ON rv.leadId = s.id AND rv.rowNumber = 1
@@ -2476,8 +2497,10 @@ export class Storage implements IStorage {
       ? q.where(eq(teamMembers.tenantId, tenantId))
       : q).orderBy(teamMembers.name).all();
   }
-  getTeamMemberById(id: number): TeamMember | undefined {
-    return db.select().from(teamMembers).where(eq(teamMembers.id, id)).get();
+  // Tenant-aware by option (see getLeadById). Omit tenantId → original behaviour.
+  getTeamMemberById(id: number, tenantId?: number): TeamMember | undefined {
+    const condition = tenantId != null ? and(eq(teamMembers.id, id), eq(teamMembers.tenantId, tenantId)) : eq(teamMembers.id, id);
+    return db.select().from(teamMembers).where(condition).get();
   }
   createTeamMember(member: InsertTeamMember): TeamMember {
     return db.insert(teamMembers).values({ ...member, createdAt: new Date().toISOString() }).returning().get();
@@ -2784,8 +2807,10 @@ export class Storage implements IStorage {
       try { return (JSON.parse(t.assigneeIds || "[]") as number[]).includes(repId); } catch { return false; }
     });
   }
-  getTerritoryById(id: number): Territory | undefined {
-    return db.select().from(territories).where(eq(territories.id, id)).get();
+  // Tenant-aware by option (see getLeadById). Omit tenantId → original behaviour.
+  getTerritoryById(id: number, tenantId?: number): Territory | undefined {
+    const condition = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
+    return db.select().from(territories).where(condition).get();
   }
   // Leads currently linked to a territory (area-sync). Used by reclaim.
   getLeadsByTerritory(territoryId: number): Lead[] {

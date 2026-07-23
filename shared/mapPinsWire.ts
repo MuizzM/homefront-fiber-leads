@@ -5,17 +5,18 @@
  * allocate. The packed response sends the schema once in shared code and rows
  * as arrays. The object response remains available for backward compatibility.
  */
-// Bumped 2 → 3 when `carrier` was added to the row. unpackMapPins hard-fails on
-// a row-length mismatch, so a version skew returns empty pins — server + client
-// MUST ship together. `carrier` lets a Frontier confirmed-fresh lead paint with
-// the correct red pin instead of the Kinetic-green halo (the field was projected
-// server-side but never reached the packed payload, so every carrier read green).
-export const MAP_PINS_WIRE_VERSION = 3 as const;
+// Bumped 2 → 3 when `carrier` was added; 3 → 4 when `assignMark` was added.
+// unpackMapPins hard-fails on a row-length mismatch, so a version skew returns
+// empty pins — server + client MUST ship together. `carrier` lets a Frontier
+// confirmed-fresh lead paint red instead of Kinetic-green; `assignMark` lets a
+// manager's pre-assignment priority/hold triage show on the pin at a glance.
+export const MAP_PINS_WIRE_VERSION = 4 as const;
 
 export const MAP_PIN_WIRE_FIELDS = [
   "id", "lat", "lng", "leadStatus", "address", "city", "state", "zip",
   "fiberStatus", "assignedRepId", "leadScore", "visited", "knockCount",
   "lastOutcome", "lastKnockedAt", "leadTag", "freshConfidence", "carrier",
+  "assignMark",
 ] as const;
 
 export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];

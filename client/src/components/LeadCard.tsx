@@ -17,6 +17,7 @@ import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { MapPin, Zap, Plus, ArrowUpRight, Navigation } from "lucide-react";
 import { CopyAddressButton } from "@/components/CopyAddressButton";
 import { formatFullAddress } from "@/lib/reverseGeocode";
+import { leadMarkMeta } from "@shared/leadMark";
 
 export interface CardProperty {
   id?: number;                       // present → already a saved lead
@@ -26,7 +27,7 @@ export interface CardProperty {
   fiberStatus?: string | null; isNewFiber?: boolean | null; billingStatus?: string | null;
   speedTier?: string | null; maxDownloadMbps?: number | null;
   competitorName?: string | null; leadTag?: string | null; leadScore?: number | null;
-  freshConfidence?: string | null;
+  freshConfidence?: string | null; assignMark?: string | null;
   techType?: string | null; placement?: string | null; householdSegmentType?: string | null;
   source?: "scan" | "tap" | "lead";
 }
@@ -115,6 +116,23 @@ function buildFacts(p: CardProperty): Array<{ label: string; value: string; tone
 
 function Grabber() {
   return <div className="mx-auto mb-4 h-1 w-9 rounded-full bg-border" aria-hidden="true" />;
+}
+
+// A manager's pre-assignment triage mark (priority / hold), shown so anyone
+// looking at the lead knows it's been flagged before assignment.
+function MarkChip({ mark }: { mark?: string | null }) {
+  const meta = leadMarkMeta(mark);
+  if (!meta) return null;
+  return (
+    <span
+      className={`mt-1.5 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold ${meta.chip}`}
+      data-testid="lead-mark-chip"
+      title={meta.description}
+    >
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: meta.ring }} />
+      {meta.label}
+    </span>
+  );
 }
 
 function BadgePill({ p, badge, size = "sm" }: {
@@ -233,6 +251,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
             <BadgePill p={p} badge={badge} />
             <h2 className="mt-2.5 text-[19px] font-bold leading-tight tracking-tight text-foreground">{p.address}</h2>
             <p className="mt-0.5 text-[13px] text-muted-foreground">{cityLine}</p>
+            <MarkChip mark={p.assignMark} />
 
             <FactsList facts={facts} />
 
@@ -255,6 +274,7 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
             <BadgePill p={p} badge={badge} />
             <h2 className="mt-3 text-[21px] font-bold leading-tight tracking-tight text-foreground">{p.address}</h2>
             <p className="mt-0.5 text-[13px] text-muted-foreground">{cityLine}</p>
+            <MarkChip mark={p.assignMark} />
 
             <div className="mt-4 grid grid-cols-3 divide-x divide-border overflow-hidden rounded-xl border border-border bg-secondary/40">
               {[

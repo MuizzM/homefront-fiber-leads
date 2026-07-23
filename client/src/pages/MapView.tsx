@@ -107,6 +107,7 @@ import {
   type LeadFeatureCache,
 } from "@/lib/leadGeoJson";
 import { unpackMapPins } from "@shared/mapPinsWire";
+import { LEAD_MARKS, LEAD_MARK_META, type LeadMark } from "@shared/leadMark";
 import { useCan } from "@/lib/capabilities";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
@@ -737,12 +738,14 @@ export default function MapView() {
   const [lassoDisabled, setLassoDisabled] = useState<Set<PinDisplayState>>(
     new Set(),
   );
-  const [lassoAction, setLassoAction] = useState<"assign" | "status" | "area">(
+  const [lassoAction, setLassoAction] = useState<"assign" | "status" | "mark" | "area">(
     "assign",
   );
   const [lassoStatusOutcome, setLassoStatusOutcome] = useState<KnockOutcome>(
     BULK_STATUS_OUTCOMES[0],
   );
+  // Pre-assignment triage mark to apply to the lassoed selection. "" = clear.
+  const [lassoMark, setLassoMark] = useState<LeadMark | "">(LEAD_MARKS[0]);
   const lassoLayerRef = useRef<boolean>(false);
 
   // Sidebar filters
@@ -1176,6 +1179,25 @@ export default function MapView() {
       const label = OUTCOME_META[data.outcome]?.label ?? "status";
       toast({
         title: `✓ ${data.updated} set to ${label}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
+      });
+      exitLasso();
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  // "Mark before assignment" — flag/clear a lassoed pool selection with a
+  // priority/hold triage mark so it's ranked before a rep ever gets it.
+  const bulkMarkMutation = useMutation({
+    mutationFn: async ({ leadIds, mark }: { leadIds: number[]; mark: LeadMark | "" }) => {
+      const res = await apiRequest("POST", "/api/leads/bulk-mark", { leadIds, mark: mark || null });
+      return res.json();
+    },
+    onSuccess: (data: { updated: number; skipped: number; mark: LeadMark | null }) => {
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      const label = data.mark ? LEAD_MARK_META[data.mark].label : "Cleared";
+      toast({
+        title: `✓ ${data.updated} ${data.mark ? `marked ${label}` : "cleared"}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
       });
       exitLasso();
     },
@@ -5070,6 +5092,7 @@ export default function MapView() {
                       [
                         ["assign", "Assign"],
                         ["status", "Status"],
+                        ["mark", "Mark"],
                         ["area", "Area"],
                       ] as const
                     ).map(([key, label]) => (
@@ -5171,6 +5194,45 @@ export default function MapView() {
                           {bulkStatusMutation.isPending
                             ? "…"
                             : `Set ${lassoActiveIds.length}`}
+                        </Button>
+                      </>
+                    )}
+                    {lassoAction === "mark" && (
+                      <>
+                        <select
+                          value={lassoMark}
+                          onChange={(e) => setLassoMark(e.target.value as LeadMark | "")}
+                          data-testid="lasso-mark-select"
+                          className="h-11 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                        >
+                          {LEAD_MARKS.map((m) => (
+                            <option key={m} value={m} className="text-slate-900">
+                              {LEAD_MARK_META[m].label}
+                            </option>
+                          ))}
+                          <option value="" className="text-slate-900">
+                            Clear mark
+                          </option>
+                        </select>
+                        <Button
+                          disabled={
+                            !lassoActiveIds.length ||
+                            bulkMarkMutation.isPending
+                          }
+                          onClick={() =>
+                            bulkMarkMutation.mutate({
+                              leadIds: lassoActiveIds,
+                              mark: lassoMark,
+                            })
+                          }
+                          data-testid="lasso-set-mark"
+                          className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
+                        >
+                          {bulkMarkMutation.isPending
+                            ? "…"
+                            : lassoMark
+                              ? `Mark ${lassoActiveIds.length}`
+                              : `Clear ${lassoActiveIds.length}`}
                         </Button>
                       </>
                     )}

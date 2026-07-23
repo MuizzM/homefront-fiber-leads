@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -395,8 +395,30 @@ export default function Team() {
     },
   });
 
-  const statsFor = (repId: number) =>
-    leaderboard.find(l => l.rep.id === repId) ?? { knocks: 0, contacts: 0, callbacks: 0, sales: 0 };
+  // O(1) row lookups built once per render — the roster is rendered inside a
+  // .map, so a per-row leaderboard.find / activeMembers.filter / team.find was
+  // O(n²) and janked large orgs. These maps make each row a constant-time get.
+  const statsById = useMemo(() => {
+    const m = new Map<number, { knocks: number; contacts: number; callbacks: number; sales: number }>();
+    for (const l of leaderboard) m.set(l.rep.id, { knocks: l.knocks, contacts: l.contacts, callbacks: l.callbacks, sales: l.sales });
+    return m;
+  }, [leaderboard]);
+  const memberById = useMemo(() => {
+    const m = new Map<number, TeamMember>();
+    for (const t of team) m.set(t.id, t);
+    return m;
+  }, [team]);
+  const directReportCountById = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const t of team) {
+      if (!t.active) continue;
+      const sup = (t as any).reportsToId;
+      if (sup != null) m.set(sup, (m.get(sup) ?? 0) + 1);
+    }
+    return m;
+  }, [team]);
+  const NO_STATS = { knocks: 0, contacts: 0, callbacks: 0, sales: 0 };
+  const statsFor = (repId: number) => statsById.get(repId) ?? NO_STATS;
 
   const openEdit = (m: TeamMember) => {
     setEditForm(fromMember(m));
@@ -473,7 +495,7 @@ export default function Team() {
               const s = statsFor(member.id);
               const ri2 = roleInfo(member.role);
               const sup = (member as any).reportsToId
-                ? team.find(t => t.id === (member as any).reportsToId)
+                ? memberById.get((member as any).reportsToId)
                 : null;
               const metrics = [
                 { label: "Knocks", val: s.knocks },
@@ -510,10 +532,10 @@ export default function Team() {
                           <ChevronUp className="w-3 h-3" /> Reports to <span className="text-foreground/80 font-medium">{sup.name}</span>
                         </span>
                       )}
-                      {directReportsOf(member.id).length > 0 && (
+                      {(directReportCountById.get(member.id) ?? 0) > 0 && (
                         <span className="inline-flex items-center gap-1" data-testid={`chip-reports-${member.id}`}>
                           <GitBranch className="w-3 h-3" />
-                          <span className="tabular-nums font-medium text-foreground/80">{directReportsOf(member.id).length}</span> direct report{directReportsOf(member.id).length === 1 ? "" : "s"}
+                          <span className="tabular-nums font-medium text-foreground/80">{directReportCountById.get(member.id)}</span> direct report{directReportCountById.get(member.id) === 1 ? "" : "s"}
                         </span>
                       )}
                       {member.phone && (
