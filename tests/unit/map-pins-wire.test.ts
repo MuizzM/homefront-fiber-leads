@@ -18,6 +18,16 @@ describe("packed map-pin wire format", () => {
     expect(unpackMapPins<typeof pins[number]>(packed)).toEqual({ pins, total: 2 });
   });
 
+  it("carries assignMark through pack/unpack so a pre-assignment mark shows on the pin", () => {
+    const pins = [
+      { id: 1, lat: 35.8, lng: -80.2, leadStatus: "prospect", address: "1 A St", city: "X", state: "NC", zip: "27292", assignMark: "priority" },
+      { id: 2, lat: 35.7, lng: -80.3, leadStatus: "prospect", address: "2 A St", city: "X", state: "NC", zip: "27292" },
+    ];
+    const { pins: out } = unpackMapPins<typeof pins[number]>(packMapPins(pins));
+    expect(out[0].assignMark).toBe("priority");
+    expect(out[1].assignMark).toBeUndefined();
+  });
+
   it("carries carrier through pack/unpack so a Frontier lead can paint red", () => {
     const pins = [
       { id: 1, lat: 35.8, lng: -80.2, leadStatus: "prospect", address: "1 A St", city: "X", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed", carrier: "frontier" },
@@ -49,6 +59,7 @@ describe("packed map-pin wire format", () => {
       visited: i % 3 === 0,
       knockCount: i % 3 === 0 ? 1 : undefined,
       lastOutcome: i % 6 === 0 ? "sold" : undefined,
+      assignMark: i % 4 === 0 ? "priority" : undefined,
     }));
     const objectBytes = Buffer.byteLength(JSON.stringify({ pins, total: pins.length }));
     const packedBytes = Buffer.byteLength(JSON.stringify(packMapPins(pins)));
