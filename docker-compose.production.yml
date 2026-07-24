@@ -294,6 +294,12 @@ services:
       DECODO_RESERVE_PCT: "10"
       DECODO_BILLING_DAY: "1"
       YIELD_ROLLUPS: "off"
+      # TOKEN ECONOMY (bot-wall workaround): mint rarely, ride tokens long.
+      # 1 mint/2s max; each token serves 40 leases / 1000 checks before
+      # retirement. One success per minute = 1000 checks/min of capacity.
+      KFS_MINT_MIN_INTERVAL_MS: "2000"
+      KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
+      KFS_TOKEN_MAX_CHECKS: "1000"
       SCAN_TARGET_MERGE: "off"
       # ── Heavy-migration gates — BOTH required to keep the app off the
       # scan_targets table rebuild (949k rows) that wedged the event loop twice.
