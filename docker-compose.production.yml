@@ -129,8 +129,8 @@ services:
       # CPU-bound parse/classify/DB work across all cores, 24 gives the extra cores
       # work without a step-change in proxy pressure (Decodo showed 1% 403s at 20).
       # Raise further only if 403s stay low AND the portal stays snappy.
-      SCAN_GLOBAL_CONCURRENCY: "64"
-      SCAN_BATCH_CONCURRENCY: "20"
+      SCAN_GLOBAL_CONCURRENCY: "32"
+      SCAN_BATCH_CONCURRENCY: "14"
       # Cap concurrently-EXECUTING scan-run worker loops PER PROCESS (each loop polls
       # the DB via a synchronous better-sqlite3 claim). 6/worker × 4 workers = up to 24
       # run loops box-wide, matching the global concurrency cap.
