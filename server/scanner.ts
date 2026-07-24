@@ -130,6 +130,41 @@ function isAuthDenialMessage(message: string): boolean {
 // overrides it when the provider issues a deployment-specific credential.
 const DEFAULT_KFS_AUTH_BASIC = `Basic ${Buffer.from("kinetic:SecuRe!CoNneCt1").toString("base64")}`;
 
+// Shared mint request body; `transport` picks the egress (direct server IP vs
+// Decodo residential proxy).
+async function mintRequest(transport: "direct" | "decodo"): Promise<{ token: string; expiresAt: number }> {
+  const basic = process.env.KFS_AUTH_BASIC?.trim() || DEFAULT_KFS_AUTH_BASIC;
+  const init = {
+    method: "POST",
+    headers: providerHeaders({
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      ...(basic ? { "Authorization": basic } : {}),
+      "Origin": KFS_ORIGIN,
+      "Referer": KFS_REFERER,
+    }),
+    body: JSON.stringify({ brazeDeviceId: "" }),
+    signal: AbortSignal.timeout(10_000),
+  } as any;
+  const response = transport === "direct" ? await fetch(kineticTokenUrl(), init) : await proxyFetch(kineticTokenUrl(), init);
+  if (!response.ok) throw new Error(`Auto-auth blocked (${response.status} via ${transport})`);
+  let data: Record<string, unknown>;
+  try {
+    data = (await response.json()) as Record<string, unknown>;
+  } catch {
+    throw new Error(`Auto-auth non-JSON body (challenge via ${transport})`);
+  }
+  const token = typeof data.token === "string" ? data.token.trim()
+    : typeof data.access_token === "string" ? data.access_token.trim() : "";
+  if (!token) throw new Error(`No token in mint response (via ${transport})`);
+  const now = Date.now();
+  const expiresIn = Number(data.expires_in);
+  const expiresAt = jwtExpiryMs(token)
+    ?? (Number.isFinite(expiresIn) && expiresIn > 0 ? now + Math.floor(expiresIn * 1000) : now + 28 * 60 * 1000);
+  if (expiresAt <= now + TOKEN_REFRESH_MARGIN_MS) throw new Error(`Minted token expires too soon (via ${transport})`);
+  return { token, expiresAt };
+}
+
 async function mintViaDecodo(): Promise<{ token: string; expiresAt: number }> {
   const basic = process.env.KFS_AUTH_BASIC?.trim() || DEFAULT_KFS_AUTH_BASIC;
   const response = await proxyFetch(kineticTokenUrl(), {
@@ -173,6 +208,22 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
   // residential IP and returns 201. So on an authenticated denial we rotate the
   // Decodo SESSION (fresh IP) and retry once. If Decodo itself is unavailable the
   // request fails closed (proxyFetch throws) and the address stays PENDING_AUTH.
+  // HYBRID EGRESS (verified live 2026-07-24): the server's own IP passes
+  // Cloudflare cleanly (3/3 → 201) while Decodo pool IPs carry mixed
+  // reputation. With the token economy capping mints at ~30/min, direct
+  // volume stays far under the per-IP rate radar. Direct first; on a direct
+  // denial, rotate the Decodo session and mint via proxy instead — two
+  // independent egress reputations means the wall has to block BOTH to stop us.
+  // KFS_MINT_DIRECT=off restores Decodo-exclusive minting.
+  if (process.env.KFS_MINT_DIRECT !== "off") {
+    try {
+      return await mintRequest("direct");
+    } catch (err) {
+      const message = String((err as any)?.message ?? err);
+      structuredLog("scan.token.mint_failed", { transport: "direct", error: message.slice(0, 120) }, "warn");
+      // fall through to the Decodo path on ANY direct failure
+    }
+  }
   try {
     return await mintViaDecodo();
   } catch (err) {
