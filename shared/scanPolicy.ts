@@ -16,3 +16,48 @@
 // almost never recurs 3 separate runs in a row on the same address, so the breaker
 // only trips on the deterministic "Kinetic doesn't know this address" case.
 export const INCONCLUSIVE_GIVEUP = 3;
+
+// ── ESCALATING PARK WINDOW (2026-07-24 — the top measured waste) ─────────────
+// Measured in production: 285,723 addresses (37% of the never-scanned pool) are
+// parked address_not_found. Under a FLAT 14-day quiet window they ALL age back
+// in together, every producer re-enqueues them, and each burns one real proxy
+// check before being re-parked — forever. Two hours of live queue data:
+// 333,187 parked-skips vs 9,320 genuine dedup-skips, and 170,777 enqueues to
+// produce 1,836 checks (93:1). It is the churn that floods the single writer,
+// grows the WAL, and starves Concord's real never-scanned backlog.
+//
+// Fix: the quiet window DOUBLES per park generation (a re-park counts as one
+// generation), so an address Kinetic keeps rejecting backs off 14 → 28 → 56 →
+// 112 days instead of returning fortnightly. Past the cap it is terminal: it
+// stops re-entering the rotation and is routed to address repair/review, which
+// is where a genuinely fixable variant gets corrected rather than retried.
+export const ANF_PARK_MAX_GENERATIONS = 3;
+
+/** Park generation from the raw attempt counter (0 = first park). */
+export function anfParkGeneration(attempts: number): number {
+  return Math.max(0, Math.floor(attempts) - INCONCLUSIVE_GIVEUP);
+}
+
+/** Effective quiet days for an address at this attempt count: base × 2^gen. */
+export function anfQuietDaysFor(attempts: number, baseDays: number): number {
+  return baseDays * Math.pow(2, Math.min(anfParkGeneration(attempts), ANF_PARK_MAX_GENERATIONS));
+}
+
+/**
+ * The ONE SQL predicate for "this address is parked address_not_found right
+ * now" — escalating window, evaluated per row. Both the selectors (which must
+ * not enqueue parked rows) and the claim layer (which skips them) build from
+ * this, so the two can never drift apart again.
+ * `a` is the table alias (e.g. "s" or "st").
+ */
+export function anfParkedSql(a: string, baseDays: number): string {
+  return `(${a}.last_scanned_at IS NULL
+    AND ${a}.inconclusive_attempts >= ${INCONCLUSIVE_GIVEUP}
+    AND ${a}.last_inconclusive_at IS NOT NULL
+    AND (
+      -- terminal: past the generation cap it never re-enters the rotation
+      ${a}.inconclusive_attempts >= ${INCONCLUSIVE_GIVEUP + ANF_PARK_MAX_GENERATIONS + 1}
+      OR ${a}.last_inconclusive_at > datetime('now', '-' ||
+           (${baseDays} * (1 << MIN(MAX(${a}.inconclusive_attempts - ${INCONCLUSIVE_GIVEUP}, 0), ${ANF_PARK_MAX_GENERATIONS}))) || ' days')
+    ))`;
+}

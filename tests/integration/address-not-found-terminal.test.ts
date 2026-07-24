@@ -90,12 +90,39 @@ describe("address_not_found terminal", () => {
     expect(store.claimRunTargets(manualRun, 10, 0)).toHaveLength(1);
   });
 
-  it("re-probes after the quiet window lapses", () => {
-    const lapsed = seedTarget("555 LAPSED AVE", { inconclusive_attempts: 5, last_inconclusive_at: rawDb.prepare("SELECT datetime('now','-20 days') d").pluck().get() });
+  it("re-probes after the quiet window lapses (generation 0 = base window)", () => {
+    // A first-generation park (attempts == GIVE-UP) uses the BASE 14-day
+    // window, so 20 days old is claimable again.
+    const lapsed = seedTarget("555 LAPSED AVE", { inconclusive_attempts: 3, last_inconclusive_at: rawDb.prepare("SELECT datetime('now','-20 days') d").pluck().get() });
     const runId = "run_anf_lapsed";
     store.createScanRun({ id: runId, tenantId: TENANT, kind: "city-sweep", label: "lapsed", city: "Testville", state: "NC", budget: 10 });
     store.enqueueRunTargets(runId, [{ id: lapsed, seq: 0 }]);
     expect(store.claimRunTargets(runId, 10, 3600)).toHaveLength(1);
+  });
+
+  it("ESCALATES: a repeatedly-parked address waits its doubled window, then returns", () => {
+    // attempts 5 == generation 2 → 14 × 2^2 = 56-day window. At 20 days it must
+    // stay parked (the old flat window let all 285k parked rows flood back
+    // every 14 days); at 60 days it re-enters the rotation.
+    const early = seedTarget("557 ESCALATED AVE", { inconclusive_attempts: 5, last_inconclusive_at: rawDb.prepare("SELECT datetime('now','-20 days') d").pluck().get() });
+    const runEarly = "run_anf_escalated_early";
+    store.createScanRun({ id: runEarly, tenantId: TENANT, kind: "city-sweep", label: "esc", city: "Testville", state: "NC", budget: 10 });
+    store.enqueueRunTargets(runEarly, [{ id: early, seq: 0 }]);
+    expect(store.claimRunTargets(runEarly, 10, 3600)).toHaveLength(0);
+
+    const ready = seedTarget("559 ESCALATED AVE", { inconclusive_attempts: 5, last_inconclusive_at: rawDb.prepare("SELECT datetime('now','-60 days') d").pluck().get() });
+    const runReady = "run_anf_escalated_ready";
+    store.createScanRun({ id: runReady, tenantId: TENANT, kind: "city-sweep", label: "esc2", city: "Testville", state: "NC", budget: 10 });
+    store.enqueueRunTargets(runReady, [{ id: ready, seq: 0 }]);
+    expect(store.claimRunTargets(runReady, 10, 3600)).toHaveLength(1);
+  });
+
+  it("TERMINAL past the generation cap: never re-enters the rotation", () => {
+    const terminal = seedTarget("561 TERMINAL AVE", { inconclusive_attempts: 12, last_inconclusive_at: rawDb.prepare("SELECT datetime('now','-900 days') d").pluck().get() });
+    const runId = "run_anf_terminal_cap";
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "city-sweep", label: "term", city: "Testville", state: "NC", budget: 10 });
+    store.enqueueRunTargets(runId, [{ id: terminal, seq: 0 }]);
+    expect(store.claimRunTargets(runId, 10, 3600)).toHaveLength(0);
   });
 
   it("backfills the already-exhausted needs-fix tail without new checks", async () => {

@@ -14,6 +14,7 @@ import helmet from "helmet";
 import cors from "cors";
 import compression from "compression";
 import { structuredLog } from "./structuredLog";
+import { anfParkedSql } from "@shared/scanPolicy";
 import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPolicy";
 
 // ── Multi-core scan cluster ────────────────────────────────────────────────────
@@ -990,8 +991,7 @@ app.use((req, res, next) => {
           const ids = (rawDb.prepare(`SELECT id FROM scan_targets WHERE lower(city)=? AND lower(state)=?
             AND (carrier IS NULL OR carrier='kinetic')
             AND (last_scanned_at IS NULL OR last_scanned_at < datetime('now','-24 hours'))
-            AND NOT (last_scanned_at IS NULL AND inconclusive_attempts >= 3
-                     AND last_inconclusive_at IS NOT NULL AND last_inconclusive_at > datetime('now','-14 days'))
+            AND NOT ${anfParkedSql("scan_targets", 14)}
             ORDER BY (last_scanned_at IS NULL) DESC, last_scanned_at ASC LIMIT ?`)
             .all(city, st, perCityCap) as any[]).map((r) => Number(r.id));
           if (ids.length) {
@@ -1023,8 +1023,7 @@ app.use((req, res, next) => {
             WHERE s.tenant_id=? AND lower(s.state) IN (${inClause})
               AND (s.carrier IS NULL OR s.carrier='kinetic')
               AND (s.last_scanned_at IS NULL OR s.last_scanned_at < datetime('now','-24 hours'))
-              AND NOT (s.last_scanned_at IS NULL AND s.inconclusive_attempts >= 3
-                       AND s.last_inconclusive_at IS NOT NULL AND s.last_inconclusive_at > datetime('now','-14 days'))
+              AND NOT ${anfParkedSql("s", 14)}
             ORDER BY cc.unscanned DESC, (s.last_scanned_at IS NULL) DESC, s.id ASC
             LIMIT ?`)
             .all(tid, ...wideStates, tid, ...wideStates, refillCap - enqueued) as any[]).map((r) => Number(r.id));

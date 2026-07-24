@@ -36,6 +36,7 @@ import { registerHarvestSqlFunctions } from "./freshHarvest";
 import { registerFootprintSqlFunctions, warmFootprintGate, footprintGateActive, isFootprintCity } from "./footprintGate";
 import { budgetShapeFactor } from "./harvestScheduler";
 import { yieldRollupsReady } from "./yieldRollups";
+import { anfParkedSql } from "@shared/scanPolicy";
 
 const FRESH_WINDOW_DAYS = 21;
 // Fraction of each cycle's budget spent on random NEVER-scanned footprint
@@ -82,7 +83,7 @@ const LN2 = 0.6931471805599453;
 // enqueued → all skipped → zero checks).
 const ANF_QUIET_DAYS = Math.max(1, Math.floor(Number(process.env.ADDRESS_NOT_FOUND_QUIET_DAYS ?? 14) || 14));
 const ANF_GIVEUP = 3; // mirrors shared/scanPolicy INCONCLUSIVE_GIVEUP
-const NOT_PARKED_ANF = `NOT (s.last_scanned_at IS NULL AND s.inconclusive_attempts >= ${ANF_GIVEUP} AND s.last_inconclusive_at IS NOT NULL AND s.last_inconclusive_at > datetime('now','-${ANF_QUIET_DAYS} days'))`;
+const NOT_PARKED_ANF = `NOT ${anfParkedSql("s", ANF_QUIET_DAYS)}`;
 
 const FOCUS_STATES = (process.env.FRESH_HARVEST_STATES ?? "nc,sc")
   .split(",").map((v) => v.trim().toLowerCase()).filter(Boolean);

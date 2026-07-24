@@ -5,7 +5,7 @@
 // are pure DB operations over data the product already accumulated.
 import { rawDb } from "./db";
 import type { MarketAggregate } from "@shared/marketIntel";
-import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
+import { INCONCLUSIVE_GIVEUP, anfParkedSql } from "@shared/scanPolicy";
 
 // Quiet window for addresses concluded address_not_found (persistent needs-fix
 // non-answers with no adoptable suggestion): parked out of BULK claims this
@@ -292,12 +292,13 @@ const _skipRecentlyScanned = rawDb.prepare(
 // Kinetic's fabric (INCONCLUSIVE_GIVEUP+ needs-fix non-answers, never a
 // conclusive answer). Bulk claims skip them during the quiet window instead of
 // re-burning proxy checks; after it lapses they are claimable again (re-probe).
+// Uses the SHARED escalating-window predicate (@shared/scanPolicy) so the
+// claim layer and every selector agree on "parked" by construction.
 const _skipParkedNotFound = rawDb.prepare(
   `UPDATE scan_run_targets SET state='skipped', result=?, next_attempt_at=NULL
      WHERE run_id=? AND state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))
        AND EXISTS (SELECT 1 FROM scan_targets st WHERE st.id=scan_run_targets.target_id
-                     AND st.last_scanned_at IS NULL AND st.inconclusive_attempts >= ?
-                     AND st.last_inconclusive_at IS NOT NULL AND st.last_inconclusive_at > datetime('now', ?))`);
+                     AND ${anfParkedSql("st", ANF_QUIET_DAYS)})`);
 // IMMEDIATE (not DEFERRED) so the claim takes the WAL write lock up front and
 // busy_timeout serializes concurrent claimers cleanly. A DEFERRED claim lets two
 // processes read the SAME queued rows, and the loser's first write throws
@@ -311,7 +312,7 @@ const _claimTx = rawDb.transaction((runId: string, limit: number, skipRecentlySc
     _skipRecentlyScanned.run("superseded: address conclusively checked within dedup window", runId, `-${Math.floor(skipRecentlyScannedSec)} seconds`);
     _skipParkedNotFound.run(
       "parked: address_not_found quiet window (needs-fix non-answers exhausted)",
-      runId, INCONCLUSIVE_GIVEUP, `-${ANF_QUIET_DAYS} days`,
+      runId,
     );
   }
   const rows = _claimSelect.all(runId, limit) as any[];
@@ -387,8 +388,12 @@ export async function finalizeAddressNotFoundBacklog(attemptCap: number): Promis
       LIMIT 100000`,
   ).all(attemptCap) as Array<{ runId: string; targetId: number; attempts: number }>;
   if (!rows.length) return { targets: 0, runs: 0 };
+  // Each park ADVANCES the generation (MAX(attempts+1, GIVEUP)) so the shared
+  // escalating quiet window backs this address off 14 → 28 → 56 → 112 days.
+  // The old MAX(attempts, GIVEUP) pinned every address at generation 0, so all
+  // 285k parked rows re-entered the rotation together every 14 days.
   const park = rawDb.prepare(
-    `UPDATE scan_targets SET inconclusive_attempts = MAX(inconclusive_attempts, ?), last_inconclusive_at = datetime('now')
+    `UPDATE scan_targets SET inconclusive_attempts = MAX(inconclusive_attempts + 1, ?), last_inconclusive_at = datetime('now')
       WHERE id = ? AND last_scanned_at IS NULL`,
   );
   const runsTouched = new Set<string>();
