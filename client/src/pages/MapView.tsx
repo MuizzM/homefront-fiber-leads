@@ -950,49 +950,87 @@ export default function MapView() {
         return;
       }
 
-      // THE CORE ASK: tapping a house SCANS it for fiber (Kinetic via Decodo) and
-      // drops a GREEN pin the instant it's a NEW FIBER + billing N lead — the rep
-      // never leaves the map. Reps hold scan.submit; the server routes this at
-      // IMMEDIATE priority so it never queues behind the statewide sweep.
+      // ONE-TAP ADD (owner directive 2026-07-24): pin + card land INSTANTLY.
+      // The old flow made the rep wait 3–9s on the fiber scan before anything
+      // appeared — during throttle windows it felt broken. Now the prospect
+      // pin drops the moment the address resolves, and the fiber check runs
+      // behind it, upgrading the pin to GREEN when it's a fresh-fiber lead.
+      let pinnedLeadId: number | null = null;
+      if (canAssign) {
+        try {
+          const addRes = await apiRequest("POST", "/api/leads", {
+            address: resolved.address, city: resolved.city, state: resolved.state,
+            zip: resolved.zip, leadStatus: "prospect", lat: resolved.lat, lng: resolved.lng,
+          });
+          const added = await addRes.json();
+          if (added?.id != null) {
+            pinnedLeadId = added.id;
+            const existed = added?.existed === true;
+            if (!existed && added.lat != null && added.lng != null) {
+              qc.setQueryData(["/api/leads/map"], (old: any) => {
+                if (!old?.pins || old.pins.some((p: any) => p.id === added.id)) return old;
+                return {
+                  ...old,
+                  total: (old.total ?? old.pins.length) + 1,
+                  pins: [...old.pins, {
+                    id: added.id, address: added.address, city: added.city, state: added.state,
+                    zip: added.zip, lat: added.lat, lng: added.lng,
+                    leadStatus: added.leadStatus ?? "prospect", visited: false,
+                    assignedRepId: added.assignedRepId ?? null,
+                  }],
+                };
+              });
+            }
+            qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+            setSelectedLeadId(added.id);
+            try { navigator.vibrate?.(10); } catch { /* no haptics */ }
+            toast({
+              title: existed ? "Already on the map" : "📍 Pin added",
+              description: `${resolved.address} — checking fiber…`,
+            });
+          }
+        } catch { /* pin-first is best-effort; the scan below still runs */ }
+      }
+
+      // Background fiber check: upgrades the pin to GREEN on a fresh-fiber
+      // lead; otherwise the prospect pin simply stays — the tap is never a
+      // dead end for a rep with add rights.
       try {
         const scanRes = await apiRequest("POST", "/api/leads/scan-house", resolved);
         const verdict = await scanRes.json();
         if (verdict.isFreshLead && verdict.leadId != null) {
-          // Optimistic green pin: insert the confirmed-fresh lead so it paints
-          // immediately (fresh halo keyed on the fresh_fiber_confirmed tag),
-          // then reconcile against the server. Select it + flash + haptic.
-          qc.setQueryData(["/api/leads/map"], (old: any) => {
-            if (!old?.pins || old.pins.some((pin: any) => pin.id === verdict.leadId)) return old;
-            return {
-              ...old,
-              total: (old.total ?? old.pins.length) + 1,
-              pins: [...old.pins, {
-                id: verdict.leadId, address: resolved!.address, city: resolved!.city,
-                state: resolved!.state, zip: resolved!.zip,
-                lat: verdict.lat ?? resolved!.lat, lng: verdict.lng ?? resolved!.lng,
-                leadStatus: "prospect", visited: false, assignedRepId: null,
-                leadTag: "fresh_fiber_confirmed", fiberStatus: "new_fiber",
-              }],
-            };
-          });
+          if (verdict.leadId !== pinnedLeadId) {
+            qc.setQueryData(["/api/leads/map"], (old: any) => {
+              if (!old?.pins || old.pins.some((pin: any) => pin.id === verdict.leadId)) return old;
+              return {
+                ...old,
+                total: (old.total ?? old.pins.length) + 1,
+                pins: [...old.pins, {
+                  id: verdict.leadId, address: resolved!.address, city: resolved!.city,
+                  state: resolved!.state, zip: resolved!.zip,
+                  lat: verdict.lat ?? resolved!.lat, lng: verdict.lng ?? resolved!.lng,
+                  leadStatus: "prospect", visited: false, assignedRepId: null,
+                  leadTag: "fresh_fiber_confirmed", fiberStatus: "new_fiber",
+                }],
+              };
+            });
+          }
           qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
           try { navigator.vibrate?.([12, 40, 12]); } catch { /* no haptics */ }
           setSelectedLeadId(verdict.leadId);
           try {
             ringFlashRef.current = { at: performance.now(), color: STATE_COLORS.sold };
           } catch { /* flash best-effort */ }
-          toast({ title: "🟢 New fiber lead!", description: `${resolved.address} — added to the map` });
+          toast({ title: "🟢 New fiber lead!", description: `${resolved.address} — upgraded on the map` });
         } else if (verdict.unresolved) {
-          // NEVER a false "no fiber": a throttle/timeout is unresolved — retry.
-          toast({
-            title: "Couldn't verify",
-            description: "The check didn't complete. Tap the house again to retry.",
-            variant: "destructive",
-          });
-        } else {
-          // Conclusive, but not a fresh lead. If the rep can add leads, offer to
-          // log it as an ordinary prospect (prefilled) so the tap is never a
-          // dead end; a plain rep just sees the verdict.
+          if (pinnedLeadId == null) {
+            toast({
+              title: "Couldn't verify",
+              description: "The check didn't complete. Tap the house again to retry.",
+              variant: "destructive",
+            });
+          }
+        } else if (pinnedLeadId == null) {
           toast({
             title: verdict.label ?? "No fiber lead here",
             description: canAssign
@@ -1002,16 +1040,16 @@ export default function MapView() {
           if (canAssign) setAddLeadInitial({ ...resolved, source: "tap" });
         }
       } catch {
-        // The scan call itself failed (network/gate) — keep the address; if the
-        // rep can add leads, let them do it manually. Mode stays armed.
-        toast({
-          title: "Scan unavailable",
-          description: canAssign
-            ? "Couldn't reach the fiber check. Opening add-lead instead."
-            : "Couldn't reach the fiber check. Try again.",
-          variant: "destructive",
-        });
-        if (canAssign) setAddLeadInitial({ ...resolved, source: "tap" });
+        if (pinnedLeadId == null) {
+          toast({
+            title: "Scan unavailable",
+            description: canAssign
+              ? "Couldn't reach the fiber check. Opening add-lead instead."
+              : "Couldn't reach the fiber check. Try again.",
+            variant: "destructive",
+          });
+          if (canAssign) setAddLeadInitial({ ...resolved, source: "tap" });
+        }
       } finally {
         setTapResolving(false);
         try {
