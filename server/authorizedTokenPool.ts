@@ -90,6 +90,7 @@ export class AuthorizedTokenPool {
   private readonly maxChecksPerToken: number;
   private readonly mint: AuthorizedTokenPoolOptions["mint"];
   private consecutiveMintFailures = 0;
+  private lastMintFailureAt = 0;
   private readonly now: () => number;
   private readonly slots: TokenSlot[] = [];
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
@@ -209,6 +210,16 @@ export class AuthorizedTokenPool {
         // Per-slot refreshes are single-flight above; this second, pool-wide
         // permit prevents many independently expiring slots from stampeding the
         // token endpoint at the same instant. This is the ONE shared refresh op.
+        // 403-STORM BACKOFF (Kinetic bot-wall workaround): once mints fail
+        // consecutively, each further attempt waits 5s -> 10s -> 20s -> ... ->
+        // 120s cap. Without it, lease demand re-fires the failed mint hundreds
+        // of times a minute — feeding the very throttle that caused the
+        // failures (observed live: 500+ mint_failed/3min, zero checks for hours).
+        if (process.env.VITEST !== "true" && this.consecutiveMintFailures >= 3) {
+          const backoffMs = Math.min(120_000, 5_000 * 2 ** (this.consecutiveMintFailures - 3));
+          const wait = this.lastMintFailureAt + backoffMs - this.now();
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        }
         const minted = await this.withRefreshPermit(() => this.mint(slot.id));
         if (!minted.token || minted.expiresAt <= this.now() + this.refreshMarginMs) throw new Error("AUTHORIZED_TOKEN_EXPIRES_TOO_SOON");
         slot.token = minted.token;
@@ -229,6 +240,7 @@ export class AuthorizedTokenPool {
         slot.lastError = String((error as any)?.message ?? error).slice(0, 180);
         slot.state = "EMPTY";
         this.consecutiveMintFailures++;
+        this.lastMintFailureAt = this.now();
         throw error;
       } finally {
         slot.refreshInFlight = null;
