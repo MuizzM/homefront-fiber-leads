@@ -129,8 +129,8 @@ services:
       # CPU-bound parse/classify/DB work across all cores, 24 gives the extra cores
       # work without a step-change in proxy pressure (Decodo showed 1% 403s at 20).
       # Raise further only if 403s stay low AND the portal stays snappy.
-      SCAN_GLOBAL_CONCURRENCY: "24"
-      SCAN_BATCH_CONCURRENCY: "10"
+      SCAN_GLOBAL_CONCURRENCY: "64"
+      SCAN_BATCH_CONCURRENCY: "20"
       # Cap concurrently-EXECUTING scan-run worker loops PER PROCESS (each loop polls
       # the DB via a synchronous better-sqlite3 claim). 6/worker × 4 workers = up to 24
       # run loops box-wide, matching the global concurrency cap.
@@ -235,9 +235,9 @@ services:
       FRESH_HARVEST: "${FRESH_HARVEST:-on}"
       # PUMP MODE: 2x harvest budget (8k/10min) and the keep-warm feeder tops up
       # harder so the queue never drains.
-      FRESH_HARVEST_BUDGET: "8000"
-      FRESH_HARVEST_INTERVAL_MIN: "10"
-      KEEPWARM_REFILL: "12000"
+      FRESH_HARVEST_BUDGET: "20000"
+      FRESH_HARVEST_INTERVAL_MIN: "5"
+      KEEPWARM_REFILL: "30000"
       KEEPWARM_PER_CITY: "3000"
       # REACH FURTHER (operator, 2026-07-21: "keep reaching and removing
       # limitations"). Under the unlimited Decodo plan, breadth is free, so the
@@ -302,7 +302,7 @@ services:
       # offline dedup script; never on boot. ──
       DEFER_ADDR_UNIQUENESS_MIGRATION: "on"
       DEFERRED_MIGRATIONS: "off"
-      ADAPTIVE_PACE: "on"
+      ADAPTIVE_PACE: "off"   # NIGHT BLITZ: owner says app may be down — all resources to scanning
       FRONTIER_BUILD_ZONES: "off"
       # Priority build cities: OSM-ingested daily (free), always scanned first
       # in every harvest cycle. Davidson + Lake Norman towns.
@@ -324,7 +324,7 @@ services:
       # NC-EXCLUSIVE background scanning (owner 2026-07-24): SC/GA producers
       # paused — data, queues, and config preserved; CRITICAL Field Map/manual
       # scans remain available everywhere (never state-gated).
-      FRESH_HARVEST_STATES: "nc"
+      FRESH_HARVEST_STATES: "nc,sc"
       FRONTIER_DIRECT: "off"
       FRONTIER_MARKETS: "off"
       # FULL SCAN (operator, 2026-07-21) — every safe coverage producer ON so we
