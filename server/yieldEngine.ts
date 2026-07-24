@@ -658,6 +658,34 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
   budget = Math.round(budget * budgetShapeFactor()); // Eastern-time idle-capacity shaping
   const bwScale = bandwidthBudgetScale();
   budget = Math.round(budget * bwScale);
+  // THROUGHPUT-MATCHED DISPATCH (2026-07-24, measured): a cycle was enqueueing
+  // 251,033 targets/hour against 2,863 completed checks — 88x oversubscription.
+  // Every excess row is an INSERT plus a claim/skip UPDATE on the single writer
+  // (9.3M 'skipped' rows accumulated), which is the churn that grows the WAL,
+  // competes with the portal, and starves the real backlog. Dispatch is now
+  // sized to PROVEN recent throughput: at most OVERSUBSCRIBE x the checks the
+  // provider actually completed in the last hour. Nothing is lost — unselected
+  // targets stay in the pool and are picked up by the next cycle, which is the
+  // durable queue working as designed. YIELD_THROUGHPUT_MATCH=off restores the
+  // fixed budget.
+  if (process.env.YIELD_THROUGHPUT_MATCH !== "off") {
+    try {
+      const oversubscribe = Math.max(1, Number(process.env.YIELD_OVERSUBSCRIBE) || 2);
+      const cyclesPerHour = Math.max(1, 60 / Math.max(1, Number(process.env.FRESH_HARVEST_INTERVAL_MIN) || 15));
+      const checkedLastHour = Number((rawDb.prepare(
+        `SELECT COUNT(*) n FROM availability_snapshots WHERE checked_at_epoch > ?`,
+      ).get(Date.now() - 3_600_000) as any)?.n ?? 0);
+      // Per-cycle share of the hourly capacity, x oversubscription headroom.
+      // Floor keeps a cold start (or a provider outage) from freezing dispatch.
+      const capacity = Math.max(500, Math.round((checkedLastHour * oversubscribe) / cyclesPerHour));
+      if (capacity < budget) {
+        structuredLog("yield_engine.throughput_capped", {
+          requested: budget, capped: capacity, checkedLastHour, oversubscribe, cyclesPerHour,
+        });
+        budget = capacity;
+      }
+    } catch { /* measurement is best-effort — never block a cycle */ }
+  }
   if (budget <= 0) {
     structuredLog("yield_engine.cycle", { exploit: 0, explore: 0, skipped: "bandwidth governor", bwScale });
     return { exploit: 0, explore: 0 };
