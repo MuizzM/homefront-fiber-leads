@@ -163,7 +163,7 @@ describe("pinDisplayState — truth table", () => {
     expect(STATE_COLORS.interested).toBe("#8B5CF6");
     expect(STATE_COLORS.callback).toBe("#F97316");
     expect(STATE_COLORS.follow_up).toBe("#F97316");
-    expect(STATE_COLORS.sold).toBe("#22C55E");
+    expect(STATE_COLORS.sold).toBe("#14532D");
     expect(STATE_COLORS.not_interested).toBe("#EF4444");
     const canonicalStates: PinDisplayState[] = [
       "unworked", "not_home", "interested", "follow_up", "sold", "not_interested",

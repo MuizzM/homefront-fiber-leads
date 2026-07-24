@@ -33,7 +33,8 @@ export const STATUS_CONFIG: Readonly<Record<LeadMapStatus, Readonly<LeadStatusCo
     label: "Interested", color: "#8B5CF6", shape: "teardrop", glyph: "star", cardIcon: "Star",
   },
   sold: {
-    label: "Sold", color: "#22C55E", shape: "teardrop", glyph: "dollar", cardIcon: "DollarSign",
+    // Deep dark green — clearly distinct from prospect (#16A34A) on the map.
+    label: "Sold", color: "#14532D", shape: "teardrop", glyph: "dollar", cardIcon: "DollarSign",
   },
   not_interested: {
     label: "Not Interested", color: "#EF4444", shape: "teardrop", glyph: "x", cardIcon: "X",

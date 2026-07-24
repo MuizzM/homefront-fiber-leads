@@ -12,7 +12,7 @@ describe("canonical lead status pins", () => {
     ]);
     expect(STATUS_CONFIG.not_home.color).toBe("#EAB308");
     expect(STATUS_CONFIG.interested.color).toBe("#8B5CF6");
-    expect(STATUS_CONFIG.sold.color).toBe("#22C55E");
+    expect(STATUS_CONFIG.sold.color).toBe("#14532D");
     expect(STATUS_CONFIG.not_interested.color).toBe("#EF4444");
     expect(STATUS_CONFIG.prospect.color).toBe("#16A34A");
     expect(STATUS_CONFIG.follow_up.color).toBe("#F97316");
