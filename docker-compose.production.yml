@@ -82,7 +82,7 @@ services:
       COMING_SOON_HOT_HOURS: "3"
       COMING_SOON_CONSTRUCTION_HOURS: "6"
       COMING_SOON_WATCH_HOURS: "12"
-      COMING_SOON_HOT_CITIES: "bear creek:nc,goldston:nc,moncure:nc,inman:sc"
+      COMING_SOON_HOT_CITIES: "bear creek:nc,goldston:nc,moncure:nc"
       # ── Concurrency tuned to the THROUGHPUT PLATEAU, not a rate limit ────────
       # At the raised default (100 concurrent checks) Node's single thread saturated
       # on synchronous SQLite work: per-check latency inflated ~10x (to ~30s),
@@ -216,7 +216,7 @@ services:
       # distinct from the NC Cameron; the burst keys every city by (city, state).
       # lexington:nc (Davidson Co — verified_expanding, Q4-2025 + Q1-2026 build
       # releases) is distinct from lexington:sc above; both are hot.
-      HOT_MARKETS: "inman:sc,spartanburg:sc,west columbia:sc,campobello:sc,landrum:sc,lexington:sc,kershaw:sc,cameron:sc,saint matthews:sc,broadway:nc,sanford:nc,lexington:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
+      HOT_MARKETS: "broadway:nc,sanford:nc,lexington:nc,concord:nc,kannapolis:nc,rockwell:nc,salisbury:nc,granite quarry:nc,gold hill:nc,faith:nc,china grove:nc,landis:nc"
       # BUILD INTELLIGENCE — news + county-permit signals auto-promote cities
       # into the hot zone (TTL'd, evidence-logged). Official Windstream release
       # naming a city → immediate promotion; ≥2 independent news articles/30d →
@@ -321,7 +321,10 @@ services:
       # GA (dalton) removed from states + hot markets; frontier producers stay
       # off and frontier-carrier rows are excluded at selection (yieldEngine
       # KINETIC_ONLY) with historical records preserved suppressed.
-      FRESH_HARVEST_STATES: "nc,sc"
+      # NC-EXCLUSIVE background scanning (owner 2026-07-24): SC/GA producers
+      # paused — data, queues, and config preserved; CRITICAL Field Map/manual
+      # scans remain available everywhere (never state-gated).
+      FRESH_HARVEST_STATES: "nc"
       FRONTIER_DIRECT: "off"
       FRONTIER_MARKETS: "off"
       # FULL SCAN (operator, 2026-07-21) — every safe coverage producer ON so we
