@@ -875,6 +875,17 @@ function finish(run: ScanRunRow, status: string): void {
 // are reclaimed (a resurrected zombie is deduped by the coordinator address-lock).
 const STUCK_RECLAIM_SECONDS = Number(process.env.SCAN_STUCK_RECLAIM_SECONDS ?? 300);
 
+// BOOT-STORM GUARD (2026-07-24 — five failed deploy health gates). Both resume
+// paths dispatched EVERY resumable run in a single tick; with 221 runs carrying
+// 116k queued targets, a boot spawned 221 worker loops at once, each racing to
+// mint a Decodo token. Against Decodo's 403 rolling window that becomes a
+// mint/rotate spin across all four workers, the event loops peg, in-container
+// health probes fail, and the deploy rolls back — stranding MORE runs, so the
+// next boot's storm is bigger (self-amplifying). Resumes are now BOUNDED per
+// tick; the 60s reaper drains the remainder progressively. Nothing is lost:
+// runs stay 'running' with their queued rows intact until dispatched.
+const RESUME_MAX_PER_TICK = Math.max(1, Number(process.env.SCAN_RESUME_MAX_PER_TICK) || 8);
+
 export function resumeInterruptedRuns(): void {
   try {
     // First evict zombie leases: runs whose worker is still in activeRuns but whose
@@ -887,6 +898,8 @@ export function resumeInterruptedRuns(): void {
       activeRuns.delete(run.id); // drop the zombie lease so runScanWorker can re-enter below
     }
     const runs = getResumableRuns(30);
+    let dispatched = 0;
+    let deferred = 0;
     for (const run of runs) {
       if (isRunActive(run.id)) continue; // a live worker already owns it
       resetInflightTargets(run.id); // return crash-orphaned claims to the queue
@@ -894,10 +907,15 @@ export function resumeInterruptedRuns(): void {
         setRunStatus(run.id, "done");
         continue;
       }
+      if (dispatched >= RESUME_MAX_PER_TICK) { deferred++; continue; } // next reaper tick
       console.log(
         `[scan-engine] resuming interrupted run ${run.id} (${countQueued(run.id)} pending)`,
       );
       dispatchRun(run.id, run.tenantId);
+      dispatched++;
+    }
+    if (deferred > 0) {
+      console.log(`[scan-engine] resume bounded: ${dispatched} dispatched, ${deferred} deferred to the next reaper tick`);
     }
     // Drain STRANDED TAILS: 'done' or 'error' runs that still hold claimable queued
     // targets (a target requeued exactly as the batch drained, or a worker that died
@@ -935,6 +953,8 @@ export function resumeInterruptedRuns(): void {
 // claims (no duplication, no data loss).
 export function resumeCriticalRuns(): void {
   try {
+    let dispatched = 0;
+    let deferred = 0;
     for (const run of getResumableRuns(0)) {
       // Fast-resume every REVENUE-class run (IMMEDIATE/NEW_BUILD/DISCOVERY) so a rep's
       // tap, a fresh new-build/Coming-Soon check, or a discovery run never waits for the
@@ -943,8 +963,16 @@ export function resumeCriticalRuns(): void {
       if (isRunActive(run.id)) continue;
       resetInflightTargets(run.id);
       if (countQueued(run.id) === 0) { setRunStatus(run.id, "done"); continue; }
+      // Bounded even for revenue class: a rep's live tap goes through the
+      // CRITICAL admission reserve, not through this backlog drain, so capping
+      // the boot burst costs no interactive latency.
+      if (dispatched >= RESUME_MAX_PER_TICK) { deferred++; continue; }
       console.log(`[scan-engine] fast-resuming revenue run ${run.id} kind=${run.kind} (${countQueued(run.id)} pending)`);
       dispatchRun(run.id, run.tenantId);
+      dispatched++;
+    }
+    if (deferred > 0) {
+      console.log(`[scan-engine] critical resume bounded: ${dispatched} dispatched, ${deferred} deferred`);
     }
   } catch (err: any) {
     console.warn("[scan-engine] critical resume failed:", err?.message);
