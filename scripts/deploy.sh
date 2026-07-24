@@ -224,11 +224,16 @@ trap - EXIT
 # 6) Health gate.
 echo "[deploy] health check…"
 ok=0
-# ~180s of grace (60 × 3s). The app starts listening before its heavy background
-# startup, so health is normally ready in seconds; this is a wide margin for a large DB.
-attempts_left=60
+# Gate on dockerd's OWN healthcheck verdict (docker inspect), not on forked
+# exec probes: on a fully-loaded 4-core box the exec fork itself starves and
+# times out while the app is healthy — observed live as two consecutive false
+# health-gate failures + rollbacks (2026-07-23). dockerd probes in-container
+# on its own schedule (start_period 120s) and its status is already computed.
+# ~300s of grace (100 × 3s) to cover start_period + first probes under load.
+attempts_left=100
 while [ "$attempts_left" -gt 0 ]; do
-  if APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" exec -T app node -e "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" 2>/dev/null; then
+  APP_CONTAINER_NOW="$(APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" ps -q app || true)"
+  if [ -n "$APP_CONTAINER_NOW" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$APP_CONTAINER_NOW" 2>/dev/null)" = "healthy" ]; then
     ok=1; break
   fi
   attempts_left=$((attempts_left - 1))
