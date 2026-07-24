@@ -414,9 +414,13 @@ services:
     networks: [internal]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
+      # Timeout/retries absorb probe-fork starvation on pegged cores: the
+      # probe is `node -e fetch` FORKED in-container; under deploy-time load
+      # the fork itself can take >5s while the app is healthy — three deploys
+      # false-failed their gates on exactly this (2026-07-23/24).
+      interval: 20s
+      timeout: 20s
+      retries: 8
       # The server now starts listening (health OK) BEFORE the heavy background startup,
       # so it's healthy in seconds. Wide grace as a safety margin for migrations / route
       # registration on a large production DB (a 20s window previously forced a rollback).
