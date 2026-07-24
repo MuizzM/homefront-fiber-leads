@@ -992,70 +992,16 @@ export default function MapView() {
         } catch { /* pin-first is best-effort; the scan below still runs */ }
       }
 
-      // Background fiber check: upgrades the pin to GREEN on a fresh-fiber
-      // lead; otherwise the prospect pin simply stays — the tap is never a
-      // dead end for a rep with add rights.
-      try {
-        const scanRes = await apiRequest("POST", "/api/leads/scan-house", resolved);
-        const verdict = await scanRes.json();
-        if (verdict.isFreshLead && verdict.leadId != null) {
-          if (verdict.leadId !== pinnedLeadId) {
-            qc.setQueryData(["/api/leads/map"], (old: any) => {
-              if (!old?.pins || old.pins.some((pin: any) => pin.id === verdict.leadId)) return old;
-              return {
-                ...old,
-                total: (old.total ?? old.pins.length) + 1,
-                pins: [...old.pins, {
-                  id: verdict.leadId, address: resolved!.address, city: resolved!.city,
-                  state: resolved!.state, zip: resolved!.zip,
-                  lat: verdict.lat ?? resolved!.lat, lng: verdict.lng ?? resolved!.lng,
-                  leadStatus: "prospect", visited: false, assignedRepId: null,
-                  leadTag: "fresh_fiber_confirmed", fiberStatus: "new_fiber",
-                }],
-              };
-            });
-          }
-          qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-          try { navigator.vibrate?.([12, 40, 12]); } catch { /* no haptics */ }
-          setSelectedLeadId(verdict.leadId);
-          try {
-            ringFlashRef.current = { at: performance.now(), color: STATE_COLORS.sold };
-          } catch { /* flash best-effort */ }
-          toast({ title: "🟢 New fiber lead!", description: `${resolved.address} — upgraded on the map` });
-        } else if (verdict.unresolved) {
-          if (pinnedLeadId == null) {
-            toast({
-              title: "Couldn't verify",
-              description: "The check didn't complete. Tap the house again to retry.",
-              variant: "destructive",
-            });
-          }
-        } else if (pinnedLeadId == null) {
-          toast({
-            title: verdict.label ?? "No fiber lead here",
-            description: canAssign
-              ? "Not a fresh-fiber lead. Opening add-lead so you can still log it."
-              : "Not a fresh-fiber lead.",
-          });
-          if (canAssign) setAddLeadInitial({ ...resolved, source: "tap" });
-        }
-      } catch {
-        if (pinnedLeadId == null) {
-          toast({
-            title: "Scan unavailable",
-            description: canAssign
-              ? "Couldn't reach the fiber check. Opening add-lead instead."
-              : "Couldn't reach the fiber check. Try again.",
-            variant: "destructive",
-          });
-          if (canAssign) setAddLeadInitial({ ...resolved, source: "tap" });
-        }
-      } finally {
-        setTapResolving(false);
-        try {
-          (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(emptyFeatureCollection());
-        } catch { /* transient layer state */ }
+      // NO AUTO-SCAN (owner directive 2026-07-24): the tap ONLY drops the
+      // pin + card — fiber verification is done manually, never automatically
+      // on tap. Reps without add rights just get a confirmation toast.
+      if (pinnedLeadId == null && !canAssign) {
+        toast({ title: "Address found", description: resolved.address });
       }
+      setTapResolving(false);
+      try {
+        (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(emptyFeatureCollection());
+      } catch { /* transient layer state */ }
     };
     const map = mapRef.current;
     if (map) {
