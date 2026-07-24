@@ -671,11 +671,18 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
   try {
     registerFootprintSqlFunctions();
     warmFootprintGate();
+    // TWO-TIER FAIRNESS (Concord catch-up): tier 1 is a guaranteed per-city
+    // floor (round-robin, oldest first — a 60-house street always gets its
+    // slots); tier 2 spends the REMAINING lane budget proportionally to each
+    // city's never-scanned BACKLOG, so a 59k-backlog giant (Concord) drains at
+    // scale instead of one-slot-per-lap. Both tiers stay oldest-first.
+    const cityFloor = Math.max(1, Number(process.env.YIELD_DISCOVERY_CITY_FLOOR) || 25);
     discovery = (rawDb.prepare(
       `WITH ranked AS (
          SELECT s.id, s.created_at,
                 ROW_NUMBER() OVER (PARTITION BY lower(s.city), lower(s.state)
-                                   ORDER BY s.created_at ASC, s.id ASC) AS cityRank
+                                   ORDER BY s.created_at ASC, s.id ASC) AS cityRank,
+                COUNT(*) OVER (PARTITION BY lower(s.city), lower(s.state)) AS cityBacklog
            FROM scan_targets s
           WHERE s.tenant_id=? AND s.last_scanned_at IS NULL
             AND lower(s.state) IN (${STATE_IN})
@@ -688,7 +695,11 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
             -- 2h/12h recheck cadence).
             AND s.id NOT IN (SELECT w.scan_target_id FROM coming_soon_watchlist w WHERE w.status='active')
        )
-       SELECT id FROM ranked ORDER BY cityRank ASC, created_at ASC, id ASC LIMIT ?`,
+       SELECT id FROM ranked
+        ORDER BY MIN(cityRank, ${cityFloor}) ASC,
+                 CAST(cityRank AS REAL) / MAX(cityBacklog, 1) ASC,
+                 created_at ASC, id ASC
+        LIMIT ?`,
     ).all(tenantId, ...stateArgs(), discoveryBudget) as any[]).map((r) => r.id);
     const oldest = rawDb.prepare(
       `SELECT MIN(created_at) o, COUNT(*) n FROM scan_targets s
