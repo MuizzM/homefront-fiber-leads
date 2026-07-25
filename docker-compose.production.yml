@@ -298,6 +298,8 @@ services:
       # 1 mint/2s max; each token serves 40 leases / 1000 checks before
       # retirement. One success per minute = 1000 checks/min of capacity.
       KFS_MINT_MIN_INTERVAL_MS: "2000"
+      DECODO_STICKY: "off"
+      KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
       KFS_TOKEN_MAX_CHECKS: "1000"
       SCAN_TARGET_MERGE: "off"
