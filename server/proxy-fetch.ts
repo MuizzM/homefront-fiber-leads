@@ -67,6 +67,42 @@ function configuredProxyUrl(): string | null {
   return proxyUrlFromEnv(process.env);
 }
 
+// ── STICKY DECODO SESSIONS (Cloudflare workaround, verified live) ───────────
+// Per-connection rotation makes EVERY request roll the IP-reputation dice
+// fresh (measured: 87% of checks 403'd during a wall). Cloudflare reputation
+// is sticky per egress IP — a clean IP stays clean for many minutes. So we
+// ride ONE residential IP per 15-minute window (Decodo `session-<id>` username
+// suffix) and rotate the id on schedule — or immediately on an auth denial,
+// which was already the behavior via rotateProxySession(). A bad IP is
+// retired in seconds; a good one is used at full speed instead of being
+// thrown away after a single request. DECODO_STICKY=off restores per-
+// connection rotation.
+const STICKY_MS = Math.max(60_000, Number(process.env.DECODO_STICKY_MINUTES ?? 15) * 60_000);
+let _stickyId = Math.random().toString(36).slice(2, 10);
+let _stickyUntil = Date.now() + STICKY_MS;
+
+function stickyProxyUrl(base: string): string {
+  if (process.env.DECODO_STICKY === "off") return base;
+  try {
+    if (Date.now() > _stickyUntil) {
+      _stickyId = Math.random().toString(36).slice(2, 10);
+      _stickyUntil = Date.now() + STICKY_MS;
+      console.log(`[proxy-fetch] sticky session window expired → new sticky id`);
+    }
+    const u = new URL(base);
+    if (!u.username) return base;
+    // Avoid double-stick if the operator baked a session into the URL already.
+    if (u.username.includes("-session-")) return base;
+    u.username = `${u.username}-session-${_stickyId}-sessionduration-30`;
+    return u.toString();
+  } catch { return base; }
+}
+
+/** Exposed for diagnostics: the current sticky session window (masked). */
+export function stickySessionInfo(): { id: string; untilMs: number } {
+  return { id: _stickyId.slice(0, 4) + "…", untilMs: Math.max(0, _stickyUntil - Date.now()) };
+}
+
 function buildAgent(proxyUrl: string) {
   return new _ProxyAgent({
     uri: proxyUrl,
@@ -95,7 +131,7 @@ async function loadUndici() {
 
     const proxyUrl = configuredProxyUrl();
     if (proxyUrl && _ProxyAgent) {
-      _sharedDispatcher = buildAgent(proxyUrl);
+      _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
       console.log(`[proxy-fetch] Pool created: ${POOL_SIZE} connections × ${PIPELINE} pipeline = ${POOL_SIZE * PIPELINE} slots`);
     }
   } catch {
@@ -121,14 +157,18 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
     // Still unavailable after a completed load = undici truly missing: fail
     // closed rather than ever sending an unproxied direct request.
     if (!_undiciFetch) throw new Error("[proxy-fetch] PROXY_URL set but undici unavailable — refusing an unconfigured direct request");
-    if (!_sharedDispatcher) _sharedDispatcher = buildAgent(proxyUrl);
+    if (!_sharedDispatcher) _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
     // Count this request toward the proactive-rotation cadence, but DON'T rotate
     // before dispatching it — the request that trips the counter must run on the
     // existing WARM dispatcher, and the rotation happens AFTER the response so
     // the fresh (connectionless) session is paid for by the NEXT request, not
     // this interactive one. Verified in prod: a fresh dispatcher searches 200
     // while a long-lived one 403s; we retire the IP set, just not mid-request.
+    // Sticky mode: NO request-count rotation — the 15-min sticky window +
+    // denial-driven rebuilds govern egress changes. Rotating every 10 requests
+    // (the legacy default) would throw away the clean IP we just rode in on.
     const shouldProactiveRotate =
+      process.env.DECODO_STICKY === "off" &&
       PROACTIVE_ROTATE_EVERY > 0 && ++_reqSinceRotate >= PROACTIVE_ROTATE_EVERY;
     if (shouldProactiveRotate) _reqSinceRotate = 0;
     try {
@@ -175,7 +215,14 @@ export async function proxyFetch(url: string, opts: RequestInit = {}): Promise<R
 // assigns a fresh egress IP — a fresh authorized session.
 function rebuildDispatcher(proxyUrl: string): void {
   const old = _sharedDispatcher;
-  _sharedDispatcher = buildAgent(proxyUrl);
+  // A rebuild is almost always denial-driven (403/socket reset): the whole
+  // point is a FRESH egress IP. Force a new sticky id here — the time-based
+  // window only applies to undisturbed operation, never to a rotate.
+  if (process.env.DECODO_STICKY !== "off") {
+    _stickyId = Math.random().toString(36).slice(2, 10);
+    _stickyUntil = Date.now() + STICKY_MS;
+  }
+  _sharedDispatcher = buildAgent(stickyProxyUrl(proxyUrl));
   _sessionSeq++;
   // Graceful, fire-and-forget close of the old pool so in-flight requests finish
   // on it while new traffic moves to the fresh session. Never awaited.
