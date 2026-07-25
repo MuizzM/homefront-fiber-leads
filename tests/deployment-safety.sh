@@ -39,7 +39,17 @@ grep -q 'BACKUP_VOLUME="$DATA_MOUNT_NAME"' scripts/deploy.sh || fail "deploy doe
 # 38GB box. Deploys must build FIRST, then stop the app, checkpoint, and
 # stream the backup. Greps anchor on CODE (pragma/flag strings), not on log
 # messages a refactor could keep while deleting the behavior.
-grep -q 'BACKUP_QUIESCENT=1 BACKUP_VOLUME' scripts/deploy.sh || fail "deploy does not use the offline quiescent backup window"
+# The offline quiescent backup now lives in the SCHEDULED job, not in the
+# release path — a release must not stop a healthy container to compress 7GB
+# (measured: a multi-minute outage per deploy).
+grep -q 'BACKUP_QUIESCENT=1 BACKUP_VOLUME' scripts/backup-offline.sh || fail "scheduled offline backup lost its quiescent mode"
+grep -q 'DEPLOY_WITH_BACKUP' scripts/deploy.sh || fail "deploy lost the opt-in backup switch"
+grep -q 'flock' scripts/backup-offline.sh || fail "scheduled backup can collide with a deploy"
+if grep -qE '^\s*timeout 1800 env BACKUP_QUIESCENT=1' scripts/deploy.sh; then
+  fail "the release still takes its backup inside the downtime window"
+fi
+grep -q 'lb_try_duration' Caddyfile || fail "Caddy does not hold requests through a cutover (hard errors during releases)"
+grep -q 'health_uri' Caddyfile || fail "Caddy upstream health checks missing"
 grep -q 'pragma("wal_checkpoint(TRUNCATE)")' scripts/deploy.sh || fail "offline window lacks a real WAL-checkpoint pragma"
 if grep -q 'VACUUM INTO' scripts/deploy.sh; then
   fail "deploy must not take an online vacuum snapshot (disk-hungry; wedged production deploys)"

@@ -2,10 +2,11 @@
 # ── Production deploy (Hetzner + Docker Compose) ─────────────────────────────
 # - Immutable image tag = commit SHA (never :latest).
 # - Build-first: both images build while the OLD release keeps serving.
-# - Pre-cutover DB backup taken in a SHORT OFFLINE WINDOW (app stopped,
-#   WAL-checkpointed, streamed zstd|age — ~1/3 of DB size on disk). The old
-#   online-vacuum snapshot needed multiples of the DB size in transient disk
-#   and wedged deploys on the 38GB box; the offline stream is the proven fix.
+# - FAST CUTOVER: the release swaps the container and nothing else. The
+#   offline DB backup moved OUT of the downtime window to a scheduled job
+#   (scripts/backup-offline.sh) after a measured multi-minute outage per
+#   release — stopping a healthy container to compress 7GB is not a blip.
+#   DEPLOY_WITH_BACKUP=1 restores the in-deploy backup for a risky release.
 # - Health-gated cutover; auto-rollback to the previous SHA if health fails,
 #   and auto-restore of the previous release if the offline window itself fails.
 # - Records the previous SHA for rollback.sh.
@@ -16,8 +17,9 @@
 # it requires the manual, approval-gated procedure in docs/INCIDENT_RUNBOOK.md.
 #
 # Env:
-#   DEPLOY_SKIP_BACKUP=1   emergency-only: skip the offline backup window and
-#                          cut over directly (rolling restart, no snapshot).
+#   DEPLOY_WITH_BACKUP=1   take the offline snapshot inside this deploy
+#                          (adds the stop-the-world window back — use only
+#                          for a release you consider especially risky).
 #
 # Usage:  scripts/deploy.sh [full-commit-sha] (defaults to current HEAD)
 set -euo pipefail
@@ -141,7 +143,7 @@ APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" build app
 # writing). Fail HERE, before any downtime. The whole block is skipped in
 # emergency mode: its docker exec would die on a broken app container, and
 # the emergency hatch must work exactly then.
-if [ "${DEPLOY_SKIP_BACKUP:-0}" != "1" ]; then
+if [ "${DEPLOY_WITH_BACKUP:-0}" = "1" ]; then
   BACKUP_DIR_HOST="${BACKUP_DIR:-./backups}"
   mkdir -p "$BACKUP_DIR_HOST"
   DB_KB="$(docker exec "$APP_CONTAINER" du -k /data/data.db | cut -f1)"
@@ -169,9 +171,18 @@ restore_previous_release() {
   fi
 }
 
+# ── DOWNTIME BUDGET ─────────────────────────────────────────────────────────
+# The pre-cutover backup used to run INSIDE the stopped window: stop the
+# healthy container, checkpoint, compress ~7GB, then start the replacement.
+# Measured cost: a multi-minute hard outage on every release (reps saw
+# connection failures, not a blip). Releases no longer pay that price —
+# the offline backup is now a SCHEDULED job (scripts/backup-offline.sh, run
+# from cron at a quiet hour) and the deploy window contains only the
+# container swap (seconds). Set DEPLOY_WITH_BACKUP=1 to restore the old
+# in-deploy backup for a release you consider especially risky.
 WINDOW_OPEN=0
-if [ "${DEPLOY_SKIP_BACKUP:-0}" = "1" ]; then
-  echo "[deploy] WARNING: DEPLOY_SKIP_BACKUP=1 — cutting over WITHOUT a pre-deploy snapshot" >&2
+if [ "${DEPLOY_WITH_BACKUP:-0}" != "1" ]; then
+  echo "[deploy] fast cutover — backup deferred to the scheduled offline job (DEPLOY_WITH_BACKUP=1 to force one here)"
 else
   # Arm the restore trap BEFORE stopping: if `stop` itself fails halfway (or
   # anything between stop and cutover dies), set -e exits through the trap and

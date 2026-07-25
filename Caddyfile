@@ -7,7 +7,24 @@
 
 portal.homefrontsolutionsllc.com {
 	encode zstd gzip
-	reverse_proxy app:5000
+
+	# NEAR-ZERO-DOWNTIME CUTOVER. Without retry, the moment the app container
+	# stops during a release Caddy fails the request outright — reps saw hard
+	# connection errors for the length of the swap (measured: a multi-minute
+	# outage while the release also took its backup inside that window).
+	# lb_try_duration makes Caddy HOLD a request and keep retrying while the
+	# replacement comes up, so a normal cutover is a slightly slow request
+	# instead of an error. Active health checks keep an unhealthy upstream out
+	# of rotation, and the passive fail policy stops hammering a dead one.
+	reverse_proxy app:5000 {
+		lb_try_duration 45s
+		lb_try_interval 250ms
+		health_uri       /api/health
+		health_interval  5s
+		health_timeout   3s
+		fail_duration    5s
+		max_fails        3
+	}
 
 	# Transport-level hardening. The APP already sets a strict CSP + security
 	# headers via helmet (authoritative); these are belt-and-suspenders.
