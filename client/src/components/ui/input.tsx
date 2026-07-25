@@ -9,7 +9,13 @@ const Input = React.forwardRef<HTMLInputElement, React.ComponentProps<"input">>(
       <input
         type={type}
         className={cn(
-          "flex h-11 w-full rounded-xl border border-input bg-background px-3.5 py-2 text-base ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 md:rounded-lg md:px-3 md:text-sm",
+          // NOTE: horizontal padding is intentionally NOT responsive. A
+          // `md:px-3` here outranked any unprefixed consumer padding at
+          // desktop widths (tailwind-merge cannot dedupe across breakpoints),
+          // so every input with a leading icon collided with that icon on
+          // desktop — visible in the Leads search. One padding value keeps
+          // `pl-9`-style overrides working at every width.
+          "flex h-11 w-full rounded-xl border border-input bg-background px-3.5 py-2 text-base ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 md:h-9 md:rounded-lg md:text-sm",
           className
         )}
         ref={ref}

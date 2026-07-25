@@ -130,7 +130,8 @@ interface RepActivity {
 
 // Dashboard field tiles use the shared KPI card (fixed width for the thumb-scroll row).
 function FieldTile(props: { label: string; value: number | string; tone: string; icon: any; chip: string; accent: string; loading?: boolean }) {
-  return <KpiTile {...props} className="w-[132px]" />;
+  // Fixed width inside the phone rail; full-width cell once the row becomes a grid.
+  return <KpiTile {...props} className="w-[132px] md:w-auto" />;
 }
 
 // Tap-a-rep activity card: recent dispositions with the door + timestamp.
@@ -265,7 +266,7 @@ export default function Dashboard() {
             data-testid="badge-clocked-in"
           >
             {stats.team.activeClockedIn > 0 && <span className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />}
-            {stats.team.activeClockedIn} reps in field
+            {stats.team.activeClockedIn} rep{stats.team.activeClockedIn !== 1 ? "s" : ""} in field
           </Badge>
         )}
         {stats && isRep && (
@@ -278,7 +279,10 @@ export default function Dashboard() {
       {/* ── Field summary — thumb-scrollable tiles, the day at a glance ── */}
       <section className="space-y-2.5">
         <h2 className={EYEBROW}>{isRep ? "Your day" : "Today at a glance"}</h2>
-        <div className="-mx-6 flex gap-2.5 overflow-x-auto px-6 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pill-row-fade"
+        {/* Phones keep the thumb-scrollable rail; from md up the tiles become a
+            grid so every metric — including Sold — is visible at once instead
+            of being clipped off the right edge with no scroll affordance. */}
+        <div className="-mx-6 flex gap-2.5 overflow-x-auto px-6 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden pill-row-fade md:mx-0 md:grid md:grid-cols-3 md:overflow-visible md:px-0 lg:grid-cols-5"
           data-testid="field-tiles">
           <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? "—"} loading={statsLoading && !stats} tone="text-amber-400" icon={AlertCircle} chip="bg-amber-500/15" accent="bg-amber-500" />
           <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
