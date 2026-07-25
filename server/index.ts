@@ -428,6 +428,19 @@ app.use((req, res, next) => {
       // builds that would stall an HTTP-serving worker.
       const { startYieldRollupMaintenance } = await import("./yieldRollups");
       startYieldRollupMaintenance();
+      // ADDRESS REPAIR LANE — INDEPENDENT of YIELD_ROLLUPS. It was originally
+      // wired inside the rollup tick, so YIELD_ROLLUPS=off silently disabled
+      // it (observed live: the repair columns were never even created). It
+      // owns its own bounded, sentinel-aware timer in the primary.
+      if (process.env.ADDRESS_REPAIR_LANE !== "off") {
+        const { runAddressRepairPass, ensureRepairSchema } = await import("./addressRepairLane");
+        try { ensureRepairSchema(); } catch (e: any) { console.warn("[address-repair] schema:", e?.message); }
+        const repairTimer = setInterval(() => {
+          try { runAddressRepairPass(Math.max(50, Number(process.env.ADDRESS_REPAIR_BATCH) || 300)); }
+          catch (e: any) { console.warn("[address-repair] pass failed:", e?.message); }
+        }, Math.max(30_000, Number(process.env.ADDRESS_REPAIR_TICK_MS) || 120_000));
+        if (typeof (repairTimer as any).unref === "function") (repairTimer as any).unref();
+      }
     }
     try { const { coordinatorBootClean } = await import("./distributedProviderCoordinator"); coordinatorBootClean(); }
     catch (e: any) { console.warn("[coordinator] boot clean skipped:", e?.message); }
@@ -977,7 +990,26 @@ app.use((req, res, next) => {
         const { bandwidthBudgetScale, isProxyCircuitOpen } = await import("./bandwidthGovernor");
         if (isProxyCircuitOpen()) return;
         const bwScale = bandwidthBudgetScale();
-        const refillCap = Math.max(500, Math.round(KW_REFILL * bwScale));
+        let refillCap = Math.max(500, Math.round(KW_REFILL * bwScale));
+        // THROUGHPUT-MATCHED REFILL (measured 2026-07-24): with the yield
+        // engine capped to proven throughput, keep-warm became the dominant
+        // enqueuer — 176,415 rows/hour against 3,179 completed checks, and
+        // 169,404 of those were skipped again as parked. Topping the queue up
+        // far past what the provider can drain buys nothing and costs the
+        // single writer an INSERT plus a claim/skip UPDATE per row. Cap the
+        // refill at what actually drains in an hour (x2 headroom).
+        if (process.env.YIELD_THROUGHPUT_MATCH !== "off") {
+          try {
+            const checkedLastHour = Number((rawDb.prepare(
+              `SELECT COUNT(*) n FROM availability_snapshots WHERE checked_at_epoch > ?`,
+            ).get(Date.now() - 3_600_000) as any)?.n ?? 0);
+            const drainCap = Math.max(500, checkedLastHour * 2);
+            if (drainCap < refillCap) {
+              structuredLog("keepwarm.throughput_capped", { requested: refillCap, capped: drainCap, checkedLastHour });
+              refillCap = drainCap;
+            }
+          } catch { /* best-effort — never block the feeder */ }
+        }
         const perCityCap = Math.max(250, Math.round(KW_PER_CITY * bwScale));
         // Only refill when the pipeline is draining — this is what bounds total work.
         const claimable = Number((rawDb.prepare(`SELECT COUNT(*) c FROM scan_run_targets t JOIN scan_runs r ON r.id=t.run_id

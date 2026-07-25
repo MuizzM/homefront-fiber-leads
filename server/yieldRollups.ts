@@ -256,20 +256,6 @@ export function startYieldRollupMaintenance(): NodeJS.Timeout | null {
         }
         return;
       }
-      // 6) ADDRESS REPAIR LANE — terminally-parked addresses (the escalating
-      // park window's endpoint) get repaired from our own verified neighbours
-      // or quarantined as ADDRESS_REVIEW. Bounded per tick, sentinel-aware,
-      // single-writer, idempotent (a processed row leaves the candidate set).
-      // Kill-switch ADDRESS_REPAIR_LANE=off.
-      if (process.env.ADDRESS_REPAIR_LANE !== "off") {
-        try {
-          const { runAddressRepairPass } = require("./addressRepairLane") as typeof import("./addressRepairLane");
-          const res = runAddressRepairPass(Math.max(50, Number(process.env.ADDRESS_REPAIR_BATCH) || 300));
-          if (res.examined > 0) return; // one duty per tick — keep ticks short
-        } catch (e: any) {
-          structuredLog("yield_rollups.repair_error", { error: String(e?.message ?? e).slice(0, 140) }, "error");
-        }
-      }
       // Steady-state: keep stats fresh the recommended way (cheap no-op when
       // nothing changed enough to matter).
       try { rawDb.exec("PRAGMA optimize"); } catch { /* advisory */ }

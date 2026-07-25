@@ -100,12 +100,28 @@ describe("commission self-dealing is refused", () => {
 describe("bulk lead operations are bounded", () => {
   const bigList = Array.from({ length: 501 }, (_, i) => i + 1);
 
-  it("bulk-assign refuses an over-large selection", async () => {
+  it("bulk-assign ACCEPTS a whole-neighbourhood selection (set-based + chunked)", async () => {
+    // The 500 cap existed because the old path ran ~3 synchronous statements
+    // per lead. It is now two statements per 500-lead chunk with an
+    // event-loop yield between chunks, so a lasso can hand a rep an entire
+    // neighbourhood. (Ids that do not exist simply count as skipped.)
     const res = await request("/api/leads/bulk-assign", manager.session, {
       method: "POST", body: JSON.stringify({ leadIds: bigList, repId: rep.memberId }),
     });
-    expect(res.status).toBe(400);
-    expect((await res.json() as any).code).toBe("BULK_TOO_LARGE");
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.updated + body.skipped).toBe(bigList.length);
+  });
+
+  it("bulk-assign still refuses an absurd payload (defense in depth)", async () => {
+    // Two independent guards: the JSON body limit (413) fires first at this
+    // size, and MAX_BULK_ASSIGN_LEADS (400 BULK_TOO_LARGE) backs it up. Either
+    // refusal is correct — what matters is that it is never accepted.
+    const absurd = Array.from({ length: 25_001 }, (_, i) => i + 1);
+    const res = await request("/api/leads/bulk-assign", manager.session, {
+      method: "POST", body: JSON.stringify({ leadIds: absurd, repId: rep.memberId }),
+    });
+    expect([400, 413]).toContain(res.status);
   });
 
   it("bulk-status refuses an over-large selection", async () => {

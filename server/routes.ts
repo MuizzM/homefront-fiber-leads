@@ -822,6 +822,11 @@ const AREA_SCAN_CONCURRENCY = Number(process.env.AREA_SCAN_CONCURRENCY ?? 25); /
 // runs synchronous SQLite work on the one event-loop thread, so this caps how
 // long one request can monopolize it. A real lasso selection is well under this.
 const MAX_BULK_LEADS = 500;
+// Bulk ASSIGN is set-based + chunked (two statements per 500-lead chunk, with
+// an event-loop yield between chunks), so it is not bound by the per-row cost
+// that caps the other bulk routes. A rep can be handed a whole neighbourhood
+// in one lasso. Still bounded — the payload itself must stay sane.
+const MAX_BULK_ASSIGN_LEADS = Math.max(500, Number(process.env.MAX_BULK_ASSIGN_LEADS) || 25_000);
 async function runAreaScan(jobId: string, addresses: ReturnType<typeof generateAddresses>) {
   const job = scanJobs.get(jobId);
   if (!job) return;
@@ -3709,37 +3714,71 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Bulk assign leads to a rep (lasso selection) ────────────────────────────
   // POST /api/leads/bulk-assign  { leadIds: number[], repId: number | null }
-  app.post("/api/leads/bulk-assign", requireCapability("lead.assign"), (req, res) => {
+  app.post("/api/leads/bulk-assign", requireCapability("lead.assign"), async (req, res) => {
     const { leadIds, repId } = req.body as { leadIds: number[]; repId: number | null };
     if (!Array.isArray(leadIds) || leadIds.length === 0) return res.status(400).json({ error: "leadIds required" });
-    // Bound the batch: each id runs synchronous better-sqlite3 work on the one
-    // event-loop thread, so an unbounded array would stall the HTTP server for
-    // every user. A lasso selection is realistically well under this cap.
-    if (leadIds.length > MAX_BULK_LEADS) return res.status(400).json({ error: `Too many leads — select at most ${MAX_BULK_LEADS} at a time`, code: "BULK_TOO_LARGE" });
+    // WHOLE-TERRITORY ASSIGNMENT. The old per-id loop ran ~3 synchronous
+    // statements per lead (SELECT + UPDATE + INSERT) on the one event-loop
+    // thread, so it had to be capped at 500 or a big lasso stalled the portal
+    // for every user. This path is SET-BASED instead: two statements per chunk
+    // regardless of chunk size, so 10,000 leads costs ~40 statements rather
+    // than 30,000. Chunks yield the event loop between them, so the portal
+    // stays responsive while a whole neighbourhood is handed to a rep.
+    if (leadIds.length > MAX_BULK_ASSIGN_LEADS) {
+      return res.status(400).json({ error: `Too many leads — select at most ${MAX_BULK_ASSIGN_LEADS.toLocaleString()} at a time`, code: "BULK_TOO_LARGE" });
+    }
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
-    const stamp = repId ? { assignedBy: user?.name ?? null, assignedAt: new Date().toISOString() } : { assignedBy: null, assignedAt: null };
+    const assignedAt = repId ? new Date().toISOString() : null;
+    const assignedBy = repId ? (user?.name ?? null) : null;
     const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
-    // One transaction: the whole selection assigns atomically (all-or-nothing on
-    // error) instead of leaving a half-applied batch, and commits the writes in
-    // a single fsync instead of one per lead.
-    const apply = rawDb.transaction(() => {
-      let updated = 0, skipped = 0;
-      for (const id of leadIds) {
-        // A team_lead may only move unassigned or own-team leads — silently skip
-        // (don't steal) another team's; count them so the UI can be honest.
-        const lead = storage.getLeadById(id);
-        if (lead && (tid == null || lead.tenantId === tid) && !canReassignLead(user, lead)) { skipped++; continue; }
-        const result = storage.updateLead(id, { assignedRepId: repId ?? null, ...stamp }, tid);
-        if (result) {
-          updated++;
-          if (repName) storage.addLeadEvent(id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
+    // The same authority rule canReassignLead() enforces per row, expressed
+    // once in SQL: admin/manager (undefined scope) may move anything; a
+    // team_lead may move only unassigned or own-team leads.
+    const scope = leadVisibilityScope(user);
+    const scopeSql = scope === undefined
+      ? "1=1"
+      : `(assigned_rep_id IS NULL${(scope as number[]).length ? ` OR assigned_rep_id IN (${(scope as number[]).map((n) => Number(n) | 0).join(",")})` : ""})`;
+    const tenantSql = tid == null ? "1=1" : `tenant_id = ${Number(tid) | 0}`;
+    const ids = [...new Set(leadIds.map((v) => Number(v)).filter(Number.isInteger))];
+    const eventDetail = JSON.stringify({ assignedTo: repName, assignedBy });
+    const CHUNK = 500;
+    let updated = 0;
+
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => "?").join(",");
+      // One transaction per chunk: a stall can never exceed one chunk, and a
+      // failure leaves whole chunks applied rather than a half-written row.
+      const applyChunk = rawDb.transaction(() => {
+        // Assignment events first — they must see the PRE-update rows, and
+        // only for leads this caller is actually allowed to move.
+        if (repName) {
+          rawDb.prepare(
+            `INSERT INTO lead_events (lead_id, type, actor, detail, at)
+             SELECT id, 'assignment', ?, ?, datetime('now') FROM leads
+              WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
+          ).run(user?.name ?? null, eventDetail, ...chunk);
         }
-      }
-      return { updated, skipped };
-    });
-    const { updated, skipped } = apply.immediate();
+        return rawDb.prepare(
+          `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?,
+                  unassigned_at = CASE WHEN ? IS NULL THEN datetime('now') ELSE unassigned_at END,
+                  updated_at = datetime('now')
+            WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
+        ).run(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk).changes;
+      });
+      updated += applyChunk.immediate() as number;
+      // Yield so /api/health, the Field Map, and every other request keep
+      // flowing while a large territory assignment completes.
+      if (i + CHUNK < ids.length) await new Promise((resolve) => setImmediate(resolve));
+    }
+    const skipped = ids.length - updated;
+    if (updated > 0) {
+      bustMapCache(tid);
+      storage.logActivity(user?.id ?? null, "lead.bulk_assign", "lead", undefined,
+        { repId, repName, requested: ids.length, updated, skipped }, req.ip);
+    }
     res.json({ updated, skipped, repId });
   });
 
