@@ -61,3 +61,26 @@ export function anfParkedSql(a: string, baseDays: number): string {
            (${baseDays} * (1 << MIN(MAX(${a}.inconclusive_attempts - ${INCONCLUSIVE_GIVEUP}, 0), ${ANF_PARK_MAX_GENERATIONS}))) || ' days')
     ))`;
 }
+
+
+// ── PROVEN-CAPACITY ESTIMATE (spiral fix, 2026-07-25) ───────────────────────
+// Sizing dispatch from the INSTANTANEOUS last hour is self-reinforcing
+// downward: a dip (a release window, a 403 storm) shrinks the cap, the smaller
+// queue yields fewer checks, and the next hour is smaller still. Observed in
+// production: `keepwarm.throughput_capped requested=45000 capped=500
+// checkedLastHour=34` with throughput collapsed from 3,376/hr to 43/hr and no
+// path back on its own.
+//
+// Capacity is therefore the BEST recent evidence, never the worst: the last
+// hour, the 24-hour average, and a floor the system has already demonstrated.
+// A dip can slow dispatch but can never strangle it.
+export const MIN_ASSUMED_HOURLY_CHECKS = 3000;
+
+export function provenHourlyCapacity(
+  checkedLastHour: number,
+  checkedLast24h: number,
+  floor: number = MIN_ASSUMED_HOURLY_CHECKS,
+): number {
+  const dayAverage = Math.round((Number(checkedLast24h) || 0) / 24);
+  return Math.max(Number(checkedLastHour) || 0, dayAverage, Math.max(1, floor));
+}

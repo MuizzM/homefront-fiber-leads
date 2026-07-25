@@ -14,7 +14,7 @@ import helmet from "helmet";
 import cors from "cors";
 import compression from "compression";
 import { structuredLog } from "./structuredLog";
-import { anfParkedSql } from "@shared/scanPolicy";
+import { anfParkedSql, provenHourlyCapacity } from "@shared/scanPolicy";
 import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPolicy";
 
 // ── Multi-core scan cluster ────────────────────────────────────────────────────
@@ -1003,9 +1003,15 @@ app.use((req, res, next) => {
             const checkedLastHour = Number((rawDb.prepare(
               `SELECT COUNT(*) n FROM availability_snapshots WHERE checked_at_epoch > ?`,
             ).get(Date.now() - 3_600_000) as any)?.n ?? 0);
-            const drainCap = Math.max(500, checkedLastHour * 2);
+            const checkedLast24h = Number((rawDb.prepare(
+              `SELECT COUNT(*) n FROM availability_snapshots WHERE checked_at_epoch > ?`,
+            ).get(Date.now() - 86_400_000) as any)?.n ?? 0);
+            // Spiral fix: capacity is the BEST recent evidence, never the
+            // worst. `capped: 500, checkedLastHour: 34` was this feeder
+            // starving itself in production.
+            const drainCap = Math.max(500, provenHourlyCapacity(checkedLastHour, checkedLast24h) * 2);
             if (drainCap < refillCap) {
-              structuredLog("keepwarm.throughput_capped", { requested: refillCap, capped: drainCap, checkedLastHour });
+              structuredLog("keepwarm.throughput_capped", { requested: refillCap, capped: drainCap, checkedLastHour, checkedLast24h });
               refillCap = drainCap;
             }
           } catch { /* best-effort — never block the feeder */ }

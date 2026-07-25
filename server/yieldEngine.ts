@@ -36,7 +36,7 @@ import { registerHarvestSqlFunctions } from "./freshHarvest";
 import { registerFootprintSqlFunctions, warmFootprintGate, footprintGateActive, isFootprintCity } from "./footprintGate";
 import { budgetShapeFactor } from "./harvestScheduler";
 import { yieldRollupsReady } from "./yieldRollups";
-import { anfParkedSql } from "@shared/scanPolicy";
+import { anfParkedSql, provenHourlyCapacity } from "@shared/scanPolicy";
 
 const FRESH_WINDOW_DAYS = 21;
 // Fraction of each cycle's budget spent on random NEVER-scanned footprint
@@ -675,12 +675,17 @@ export function runYieldCycle(tenantId: number, budget = Number(process.env.FRES
       const checkedLastHour = Number((rawDb.prepare(
         `SELECT COUNT(*) n FROM availability_snapshots WHERE checked_at_epoch > ?`,
       ).get(Date.now() - 3_600_000) as any)?.n ?? 0);
-      // Per-cycle share of the hourly capacity, x oversubscription headroom.
-      // Floor keeps a cold start (or a provider outage) from freezing dispatch.
-      const capacity = Math.max(500, Math.round((checkedLastHour * oversubscribe) / cyclesPerHour));
+      const checkedLast24h = Number((rawDb.prepare(
+        `SELECT COUNT(*) n FROM availability_snapshots WHERE checked_at_epoch > ?`,
+      ).get(Date.now() - 86_400_000) as any)?.n ?? 0);
+      // BEST recent evidence, never the worst — see provenHourlyCapacity. Using
+      // the raw last hour here created a downward spiral that took production
+      // from 3,376 checks/hr to 43/hr with no self-recovery.
+      const perHour = provenHourlyCapacity(checkedLastHour, checkedLast24h);
+      const capacity = Math.max(500, Math.round((perHour * oversubscribe) / cyclesPerHour));
       if (capacity < budget) {
         structuredLog("yield_engine.throughput_capped", {
-          requested: budget, capped: capacity, checkedLastHour, oversubscribe, cyclesPerHour,
+          requested: budget, capped: capacity, checkedLastHour, checkedLast24h, perHour, oversubscribe, cyclesPerHour,
         });
         budget = capacity;
       }

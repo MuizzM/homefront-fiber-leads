@@ -44,12 +44,22 @@ function seedChecks(n: number): void {
 
 describe("throughput-matched dispatch", () => {
   it("caps a huge configured budget to proven recent throughput", () => {
-    seedChecks(300); // provider completed 300 checks in the last hour
-    const res = yieldEngine.runYieldCycle(TENANT, 20_000);
+    // Above the spiral floor so the cap is what is actually being tested:
+    // capacity = max(lastHour, 24h avg, MIN_ASSUMED_HOURLY_CHECKS) x 2
+    //          = 3,500 x 2 = 7,000 for a 1-cycle-per-hour cadence.
+    seedChecks(3500);
+    const res = yieldEngine.runYieldCycle(TENANT, 50_000);
     const total = res.exploit + res.explore + (res.discovery ?? 0);
-    // capacity = 300 checks x 2 oversubscribe / 1 cycle-per-hour = 600
-    expect(total).toBeLessThanOrEqual(600);
+    expect(total).toBeLessThanOrEqual(7000);
     expect(total).toBeGreaterThan(0); // still dispatches real work
+  });
+
+  it("a collapsed hour does NOT strangle dispatch (the production spiral)", () => {
+    // Live incident: checkedLastHour=34 drove the cap to 500, throughput fell
+    // 3,376/hr → 43/hr and could not recover. The floor must hold dispatch up.
+    const res = yieldEngine.runYieldCycle(TENANT, 50_000);
+    const total = res.exploit + res.explore + (res.discovery ?? 0);
+    expect(total).toBeGreaterThan(600); // never collapses to the old 500-ish cap
   });
 
   it("never freezes dispatch when the provider has completed nothing (cold start)", async () => {
