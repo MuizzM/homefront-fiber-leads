@@ -26,6 +26,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 # Litestream — streams every SQLite change to B2/R2 (see deploy/litestream.yml).
 COPY --from=litestream/litestream:0.3.13 /usr/local/bin/litestream /usr/local/bin/litestream
 
+# curl-impersonate-chrome — Chrome's exact TLS fingerprint for the token mint
+# (Cloudflare JA3 crack; see server/curlMint.ts). Static-patched libcurl,
+# needs only glibc + ca-certificates which the runtime already has.
+RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+  && curl -fsSL -o /tmp/curl-imp.tar.gz \
+     "https://github.com/lwthiker/curl-impersonate/releases/download/v0.6.1/curl-impersonate-v0.6.1.x86_64-linux-gnu.tar.gz" \
+  && tar -xzf /tmp/curl-imp.tar.gz -C /usr/local/bin curl-impersonate-chrome \
+  && chmod +x /usr/local/bin/curl-impersonate-chrome \
+  && rm -f /tmp/curl-imp.tar.gz \
+  && apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 # Prod deps only; better-sqlite3 recompiles here against the runtime Node.
 RUN npm ci --omit=dev && npm cache clean --force
