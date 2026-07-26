@@ -73,6 +73,7 @@ import {
 } from "@/lib/leadNotes";
 import {
   UNCLUSTERED_PAINT,
+  PIN_DS_COLOR,
   SELECTED_RING_SPEC,
   SELECTED_RING_FILTER,
   sheetPeekPaddingPx,
@@ -105,6 +106,7 @@ import {
 } from "@/lib/statusIcons";
 import {
   reconcileLeadFeatures,
+  repColorFor,
   type LeadFeatureCache,
 } from "@/lib/leadGeoJson";
 import { unpackMapPins } from "@shared/mapPinsWire";
@@ -751,6 +753,10 @@ export default function MapView() {
 
   // Sidebar filters
   const [filterRep, setFilterRep] = useState<string>("all"); // "all" | "unassigned" | repId
+  // ADMIN ASSIGNMENT VIEW (owner ask 2026-07-26): a map mode where every pin
+  // takes its assigned rep's color so managers see at a glance WHO owns each
+  // area; legend below lists reps with counts and click-to-filter.
+  const [repColorMode, setRepColorMode] = useState<boolean>(false);
   const territoryLayersRef = useRef<string[]>([]);
 
   const { toast } = useToast();
@@ -2416,6 +2422,22 @@ export default function MapView() {
     // It must also stay free of poll-churned identities (team, territories, user):
     // the memoized visibleLeads absorbs those upstream.
   }, [visibleLeads, mapReady, styleEpoch]);
+
+  // Admin assignment view: recolor unclustered pins by repColor (or restore
+  // the canonical status palette). Pure style-thread paint swap — no setData.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !canManage) return;
+    try {
+      if (map.getLayer("lead-unclustered")) {
+        map.setPaintProperty(
+          "lead-unclustered",
+          "circle-color",
+          repColorMode ? ["get", "repColor"] : PIN_DS_COLOR,
+        );
+      }
+    } catch { /* style mid-load; styleEpoch re-fires this effect */ }
+  }, [repColorMode, mapReady, styleEpoch, canManage]);
 
   // ── Selected-pin ring — pure style-thread update, no setData, no re-cluster ──
   useEffect(() => {
@@ -5862,8 +5884,54 @@ export default function MapView() {
               className="glass-surface absolute left-3 p-3 z-10 min-w-[170px] max-w-[240px] overflow-y-auto"
             >
               {/* Rep filter — moved here from the (removed) top bar */}
-              {canAssign && (
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => setRepColorMode((v) => !v)}
+                  data-testid="map-rep-color-mode"
+                  title="Color pins by assigned rep — see who owns each area"
+                  className={`mb-2.5 w-full h-11 rounded-lg border text-[12px] font-semibold transition-colors ${
+                    repColorMode
+                      ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
+                      : "bg-white/10 border-white/20 text-white/70"
+                  }`}
+                >
+                  {repColorMode ? "👥 Rep areas: ON" : "👥 Rep areas: OFF"}
+                </button>
+              )}
+              {canAssign && repColorMode ? (
                 <div className="mb-2.5">
+                  <span className="block text-[10px] text-white/40 uppercase tracking-wider font-semibold mb-1">
+                    Assignments (tap to filter)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setFilterRep(filterRep === "unassigned" ? "all" : "unassigned")}
+                    className={`w-full flex items-center gap-2 h-9 px-1.5 rounded-md text-[12px] text-left ${filterRep === "unassigned" ? "bg-white/20" : "hover:bg-white/10"}`}
+                  >
+                    <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: "#6b7280" }} />
+                    <span className="text-white/80 flex-1 truncate">Unassigned</span>
+                    <span className="text-white/40">{repLeadCounts.unassigned}</span>
+                  </button>
+                  {team.map((m: TeamMember) => {
+                    const active = filterRep === String(m.id);
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => setFilterRep(active ? "all" : String(m.id))}
+                        className={`w-full flex items-center gap-2 h-9 px-1.5 rounded-md text-[12px] text-left ${active ? "bg-white/20" : "hover:bg-white/10"}`}
+                      >
+                        <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: repColorFor(m.id) }} />
+                        <span className="text-white/80 flex-1 truncate">{m.name}</span>
+                        <span className="text-white/40">{repLeadCounts.counts.get(m.id) ?? 0}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {canAssign && (
+                <div className="mb-2.5" style={repColorMode ? { display: "none" } : undefined}>
                   <span className="block text-[10px] text-white/40 uppercase tracking-wider font-semibold mb-1">
                     Rep
                   </span>

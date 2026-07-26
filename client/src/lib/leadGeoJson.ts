@@ -12,6 +12,7 @@ export interface GeoJsonLead {
   leadTag?: string | null;
   freshConfidence?: string | null;
   carrier?: string | null;
+  assignedRepId?: number | null;
 }
 
 export interface LeadPointFeature {
@@ -26,6 +27,8 @@ export interface LeadPointFeature {
     ds: string;
     fresh: number;
     carrier: string;
+    assignedRepId: number;
+    repColor: string;
   };
 }
 
@@ -39,7 +42,17 @@ export type LeadFeatureCache = Map<number, CachedLeadFeature>;
 export function leadFeatureSignature(lead: GeoJsonLead): string {
   const ds = pinDisplayState(lead);
   const fresh = lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0;
-  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic"].join("\u001f");
+  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic", lead.assignedRepId ?? 0].join("\u001f");
+}
+
+/**
+ * Deterministic per-rep pin color for the admin assignment view: golden-angle
+ * hue rotation keeps consecutive rep ids visually distinct; unassigned = gray.
+ */
+export function repColorFor(repId: number | null | undefined): string {
+  if (repId == null) return "#6b7280";
+  const hue = Math.round((Number(repId) * 137.508) % 360);
+  return `hsl(${hue}, 72%, 52%)`;
 }
 
 /**
@@ -88,6 +101,8 @@ export function reconcileLeadFeatures(
             ds,
             fresh: lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0,
             carrier: lead.carrier ?? "kinetic",
+            assignedRepId: lead.assignedRepId ?? 0,
+            repColor: repColorFor(lead.assignedRepId),
           },
         },
       };
