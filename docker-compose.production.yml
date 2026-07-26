@@ -317,7 +317,7 @@ services:
       # Priority build cities: OSM-ingested daily (free), always scanned first
       # in every harvest cycle. Davidson + Lake Norman towns.
       CITY_INGEST: "on"
-      FRESH_HARVEST_CITIES: "campobello:sc,landrum:sc,broadway:nc,davidson:nc,lexington:nc,cornelius:nc,huntersville:nc,mooresville:nc,denver:nc"
+      FRESH_HARVEST_CITIES: "campobello:sc,landrum:sc,lexington:sc,albemarle:nc,broadway:nc,concord:nc,kannapolis:nc,harrisburg:nc,indian trail:nc,granite quarry:nc,hemby bridge:nc,morven:nc,pine bluff:nc,sanford:nc,tryon:nc,wingate:nc,norwood:nc,oakboro:nc,locust:nc,stanfield:nc,lexington:nc,davidson:nc"
       # States the PRIMARY yield-engine harvester scans (FOCUS_STATES). Was the
       # code default "nc,sc" — which fenced GA out of ALL the smart tiers (cluster
       # neighbours, street completion, expansion push/flip, momentum, copper watch,
