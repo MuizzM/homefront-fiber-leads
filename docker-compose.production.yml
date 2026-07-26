@@ -129,8 +129,8 @@ services:
       # CPU-bound parse/classify/DB work across all cores, 24 gives the extra cores
       # work without a step-change in proxy pressure (Decodo showed 1% 403s at 20).
       # Raise further only if 403s stay low AND the portal stays snappy.
-      SCAN_GLOBAL_CONCURRENCY: "32"
-      SCAN_BATCH_CONCURRENCY: "16"
+      SCAN_GLOBAL_CONCURRENCY: "6"
+      SCAN_BATCH_CONCURRENCY: "3"
       # Cap concurrently-EXECUTING scan-run worker loops PER PROCESS (each loop polls
       # the DB via a synchronous better-sqlite3 claim). 6/worker × 4 workers = up to 24
       # run loops box-wide, matching the global concurrency cap.
@@ -297,7 +297,7 @@ services:
       # TOKEN ECONOMY (bot-wall workaround): mint rarely, ride tokens long.
       # 1 mint/2s max; each token serves 40 leases / 1000 checks before
       # retirement. One success per minute = 1000 checks/min of capacity.
-      KFS_MINT_MIN_INTERVAL_MS: "250"
+      KFS_MINT_MIN_INTERVAL_MS: "2000"
       DECODO_STICKY: "off"
       KFS_USER_AGENT: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1"
       KFS_TOKEN_MAX_LEASES_PER_SLOT: "40"
