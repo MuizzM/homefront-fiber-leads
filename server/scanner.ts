@@ -222,6 +222,11 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
   // by the token economy, so direct volume stays far under the per-IP radar.
   // Ladder: impersonate-direct -> impersonate-proxy -> legacy paths below.
   if (process.env.KFS_MINT_IMPERSONATE !== "off") {
+    // CRITICAL: do NOT inject our custom User-Agent here. curl-impersonate
+    // ships a Chrome fingerprint paired to its own Chrome UA — overriding it
+    // (e.g. the iPhone Safari UA in KFS_USER_AGENT) creates a UA/fingerprint
+    // mismatch Cloudflare reads instantly (measured: 4/4 403s with the
+    // override, 4/4 201s without). The impersonate UA stays matched, always.
     const mintHeaders = providerHeaders({
       "Content-Type": "application/json",
       "Accept": "application/json",
@@ -231,6 +236,7 @@ async function mintAuthorizedToken(): Promise<{ token: string; expiresAt: number
       "Origin": KFS_ORIGIN,
       "Referer": KFS_REFERER,
     });
+    delete mintHeaders["User-Agent"];
     const mintBody = JSON.stringify({ brazeDeviceId: "" });
     try {
       return await mintViaImpersonate(kineticTokenUrl(), mintHeaders, mintBody, null);
