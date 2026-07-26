@@ -22,10 +22,34 @@ import { execFile } from "node:child_process";
 
 const BIN = process.env.CURL_IMPERSONATE_BIN || "/usr/local/bin/curl-impersonate-chrome";
 
+// ── HUMAN WARM-UP (owner's field instinct, verified live: 2/3 vs 1/3 cold) ──
+// A real browser never POSTs a token cold: it loads the storefront first,
+// accepts Cloudflare's session cookies, and only then does the JS mint. A
+// cookie-bearing request with a natural referer chain reads as a person; a
+// cookieless API call reads as a script. So before each mint we refresh a
+// small cookie jar (homepage GET, sub-second jitter), then mint WITH it.
+const COOKIE_JAR = `/tmp/kfs-mint-cookies-${process.pid}.txt`;
+const WARM_TTL_MS = 10 * 60_000;
+let lastWarmAt = 0;
+
+function humanWarmup(warmUrl: string, proxyUrl: string | null, timeoutMs: number): Promise<void> {
+  if (Date.now() - lastWarmAt < WARM_TTL_MS) return Promise.resolve();
+  const args: string[] = ["-sS", "-o", "/dev/null", "-c", COOKIE_JAR, "--max-time", String(Math.ceil(timeoutMs / 1000))];
+  if (proxyUrl) args.push("-x", proxyUrl);
+  args.push(warmUrl);
+  return new Promise((resolve) => {
+    execFile(BIN, args, { timeout: timeoutMs + 5000 }, () => {
+      lastWarmAt = Date.now();
+      // Human jitter: 200–700ms before the follow-up call.
+      setTimeout(resolve, 200 + Math.floor(Math.random() * 500));
+    });
+  });
+}
+
 export interface ImpersonateResponse { status: number; body: string }
 
 function run(url: string, init: { headers: Record<string, string>; body: string }, proxyUrl: string | null, timeoutMs: number): Promise<ImpersonateResponse> {
-  const args: string[] = ["-sS", "-o", "-", "-w", "\n%{http_code}", "--max-time", String(Math.ceil(timeoutMs / 1000)), "-X", "POST"];
+  const args: string[] = ["-sS", "-o", "-", "-w", "\n%{http_code}", "--max-time", String(Math.ceil(timeoutMs / 1000)), "-X", "POST", "-b", COOKIE_JAR, "-c", COOKIE_JAR];
   if (proxyUrl) args.push("-x", proxyUrl);
   for (const [k, v] of Object.entries(init.headers)) args.push("-H", `${k}: ${v}`);
   args.push("--data-binary", init.body, url);
@@ -52,6 +76,11 @@ export async function mintViaImpersonate(
   timeoutMs = 15_000,
 ): Promise<{ token: string; expiresAt: number }> {
   const transport = proxyUrl ? "imp-proxy" : "imp-direct";
+  // Human session first: warm the cookie jar from the storefront root, then
+  // mint inside that session (owner's insight — small human steps before the
+  // token call keep us under the "verify you are human" trigger).
+  const origin = url.replace(/\/api\/.*$/, "/");
+  await humanWarmup(origin, proxyUrl, Math.min(timeoutMs, 12_000));
   const res = await run(url, { headers, body }, proxyUrl, timeoutMs);
   if (res.status !== 200 && res.status !== 201) throw new Error(`Auto-auth blocked (${res.status} via ${transport})`);
   let data: Record<string, unknown>;
