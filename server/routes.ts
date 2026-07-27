@@ -4197,8 +4197,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Update lead status to match knock outcome — shared map covers all 7 outcomes
     // (incl. follow_up→follow_up, needs_verification→contacted) and cannot drift
     // from the client, which imports the same module.
+    //
+    // P1-1: the flip is a COMPARE-AND-SET on outcome recency. A stale offline
+    // knock (its knockedAt predates the lead's last_outcome_at) LOSES the CAS:
+    // no status flip and NONE of the money side effects below fire (no sale
+    // reversal, no commission removal, no new commission). The knock row itself
+    // is still recorded as field history; the response carries
+    // `superseded: true` so the client can distinguish it from an applied knock.
     const newStatus = OUTCOME_TO_STATUS[parsed.data.outcome as KnockOutcome];
-    if (newStatus) storage.updateLead(Number(req.params.id), { leadStatus: newStatus });
+    const knockedAtTs = parsed.data.knockedAt || serverTs;
+    let superseded = false;
+    if (newStatus) {
+      superseded = !storage.applyKnockOutcomeCas(Number(req.params.id), newStatus, parsed.data.outcome, knockedAtTs);
+    }
     // A knock changes the pin's visited state even when leadStatus is unchanged
     // (not_home) — bust this org's map layer explicitly.
     bustMapCache((req as any).user?.tenantId ?? undefined);
@@ -4206,7 +4217,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Sold → one QUALIFIED commissionable sale per door in the weekly ledger
     // (idempotent by lead); any other outcome on a previously-sold door reverses
     // it. Best-effort: a ledger hiccup must never block the knock itself.
-    if (parsed.data.repId) {
+    if (!superseded && parsed.data.repId) {
       try {
         const knockLead = storage.getLeadById(Number(req.params.id));
         const saleTenant = knockLead?.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
@@ -4226,14 +4237,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Auto-create pending commission when outcome = sold. The structure IN
     // EFFECT for this rep AT SALE TIME scores it, and its id/version/calcType
     // freeze onto the record — a later plan edit never rewrites this payout.
-    if (parsed.data.outcome === "sold" && parsed.data.repId) {
+    if (!superseded && parsed.data.outcome === "sold" && parsed.data.repId) {
       try {
         const rep = storage.getTeamMemberById(parsed.data.repId);
         const saleDate = new Date().toISOString().slice(0, 10);
-        const structures = storage.getCommissionRates().map(rateToStructure);
+        // P0-3: score with ONLY the knock's org's structures — another tenant's
+        // plans must never price this sale.
+        const rateTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
+        const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
         const active = pickActiveStructure(structures, parsed.data.repId, rep?.role ?? null, saleDate);
         if (active) {
-          const saleAmount = Number((req.body as any)?.saleAmount) || 0; // deal value for %/tier plans
+          // P0-6: the deal value is NEVER read from the knock body — a rep could
+          // fabricate their own percentage/tiered payout. No server-side deal
+          // value exists at knock time, so the basis is 0: flat plans pay their
+          // rate-derived flatAmount (the common case); percentage/tiered plans
+          // book a $0/flagged record a manager corrects with real numbers.
+          const saleAmount = 0;
           const calc = calcCommission(active, saleAmount);
           storage.createCommission({
             repId: parsed.data.repId,
@@ -4258,7 +4277,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             { repId: parsed.data.repId, leadId: Number(req.params.id) }, req.ip);
         }
       } catch (e) { console.warn("Auto-commission failed:", e); }
-    } else if (parsed.data.repId) {
+    } else if (!superseded && parsed.data.repId) {
       // Un-marking a sale: the door is no longer "sold", so pull its auto-created
       // PENDING commission so it disappears from the rep's Commissions view.
       // Approved/paid commissions are left alone (a clawback is a manager action).
@@ -4272,7 +4291,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       } catch (e) { console.warn("Commission removal failed:", e); }
     }
     storage.logActivity((req as any).user?.id ?? null, `knock.${parsed.data.outcome}`, "knock", knock.id,
-      { leadId: Number(req.params.id), repId: parsed.data.repId, verification: verdict.status, distanceM: verdict.distanceM, serverTs }, req.ip);
+      { leadId: Number(req.params.id), repId: parsed.data.repId, verification: verdict.status, distanceM: verdict.distanceM, serverTs, superseded }, req.ip);
+    // P1-1: a superseded (stale) knock is recorded as history but applied to
+    // NOTHING — 200 + marker distinguishes it from an applied knock (201).
+    if (superseded) return res.status(200).json({ ...knock, superseded: true });
     res.status(201).json(knock);
   });
 
@@ -6024,27 +6046,41 @@ export function registerSaasRoutes(app: any) {
   app.patch("/api/commissions/:id", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
     const id = Number(req.params.id);
+    // P0-2: tenant wall on the WRITE — a commission outside the caller's org is
+    // indistinguishable from a missing one (404, no existence leak), and the
+    // UPDATE itself carries the tenant predicate as a second line of defense.
+    const tid: number | undefined = user?.role === "super_admin" ? undefined : (user?.tenantId ?? undefined);
+    const existing = storage.getCommissionById(id);
+    if (!existing || (tid != null && existing.tenantId !== tid)) {
+      return res.status(404).json({ error: "Not found" });
+    }
     const { status, paidDate, notes } = req.body;
     const updates: any = {};
     if (status) updates.status = status;
     if (paidDate) updates.paidDate = paidDate;
     if (notes !== undefined) updates.notes = notes;
     if (status === "approved" || status === "paid") updates.approvedBy = user.id;
-    const updated = storage.updateCommission(id, updates);
+    const updated = storage.updateCommission(id, updates, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
     storage.logActivity(user.id, `commission.${status}`, "commission", id, { status }, req.ip);
     res.json(updated);
   });
 
   // GET /api/commissions/summary — earnings summary per rep (admin/manager)
-  app.get("/api/commissions/summary", requireManager, (_req: Request, res: Response) => {
-    res.json(storage.getCommissionSummary());
+  app.get("/api/commissions/summary", requireManager, (req: Request, res: Response) => {
+    // P0-4: scoped to the caller's org (super_admin = platform-wide).
+    const user = (req as any).user;
+    const tid: number | undefined = user?.role === "super_admin" ? undefined : (user?.tenantId ?? undefined);
+    res.json(storage.getCommissionSummary(tid));
   });
 
   // GET /api/commission-rates — structure plans. Management-only: reps see
   // their commission RESULTS (via /api/commissions), never the structure config.
-  app.get("/api/commission-rates", requireCapability("commission.structure.manage"), (_req: Request, res: Response) => {
-    res.json(storage.getCommissionRates());
+  app.get("/api/commission-rates", requireCapability("commission.structure.manage"), (req: Request, res: Response) => {
+    // P0-3: scoped to the caller's org (super_admin = all orgs).
+    const user = (req as any).user;
+    const tid: number | undefined = user?.role === "super_admin" ? undefined : (user?.tenantId ?? undefined);
+    res.json(storage.getCommissionRates(tid));
   });
 
   // POST /api/commission-rates — create a commission structure (Admin/Manager/
@@ -6064,7 +6100,14 @@ export function registerSaasRoutes(app: any) {
       if (tiers.length === 0) return res.status(400).json({ error: "tiered plan needs at least one tier" });
       tiersJson = JSON.stringify(tiers as Tier[]);
     }
+    // P0-3: a rep-specific structure may only target a rep in the caller's org.
+    if (b.repId != null && !repInCallerTenant(user, Number(b.repId))) {
+      return res.status(404).json({ error: "Rep not found" });
+    }
     const rate = storage.createCommissionRate({
+      // The structure's org is the CALLER's org — never client-supplied.
+      // super_admin (tenantId null) creates a platform-wide structure.
+      tenantId: user?.role === "super_admin" ? null : (user?.tenantId ?? null),
       name: String(b.name), role: b.role ?? null, repId: b.repId != null ? Number(b.repId) : null,
       ratePerSale: Number(b.ratePerSale) || 0,
       calcType, percentage: Number(b.percentage) || 0, tiers: tiersJson,
@@ -6083,7 +6126,9 @@ export function registerSaasRoutes(app: any) {
   app.patch("/api/commission-rates/:id", requireCapability("commission.structure.manage"), (req: Request, res: Response) => {
     const user = (req as any).user;
     const id = Number(req.params.id);
-    const existing = storage.getCommissionRates().find(r => r.id === id);
+    // P0-3: scoped lookup — another org's structure is a 404, never an edit.
+    const tid: number | undefined = user?.role === "super_admin" ? undefined : (user?.tenantId ?? undefined);
+    const existing = storage.getCommissionRates(tid).find(r => r.id === id);
     if (!existing) return res.status(404).json({ error: "Not found" });
     // Allowlist — never let the body set id/createdAt/isActive/etc. (mass-assignment
     // of the PK would break structure refs; isActive would drop the row from payout

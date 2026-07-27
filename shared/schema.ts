@@ -207,6 +207,11 @@ export const leads = sqliteTable("leads", {
   contactEmail: text("contact_email"),
   leadStatus: text("lead_status").notNull().default("prospect"),
   // "prospect"|"contacted"|"interested"|"sold"|"not_interested"|"follow_up"
+  // ── Outcome recency (P1-1) — stamped by the knock CAS so a stale offline
+  // knock (older knockedAt) can never overwrite a newer outcome's status or
+  // undo its sale. The CAS compares these, never the client.
+  lastOutcome: text("last_outcome"),
+  lastOutcomeAt: text("last_outcome_at"),
   notes: text("notes"),
   deploymentNotes: text("deployment_notes"),
   // ── Lead Scoring ──────────────────────────────────────────────────────────
@@ -528,6 +533,9 @@ export type ActivityLogEntry = typeof activityLog.$inferSelect;
 // Admin can set different rates per role or per rep
 export const commissionRates = sqliteTable("commission_rates", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  // P0-3: a structure belongs to ONE org. Nullable for legacy rows — the
+  // bootstrapDefaultTenant adoption sweep files them under the default tenant.
+  tenantId: integer("tenant_id"),
   name: text("name").notNull(),                // "Standard Rep", "Team Lead Bonus"
   role: text("role"),                          // null = applies to specific rep
   repId: integer("rep_id"),                    // null = applies to all of that role

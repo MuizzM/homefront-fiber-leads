@@ -27,7 +27,7 @@ import {
   type ActivityLogEntry,
   type Tenant, type InsertTenant,
 } from "@shared/schema";
-import { eq, desc, or, and, gt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { eq, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 
@@ -102,6 +102,10 @@ export interface IStorage {
   createLead(lead: InsertLead): Lead;
   upsertLeadByAddress(lead: InsertLead & LegacyScanFields): { lead: Lead; created: boolean };
   updateLead(id: number, updates: Partial<InsertLead>, tenantId?: number): Lead | undefined;
+  // P1-1: CAS outcome flip — wins only when no outcome exists yet or this knock
+  // is NEWER than the recorded one. Returns the updated lead, or undefined when
+  // a newer outcome already exists (caller must skip ALL money side effects).
+  applyKnockOutcomeCas(leadId: number, status: string, outcome: string, knockedAt: string): Lead | undefined;
   deleteLead(id: number, tenantId?: number): boolean;
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[];
   searchLeadsPage(
@@ -203,11 +207,11 @@ export interface IStorage {
   getCommissions(tenantId?: number, repId?: number): Commission[];
   getCommissionById(id: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
-  updateCommission(id: number, updates: Partial<Commission>): Commission | undefined;
+  updateCommission(id: number, updates: Partial<Commission>, tenantId?: number): Commission | undefined;
   removePendingCommissionsForLead(leadId: number): Commission[];
-  getCommissionSummary(): { repId: number; repName: string; total: number; paid: number; pending: number; sales: number }[];
+  getCommissionSummary(tenantId?: number): { repId: number; repName: string; total: number; paid: number; pending: number; sales: number }[];
   // ── Commission Rates ───────────────────────────────────────────────────────
-  getCommissionRates(): CommissionRate[];
+  getCommissionRates(tenantId?: number): CommissionRate[];
   createCommissionRate(r: InsertCommissionRate): CommissionRate;
   updateCommissionRate(id: number, updates: Partial<CommissionRate>): CommissionRate | undefined;
   // ── Activity Log ───────────────────────────────────────────────────────────
@@ -346,6 +350,25 @@ export function runMigrations() {
     `ALTER TABLE commission_rates ADD COLUMN effective_to TEXT`,
     `ALTER TABLE commission_rates ADD COLUMN version INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE commission_rates ADD COLUMN updated_by TEXT`,
+    // P0-3: commission structures are per-org (legacy NULLs are adopted into
+    // the default tenant by bootstrapDefaultTenant, same as every other table).
+    `ALTER TABLE commission_rates ADD COLUMN tenant_id INTEGER`,
+    // P1-1: outcome-recency columns — the knock CAS compares last_outcome_at
+    // so a stale offline knock can never clobber a newer outcome.
+    `ALTER TABLE leads ADD COLUMN last_outcome TEXT`,
+    `ALTER TABLE leads ADD COLUMN last_outcome_at TEXT`,
+    // P1-2: one pending commission per (tenant, lead). Pre-existing duplicate
+    // sold-knock rows would break the partial UNIQUE index, so keep the NEWEST
+    // pending row per (tenant_id, lead_id) and mark the rest 'superseded'
+    // BEFORE the index builds (idempotent: a no-op once deduped).
+    `UPDATE commissions SET status = 'superseded'
+      WHERE status = 'pending' AND lead_id IS NOT NULL
+        AND id NOT IN (
+          SELECT MAX(id) FROM commissions
+           WHERE status = 'pending' AND lead_id IS NOT NULL
+           GROUP BY tenant_id, lead_id
+        )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_tenant_lead_pending ON commissions(tenant_id, lead_id) WHERE status = 'pending' AND lead_id IS NOT NULL`,
     `ALTER TABLE knock_log ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE clock_sessions ADD COLUMN tenant_id INTEGER`,
     // Audit stream is now tenant-scoped on read — stamp the actor's tenant at write.
@@ -2600,6 +2623,24 @@ export class Storage implements IStorage {
     if (row) bustPinCaches(row.tenantId); // pins changed → cache + ETag version must move
     return row;
   }
+  // P1-1: compare-and-set outcome flip. A stale offline knock (knockedAt OLDER
+  // than the lead's recorded last_outcome_at) loses the CAS — the update's WHERE
+  // matches nothing — and the caller must then skip every side effect (status
+  // was never flipped here, and reversal/commission-removal must not fire).
+  applyKnockOutcomeCas(leadId: number, status: string, outcome: string, knockedAt: string): Lead | undefined {
+    const now = new Date().toISOString();
+    const row = db.update(leads).set({
+      leadStatus: status,
+      lastOutcome: outcome,
+      lastOutcomeAt: knockedAt,
+      updatedAt: now,
+    }).where(and(
+      eq(leads.id, leadId),
+      or(isNull(leads.lastOutcomeAt), lt(leads.lastOutcomeAt, knockedAt)),
+    )).returning().get();
+    if (row) bustPinCaches(row.tenantId);
+    return row;
+  }
   deleteLead(id: number, tenantId?: number): boolean {
     const condition = tenantId != null
       ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
@@ -3447,10 +3488,31 @@ export class Storage implements IStorage {
   createCommission(c: InsertCommission): Commission {
     // Tenancy: a commission belongs to the REP's tenant (unless explicitly set).
     const tenantId = (c as any).tenantId ?? this.getTeamMemberById(c.repId)?.tenantId ?? null;
-    return db.insert(commissions).values({ ...c, tenantId, createdAt: new Date().toISOString() }).returning().get();
+    try {
+      return db.insert(commissions).values({ ...c, tenantId, createdAt: new Date().toISOString() }).returning().get();
+    } catch (e: any) {
+      // P1-2: idx_commissions_tenant_lead_pending guarantees at most ONE pending
+      // commission per (tenant, lead). A duplicate sold knock (offline retry with
+      // a fresh clientId, double-tap) hits the index — return the EXISTING
+      // pending row instead of fabricating a second payout.
+      if (e?.message?.includes("UNIQUE constraint failed") && c.leadId != null) {
+        const existing = db.select().from(commissions).where(and(
+          eq(commissions.leadId, c.leadId),
+          eq(commissions.status, "pending"),
+          tenantId == null ? isNull(commissions.tenantId) : eq(commissions.tenantId, tenantId),
+        )).get();
+        if (existing) return existing;
+      }
+      throw e;
+    }
   }
-  updateCommission(id: number, updates: Partial<Commission>): Commission | undefined {
-    return db.update(commissions).set(updates).where(eq(commissions.id, id)).returning().get();
+  updateCommission(id: number, updates: Partial<Commission>, tenantId?: number): Commission | undefined {
+    // P0-2: the tenant predicate is part of the UPDATE so a cross-tenant id can
+    // never be written even if a caller skipped the read-side check.
+    const condition = tenantId != null
+      ? and(eq(commissions.id, id), eq(commissions.tenantId, tenantId))
+      : eq(commissions.id, id);
+    return db.update(commissions).set(updates).where(condition).returning().get();
   }
   // Un-marking a sale: drop the auto-created PENDING commission for a lead.
   // Approved/paid commissions are never auto-removed — a clawback is a manager
@@ -3463,10 +3525,15 @@ export class Storage implements IStorage {
     }
     return pending;
   }
-  getCommissionSummary() {
-    const reps = this.getTeamMembers().filter(r => r.active);
+  getCommissionSummary(tenantId?: number) {
+    // P0-4: tenant-scoped — a manager's earnings view must never aggregate
+    // another org's reps or their commissions. Members and commission rows are
+    // BOTH filtered by tenant (undefined = super_admin platform view).
+    const reps = this.getTeamMembers(tenantId).filter(r => r.active);
     return reps.map(rep => {
-      const repCommissions = db.select().from(commissions).where(eq(commissions.repId, rep.id)).all();
+      const conds = [eq(commissions.repId, rep.id)];
+      if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
+      const repCommissions = db.select().from(commissions).where(and(...conds)).all();
       const total = repCommissions.reduce((sum, c) => sum + c.amount, 0);
       const paid = repCommissions.filter(c => c.status === "paid").reduce((sum, c) => sum + c.amount, 0);
       const pending = repCommissions.filter(c => c.status === "pending" || c.status === "approved").reduce((sum, c) => sum + c.amount, 0);
@@ -3475,8 +3542,13 @@ export class Storage implements IStorage {
   }
 
   // ── Commission Rates ───────────────────────────────────────────────────────
-  getCommissionRates(): CommissionRate[] {
-    return db.select().from(commissionRates).where(eq(commissionRates.isActive, true)).all();
+  getCommissionRates(tenantId?: number): CommissionRate[] {
+    // P0-3: structures are per-org. Tenant callers see ONLY their own plans;
+    // undefined (super_admin) sees all. A NULL-tenant row (legacy, pre-adoption)
+    // is never served to a tenant caller.
+    const conds = [eq(commissionRates.isActive, true)];
+    if (tenantId != null) conds.push(eq(commissionRates.tenantId, tenantId));
+    return db.select().from(commissionRates).where(and(...conds)).all();
   }
   createCommissionRate(r: InsertCommissionRate): CommissionRate {
     return db.insert(commissionRates).values({ ...r, createdAt: new Date().toISOString() }).returning().get();
