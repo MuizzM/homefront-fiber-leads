@@ -414,8 +414,31 @@ export function getTokenStatus(): {
   };
 }
 
-// Warm the token pool on boot so scans start with a ready token.
-authorizedTokenPool.start();
+/**
+ * Boot-time token warming is a production behavior.
+ *
+ * Importing scanner.ts is common in unit/integration tests. Starting the pool at
+ * module scope used to schedule maintenance immediately, which could mint a real
+ * provider token after an otherwise offline test imported the scan engine. Keep
+ * the decision pure and exported so it can be verified without starting timers
+ * or touching a transport. Manual-token installation remains unchanged:
+ * AuthorizedTokenPool.install() starts pool maintenance after installing the
+ * supplied token.
+ */
+export function shouldAutoWarmAuthorizedTokenPool(env: NodeJS.ProcessEnv = process.env): boolean {
+  const runningUnderTest =
+    env.NODE_ENV === "test"
+    || env.VITEST === "true"
+    || typeof env.VITEST_POOL_ID === "string"
+    || typeof env.VITEST_WORKER_ID === "string";
+  return !runningUnderTest;
+}
+
+// Production still warms by default even when the legacy authorization flag is
+// absent. Test/module imports remain transport-free.
+if (shouldAutoWarmAuthorizedTokenPool()) {
+  authorizedTokenPool.start();
+}
 
 export interface KineticAddressResponse {
   // Top-level
