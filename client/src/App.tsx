@@ -44,6 +44,7 @@ const LiveMap = lazy(() => import("@/pages/LiveMap"));
 const ClockIn = lazy(() => import("@/pages/ClockIn"));
 const Profile = lazy(() => import("@/pages/Profile"));
 const Diagnostics = lazy(() => import("@/pages/Diagnostics"));
+const LoginActivity = lazy(() => import("@/pages/LoginActivity"));
 const Governance = lazy(() => import("@/pages/Governance"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
@@ -235,6 +236,10 @@ function AppRoutes() {
           <Route path="/profile" component={Profile} />
           <Route path="/diagnostics">
             <Guard role={role} allowed={["admin", "manager"]}><Diagnostics /></Guard>
+          </Route>
+          <Route path="/login-activity">
+            {/* Admin/team visibility into the org's auth trail (server scopes by tenant). */}
+            <Guard role={role} allowed={["admin", "manager", "team_lead"]}><LoginActivity /></Guard>
           </Route>
           <Route path="/governance">
             <Guard role={role} allowed={["admin"]}><Governance /></Guard>

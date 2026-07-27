@@ -92,6 +92,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/applications", label: "Rep Onboarding", icon: ClipboardList,show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   { href: "/live-map",     label: "Live Map",       icon: Radio,        show: r => hasRole(r, "admin", "manager"),      group: "Manage" },
   // ── Governance (Phase 2) ──────────────────────────────────────────────────
+  { href: "/login-activity", label: "Login Activity", icon: ShieldCheck, show: r => hasRole(r, "admin", "manager", "team_lead"), group: "Governance" },
   { href: "/diagnostics",  label: "Diagnostics",   icon: Activity,     show: r => hasRole(r, "admin", "manager"),      group: "Governance" },
   { href: "/governance",   label: "Permissions",   icon: ShieldCheck,  show: r => hasRole(r, "admin"),                 group: "Governance" },
   { href: "/billing",      label: "Billing",       icon: CreditCard,   show: r => hasRole(r, "admin"),                 group: "Governance" },
