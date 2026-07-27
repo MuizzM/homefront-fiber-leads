@@ -15,7 +15,7 @@ import {
   type QueuedKnock,
 } from "@shared/knock";
 
-export type LeadSaveState = "idle" | "saving" | "saved" | "queued" | "error";
+export type LeadSaveState = "idle" | "saving" | "saved" | "queued" | "error" | "superseded";
 
 export interface QueueSnapshot {
   pendingCount: number;
@@ -37,7 +37,7 @@ export interface KnockQueueOpts {
   storage?: StorageLike;
   now?: () => number;
   isOnline?: () => boolean;
-  onSaved?: (leadId: number, outcome?: string) => void; // parent hook invalidates react-query here
+  onSaved?: (leadId: number, outcome?: string, superseded?: boolean) => void; // parent hook invalidates react-query here
 }
 
 export interface EnqueueInput {
@@ -259,10 +259,13 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
           pending.splice(idx, 1);
           persistPending();
           rememberSave(item.leadId, item.clientId, resp?.id);
-          setLeadState(item.leadId, "saved");
+          // REVIEWER GATE (HIGH ×3): the server now marks stale knocks with
+          // `superseded` — the queue must know the difference between "applied"
+          // and "recorded but discarded as stale" so the UI can tell the truth.
+          setLeadState(item.leadId, resp?.superseded ? "superseded" : "saved");
           scheduleIdle(item.leadId);
           markChanged();
-          opts.onSaved?.(item.leadId, item.outcome);
+          opts.onSaved?.(item.leadId, item.outcome, resp?.superseded === true);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const status = parseInt(message, 10); // apiRequest throws Error("<status>: <text>")

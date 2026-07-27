@@ -27,7 +27,7 @@ import {
   type ActivityLogEntry,
   type Tenant, type InsertTenant,
 } from "@shared/schema";
-import { eq, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 
@@ -368,7 +368,12 @@ export function runMigrations() {
            WHERE status = 'pending' AND lead_id IS NOT NULL
            GROUP BY tenant_id, lead_id
         )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_tenant_lead_pending ON commissions(tenant_id, lead_id) WHERE status = 'pending' AND lead_id IS NOT NULL`,
+    `ALTER TABLE knock_log ADD COLUMN superseded INTEGER NOT NULL DEFAULT 0`,
+    // REVIEWER GATE (fin #6): backfill outcome recency for pre-migration leads —
+    // without it, a stale offline knock flushed after deploy WINS the CAS over
+    // a newer pre-deploy disposition (NULL last_outcome_at).
+    `UPDATE leads SET last_outcome_at = (SELECT MAX(knocked_at) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_superseded ON knock_log(lead_id, superseded)`,
     `ALTER TABLE knock_log ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE clock_sessions ADD COLUMN tenant_id INTEGER`,
     // Audit stream is now tenant-scoped on read — stamp the actor's tenant at write.
@@ -1887,6 +1892,8 @@ export function runMigrations() {
   catch (e: any) { console.warn("[migration] address review backfill:", e?.message); }
 
   bootstrapDefaultTenant(raw);
+  try { migrateCommissionsPendingDedupe(raw); }
+  catch (e: any) { console.error("CRITICAL: commissions pending dedupe/index migration failed:", e?.message); }
 
   // P0-1: stamp immutable super-admin identity from the env list (idempotent;
   // ONLY ever SETS the flag for listed emails and CLEARS it for unlisted ones
@@ -1901,6 +1908,40 @@ export function runMigrations() {
       raw.prepare(`UPDATE users SET is_super_admin = 0 WHERE is_super_admin = 1 AND lower(email) NOT IN (${placeholders})`).run(...emails);
     }
   } catch (e: any) { console.warn("[migration] super-admin stamp:", e?.message); }
+}
+
+/**
+ * P1-2 migration (ATOMIC — reviewer gate): dedupe pre-existing pending
+ * commissions then build the uniqueness index in ONE transaction. A failed
+ * index build rolls the dedupe back too (never a half-migrated invariant).
+ * NULL tenant rows are coalesced to the default tenant (1) so they can't slip
+ * the index (SQLite treats NULLs as distinct). Idempotent + re-runnable.
+ */
+function migrateCommissionsPendingDedupe(raw: import("better-sqlite3").Database): void {
+  const tx = raw.transaction(() => {
+    raw.prepare(
+      `UPDATE commissions SET status = 'superseded'
+        WHERE status = 'pending' AND lead_id IS NOT NULL
+          AND id NOT IN (
+            SELECT MAX(id) FROM commissions
+             WHERE status = 'pending' AND lead_id IS NOT NULL
+             GROUP BY COALESCE(tenant_id, 1), lead_id
+          )`,
+    ).run();
+    raw.prepare(
+      `UPDATE commissions SET tenant_id = COALESCE(tenant_id, 1)
+        WHERE status = 'pending' AND lead_id IS NOT NULL AND tenant_id IS NULL`,
+    ).run();
+    raw.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_tenant_lead_pending
+        ON commissions(tenant_id, lead_id) WHERE status = 'pending' AND lead_id IS NOT NULL`,
+    );
+    const idx = raw.prepare(
+      "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_commissions_tenant_lead_pending'",
+    ).get();
+    if (!idx) throw new Error("idx_commissions_tenant_lead_pending was NOT created");
+  });
+  tx.immediate();
 }
 
 // One-time-per-change, idempotent: re-evaluate confirmed fresh leads against the
@@ -3501,7 +3542,11 @@ export class Storage implements IStorage {
           eq(commissions.status, "pending"),
           tenantId == null ? isNull(commissions.tenantId) : eq(commissions.tenantId, tenantId),
         )).get();
-        if (existing) return existing;
+        if (existing) {
+          // REVIEWER GATE: flag pre-existence so callers can answer honestly
+          // (POST /api/commissions must not audit a phantom creation).
+          return { ...existing, preExisting: true } as Commission & { preExisting?: boolean };
+        }
       }
       throw e;
     }
@@ -3533,6 +3578,7 @@ export class Storage implements IStorage {
     return reps.map(rep => {
       const conds = [eq(commissions.repId, rep.id)];
       if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
+      conds.push(ne(commissions.status, "superseded"));
       const repCommissions = db.select().from(commissions).where(and(...conds)).all();
       const total = repCommissions.reduce((sum, c) => sum + c.amount, 0);
       const paid = repCommissions.filter(c => c.status === "paid").reduce((sum, c) => sum + c.amount, 0);

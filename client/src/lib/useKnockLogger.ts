@@ -29,10 +29,18 @@ export function useKnockLogger() {
       repId: user.teamMemberId,
       post: (url, body) => apiRequest("POST", url, body).then(r => r.json()),
       patch: (url, body) => apiRequest("PATCH", url, body).then(r => r.json()),
-      onSaved: (leadId: number, outcome?: string) => {
-        // HONESTY FIX (P1-8): the commission toast fires ONLY here — on durable
-        // server confirmation — never at tap time.
-        if (outcome === "sold") toast({ title: "Sold 🎉 — commission logged", description: "Pending review on your Commission tab" });
+      onSaved: (leadId: number, outcome?: string, superseded?: boolean) => {
+        if (superseded) {
+          // REVIEWER GATE (HIGH ×3): the knock was recorded as stale — a NEWER
+          // outcome already stands. Tell the rep the truth and reconcile the
+          // optimistic pin NOW (don't wait 60s for the poll to silently flip it).
+          toast({ title: "A newer outcome already stands", description: "This knock was recorded as history; the door keeps its latest status." });
+          qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+        } else if (outcome === "sold") {
+          // HONESTY FIX (P1-8): the commission toast fires ONLY on durable
+          // server confirmation — never at tap time, never on a superseded knock.
+          toast({ title: "Sold 🎉 — commission logged", description: "Pending review on your Commission tab" });
+        }
         qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
         qc.invalidateQueries({ queryKey: ["/api/leads"] });
         qc.invalidateQueries({ queryKey: ["/api/followups"] }); // re-working a door clears/updates its callback

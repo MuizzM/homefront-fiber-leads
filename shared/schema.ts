@@ -304,6 +304,10 @@ export const knockLog = sqliteTable("knock_log", {
   // Idempotency key from the offline knock queue; null for legacy rows. A retried
   // flush with the same clientId returns the existing row instead of double-logging.
   clientId: text("client_id"),
+  // Set when the outcome CAS LOST (a newer outcome already stood): the knock is
+  // recorded as field history but applied NO status flip and NO money effects.
+  // Persisted so retries, history, and counters can all tell the truth.
+  superseded: integer("superseded").notNull().default(0),
   // ── Location verification (see shared/geoVerify.ts) ──────────────────────────
   // OBSERVATIONS the device reports (client-supplied evidence — may be spoofed,
   // which is exactly what the verdict defends against):

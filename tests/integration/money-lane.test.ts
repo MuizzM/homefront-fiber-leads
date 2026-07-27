@@ -222,7 +222,7 @@ describe("P1-1 stale offline knock loses the outcome CAS", () => {
     // A NEWER outcome still wins the CAS and unwinds the sale normally.
     const newer = await knock(lead.id, rep1.session, "not_interested", "2026-02-03T10:00:00.000Z");
     expect(newer.status).toBe(201);
-    expect(newer.body.superseded).toBeUndefined();
+    expect(newer.body.superseded).toBeFalsy(); // knock rows carry the superseded column (0 = applied)
     expect(storage.getLeadById(lead.id)!.leadStatus).toBe("not_interested");
     expect(pendingFor(lead.id).length).toBe(0);
     expect(saleRow()?.status).toBe("REVERSED");
