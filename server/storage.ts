@@ -372,7 +372,7 @@ export function runMigrations() {
     // REVIEWER GATE (fin #6): backfill outcome recency for pre-migration leads —
     // without it, a stale offline knock flushed after deploy WINS the CAS over
     // a newer pre-deploy disposition (NULL last_outcome_at).
-    `UPDATE leads SET last_outcome_at = (SELECT MIN(MAX(knocked_at), datetime('now')) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL`,
+    `UPDATE leads SET last_outcome_at = (SELECT MIN(MAX(knocked_at), strftime('%Y-%m-%dT%H:%M:%fZ','now')) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_superseded ON knock_log(lead_id, superseded)`,
     `ALTER TABLE knock_log ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE clock_sessions ADD COLUMN tenant_id INTEGER`,
