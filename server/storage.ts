@@ -2644,11 +2644,13 @@ export class Storage implements IStorage {
     // separate scan process) or after out-of-band inserts, so it must NOT gate
     // correctness — otherwise a cache miss inserts a DUPLICATE lead and fires a
     // false "went live" alert. ──────────────────────────────────────────────────
-    const exactHit = rawDb.prepare("SELECT * FROM leads WHERE address = ? LIMIT 1").get(lead.address ?? "") as Lead | undefined;
+    const exactHit = rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND address = ? LIMIT 1")
+      .get(leadTenantId, lead.address ?? "") as Lead | undefined;
     if (exactHit) return { lead: exactHit, created: false };
     const prefix = normalizedAddr.split(" ")[0];
     if (prefix) {
-      const candidates = rawDb.prepare("SELECT * FROM leads WHERE address LIKE ? LIMIT 20").all(prefix + "%") as Lead[];
+      const candidates = rawDb.prepare("SELECT * FROM leads WHERE tenant_id IS ? AND address LIKE ? LIMIT 20")
+        .all(leadTenantId, prefix + "%") as Lead[];
       const existingLead = candidates.find(l => normalizeAddress(l.address ?? "") === normalizedAddr);
       if (existingLead) return { lead: existingLead, created: false };
     }
