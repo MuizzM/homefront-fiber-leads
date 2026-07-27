@@ -6,7 +6,7 @@ import { mintViaImpersonate } from "./curlMint";
 import { emitStage, type ScanStage } from "./scanStageBus";
 import { KFS_SCAN_URL, KFS_REFERER, KFS_ORIGIN } from "./kfs-config";
 import { scoreLead } from "./lead-scoring";
-import { parseKineticResponse, selectReliableAddressSuggestion } from "./kineticResponseParser";
+import { classifyKineticResult, parseKineticResponse, selectReliableAddressSuggestion } from "./kineticResponseParser";
 import { isActiveBilling } from "@shared/billingStatus";
 import {
   ProviderRequestQueue,
@@ -1005,6 +1005,38 @@ async function scanAddressDirect(
       return base;
     }
     base.rawResponse = data;
+    const parsed = parseKineticResponse(data);
+    const providerClassification = classifyKineticResult(parsed);
+    const requestedIdentityKey = normalizeKineticAddressKey(address, city, state, "");
+    const echoedIdentityKey = parsed.addressLine1 && parsed.city && parsed.state
+      ? normalizeKineticAddressKey(parsed.addressLine1, parsed.city, parsed.state, "")
+      : null;
+    const exactAddressIdentity =
+      parsed.addressFound
+      && parsed.exactMatch
+      && echoedIdentityKey === requestedIdentityKey;
+
+    // ADDRESS IDENTITY GATE — a successful response is conclusive for the
+    // requested door only when the provider explicitly says AddressFound AND
+    // exactMatch AND its echoed address/city/state canonicalize to the requested
+    // identity. exactMatch alone is insufficient: a provider/cache defect can
+    // still echo a different rooftop with valid NEW FIBER fields. Keep the raw
+    // response only on this in-memory result for diagnostics; the failed result
+    // never reaches applyCheck or durable availability evidence.
+    if (parsed.success && !exactAddressIdentity) {
+      base.apiSource = "failed";
+      base.fiberStatus = "unknown";
+      base.confidence = "LOW";
+      base.notes = `Non-conclusive response (AddressNeedsFix: successful result failed address identity; validation=${parsed.validationResult || "missing"}, exactMatch=${parsed.exactMatch}, echoedIdentity=${echoedIdentityKey ? "mismatch" : "missing"})`;
+      emit("error", {
+        status: "error",
+        httpStatus: 200,
+        latencyMs: searchMs,
+        classification: "unresolved/address_identity_mismatch",
+        detail: "successful provider response failed exact echoed-address identity — unresolved, NOT no-service",
+      });
+      return base;
+    }
 
     // CONCLUSIVE not-serviceable verdicts — Kinetic definitively says this address
     // is not in / not served by its fabric (not in the DB, out of territory, or
@@ -1012,7 +1044,7 @@ async function scanAddressDirect(
     // re-scan them), NOT failures. Matched by a known family of validationResult
     // codes, e.g. AddressNotFound, AddressUnserviceableOutOfTerritory.
     const vr = String(data.validationResult ?? "");
-    if (/addressnotfound|unserviceable|outofterritory|not\s*serviceable|no\s*service/i.test(vr)) {
+    if (providerClassification === "NO_SERVICE" || /addressnotfound|unserviceable|outofterritory|not\s*serviceable|no\s*service/i.test(vr)) {
       base.fiberStatus = "no_service";
       base.apiSource = "kinetic_live";
       base.confidence = "HIGH";
@@ -1046,8 +1078,16 @@ async function scanAddressDirect(
           const cZip = pick.zip ?? zip;
           const origKey = normalizeKineticAddressKey(address, city, state, zip);
           const corrKey = normalizeKineticAddressKey(cAddress, cCity, cState, cZip);
-          // Never "correct" an address to itself — that would just repeat the request.
-          if (corrKey !== origKey) {
+          const requestTuple = (a: string, c: string, s: string, z: string) =>
+            [a, c, s, String(z).replace(/\D/g, "").slice(0, 5)]
+              .map((part) => String(part ?? "").trim().toUpperCase().replace(/\s+/g, " "))
+              .join("|");
+          const repeatsIdenticalRequest =
+            requestTuple(cAddress, cCity, cState, cZip) === requestTuple(address, city, state, zip);
+          // Re-search a genuine spelling/format correction once, including a
+          // suffix-equivalent form (DRIVE → DR). An identical request would only
+          // repeat the same non-answer.
+          if (!repeatsIdenticalRequest) {
             emit("searching", {
               status: "info", httpStatus: 200, latencyMs: searchMs, sessionId: getProxySessionId(),
               tokenSuffix: tokenLease.token.slice(-4),
@@ -1056,13 +1096,29 @@ async function scanAddressDirect(
             });
             // SAME transport, SAME authorized-token + proxyFetch path; depth+1 bounds it.
             const corrected = await scanAddressDirect(cAddress, cCity, cState, cZip, source, correctionDepth + 1);
-            // ADOPT the correction ONLY if it produced a conclusive serviceable answer
-            // (fiber/copper/tenured — a real kinetic_live verdict that is not no-service
-            // and not an unresolved non-answer). The corrected/canonical address then
-            // becomes the address of record for this check.
+            // A conclusive correction may be adopted only when it represents the
+            // SAME canonical address. A materially different suggestion needs an
+            // atomic scan-target identity migrate/merge that does not exist yet;
+            // attaching its evidence to the original target would publish the
+            // wrong door. We still perform the bounded correction search so the
+            // provider behavior remains observable, then fail closed.
             if (corrected.apiSource === "kinetic_live" && corrected.fiberStatus !== "no_service" && corrected.fiberStatus !== "unknown") {
-              corrected.notes = `Corrected ${vr || "address"} → ${cAddress} (${selection.reason}). ${corrected.notes}`.trim();
-              return corrected;
+              if (corrKey === origKey) {
+                corrected.notes = `Corrected equivalent ${vr || "address"} → ${cAddress} (${selection.reason}). ${corrected.notes}`.trim();
+                return corrected;
+              }
+              base.apiSource = "failed";
+              base.fiberStatus = "unknown";
+              base.confidence = "LOW";
+              base.notes = `Non-conclusive (${vr}); suggestion resolved a materially different address and cannot be attached to the original scan target — unresolved, recheck`;
+              emit("error", {
+                status: "error",
+                httpStatus: 200,
+                latencyMs: searchMs,
+                classification: "unresolved/address_identity_mismatch",
+                detail: `correction resolved but changed canonical identity (${vr}) — not attached to original target`,
+              });
+              return base;
             }
             // The correction did NOT resolve to a serviceable answer (it came back
             // no-service, blocked, or non-conclusive). Per product law we do NOT adopt a
@@ -1115,8 +1171,6 @@ async function scanAddressDirect(
     //    uqualProvisioningResult, and keeps FIBER qualified INDEPENDENTLY of any
     //    COPPER "NO QUAL / REMOVE FIBER AREA" override (that override disqualifies
     //    copper only, never fiber).
-    const parsed = parseKineticResponse(data);
-
     // Core fields
     base.dfAddressId = parsed.dfAddressId;
     base.accessId = parsed.accessId;

@@ -113,21 +113,52 @@ describe("Kinetic scanner — apply reliable address suggestions instead of repe
     return searched;
   }
 
-  it("applies the single reliable suggestion and re-searches ONCE with the corrected address (conclusive)", async () => {
+  it("re-searches a reliable materially-different suggestion once but does not attach its verdict to the original target", async () => {
     const searched = trackedSearch(a =>
       a.includes("James Allgood") ? json(200, FIBER_FIX) : json(200, needsFix("AddressNeedsFix", [RELIABLE_SUGGESTION])));
 
     const r = await scanner.scanAddress(TYPO_QUERY.address, TYPO_QUERY.city, TYPO_QUERY.state, TYPO_QUERY.zip, { source: "manual" });
 
-    // The corrected search produced the conclusive fiber verdict.
-    expect(r).toMatchObject({ apiSource: "kinetic_live", fiberStatus: "new_fiber", fiberAvailable: true, techType: "FIBER" });
-    // Correction is recorded on the notes, and the corrected/canonical address is adopted.
-    expect(r.notes).toMatch(/Corrected AddressNeedsFix → 345 James Allgood Dr/);
-    expect(r.address).toBe("345 James Allgood Dr");
+    // The corrected provider search is exact, but its canonical identity differs
+    // from the typo target. Until target migrate/merge is atomic, fail closed
+    // rather than publishing the corrected house under the original target ID.
+    expect(r).toMatchObject({ apiSource: "failed", fiberStatus: "unknown", fiberAvailable: false });
+    expect(r.notes).toMatch(/materially different address/i);
+    expect(r.address).toBe(TYPO_QUERY.address);
     // Exactly TWO searches: the original + ONE corrected retry (bounded, no loop).
     expect(searched).toHaveLength(2);
     expect(searched[0]).toBe(TYPO_QUERY.address);
     expect(searched[1]).toContain("James Allgood");
+  });
+
+  it("keeps an exact result for an equivalent suffix correction on the same canonical address", async () => {
+    const equivalentQuery = {
+      address: "345 James Allgood Drive",
+      city: "Inman",
+      state: "SC",
+      zip: "29349",
+    };
+    const searched = trackedSearch(a =>
+      a === "345 James Allgood Dr"
+        ? json(200, FIBER_FIX)
+        : json(200, needsFix("AddressNeedsFix", [RELIABLE_SUGGESTION])));
+
+    const r = await scanner.scanAddress(
+      equivalentQuery.address,
+      equivalentQuery.city,
+      equivalentQuery.state,
+      equivalentQuery.zip,
+      { source: "manual" },
+    );
+
+    expect(r).toMatchObject({
+      apiSource: "kinetic_live",
+      fiberStatus: "new_fiber",
+      fiberAvailable: true,
+      address: "345 James Allgood Dr",
+    });
+    expect(r.notes).toMatch(/Corrected equivalent AddressNeedsFix/);
+    expect(searched).toEqual(["345 James Allgood Drive", "345 James Allgood Dr"]);
   });
 
   it("falls back to non-conclusive (never NO_SERVICE) when suggestions are ambiguous — no correction attempted", async () => {

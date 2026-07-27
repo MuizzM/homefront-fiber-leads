@@ -15,7 +15,6 @@ interface ProjectionCandidate {
   lat: number | null;
   lng: number | null;
   first_seen_fiber_at: string | null;
-  last_fiber_available: number | null;
   last_fiber_status: string | null;
   last_billing_status: string | null;
   last_customer_segment: "new_opportunity" | "existing_customer" | "unknown";
@@ -29,6 +28,7 @@ interface ProjectionCandidate {
   competitive_decision: string | null; // 'eligible' | 'excluded_fiber_competitor' | 'competitor_review'
   competitor_name: string | null;
   competitor_tech: string | null;
+  latest_fiber_available: number | null;
 }
 
 export interface ProjectionResult {
@@ -75,10 +75,11 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
   const ids = [...new Set((targetIds ?? []).filter((id) => Number.isInteger(id) && id > 0))];
   const filter = ids.length ? `AND s.id IN (${ids.map(() => "?").join(",")})` : "";
   const candidates = rawDb.prepare(`
-    SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,s.last_fiber_available,
+    SELECT s.id,s.address,s.city,s.state,s.zip,s.lat,s.lng,s.first_seen_fiber_at,
            s.last_fiber_status,s.last_billing_status,s.last_customer_segment,s.converted_to_lead_id,s.carrier,s.frontier_control,
            EXISTS(SELECT 1 FROM availability_snapshots f WHERE f.scan_target_id=s.id AND f.tenant_id=? AND f.fresh=1 AND f.conclusive=1) AS proven_flip,
            latest.max_download_mbps,latest.household_segment_type,latest.billing_status,latest.service_status,
+      latest.fiber_available AS latest_fiber_available,
       latest.competitive_decision,latest.competitor_name,latest.competitor_tech
       FROM scan_targets s
       -- Latest CONCLUSIVE snapshot, ordered by the canonical epoch (never raw text).
@@ -193,7 +194,7 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       const evidence = evidenceStmt.all(tenantId, candidate.id) as IndependentAvailabilityEvidence[];
       const evidenceDecision = decideFreshFiberConfirmation({
         transitionFresh: !!candidate.proven_flip,
-        currentFiberAvailable: candidate.last_fiber_available == null ? null : !!candidate.last_fiber_available,
+        currentFiberAvailable: candidate.latest_fiber_available == null ? null : !!candidate.latest_fiber_available,
         customerSegment: candidate.last_customer_segment ?? "unknown",
         firstDetectedAt: candidate.first_seen_fiber_at,
         evidence,
@@ -206,7 +207,13 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
       // genuine NEW FIBER answer (the discovery↔Manual-Check divergence).
       const seg = String(candidate.household_segment_type ?? "").toUpperCase();
       const billing = String(candidate.billing_status ?? "").toUpperCase();
-      const fiberAvail = candidate.last_fiber_available == null ? null : !!candidate.last_fiber_available;
+      // Same-epoch evidence tuple: availability, segment, billing and competitive
+      // decision all come from the exact same latest CONCLUSIVE snapshot selected
+      // by the join above. scan_targets.last_fiber_available can lag that snapshot
+      // and must never fill a null/unknown provider answer.
+      const fiberAvail = candidate.latest_fiber_available == null ? null : !!candidate.latest_fiber_available;
+      // Null is inconclusive and cannot mutate any lead state.
+      if (fiberAvail == null) { result.rejected++; return; }
       // NOW ACTIVE transition: a genuinely newer CONCLUSIVE NEW FIBER + billing Y
       // (the `latest` join is conclusive-only, epoch-ordered) means the prospect
       // signed up. Move the existing Fresh Lead to now_active — never delete it.
@@ -256,7 +263,13 @@ export function projectConfirmedFreshLeads(tenantId: number, targetIds?: number[
         return;
       }
 
-      const authoritativeFresh = seg === "NEW FIBER" && billing === "N" && fiberAvail !== false;
+      // An explicit unavailable result is conclusive but cannot publish. It was
+      // deliberately allowed through the competitive gate above so a confirmed
+      // fiber-competitor recheck can retain the existing suppression behavior.
+      if (fiberAvail !== true) { result.rejected++; return; }
+      // NEW FIBER + N is authoritative only alongside the explicit positive
+      // availability observation enforced above.
+      const authoritativeFresh = seg === "NEW FIBER" && billing === "N" && fiberAvail === true;
       const decision: FreshFiberConfirmationDecision = evidenceDecision.confirmed
         ? evidenceDecision
         : authoritativeFresh
