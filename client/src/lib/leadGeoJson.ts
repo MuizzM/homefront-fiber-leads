@@ -45,15 +45,8 @@ export function leadFeatureSignature(lead: GeoJsonLead): string {
   return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic", lead.assignedRepId ?? 0].join("\u001f");
 }
 
-/**
- * Deterministic per-rep pin color for the admin assignment view: golden-angle
- * hue rotation keeps consecutive rep ids visually distinct; unassigned = gray.
- */
-export function repColorFor(repId: number | null | undefined): string {
-  if (repId == null) return "#6b7280";
-  const hue = Math.round((Number(repId) * 137.508) % 360);
-  return `hsl(${hue}, 72%, 52%)`;
-}
+import { colorForRep } from "@shared/repColors";
+export { colorForRep as repColorFor };
 
 /**
  * Reconciles the next lead snapshot in O(n). Unchanged refetches reuse every
@@ -102,7 +95,7 @@ export function reconcileLeadFeatures(
             fresh: lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0,
             carrier: lead.carrier ?? "kinetic",
             assignedRepId: lead.assignedRepId ?? 0,
-            repColor: repColorFor(lead.assignedRepId),
+            repColor: colorForRep(lead.assignedRepId),
           },
         },
       };

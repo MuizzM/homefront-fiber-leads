@@ -477,6 +477,9 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     }
     if (centralMode && canManage && onCentralMark) {
       onCentralMark(key); // central-team mark: no rep credit, no commission
+      // AUDIT FIX: disarm after one mark — the hint says "next status tap",
+      // and an armed manager silently stripped rep credit on later doors.
+      setCentralMode(false);
     } else {
       onKnock(key); // optimistic upstream: dot, status line, pill, and pin recolor together
     }
@@ -630,15 +633,17 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         {/* Tap the handle to toggle peek/expanded — one-hand alternative to the
             drag (swallowDragClick suppresses this after a real drag). */}
         {!docked ? (
-          <div
+          <button
+            type="button"
+            aria-label="Expand or collapse card"
             data-testid="knock-sheet-handle"
-            className="flex justify-center pt-2 pb-1 cursor-pointer"
+            className="flex justify-center pt-2 pb-1 cursor-pointer bg-transparent border-0 w-full"
             onClick={() => setSnap(s => (s === "peek" ? "expanded" : "peek"))}
           >
             {/* white/40 clears the 3:1 non-text floor over the 0.86 ink sheet
                 on both basemap extremes (white/25 measured ~2.2:1). */}
             <div className="w-10 h-[5px] rounded-full bg-white/40" />
-          </div>
+          </button>
         ) : (
           <div className="pt-4" />
         )}

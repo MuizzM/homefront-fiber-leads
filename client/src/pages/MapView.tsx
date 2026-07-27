@@ -992,10 +992,16 @@ export default function MapView() {
             try { navigator.vibrate?.(10); } catch { /* no haptics */ }
             toast({
               title: existed ? "Already on the map" : "📍 Pin added",
-              description: `${resolved.address} — checking fiber…`,
+              description: resolved.address,
             });
           }
-        } catch { /* pin-first is best-effort; the scan below still runs */ }
+        } catch {
+          toast({
+            title: "Couldn't add the lead",
+            description: "No pin was created — tap the house again to retry.",
+            variant: "destructive",
+          });
+        }
       }
 
       // NO AUTO-SCAN (owner directive 2026-07-24): the tap ONLY drops the
@@ -2429,15 +2435,24 @@ export default function MapView() {
     const map = mapRef.current;
     if (!map || !mapReady || !canManage) return;
     try {
-      if (map.getLayer("lead-unclustered")) {
-        map.setPaintProperty(
-          "lead-unclustered",
-          "circle-color",
-          repColorMode ? ["get", "repColor"] : PIN_DS_COLOR,
-        );
+      if (repColorMode) {
+        // AUDIT FIX: in the default icon-pin config the circle layer is hidden,
+        // so recoloring it changed NOTHING. Swap layers: icons off, circles on
+        // in rep colors (clusters stay status-colored — territory-level view).
+        if (map.getLayer(STATUS_ICON_LAYER)) map.setLayoutProperty(STATUS_ICON_LAYER, "visibility", "none");
+        if (map.getLayer("lead-unclustered")) {
+          map.setLayoutProperty("lead-unclustered", "visibility", "visible");
+          map.setPaintProperty("lead-unclustered", "circle-color", ["get", "repColor"]);
+        }
+      } else {
+        if (map.getLayer("lead-unclustered")) {
+          map.setPaintProperty("lead-unclustered", "circle-color", PIN_DS_COLOR);
+          map.setLayoutProperty("lead-unclustered", "visibility", newFieldMap() ? "none" : (showLeads ? "visible" : "none"));
+        }
+        if (map.getLayer(STATUS_ICON_LAYER)) map.setLayoutProperty(STATUS_ICON_LAYER, "visibility", newFieldMap() ? (showLeads ? "visible" : "none") : "none");
       }
     } catch { /* style mid-load; styleEpoch re-fires this effect */ }
-  }, [repColorMode, mapReady, styleEpoch, canManage]);
+  }, [repColorMode, mapReady, styleEpoch, canManage, showLeads]);
 
   // ── Selected-pin ring — pure style-thread update, no setData, no re-cluster ──
   useEffect(() => {
@@ -5769,11 +5784,11 @@ export default function MapView() {
           {/* ── Add-lead FAB — team_lead+ (matches POST /api/leads permission).
                  Toggles tap-a-house: tap a rooftop → reverse-geocode → property
                  card → add. Stacked ABOVE the locate FAB (bottom-right). ── */}
-          {mapReady && canSubmitScan && bottomSlot !== "knock" && (
+          {mapReady && canAssign && bottomSlot !== "knock" && (
             <button
               onClick={() => setAddMode((v) => !v)}
               aria-label={
-                addMode ? "Cancel scan mode" : "Scan a house for fiber"
+                addMode ? "Cancel add-lead mode" : "Add a lead — tap a house"
               }
               aria-pressed={addMode}
               data-testid="add-lead-fab"
@@ -5833,7 +5848,7 @@ export default function MapView() {
               <div className="flex items-center gap-2 pl-3.5 pr-2 py-2 min-h-11">
                 <Radar className="w-4 h-4 text-orange-400 shrink-0" />
                 <span className="font-medium whitespace-nowrap">
-                  Tap houses to scan for fiber
+                  Tap a house to add a lead
                 </span>
               </div>
               {canAssign && (
