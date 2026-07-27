@@ -924,10 +924,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Token is NOT in the frontend bundle; fetched at runtime from the server.
   // App-level public config (no secrets): role lists the client must never
   // hardcode. AUDIT FIX: super-admin emails were hardcoded in TWO client files.
-  app.get("/api/config/app", requireAdmin, (_req: any, res: any) => {
-    const superAdminEmails = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
-      .split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
-    res.json({ superAdminEmails });
+  app.get("/api/config/app", requireAdmin, (req: any, res: any) => {
+    // P0-1 (reviewer B2): never disclose the apex email list — the caller only
+    // needs to know if THEY are apex (from the immutable column).
+    res.json({ youAreSuperAdmin: !!(req as any).user?.isSuperAdmin });
   });
 
   app.get("/api/config/map", requireAuth, (req: any, res) => {
@@ -1503,9 +1503,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   function requireBillingOwner(req: Request, res: Response, next: NextFunction) {
     requireAuth(req, res, () => {
       const u = (req as any).user;
-      const owners = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
-        .split(",").map(e => e.trim().toLowerCase());
-      if (!u || !["admin", "super_admin"].includes(u.role) || !owners.includes(String(u.email).toLowerCase())) {
+      // P0-1 (reviewer B1): billing apex also reads the immutable column —
+      // never the mutable email string.
+      if (!u || !["admin", "super_admin"].includes(u.role) || !u.isSuperAdmin) {
         return res.status(403).json({ error: "Platform owner only" });
       }
       next();
@@ -5686,6 +5686,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         userId = existing.id;
         // Claim only an unassigned pre-membership login; never move an account
         // from another tenant. A stale/foreign rep link is detached, not moved.
+        // P0-1: apex emails are reserved even via public applications.
+        const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
+        if (apex.includes(String(application.email ?? "").trim().toLowerCase())) {
+          return res.status(400).json({ error: "That email is reserved for platform ownership" });
+        }
         // Keep login active so the applicant can sign.
         storage.updateUser(existing.id, {
           active: true,
