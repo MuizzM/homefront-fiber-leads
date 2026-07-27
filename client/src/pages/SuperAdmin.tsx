@@ -4,6 +4,8 @@ import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { BillingOps } from "@/components/BillingOps";
+import { AdminHistory } from "@/components/AdminHistory";
+import { useSuperAdminEmails, isSuperAdmin as isSuperAdminUser } from "@/lib/appConfig";
 import {
   Building2, Plus, DollarSign, Users, Zap, BarChart2,
   Edit2, Trash2, Shield, Globe, CheckCircle,
@@ -323,8 +325,13 @@ export default function SuperAdmin() {
   const [editTenant, setEditTenant] = useState<Tenant | null>(null);
   const [deleteTenant, setDeleteTenant] = useState<Tenant | null>(null);
 
-  // Only muizzm21@gmail.com can see this
-  if (user?.role !== "admin" || user?.email !== "muizzm21@gmail.com") {
+  // Identity comes from the session's immutable super-admin flag — NOT a
+  // hardcoded email literal, which disagreed with the server's own authority
+  // (requireSuperAdmin reads is_super_admin) and locked the console the moment
+  // SUPER_ADMIN_EMAILS named a different address. The email comparison remains
+  // only for a cached pre-upgrade snapshot; the server enforces the real wall.
+  const superAdminEmails = useSuperAdminEmails().emails;
+  if (user?.role !== "admin" || !isSuperAdminUser(user, superAdminEmails)) {
     return (
       <div className="p-6 flex items-center justify-center h-64">
         <div className="text-center">
@@ -400,6 +407,10 @@ export default function SuperAdmin() {
 
       {/* Billing & credits — cross-tenant lead-credit metering ops */}
       <BillingOps />
+
+      {/* Append-only record of every privileged change. Server-backed, so it
+          survives refresh, navigation, logout and redeploy. */}
+      <AdminHistory />
 
       {/* Revenue by tenant — statement rows */}
       {revenue && revenue.summary.length > 0 && (

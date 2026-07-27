@@ -1934,6 +1934,14 @@ export function runMigrations() {
       raw.prepare(`UPDATE users SET is_super_admin = 0 WHERE is_super_admin = 1 AND lower(email) NOT IN (${placeholders})`).run(...emails);
     }
   } catch (e: any) { console.warn("[migration] super-admin stamp:", e?.message); }
+
+  // Admin history. Created through the normal migration path (IF NOT EXISTS +
+  // append-only triggers) so a redeploy re-runs it and finds prior rows intact —
+  // history surviving deployments is the whole point of the table.
+  try {
+    const { ensureAdminAuditSchema } = require("./adminAudit") as typeof import("./adminAudit");
+    ensureAdminAuditSchema();
+  } catch (e: any) { console.warn("[migration] admin audit schema:", e?.message); }
 }
 
 /**
