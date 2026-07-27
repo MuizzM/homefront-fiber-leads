@@ -4498,6 +4498,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
+      storage.logLoginAttempt(cleanEmail, "request", false, "rate_limited", ip, req.headers["user-agent"] as string);
       return res.status(429).json({ error: `Too many requests. Try again in ${Math.ceil(retryAfter / 60)} minutes.` });
     }
     // Owner's decision (2026-07-08): this is a closed internal team tool, so an
@@ -4508,6 +4509,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // flip this back to the constant response.
     const user = storage.getUserByEmail(cleanEmail);
     if (!user || !user.active) {
+      storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string);
       // Neutral response — do NOT reveal whether an email is registered/active
       // (account enumeration). A real user gets a code; anyone else gets the same
       // "sent" with no email actually dispatched.
@@ -4527,8 +4529,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // warn that the email may be delayed. The code is NEVER returned in the API
       // response in production — email remains the only automated delivery path.
       console.warn("[otp] mail delivery failed; advancing login flow anyway:", mailErr?.message);
+      storage.logLoginAttempt(cleanEmail, "request", true, "code_created_mail_failed", ip, req.headers["user-agent"] as string);
       return res.json({ sent: true, emailDelivered: false });
     }
+    storage.logLoginAttempt(cleanEmail, "request", true, "code_sent", ip, req.headers["user-agent"] as string);
     // Localhost must remain usable without a paid mail account. The code is
     // returned only in non-production when delivery fell back to the console;
     // production can never expose an authentication secret in an API response.
@@ -4552,18 +4556,35 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
+      storage.logLoginAttempt(cleanEmail, "verify", false, "rate_limited", ip, req.headers["user-agent"] as string);
       return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(retryAfter / 60)} minutes.` });
     }
     const ok = storage.verifyOtp(cleanEmail, code.trim());
-    if (!ok) return res.status(401).json({ error: "Invalid or expired code. Check your email and try again." });
+    if (!ok) {
+      storage.logLoginAttempt(cleanEmail, "verify", false, "bad_code", ip, req.headers["user-agent"] as string);
+      return res.status(401).json({ error: "Invalid or expired code. Check your email and try again." });
+    }
     const user = storage.getUserByEmail(cleanEmail);
-    if (!user || !user.active) return res.status(401).json({ error: "Account not active. Contact your administrator." });
+    if (!user || !user.active) {
+      storage.logLoginAttempt(cleanEmail, "verify", false, "account_inactive", ip, req.headers["user-agent"] as string);
+      return res.status(401).json({ error: "Account not active. Contact your administrator." });
+    }
+    storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string);
     // Reset verify limiter on success
     otpVerifyLimiter.delete(`email:${cleanEmail}`);
     otpVerifyLimiter.delete(`ip:${ip}`);
     otpRequestLimiter.delete(`email:${cleanEmail}`);
     const session = storage.createSession(user.id);
     res.json({ sessionId: session.id, user: { id: user.id, name: user.name, email: user.email, role: user.role, teamMemberId: user.teamMemberId } });
+  });
+
+  // Login-attempt audit (owner ask 2026-07-26): managers read the persistent
+  // auth trail — recent attempts or the per-email summary. Requires manager+.
+  app.get("/api/auth/login-attempts", requireManager, (req, res) => {
+    const email = typeof req.query.email === "string" ? req.query.email.trim().toLowerCase() : "";
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
+    if (req.query.summary === "1") return res.json({ summary: storage.getLoginAttemptSummary() });
+    res.json({ attempts: storage.getLoginAttempts(limit, email || undefined) });
   });
 
   // Legacy password login — kept ONLY for first-run admin setup, disabled otherwise
