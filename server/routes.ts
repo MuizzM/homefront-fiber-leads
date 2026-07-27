@@ -279,6 +279,9 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!session) return res.status(401).json({ error: "Session expired" });
   const user = storage.getUserById(session.userId);
   if (!user || !user.active) return res.status(401).json({ error: "User not found" });
+  // Keep an actively-used session alive: every authenticated request slides the
+  // expiry forward, so a rep mid-shift is never signed out under their own taps.
+  storage.touchSession(session);
   (req as any).user = user;
   next();
 }

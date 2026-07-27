@@ -1329,8 +1329,14 @@ app.use((req, res, next) => {
   setInterval(() => {
     try {
       const raw = (require("./db").db as any).driver ?? (require("./db").db as any).$client;
-      raw.exec(`DELETE FROM sessions WHERE expires_at < datetime('now')`);
-      raw.exec(`DELETE FROM otp_codes WHERE expires_at < datetime('now')`);
+      // FORMAT MATCH: both tables store expires_at as a JS ISO string
+      // ("2026-07-25T00:19:00.000Z"), but datetime('now') renders SQLite's
+      // space-separated form ("2026-07-25 00:19:00"). These compare as plain
+      // text, and 'T' (0x54) sorts above ' ' (0x20), so same-day expiries never
+      // matched and lingered a full extra day. Compare ISO against ISO.
+      const nowIso = new Date().toISOString();
+      raw.prepare(`DELETE FROM sessions WHERE expires_at < ?`).run(nowIso);
+      raw.prepare(`DELETE FROM otp_codes WHERE expires_at < ?`).run(nowIso);
     } catch {}
   }, 6 * 60 * 60 * 1000);
 

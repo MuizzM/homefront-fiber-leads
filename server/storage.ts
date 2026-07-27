@@ -35,6 +35,25 @@ import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 // upsertLeadByAddress still persists them when a scanner payload carries them.
 type LegacyScanFields = { maxDownload?: number | null; isNewDeployment?: boolean | null };
 
+// ── Session lifetime ─────────────────────────────────────────────────────────
+// Field reps work full shifts on weak signal; being bounced to the Login screen
+// mid-knock is a data-loss-shaped event, so the window is generous AND SLIDING
+// (storage.touchSession restarts the clock on every authenticated request).
+// SESSION_TTL_MS is therefore "how long you may stay AWAY before signing in
+// again", not "how long a shift may last" — comfortably covering a 24h day.
+// Override per-deployment with SESSION_TTL_HOURS.
+const SESSION_TTL_HOURS = Math.min(720, Math.max(24, Number(process.env.SESSION_TTL_HOURS) || 24 * 7));
+export const SESSION_TTL_MS = SESSION_TTL_HOURS * 60 * 60 * 1000;
+// Hard ceiling measured from login: renewal can extend a session repeatedly,
+// but never past this, so a lost or stolen device eventually falls out.
+export const SESSION_ABSOLUTE_MAX_MS = Math.max(
+  SESSION_TTL_MS,
+  Math.min(365, Math.max(1, Number(process.env.SESSION_ABSOLUTE_MAX_DAYS) || 30)) * 24 * 60 * 60 * 1000,
+);
+// Only rewrite expires_at once it has drifted at least this far, so a burst of
+// knocks costs one write per hour rather than one per request.
+const SESSION_RENEW_SLACK_MS = 60 * 60 * 1000;
+
 // An open follow-up: a lead whose latest knock is a scheduled callback (see
 // getOpenCallbacks). Display fields come from the lead; the schedule + note from
 // the knock. No provider-internal ids are ever included.
@@ -156,6 +175,8 @@ export interface IStorage {
   // ── Sessions ───────────────────────────────────────────────────────────────
   createSession(userId: number): Session;
   getSession(id: string): Session | undefined;
+  /** Slide an authenticated session's expiry forward (see implementation). */
+  touchSession(session: Session): Session;
   deleteSession(id: string): void;
   deleteSessionsByUser(userId: number): number;
   // ── OTP ────────────────────────────────────────────────────────────────────
@@ -3023,12 +3044,35 @@ export class Storage implements IStorage {
   // ── Sessions ───────────────────────────────────────────────────────────────
   createSession(userId: number): Session {
     const id = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
     return db.insert(sessions).values({ id, userId, expiresAt, createdAt: new Date().toISOString() }).returning().get();
   }
   getSession(id: string): Session | undefined {
     const now = new Date().toISOString();
     return db.select().from(sessions).where(and(eq(sessions.id, id), gt(sessions.expiresAt, now))).get();
+  }
+  /** SLIDING RENEWAL — an app in active use must NEVER expire under the rep.
+   * The original TTL was absolute from login, so a session minted 7 days ago
+   * died at whatever moment the rep happened to be working: reliably mid-shift,
+   * mid-knock. Every authenticated request now pushes the deadline back to a
+   * full TTL ahead, so the only way to be signed out is genuinely not opening
+   * the app for the whole window. Bounded two ways: an absolute cap from
+   * createdAt (a lost/stolen device can't stay valid forever), and a slack
+   * threshold so a burst of knocks doesn't turn every request into a DB write.
+   * Best-effort: a failed renewal must never break an otherwise-valid request. */
+  touchSession(session: Session): Session {
+    try {
+      const now = Date.now();
+      const created = Date.parse(session.createdAt ?? "") || now;
+      const target = Math.min(now + SESSION_TTL_MS, created + SESSION_ABSOLUTE_MAX_MS);
+      const current = Date.parse(session.expiresAt) || 0;
+      if (target - current <= SESSION_RENEW_SLACK_MS) return session;
+      const expiresAt = new Date(target).toISOString();
+      db.update(sessions).set({ expiresAt }).where(eq(sessions.id, session.id)).run();
+      return { ...session, expiresAt };
+    } catch {
+      return session; // transient write contention — the session is still valid
+    }
   }
   deleteSession(id: string): void {
     db.delete(sessions).where(eq(sessions.id, id)).run();
