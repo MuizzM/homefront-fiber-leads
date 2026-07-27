@@ -3,7 +3,7 @@ import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Clock3, PhoneCall, Search, ShieldAlert } from "lucide-react";
 import { CallingAvailability, CallingChrome, CallingPageSkeleton, CallingUnknownState } from "@/components/calling/CallingChrome";
-import { formatDecision, formatStage, getCallingQueue, getCallingStatus, type CallingCandidate } from "@/lib/callingApi";
+import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCallingCallbacks, type CallingCallback, type CallingCandidate } from "@/lib/callingApi";
 import { cn } from "@/lib/utils";
 
 const STAGE_FILTERS = [
@@ -37,6 +37,21 @@ const STAGE_LABELS: Record<string, string> = {
   INTERESTED: "Interested",
   CONVERTED: "Converted",
 };
+
+function callbackDueLabel(dueAt: string, timeZone: string): string {
+  const due = Date.parse(dueAt);
+  if (!Number.isFinite(due)) return "unscheduled";
+  const now = Date.now();
+  try {
+    if (due < now) {
+      const hrs = Math.floor((now - due) / 3_600_000);
+      return hrs < 24 ? `${hrs || 1}h late` : `${Math.floor(hrs / 24)}d late`;
+    }
+    return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone }).format(new Date(due));
+  } catch {
+    return new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date(due));
+  }
+}
 
 function stageLabel(stage: string): string {
   return STAGE_LABELS[stage] ?? formatStage(stage);
@@ -140,6 +155,31 @@ export default function CallingQueue() {
   }, [queueQuery.data, search]);
   const eligible = (queueQuery.data ?? []).filter(item => item.queueStage === "ELIGIBLE_MANUAL_CALL").length;
   const callbacks = (queueQuery.data ?? []).filter(item => item.queueStage === "CALLBACK_SCHEDULED").length;
+  // AUDIT FIX: real due-callbacks view (overdue/today/upcoming, in the stored
+  // timezone) on the previously client-less endpoint.
+  const callbacksQuery = useQuery({
+    queryKey: ["/api/v1/calling/callbacks"],
+    queryFn: () => getCallingCallbacks(100),
+    enabled: statusQuery.isSuccess,
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const callbackGroups = useMemo(() => {
+    const rows = callbacksQuery.data ?? [];
+    const now = Date.now();
+    const overdue: CallingCallback[] = [];
+    const today: CallingCallback[] = [];
+    const upcoming: CallingCallback[] = [];
+    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999);
+    for (const cb of rows) {
+      const due = Date.parse(cb.dueAt);
+      if (!Number.isFinite(due)) upcoming.push(cb);
+      else if (due < now) overdue.push(cb);
+      else if (due <= endOfToday.getTime()) today.push(cb);
+      else upcoming.push(cb);
+    }
+    return { overdue, today, upcoming };
+  }, [callbacksQuery.data]);
 
   return (
     <CallingChrome>
@@ -155,6 +195,39 @@ export default function CallingQueue() {
               <MetricCell label="Eligible" value={queueQuery.data ? eligible : null} dot="bg-emerald-500" />
               <MetricCell label="Callbacks" value={queueQuery.data ? callbacks : null} dot="bg-sky-500" />
             </section>
+
+            {(callbackGroups.overdue.length + callbackGroups.today.length) > 0 && (
+              <section aria-label="Due callbacks" className="overflow-hidden rounded-2xl border border-sky-500/25 bg-card" data-testid="due-callbacks">
+                <div className="border-b border-border px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-sky-600 dark:text-sky-400">
+                  Due callbacks — {callbackGroups.overdue.length} overdue · {callbackGroups.today.length} today
+                </div>
+                <ul className="divide-y divide-border/60">
+                  {[...callbackGroups.overdue, ...callbackGroups.today].slice(0, 8).map(cb => {
+                    const overdue = Date.parse(cb.dueAt) < Date.now();
+                    return (
+                      <li key={cb.id}>
+                        <Link href={`/calling/lead/${cb.leadId}`} className="group flex items-center gap-3 px-4 py-2.5 transition-colors hover:bg-secondary/40">
+                          <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${overdue ? "bg-red-500" : "bg-sky-500"}`} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-[13px] font-medium text-foreground">{cb.address}</span>
+                              <span className={`shrink-0 text-2xs font-semibold uppercase tracking-wide ${overdue ? "text-red-500" : "text-sky-500"}`}>
+                                {overdue ? "Overdue" : "Today"} · {callbackDueLabel(cb.dueAt, cb.timeZone)}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                              {cb.city}, {cb.state} {cb.zip}
+                              {cb.maskedPhone ? <> · <span className="font-mono text-[11px]">{cb.maskedPhone}</span></> : null}
+                            </p>
+                          </div>
+                          <ArrowRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground/50 transition group-hover:translate-x-0.5" />
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
 
             <div className="space-y-2.5">
               <div className="relative">

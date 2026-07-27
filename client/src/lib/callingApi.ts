@@ -359,6 +359,19 @@ export async function getCallingQueue(options: { stage?: string; limit?: number 
   return payload.queue.map(candidateFromApi);
 }
 
+export interface CallingCallback {
+  id: string; leadId: number; dueAt: string; timeZone: string; status: string;
+  assignedUserId: number | null;
+  address: string; city: string; state: string; zip: string; maskedPhone: string | null;
+}
+
+// AUDIT FIX: the callbacks endpoint existed server-side with ZERO client
+// consumers — scheduled callbacks were effectively invisible to reps.
+export async function getCallingCallbacks(limit = 100): Promise<CallingCallback[]> {
+  const payload = await json<{ callbacks: CallingCallback[] }>(apiRequest("GET", `${ROOT}/callbacks?limit=${limit}`));
+  return payload.callbacks ?? [];
+}
+
 export async function getCallingLead(leadId: number): Promise<CallingLeadDetail> {
   const payload = await json<{ lead: PublicCallingCandidate; timeline: CallingAuditEvent[];
     attempts?: CallingLeadDetail["attempts"]; callbacks?: CallingLeadDetail["callbacks"];
