@@ -82,12 +82,26 @@ function hasRole(userRole: string | undefined, ...allowed: AppRole[]) {
   return allowed.includes((userRole ?? "rep") as AppRole);
 }
 
+// AUDIT FIX: denied routes used to silently redirect to "/" (which can loop for
+// calling roles). Users deserve an explicit "no access" state instead of a
+// mystery teleport home.
+function AccessDenied() {
+  return (
+    <div className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center gap-3 p-6 text-center">
+      <div className="text-4xl">🔒</div>
+      <h1 className="text-lg font-semibold">No access to this area</h1>
+      <p className="text-sm text-muted-foreground">Your role doesn't include this workspace. Ask your manager if you need it, or head back to your queue.</p>
+      <a href="/#/" className="text-sm font-semibold text-primary underline underline-offset-4">Back to home</a>
+    </div>
+  );
+}
+
 function Guard({ role, allowed, children }: {
   role: string | undefined;
   allowed: AppRole[];
   children: React.ReactNode;
 }) {
-  if (!hasRole(role, ...allowed)) return <Redirect to="/" />;
+  if (!hasRole(role, ...allowed)) return <AccessDenied />;
   return <>{children}</>;
 }
 
@@ -96,7 +110,7 @@ function CapabilityGuard({ role, capability, children }: {
   capability: Capability;
   children: React.ReactNode;
 }) {
-  if (!can(role, capability)) return <Redirect to="/" />;
+  if (!can(role, capability)) return <AccessDenied />;
   return <>{children}</>;
 }
 
