@@ -372,7 +372,7 @@ export function runMigrations() {
     // REVIEWER GATE (fin #6): backfill outcome recency for pre-migration leads —
     // without it, a stale offline knock flushed after deploy WINS the CAS over
     // a newer pre-deploy disposition (NULL last_outcome_at).
-    `UPDATE leads SET last_outcome_at = (SELECT MAX(knocked_at) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL`,
+    `UPDATE leads SET last_outcome_at = (SELECT MIN(MAX(knocked_at), datetime('now')) FROM knock_log WHERE knock_log.lead_id = leads.id) WHERE last_outcome_at IS NULL`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_superseded ON knock_log(lead_id, superseded)`,
     `ALTER TABLE knock_log ADD COLUMN tenant_id INTEGER`,
     `ALTER TABLE clock_sessions ADD COLUMN tenant_id INTEGER`,
@@ -1892,8 +1892,10 @@ export function runMigrations() {
   catch (e: any) { console.warn("[migration] address review backfill:", e?.message); }
 
   bootstrapDefaultTenant(raw);
-  try { migrateCommissionsPendingDedupe(raw); }
-  catch (e: any) { console.error("CRITICAL: commissions pending dedupe/index migration failed:", e?.message); }
+  // GATE M6: a money invariant that can't build is a FAILED RELEASE, not a
+  // quiet warning — the deploy health-gate rolls back instead of running
+  // commission booking without its uniqueness guard.
+  migrateCommissionsPendingDedupe(raw);
 
   // P0-1: stamp immutable super-admin identity from the env list (idempotent;
   // ONLY ever SETS the flag for listed emails and CLEARS it for unlisted ones
@@ -2677,7 +2679,19 @@ export class Storage implements IStorage {
       updatedAt: now,
     }).where(and(
       eq(leads.id, leadId),
-      or(isNull(leads.lastOutcomeAt), lt(leads.lastOutcomeAt, knockedAt)),
+      or(
+        isNull(leads.lastOutcomeAt),
+        lt(leads.lastOutcomeAt, knockedAt),
+        // GATE (heal): SELF-TOLERANCE — a replay of the knock that ALREADY owns
+        // this exact outcome at this exact timestamp wins (idempotent re-apply
+        // of its own money effects), while a DIFFERENT outcome owning the same
+        // timestamp still supersedes it.
+        and(
+          eq(leads.lastOutcomeAt, knockedAt),
+          eq(leads.leadStatus, status),
+          eq(leads.lastOutcome, outcome),
+        ),
+      ),
     )).returning().get();
     if (row) bustPinCaches(row.tenantId);
     return row;
@@ -2841,10 +2855,17 @@ export class Storage implements IStorage {
     // the client can never set them (insertKnockSchema omits them).
     // Tenancy: a knock belongs to its LEAD's tenant (never client-supplied).
     const tenantId = this.getLeadById(knock.leadId)?.tenantId ?? null;
+    // GATE B2: timestamps are clamped at STORAGE level — garbage or
+    // future-beyond-10min skew becomes server time. No code path (first-pass
+    // CAS, dedupe replay, backfill) can ever see a poisoned value.
+    const clientTs = typeof knock.knockedAt === "string" ? Date.parse(knock.knockedAt) : NaN;
+    const safeTs = (Number.isFinite(clientTs) && clientTs <= Date.now() + 10 * 60_000)
+      ? knock.knockedAt!
+      : new Date().toISOString();
     return db.insert(knockLog).values({
       ...knock,
       tenantId,
-      knockedAt: knock.knockedAt || new Date().toISOString(),
+      knockedAt: safeTs,
       ...(verdict ?? {}),
     }).returning().get();
   }
@@ -2917,9 +2938,9 @@ export class Storage implements IStorage {
     const rows = rawDb.prepare(
       `SELECT leadId, count, lastAt, outcome AS lastOutcome FROM (
          SELECT knock_log.lead_id AS leadId, knock_log.outcome,
-                COUNT(*)        OVER (PARTITION BY knock_log.lead_id) AS count,
+                SUM(CASE WHEN knock_log.superseded = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY knock_log.lead_id) AS count,
                 MAX(knocked_at) OVER (PARTITION BY knock_log.lead_id) AS lastAt,
-                ROW_NUMBER()    OVER (PARTITION BY knock_log.lead_id ORDER BY knocked_at DESC, knock_log.id DESC) AS rn
+                ROW_NUMBER()    OVER (PARTITION BY knock_log.lead_id ORDER BY (knock_log.superseded = 0) DESC, knocked_at DESC, knock_log.id DESC) AS rn
          FROM knock_log ${tenantJoin}
        ) WHERE rn = 1`
     ).all(...(tenantId != null ? [tenantId] : [])) as any[];
@@ -2948,7 +2969,7 @@ export class Storage implements IStorage {
          SUM(CASE WHEN k.knocked_at >= @midnight THEN 1 ELSE 0 END) AS knocksToday,
          SUM(CASE WHEN k.knocked_at >= @midnight AND k.outcome = 'sold' THEN 1 ELSE 0 END) AS salesToday
        FROM knock_log k JOIN team_members t ON t.id = k.rep_id
-       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1
+       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1 AND k.superseded = 0
        GROUP BY k.rep_id`
     ).all({ since: window?.since ?? null, until: window?.until ?? null, midnight: midnight.toISOString(), tenantId: tenantId ?? null }) as any[];
     const byRep = new Map(rows.map(r => [r.repId, r]));

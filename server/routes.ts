@@ -4139,62 +4139,84 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // skip ALL side effects (status flip, cache bust, commission, activity log).
     // better-sqlite3 is synchronous per-process so SELECT-then-INSERT is race-free;
     // the partial unique index on client_id is the backstop.
+    // GATE (heal rework): the WHOLE money bundle is one reusable immediate
+    // transaction, shared by the first-pass path and the dedupe-replay heal.
+    // It is idempotent end-to-end: self-tolerant CAS + ledger upsert +
+    // unique-catch commission + conditional removal.
+    const runMoneyBundle = (leadId: number, knockRow: any, outcome: KnockOutcome, knockedAt: string) => rawDb.transaction(() => {
+      const flipStatus = OUTCOME_TO_STATUS[outcome];
+      let sup = false;
+      if (flipStatus) {
+        sup = !storage.applyKnockOutcomeCas(leadId, flipStatus, outcome, knockedAt);
+      }
+      // ── WEEKLY COMMISSION ENGINE (authoritative pay system) ────────────────
+      if (!sup && knockRow.repId) {
+        const saleTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
+        if (saleTenant != null) {
+          if (outcome === "sold") {
+            commissionSvc.recordFieldSaleFromKnock({
+              tenantId: saleTenant, repId: knockRow.repId, leadId,
+              knockId: knockRow.id, soldAt: knockRow.knockedAt || serverTs, actorId: (req as any).user?.id ?? null,
+            });
+          } else {
+            commissionSvc.reverseFieldSale(saleTenant, leadId, (req as any).user?.id ?? null);
+          }
+        }
+      }
+      // Auto-create pending commission when outcome = sold (rate snapshot frozen
+      // onto the record; P0-3 org-scoped rates; P0-6 server-fixed basis 0).
+      if (!sup && outcome === "sold" && knockRow.repId) {
+        const rep = storage.getTeamMemberById(knockRow.repId);
+        const saleDate = new Date().toISOString().slice(0, 10);
+        const rateTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
+        const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
+        const active = pickActiveStructure(structures, knockRow.repId, rep?.role ?? null, saleDate);
+        if (active) {
+          const saleAmount = 0;
+          const calc = calcCommission(active, saleAmount);
+          storage.createCommission({
+            repId: knockRow.repId,
+            leadId,
+            knockId: knockRow.id,
+            amount: calc.amount,
+            saleDate,
+            status: "pending",
+            notes: `Auto: knock #${knockRow.id} · ${describeStructure(active)}`,
+            approvedBy: null,
+            paidDate: null,
+            structureId: active.id,
+            structureVersion: active.version,
+            calcType: calc.calcType,
+            saleAmount: saleAmount || null,
+          } as any);
+        }
+      } else if (!sup && knockRow.repId) {
+        // Un-marking a sale: pull the auto-created PENDING commission.
+        // Approved/paid rows are left alone (a clawback is a manager action).
+        storage.removePendingCommissionsForLead(leadId);
+      }
+      return sup;
+    });
+    const serverTs = new Date().toISOString();
     const clientId = typeof req.body?.clientId === "string" && req.body.clientId ? req.body.clientId : null;
     if (clientId) {
       const existing = storage.getKnockByClientId(clientId);
       if (existing) {
-        // REVIEWER GATE (B2 dedupe-heal): a mid-crash knock previously died here —
-        // the row existed but its money effects never ran, and NO retry could
-        // repair them. Re-run the atomic bundle idempotently (CAS + unique
-        // commission + ledger upsert are all safe on replay), then return the
-        // persisted superseded marker so the client sees the truth.
+        // GATE (heal rework): the replay re-runs the FULL money bundle — the same
+        // immediate transaction as the first pass (self-tolerant CAS + ledger +
+        // commission + removal). A mid-crash knock heals completely; a knock
+        // that was legitimately superseded by a newer outcome re-supersedes and
+        // resurrects NOTHING.
+        if (existing.leadId !== Number(req.params.id)) return res.status(404).json({ error: "Not found" });
         try {
-          const replayKnock = existing as any;
-          const replayOutcome = replayKnock.outcome as KnockOutcome;
-          const replayStatus = OUTCOME_TO_STATUS[replayOutcome as KnockOutcome];
-          const replayTx = rawDb.transaction(() => {
-            // The replayed knock OWNS its recency (it set lastOutcomeAt); a strict
-            // re-CAS against itself would self-supersede and never heal. Heal
-            // means: this knock is not marked stale → its money effects run.
-            let sup = false;
-            if (replayStatus && replayKnock.superseded) {
-              sup = !storage.applyKnockOutcomeCas(Number(req.params.id), replayStatus, replayOutcome, replayKnock.knockedAt || serverTs);
-            }
-            if (!replayKnock.superseded && replayOutcome === "sold" && replayKnock.repId) {
-              const rep = storage.getTeamMemberById(replayKnock.repId);
-              const saleDate = new Date().toISOString().slice(0, 10);
-              const rateTenant = replayKnock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
-              const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
-              const active = pickActiveStructure(structures, replayKnock.repId, rep?.role ?? null, saleDate);
-              if (active) {
-                const calc = calcCommission(active, 0);
-                storage.createCommission({
-                  repId: replayKnock.repId,
-                  leadId: Number(req.params.id),
-                  knockId: replayKnock.id,
-                  amount: calc.amount,
-                  saleDate,
-                  status: "pending",
-                  notes: `Auto: knock #${replayKnock.id} · ${describeStructure(active)}`,
-                  approvedBy: null,
-                  paidDate: null,
-                  structureId: active.id,
-                  structureVersion: active.version,
-                  calcType: calc.calcType,
-                  saleAmount: null,
-                } as any);
-              }
-            }
-            return sup;
-          });
-          const healed = replayTx.immediate();
-          if (healed !== !!replayKnock.superseded) {
-            rawDb.prepare("UPDATE knock_log SET superseded = ? WHERE id = ?").run(healed ? 1 : 0, replayKnock.id);
+          const healed = runMoneyBundle(Number(req.params.id), existing, (existing as any).outcome as KnockOutcome, (existing as any).knockedAt || serverTs).immediate();
+          if (healed !== !!(existing as any).superseded) {
+            rawDb.prepare("UPDATE knock_log SET superseded = ? WHERE id = ?").run(healed ? 1 : 0, existing.id);
           }
           return res.status(200).json({ ...existing, deduped: true, superseded: healed || undefined });
         } catch (e: any) {
           console.warn("[knock] dedupe-heal failed:", e?.message);
-          return res.status(200).json({ ...existing, deduped: true, superseded: existing.superseded ? true : undefined });
+          return res.status(200).json({ ...existing, deduped: true, superseded: (existing as any).superseded ? true : undefined });
         }
       }
     }
@@ -4226,7 +4248,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const lead = storage.getLeadById(Number(req.params.id));
     const b = req.body ?? {};
     const geoConfig = storage.getGeoConfig((req as any).user?.tenantId ?? null);
-    const serverTs = new Date().toISOString();
     // The rep's previous located knock, for impossible-travel detection.
     const repId = parsed.data.repId;
     let prev: { lat: number; lng: number; at: string } | null = null;
@@ -4265,7 +4286,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // reversal, no commission removal, no new commission). The knock row itself
     // is still recorded as field history; the response carries
     // `superseded: true` so the client can distinguish it from an applied knock.
-    const newStatus = OUTCOME_TO_STATUS[parsed.data.outcome as KnockOutcome];
     // REVIEWER GATE (all 5 reviewers, unanimous): the CAS clock must never come
     // raw from the client. A forged-future knockedAt (or skewed phone) used to
     // win every future CAS on the lead — freezing it sold with an irreversible
@@ -4282,62 +4302,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // (both proven live by the red team). The same bundle is reused by the
     // dedupe-replay path below, which is how a mid-crash knock HEALS on retry
     // instead of dying unrepairable.
-    const applyMoneyBundle = rawDb.transaction(() => {
-      let sup = false;
-      if (newStatus) {
-        sup = !storage.applyKnockOutcomeCas(Number(req.params.id), newStatus, parsed.data.outcome, knockedAtTs);
-      }
-      // ── WEEKLY COMMISSION ENGINE (authoritative pay system) ────────────────
-      if (!sup && parsed.data.repId) {
-        const knockLead = storage.getLeadById(Number(req.params.id));
-        const saleTenant = knockLead?.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
-        if (saleTenant != null) {
-          if (parsed.data.outcome === "sold") {
-            commissionSvc.recordFieldSaleFromKnock({
-              tenantId: saleTenant, repId: parsed.data.repId, leadId: Number(req.params.id),
-              knockId: knock.id, soldAt: knock.knockedAt || serverTs, actorId: (req as any).user?.id ?? null,
-            });
-          } else {
-            commissionSvc.reverseFieldSale(saleTenant, Number(req.params.id), (req as any).user?.id ?? null);
-          }
-        }
-      }
-      // Auto-create pending commission when outcome = sold (rate snapshot frozen
-      // onto the record; P0-3 org-scoped rates; P0-6 server-fixed basis 0).
-      if (!sup && parsed.data.outcome === "sold" && parsed.data.repId) {
-        const rep = storage.getTeamMemberById(parsed.data.repId);
-        const saleDate = new Date().toISOString().slice(0, 10);
-        const rateTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
-        const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
-        const active = pickActiveStructure(structures, parsed.data.repId, rep?.role ?? null, saleDate);
-        if (active) {
-          const saleAmount = 0;
-          const calc = calcCommission(active, saleAmount);
-          storage.createCommission({
-            repId: parsed.data.repId,
-            leadId: Number(req.params.id),
-            knockId: knock.id,
-            amount: calc.amount,
-            saleDate,
-            status: "pending",
-            notes: `Auto: knock #${knock.id} · ${describeStructure(active)}`,
-            approvedBy: null,
-            paidDate: null,
-            structureId: active.id,
-            structureVersion: active.version,
-            calcType: calc.calcType,
-            saleAmount: saleAmount || null,
-          } as any);
-        }
-      } else if (!sup && parsed.data.repId) {
-        // Un-marking a sale: pull the auto-created PENDING commission.
-        // Approved/paid rows are left alone (a clawback is a manager action).
-        storage.removePendingCommissionsForLead(Number(req.params.id));
-      }
-      return sup;
-    });
+
     try {
-      superseded = applyMoneyBundle.immediate();
+      superseded = runMoneyBundle(Number(req.params.id), knock, parsed.data.outcome as KnockOutcome, knockedAtTs).immediate();
     } catch (e: any) {
       // The bundle is atomic — a money-engine failure rolls the CAS back too,
       // so nothing is half-applied. The knock row stands as history; the client

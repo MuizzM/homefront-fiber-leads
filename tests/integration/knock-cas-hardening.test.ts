@@ -57,7 +57,7 @@ async function knock(leadId: number, session: string, outcome: string, knockedAt
 const pendingFor = (leadId: number) =>
   (rawDb.prepare("SELECT * FROM commissions WHERE lead_id = ? AND status = 'pending'").all(leadId) as any[]);
 
-let mgr1: Fixture, rep1: Fixture, rep6: Fixture;
+let mgr1: Fixture, rep1: Fixture, rep6: Fixture, rep7: Fixture;
 
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-cas-hard-"));
@@ -70,6 +70,7 @@ beforeAll(async () => {
   mgr1 = makePerson("Cas Mgr", "manager", 1);
   rep1 = makePerson("Cas Rep", "rep", 1);
   rep6 = makePerson("Cas Rep Six", "rep", 1);
+  rep7 = makePerson("Cas Rep Seven", "rep", 1);
 
   const { registerRoutes, registerSaasRoutes } = await import("../../server/routes");
   const app = express();
@@ -147,8 +148,8 @@ describe("C2 — superseded persisted + replay marker", () => {
   });
 });
 
-describe("C3 — dedupe replay heals a mid-crash knock", () => {
-  it("re-running the bundle on replay books the missing commission", async () => {
+describe("C3 — dedupe replay: heal repairs, never resurrects, never bypasses the clamp", () => {
+  it("heal repairs a knock whose money effects are missing", async () => {
     const lead = makeLead(1, rep1.memberId);
     const client = `cas-heal-${lead.id}`;
     const t = new Date().toISOString();
@@ -157,10 +158,10 @@ describe("C3 — dedupe replay heals a mid-crash knock", () => {
       body: JSON.stringify({ outcome: "sold", knockedAt: t, clientId: client }),
     });
     expect(r1.status).toBe(201);
-    // Simulate the mid-crash strand: delete the commission the bundle created.
+    // Simulate the strand (effects missing on an applied knock).
     rawDb.prepare("UPDATE commissions SET status = 'superseded' WHERE lead_id = ?").run(lead.id);
     expect(pendingFor(lead.id).length).toBe(0);
-    // Replay the same clientId — the heal re-runs the bundle idempotently.
+    // Replay the same clientId — the heal re-runs the FULL bundle idempotently.
     const r2 = await request(`/api/leads/${lead.id}/knock`, rep1.session, {
       method: "POST",
       body: JSON.stringify({ outcome: "sold", knockedAt: t, clientId: client }),
@@ -168,6 +169,61 @@ describe("C3 — dedupe replay heals a mid-crash knock", () => {
     const body2 = (await r2.json()) as any;
     expect(body2.deduped).toBe(true);
     expect(pendingFor(lead.id).length).toBe(1); // healed — exactly one, not two
+  });
+
+  it("B1: heal NEVER resurrects a commission on a door whose sale was reversed", async () => {
+    const lead = makeLead(1, rep1.memberId);
+    const client = `cas-b1-${lead.id}`;
+    const t1 = new Date(Date.now() - 60_000).toISOString();
+    // Sold knock applies (commission booked).
+    const sold = await request(`/api/leads/${lead.id}/knock`, rep1.session, {
+      method: "POST",
+      body: JSON.stringify({ outcome: "sold", knockedAt: t1, clientId: client }),
+    });
+    expect(sold.status).toBe(201);
+    expect(pendingFor(lead.id).length).toBe(1);
+    // A NEWER not_interested wins the CAS → sale reversed, commission removed.
+    const t2 = new Date(Date.now() + 60_000).toISOString();
+    const fix = await knock(lead.id, rep1.session, "not_interested", t2);
+    expect(fix.status).toBe(201);
+    expect(pendingFor(lead.id).length).toBe(0);
+    // Ordinary offline-queue retry of the ORIGINAL sold knock: must re-supersede, book NOTHING.
+    const replay = await request(`/api/leads/${lead.id}/knock`, rep1.session, {
+      method: "POST",
+      body: JSON.stringify({ outcome: "sold", knockedAt: t1, clientId: client }),
+    });
+    expect(replay.status).toBe(200);
+    const body = (await replay.json()) as any;
+    expect(body.deduped).toBe(true);
+    expect(body.superseded).toBe(true);
+    expect(pendingFor(lead.id).length).toBe(0); // nothing resurrected
+    expect(storage.getLeadById(lead.id).leadStatus).toBe("not_interested");
+  });
+
+  it("B2: the clamp cannot be bypassed through the dedupe replay", async () => {
+    const lead = makeLead(1, rep1.memberId);
+    const t = new Date(Date.now() + 60_000).toISOString();
+    await knock(lead.id, rep1.session, "not_interested", t);
+    const client = `cas-b2-${lead.id}`;
+    // First pass: forged 2099 knock is clamped → LOSES the CAS.
+    const first = await request(`/api/leads/${lead.id}/knock`, rep1.session, {
+      method: "POST",
+      body: JSON.stringify({ outcome: "sold", knockedAt: "2099-01-01T00:00:00.000Z", clientId: client }),
+    });
+    expect(first.status).toBe(200);
+    expect((await first.json() as any).superseded).toBe(true);
+    // The row stored the CLAMPED timestamp (storage-level clamp) — replay can't smuggle 2099 back.
+    const stored = rawDb.prepare("SELECT knocked_at FROM knock_log WHERE client_id = ?").get(client) as any;
+    expect(stored.knocked_at.startsWith("2099")).toBe(false);
+    // Replay: also superseded; the lead stays not_interested; nothing books.
+    const replay = await request(`/api/leads/${lead.id}/knock`, rep1.session, {
+      method: "POST",
+      body: JSON.stringify({ outcome: "sold", knockedAt: "2099-01-01T00:00:00.000Z", clientId: client }),
+    });
+    expect(replay.status).toBe(200);
+    expect((await replay.json() as any).superseded).toBe(true);
+    expect(storage.getLeadById(lead.id).leadStatus).toBe("not_interested");
+    expect(pendingFor(lead.id).length).toBe(0);
   });
 });
 
@@ -228,5 +284,20 @@ describe("C6 — summary excludes superseded rows", () => {
     const row = body.find((r: any) => r.repId === rep6.memberId);
     expect(row.total).toBe(0);
     expect(row.sales).toBe(0);
+  });
+});
+
+describe("M7 — leaderboard excludes superseded sold knocks", () => {
+  it("a superseded sold knock counts zero on the leaderboard", async () => {
+    const lead = makeLead(1, rep7.memberId);
+    const t2 = new Date(Date.now() + 60_000).toISOString();
+    await knock(lead.id, rep7.session, "not_interested", t2);
+    const t1 = new Date(Date.now() - 60_000).toISOString();
+    const stale = await knock(lead.id, rep7.session, "sold", t1);
+    expect(stale.body.superseded).toBe(true);
+    const rows = rawDb.prepare(
+      "SELECT SUM(CASE WHEN k.outcome = 'sold' THEN 1 ELSE 0 END) AS sales FROM knock_log k WHERE k.rep_id = ? AND k.superseded = 0",
+    ).get(rep7.memberId) as any;
+    expect(rows.sales).toBe(0);
   });
 });
