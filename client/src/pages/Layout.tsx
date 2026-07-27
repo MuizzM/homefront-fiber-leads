@@ -36,6 +36,7 @@ import { BottomTabs } from "@/components/BottomTabs";
 import { PaywallBanner } from "@/components/PaywallBanner";
 import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
+import { apiRequest } from "@/lib/queryClient";
 import { useTheme } from "@/hooks/use-theme";
 import { can, type Role as AppRole } from "@shared/capabilities";
 
@@ -59,9 +60,14 @@ type NavItem = {
   group?: string;
 };
 
+// Server-owned super-admin list (was hardcoded here and in App.tsx).
+// Populated once at shell mount from /api/config/app; empty until then.
+export let SUPER_ADMIN_EMAILS: string[] = [];
+
 const NAV_ITEMS: NavItem[] = [
   // ── Core ──────────────────────────────────────────────────────────────────
-  { href: "/",      label: "Dashboard",    icon: LayoutDashboard, show: isFieldRole,                                   group: "Core" },
+  { href: "/today", label: "Dashboard",    icon: LayoutDashboard, show: (r: AppRole) => r === "rep",                       group: "Core" },
+  { href: "/",      label: "Dashboard",    icon: LayoutDashboard, show: (r: AppRole) => isFieldRole(r) && r !== "rep",       group: "Core" },
   { href: "/map",   label: "Field Map",    icon: Map,             show: isFieldRole,                                   group: "Core" },
   { href: "/leads", label: "Leads",        icon: MapPin,          show: isFieldRole,                                   group: "Core" },
   // Calling is a separate, capability-gated workspace. Field-map access never
@@ -90,7 +96,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/governance",   label: "Permissions",   icon: ShieldCheck,  show: r => hasRole(r, "admin"),                 group: "Governance" },
   { href: "/billing",      label: "Billing",       icon: CreditCard,   show: r => hasRole(r, "admin"),                 group: "Governance" },
   // ── Admin ─────────────────────────────────────────────────────────────────
-  { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r: string, email?: string) => email === "muizzm21@gmail.com", group: "Admin" },
+  { href: "/super-admin",  label: "SaaS Tenants",  icon: Globe,        show: (_r: string, email?: string) => !!email && SUPER_ADMIN_EMAILS.includes(email.trim().toLowerCase()), group: "Admin" },
 ];
 
 // ── Role badge for sidebar footer ─────────────────────────────────────────────
@@ -133,6 +139,17 @@ function avatarBg(role: string) {
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useHashLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [, setSuperAdminLoaded] = useState(0);
+  useEffect(() => {
+    // Populate the server-owned super-admin list once (nav gate re-renders).
+    let alive = true;
+    apiRequest("GET", "/api/config/app").then(r => r.json()).then((d: any) => {
+      if (!alive) return;
+      SUPER_ADMIN_EMAILS = Array.isArray(d?.superAdminEmails) ? d.superAdminEmails : [];
+      setSuperAdminLoaded(v => v + 1);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
   const [moreOpen, setMoreOpen] = useState(false);
   const moreSheetRef = useRef<HTMLDivElement | null>(null);
   const moreTriggerRef = useRef<HTMLButtonElement | null>(null);

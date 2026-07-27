@@ -4,6 +4,7 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { queryClient, persistOptions } from "@/lib/queryClient";
 import { Toaster } from "@/components/ui/toaster";
 import { AuthProvider, useAuth } from "@/lib/auth";
+import { useSuperAdminEmails, isSuperAdmin } from "@/lib/appConfig";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Suspense, lazy, useEffect } from "react";
 import { can, type Capability, type Role as AppRole } from "@shared/capabilities";
@@ -75,8 +76,7 @@ function PageLoader() {
 }
 
 // Super-admin (SaaS tenant management) is gated by identity, not just role.
-// Mirrors the server's SUPER_ADMIN_EMAILS check and the sidebar nav gate.
-const SUPER_ADMIN_EMAIL = "muizzm21@gmail.com";
+// Server-owned via /api/config/app — never hardcode role lists client-side.
 
 function hasRole(userRole: string | undefined, ...allowed: AppRole[]) {
   return allowed.includes((userRole ?? "rep") as AppRole);
@@ -118,6 +118,7 @@ function AppRoutes() {
   const { user, isFirstRun, loading } = useAuth();
   const [location] = useHashLocation();
   const role = user?.role;
+  const superAdminEmails = useSuperAdminEmails();
 
   // Warm likely destinations only after the browser is idle. Save-Data and
   // slower cellular connections never prefetch the large Mapbox chunk: the
@@ -303,7 +304,7 @@ function AppRoutes() {
             {/* Super-admin is identity-gated (matches the nav): a normal tenant
                 admin who types the URL is redirected, not shown a dead shell.
                 The server independently enforces requireSuperAdmin on all data. */}
-            {user?.email === SUPER_ADMIN_EMAIL
+            {isSuperAdmin(user?.email, superAdminEmails)
               ? <SuperAdmin />
               : <Redirect to="/" />}
           </Route>

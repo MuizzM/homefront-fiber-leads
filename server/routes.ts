@@ -922,6 +922,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Map config — returns Mapbox token only to authenticated users ───────────
   // Token is NOT in the frontend bundle; fetched at runtime from the server.
+  // App-level public config (no secrets): role lists the client must never
+  // hardcode. AUDIT FIX: super-admin emails were hardcoded in TWO client files.
+  app.get("/api/config/app", requireAuth, (_req: any, res: any) => {
+    const superAdminEmails = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
+      .split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    res.json({ superAdminEmails });
+  });
+
   app.get("/api/config/map", requireAuth, (req: any, res) => {
     // The map basemap/pins use a PUBLIC token (pk.…) that is safe to send to the
     // browser — scope it in Mapbox to URL-restricted "styles:read/tiles:read" only,
