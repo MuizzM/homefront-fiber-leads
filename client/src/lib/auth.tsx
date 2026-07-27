@@ -104,6 +104,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUnauthorizedHandler(() => {
       if (!_memSession || confirming) return;
       const suspect = _memSession;
+      let revoked = false;
       confirming = (async () => {
         try {
           const res = await fetch(`${API_BASE}/api/auth/status`, { headers: { "x-session-id": suspect } });
@@ -115,6 +116,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setUser(data.currentUser);
             return;
           }
+          // Removed from the team (offboarded / login deactivated) rather than
+          // simply timed out. Say so, so a rep who was kicked mid-shift isn't
+          // left retyping a code that will never work.
+          revoked = Boolean(data.accessRevoked);
         } catch {
           return; // couldn't reach the server — assume the session is fine
         }
@@ -131,7 +136,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSid(null);
         syncSessionToQueryClient(null);
         setUser(null);
-        toast({ title: "Session expired", description: "Please sign back in — anything you logged is saved and will sync." });
+        toast(revoked
+          ? { title: "Access removed", description: "Your account was deactivated by your team. Contact your manager if this is unexpected." }
+          : { title: "Session expired", description: "Please sign back in — anything you logged is saved and will sync." });
       })().finally(() => { confirming = null; });
     });
     return () => setUnauthorizedHandler(null);
