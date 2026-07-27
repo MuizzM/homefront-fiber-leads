@@ -3876,6 +3876,67 @@ export default function MapView() {
   // retries/idempotency; react-query owns rollback via onSaved invalidations.
   // The card's chip, timestamp, and active pill all read from this same
   // optimistic pin data, so a single tap updates everything at once.
+  // CENTRAL MARK (owner ask 2026-07-26): managers mark an outcome on behalf of
+  // the central team — no rep credit, no commission. Optimistic pin recolor,
+  // same imperative paint path as a rep knock.
+  const handleCentralMark = useCallback(
+    async (outcome: KnockOutcome) => {
+      const lead = selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
+      if (!lead || !canManage) return;
+      try {
+        const res = await apiRequest("POST", `/api/leads/${lead.id}/central-disposition`, { outcome });
+        const updated = await res.json();
+        const nextDisplayState = pinDisplayState({ leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome });
+        const feature = featureByIdRef.current.get(lead.id);
+        if (feature) {
+          feature.properties.status = toLeadMapStatus(nextDisplayState);
+          feature.properties.ds = nextDisplayState;
+          feature.properties.visited = 1;
+          try { (mapRef.current?.getSource("leads-cluster") as any)?.setData(geoJsonDataRef.current); } catch { /* */ }
+        }
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          if (!old?.pins) return old;
+          return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome } : p) };
+        });
+        try { navigator.vibrate?.(10); } catch { /* */ }
+        toast({ title: "🏢 Marked centrally", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
+      } catch (e: any) {
+        toast({ title: "Central mark failed", description: String(e?.message ?? e), variant: "destructive" });
+      }
+    },
+    [selectedLeadId, leadById, canManage, qc, toast],
+  );
+
+  // DELETE LEAD (owner ask 2026-07-26): managers remove a manually-added pin
+  // when the area turns out not to be new fiber. Pin vanishes from the map +
+  // panel; the card closes.
+  const handleDeleteLead = useCallback(
+    async () => {
+      const lead = selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
+      if (!lead || !canManage) return;
+      try {
+        await apiRequest("DELETE", `/api/leads/${lead.id}`);
+        featureByIdRef.current.delete(lead.id);
+        if (geoJsonDataRef.current?.features) {
+          geoJsonDataRef.current = {
+            ...geoJsonDataRef.current,
+            features: geoJsonDataRef.current.features.filter((f: any) => f.id !== lead.id && f?.properties?.id !== lead.id),
+          };
+          try { (mapRef.current?.getSource("leads-cluster") as any)?.setData(geoJsonDataRef.current); } catch { /* */ }
+        }
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          if (!old?.pins) return old;
+          return { ...old, total: Math.max(0, (old.total ?? old.pins.length) - 1), pins: old.pins.filter((p: any) => p.id !== lead.id) };
+        });
+        setSelectedLeadId(null);
+        toast({ title: "🗑 Lead removed", description: lead.address });
+      } catch (e: any) {
+        toast({ title: "Delete failed", description: String(e?.message ?? e), variant: "destructive" });
+      }
+    },
+    [selectedLeadId, leadById, canManage, qc, toast, setSelectedLeadId],
+  );
+
   const handleKnock = useCallback(
     (outcome: KnockOutcome) => {
       const lead =
@@ -6298,6 +6359,9 @@ export default function MapView() {
               onClose={closeSheet}
               dockOffsetPx={leadsOpen ? 340 : 0}
               onPeekHeight={setSheetPeekPx}
+              canManage={canManage}
+              onCentralMark={handleCentralMark}
+              onDelete={handleDeleteLead}
             />
           )}
         </div>

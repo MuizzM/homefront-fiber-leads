@@ -4075,6 +4075,36 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       .slice(0, 100);
     res.json(merged);
   });
+  // CENTRAL DISPOSITION (owner ask 2026-07-26): managers/team-leads/admins mark
+  // a lead's outcome on behalf of the CENTRAL team — no rep credit, no knock
+  // row, no commission. For the field workflow where management adds pins and
+  // later clears/qualifies them centrally (e.g. area turned out not to be new
+  // fiber). Server-authoritative status flip + activity audit.
+  app.post("/api/leads/:id/central-disposition", requireManager, (req, res) => {
+    const u = (req as any).user;
+    const lead = storage.getLeadById(Number(req.params.id));
+    if (!lead) return res.status(404).json({ error: "Not found" });
+    if (u?.role !== "super_admin" && u?.tenantId != null && lead.tenantId != null && lead.tenantId !== u.tenantId) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    if (!isKnockOutcome(req.body?.outcome)) return res.status(400).json({ error: "invalid outcome" });
+    const outcome = req.body.outcome as KnockOutcome;
+    const newStatus = OUTCOME_TO_STATUS[outcome];
+    const at = new Date().toISOString();
+    const updated = storage.updateLead(lead.id, {
+      leadStatus: newStatus,
+      visited: 1,
+      lastOutcome: outcome,
+      lastOutcomeAt: at,
+    } as any, u?.tenantId ?? undefined);
+    if (!updated) return res.status(500).json({ error: "Update failed" });
+    try {
+      storage.logActivity(u?.id ?? null, "lead.central_disposition", "lead", lead.id,
+        { outcome, newStatus, markedBy: u?.name ?? "central", address: lead.address }, req.ip, u?.tenantId ?? null);
+    } catch { /* audit is best-effort */ }
+    res.json({ ...updated, central: true });
+  });
+
   // Any authenticated rep can log a knock
   app.post("/api/leads/:id/knock", requireCapability("lead.disposition.update"), (req, res) => {
     const _knu = (req as any).user;

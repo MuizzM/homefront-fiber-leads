@@ -60,6 +60,11 @@ export interface LeadKnockSheetProps {
   // Published MEASURED peek height (drag header + peek body) so MapView's camera
   // bottom-padding tracks the real content instead of a hardcoded constant.
   onPeekHeight?: (px: number) => void;
+  // MANAGER ACTIONS (owner ask 2026-07-26): central marking (no rep credit) and
+  // lead deletion, for manually-added pins that turn out not to be new fiber.
+  canManage?: boolean;
+  onCentralMark?: (outcome: KnockOutcome) => void;
+  onDelete?: () => void;
 }
 
 // lucide icon NAME (from OutcomeDef.icon) → component. Pins and card share one
@@ -214,6 +219,7 @@ function VerifiedPremiseFacts({ detail }: { detail: LeadDetail | undefined }): J
 }
 
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
+  const { canManage = false, onCentralMark, onDelete } = props;
   const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0, onPeekHeight } = props;
 
   // Keep the last lead rendered while `lead: null` animates the sheet out.
@@ -452,6 +458,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
 
   // ── One-tap disposition ──────────────────────────────────────────────────────
   const tapGuard = useRef(0); // absorbs accidental double-fires of the same tap
+  // Manager modes: CENTRAL routes the next status tap to the central-team
+  // endpoint (no rep credit); DELETE arms a two-tap inline confirm.
+  const [centralMode, setCentralMode] = useState(false);
+  const [deleteArmed, setDeleteArmed] = useState(false);
+  useEffect(() => { setCentralMode(false); setDeleteArmed(false); }, [lead?.id]);
+
   const handleStatusTap = (key: KnockOutcome) => {
     const now = Date.now();
     if (now - tapGuard.current < 350) return;
@@ -463,7 +475,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       setFlashKey(key);
       window.setTimeout(() => setFlashKey(k => (k === key ? null : k)), 150);
     }
-    onKnock(key); // optimistic upstream: dot, status line, pill, and pin recolor together
+    if (centralMode && canManage && onCentralMark) {
+      onCentralMark(key); // central-team mark: no rep credit, no commission
+    } else {
+      onKnock(key); // optimistic upstream: dot, status line, pill, and pin recolor together
+    }
   };
 
   // ── Notes: composer model ────────────────────────────────────────────────────
@@ -743,6 +759,50 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               Copy
             </button>
           </div>
+
+          {/* MANAGER ACTIONS (owner ask 2026-07-26): central-mark toggle +
+              delete with inline two-tap confirm, for manually-added pins. */}
+          {canManage && (onCentralMark || onDelete) ? (
+            <div className="mt-3 flex items-center gap-2" data-testid="knock-manager-row">
+              {onCentralMark ? (
+                <button
+                  type="button"
+                  data-testid="knock-central-toggle"
+                  aria-pressed={centralMode}
+                  onClick={() => { setCentralMode(v => !v); setDeleteArmed(false); }}
+                  className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
+                    centralMode
+                      ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
+                      : "bg-white/[0.06] border-white/15 text-white/70"
+                  }`}
+                  title="Mark this door on behalf of the central team — no rep credit"
+                >
+                  🏢 {centralMode ? "Central: ON" : "Central mark"}
+                </button>
+              ) : null}
+              {onDelete ? (
+                <button
+                  type="button"
+                  data-testid="knock-delete"
+                  onClick={() => {
+                    if (!deleteArmed) { setDeleteArmed(true); window.setTimeout(() => setDeleteArmed(false), 4000); return; }
+                    onDelete();
+                  }}
+                  className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
+                    deleteArmed
+                      ? "bg-red-500/80 border-red-400 text-white"
+                      : "bg-white/[0.06] border-red-400/40 text-red-300"
+                  }`}
+                  title={deleteArmed ? "Tap again to confirm delete" : "Remove this lead"}
+                >
+                  {deleteArmed ? "⚠️ Confirm delete?" : "🗑 Delete"}
+                </button>
+              ) : null}
+              {centralMode ? (
+                <span className="text-[11px] text-teal-200/80 leading-tight">Next status tap marks centrally (no rep)</span>
+              ) : null}
+            </div>
+          ) : null}
 
           {/* Primary interaction: all 7 status pills, flex-wrap so every one is
               visible at once (no horizontal scroll, no fade mask), FIXED order so
