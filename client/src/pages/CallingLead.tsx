@@ -61,10 +61,47 @@ function dateLabel(value: string | null): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
 }
 
+function dateLabelTz(value: string | null | undefined, timeZone: string | null | undefined): string {
+  if (!value || !Number.isFinite(Date.parse(value))) return "Not available";
+  try {
+    return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", ...(timeZone ? { timeZone } : {}) }).format(new Date(value));
+  } catch { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value)); }
+}
+
 function DecisionPanel({ detail, evaluation }: { detail: CallingLeadDetail; evaluation: Awaited<ReturnType<typeof evaluateCallingLead>> | null }) {
   const decision = evaluation?.evaluation ?? detail.decision;
   if (!decision) {
+    // AUDIT FIX: a failed decision fetch used to render identically to a
+    // genuinely unchecked lead — reps ran redundant paid evaluations and
+    // couldn't tell something broke. Distinct unavailable state.
+    if (detail.decisionError) {
+      return (
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3" data-testid="calling-decision-error">
+          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Decision unavailable</div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">The recorded decision couldn't be loaded ({detail.decisionError}). Retry, or run a new compliance check.</div>
+          </div>
+        </div>
+      );
+    }
     return <p className="text-xs leading-relaxed text-muted-foreground">No current decision. A server-side compliance check is required before authorization.</p>;
+  }
+  // AUDIT FIX: a stale eligible decision used to render green "Eligible"
+  // forever. Compute expiry here so the panel tells the truth.
+  const expired = Number.isFinite(Date.parse(decision.expiresAt)) && Date.parse(decision.expiresAt) <= Date.now();
+  if (expired) {
+    return (
+      <div className="space-y-3" data-testid="calling-decision">
+        <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.08] p-3">
+          <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-amber-600 dark:text-amber-400">Decision expired</div>
+            <div className="mt-0.5 text-[11px] text-muted-foreground">This evaluation lapsed {dateLabel(decision.expiresAt)}. Run a new compliance check before authorizing.</div>
+          </div>
+        </div>
+      </div>
+    );
   }
   return (
     <div className="space-y-3" data-testid="calling-decision">
@@ -188,6 +225,11 @@ export default function CallingLead() {
   const [copied, setCopied] = useState(false);
   const [notes, setNotes] = useState("");
   const [callbackAt, setCallbackAt] = useState("");
+  // AUDIT FIX: permanently-suppressing outcomes (DNC/revoke/wrong-number)
+  // used to fire on a single thumb-tap mid-call — one slip permanently burns a
+  // number. These four now arm first ("Confirm?"), fire on second tap.
+  const SUPPRESSING: ReadonlySet<DispositionCode> = new Set(["DO_NOT_CALL", "CONSENT_REVOKED", "WRONG_NUMBER", "WRONG_PARTY"]);
+  const [armedDisposition, setArmedDisposition] = useState<DispositionCode | null>(null);
   const [callbackEvidenceRef, setCallbackEvidenceRef] = useState("");
   const [showCallback, setShowCallback] = useState(false);
   const [completed, setCompleted] = useState<string | null>(null);
@@ -204,7 +246,16 @@ export default function CallingLead() {
 
   useEffect(() => {
     if (!authorization) { setExpiresIn(0); return; }
-    const tick = () => setExpiresIn(expirySeconds(authorization.expiresAt));
+    const tick = () => {
+      const remaining = expirySeconds(authorization.expiresAt);
+      setExpiresIn(remaining);
+      // AUDIT FIX: an expired authorization used to leave the rep stranded —
+      // start disabled forever with no way back but a page reload.
+      if (remaining <= 0) {
+        setAuthorization(null);
+        toast({ title: "Authorization expired", description: "Re-authorize when you're ready to place the call." });
+      }
+    };
     tick();
     const timer = window.setInterval(tick, 500);
     return () => window.clearInterval(timer);
@@ -254,7 +305,11 @@ export default function CallingLead() {
     mutationFn: (code: DispositionCode) => saveDisposition(activeAttempt!.attemptId, {
       code, notes: notes.trim() || undefined,
       callbackAt: code === "CALLBACK_REQUESTED" ? new Date(callbackAt).toISOString() : undefined,
-      callbackTimeZone: code === "CALLBACK_REQUESTED" ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined,
+      // AUDIT FIX: callbacks used to capture the rep's DEVICE timezone — a
+      // traveling rep schedules against the wrong local time. Default to the
+      // lead's evaluated timezone (from the compliance decision) with the
+      // device zone as fallback.
+      callbackTimeZone: code === "CALLBACK_REQUESTED" ? (detailQuery.data?.decision?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone) : undefined,
       callbackConsentEvidenceRef: code === "CALLBACK_REQUESTED" ? callbackEvidenceRef.trim() : undefined,
       idempotencyKey: newIdempotencyKey(),
     }),
@@ -372,14 +427,64 @@ export default function CallingLead() {
                 </section>
                 <section className="rounded-2xl border border-border bg-card p-4"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Approved script · {activeAttempt.script.version}</div><h2 className="mt-1 text-base font-semibold">{activeAttempt.script.title}</h2><div className="mt-3 rounded-xl border border-border bg-background/60 p-4 text-sm leading-relaxed whitespace-pre-wrap"><div className="mb-2 font-semibold">{activeAttempt.script.sellerName} · {activeAttempt.script.companyName} · {activeAttempt.script.purpose}</div>{activeAttempt.script.body}</div></section>
                 <section className="rounded-2xl border border-border bg-card p-4"><div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-primary" /><h2 className="text-base font-semibold">Record outcome</h2></div><textarea value={notes} onChange={event => setNotes(event.target.value)} rows={3} placeholder="Call notes (do not enter sensitive payment data)" className="mt-3 w-full rounded-xl border border-border bg-background p-3 text-sm" />
-                  <div className="mt-3 grid grid-cols-2 gap-2">{DISPOSITIONS.filter(item => item.code !== "CONSENT_GRANTED" || detailQuery.data.consent.verified).map(item => <button key={item.code} type="button" disabled={dispositionMutation.isPending} onClick={() => dispositionMutation.mutate(item.code)} className={cn("min-h-11 rounded-xl border border-border bg-background px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-50", item.tone)}>{item.label}</button>)}</div>
+                  <div className="mt-3 grid grid-cols-2 gap-2">{DISPOSITIONS.filter(item => item.code !== "CONSENT_GRANTED" || detailQuery.data.consent.verified).map(item => {
+                    const armed = armedDisposition === item.code;
+                    return (
+                      <button
+                        key={item.code}
+                        type="button"
+                        disabled={dispositionMutation.isPending}
+                        aria-pressed={armed}
+                        onClick={() => {
+                          if (SUPPRESSING.has(item.code) && !armed) {
+                            setArmedDisposition(item.code);
+                            window.setTimeout(() => setArmedDisposition(a => (a === item.code ? null : a)), 4000);
+                            return;
+                          }
+                          setArmedDisposition(null);
+                          dispositionMutation.mutate(item.code);
+                        }}
+                        className={cn(
+                          "min-h-11 rounded-xl border border-border bg-background px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-50",
+                          item.tone,
+                          armed && "border-red-500 bg-red-500/25 text-red-100 ring-1 ring-red-400",
+                        )}
+                      >
+                        {armed ? `⚠️ Confirm: ${item.label}?` : item.label}
+                      </button>
+                    );
+                  })}</div>
                   {!showCallback ? <button type="button" onClick={() => setShowCallback(true)} className="mt-2 flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/[0.08] text-xs font-semibold text-sky-300"><CalendarClock className="h-4 w-4" /> Customer requested callback</button> : <div className="mt-2 space-y-3 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] p-3"><label className="block text-xs font-semibold">Callback date and local time<input type="datetime-local" value={callbackAt} onChange={event => setCallbackAt(event.target.value)} className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3" /></label><label className="block text-xs font-semibold">Verified callback evidence artifact ID<input value={callbackEvidenceRef} onChange={event => setCallbackEvidenceRef(event.target.value)} placeholder="UUID bound to this exact call attempt" className="mt-1 h-11 w-full rounded-xl border border-border bg-background px-3 font-mono font-normal" /></label><p className="text-[11px] leading-relaxed text-muted-foreground">The server accepts only a retained, verified evidence artifact bound to this tenant, lead, phone, and call attempt. A free-form note cannot authorize a callback.</p><Button variant="outline" className="w-full border-sky-500/30 text-sky-300" disabled={!callbackValid || dispositionMutation.isPending} onClick={() => dispositionMutation.mutate("CALLBACK_REQUESTED")}>Save requested callback</Button></div>}
                 </section>
                 <ConsentForm detail={detailQuery.data} attempt={activeAttempt} onSaved={() => void detailQuery.refetch()} />
               </>
             )}
 
-            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><p className="mt-2 text-xs text-muted-foreground">No next call was started.</p><Button asChild className="mt-4"><Link href="/calling">Return to queue</Link></Button></section>}
+            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button asChild><Link href="/calling">Next eligible lead →</Link></Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
+
+            {activeAttempt && !completed && (
+              <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="calling-quick-dispositions">
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Quick outcome</div>
+                <div className="mt-2 grid grid-cols-4 gap-2">
+                  {([
+                    { code: "NO_ANSWER", label: "No answer" },
+                    { code: "INTERESTED", label: "Interested" },
+                    { code: "SALE_COMPLETED", label: "Sale 🎉" },
+                    { code: "NOT_INTERESTED", label: "Not interested" },
+                  ] as Array<{ code: DispositionCode; label: string }>).map(item => (
+                    <button
+                      key={item.code}
+                      type="button"
+                      disabled={dispositionMutation.isPending}
+                      onClick={() => dispositionMutation.mutate(item.code)}
+                      className="min-h-12 rounded-xl border border-border bg-background px-2 text-[12px] font-semibold transition-colors hover:bg-secondary active:scale-95 disabled:opacity-50"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {candidate.phoneId && !completed && canOptOut && (
               <section className="rounded-2xl border border-red-500/25 bg-red-500/[0.05] p-4"><div className="flex items-start gap-3"><AlertOctagon className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" /><div className="min-w-0 flex-1"><h2 className="text-sm font-semibold text-red-600 dark:text-red-400">STOP / do not call</h2><p className="mt-1 text-xs leading-relaxed text-muted-foreground">Use immediately for any stop request, wrong number, or consent revocation. This permanently suppresses the number for this organization.</p></div></div>
@@ -393,7 +498,7 @@ export default function CallingLead() {
             )}
 
             <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"><Clock3 className="h-4 w-4 text-muted-foreground" /> Immutable activity trail ({detailQuery.data.timeline.length})</summary><div className="max-h-80 divide-y divide-border overflow-y-auto border-t border-border px-4">{detailQuery.data.timeline.length ? detailQuery.data.timeline.map(event => <div key={event.id} className="py-3"><div className="flex items-baseline justify-between gap-3"><span className="text-xs font-semibold">{formatDecision(event.eventType)}</span><time className="shrink-0 text-2xs text-muted-foreground">{dateLabel(event.createdAt)}</time></div><div className="mt-1 truncate font-mono text-2xs text-muted-foreground">{event.eventSha256}</div></div>) : <p className="py-4 text-xs text-muted-foreground">No calling activity yet.</p>}</div></details></section>
-            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"><PhoneCall className="h-4 w-4 text-muted-foreground" /> Attempts and callbacks ({attempts.length + callbacks.length})</summary><div className="divide-y divide-border border-t border-border px-4">{attempts.map(attempt => <div key={attempt.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">{attempt.dispositionCode ? formatDecision(attempt.dispositionCode) : "Open manual attempt"}</span><time className="text-2xs text-muted-foreground">{dateLabel(attempt.startedAt)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">Rep #{attempt.representativeUserId} · script {attempt.scriptVersion}</div></div>)}{callbacks.map(callback => <div key={callback.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">Callback · {formatDecision(callback.status)}</span><time className="text-2xs text-muted-foreground">{dateLabel(callback.dueAt)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">{callback.timeZone}</div></div>)}{!attempts.length && !callbacks.length && <p className="py-4 text-xs text-muted-foreground">No attempts or callbacks yet.</p>}</div></details></section>
+            <section className="rounded-2xl border border-border bg-card"><details><summary className="flex min-h-14 cursor-pointer items-center gap-2 px-4 text-sm font-semibold"><PhoneCall className="h-4 w-4 text-muted-foreground" /> Attempts and callbacks ({attempts.length + callbacks.length})</summary><div className="divide-y divide-border border-t border-border px-4">{attempts.map(attempt => <div key={attempt.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">{attempt.dispositionCode ? formatDecision(attempt.dispositionCode) : "Open manual attempt"}</span><time className="text-2xs text-muted-foreground">{dateLabel(attempt.startedAt)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">Rep #{attempt.representativeUserId} · script {attempt.scriptVersion}</div></div>)}{callbacks.map(callback => <div key={callback.id} className="py-3 text-xs"><div className="flex justify-between gap-3"><span className="font-semibold">Callback · {formatDecision(callback.status)}</span><time className="text-2xs text-muted-foreground">{dateLabelTz(callback.dueAt, callback.timeZone)}</time></div><div className="mt-1 text-[11px] text-muted-foreground">{callback.timeZone}</div></div>)}{!attempts.length && !callbacks.length && <p className="py-4 text-xs text-muted-foreground">No attempts or callbacks yet.</p>}</div></details></section>
           </div>
         )}
       </div>

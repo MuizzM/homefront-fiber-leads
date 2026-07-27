@@ -75,6 +75,7 @@ export interface CallingLeadDetail {
     timeZone: string | null;
     ruleVersion: string;
   } | null;
+  decisionError: string | null;
   consent: {
     id: string | null;
     verified: boolean;
@@ -366,13 +367,14 @@ export async function getCallingLead(leadId: number): Promise<CallingLeadDetail>
   );
   const candidate = candidateFromApi(payload.lead);
   let decision: CallingLeadDetail["decision"] = null;
+  let decisionError: string | null = null;
   if (candidate.lastDecisionId) {
     try {
       const result = await json<{ decision: CallingLeadDetail["decision"] }>(apiRequest("GET", `${ROOT}/decisions/${encodeURIComponent(candidate.lastDecisionId)}`));
       decision = result.decision;
-    } catch { decision = null; }
+    } catch (e: any) { decision = null; decisionError = String(e?.message ?? "fetch failed"); }
   }
-  return { candidate, timeline: payload.timeline ?? [], decision,
+  return { candidate, timeline: payload.timeline ?? [], decision, decisionError,
     consent: payload.consent ?? { id: null, verified: false, revoked: false },
     attempts: payload.attempts ?? [], callbacks: payload.callbacks ?? [], openAttempt: payload.openAttempt ?? null };
 }
