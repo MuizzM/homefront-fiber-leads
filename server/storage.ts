@@ -253,6 +253,11 @@ export function runMigrations() {
     // verify outcome — who, when, IP, result — survives the nightly OTP purge.
     `CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, kind TEXT NOT NULL, success INTEGER NOT NULL DEFAULT 0, reason TEXT, ip TEXT, user_agent TEXT, tenant_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `ALTER TABLE login_attempts ADD COLUMN tenant_id INTEGER`,
+    // P0-1 (K3 swarm): super-admin identity must be IMMUTABLE — an email string
+    // is user-editable (see requireSuperAdmin). Column stamped once at boot
+    // from the env list; the env list can only REMOVE the apex by restart+env,
+    // never be claimed by editing a user row.
+    `ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_email ON login_attempts(email, created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_at ON login_attempts(created_at)`,
     `CREATE TABLE IF NOT EXISTS territories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, rep_id INTEGER NOT NULL, polygon TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#3b82f6', created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
@@ -1859,6 +1864,20 @@ export function runMigrations() {
   catch (e: any) { console.warn("[migration] address review backfill:", e?.message); }
 
   bootstrapDefaultTenant(raw);
+
+  // P0-1: stamp immutable super-admin identity from the env list (idempotent;
+  // ONLY ever SETS the flag for listed emails and CLEARS it for unlisted ones
+  // that were somehow stamped — identity comes from env+restart, never from a
+  // mutable user row edit).
+  try {
+    const emails = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
+      .split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    if (emails.length) {
+      const placeholders = emails.map(() => "?").join(",");
+      raw.prepare(`UPDATE users SET is_super_admin = 1 WHERE lower(email) IN (${placeholders})`).run(...emails);
+      raw.prepare(`UPDATE users SET is_super_admin = 0 WHERE is_super_admin = 1 AND lower(email) NOT IN (${placeholders})`).run(...emails);
+    }
+  } catch (e: any) { console.warn("[migration] super-admin stamp:", e?.message); }
 }
 
 // One-time-per-change, idempotent: re-evaluate confirmed fresh leads against the

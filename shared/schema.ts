@@ -97,6 +97,9 @@ export const users = sqliteTable("users", {
   passwordHash: text("password_hash"),
   tenantId: integer("tenant_id"),              // null = HomeFront Fiber internal (super-admin)
   role: text("role").notNull().default("rep"), // "super_admin" | "admin" | "rep" | "team_lead" | "manager"
+  // P0-1 (K3 swarm): immutable platform-apex identity, stamped at boot from
+  // SUPER_ADMIN_EMAILS. The email string stays a login handle, never the gate.
+  isSuperAdmin: integer("is_super_admin").notNull().default(0),
   teamMemberId: integer("team_member_id"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),

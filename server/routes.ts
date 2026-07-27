@@ -4707,6 +4707,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (Object.keys(safeUpdate).length === 0) {
       return res.status(400).json({ error: "No valid fields to update" });
     }
+    // P0-1 (K3 swarm): nobody may claim a platform-apex email. The apex lives in
+    // the immutable is_super_admin column now; setting one of the apex emails on
+    // any account is reserved for an existing apex admin only.
+    if (safeUpdate.email && typeof safeUpdate.email === "string") {
+      const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
+      if (apex.includes(safeUpdate.email.trim().toLowerCase()) && !(req as any).user?.isSuperAdmin) {
+        return res.status(403).json({ error: "That email is reserved for platform ownership" });
+      }
+    }
     // Validate role if provided
     if (safeUpdate.role && !(LOGIN_ROLES as readonly string[]).includes(safeUpdate.role as string)) {
       return res.status(400).json({ error: "Invalid role" });
@@ -6218,11 +6227,13 @@ export function registerSaasRoutes(app: any) {
   // ═══════════════════════════════════════════════════════════════════════════
   // SUPER-ADMIN: Tenant Management (muizzm21@gmail.com only)
   // ═══════════════════════════════════════════════════════════════════════════
-  const SUPER_ADMIN_EMAILS = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
-    .split(",").map(e => e.trim().toLowerCase());
+  void (process.env.SUPER_ADMIN_EMAILS); // apex identity now lives in users.is_super_admin (see requireSuperAdmin)
   function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
     const user = (req as any).user;
-    if (!user || user.role !== "admin" || !SUPER_ADMIN_EMAILS.includes(user.email.toLowerCase())) {
+    // P0-1 (K3 swarm): identity is the IMMUTABLE is_super_admin column (stamped
+    // at boot from env), never the user-editable email string — a tenant admin
+    // could previously self-promote by PATCHing their email to the apex value.
+    if (!user || user.role !== "admin" || !(user as any).isSuperAdmin) {
       return res.status(403).json({ error: "Super-admin only" });
     }
     next();
