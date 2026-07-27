@@ -425,7 +425,7 @@ describe("money surfaces are walled", () => {
       method: "PATCH", body: JSON.stringify({ status: "paid" }),
     });
     expect(res.status).toBe(404);
-    expect(storage.getCommissionById(ids.bCommission)!.status).toBe("pending");
+    expect(storage.getCommissionById(ids.bCommission, TENANT_B)!.status).toBe("pending");
   });
 
   it("POST /api/commissions → 404 when the rep belongs to another org", async () => {

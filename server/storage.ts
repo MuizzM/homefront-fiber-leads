@@ -30,6 +30,11 @@ import {
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
+import {
+  planLegacyCommissionTransition,
+  type LegacyCommissionLifecycleErrorCode,
+  type LegacyCommissionStatus,
+} from "@shared/legacyCommissionLifecycle";
 
 // Legacy scanner columns that exist in SQLite but predate the drizzle schema —
 // upsertLeadByAddress still persists them when a scanner payload carries them.
@@ -70,6 +75,29 @@ export interface OpenCallback {
   notes: string | null;
   setAt: string;                 // when the callback was logged
 }
+
+export interface LegacyCommissionMutationCommand {
+  id: number;
+  tenantId: number;
+  actorUserId: number;
+  expectedStatus: LegacyCommissionStatus;
+  status: LegacyCommissionStatus;
+  paidDate?: string;
+  notes?: string | null;
+  ip?: string;
+}
+
+export type LegacyCommissionMutationResult =
+  | { kind: "updated"; commission: Commission }
+  | { kind: "unchanged"; commission: Commission }
+  | { kind: "not_found" }
+  | { kind: "stale" }
+  | { kind: "rejected"; code: Exclude<LegacyCommissionLifecycleErrorCode, "STALE_VERSION">; message: string }
+  | {
+      kind: "failed";
+      code: "LEGACY_COMMISSION_TRANSACTION_FAILED";
+      failureCategory: "transaction";
+    };
 
 // Server-computed location verdict written alongside a knock (never client-set).
 export type KnockVerdict = {
@@ -229,11 +257,12 @@ export interface IStorage {
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(tenantId?: number, repId?: number): Commission[];
-  getCommissionById(id: number): Commission | undefined;
+  getCommissionById(id: number, tenantId: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
-  updateCommission(id: number, updates: Partial<Commission>, tenantId?: number): Commission | undefined;
+  updateCommission(id: number, updates: Partial<Commission>, tenantId: number): Commission | undefined;
+  transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult;
   removePendingCommissionsForLead(leadId: number): Commission[];
-  getCommissionSummary(tenantId?: number): { repId: number; repName: string; total: number; paid: number; pending: number; sales: number }[];
+  getCommissionSummary(tenantId: number): { repId: number; repName: string; total: number; paid: number; pending: number; sales: number }[];
   // ── Commission Rates ───────────────────────────────────────────────────────
   getCommissionRates(tenantId?: number): CommissionRate[];
   createCommissionRate(r: InsertCommissionRate): CommissionRate;
@@ -3673,8 +3702,10 @@ export class Storage implements IStorage {
     const q = db.select().from(commissions);
     return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(commissions.createdAt)).all();
   }
-  getCommissionById(id: number): Commission | undefined {
-    return db.select().from(commissions).where(eq(commissions.id, id)).get();
+  getCommissionById(id: number, tenantId: number): Commission | undefined {
+    return db.select().from(commissions)
+      .where(and(eq(commissions.id, id), eq(commissions.tenantId, tenantId)))
+      .get();
   }
   createCommission(c: InsertCommission): Commission {
     // Tenancy: a commission belongs to the REP's tenant (unless explicitly set).
@@ -3701,13 +3732,75 @@ export class Storage implements IStorage {
       throw e;
     }
   }
-  updateCommission(id: number, updates: Partial<Commission>, tenantId?: number): Commission | undefined {
+  updateCommission(id: number, updates: Partial<Commission>, tenantId: number): Commission | undefined {
     // P0-2: the tenant predicate is part of the UPDATE so a cross-tenant id can
     // never be written even if a caller skipped the read-side check.
-    const condition = tenantId != null
-      ? and(eq(commissions.id, id), eq(commissions.tenantId, tenantId))
-      : eq(commissions.id, id);
-    return db.update(commissions).set(updates).where(condition).returning().get();
+    return db.update(commissions).set(updates)
+      .where(and(eq(commissions.id, id), eq(commissions.tenantId, tenantId)))
+      .returning().get();
+  }
+
+  transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult {
+    const transact = rawDb.transaction((): LegacyCommissionMutationResult => {
+      const existing = this.getCommissionById(command.id, command.tenantId);
+      if (!existing) return { kind: "not_found" };
+
+      const plan = planLegacyCommissionTransition(existing, command, command.actorUserId);
+      if (!plan.ok) {
+        if (plan.code === "STALE_VERSION") return { kind: "stale" };
+        return { kind: "rejected", code: plan.code, message: plan.message };
+      }
+      if (!plan.changed) return { kind: "unchanged", commission: existing };
+
+      const update = rawDb.prepare(
+        `UPDATE commissions
+            SET status = ?, paid_date = ?, notes = ?, approved_by = ?
+          WHERE id = ? AND tenant_id = ? AND status = ?`,
+      ).run(
+        plan.next.status,
+        plan.next.paidDate,
+        plan.next.notes,
+        plan.next.approvedBy,
+        command.id,
+        command.tenantId,
+        command.expectedStatus,
+      );
+      if (update.changes !== 1) return { kind: "stale" };
+
+      // Money mutation and audit event are one durability boundary. If the
+      // append fails for any reason, better-sqlite3 rolls this update back.
+      rawDb.prepare(
+        `INSERT INTO activity_log
+          (user_id, tenant_id, action, entity_type, entity_id, details, ip, at)
+         VALUES (?, ?, ?, 'commission', ?, ?, ?, ?)`,
+      ).run(
+        command.actorUserId,
+        command.tenantId,
+        plan.next.status === existing.status ? "commission.updated" : `commission.${plan.next.status}`,
+        command.id,
+        JSON.stringify({
+          previousStatus: existing.status,
+          status: plan.next.status,
+          changedFields: plan.changedFields,
+        }),
+        command.ip ?? null,
+        new Date().toISOString(),
+      );
+
+      const updated = this.getCommissionById(command.id, command.tenantId);
+      if (!updated) throw new Error("LEGACY_COMMISSION_UPDATE_NOT_VISIBLE");
+      return { kind: "updated", commission: updated };
+    });
+
+    try {
+      return transact.immediate();
+    } catch {
+      return {
+        kind: "failed",
+        code: "LEGACY_COMMISSION_TRANSACTION_FAILED",
+        failureCategory: "transaction",
+      };
+    }
   }
   // Un-marking a sale: drop the auto-created PENDING commission for a lead.
   // Approved/paid commissions are never auto-removed — a clawback is a manager
@@ -3720,16 +3813,16 @@ export class Storage implements IStorage {
     }
     return pending;
   }
-  getCommissionSummary(tenantId?: number) {
-    // P0-4: tenant-scoped — a manager's earnings view must never aggregate
-    // another org's reps or their commissions. Members and commission rows are
-    // BOTH filtered by tenant (undefined = super_admin platform view).
+  getCommissionSummary(tenantId: number) {
     const reps = this.getTeamMembers(tenantId).filter(r => r.active);
     return reps.map(rep => {
-      const conds = [eq(commissions.repId, rep.id)];
-      if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
-      conds.push(ne(commissions.status, "superseded"));
-      const repCommissions = db.select().from(commissions).where(and(...conds)).all();
+      const repCommissions = db.select().from(commissions)
+        .where(and(
+          eq(commissions.tenantId, tenantId),
+          eq(commissions.repId, rep.id),
+          ne(commissions.status, "superseded"),
+        ))
+        .all();
       const total = repCommissions.reduce((sum, c) => sum + c.amount, 0);
       const paid = repCommissions.filter(c => c.status === "paid").reduce((sum, c) => sum + c.amount, 0);
       const pending = repCommissions.filter(c => c.status === "pending" || c.status === "approved").reduce((sum, c) => sum + c.amount, 0);

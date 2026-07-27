@@ -67,6 +67,7 @@ import {
   type CommissionStructure, type Tier, type CalcType,
 } from "@shared/commission";
 import type { CommissionRate } from "@shared/schema";
+import { LEGACY_COMMISSION_STATUSES } from "@shared/legacyCommissionLifecycle";
 import {
   can as hasCapability, capabilitiesFor, groupedCapabilities, rolesWithCapability, isHighRisk,
   type Capability, type Role,
@@ -6686,33 +6687,68 @@ export function registerSaasRoutes(app: any) {
   // PATCH /api/commissions/:id — update status (approve, mark paid, dispute)
   app.patch("/api/commissions/:id", requireManager, (req: Request, res: Response) => {
     const user = (req as any).user;
-    const id = Number(req.params.id);
-    // P0-2: tenant wall on the WRITE — a commission outside the caller's org is
-    // indistinguishable from a missing one (404, no existence leak), and the
-    // UPDATE itself carries the tenant predicate as a second line of defense.
-    const tid: number | undefined = user?.role === "super_admin" ? undefined : (user?.tenantId ?? undefined);
-    const existing = storage.getCommissionById(id);
-    if (!existing || (tid != null && existing.tenantId !== tid)) {
+    const tenantId = Number(user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(403).json({ error: "Organization required" });
+    }
+    const parsedId = z.coerce.number().int().positive().safeParse(req.params.id);
+    if (!parsedId.success) return res.status(400).json({ error: "Invalid commission ID" });
+    // Resolve tenant ownership before validating the mutation body so a foreign
+    // identifier remains indistinguishable from a missing commission.
+    if (!storage.getCommissionById(parsedId.data, tenantId)) {
       return res.status(404).json({ error: "Not found" });
     }
-    const { status, paidDate, notes } = req.body;
-    const updates: any = {};
-    if (status) updates.status = status;
-    if (paidDate) updates.paidDate = paidDate;
-    if (notes !== undefined) updates.notes = notes;
-    if (status === "approved" || status === "paid") updates.approvedBy = user.id;
-    const updated = storage.updateCommission(id, updates, tid);
-    if (!updated) return res.status(404).json({ error: "Not found" });
-    storage.logActivity(user.id, `commission.${status}`, "commission", id, { status }, req.ip);
-    res.json(updated);
+    const parsed = z.object({
+      expectedStatus: z.enum(LEGACY_COMMISSION_STATUSES),
+      status: z.enum(LEGACY_COMMISSION_STATUSES),
+      paidDate: z.string().trim().max(10).optional(),
+      notes: z.string().max(5_000).nullable().optional(),
+    }).strict().safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: "Invalid commission update", details: parsed.error.flatten() });
+    }
+    const result = storage.transitionLegacyCommission({
+      id: parsedId.data,
+      tenantId,
+      actorUserId: user.id,
+      ...parsed.data,
+      ip: req.ip,
+    });
+    if (result.kind === "not_found") return res.status(404).json({ error: "Not found" });
+    if (result.kind === "stale") {
+      return res.status(409).json({
+        error: "Commission changed since it was loaded",
+        code: "STALE_VERSION",
+      });
+    }
+    if (result.kind === "rejected") {
+      const status = result.code === "ILLEGAL_TRANSITION"
+        || result.code === "PAID_TERMINAL"
+        || result.code === "INVALID_CURRENT_STATUS"
+        ? 409
+        : 400;
+      return res.status(status).json({ error: result.message, code: result.code });
+    }
+    if (result.kind === "failed") {
+      structuredLog("commission.transition.failed", {
+        tenantId,
+        commissionId: parsedId.data,
+        actorUserId: user.id,
+        failureCategory: result.failureCategory,
+        errorCode: result.code,
+      }, "error");
+      return res.status(500).json({ error: "Commission update failed", code: result.code });
+    }
+    res.json(result.commission);
   });
 
   // GET /api/commissions/summary — earnings summary per rep (admin/manager)
   app.get("/api/commissions/summary", requireManager, (req: Request, res: Response) => {
-    // P0-4: scoped to the caller's org (super_admin = platform-wide).
-    const user = (req as any).user;
-    const tid: number | undefined = user?.role === "super_admin" ? undefined : (user?.tenantId ?? undefined);
-    res.json(storage.getCommissionSummary(tid));
+    const tenantId = Number((req as any).user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(403).json({ error: "Organization required" });
+    }
+    res.json(storage.getCommissionSummary(tenantId));
   });
 
   // GET /api/commission-rates — structure plans. Management-only: reps see

@@ -116,13 +116,14 @@ describe("P0-2 commission PATCH is tenant-walled", () => {
     });
     expect(cross.status).toBe(404);
     // Untouched by the cross-tenant attempt.
-    expect(storage.getCommissionById(c.id)!.status).toBe("pending");
+    expect(storage.getCommissionById(c.id, TENANT_B)!.status).toBe("pending");
 
     const own = await request(`/api/commissions/${c.id}`, mgr2.session, {
-      method: "PATCH", body: JSON.stringify({ status: "approved" }),
+      method: "PATCH",
+      body: JSON.stringify({ expectedStatus: "pending", status: "approved" }),
     });
     expect(own.status).toBe(200);
-    expect(storage.getCommissionById(c.id)!.status).toBe("approved");
+    expect(storage.getCommissionById(c.id, TENANT_B)!.status).toBe("approved");
 
     // Storage layer: the tenant predicate is on the UPDATE itself.
     expect(storage.updateCommission(c.id, { status: "paid" }, 1)).toBeUndefined();
