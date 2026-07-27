@@ -61,6 +61,31 @@ function dateLabel(value: string | null): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }).format(new Date(value));
 }
 
+/**
+ * Convert a datetime-local wall time (e.g. "2026-07-27T14:30") to an ISO
+ * instant AS SEEN in the given IANA timezone. The input has no zone, so we
+ * solve the tz offset at that wall time via Intl parts (no library).
+ */
+function wallTimeToIso(wallTime: string, timeZone: string): string | null {
+  try {
+    const naive = new Date(wallTime + ":00");
+    if (!Number.isFinite(naive.getTime())) return null;
+    // First guess: treat the wall time as UTC, then measure the tz offset there.
+    const asUtc = new Date(Date.UTC(
+      naive.getFullYear(), naive.getMonth(), naive.getDate(),
+      naive.getHours(), naive.getMinutes(), 0,
+    ));
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).formatToParts(asUtc);
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0);
+    const zonedAsUtc = Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second"));
+    const offsetMs = zonedAsUtc - asUtc.getTime();
+    return new Date(asUtc.getTime() - offsetMs).toISOString();
+  } catch { return null; }
+}
+
 function dateLabelTz(value: string | null | undefined, timeZone: string | null | undefined): string {
   if (!value || !Number.isFinite(Date.parse(value))) return "Not available";
   try {
@@ -304,11 +329,12 @@ export default function CallingLead() {
   const dispositionMutation = useMutation({
     mutationFn: (code: DispositionCode) => saveDisposition(activeAttempt!.attemptId, {
       code, notes: notes.trim() || undefined,
-      callbackAt: code === "CALLBACK_REQUESTED" ? new Date(callbackAt).toISOString() : undefined,
-      // AUDIT FIX: callbacks used to capture the rep's DEVICE timezone — a
-      // traveling rep schedules against the wrong local time. Default to the
-      // lead's evaluated timezone (from the compliance decision) with the
-      // device zone as fallback.
+      // QA GATE FIX (C1): the datetime-local input is wall time in the LEAD's
+      // timezone — interpret it there so instant and label agree (previously
+      // the instant was device-local while the label claimed the lead's zone).
+      callbackAt: code === "CALLBACK_REQUESTED"
+        ? (wallTimeToIso(callbackAt, detailQuery.data?.decision?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone) ?? new Date(callbackAt).toISOString())
+        : undefined,
       callbackTimeZone: code === "CALLBACK_REQUESTED" ? (detailQuery.data?.decision?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone) : undefined,
       callbackConsentEvidenceRef: code === "CALLBACK_REQUESTED" ? callbackEvidenceRef.trim() : undefined,
       idempotencyKey: newIdempotencyKey(),
@@ -460,7 +486,7 @@ export default function CallingLead() {
               </>
             )}
 
-            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button asChild><Link href="/calling">Next eligible lead →</Link></Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
+            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button asChild><Link href="/calling">Open the queue for the next lead →</Link></Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
 
             {activeAttempt && !completed && (
               <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="calling-quick-dispositions">
@@ -471,17 +497,36 @@ export default function CallingLead() {
                     { code: "INTERESTED", label: "Interested" },
                     { code: "SALE_COMPLETED", label: "Sale 🎉" },
                     { code: "NOT_INTERESTED", label: "Not interested" },
-                  ] as Array<{ code: DispositionCode; label: string }>).map(item => (
-                    <button
-                      key={item.code}
-                      type="button"
-                      disabled={dispositionMutation.isPending}
-                      onClick={() => dispositionMutation.mutate(item.code)}
-                      className="min-h-12 rounded-xl border border-border bg-background px-2 text-[12px] font-semibold transition-colors hover:bg-secondary active:scale-95 disabled:opacity-50"
-                    >
-                      {item.label}
-                    </button>
-                  ))}
+                  ] as Array<{ code: DispositionCode; label: string }>).map(item => {
+                    // QA GATE FIX (C3): a sticky thumb-zone button that instantly
+                    // records a SALE deserves the same arm-then-confirm as the
+                    // suppressing outcomes.
+                    const needsConfirm = item.code === "SALE_COMPLETED";
+                    const armed = armedDisposition === item.code;
+                    return (
+                      <button
+                        key={item.code}
+                        type="button"
+                        disabled={dispositionMutation.isPending}
+                        aria-pressed={armed}
+                        onClick={() => {
+                          if (needsConfirm && !armed) {
+                            setArmedDisposition(item.code);
+                            window.setTimeout(() => setArmedDisposition(a => (a === item.code ? null : a)), 4000);
+                            return;
+                          }
+                          setArmedDisposition(null);
+                          dispositionMutation.mutate(item.code);
+                        }}
+                        className={cn(
+                          "min-h-12 rounded-xl border border-border bg-background px-2 text-[12px] font-semibold transition-colors hover:bg-secondary active:scale-95 disabled:opacity-50",
+                          armed && "border-emerald-500 bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400",
+                        )}
+                      >
+                        {armed ? "⚠️ Confirm sale?" : item.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}

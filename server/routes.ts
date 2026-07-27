@@ -924,7 +924,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Token is NOT in the frontend bundle; fetched at runtime from the server.
   // App-level public config (no secrets): role lists the client must never
   // hardcode. AUDIT FIX: super-admin emails were hardcoded in TWO client files.
-  app.get("/api/config/app", requireAuth, (_req: any, res: any) => {
+  app.get("/api/config/app", requireAdmin, (_req: any, res: any) => {
     const superAdminEmails = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com")
       .split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
     res.json({ superAdminEmails });
@@ -4506,7 +4506,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
-      storage.logLoginAttempt(cleanEmail, "request", false, "rate_limited", ip, req.headers["user-agent"] as string);
+      storage.logLoginAttempt(cleanEmail, "request", false, "rate_limited", ip, req.headers["user-agent"] as string, (req as any).user?.tenantId ?? null);
       return res.status(429).json({ error: `Too many requests. Try again in ${Math.ceil(retryAfter / 60)} minutes.` });
     }
     // Owner's decision (2026-07-08): this is a closed internal team tool, so an
@@ -4517,7 +4517,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // flip this back to the constant response.
     const user = storage.getUserByEmail(cleanEmail);
     if (!user || !user.active) {
-      storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string);
+      storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
       // Neutral response — do NOT reveal whether an email is registered/active
       // (account enumeration). A real user gets a code; anyone else gets the same
       // "sent" with no email actually dispatched.
@@ -4537,10 +4537,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // warn that the email may be delayed. The code is NEVER returned in the API
       // response in production — email remains the only automated delivery path.
       console.warn("[otp] mail delivery failed; advancing login flow anyway:", mailErr?.message);
-      storage.logLoginAttempt(cleanEmail, "request", true, "code_created_mail_failed", ip, req.headers["user-agent"] as string);
+      storage.logLoginAttempt(cleanEmail, "request", true, "code_created_mail_failed", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
       return res.json({ sent: true, emailDelivered: false });
     }
-    storage.logLoginAttempt(cleanEmail, "request", true, "code_sent", ip, req.headers["user-agent"] as string);
+    storage.logLoginAttempt(cleanEmail, "request", true, "code_sent", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
     // Localhost must remain usable without a paid mail account. The code is
     // returned only in non-production when delivery fell back to the console;
     // production can never expose an authentication secret in an API response.
@@ -4564,20 +4564,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!ipCheck.allowed || !emailCheck.allowed) {
       const retryAfter = Math.max(ipCheck.retryAfter ?? 0, emailCheck.retryAfter ?? 0);
       res.setHeader("Retry-After", String(retryAfter));
-      storage.logLoginAttempt(cleanEmail, "verify", false, "rate_limited", ip, req.headers["user-agent"] as string);
+      storage.logLoginAttempt(cleanEmail, "verify", false, "rate_limited", ip, req.headers["user-agent"] as string, (req as any).user?.tenantId ?? null);
       return res.status(429).json({ error: `Too many attempts. Try again in ${Math.ceil(retryAfter / 60)} minutes.` });
     }
     const ok = storage.verifyOtp(cleanEmail, code.trim());
     if (!ok) {
-      storage.logLoginAttempt(cleanEmail, "verify", false, "bad_code", ip, req.headers["user-agent"] as string);
+      storage.logLoginAttempt(cleanEmail, "verify", false, "bad_code", ip, req.headers["user-agent"] as string, storage.getUserByEmail(cleanEmail)?.tenantId ?? null);
       return res.status(401).json({ error: "Invalid or expired code. Check your email and try again." });
     }
     const user = storage.getUserByEmail(cleanEmail);
     if (!user || !user.active) {
-      storage.logLoginAttempt(cleanEmail, "verify", false, "account_inactive", ip, req.headers["user-agent"] as string);
+      storage.logLoginAttempt(cleanEmail, "verify", false, "account_inactive", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
       return res.status(401).json({ error: "Account not active. Contact your administrator." });
     }
-    storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string);
+    storage.logLoginAttempt(cleanEmail, "verify", true, "success", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
     // Reset verify limiter on success
     otpVerifyLimiter.delete(`email:${cleanEmail}`);
     otpVerifyLimiter.delete(`ip:${ip}`);
@@ -4588,11 +4588,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // Login-attempt audit (owner ask 2026-07-26): managers read the persistent
   // auth trail — recent attempts or the per-email summary. Requires manager+.
-  app.get("/api/auth/login-attempts", requireManager, (req, res) => {
+  app.get("/api/auth/login-attempts", requireManager, (req: any, res) => {
     const email = typeof req.query.email === "string" ? req.query.email.trim().toLowerCase() : "";
     const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 200));
-    if (req.query.summary === "1") return res.json({ summary: storage.getLoginAttemptSummary() });
-    res.json({ attempts: storage.getLoginAttempts(limit, email || undefined) });
+    // QA GATE FIX (B1): never read another tenant's auth trail.
+    const scope = req.user?.role === "super_admin" ? null : (req.user?.tenantId ?? -1);
+    try {
+      if (req.query.summary === "1") return res.json({ summary: storage.getLoginAttemptSummary(scope) });
+      res.json({ attempts: storage.getLoginAttempts(limit, email || undefined, scope) });
+    } catch (e: any) {
+      console.error("[login-attempts] read failed:", e?.message);
+      res.status(500).json({ error: "Audit read failed" });
+    }
   });
 
   // Legacy password login — kept ONLY for first-run admin setup, disabled otherwise

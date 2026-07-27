@@ -251,7 +251,8 @@ export function runMigrations() {
     `ALTER TABLE otp_codes ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0`,
     // Persistent login-attempt audit (owner ask 2026-07-26): every OTP request and
     // verify outcome — who, when, IP, result — survives the nightly OTP purge.
-    `CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, kind TEXT NOT NULL, success INTEGER NOT NULL DEFAULT 0, reason TEXT, ip TEXT, user_agent TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE TABLE IF NOT EXISTS login_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL, kind TEXT NOT NULL, success INTEGER NOT NULL DEFAULT 0, reason TEXT, ip TEXT, user_agent TEXT, tenant_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `ALTER TABLE login_attempts ADD COLUMN tenant_id INTEGER`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_email ON login_attempts(email, created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_at ON login_attempts(created_at)`,
     `CREATE TABLE IF NOT EXISTS territories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, rep_id INTEGER NOT NULL, polygon TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#3b82f6', created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
@@ -3485,29 +3486,34 @@ export class Storage implements IStorage {
     }).run();
   }
   // ── Login attempts (auth audit) ─────────────────────────────────────────────
-  logLoginAttempt(email: string, kind: "request" | "verify", success: boolean, reason: string, ip?: string | null, userAgent?: string | null): void {
+  // QA GATE FIX (B1): tenant isolation. Tenant resolved from the target
+  // user's record when available, else the caller's org.
+  logLoginAttempt(email: string, kind: "request" | "verify", success: boolean, reason: string, ip?: string | null, userAgent?: string | null, tenantId?: number | null): void {
     try {
+      let tid = tenantId ?? null;
+      if (tid == null) {
+        try { tid = this.getUserByEmail(String(email).toLowerCase())?.tenantId ?? null; } catch { /* */ }
+      }
       rawDb.prepare(
-        `INSERT INTO login_attempts (email, kind, success, reason, ip, user_agent) VALUES (?,?,?,?,?,?)`,
-      ).run(String(email).toLowerCase().slice(0, 254), kind, success ? 1 : 0, reason.slice(0, 60), (ip ?? "").slice(0, 64) || null, (userAgent ?? "").slice(0, 200) || null);
+        `INSERT INTO login_attempts (email, kind, success, reason, ip, user_agent, tenant_id) VALUES (?,?,?,?,?,?,?)`,
+      ).run(String(email).toLowerCase().slice(0, 254), kind, success ? 1 : 0, reason.slice(0, 60), (ip ?? "").slice(0, 64) || null, (userAgent ?? "").slice(0, 200) || null, tid);
     } catch { /* auth audit must never break the login flow */ }
   }
-  getLoginAttempts(limit = 200, email?: string): any[] {
-    try {
-      if (email) {
-        return rawDb.prepare(`SELECT * FROM login_attempts WHERE email = ? ORDER BY created_at DESC LIMIT ?`).all(String(email).toLowerCase(), limit) as any[];
-      }
-      return rawDb.prepare(`SELECT * FROM login_attempts ORDER BY created_at DESC LIMIT ?`).all(limit) as any[];
-    } catch { return []; }
+  getLoginAttempts(limit = 200, email?: string, tenantId?: number | null): any[] {
+    const where: string[] = [];
+    const args: any[] = [];
+    if (email) { where.push("email = ?"); args.push(String(email).toLowerCase()); }
+    if (tenantId != null) { where.push("(tenant_id = ? OR tenant_id IS NULL)"); args.push(tenantId); }
+    const sql = `SELECT * FROM login_attempts ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY created_at DESC LIMIT ?`;
+    return rawDb.prepare(sql).all(...args, limit) as any[];
   }
-  getLoginAttemptSummary(): any[] {
-    try {
-      return rawDb.prepare(
-        `SELECT email, COUNT(*) AS attempts, SUM(success) AS successes, MAX(created_at) AS last_at,
-                SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures
-           FROM login_attempts GROUP BY email ORDER BY last_at DESC`,
-      ).all() as any[];
-    } catch { return []; }
+  getLoginAttemptSummary(tenantId?: number | null): any[] {
+    const scoped = tenantId != null;
+    return rawDb.prepare(
+      `SELECT email, COUNT(*) AS attempts, SUM(success) AS successes, MAX(created_at) AS last_at,
+              SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures
+         FROM login_attempts ${scoped ? "WHERE tenant_id = ? OR tenant_id IS NULL" : ""} GROUP BY email ORDER BY last_at DESC`,
+    ).all(...(scoped ? [tenantId] : [])) as any[];
   }
 
   getActivityLog(limit = 100, tenantId?: number): ActivityLogEntry[] {

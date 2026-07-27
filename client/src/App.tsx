@@ -118,7 +118,7 @@ function AppRoutes() {
   const { user, isFirstRun, loading } = useAuth();
   const [location] = useHashLocation();
   const role = user?.role;
-  const superAdminEmails = useSuperAdminEmails();
+  const { emails: superAdminEmails, settled: superAdminSettled } = useSuperAdminEmails();
 
   // Warm likely destinations only after the browser is idle. Save-Data and
   // slower cellular connections never prefetch the large Mapbox chunk: the
@@ -304,9 +304,11 @@ function AppRoutes() {
             {/* Super-admin is identity-gated (matches the nav): a normal tenant
                 admin who types the URL is redirected, not shown a dead shell.
                 The server independently enforces requireSuperAdmin on all data. */}
-            {isSuperAdmin(user?.email, superAdminEmails)
-              ? <SuperAdmin />
-              : <Redirect to="/" />}
+            {!superAdminSettled
+              ? null
+              : isSuperAdmin(user?.email, superAdminEmails)
+                ? <SuperAdmin />
+                : <Redirect to="/" />}
           </Route>
 
           <Route component={NotFound} />
