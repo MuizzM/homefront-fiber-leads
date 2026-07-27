@@ -299,7 +299,9 @@ export default function Team() {
   const canManageCommission = useCan("commission.structure.manage");
   const canManageDocuments = useCan("onboarding.documents.manage");
 
-  const { data: team = [], isLoading } = useQuery<TeamMember[]>({
+  // HONESTY FIX: a query failure used to paint "No team members yet" + an Add
+  // CTA (inviting duplicates after a transient error). Distinguish the two.
+  const { data: team = [], isLoading, isError, refetch: refetchTeam } = useQuery<TeamMember[]>({
     queryKey: ["/api/team"],
   });
 
@@ -720,6 +722,14 @@ export default function Team() {
             </div>
           ))}
         </div>
+      ) : isError && !isLoading ? (
+        <Card className="bg-card border-red-500/25 rounded-xl">
+          <CardContent className="py-14 text-center">
+            <div className="text-sm font-semibold text-red-400">Couldn't load the team</div>
+            <p className="text-sm text-muted-foreground mt-1 mb-4 max-w-xs mx-auto">This is a fetch problem, not an empty roster.</p>
+            <button type="button" onClick={() => void refetchTeam()} className="h-9 rounded-lg border border-border px-4 text-xs font-semibold hover:bg-secondary">Retry</button>
+          </CardContent>
+        </Card>
       ) : team.length === 0 ? (
         <Card className="bg-card border-border rounded-xl">
           <CardContent className="py-14 text-center">

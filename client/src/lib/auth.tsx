@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
-import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache } from "@/lib/queryClient";
+import { setSessionId as syncSessionToQueryClient, setUnauthorizedHandler, clearPersistedQueryCache, queryClient } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
@@ -100,6 +100,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       _memSession = null;
       writePersistedSession(null);
       writePersistedUser(null); // a real 401 ends offline grace too
+      // P1-11 (K3 swarm): identity changed — purge ALL query state. Previously
+      // only the disk snapshot was dropped on manual logout; the whole in-memory
+      // cache (leads, team, stats) survived into the next login on the same
+      // device, and the 401 path cleared nothing at all.
+      try { queryClient.clear(); } catch { /* */ }
+      clearPersistedQueryCache();
       setSid(null);
       syncSessionToQueryClient(null);
       setUser(null);
@@ -145,6 +151,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function login(newSid: string, u: AuthUser) {
+    // P1-11: a NEW identity is arriving — evict everything the previous
+    // identity cached before the new session hydrates (user switch in one tab).
+    try { queryClient.clear(); clearPersistedQueryCache(); } catch { /* */ }
     _memSession = newSid;
     writePersistedSession(newSid); // persist across page reloads via window.name
     setSid(newSid);
@@ -167,6 +176,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     _memSession = null;
     writePersistedSession(null); // clear persisted session
     writePersistedUser(null); // clear the offline-grace snapshot
+    try { queryClient.clear(); } catch { /* */ }
     clearPersistedQueryCache(); // drop the on-disk dashboard SWR snapshot
     setSid(null);
     syncSessionToQueryClient(null);

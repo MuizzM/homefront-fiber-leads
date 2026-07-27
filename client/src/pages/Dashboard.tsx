@@ -217,7 +217,7 @@ export default function Dashboard() {
 
   // Rep-scoped lead stats power the field tiles (assigned / dispositioned /
   // sold / follow-ups) — the byStatus map is O(statuses), not O(leads).
-  const { data: leadStats, isLoading: leadStatsLoading } = useQuery<LeadStats>({
+  const { data: leadStats, isLoading: leadStatsLoading, isError: leadStatsError } = useQuery<LeadStats>({
     queryKey: ["/api/stats"],
     queryFn: () => apiRequest("GET", "/api/stats").then(r => r.json()),
     staleTime: 30_000,
@@ -235,8 +235,9 @@ export default function Dashboard() {
     staleTime: 30_000,
   });
 
-  const assigned = leadStats?.total ?? 0;
-  const dispositioned = assigned - (leadStats?.byStatus?.prospect ?? 0);
+  const statsFailed = statsError || leadStatsError;
+  const assigned = statsFailed ? "—" : (leadStats?.total ?? 0);
+  const dispositioned = typeof assigned === "number" ? assigned - (leadStats?.byStatus?.prospect ?? 0) : "—";
 
   const today = new Date().toISOString().slice(0, 10);
   const todayHours = clockSessions
@@ -287,8 +288,8 @@ export default function Dashboard() {
           <FieldTile label="Unassigned" value={stats?.leads.unassigned ?? "—"} loading={statsLoading && !stats} tone="text-amber-400" icon={AlertCircle} chip="bg-amber-500/15" accent="bg-amber-500" />
           <FieldTile label="Assigned" value={assigned} loading={leadStatsLoading && !leadStats} tone="text-foreground" icon={MapPin} chip="bg-secondary" accent="bg-muted-foreground/40" />
           <FieldTile label="Dispositioned" value={dispositioned} loading={leadStatsLoading && !leadStats} tone="text-sky-400" icon={Activity} chip="bg-sky-500/15" accent="bg-sky-500" />
-          <FieldTile label="Sold" value={leadStats?.byStatus?.sold ?? 0} loading={leadStatsLoading && !leadStats} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
-          <FieldTile label="Follow-ups due" value={leadStats?.byStatus?.follow_up ?? 0} loading={leadStatsLoading && !leadStats} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
+          <FieldTile label="Sold" value={statsFailed ? "—" : (leadStats?.byStatus?.sold ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-emerald-400" icon={DollarSign} chip="bg-emerald-500/15" accent="bg-emerald-500" />
+          <FieldTile label="Follow-ups due" value={statsFailed ? "—" : (leadStats?.byStatus?.follow_up ?? 0)} loading={leadStatsLoading && !leadStats} tone="text-yellow-400" icon={Calendar} chip="bg-yellow-500/15" accent="bg-yellow-500" />
         </div>
       </section>
 

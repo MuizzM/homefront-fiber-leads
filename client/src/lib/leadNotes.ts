@@ -11,6 +11,7 @@
 export type NoteSaveResult =
   | { status: "saved"; updatedAt: string | null }
   | { status: "conflict"; serverNotes: string; updatedAt: string | null }
+  | { status: "rejected"; reason: string }
   | { status: "queued" };
 
 export type NotePoster = (leadId: number, body: { notes: string; baseUpdatedAt: string | null }) =>
@@ -55,6 +56,13 @@ export async function saveLeadNote(
     if (res.status === 409) {
       const body = await res.json();
       return { status: "conflict", serverNotes: String(body?.serverNotes ?? ""), updatedAt: body?.updatedAt ?? null };
+    }
+    // HONESTY FIX: a definitive server rejection (400/403/404 — too-long note,
+    // deleted lead, capability denial) is NOT an offline queue event. Stashing
+    // it retries forever invisibly; tell the truth instead.
+    if (res.status === 400 || res.status === 403 || res.status === 404) {
+      const body = await res.json().catch(() => ({}));
+      return { status: "rejected", reason: String((body as any)?.error ?? `HTTP ${res.status}`) };
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const body = await res.json();

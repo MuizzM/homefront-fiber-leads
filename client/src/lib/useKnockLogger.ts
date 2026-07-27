@@ -29,7 +29,10 @@ export function useKnockLogger() {
       repId: user.teamMemberId,
       post: (url, body) => apiRequest("POST", url, body).then(r => r.json()),
       patch: (url, body) => apiRequest("PATCH", url, body).then(r => r.json()),
-      onSaved: (leadId: number) => {
+      onSaved: (leadId: number, outcome?: string) => {
+        // HONESTY FIX (P1-8): the commission toast fires ONLY here — on durable
+        // server confirmation — never at tap time.
+        if (outcome === "sold") toast({ title: "Sold 🎉 — commission logged", description: "Pending review on your Commission tab" });
         qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
         qc.invalidateQueries({ queryKey: ["/api/leads"] });
         qc.invalidateQueries({ queryKey: ["/api/followups"] }); // re-working a door clears/updates its callback
@@ -61,9 +64,13 @@ export function useKnockLogger() {
       leadId: lead.id, repId: credit, outcome,
       notes: opts.notes ?? null, callbackDate: opts.callbackDate ?? null, callbackTime: opts.callbackTime ?? null, ...fix,
     }));
-    if (outcome === "sold") toast({ title: "Sold 🎉 — commission logged", description: "Pending review on your Commission tab" });
-    else if (wasSold) toast({ title: "Sale removed — pending commission reversed" });
-    else toast({ title: "Outcome logged" });
+    // HONESTY FIX (P1-8): never claim a commission before the server confirms
+    // it. The enqueue is durable; the save event arrives via the queue's
+    // onSaved callback (below) — that's where the toast belongs.
+    if (outcome !== "sold") {
+      if (wasSold) toast({ title: "Sale removed — pending commission reversed" });
+      else toast({ title: "Outcome logged" });
+    }
     return true;
   }, [queue, isRep, user?.teamMemberId, qc, toast]);
 

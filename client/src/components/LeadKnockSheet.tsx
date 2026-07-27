@@ -235,7 +235,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const [snap, setSnap] = useState<SheetSnap>("peek");
   const [note, setNote] = useState("");                // composer DRAFT — clears once committed
   const [noteOpen, setNoteOpen] = useState(false);     // collapsed "+ Add note" chip → textarea on focus
-  const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued">("idle");
+  const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued" | "conflict">("idle");
   const [lastCommittedNote, setLastCommittedNote] = useState<string | null>(null); // pinned "latest note"
   const [flashKey, setFlashKey] = useState<KnockOutcome | null>(null); // brief tap-confirm flash
   const [copiedAddr, setCopiedAddr] = useState(false);                 // copy-glyph → check feedback
@@ -496,7 +496,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (!id || !text || committingRef.current) return;
     committingRef.current = true;
     setNoteState("saving");
-    const finish = (state: "saved" | "queued") => {
+    const finish = (state: "saved" | "queued" | "conflict") => {
       committingRef.current = false;
       setNoteState(state);
       setLastCommittedNote(text); // pin the just-committed note so it never feels lost
@@ -510,12 +510,17 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     void onSaveNote(id, text, noteBaseRef.current).then(r => {
       if (r.status === "saved") { noteBaseRef.current = r.updatedAt; finish("saved"); return; }
       if (r.status === "queued") { finish("queued"); return; }
+      if (r.status === "rejected") { setNoteState("conflict"); return; }
       // Conflict: another device wrote since we loaded — merge and re-commit
       // once against the fresh version, never silently overwrite.
-      const merged = mergeNotes(r.serverNotes, text);
-      void onSaveNote(id, merged, r.updatedAt).then(r2 => {
-        if (r2.status === "saved") noteBaseRef.current = r2.updatedAt;
-        finish(r2.status === "queued" ? "queued" : "saved");
+      const merged = mergeNotes(r.status === "conflict" ? r.serverNotes : "", text);
+      void onSaveNote(id, merged, r.status === "conflict" ? r.updatedAt : noteBaseRef.current).then(r2 => {
+        if (r2.status === "saved") { noteBaseRef.current = r2.updatedAt; finish("saved"); return; }
+        if (r2.status === "queued") { finish("queued"); return; }
+        // HONESTY FIX: a second conflict is NOT a save — the merged text never
+        // persisted. Keep the draft and say so (was: chip read "Saved to
+        // history" while nothing was written).
+        finish("conflict");
       });
     });
   };
@@ -857,8 +862,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               </span>
               {noteState !== "idle" && (
                 <span data-testid="note-save-state" data-state={noteState} className="text-2xs font-medium"
-                  style={{ color: noteState === "saved" ? "#34d399" : MUTED }}>
-                  {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : "Saved to history"}
+                  style={{ color: noteState === "saved" ? "#34d399" : noteState === "conflict" ? "#f59e0b" : MUTED }}>
+                  {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved — newer note exists" : "Saved to history"}
                 </span>
               )}
             </div>

@@ -330,6 +330,8 @@ function AssignRepModal({ lead, team, onClose }: {
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       onClose();
     },
+    // HONESTY FIX: silent failure — a server rejection used to say nothing.
+    onError: (e: any) => toast({ title: "Assign failed", description: String(e?.message ?? "Request failed"), variant: "destructive" }),
   });
 
   return (
@@ -463,6 +465,8 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       setEditContact(false);
     },
+    // HONESTY FIX: silent failure — now surfaces the rejection.
+    onError: (e: any) => toast({ title: "Contact not saved", description: String(e?.message ?? "Request failed"), variant: "destructive" }),
   });
 
   const fiberStatusLabel: Record<string, string> = {

@@ -37,7 +37,7 @@ export interface KnockQueueOpts {
   storage?: StorageLike;
   now?: () => number;
   isOnline?: () => boolean;
-  onSaved?: (leadId: number) => void; // parent hook invalidates react-query here
+  onSaved?: (leadId: number, outcome?: string) => void; // parent hook invalidates react-query here
 }
 
 export interface EnqueueInput {
@@ -262,7 +262,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
           setLeadState(item.leadId, "saved");
           scheduleIdle(item.leadId);
           markChanged();
-          opts.onSaved?.(item.leadId);
+          opts.onSaved?.(item.leadId, item.outcome);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           const status = parseInt(message, 10); // apiRequest throws Error("<status>: <text>")

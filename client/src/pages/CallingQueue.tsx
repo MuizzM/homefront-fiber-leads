@@ -83,7 +83,11 @@ function CandidateRow({ candidate }: { candidate: CallingCandidate }) {
             {candidate.city}, {candidate.state} {candidate.zip}
             {" "}<span aria-hidden="true">·</span> {candidate.contactName ?? "Not enriched"}
             {candidate.maskedPhone ? <> <span aria-hidden="true">·</span> <span className="font-mono text-[11px] tabular-nums">{candidate.maskedPhone}</span></> : null}
-            {candidate.lastDecisionStatus ? <> <span aria-hidden="true">·</span> Last check: {formatDecision(candidate.lastDecisionStatus)}</> : null}
+            {candidate.lastDecisionStatus ? (
+              Number.isFinite(Date.parse(candidate.lastDecisionExpiresAt ?? "")) && Date.parse(candidate.lastDecisionExpiresAt ?? "") <= Date.now()
+                ? <> <span aria-hidden="true">·</span> <span className="text-amber-500">Last check expired</span></>
+                : <> <span aria-hidden="true">·</span> Last check: {formatDecision(candidate.lastDecisionStatus)}</>
+            ) : null}
           </p>
         </div>
         {eligible
