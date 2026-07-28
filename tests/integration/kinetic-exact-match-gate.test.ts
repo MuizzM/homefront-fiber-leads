@@ -289,6 +289,56 @@ describe("Kinetic exact-address and explicit-availability gates", () => {
     expect(projectedLeadCount(targetId)).toBe(0);
   });
 
+  it("keeps an explicit AddressNotFound response conclusive without creating a lead", async () => {
+    const requested = {
+      address: "103 Explicit No Service Ln",
+      city: "Concord",
+      state: "NC",
+      zip: "28025",
+      lat: 35.4084,
+      lng: -80.5797,
+    };
+    const targetId = seedTarget(
+      requested.address,
+      requested.city,
+      requested.state,
+      requested.zip,
+      requested.lat,
+      requested.lng,
+    );
+    installResponse({
+      success: true,
+      validationResult: "AddressNotFound",
+      errorCode: 0,
+      techType: "",
+      maxQual: "",
+      dfAddressId: "",
+      accessId: "",
+      exchangeId: "",
+      exactMatch: false,
+      fiberFastFlag: false,
+    });
+
+    const result = await scanner.scanAddress(
+      requested.address,
+      requested.city,
+      requested.state,
+      requested.zip,
+      { source: "manual" },
+    );
+
+    expect(result).toMatchObject({
+      apiSource: "kinetic_live",
+      fiberStatus: "no_service",
+      confidence: "HIGH",
+      isNewFiber: false,
+    });
+
+    await passThroughWorker("run_exact_gate_explicit_no_service", targetId, result);
+    expect(conclusiveSnapshotCount(targetId)).toBe(1);
+    expect(projectedLeadCount(targetId)).toBe(0);
+  });
+
   it("rejects NEW FIBER/N projection when fiber availability is null", () => {
     const targetId = seedTarget(
       "104 Null Fiber Ln",

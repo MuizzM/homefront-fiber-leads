@@ -1023,7 +1023,11 @@ async function scanAddressDirect(
     // still echo a different rooftop with valid NEW FIBER fields. Keep the raw
     // response only on this in-memory result for diagnostics; the failed result
     // never reaches applyCheck or durable availability evidence.
-    if (parsed.success && !exactAddressIdentity) {
+    if (
+      providerClassification !== "NO_SERVICE"
+      && parsed.success
+      && !exactAddressIdentity
+    ) {
       base.apiSource = "failed";
       base.fiberStatus = "unknown";
       base.confidence = "LOW";
