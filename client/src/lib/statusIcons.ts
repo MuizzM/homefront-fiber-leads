@@ -40,7 +40,12 @@ function tearDrop(color: string, glyph: string, ariaLabel: string): string {
 const GLYPHS = {
   door: `<path d="M14 11.5h12v19H14z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/><path d="M17 14.5h6v16h-6z" fill="#fff"/><circle cx="21.4" cy="22.5" r="1" fill="#334155"/>`,
   star: `<path d="m20 10.5 3.05 6.18 6.82 1-4.94 4.8 1.17 6.79L20 26.06l-6.1 3.21 1.17-6.79-4.94-4.8 6.82-1L20 10.5Z" fill="#fff"/>`,
-  dollar: `<text x="20" y="28.5" text-anchor="middle" fill="#fff" font-family="Arial,sans-serif" font-size="22" font-weight="800">$</text>`,
+  // Vector, NOT <text>. These SVGs are rasterized as data-URL images, where font
+  // resolution is unreliable — Arial is absent on most Android devices, and a
+  // glyph that silently fails to draw leaves a sold pin looking blank. Every
+  // other glyph here is a path; this one was the exception, and the $ was the
+  // one field reps said they couldn't see.
+  dollar: `<path d="M20 9.5v21" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M25 15.1c0-2.2-2.2-3.7-5-3.7s-5 1.4-5 3.4c0 2.3 2 3.1 5 3.8s5.2 1.5 5.2 4c0 2.2-2.3 3.9-5.2 3.9s-5.2-1.7-5.2-4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`,
   x: `<path d="m13 13 14 14m0-14L13 27" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round"/>`,
   clock: `<circle cx="20" cy="20" r="9" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M20 14v6l4.4 2.7" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`,
 } as const;

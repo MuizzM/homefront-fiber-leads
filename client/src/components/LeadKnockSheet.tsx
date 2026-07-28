@@ -524,7 +524,9 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const ds = pinDisplayState(renderedLead);
   const canonicalStatus = toLeadMapStatus(ds);
   const activeOutcome = DS_TO_OUTCOME[ds] ?? null;
-  const statusColor = STATUS_CONFIG[canonicalStatus].color;
+  // The card is dark, so it reads onDark where the pin colour is too dark to be
+  // text (sold). Pins keep STATUS_CONFIG.color — the map contract is unchanged.
+  const statusColor = STATUS_CONFIG[canonicalStatus].onDark ?? STATUS_CONFIG[canonicalStatus].color;
   const statusLabel = ds === "sold"
     ? "SOLD"
     : ds === "callback" || ds === "contacted"
@@ -786,6 +788,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                   );
                 })()}
                 <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1 flex items-center gap-1.5" style={{ color: statusColor }}>
+                  {(() => {
+                    // Same glyph the pin carries, so the card and the map agree at
+                    // a glance: $ for sold, star for interested, door for not home.
+                    const StatusIcon = ICON_MAP[STATUS_CONFIG[canonicalStatus].cardIcon];
+                    return StatusIcon ? <StatusIcon data-testid="knock-status-icon" className="w-[14px] h-[14px] shrink-0" /> : null;
+                  })()}
                   <span className="truncate">{statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}</span>
                   {statusBadge && (
                     <span
