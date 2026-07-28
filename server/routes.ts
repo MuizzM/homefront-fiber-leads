@@ -4377,7 +4377,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           knockedAt: at,
         } as any);
       }
-    } catch (e: any) { console.warn("[central] history knock row skipped:", e?.message); }
+    } catch (e: any) {
+      // Was a silent console.warn: if this write failed, the mark still returned
+      // 200 and History simply stayed empty, with nothing anywhere saying why.
+      // That is precisely the shape of the bug this endpoint was reported for.
+      // Still non-fatal — the disposition itself succeeded and must not be rolled
+      // back over a timeline row — but it is now recorded where operators look.
+      structuredLog("central.history_row_failed", {
+        leadId: lead.id, actorUserId: u?.id ?? null, reason: String(e?.message ?? e).slice(0, 200),
+      }, "warn");
+    }
     try {
       storage.logActivity(u?.id ?? null, "lead.central_disposition", "lead", lead.id,
         { outcome, newStatus, markedBy: u?.name ?? "central", address: lead.address }, req.ip, u?.tenantId ?? null);
