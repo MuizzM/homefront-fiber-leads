@@ -155,6 +155,7 @@ function isAutoAreaName(name?: string | null): boolean {
 }
 import { scanAddress, setManualToken, getTokenStatus, forceFreshTokenFromApi, getAddressScanQueueStatus, liveTestAddress, pauseScanning, resumeScanning, isScanningPaused, type ScanResult } from "./scanner";
 import { getInspectorSnapshot, getAddressTimeline, onScanEvent } from "./scanEvents";
+import { scrubSecretText } from "./secretScrub";
 import { getProxySessionId, isProxyConnected } from "./proxy-fetch";
 import { runDailyMarketRefresh, getDailyRefreshStatus } from "./dailyMarketRefresh";
 import { getComingSoonWatchlist } from "./comingSoonProgram";
@@ -1802,6 +1803,155 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     } catch (e: any) {
       res.status(500).json({ error: String(e?.message ?? e) });
     }
+  });
+
+  // ── Run-scoped stage feed (FIELD-facing) ────────────────────────────────────
+  // The inspector above is requireAdmin, which left the person who actually
+  // STARTED an area scan — a rep or manager standing on the street — with a
+  // progress bar and no explanation when it stalls. These two routes expose the
+  // SAME telemetry narrowed to ONE run the caller's tenant owns.
+  //
+  // Why a sibling route instead of adding a `runId` filter to
+  // /api/scan/inspector/stream: that stream's payload is not just stage events —
+  // every snapshot and every 5s heartbeat carries inspectorHealth(), i.e. the
+  // proxy session id, token readiness/expiry and pool size. Loosening its gate
+  // would widen an operational surface for everyone, and a per-audience payload
+  // switch inside one handler is exactly the kind of branch that leaks the wrong
+  // branch after a refactor. Instead these routes REUSE the existing store
+  // (getInspectorSnapshot already accepts `runId`) and the existing in-process
+  // relay (onScanEvent) — no new query, no new bus, no second event pipeline —
+  // and project through a strict allowlist that cannot grow accidentally.
+  //
+  // Bounds: the snapshot is already capped at one row per address (latest stage);
+  // we clamp harder than the admin cap because this is a phone on LTE, and there
+  // is no `offset`, so the endpoint can never be walked to pull the whole table.
+  const FIELD_STAGE_LIMIT_DEFAULT = 100;
+  const FIELD_STAGE_LIMIT_MAX = 200;
+  // Each SSE client pins one relay listener that every scan event must fan out
+  // to, so concurrency is capped rather than left to the socket count.
+  const FIELD_STAGE_MAX_STREAMS = 24;
+  let fieldStageStreams = 0;
+
+  // Field projection = ALLOWLIST, not a denylist. sessionId ("decodo-sN") and
+  // tokenSuffix (JWT last-4) are already masked at the bus, but they are proxy/
+  // credential *infrastructure* detail that answers nothing a rep can act on, so
+  // they are dropped outright here — the safest handling of a masked secret is to
+  // not ship it at all. detail/retryReason are the only free-text fields and they
+  // originate upstream (provider error strings), so they go through the shared
+  // secret scrubber: this route must be safe even when mounted without the global
+  // response sanitizer in server/index.ts (tests and embedded harnesses are).
+  //
+  // Two input shapes flow through here and must produce ONE stable row contract,
+  // so the client never branches on which transport delivered a row: a derived
+  // InspectorRow from the snapshot (startedAt/updatedAt) and a raw bus event from
+  // the live relay (tsEpoch). Both normalize to tsEpoch + startedAt.
+  const fieldSafeStage = (e: any) => {
+    const at = typeof e.tsEpoch === "number" ? e.tsEpoch : (typeof e.updatedAt === "number" ? e.updatedAt : null);
+    return {
+      // Same correlation contract as the admin inspector, so one address is
+      // traceable across both surfaces.
+      correlationId: e.addressKey ?? null,
+      address: e.address ?? null, city: e.city ?? null, state: e.state ?? null, zip: e.zip ?? null,
+      runId: e.runId ?? null,
+      source: e.source ?? null,
+      stage: e.stage, status: e.status ?? null,
+      attempt: e.attempt ?? 1,
+      httpStatus: e.httpStatus ?? null,
+      latencyMs: e.latencyMs ?? null,
+      retryReason: scrubSecretText(e.retryReason ?? null),
+      classification: e.classification ?? null,
+      detail: scrubSecretText(e.detail ?? null),
+      startedAt: typeof e.startedAt === "number" ? e.startedAt : null,
+      tsEpoch: at,
+      ts: at == null ? null : new Date(at).toISOString(),
+    };
+  };
+
+  // Run header a rep may see. Deliberately omits budget/estBytes/costUsd — spend
+  // is an owner concern and /api/scan/runs/:id (requireManager) already serves it.
+  const fieldSafeRun = (r: any) => ({
+    id: r.id, label: r.label, kind: r.kind, city: r.city, state: r.state,
+    status: r.status, active: r.active, pct: r.pct,
+    verified: r.verified, failed: r.failed, newFiber: r.newFiber, newlyLive: r.newlyLive,
+    queued: r.queued,
+  });
+
+  // Tenant wall. Resolved SERVER-side from the session's tenant — never from a
+  // query param — and a run belonging to another tenant is reported as 404, not
+  // 403, so this endpoint can't be used to probe which run ids exist elsewhere.
+  // Returns the run on success, or null after having already sent the response.
+  function resolveOwnRun(req: any, res: Response): any | null {
+    const tenantId = req.user?.tenantId ?? null;
+    if (tenantId == null) { res.status(403).json({ error: "Organization membership required" }); return null; }
+    const runId = String(req.params.runId ?? "");
+    // getRunStatus → getRun(runId, tenantId): the tenant predicate is in the SQL,
+    // so a cross-tenant id simply doesn't resolve.
+    const run = runId ? scanSvc.getRunStatus(runId, tenantId) : null;
+    if (!run) { res.status(404).json({ error: "Run not found" }); return null; }
+    return run;
+  }
+
+  app.get("/api/scan/runs/:runId/stages", requireCapability("scan.submit"), (req: any, res) => {
+    const run = resolveOwnRun(req, res);
+    if (!run) return;
+    const requested = Number(req.query.limit);
+    const limit = Math.min(FIELD_STAGE_LIMIT_MAX, Math.max(10, Number.isFinite(requested) && requested > 0 ? requested : FIELD_STAGE_LIMIT_DEFAULT));
+    const snap = getInspectorSnapshot({ runId: run.id, limit });
+    res.json({
+      run: fieldSafeRun(run),
+      // Global scan pause is the single most common answer to "why is my scan
+      // sitting still", and it is not sensitive.
+      paused: isScanningPaused(),
+      counters: snap.counters,
+      limit,
+      stages: snap.rows.map(fieldSafeStage),
+    });
+  });
+
+  // SSE variant — same gate, same projection, filtered to this run in the relay
+  // callback so a tenant never receives another tenant's run events even though
+  // the underlying relay is process-wide.
+  app.get("/api/scan/runs/:runId/stages/stream", requireCapability("scan.submit"), (req: any, res) => {
+    const run = resolveOwnRun(req, res);
+    if (!run) return;
+    if (fieldStageStreams >= FIELD_STAGE_MAX_STREAMS) {
+      return res.status(503).json({ error: "Too many live scan streams open. Retry shortly." });
+    }
+    res.set({
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+    const send = (event: string, data: unknown) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    const snap = getInspectorSnapshot({ runId: run.id, limit: FIELD_STAGE_LIMIT_DEFAULT });
+    send("snapshot", { run: fieldSafeRun(run), paused: isScanningPaused(), counters: snap.counters, stages: snap.rows.map(fieldSafeStage) });
+
+    fieldStageStreams++;
+    // The relay is in-process and already fed by the batched persister, so this
+    // adds ZERO database work per event on the scan hot path — it is a filter on
+    // an EventEmitter callback.
+    const unsub = onScanEvent((evt) => {
+      if (evt.runId !== run.id) return;
+      try { send("stage", fieldSafeStage(evt)); } catch { /* socket gone; close handler cleans up */ }
+    });
+    // 15s (vs the admin stream's 5s) — a phone on LTE pays radio wakeups for
+    // every keepalive, and this stream has no periodic health payload to push.
+    const hb = setInterval(() => { try { res.write(`: ping\n\n`); } catch { /* closed */ } }, 15_000);
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;              // 'close' can fire alongside an error path
+      closed = true;
+      clearInterval(hb);
+      unsub();                          // MUST run, or the relay listener leaks
+      fieldStageStreams = Math.max(0, fieldStageStreams - 1);
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
   });
 
   // ── New Build Radar ─────────────────────────────────────────────────────────
