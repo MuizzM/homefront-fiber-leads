@@ -42,7 +42,12 @@ const isTokenUrl = (u: string) => u.includes("/_internal/precisely/token") || u.
 const isSearchUrl = (u: string) => u.includes("/address/search");
 const freshToken = () => json(201, { token: `t${Math.random()}`.padEnd(40, "x"), success: true });
 
-const ADDR = ["4023 Dakeita Circle", "Concord", "NC", "28025"] as const;
+const ADDR = [
+  FIX.address.addressLine1,
+  FIX.address.city,
+  FIX.address.stateProvinceCd,
+  FIX.address.postalCd,
+] as const;
 
 describe("Live Test authentication flow — Decodo-exclusive", () => {
   beforeAll(async () => {
@@ -107,7 +112,7 @@ describe("Live Test authentication flow — Decodo-exclusive", () => {
       if (isTokenUrl(url)) return freshToken();
       searches++;
       const body = JSON.parse(String(init.body));
-      expect(body.addressLine1).toBe("4023 Dakeita Circle"); // same address every attempt
+      expect(body.addressLine1).toBe(FIX.address.addressLine1); // same address every attempt
       return searches === 1 ? json(403, {}) : json(200, FIX);
     });
     const out = await scanner.liveTestAddress(...ADDR);
