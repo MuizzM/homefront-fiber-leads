@@ -5293,7 +5293,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           storage.updateTerritory(t.id, {
             status: action === "reassign" ? "active" : "unassigned",
             repId: newPrimary, name: newName,
-            assigneeIds: JSON.stringify(nextRepIds),
+            assigneeIds: JSON.stringify(nextRepIds), assignedAt: at,
             pastAssigneeIds: JSON.stringify(past),
             color: colorForRep(newPrimary),
             reclaimedAt: action === "return_to_pool" ? at : (t as any).reclaimedAt ?? null,
@@ -5394,6 +5394,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
       color: colorForRep(newPrimary), reclaimedAt: at, updatedAt: at,
+      // Reassign starts a new tenure; returning to the pool means nobody holds
+      // it, so the "assigned since" date must not linger from the last rep.
+      assignedAt: next.repIds.length ? at : null,
     } as any, tid);
 
     // Persist only the leads whose rep actually changed
@@ -5461,7 +5464,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
     storage.updateTerritory(t.id, {
       repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
-      color: colorForRep(repId), updatedAt: at,
+      color: colorForRep(repId), assignedAt: at, updatedAt: at,
     } as any, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
 
@@ -5521,7 +5524,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const merged = Array.from(new Set([t.repId, ...repIds].filter(Boolean)));
     const at = new Date().toISOString();
-    storage.updateTerritory(t.id, { status: merged.length > 1 ? "shared" : "active", assigneeIds: JSON.stringify(merged), updatedAt: at } as any, tid);
+    storage.updateTerritory(t.id, { status: merged.length > 1 ? "shared" : "active", assigneeIds: JSON.stringify(merged), assignedAt: at, updatedAt: at } as any, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged });
     res.json({ ok: true, assigneeIds: merged });
   });

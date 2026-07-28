@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus, RotateCcw } from "lucide-react";
 import { can, type Role } from "@shared/permissions";
 import { colorForRep } from "@shared/repColors";
+import { shortDate } from "@shared/territoryLabel";
 import type { TerritoryStatus } from "@shared/territory";
 
 // Location-verified progress for this territory (from /api/territories/progress).
@@ -40,6 +41,8 @@ export interface TerritoryDetailPanelProps {
   onStartNextPass?: () => void;
   /** Which sweep this area is on. 1 (or absent) means it has never been reset. */
   currentPass?: number;
+  /** ISO date this area was handed to its current rep. */
+  assignedAt?: string | null;
   /** Remove ONE rep from this area. Provided only when the caller may manage
    *  assignment; the chip's remove control is hidden entirely without it. */
   onUnassignRep?: (repId: number) => void;
@@ -61,7 +64,7 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
   const swatch = isUnassigned ? colorForRep(null) : (territory.color ?? colorForRep(territory.repIds[0]));
@@ -290,6 +293,20 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
         >
           <History className="h-3.5 w-3.5" /> View Activity
         </button>
+      )}
+
+      {/* How long the current rep has had it. "Assigned 3 weeks ago" is the cue
+          that an area is going stale — a date alone makes you do that maths. */}
+      {assignedAt && territory.repIds.length > 0 && (
+        <div data-testid="territory-assigned-at" className="mt-3 text-xs text-muted-foreground">
+          Assigned {shortDate(assignedAt)}
+          {(() => {
+            const days = Math.floor((Date.now() - new Date(assignedAt).getTime()) / 86_400_000);
+            return Number.isFinite(days) && days >= 1
+              ? ` · ${days === 1 ? "1 day" : `${days} days`} ago`
+              : "";
+          })()}
+        </div>
       )}
 
       {/* Knock it again. Sits with the other manager actions but reads as its own

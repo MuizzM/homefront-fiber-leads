@@ -517,6 +517,8 @@ export function runMigrations() {
     // re-opens the doors WITHOUT making pass 1's history ambiguous. do_not_knock
     // is a permanent compliance block that no reset clears.
     `ALTER TABLE territories ADD COLUMN current_pass INTEGER NOT NULL DEFAULT 1`,
+    // When the area was last handed to its current rep (map label + panel).
+    `ALTER TABLE territories ADD COLUMN assigned_at TEXT`,
     `ALTER TABLE knock_log ADD COLUMN pass_number INTEGER`,
     `ALTER TABLE leads ADD COLUMN do_not_knock INTEGER NOT NULL DEFAULT 0`,
     // Every knock that predates the concept belongs to the first sweep.
