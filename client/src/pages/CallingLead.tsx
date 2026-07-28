@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "wouter";
+import { Link, useLocation, useParams } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertOctagon, ArrowLeft, CalendarClock, Check, CheckCircle2, Clipboard, Clock3,
@@ -11,9 +11,10 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { CallingAvailability, CallingChrome, CallingPageSkeleton, CallingUnknownState } from "@/components/calling/CallingChrome";
+import { LeadScriptPanel } from "@/components/calling/LeadScriptPanel";
 import {
   addInternalOptOut, auditPhoneCopy, authorizeManualCall, enrichCallingLead, evaluateCallingLead, formatDecision, formatStage,
-  getCallingLead, getCallingStatus, newIdempotencyKey, revokeCallingConsent, saveConsent, saveDisposition, startManualCall,
+  getCallingLead, getCallingQueue, getCallingStatus, newIdempotencyKey, revokeCallingConsent, saveConsent, saveDisposition, startManualCall,
   validateCallingPhone, type CallingLeadDetail, type CallingStatus, type ConsentEvidence, type DispositionCode,
 } from "@/lib/callingApi";
 import { useToast } from "@/hooks/use-toast";
@@ -236,6 +237,7 @@ function PhoneValidationForm({ detail, onSaved }: { detail: CallingLeadDetail; o
 export default function CallingLead() {
   const params = useParams<{ id: string }>();
   const leadId = Number(params.id);
+  const [, navigate] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canValidatePhone = useCan("calling.enrichment.request");
@@ -286,6 +288,14 @@ export default function CallingLead() {
     return () => window.clearInterval(timer);
   }, [authorization]);
   useEffect(() => () => { setAuthorization(null); setActiveAttempt(null); }, []);
+  // Lead-to-lead navigation (the completion card's "Next eligible lead" CTA)
+  // keeps this route mounted — reset all per-lead UI state so a saved outcome
+  // or revealed number can never bleed into the next lead's screen.
+  useEffect(() => {
+    setEvaluation(null); setHumanReady(false); setAuthorization(null); setActiveAttempt(null);
+    setCompleted(null); setNotes(""); setCallbackAt(""); setCallbackEvidenceRef("");
+    setShowCallback(false); setArmedDisposition(null); setCopied(false);
+  }, [leadId]);
   useEffect(() => {
     const open = detailQuery.data?.openAttempt;
     if (!open || activeAttempt || completed) return;
@@ -354,6 +364,20 @@ export default function CallingLead() {
     onSuccess: () => { setCompleted("Suppressed — permanent internal DNC"); setActiveAttempt(null); setAuthorization(null); void queryClient.invalidateQueries({ predicate: query => String(query.queryKey[0] ?? "").startsWith("/api/v1/calling") }); toast({ title: "STOP recorded", description: "The number was immediately suppressed and pending call authorizations were invalidated." }); },
     onError: (error: Error) => toast({ title: "STOP was not recorded", description: error.message, variant: "destructive" }),
   });
+  // Completion CTA: jump straight to the top ELIGIBLE lead (skipping the one
+  // just dispositioned — it may still be in a stale queue snapshot). Honest
+  // fallback: no eligible lead or a failed fetch returns the rep to the queue.
+  const nextLeadMutation = useMutation({
+    mutationFn: async () => {
+      const queue = await getCallingQueue({ stage: "ELIGIBLE_MANUAL_CALL", limit: 25 });
+      return queue.find(item => item.leadId !== leadId) ?? null;
+    },
+    onSuccess: next => navigate(next ? `/calling/lead/${next.leadId}` : "/calling"),
+    onError: (error: Error) => {
+      toast({ title: "Next lead unavailable", description: error.message, variant: "destructive" });
+      navigate("/calling");
+    },
+  });
   const enrichmentMutation = useMutation({ mutationFn: () => enrichCallingLead(leadId),
     onSuccess: () => { setEvaluation(null); void detailQuery.refetch(); toast({ title: "Licensed enrichment complete", description: "Any match remains blocked until identity, validation, DNC, and policy checks pass." }); },
     onError: (error: Error) => toast({ title: "Enrichment failed", description: error.message, variant: "destructive" }) });
@@ -409,6 +433,8 @@ export default function CallingLead() {
                 <div className="bg-background/70 p-3"><div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Pipeline stage</div><div className="mt-1 truncate text-sm">{formatStage(candidate.queueStage)}</div></div>
               </div>
             </section>
+
+            <LeadScriptPanel leadId={leadId} />
 
             {canValidatePhone && !candidate.phoneId && (
               <section className="rounded-2xl border border-border bg-card p-4">
@@ -476,7 +502,7 @@ export default function CallingLead() {
                           armed && "border-red-500 bg-red-500/25 text-red-100 ring-1 ring-red-400",
                         )}
                       >
-                        {armed ? `⚠️ Confirm: ${item.label}?` : item.label}
+                        {armed ? `Confirm: ${item.label}?` : item.label}
                       </button>
                     );
                   })}</div>
@@ -486,7 +512,7 @@ export default function CallingLead() {
               </>
             )}
 
-            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button asChild><Link href="/calling">Open the queue for the next lead →</Link></Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
+            {completed && <section className="rounded-2xl border border-emerald-500/25 bg-emerald-500/[0.08] p-5 text-center"><CheckCircle2 className="mx-auto h-7 w-7 text-emerald-600 dark:text-emerald-400" /><h2 className="mt-2 text-base font-semibold text-emerald-600 dark:text-emerald-400">Outcome saved</h2><p className="mt-1 text-sm text-muted-foreground">{completed}</p><div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-center"><Button data-testid="next-eligible-lead" disabled={nextLeadMutation.isPending} onClick={() => nextLeadMutation.mutate()}>{nextLeadMutation.isPending ? "Finding next eligible lead…" : "Next eligible lead →"}</Button><Button asChild variant="outline"><Link href="/calling">Return to queue</Link></Button></div></section>}
 
             {activeAttempt && !completed && (
               <div className="sticky bottom-0 z-30 -mx-4 mt-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80" data-testid="calling-quick-dispositions">
@@ -495,7 +521,7 @@ export default function CallingLead() {
                   {([
                     { code: "NO_ANSWER", label: "No answer" },
                     { code: "INTERESTED", label: "Interested" },
-                    { code: "SALE_COMPLETED", label: "Sale 🎉" },
+                    { code: "SALE_COMPLETED", label: "Sale complete" },
                     { code: "NOT_INTERESTED", label: "Not interested" },
                   ] as Array<{ code: DispositionCode; label: string }>).map(item => {
                     // QA GATE FIX (C3): a sticky thumb-zone button that instantly
@@ -523,7 +549,7 @@ export default function CallingLead() {
                           armed && "border-emerald-500 bg-emerald-500/25 text-emerald-100 ring-1 ring-emerald-400",
                         )}
                       >
-                        {armed ? "⚠️ Confirm sale?" : item.label}
+                        {armed ? "Confirm sale?" : item.label}
                       </button>
                     );
                   })}

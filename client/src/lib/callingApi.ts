@@ -392,6 +392,68 @@ export async function getCallingLead(leadId: number): Promise<CallingLeadDetail>
     attempts: payload.attempts ?? [], callbacks: payload.callbacks ?? [], openAttempt: payload.openAttempt ?? null };
 }
 
+/**
+ * Per-lead speaking script (GET /api/v1/calling/leads/:leadId/script).
+ *
+ * WIRE shape (server/calling/scriptEngine.ts GeneratedScript): objection
+ * handlers are an OBJECT keyed by slug ({price, currentProvider, renter,
+ * worksFine} → string) and provenance is `model: "rules" | "llm"` — there is
+ * NO engine field. The client renders verbatim and NEVER invents content
+ * when the endpoint fails.
+ */
+export interface LeadScriptWire {
+  version?: string;
+  model?: "rules" | "llm" | string;
+  generatedAt?: string;
+  cached?: boolean;
+  sections?: {
+    opener?: string;
+    neighborhoodHook?: string;
+    valueProposition?: string | string[];
+    /** legacy alternate key — accepted defensively */
+    valueProp?: string | string[];
+    /** WIRE: object keyed by slug. Array form also accepted defensively. */
+    objectionHandlers?: Record<string, string> | Array<{ objection?: string; response?: string }>;
+    close?: string;
+    complianceFooter?: string;
+    /** legacy alternate key — accepted defensively */
+    disclosure?: string;
+  };
+}
+
+/** camelCase / snake_case slug → "Current provider" (objection row labels). */
+function humanizeSlug(slug: string): string {
+  const words = String(slug).replace(/[_-]+/g, " ").replace(/([a-z0-9])([A-Z])/g, "$1 $2").trim().toLowerCase();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "Objection";
+}
+
+/**
+ * NORMALIZED shape the panel renders: objectionHandlers is ALWAYS an array
+ * of {objection, response} rows. Normalization happens here — the single
+ * choke point — so a wire-shaped object can never reach the render path and
+ * crash the call screen mid-attempt.
+ */
+export interface LeadScript extends Omit<LeadScriptWire, "sections"> {
+  sections?: Omit<NonNullable<LeadScriptWire["sections"]>, "objectionHandlers"> & {
+    objectionHandlers?: Array<{ objection: string; response: string }>;
+  };
+}
+
+export function normalizeLeadScript(wire: LeadScriptWire): LeadScript {
+  const sections = wire.sections;
+  if (!sections) return { ...wire, sections };
+  const raw = sections.objectionHandlers;
+  const objectionHandlers = Array.isArray(raw)
+    ? raw.map(item => ({ objection: String(item?.objection ?? ""), response: String(item?.response ?? "") }))
+    : Object.entries(raw ?? {}).map(([key, value]) => ({ objection: humanizeSlug(key), response: String(value) }));
+  return { ...wire, sections: { ...sections, objectionHandlers } };
+}
+
+export async function getLeadScript(leadId: number): Promise<LeadScript> {
+  const wire = await json<LeadScriptWire>(apiRequest("GET", `${ROOT}/leads/${leadId}/script`));
+  return normalizeLeadScript(wire);
+}
+
 export function evaluateCallingLead(leadId: number): Promise<{ decisionId: string; evaluation: ComplianceEvaluation }> {
   return json(apiRequest("POST", `${ROOT}/leads/${leadId}/evaluate`, {}));
 }

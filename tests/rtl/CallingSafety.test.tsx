@@ -13,6 +13,7 @@ vi.mock("@/lib/callingApi", async importOriginal => {
     ...actual,
     getCallingStatus: vi.fn(),
     getCallingLead: vi.fn(),
+    getLeadScript: vi.fn().mockRejectedValue(new Error("script endpoint not under test")),
     evaluateCallingLead: vi.fn(),
     authorizeManualCall: vi.fn(),
     startManualCall: vi.fn(),

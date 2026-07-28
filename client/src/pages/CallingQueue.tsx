@@ -7,9 +7,10 @@ import { formatDecision, formatStage, getCallingQueue, getCallingStatus, getCall
 import { cn } from "@/lib/utils";
 
 const STAGE_FILTERS = [
-  { value: "", label: "Open" },
+  { value: "", label: "All" },
   { value: "ELIGIBLE_MANUAL_CALL", label: "Eligible" },
   { value: "CALLBACK_SCHEDULED", label: "Callbacks" },
+  { value: "COMPLIANCE_BLOCKED", label: "Blocked" },
   { value: "COMPLIANCE_REVIEW", label: "Review" },
 ] as const;
 
@@ -157,8 +158,29 @@ export default function CallingQueue() {
       [item.address, item.city, item.state, item.zip, item.contactName].some(value => value?.toLowerCase().includes(needle)),
     );
   }, [queueQuery.data, search]);
-  const eligible = (queueQuery.data ?? []).filter(item => item.queueStage === "ELIGIBLE_MANUAL_CALL").length;
-  const callbacks = (queueQuery.data ?? []).filter(item => item.queueStage === "CALLBACK_SCHEDULED").length;
+  // Chip counts come from a separate UNFILTERED queue fetch — deriving them
+  // from the stage-filtered result would zero out every other chip's count.
+  const countsQuery = useQuery({
+    queryKey: ["/api/v1/calling/queue", "counts"],
+    queryFn: () => getCallingQueue({ limit: 250 }), // server cap — chips must not undercount
+    enabled: statusQuery.isSuccess,
+    staleTime: 10_000,
+    retry: 1,
+  });
+  const chipCounts = useMemo(() => {
+    const rows = countsQuery.data;
+    if (!rows) return null;
+    const count = (stage: string) => rows.filter(item => item.queueStage === stage).length;
+    return {
+      "": rows.length,
+      ELIGIBLE_MANUAL_CALL: count("ELIGIBLE_MANUAL_CALL"),
+      CALLBACK_SCHEDULED: count("CALLBACK_SCHEDULED"),
+      COMPLIANCE_BLOCKED: count("COMPLIANCE_BLOCKED"),
+      COMPLIANCE_REVIEW: count("COMPLIANCE_REVIEW"),
+    } as Record<string, number>;
+  }, [countsQuery.data]);
+  const eligible = chipCounts?.ELIGIBLE_MANUAL_CALL ?? 0;
+  const callbacks = chipCounts?.CALLBACK_SCHEDULED ?? 0;
   // AUDIT FIX: real due-callbacks view (overdue/today/upcoming, in the stored
   // timezone) on the previously client-less endpoint.
   const callbacksQuery = useQuery({
@@ -195,9 +217,9 @@ export default function CallingQueue() {
             <CallingAvailability status={statusQuery.data} />
 
             <section aria-label="Calling queue metrics" className="grid grid-cols-3 divide-x divide-border overflow-hidden rounded-2xl border border-border bg-card">
-              <MetricCell label="Open" value={queueQuery.data?.length ?? null} />
-              <MetricCell label="Eligible" value={queueQuery.data ? eligible : null} dot="bg-emerald-500" />
-              <MetricCell label="Callbacks" value={queueQuery.data ? callbacks : null} dot="bg-sky-500" />
+              <MetricCell label="Open" value={chipCounts ? chipCounts[""] : null} />
+              <MetricCell label="Eligible" value={chipCounts ? eligible : null} dot="bg-emerald-500" />
+              <MetricCell label="Callbacks" value={chipCounts ? callbacks : null} dot="bg-sky-500" />
             </section>
 
             {(callbackGroups.overdue.length + callbackGroups.today.length) > 0 && (
@@ -240,15 +262,25 @@ export default function CallingQueue() {
                   className="h-10 w-full rounded-xl border border-border bg-card pl-9 pr-3 text-[13px] text-foreground transition-colors placeholder:text-muted-foreground/70 focus:border-primary/50 focus:outline-none focus:ring-2 focus:ring-ring/30" />
               </div>
               <div className="flex gap-2 overflow-x-auto pb-1" role="group" aria-label="Filter calling queue">
-                {STAGE_FILTERS.map(filter => (
-                  <button key={filter.value} type="button" onClick={() => setStage(filter.value)} aria-pressed={stage === filter.value}
-                    className={cn("inline-flex min-h-10 shrink-0 items-center rounded-full border px-4 text-xs font-medium transition-colors",
-                      stage === filter.value
-                        ? "border-primary/40 bg-primary/10 text-primary"
-                        : "border-border bg-card text-muted-foreground hover:bg-secondary/40 hover:text-foreground")}>
-                    {filter.label}
-                  </button>
-                ))}
+                {STAGE_FILTERS.map(filter => {
+                  const count = chipCounts?.[filter.value];
+                  return (
+                    <button key={filter.value} type="button" onClick={() => setStage(filter.value)} aria-pressed={stage === filter.value}
+                      data-testid={`stage-chip-${filter.value || "all"}`}
+                      className={cn("inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-4 text-xs font-medium transition-colors",
+                        stage === filter.value
+                          ? "border-primary/40 bg-primary/10 text-primary"
+                          : "border-border bg-card text-muted-foreground hover:bg-secondary/40 hover:text-foreground")}>
+                      {filter.label}
+                      {typeof count === "number" && (
+                        <span className={cn("inline-flex min-w-5 items-center justify-center rounded-full px-1 text-[10px] font-semibold tabular-nums",
+                          stage === filter.value ? "bg-primary/15 text-primary" : "bg-secondary text-muted-foreground")}>
+                          {count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
