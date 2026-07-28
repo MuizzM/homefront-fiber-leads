@@ -398,6 +398,9 @@ export type RepApplication = typeof repApplications.$inferSelect;
 // ── Territory Requests ────────────────────────────────────────────────────────
 export const territoryRequests = sqliteTable("territory_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  // Tenant of the requesting rep. Was absent entirely, which made every
+  // territory-request read and write cross-tenant (see storage.getTerritoryRequests).
+  tenantId: integer("tenant_id"),
   repId: integer("rep_id").notNull(),
   userId: integer("user_id").notNull(),
   message: text("message"),
