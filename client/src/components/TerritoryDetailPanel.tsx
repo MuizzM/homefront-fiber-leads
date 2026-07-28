@@ -64,7 +64,12 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
   // Two-step remove: taking an area off a rep pulls their doors back too, so it
   // asks before it acts rather than firing on a mis-tap next to the chip label.
   const [confirmRemoveId, setConfirmRemoveId] = useState<number | null>(null);
-  const canUnassign = Boolean(onUnassignRep) && can(role, "reclaim_territory");
+  // Removing ONE rep is assignment management, not whole-area reclamation, so it
+  // rides on assign_territory (team_lead+) to match the route's requireTeamLead.
+  // Gating it on reclaim_territory (manager+) meant a team lead could call the
+  // API but never see the control — the permission the server enforces and the
+  // permission the UI checks must be the same one.
+  const canUnassign = Boolean(onUnassignRep) && can(role, "assign_territory");
 
   const saveName = () => {
     const next = draftName.trim();

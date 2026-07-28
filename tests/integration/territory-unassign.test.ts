@@ -181,6 +181,18 @@ describe("POST /api/territories/:id/unassign", () => {
     expect(JSON.parse(row.after_json).repIds).not.toContain(fx.repA.memberId);
   });
 
+  it("a TEAM LEAD can unassign their own rep — the route gate the UI must match", async () => {
+    // assign_territory is team_lead+; the route is requireTeamLead + ownership.
+    // This pins the server half of that contract so the UI gate can be checked
+    // against a real number rather than an assumption.
+    const id = seedArea([fx.repA.memberId, fx.repB.memberId]);
+    const res = await req(`/api/territories/${id}/unassign`, fx.lead.session, {
+      method: "POST", body: JSON.stringify({ repId: fx.repA.memberId }),
+    });
+    expect(res.status).toBe(200);
+    expect(JSON.parse((storage.getTerritoryById(id) as any).assigneeIds)).toEqual([fx.repB.memberId]);
+  });
+
   it("a rep cannot unassign anyone (not even themselves)", async () => {
     const id = seedArea([fx.repA.memberId, fx.repB.memberId]);
     for (const s of [fx.repA.session, fx.repB.session]) {
