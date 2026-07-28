@@ -137,8 +137,10 @@ export function previewMarketRun(opts: { tenantId: number; city: string; state: 
   const ranked = rankTargets(targets, known, { nowMs: Date.now(), rescan: opts.rescan });
   const available = ranked.filter(r => r.ev > 0).length;   // addresses we can verify
   // "High-value" = the meaningfully-above-baseline targets (near known fiber /
-  // field signal), not merely "novel" — the honest count of the strong bets.
-  const highValue = ranked.filter(r => r.ev >= 0.55).length;
+  // on the build frontier / field signal), not merely "novel". An isolated
+  // never-scanned target scores exactly 0.55 (base 0.45 + full spread 0.10), so
+  // the bar sits above that — the honest count of the strong bets.
+  const highValue = ranked.filter(r => r.ev >= 0.6).length;
   const willVerify = Math.min(budget, available);
   return {
     poolAvailable: targets.length,

@@ -235,6 +235,47 @@ describe("rankTargets", () => {
     const evs = ranked.map(r => r.ev);
     expect(new Set(evs).size).toBeGreaterThan(1); // not all identical
   });
+
+  it("grades proximity: many verified fiber neighbors beat a single one", () => {
+    // Cells are ~0.0025°. One target sits among 5 known fiber homes, the other
+    // next to 1 — contiguity evidence stacks, so the dense block ranks first.
+    const known = [
+      // 5 points in the cell around (35.50, -80.40)
+      { lat: 35.5001, lng: -80.4001 }, { lat: 35.5002, lng: -80.4002 },
+      { lat: 35.5003, lng: -80.4001 }, { lat: 35.5001, lng: -80.4003 },
+      { lat: 35.5002, lng: -80.4001 },
+      // 1 point in a far-away cell around (35.60, -80.30)
+      { lat: 35.6001, lng: -80.3001 },
+    ];
+    const targets: PoolTarget[] = [
+      { id: 1, lat: 35.5002, lng: -80.4002, lastScannedAtMs: null }, // 5 neighbors
+      { id: 2, lat: 35.6002, lng: -80.3002, lastScannedAtMs: null }, // 1 neighbor
+      { id: 3, lat: 36.9000, lng: -79.1000, lastScannedAtMs: null }, // none
+    ];
+    const ranked = rankTargets(targets, known, { nowMs: Date.now() });
+    const ev = (id: number) => ranked.find(r => r.id === id)!.ev;
+    expect(ev(1)).toBeGreaterThan(ev(2));
+    expect(ev(2)).toBeGreaterThan(ev(3));
+  });
+
+  it("gives the build frontier a bonus but keeps it below a lit block", () => {
+    // Known fiber concentrated in one cell. A target in the ADJACENT (empty)
+    // cell is on the build edge → frontier bonus beats an isolated target,
+    // while a target inside the lit cell still ranks highest (max evidence).
+    const known = [
+      { lat: 35.5001, lng: -80.4001 }, { lat: 35.5002, lng: -80.4002 },
+      { lat: 35.5003, lng: -80.4001 },
+    ];
+    const targets: PoolTarget[] = [
+      { id: 1, lat: 35.5002, lng: -80.4001, lastScannedAtMs: null }, // inside the lit cell
+      { id: 2, lat: 35.5002, lng: -80.4030, lastScannedAtMs: null }, // adjacent cell — frontier
+      { id: 3, lat: 36.9000, lng: -79.1000, lastScannedAtMs: null }, // isolated
+    ];
+    const ranked = rankTargets(targets, known, { nowMs: Date.now() });
+    const ev = (id: number) => ranked.find(r => r.id === id)!.ev;
+    expect(ev(1)).toBeGreaterThan(ev(2)); // interior evidence still strongest
+    expect(ev(2)).toBeGreaterThan(ev(3)); // frontier beats isolated
+  });
 });
 
 // ── The hard law: a failed check is NEVER a negative ──────────────────────────

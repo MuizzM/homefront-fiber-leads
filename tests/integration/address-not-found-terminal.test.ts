@@ -73,6 +73,53 @@ describe("address_not_found terminal", () => {
     expect(t.last_inconclusive_at).not.toBeNull();
   });
 
+  it("never lets throttle/fail-closed retries inflate an address toward the terminal verdict", async () => {
+    // 3 generic transients (network hiccups — NOT needs-fix), then needs-fix
+    // answers. attempt_count crosses the cap (2) during the transients, but the
+    // terminal requires the cap in REAL needs-fix non-answers: the first
+    // needs-fix answer (attempt 4) must NOT conclude address_not_found.
+    const targetId = seedTarget("321 THROTTLED WAY");
+    const runId = "run_anf_not_inflated";
+    store.createScanRun({ id: runId, tenantId: TENANT, kind: "city-sweep", label: "no-inflate", city: "Testville", state: "NC", budget: 10 });
+    store.enqueueRunTargets(runId, [{ id: targetId, seq: 0 }]);
+
+    let calls = 0;
+    const flakyThenNeedsFix: import("../../server/scanEngine").Checker = async (a) => {
+      calls++;
+      const needsFix = calls > 3;
+      return {
+        result: {
+          address: a.address, city: a.city, state: a.state, zip: a.zip,
+          apiSource: "failed", fiberStatus: "unknown", isNewFiber: false,
+          fiberAvailable: null, billingStatus: null,
+          notes: needsFix
+            ? "Non-conclusive response (success=false, AddressNeedsFix)"
+            : "Non-conclusive response (success=false, no validationResult)",
+        } as any,
+        bytes: 9000,
+        checkFailed: true,
+      };
+    };
+
+    // Transients requeue with no backoff, so one worker pass spins straight
+    // through them; the first needs-fix answer requeues WITH backoff and the
+    // drained queue ends the pass. Ledger: 1 needs-fix — far from terminal.
+    await engine.runScanWorker(runId, TENANT, flakyThenNeedsFix);
+    let row = rawDb.prepare(`SELECT state, attempt_count FROM scan_run_targets WHERE run_id=? AND target_id=?`).get(runId, targetId) as any;
+    expect(row.state).toBe("queued"); // still pending retry — NOT failed
+    expect(row.attempt_count).toBeGreaterThanOrEqual(2); // attempts DID cross the cap
+    expect((rawDb.prepare(`SELECT inconclusive_attempts FROM scan_targets WHERE id=?`).get(targetId) as any).inconclusive_attempts).toBe(1);
+    expect((rawDb.prepare(`SELECT failed FROM scan_runs WHERE id=?`).get(runId) as any).failed).toBe(0);
+
+    // A SECOND real needs-fix answer reaches the cap → terminal, as before.
+    rawDb.prepare(`UPDATE scan_run_targets SET next_attempt_at=NULL WHERE run_id=?`).run(runId);
+    rawDb.prepare(`UPDATE scan_runs SET status='running' WHERE id=?`).run(runId);
+    await engine.runScanWorker(runId, TENANT, flakyThenNeedsFix);
+    row = rawDb.prepare(`SELECT state, result FROM scan_run_targets WHERE run_id=? AND target_id=?`).get(runId, targetId) as any;
+    expect(row.state).toBe("failed");
+    expect(String(row.result)).toMatch(/^address_not_found:/);
+  });
+
   it("parks exhausted addresses from BULK claims during the quiet window, but never from skipSec=0 kinds", () => {
     const parked = seedTarget("777 PARKED CT", { inconclusive_attempts: 3, last_inconclusive_at: rawDb.prepare("SELECT datetime('now') d").pluck().get() });
     const bulkRun = "run_anf_bulk";
