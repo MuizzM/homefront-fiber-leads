@@ -4154,6 +4154,13 @@ export default function MapView() {
           if (!old?.pins) return old;
           return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome } : p) };
         });
+        // The server writes a [central]-flagged knock row, so History HAS a new
+        // entry — but the card fetched that query when it opened and nothing
+        // told it to look again. Result: "No changes yet" under a mark you just
+        // made. The knock path invalidates these; this path updated the pin and
+        // the map cache and forgot the card it was rendered inside.
+        qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}/history`] });
+        qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}`] });
         try { navigator.vibrate?.(10); } catch { /* */ }
         toast({ title: "🏢 Marked centrally", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
         return true;
