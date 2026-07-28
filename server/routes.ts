@@ -4338,11 +4338,30 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const at = new Date().toISOString();
     const updated = storage.updateLead(lead.id, {
       leadStatus: newStatus,
-      visited: 1,
       lastOutcome: outcome,
       lastOutcomeAt: at,
     } as any, u?.tenantId ?? undefined);
     if (!updated) return res.status(500).json({ error: "Update failed" });
+    // Owner ask: a central mark MUST appear in the lead's History timeline.
+    // Record a knock row flagged as central (no door contact — wasHome false),
+    // credited to the acting manager's member id (or the lead's assigned rep,
+    // or the tenant's first active member as a last resort).
+    try {
+      let centralRepId: number | null = u?.teamMemberId ?? lead.assignedRepId ?? null;
+      if (centralRepId == null) {
+        centralRepId = storage.getTeamMembers(lead.tenantId ?? u?.tenantId ?? undefined).find((m: any) => m.active)?.id ?? null;
+      }
+      if (centralRepId != null) {
+        storage.createKnock({
+          leadId: lead.id,
+          repId: centralRepId,
+          outcome,
+          wasHome: false,
+          notes: `[central] ${u?.name ?? "central"}`,
+          knockedAt: at,
+        } as any);
+      }
+    } catch (e: any) { console.warn("[central] history knock row skipped:", e?.message); }
     try {
       storage.logActivity(u?.id ?? null, "lead.central_disposition", "lead", lead.id,
         { outcome, newStatus, markedBy: u?.name ?? "central", address: lead.address }, req.ip, u?.tenantId ?? null);

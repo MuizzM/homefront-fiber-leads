@@ -301,3 +301,27 @@ describe("M7 — leaderboard excludes superseded sold knocks", () => {
     expect(rows.sales).toBe(0);
   });
 });
+
+describe("Central mark appears in History", () => {
+  it("central-disposition writes a knock_log row flagged [central]", async () => {
+    const lead = makeLead(1, rep1.memberId);
+    const res = await request(`/api/leads/${lead.id}/central-disposition`, mgr1.session, {
+      method: "POST",
+      body: JSON.stringify({ outcome: "not_home" }),
+    });
+    expect(res.status).toBe(200);
+    const rows = rawDb.prepare(
+      "SELECT outcome, notes, was_home FROM knock_log WHERE lead_id = ? ORDER BY id DESC LIMIT 1",
+    ).all(lead.id) as any[];
+    expect(rows.length).toBe(1);
+    expect(rows[0].outcome).toBe("not_home");
+    expect(rows[0].notes.startsWith("[central]")).toBe(true);
+    expect(rows[0].was_home).toBe(0); // central = no door contact
+    const fresh = storage.getLeadById(lead.id);
+    // Field design: not_home is NOT a terminal status — the pin stays a prospect
+    // with the visit recorded via lastOutcome/visit state.
+    expect(fresh.leadStatus).toBe("prospect");
+    expect(fresh.lastOutcome).toBe("not_home");
+    // "visited" is not a leads column — the knock row IS the visit record.
+  });
+});
