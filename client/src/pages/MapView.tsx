@@ -2768,13 +2768,41 @@ export default function MapView() {
   // @shared/territoryLabel so they're testable away from Mapbox; here we only
   // choose the detail level from zoom, since three lines over a block-sized
   // polygon collide with the neighbours and become unreadable.
+  // O(1) progress lookup. territoryLabelFor runs once per territory and used
+  // .find over the progress array, so painting N areas cost O(N × P) — at 200
+  // areas that is 40,000 comparisons on every label repaint.
+  const progressById = useMemo(
+    () => new Map(territoryProgress.map((p: any) => [p.id, p] as const)),
+    [territoryProgress],
+  );
+
+  // Active areas per rep, counted ONCE over the territory list instead of
+  // re-scanning it per rep. The rep picker previously did
+  // territories.filter(...) inside team.map(...) AND JSON.parsed assigneeIds on
+  // every pair: O(reps × areas) parses — 40 reps × 200 areas = 8,000 JSON.parse
+  // calls per render, on the phone, while the manager is mid-tap.
+  const activeAreaCountByRep = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const t of territories as any[]) {
+      if (t.status !== "active" && t.status !== "shared") continue;
+      const seen = new Set<number>();
+      if (t.repId != null) seen.add(t.repId);
+      try {
+        for (const id of JSON.parse(t.assigneeIds || "[]") as number[]) seen.add(id);
+      } catch { /* legacy row */ }
+      // A rep on an area as both primary and assignee still holds ONE area.
+      for (const id of seen) counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }, [territories]);
+
   const territoryLabelFor = (t: (typeof territories)[number]): string => {
     const areaName = (t.name ?? "").trim();
     if (!canAssign) return areaName;
-    const prog = territoryProgress.find((p) => p.id === t.id);
+    const prog = progressById.get(t.id);
     return territoryLabel({
       areaName,
-      repName: team.find((m) => m.id === t.repId)?.name ?? "",
+      repName: repNameById.get(t.repId) ?? "",
       assignedAt: (t as any).assignedAt ?? null,
       knocked: prog?.knocked ?? null,
       total: prog?.total ?? null,
@@ -5594,7 +5622,7 @@ export default function MapView() {
             (() => {
               const t = territories.find((x) => x.id === selectedTerritoryId);
               if (!t) return null;
-              const prog = territoryProgress.find((p) => p.id === t.id);
+              const prog = progressById.get(t.id);
               const status = (t as any).status ?? "active";
               const repIds = (() => {
                 try {
@@ -5684,11 +5712,7 @@ export default function MapView() {
                             mistake this control exists to prevent. */}
                         <RepPicker
                           reps={team.filter((m) => m.active).map((m) => {
-                            const held = territories.filter((x: any) =>
-                              (x.status === "active" || x.status === "shared") &&
-                              (x.repId === m.id ||
-                                (() => { try { return (JSON.parse(x.assigneeIds || "[]") as number[]).includes(m.id); } catch { return false; } })())
-                            ).length;
+                            const held = activeAreaCountByRep.get(m.id) ?? 0;
                             return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
                           })}
                           onChange={(repId) =>
@@ -6432,7 +6456,7 @@ export default function MapView() {
                     </button>
                   </div>
                   {territories.map((t) => {
-                    const prog = territoryProgress.find((p) => p.id === t.id);
+                    const prog = progressById.get(t.id);
                     const status = (t as any).status ?? "active";
                     const isUnassigned =
                       status === "unassigned" || status === "reclaimed";
@@ -6441,7 +6465,7 @@ export default function MapView() {
                       : colorForRep(t.repId);
                     const repName = isUnassigned
                       ? "Unassigned"
-                      : (team.find((m) => m.id === t.repId)?.name ?? t.name);
+                      : (repNameById.get(t.repId) ?? t.name);
                     return (
                       <div key={t.id} className="mb-1.5 group">
                         <div className="flex items-center gap-2">
