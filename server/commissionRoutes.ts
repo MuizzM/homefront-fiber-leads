@@ -158,11 +158,14 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   });
 
   // ── Commissionable sales (idempotent ingest + lifecycle) ──────────────────────
-  app.post("/api/commission/sales", requireCapability("commission.structure.manage"), (req, res) => {
+  // Booking or transitioning a sale IS booking money — gated on the dedicated
+  // sales.write cap (manager+), never on rate-config (structure.manage) which a
+  // team_lead holds and could otherwise use to fabricate QUALIFIED sales.
+  app.post("/api/commission/sales", requireCapability("commission.sales.write"), (req, res) => {
     if (denyOutOfScope(req, res, Number(req.body?.repId))) return;
     try { res.status(201).json(svc.upsertSale(tid(req), uid(req), req.body || {})); } catch (e) { fail(res, e); }
   });
-  app.post("/api/commission/sales/:externalId/transition", requireCapability("commission.structure.manage"), (req, res) => {
+  app.post("/api/commission/sales/:externalId/transition", requireCapability("commission.sales.write"), (req, res) => {
     const { action, at, reason } = req.body || {};
     const sale = svc.getSaleByExternalId(tid(req), String(req.params.externalId));
     if (!sale) return res.status(404).json({ error: "Sale not found" });
@@ -171,7 +174,9 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   });
 
   // ── Statements — the calculation surface ──────────────────────────────────────
-  app.post("/api/commission/statements/recalculate", requireCapability("commission.read.team"), (req, res) => {
+  // Recalculation (re)writes statement rows — a WRITE, gated manager+. A read
+  // cap here would let any oversight role mutate the money ledger.
+  app.post("/api/commission/statements/recalculate", requireCapability("commission.statements.write"), (req, res) => {
     const repId = Number(req.body?.repId);
     const weekReference = parseWeekRef(req.body?.week) ?? parseWeekRef(req.body?.weekReference);
     if (!repId || !weekReference) return res.status(400).json({ error: "repId and week are required" });
@@ -231,7 +236,9 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   // Batch closeout — the Sunday ritual. Finalize recalculates-then-locks every
   // OPEN statement in the week; mark-paid only touches FINALIZED ones. Both are
   // idempotent and per-rep reported.
-  app.post("/api/commission/week/transition", requireCapability("commission.read.all"), (req, res) => {
+  // FINALIZE locks the week and MARK_PAID moves REAL money — a manager's
+  // oversight read (commission.read.all) must never authorize this. Admin only.
+  app.post("/api/commission/week/transition", requireCapability("payouts.pay"), (req, res) => {
     const { week, action, repIds } = req.body || {};
     if (action !== "FINALIZE" && action !== "MARK_PAID") return res.status(400).json({ error: "action must be FINALIZE or MARK_PAID" });
     const weekReference = parseWeekRef(week) ?? new Date().toISOString();
@@ -295,7 +302,9 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     } catch (e) { fail(res, e); }
   });
 
-  app.post("/api/commission/statements/:id/transition", requireCapability("commission.read.all"), (req, res) => {
+  // Statement lifecycle (FINALIZE / REOPEN / MARK_PAID) moves or unlocks real
+  // money — admin only (payouts.pay), never the manager oversight read.
+  app.post("/api/commission/statements/:id/transition", requireCapability("payouts.pay"), (req, res) => {
     const { action } = req.body || {};
     // Validate the action ENUM — an unknown action must never fall through to a
     // money-moving default (e.g. MARK_PAID). REOPEN is deliberate + audited.
@@ -305,14 +314,15 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     try { res.json(svc.transitionStatement(tid(req), uid(req), Number(req.params.id), action)); } catch (e) { fail(res, e); }
   });
 
-  // ── Adjustments (create = structure.manage; approve = read.all, i.e. mgr/admin) ─
-  app.post("/api/commission/adjustments", requireCapability("commission.structure.manage"), (req, res) => {
+  // ── Adjustments (create = adjustments.write, manager+; decide = payouts.pay,
+  // admin only — approving an adjustment moves real money on the paycheck) ──────
+  app.post("/api/commission/adjustments", requireCapability("commission.adjustments.write"), (req, res) => {
     const stmt = svc.getStatementById(tid(req), Number(req.body?.statementId));
     if (!stmt) return res.status(404).json({ error: "Statement not found" });
     if (denyOutOfScope(req, res, stmt.rep_id)) return;
     try { res.status(201).json(svc.createAdjustment(tid(req), uid(req), req.body || {})); } catch (e) { fail(res, e); }
   });
-  app.post("/api/commission/adjustments/:id/decide", requireCapability("commission.read.all"), (req, res) => {
+  app.post("/api/commission/adjustments/:id/decide", requireCapability("payouts.pay"), (req, res) => {
     const { decision } = req.body || {};
     if (decision !== "APPROVE" && decision !== "REJECT") return res.status(400).json({ error: "decision must be APPROVE or REJECT" });
     try { res.json(svc.decideAdjustment(tid(req), uid(req), Number(req.params.id), decision)); } catch (e) { fail(res, e); }

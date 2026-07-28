@@ -30,7 +30,10 @@ export type Capability =
   | "calling.enrichment.request" | "calling.providers.manage" | "calling.dnc.manage"
   // Commissions
   | "commission.read.self" | "commission.read.team" | "commission.read.all"
+  // structure.manage = plan/rate CONFIG only. Booking money (sales, adjustments)
+  // and statement math are separate WRITE caps a team_lead never holds.
   | "commission.structure.manage"
+  | "commission.sales.write" | "commission.adjustments.write" | "commission.statements.write"
   // Onboarding agreements
   | "onboarding.documents.read.self" | "onboarding.documents.manage"
   // Payouts — moving REAL money to reps. Owner/admin only, never a read/oversight role.
@@ -53,7 +56,8 @@ const REP: readonly Capability[] = [
 ];
 
 // A team lead assigns/reassigns within scope, sees the team's leads + activity,
-// and may configure commission structures (policy-permitting).
+// and may configure commission structures (rates/plans) — but never BOOKS money:
+// sales, adjustments, and statement (re)calculation stay manager+.
 const TEAM_LEAD: readonly Capability[] = [
   ...REP,
   "lead.read.all", "lead.assign", "lead.reassign",
@@ -61,12 +65,15 @@ const TEAM_LEAD: readonly Capability[] = [
   "dashboard.read.team", "audit.read.team",
 ];
 
-// A manager adds org-wide oversight reads.
+// A manager adds org-wide oversight reads AND the commission write surface
+// (booking sales/adjustments, recalculating statements) — but still not
+// payouts.pay: only admin moves real money.
 const MANAGER: readonly Capability[] = [
   ...TEAM_LEAD,
   "commission.read.all", "dashboard.read.org", "audit.read.org",
   "onboarding.documents.manage",
   "scan.manage",
+  "commission.sales.write", "commission.adjustments.write", "commission.statements.write",
 ];
 
 // Admin (and super_admin) hold the full set including org policy + paying reps.
@@ -164,6 +171,9 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
   "commission.read.team": "commissions",
   "commission.read.all": "commissions",
   "commission.structure.manage": "commissions",
+  "commission.sales.write": "commissions",
+  "commission.adjustments.write": "commissions",
+  "commission.statements.write": "commissions",
   "payouts.pay": "commissions",
   "onboarding.documents.read.self": "onboarding",
   "onboarding.documents.manage": "onboarding",
@@ -180,6 +190,7 @@ export const CAPABILITY_DOMAIN: Record<Capability, CapabilityDomain> = {
 export const HIGH_RISK_CAPABILITIES: ReadonlySet<Capability> = new Set<Capability>([
   "lead.assign", "lead.reassign",
   "commission.structure.manage", "commission.read.all",
+  "commission.sales.write", "commission.adjustments.write", "commission.statements.write",
   "onboarding.documents.manage",
   "scan.manage",
   "calling.attempt.manual", "calling.manage", "calling.policy.manage", "calling.providers.manage", "calling.dnc.manage",

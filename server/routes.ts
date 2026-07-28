@@ -294,19 +294,22 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+// super_admin is included in every tier below: can() grants it the full ADMIN
+// capability set and the client Guards do the same, so a role-string guard that
+// excludes it would lock the apex identity out of ordinary org operations.
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   requireAuth(req, res, () => {
     const user = (req as any).user;
-    if (user.role !== "admin") return res.status(403).json({ error: "Admin only" });
+    if (user.role !== "admin" && user.role !== "super_admin") return res.status(403).json({ error: "Admin only" });
     next();
   });
 }
 
-// Team Lead or above (team_lead, manager, admin) can onboard reps
+// Team Lead or above (team_lead, manager, admin, super_admin) can onboard reps
 function requireTeamLead(req: Request, res: Response, next: NextFunction) {
   requireAuth(req, res, () => {
     const user = (req as any).user;
-    const allowed = ["admin", "manager", "team_lead"];
+    const allowed = ["admin", "manager", "team_lead", "super_admin"];
     if (!allowed.includes(user.role)) return res.status(403).json({ error: "Team Lead or above required" });
     next();
   });
@@ -316,7 +319,7 @@ function requireTeamLead(req: Request, res: Response, next: NextFunction) {
 function requireManager(req: Request, res: Response, next: NextFunction) {
   requireAuth(req, res, () => {
     const user = (req as any).user;
-    const allowed = ["admin", "manager"];
+    const allowed = ["admin", "manager", "super_admin"];
     if (!allowed.includes(user.role)) return res.status(403).json({ error: "Manager or above required" });
     next();
   });
@@ -3700,6 +3703,27 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     catch (error) { return sendTeamLoginSyncError(res, error); }
     if (Object.prototype.hasOwnProperty.call(safeUpdate, "email")) safeUpdate.email = email;
     const memberRole = typeof safeUpdate.role === "string" ? safeUpdate.role : existing.role;
+    // LOGIN-RETARGET GUARD: changing the member email rewrites the linked LOGIN's
+    // email via syncLoginAccount — after which the editor could OTP into the
+    // victim's account with the audit trail under the victim's name. So an email
+    // retarget is refused unless the caller ranks STRICTLY ABOVE the linked
+    // login's role (admin > manager > team_lead > rep): a manager can never
+    // retarget a fellow manager's or an admin's login, even where the general
+    // edit guard above would otherwise let the edit through. No linked login →
+    // the member's own (effective) role governs, matching the edit guard.
+    const oldEmail = normalizeTeamEmail(existing.email);
+    const emailRetargeted = Object.prototype.hasOwnProperty.call(safeUpdate, "email") && email !== oldEmail;
+    const linkedLogin = storage.getAllUsers(tenantId).find((user) => user.teamMemberId === id);
+    if (emailRetargeted && !isSelfEdit) {
+      const actorRank = hierarchyRank(actor.role) ?? -1;
+      const loginRank = hierarchyRank(linkedLogin?.role ?? effectiveMemberRole(tenantId, existing)) ?? -1;
+      if (loginRank >= actorRank) {
+        return res.status(403).json({
+          error: "You cannot change the login email of a member at or above your own role",
+          code: "LOGIN_RETARGET_FORBIDDEN",
+        });
+      }
+    }
     const conflict = teamLoginEmailConflict({ tenantId, memberId: id, memberRole, email });
     if (conflict) return sendTeamLoginSyncError(res, conflict);
     try {
@@ -3722,6 +3746,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
       const updated = tx.immediate();
       if (!updated) return res.status(404).json({ error: "Not found" });
+      // Audit every login-email retarget with old + new + actor: this is the
+      // trail that distinguishes a legitimate mailbox fix from a hijack.
+      if (emailRetargeted) {
+        storage.logActivity(actor.id, "team.login_email_retargeted", "team_member", id, {
+          oldEmail, newEmail: email, actorRole: actor.role, linkedUserId: linkedLogin?.id ?? null,
+        }, req.ip);
+      }
       res.json(updated);
     } catch (error) {
       return sendTeamLoginSyncError(res, error);
