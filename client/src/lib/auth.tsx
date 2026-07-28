@@ -90,26 +90,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkStatus(_memSession);
   }, []);
 
-  // Global session-expiry recovery: if any request 401s while we held a session,
-  // clear it locally (the server already invalidated it) and route back to Login
-  // with a clear message — instead of every screen silently erroring on stale
-  // data. Queued knocks are NOT lost; they resync after sign-in.
+  // Global session-expiry recovery. A 401 is NOT by itself proof the session
+  // died: a deploy restart mid-request, a momentary DB lock, a proxy hiccup, or
+  // one endpoint rejecting for its own reason all surface as a single 401 — and
+  // hard-clearing on any of them is what bounced reps to Login mid-shift, often
+  // several times a day. So CONFIRM against /api/auth/status (the one endpoint
+  // whose whole job is answering "is this session real?") and sign out only when
+  // the server actually disowns it. A network failure keeps the rep signed in —
+  // the offline path already handles that. Queued knocks are never lost either
+  // way; they resync after sign-in.
   useEffect(() => {
+    let confirming: Promise<void> | null = null; // single-flight: a burst of 401s asks once
     setUnauthorizedHandler(() => {
-      if (!_memSession) return;
-      _memSession = null;
-      writePersistedSession(null);
-      writePersistedUser(null); // a real 401 ends offline grace too
-      // P1-11 (K3 swarm): identity changed — purge ALL query state. Previously
-      // only the disk snapshot was dropped on manual logout; the whole in-memory
-      // cache (leads, team, stats) survived into the next login on the same
-      // device, and the 401 path cleared nothing at all.
-      try { queryClient.clear(); } catch { /* */ }
-      clearPersistedQueryCache();
-      setSid(null);
-      syncSessionToQueryClient(null);
-      setUser(null);
-      toast({ title: "Session expired", description: "Please sign back in — anything you logged is saved and will sync." });
+      if (!_memSession || confirming) return;
+      const suspect = _memSession;
+      let revoked = false;
+      confirming = (async () => {
+        try {
+          const res = await fetch(`${API_BASE}/api/auth/status`, { headers: { "x-session-id": suspect } });
+          const data = await res.json();
+          if (data.currentUser) {
+            // Session is alive — the 401 was transient. Stay signed in and let
+            // the failed call retry on its own; refresh the offline snapshot.
+            writePersistedUser(data.currentUser);
+            setUser(data.currentUser);
+            return;
+          }
+          // Removed from the team (offboarded / login deactivated) rather than
+          // simply timed out. Say so, so a rep who was kicked mid-shift isn't
+          // left retyping a code that will never work.
+          revoked = Boolean(data.accessRevoked);
+        } catch {
+          return; // couldn't reach the server — assume the session is fine
+        }
+        if (_memSession !== suspect) return; // re-logged-in while we were asking
+        _memSession = null;
+        writePersistedSession(null);
+        writePersistedUser(null); // a confirmed 401 ends offline grace too
+        // P1-11 (K3 swarm): identity changed — purge ALL query state. Previously
+        // only the disk snapshot was dropped on manual logout; the whole in-memory
+        // cache (leads, team, stats) survived into the next login on the same
+        // device, and the 401 path cleared nothing at all.
+        try { queryClient.clear(); } catch { /* */ }
+        clearPersistedQueryCache();
+        setSid(null);
+        syncSessionToQueryClient(null);
+        setUser(null);
+        toast(revoked
+          ? { title: "Access removed", description: "Your account was deactivated by your team. Contact your manager if this is unexpected." }
+          : { title: "Session expired", description: "Please sign back in — anything you logged is saved and will sync." });
+      })().finally(() => { confirming = null; });
     });
     return () => setUnauthorizedHandler(null);
   }, []);

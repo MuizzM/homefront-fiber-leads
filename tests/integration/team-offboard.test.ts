@@ -324,3 +324,88 @@ describe("status changes are never a PATCH field (LAST_ADMIN bypass closed)", ()
     expect(storage.getTeamMembers(1).find((m) => m.id === plainRep.memberId)!.active).toBe(true);
   });
 });
+
+// A kick must survive SLIDING SESSIONS. Renewal keeps an actively-working rep
+// signed in indefinitely, so "the session eventually lapses" is no longer a
+// backstop: every path that deactivates a login has to revoke on the spot, and
+// /api/auth/status — the client's authority on whether a session is still real
+// — has to agree, or a kicked rep sits in an app where nothing works but
+// nothing sends them to Login either.
+describe("a kick beats session renewal", () => {
+  it("status reports accessRevoked (not a plain expiry) so the rep is told the truth", async () => {
+    const rep = makePerson("Rep Revoked Status", "rep", { reportsToId: fx.managerB.memberId });
+    // Deactivate the LOGIN while leaving the session row intact — the exact
+    // state that used to report the kicked rep as happily signed in.
+    rawDb.prepare("UPDATE users SET active = 0 WHERE id = ?").run(rep.userId);
+
+    const res = await request("/api/auth/status", rep.session);
+    const body = await res.json() as any;
+    expect(body.currentUser).toBeNull();     // never reported as signed in
+    expect(body.accessRevoked).toBe(true);   // and distinguishable from a timeout
+
+    // Self-healing: contacting status drops the dead session rows.
+    const left = rawDb.prepare("SELECT COUNT(*) c FROM sessions WHERE user_id = ?").get(rep.userId) as any;
+    expect(left.c).toBe(0);
+  });
+
+  it("a plain expiry is NOT reported as a revocation", async () => {
+    const rep = makePerson("Rep Timed Out", "rep", { reportsToId: fx.managerB.memberId });
+    rawDb.prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 60_000).toISOString(), rep.session);
+
+    const body = await (await request("/api/auth/status", rep.session)).json() as any;
+    expect(body.currentUser).toBeNull();
+    expect(body.accessRevoked).toBe(false); // timed out, not kicked
+  });
+
+  it("an offboarded rep cannot renew their way back in", async () => {
+    // Fresh lead: the fixture teamLead has been offboarded by earlier tests.
+    const lead = makePerson("Lead For Renewal Test", "team_lead", { reportsToId: fx.managerB.memberId });
+    const rep = makePerson("Rep No Renewal", "rep", { reportsToId: lead.memberId });
+    expect((await request("/api/team", rep.session)).status).toBe(200);
+
+    expect((await offboard(rep.memberId, lead.session)).status).toBe(200);
+
+    // Not merely rejected — the session is GONE, so renewal has nothing to
+    // extend and no amount of continued tapping resurrects access.
+    expect((await request("/api/team", rep.session)).status).toBe(401);
+    const rows = rawDb.prepare("SELECT COUNT(*) c FROM sessions WHERE user_id = ?").get(rep.userId) as any;
+    expect(rows.c).toBe(0);
+    const status = await (await request("/api/auth/status", rep.session)).json() as any;
+    expect(status.currentUser).toBeNull();
+  });
+
+  it("deactivating a login directly (admin PATCH /api/users/:id) also kills sessions", async () => {
+    const rep = makePerson("Rep Admin Deactivated", "rep", { reportsToId: fx.managerB.memberId });
+    expect((await request("/api/team", rep.session)).status).toBe(200);
+
+    const res = await request(`/api/users/${rep.userId}`, fx.admin.session, {
+      method: "PATCH", body: JSON.stringify({ active: false }),
+    });
+    expect(res.status).toBe(200);
+
+    expect((await request("/api/team", rep.session)).status).toBe(401);
+    const rows = rawDb.prepare("SELECT COUNT(*) c FROM sessions WHERE user_id = ?").get(rep.userId) as any;
+    expect(rows.c).toBe(0);
+  });
+
+  it("deleting a login revokes its sessions rather than orphaning them", async () => {
+    const rep = makePerson("Rep Deleted", "rep", { reportsToId: fx.managerB.memberId });
+    const res = await request(`/api/users/${rep.userId}`, fx.admin.session, { method: "DELETE" });
+    expect(res.status).toBe(200);
+    const rows = rawDb.prepare("SELECT COUNT(*) c FROM sessions WHERE user_id = ?").get(rep.userId) as any;
+    expect(rows.c).toBe(0);
+    expect((await request("/api/team", rep.session)).status).toBe(401);
+  });
+
+  it("a still-employed rep keeps working — renewal only ever helps the active", async () => {
+    const rep = makePerson("Rep Still Working", "rep", { reportsToId: fx.teamLead.memberId });
+    // Nearly-expired session, mid-shift: renewal must carry them through.
+    rawDb.prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+      .run(new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(), rep.session);
+
+    expect((await request("/api/team", rep.session)).status).toBe(200);
+    const row = rawDb.prepare("SELECT expires_at AS e FROM sessions WHERE id = ?").get(rep.session) as any;
+    expect(Date.parse(row.e) - Date.now()).toBeGreaterThan(24 * 60 * 60 * 1000);
+  });
+});

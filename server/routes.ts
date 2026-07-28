@@ -279,6 +279,9 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (!session) return res.status(401).json({ error: "Session expired" });
   const user = storage.getUserById(session.userId);
   if (!user || !user.active) return res.status(401).json({ error: "User not found" });
+  // Keep an actively-used session alive: every authenticated request slides the
+  // expiry forward, so a rep mid-shift is never signed out under their own taps.
+  storage.touchSession(session);
   (req as any).user = user;
   next();
 }
@@ -3327,6 +3330,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const conflict = teamLoginEmailConflict({ tenantId: tenantId!, memberId: member.id, memberRole: member.role, email });
     if (conflict) throw conflict;
 
+    // KICKED MEANS SIGNED OUT — everywhere, immediately. Deactivating a login
+    // without dropping its live sessions left a removed member working from an
+    // already-open app until their session lapsed; with sliding renewal that
+    // window no longer closes on its own. Every path that ends with an INACTIVE
+    // login revokes here, so the rule holds for the dedicated offboard routes
+    // and for any future caller that merely flips a member inactive.
+    // Returned to the caller so a route that also reports a revocation count
+    // (offboard) stays truthful about the total rather than reporting 0 just
+    // because this layer got there first.
+    let sessionsRevoked = 0;
+    const revokeIfDeactivated = (userId: number) => {
+      if (member.active) return;
+      const revoked = storage.deleteSessionsByUser(userId);
+      sessionsRevoked += revoked;
+      if (revoked > 0) {
+        structuredLog("auth.sessions_revoked", { userId, teamMemberId: member.id, reason: "member_deactivated", revoked });
+      }
+    };
+
     const linked = storage.getAllUsers(tenantId!).find((user) => user.teamMemberId === member.id);
     if (email) {
       if (linked) {
@@ -3334,6 +3356,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           name: member.name, email, role: member.role, active: member.active,
         } as any, tenantId!);
         if (!updated) throw new Error("Tenant-scoped login update failed");
+        revokeIfDeactivated(linked.id);
       } else {
         const byEmail = storage.getUserByEmail(email);
         if (byEmail) {
@@ -3341,6 +3364,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             teamMemberId: member.id, name: member.name, role: member.role, active: member.active,
           } as any, tenantId!);
           if (!updated) throw new Error("Tenant-scoped login adoption failed");
+          revokeIfDeactivated(byEmail.id);
         } else {
           storage.createUser({
             name: member.name,
@@ -3357,7 +3381,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // predicate ensures a corrupt foreign link can never be modified here.
       const updated = storage.updateUser(linked.id, { active: false } as any, tenantId!);
       if (!updated) throw new Error("Tenant-scoped login disable failed");
+      // Disabled login = no live sessions, regardless of the member's own flag.
+      const revoked = storage.deleteSessionsByUser(linked.id);
+      sessionsRevoked += revoked;
+      if (revoked > 0) {
+        structuredLog("auth.sessions_revoked", { userId: linked.id, teamMemberId: member.id, reason: "login_email_removed", revoked });
+      }
     }
+    return { sessionsRevoked };
   }
 
   const sendTeamLoginSyncError = (res: Response, error: unknown) => {
@@ -3590,8 +3621,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const tx = rawDb.transaction(() => {
         const updated = storage.updateTeamMember(id, { active: false } as any, tenantId);
         if (!updated) return null;
-        // Mirrors active:false onto the linked login (or leaves it absent).
-        syncLoginAccount(updated as any);
+        // Mirrors active:false onto the linked login (or leaves it absent) and
+        // revokes its sessions as part of that mirror.
+        const sync = syncLoginAccount(updated as any);
         // Re-home direct reports to the offboarded member's own supervisor so
         // nobody is left reporting to a deactivated member.
         const newSupervisorId = (target as any).reportsToId ?? null;
@@ -3601,7 +3633,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // Kill every live session immediately — a kicked member's open app
         // stops working on the next request, not at the next login.
         const linked = storage.getAllUsers(tenantId).find((u) => u.teamMemberId === id);
-        const sessionsRevoked = linked ? storage.deleteSessionsByUser(linked.id) : 0;
+        const sessionsRevoked = sync.sessionsRevoked + (linked ? storage.deleteSessionsByUser(linked.id) : 0);
         return { updated, reassigned, loginDisabled: Boolean(linked), sessionsRevoked };
       });
       const result = tx.immediate();
@@ -4502,14 +4534,28 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Also check if requester is authed
     const token = req.headers["x-session-id"] as string;
     let currentUser = null;
+    // Set when the session is intact but the ACCOUNT was deactivated — a rep the
+    // team lead / manager / admin kicked. This endpoint is the client's
+    // authority on "is my session still real?", so it must apply the SAME active
+    // check requireAuth does: reporting a kicked member as signed-in would leave
+    // them in an app where every action 401s but nothing sends them to Login.
+    // Distinguishing it from a plain expiry also lets the client say why.
+    let accessRevoked = false;
     if (token) {
       const session = storage.getSession(token);
       if (session) {
         const u = storage.getUserById(session.userId);
-        if (u) currentUser = { id: u.id, name: u.name, email: u.email, role: u.role, teamMemberId: u.teamMemberId, tenantId: (u as any).tenantId ?? null };
+        if (u && u.active) {
+          currentUser = { id: u.id, name: u.name, email: u.email, role: u.role, teamMemberId: u.teamMemberId, tenantId: (u as any).tenantId ?? null };
+        } else if (u) {
+          accessRevoked = true;
+          // Self-healing: a deactivated account should not keep session rows
+          // alive. Converges even if some future path forgets to revoke.
+          storage.deleteSessionsByUser(u.id);
+        }
       }
     }
-    res.json({ isFirstRun, currentUser });
+    res.json({ isFirstRun, currentUser, accessRevoked });
   });
 
   // ── Current tenant (org) — name/branding for the caller's organization ──────
@@ -4797,6 +4843,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const updated = storage.updateUser(id, safeUpdate as any, tenantId);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    // Deactivating a login here must end it NOW, not whenever the session would
+    // have lapsed — same rule the team-offboard path enforces.
+    if (Object.prototype.hasOwnProperty.call(safeUpdate, "active") && !updated.active) {
+      const revoked = storage.deleteSessionsByUser(updated.id);
+      storage.logActivity((req as any).user?.id ?? null, "auth.login_deactivated", "user", updated.id, { sessionsRevoked: revoked }, req.ip);
+    }
     res.json({ id: updated.id, name: updated.name, email: updated.email, role: updated.role, active: updated.active });
   });
 
@@ -4819,8 +4871,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         return res.status(409).json({ error: "The organization must retain an active admin.", code: "LAST_ACTIVE_ADMIN" });
       }
     }
+    // Drop live sessions with the account. requireAuth already fails closed on a
+    // missing user, but leaving orphaned session rows behind is avoidable debt —
+    // and revoking first means the deletion is never observable as "still in".
+    const sessionsRevoked = storage.deleteSessionsByUser(id);
     const ok = storage.deleteUser(id, tenantId);
     if (!ok) return res.status(404).json({ error: "Not found" });
+    storage.logActivity(actor.id, "auth.login_deleted", "user", id, { sessionsRevoked }, req.ip);
     res.json({ success: true });
   });
 
