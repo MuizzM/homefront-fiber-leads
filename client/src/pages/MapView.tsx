@@ -85,6 +85,8 @@ import {
   ensureHousenumLayer,
   isSheetDragActive,
   FRESH_HALO_PAINT,
+  decideAddModeTap,
+  createRafCoalescedFlush,
 } from "@/lib/mapPins";
 import {
   createFollowState,
@@ -2173,8 +2175,35 @@ export default function MapView() {
       // Tap a territory region → open its detail panel. Lead pins win over the
       // region beneath them; draw tools suppress it entirely.
       map.on("click", (e: any) => {
-        // Tap-a-house: in add mode a single tap resolves the rooftop → address.
+        // Tap-a-house: in add mode a single tap resolves the rooftop → address —
+        // UNLESS the tap lands on an existing pin. Pins are hit-tested FIRST
+        // with the same ±16px fat-finger box the empty-tap path uses below: a
+        // tap (or gloved near-miss) on a pin opens that lead and never
+        // reverse-geocodes + POSTs a duplicate pin 1-2m away.
         if ((window as any).__tapAddressMode) {
+          let hitLeadId: number | null = null;
+          try {
+            // Query whichever pin layer is live (icon layer only when it
+            // exists; a hidden layer returns nothing, a missing one throws).
+            const pinLayers = map.getLayer(STATUS_ICON_LAYER)
+              ? ["lead-unclustered", STATUS_ICON_LAYER]
+              : ["lead-unclustered"];
+            const near = map.queryRenderedFeatures(
+              [
+                [e.point.x - 16, e.point.y - 16],
+                [e.point.x + 16, e.point.y + 16],
+              ],
+              { layers: pinLayers },
+            );
+            hitLeadId = near.length ? (near[0].properties.id as number) : null;
+          } catch {
+            /* layer not ready — fall through to add */
+          }
+          const decision = decideAddModeTap(hitLeadId);
+          if (decision.action === "open-lead") {
+            (window as any).__openLeadSheet?.(decision.leadId);
+            return;
+          }
           (window as any).__onTapAddress?.(e.lngLat.lat, e.lngLat.lng);
           return;
         }
@@ -2365,6 +2394,24 @@ export default function MapView() {
   // Set by the knock handler after its imperative one-pin paint; consumed once
   // by the cluster reconcile effect to skip the duplicate full setData.
   const pendingKnockPaintRef = useRef<number | null>(null);
+  // One worker re-cluster + repaint per animation frame MAX. Disposition taps
+  // mutate their single pin synchronously (instant feedback), then schedule
+  // the full-collection setData here; back-to-back taps inside one frame
+  // collapse into a single repaint of the latest data instead of each paying
+  // a 5.5k-feature re-cluster at the rep's feedback moment.
+  const scheduleClusterSetData = useMemo(
+    () =>
+      createRafCoalescedFlush(() => {
+        try {
+          (mapRef.current?.getSource("leads-cluster") as any)?.setData(
+            geoJsonDataRef.current,
+          );
+        } catch {
+          /* source can disappear during a style switch */
+        }
+      }),
+    [],
+  );
 
   // ── Leads panel: viewport bounds lifecycle ────────────────────────────────
   // Attach once per map instance ([mapReady, styleEpoch] — handlers survive
@@ -3950,7 +3997,7 @@ export default function MapView() {
           feature.properties.status = toLeadMapStatus(nextDisplayState);
           feature.properties.ds = nextDisplayState;
           feature.properties.visited = 1;
-          try { (mapRef.current?.getSource("leads-cluster") as any)?.setData(geoJsonDataRef.current); } catch { /* */ }
+          scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
         }
         qc.setQueryData(["/api/leads/map"], (old: any) => {
           if (!old?.pins) return old;
@@ -3962,7 +4009,7 @@ export default function MapView() {
         toast({ title: "Central mark failed", description: String(e?.message ?? e), variant: "destructive" });
       }
     },
-    [selectedLeadId, leadById, canManage, qc, toast],
+    [selectedLeadId, leadById, canManage, qc, toast, scheduleClusterSetData],
   );
 
   // DELETE LEAD (owner ask 2026-07-26): managers remove a manually-added pin
@@ -3980,7 +4027,7 @@ export default function MapView() {
             ...geoJsonDataRef.current,
             features: geoJsonDataRef.current.features.filter((f: any) => f.id !== lead.id && f?.properties?.id !== lead.id),
           };
-          try { (mapRef.current?.getSource("leads-cluster") as any)?.setData(geoJsonDataRef.current); } catch { /* */ }
+          scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
         }
         qc.setQueryData(["/api/leads/map"], (old: any) => {
           if (!old?.pins) return old;
@@ -3992,7 +4039,7 @@ export default function MapView() {
         toast({ title: "Delete failed", description: String(e?.message ?? e), variant: "destructive" });
       }
     },
-    [selectedLeadId, leadById, canManage, qc, toast, setSelectedLeadId],
+    [selectedLeadId, leadById, canManage, qc, toast, setSelectedLeadId, scheduleClusterSetData],
   );
 
   const handleKnock = useCallback(
@@ -4024,23 +4071,19 @@ export default function MapView() {
       });
 
       // Mutate exactly one GeoJSON feature and hand the same collection back to
-      // Mapbox. The symbol icon swaps immediately; React does not rebuild 5,000
-      // lead components because the pins are not components or HTML markers.
+      // Mapbox on the next animation frame (coalesced). React does not rebuild
+      // 5,000 lead components because the pins are not components or HTML markers.
       const feature = featureByIdRef.current.get(lead.id);
       if (feature) {
         feature.properties.status = toLeadMapStatus(nextDisplayState);
         feature.properties.ds = nextDisplayState;
         feature.properties.visited = 1;
-        try {
-          (mapRef.current?.getSource("leads-cluster") as any)?.setData(
-            geoJsonDataRef.current,
-          );
-          // This pin is now painted; let the reconcile effect skip its
-          // duplicate full setData when the optimistic update lands.
-          pendingKnockPaintRef.current = lead.id;
-        } catch {
-          /* source can disappear during a style switch; query cache still updates below */
-        }
+        // Coalesced repaint: the mutation above is synchronous, the worker
+        // re-cluster rides the next animation frame (≤1 setData per frame).
+        scheduleClusterSetData();
+        // This pin's paint is scheduled; let the reconcile effect skip its
+        // duplicate full setData when the optimistic update lands.
+        pendingKnockPaintRef.current = lead.id;
       }
       qc.setQueryData(["/api/leads/map"], (old: any) => {
         if (!old?.pins) return old;
@@ -4103,7 +4146,7 @@ export default function MapView() {
         qc.invalidateQueries({ queryKey: ["/api/commissions/summary"] });
       }
     },
-    [leadById, selectedLeadId, knockQueue, isRep, user, qc, toast],
+    [leadById, selectedLeadId, knockQueue, isRep, user, qc, toast, scheduleClusterSetData],
   );
 
   // Lead-level notes: the card owns typing; this owns persistence through the
@@ -6250,11 +6293,11 @@ export default function MapView() {
                               className="w-2.5 h-2.5 rounded-full flex-shrink-0 border border-white/20"
                               style={{ background: color }}
                             />
-                            <span className="text-[11px] truncate text-white/85">
+                            <span className="text-[12px] truncate text-white/85">
                               {repName}
                             </span>
                             {status !== "active" && (
-                              <span className="text-[9px] uppercase tracking-wide text-white/40">
+                              <span className="text-[12px] uppercase tracking-wide text-white/40">
                                 {status}
                               </span>
                             )}
@@ -6349,7 +6392,7 @@ export default function MapView() {
                                   setReclaimMenuId(null);
                                 }
                               }}
-                              className="w-full bg-white/10 text-white text-[10px] rounded-lg px-1 py-1 border border-white/20"
+                              className="w-full bg-white/10 text-white text-[12px] rounded-lg px-2 min-h-11 border border-white/20"
                             >
                               <option value="" className="text-slate-900">
                                 Assign to next rep…
@@ -6381,7 +6424,7 @@ export default function MapView() {
                                   mode: "return_to_pool",
                                 })
                               }
-                              className="text-left text-[10px] text-white/80 hover:text-white px-1.5 py-1 rounded hover:bg-white/10"
+                              className="text-left text-[12px] text-white/80 hover:text-white px-2 min-h-11 inline-flex items-center rounded hover:bg-white/10"
                             >
                               ↩ Return leads to pool{" "}
                               <span className="text-white/40">(default)</span>
@@ -6393,7 +6436,7 @@ export default function MapView() {
                                   mode: "keep_leads",
                                 })
                               }
-                              className="text-left text-[10px] text-white/80 hover:text-white px-1.5 py-1 rounded hover:bg-white/10"
+                              className="text-left text-[12px] text-white/80 hover:text-white px-2 min-h-11 inline-flex items-center rounded hover:bg-white/10"
                             >
                               Reclaim area only{" "}
                               <span className="text-white/40">
@@ -6412,7 +6455,7 @@ export default function MapView() {
                                       newRepId: Number(e.target.value),
                                     });
                                 }}
-                                className="flex-1 bg-white/10 text-white text-[10px] rounded-lg px-1 py-1 border border-white/20"
+                                className="flex-1 bg-white/10 text-white text-[12px] rounded-lg px-2 min-h-11 border border-white/20"
                               >
                                 <option value="" className="text-slate-900">
                                   Reassign to rep…

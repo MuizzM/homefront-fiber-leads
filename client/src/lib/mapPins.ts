@@ -226,3 +226,41 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
     }, before);
   } catch { /* a style variant without housenum tiles — skip, never fake it */ }
 }
+
+// ── Add-mode tap arbitration ────────────────────────────────────────────────
+// In tap-to-add mode a tap must hit-test existing pins FIRST: landing on (or
+// gloved-near-missing) a pin opens that lead instead of reverse-geocoding +
+// POSTing a duplicate pin 1-2m away. Pure decision so the map handler stays
+// thin and the rule is unit-testable.
+export type AddModeTapDecision =
+  | { action: "open-lead"; leadId: number }
+  | { action: "add-lead" };
+
+export function decideAddModeTap(
+  hitLeadId: number | null | undefined,
+): AddModeTapDecision {
+  return hitLeadId != null
+    ? { action: "open-lead", leadId: hitLeadId }
+    : { action: "add-lead" };
+}
+
+// ── rAF-coalesced source repaint ────────────────────────────────────────────
+// A disposition tap needs at most ONE worker re-cluster + repaint per frame,
+// no matter how many optimistic updates land inside the same gesture. The
+// flush closure reads the live data ref at fire time, so a coalesced call
+// always paints the latest collection; intermediate calls collapse onto the
+// pending flag.
+export function createRafCoalescedFlush(
+  flush: () => void,
+  raf: (cb: () => void) => unknown = (cb) => requestAnimationFrame(cb),
+): () => void {
+  let pending = false;
+  return () => {
+    if (pending) return;
+    pending = true;
+    raf(() => {
+      pending = false;
+      flush();
+    });
+  };
+}
