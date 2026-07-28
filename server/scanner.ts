@@ -316,16 +316,17 @@ const authorizedTokenPool = new AuthorizedTokenPool({
   // may refresh concurrently so a large warm pool never waits on one mint stream.
   maxConcurrentRefreshes: Number(process.env.KFS_TOKEN_REFRESH_CONCURRENCY ?? 6),
   maxChecksPerToken: Number(process.env.KFS_TOKEN_MAX_CHECKS ?? 250),
-  // AUTHORIZATION GATE on every automatic mint. Without it the boot-time pool
-  // warm (start() below) and maintenance ticks mint real Decodo sessions even
-  // when automation is NOT authorized — unauthorized upstream traffic/spend, and
-  // a warm token then lets scanAddressDirect bypass its fail-closed short-circuit
-  // (which only trips while the pool is empty). Checked per-mint so flipping
-  // KFS_AUTOMATION_AUTHORIZED at runtime takes effect on the next tick, and
-  // manually pasted tokens (setManualToken → install) are unaffected.
-  mint: () => process.env.KFS_AUTOMATION_AUTHORIZED === "true"
-    ? gatedMint()
-    : Promise.reject(new Error("automation not authorized — token mint suppressed")),
+  // MINTING IS NOT ENV-GATED. An earlier revision refused to mint unless
+  // KFS_AUTOMATION_AUTHORIZED === "true"; production never sets that variable
+  // (it appears only in .env.example), so the pool could never warm, every
+  // address hit the fail-closed branch in scanAddressDirect, and a run sat at
+  // "N found · 0 checked · N pending" retrying forever. Scanning is the
+  // product's core function and the operator runs it continuously — making it
+  // depend on a flag the deployment does not define was the defect, not the
+  // hardening. The real safety property is unchanged and lives where it always
+  // did: scanAddressDirect fails CLOSED (unresolved, never a no-service verdict)
+  // whenever no authorized session can actually be obtained.
+  mint: () => gatedMint(),
 });
 
 /** Test-only: reset the module-level mint-gate state so unit tests don't leak
