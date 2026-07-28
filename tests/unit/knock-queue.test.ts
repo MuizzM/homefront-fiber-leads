@@ -133,6 +133,45 @@ describe("knockQueue — online happy path", () => {
 });
 
 describe("knockQueue — offline queueing", () => {
+  it("durably stages a tap before asynchronous evidence capture or flushing", async () => {
+    const storage = fakeStorage();
+    const { q, post } = mkQueue({ storage });
+
+    const { clientId } = q.stage({
+      leadId: 7,
+      outcome: "interested",
+      deviceTs: "2026-07-28T12:00:00.000Z",
+    });
+
+    expect(post).not.toHaveBeenCalled();
+    expect(q.getSnapshot().pendingCount).toBe(1);
+    expect(readEnvelope(storage).items[0]).toMatchObject({
+      clientId,
+      leadId: 7,
+      outcome: "interested",
+      deviceTs: "2026-07-28T12:00:00.000Z",
+    });
+
+    expect(q.enrich(clientId, {
+      repLat: 35.2271,
+      repLng: -80.8431,
+      gpsAccuracy: 8,
+      deviceTs: "2026-07-28T12:00:01.000Z",
+      mockLocation: false,
+      netState: "online",
+      appVersion: "test",
+    })).toBe(true);
+    await q.flush();
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][1]).toMatchObject({
+      repLat: 35.2271,
+      repLng: -80.8431,
+      gpsAccuracy: 8,
+      deviceTs: "2026-07-28T12:00:01.000Z",
+    });
+  });
+
   it("queues without posting while offline; flipping online + flush drains", async () => {
     const { q, post, setOnline } = mkQueue({ online: false });
     await q.enqueue({ leadId: 7, outcome: "interested" });

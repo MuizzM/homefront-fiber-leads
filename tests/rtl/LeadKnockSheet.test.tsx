@@ -416,6 +416,26 @@ describe("<LeadKnockSheet /> — manager actions (Details only, permission-gated
     expect(onCentralMark).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a failed async central mark armed and open for a truthful retry", async () => {
+    let resolveMark!: (accepted: boolean) => void;
+    const onCentralMark = vi.fn(() => new Promise<boolean>((resolve) => {
+      resolveMark = resolve;
+    }));
+    const { props } = renderSheet({ canManage: true, onCentralMark, onDelete: vi.fn() });
+    await openDetails();
+    await userEvent.click(screen.getByTestId("knock-central-toggle"));
+
+    void userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    await vi.waitFor(() => expect(onCentralMark).toHaveBeenCalledTimes(1));
+    expect(screen.getByTestId("knock-central-toggle")).toHaveAttribute("aria-pressed", "true");
+    resolveMark(false);
+    await vi.waitFor(() =>
+      expect(screen.getByTestId("knock-central-toggle")).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(props.onKnock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("knock-details-body")).toBeVisible();
+  });
+
   it("delete is a two-tap inline confirm in Details", async () => {
     const onDelete = vi.fn();
     renderSheet({ canManage: true, onDelete });

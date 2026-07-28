@@ -56,7 +56,7 @@ export interface DetailsBodyProps {
   canOpenCalling: boolean;
   leadId: number;
   canManage: boolean;
-  onCentralMark?: (outcome: KnockOutcome) => void;
+  onCentralMark?: (outcome: KnockOutcome) => boolean | void | Promise<boolean | void>;
   onDelete?: () => void;
   centralMode: boolean;
   deleteArmed: boolean;

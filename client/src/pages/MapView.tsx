@@ -4084,9 +4084,9 @@ export default function MapView() {
   // the central team — no rep credit, no commission. Optimistic pin recolor,
   // same imperative paint path as a rep knock.
   const handleCentralMark = useCallback(
-    async (outcome: KnockOutcome) => {
+    async (outcome: KnockOutcome): Promise<boolean> => {
       const lead = selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
-      if (!lead || !canManage) return;
+      if (!lead || !canManage) return false;
       try {
         const res = await apiRequest("POST", `/api/leads/${lead.id}/central-disposition`, { outcome });
         const updated = await res.json();
@@ -4104,8 +4104,10 @@ export default function MapView() {
         });
         try { navigator.vibrate?.(10); } catch { /* */ }
         toast({ title: "🏢 Marked centrally", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
+        return true;
       } catch (e: any) {
         toast({ title: "Central mark failed", description: String(e?.message ?? e), variant: "destructive" });
+        return false;
       }
     },
     [selectedLeadId, leadById, canManage, qc, toast, scheduleClusterSetData],

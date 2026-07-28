@@ -60,6 +60,21 @@ export interface EnqueueInput {
 }
 
 export interface KnockQueue {
+  // Persist an accepted field action before optional GPS/network work.
+  stage(k: EnqueueInput): { clientId: string };
+  enrich(
+    clientId: string,
+    evidence: Pick<
+      EnqueueInput,
+      | "repLat"
+      | "repLng"
+      | "gpsAccuracy"
+      | "deviceTs"
+      | "mockLocation"
+      | "netState"
+      | "appVersion"
+    >,
+  ): boolean;
   // Resolves after the IMMEDIATE flush attempt (offline: resolves at once,
   // item queued) — callers may fire-and-forget, tests may await determinism.
   enqueue(k: EnqueueInput): Promise<{ clientId: string }>;
@@ -309,37 +324,59 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   const onOnline = (): void => { markChanged(); void flush(); };
   if (typeof window !== "undefined") window.addEventListener("online", onOnline);
 
+  const stage = (k: EnqueueInput): { clientId: string } => {
+    const item: QueuedKnock = {
+      clientId: makeClientId(),
+      leadId: k.leadId,
+      repId: k.repId ?? opts.repId,
+      outcome: k.outcome,
+      knockedAt: new Date().toISOString(), // time of the TAP, not the flush
+      notes: k.notes ?? null,
+      callbackDate: k.callbackDate ?? null,
+      callbackTime: k.callbackTime ?? null,
+      attempts: 0,
+      nextAttemptAt: 0,
+      lastError: null,
+      // Evidence can be enriched after this durable write. Reload recovery may
+      // send without it, which is preferable to losing the disposition.
+      repLat: k.repLat ?? null,
+      repLng: k.repLng ?? null,
+      gpsAccuracy: k.gpsAccuracy ?? null,
+      deviceTs: k.deviceTs ?? null,
+      mockLocation: k.mockLocation ?? null,
+      netState: k.netState ?? null,
+      appVersion: k.appVersion ?? null,
+    };
+    pending.push(item);
+    persistPending();
+    setLeadState(k.leadId, isOnline() ? "saving" : "queued");
+    syncInterval();
+    markChanged();
+    return { clientId: item.clientId };
+  };
+
   const queue: KnockQueue = {
-    enqueue(k) {
-      const item: QueuedKnock = {
-        clientId: makeClientId(),
-        leadId: k.leadId,
-        repId: k.repId ?? opts.repId,
-        outcome: k.outcome,
-        knockedAt: new Date().toISOString(), // time of the TAP, not the flush
-        notes: k.notes ?? null,
-        callbackDate: k.callbackDate ?? null,
-        callbackTime: k.callbackTime ?? null,
-        attempts: 0,
-        nextAttemptAt: 0,
-        lastError: null,
-        // Location evidence for verification (undefined when the tap had no fix).
-        repLat: k.repLat ?? null,
-        repLng: k.repLng ?? null,
-        gpsAccuracy: k.gpsAccuracy ?? null,
-        deviceTs: k.deviceTs ?? null,
-        mockLocation: k.mockLocation ?? null,
-        netState: k.netState ?? null,
-        appVersion: k.appVersion ?? null,
-      };
-      pending.push(item);
+    stage,
+
+    enrich(clientId, evidence) {
+      const item = pending.find((candidate) => candidate.clientId === clientId);
+      if (!item) return false;
+      item.repLat = evidence.repLat ?? null;
+      item.repLng = evidence.repLng ?? null;
+      item.gpsAccuracy = evidence.gpsAccuracy ?? null;
+      item.deviceTs = evidence.deviceTs ?? null;
+      item.mockLocation = evidence.mockLocation ?? null;
+      item.netState = evidence.netState ?? null;
+      item.appVersion = evidence.appVersion ?? null;
       persistPending();
-      setLeadState(k.leadId, isOnline() ? "saving" : "queued");
-      syncInterval();
-      markChanged();
+      return true;
+    },
+
+    enqueue(k) {
+      const staged = stage(k);
       // Await the immediate attempt so `await enqueue()` is deterministic;
       // fire-and-forget callers just ignore the promise.
-      return flush().then(() => ({ clientId: item.clientId }));
+      return flush().then(() => staged);
     },
 
     flush,

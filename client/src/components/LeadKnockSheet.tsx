@@ -83,7 +83,7 @@ export interface LeadKnockSheetProps {
   // MANAGER ACTIONS (owner ask 2026-07-26): central marking (no rep credit) and
   // lead deletion, for manually-added pins that turn out not to be new fiber.
   canManage?: boolean;
-  onCentralMark?: (outcome: KnockOutcome) => void;
+  onCentralMark?: (outcome: KnockOutcome) => boolean | void | Promise<boolean | void>;
   onDelete?: () => void;
 }
 
@@ -442,20 +442,31 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
 
   // ── One-tap disposition ──────────────────────────────────────────────────────
   const tapGuard = useRef(0); // absorbs accidental double-fires of the same tap
+  const statusCommandPendingRef = useRef(false);
   // Manager modes: CENTRAL routes the next status tap to the central-team
   // endpoint (no rep credit); DELETE arms a two-tap inline confirm.
   const [centralMode, setCentralMode] = useState(false);
   const [deleteArmed, setDeleteArmed] = useState(false);
   useEffect(() => { setCentralMode(false); setDeleteArmed(false); }, [lead?.id]);
 
-  const handleStatusTap = (key: KnockOutcome) => {
+  const handleStatusTap = async (key: KnockOutcome) => {
     const now = Date.now();
     if (now - tapGuard.current < 350) return; // double-submit guard
     tapGuard.current = now;
     let accepted = false;
     if (centralMode && canManage && onCentralMark) {
-      onCentralMark(key); // central-team mark: no rep credit, no commission
-      accepted = true;
+      if (statusCommandPendingRef.current) return;
+      statusCommandPendingRef.current = true;
+      // Wait for the server-authoritative command. A failure must not flash,
+      // collapse, or disarm the manager workflow as though it had succeeded.
+      try {
+        accepted = (await onCentralMark(key)) !== false;
+      } catch {
+        accepted = false;
+      } finally {
+        statusCommandPendingRef.current = false;
+      }
+      if (!accepted) return;
       // AUDIT FIX: disarm after one mark — the hint says "next status tap",
       // and an armed manager silently stripped rep credit on later doors.
       setCentralMode(false);

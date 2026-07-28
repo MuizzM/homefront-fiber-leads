@@ -61,7 +61,9 @@ export function useKnockLogger() {
     useCallback(() => queue ? queue.getSnapshot() : EMPTY_SNAP, [queue]),
   );
 
-  // Returns true if the tap was accepted (optimistically applied + enqueued).
+  // Returns true only after the tap is synchronously persisted. GPS enriches
+  // the durable row before its normal flush; reload recovery can safely submit
+  // the row without location instead of losing the representative's action.
   const log = useCallback((lead: LogLead, outcome: KnockOutcome, opts: LogOpts = {}): boolean => {
     const credit = resolveCreditedRepId(user, lead.assignedRepId);
     if (!credit) {
@@ -85,10 +87,23 @@ export function useKnockLogger() {
           ? { ...p, leadStatus: OUTCOME_TO_STATUS[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: at }
           : p) }
       : old);
-    captureFieldFix().then(fix => queue.enqueue({
-      leadId: lead.id, repId: credit, outcome,
-      notes: opts.notes ?? null, callbackDate: opts.callbackDate ?? null, callbackTime: opts.callbackTime ?? null, ...fix,
-    }));
+    const staged = queue.stage({
+      leadId: lead.id,
+      repId: credit,
+      outcome,
+      notes: opts.notes ?? null,
+      callbackDate: opts.callbackDate ?? null,
+      callbackTime: opts.callbackTime ?? null,
+      deviceTs: at,
+      netState:
+        typeof navigator === "undefined" || navigator.onLine !== false
+          ? "online"
+          : "offline",
+    });
+    void captureFieldFix().then((fix) => {
+      queue.enrich(staged.clientId, fix);
+      return queue.flush();
+    });
     return true;
   }, [queue, user, qc, toast]);
 
