@@ -62,6 +62,24 @@ describe("TerritoryDetailPanel — remove a rep from an area", () => {
     expect(screen.queryByRole("button", { name: /Remove .* from this area/ })).not.toBeInTheDocument();
   });
 
+  // The next-pass control is manager+ (reclaim_territory), matching its route —
+  // deliberately stricter than unassign, because a reset clears the outcomes the
+  // whole team recorded rather than moving one rep.
+  it("offers 'Start pass N+1' to a manager, naming the pass it will open", () => {
+    panel({ currentUser: { role: "manager" }, onStartNextPass: () => {}, currentPass: 2 });
+    expect(screen.getByTestId("next-pass-btn")).toHaveTextContent("Start pass 3");
+  });
+
+  it("treats an area with no pass recorded as being on its first", () => {
+    panel({ currentUser: { role: "manager" }, onStartNextPass: () => {} });
+    expect(screen.getByTestId("next-pass-btn")).toHaveTextContent("Start pass 2");
+  });
+
+  it("hides the next-pass control from a team lead", () => {
+    panel({ currentUser: { role: "team_lead" }, onStartNextPass: () => {} });
+    expect(screen.queryByTestId("next-pass-btn")).not.toBeInTheDocument();
+  });
+
   // The route is requireTeamLead. If the UI gate drifts above that, a team lead
   // can call the API but has no way to reach it — which is what shipped first.
   it.each(["team_lead", "manager", "admin"])("shows the control to %s, matching the route's gate", (role) => {

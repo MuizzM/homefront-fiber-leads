@@ -17,6 +17,10 @@ import { structuredLog } from "./structuredLog";
 import {
   recordAdminAudit, auditContext, queryAdminAudit, adminAuditFacets, ADMIN_AUDIT_OUTCOMES,
 } from "./adminAudit";
+import {
+  previewNextPass, startNextPass, listTerritoryPasses, currentPassOf,
+} from "./territoryPass";
+import { isTerritoryPassAction, type TerritoryPassAction } from "@shared/territoryPass";
 import { rawDb } from "./db";
 import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
@@ -5114,6 +5118,139 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   // ── Territory lifecycle: reclaim / complete / share / archive / history ──────
   // POST /api/territories/:id/reclaim  { mode: "keep_leads"|"return_to_pool"|"reassign", newRepId? }
+  // ── Multi-pass knocking ─────────────────────────────────────────────────────
+  // "Knock this area again." Closing a pass re-opens the doors that were worked
+  // and leaves everything that actually happened exactly where it is: knock_log
+  // is append-only and untouched, and each closed pass gets an immutable
+  // territory_passes row. History is the point of the feature, not a side effect.
+  //
+  // manager+ (reclaim_territory), because a reset clears the outcomes an entire
+  // team recorded — heavier than a single unassign, which is team_lead+.
+
+  // Dry run. Same rules as the real thing, zero writes, so the dialog can show
+  // the manager exactly which doors survive and why BEFORE anything happens.
+  app.get("/api/territories/:id/next-pass/preview", requireManager, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    if (!can(user?.role, "reclaim_territory")) return res.status(403).json({ error: "not allowed" });
+    const t = storage.getTerritoryById(Number(req.params.id));
+    // 404 not 403 on a foreign area: a manager should not be able to probe which
+    // territory ids exist in another org.
+    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+
+    const keepPendingCallbacks = req.query.keepPendingCallbacks === "true";
+    const preview = previewNextPass(t.id, tid ?? null, { keepPendingCallbacks });
+    // Only counts and reasons cross the wire. The frozen[] array carries lead ids
+    // and the client has no use for them here.
+    const { frozen, reset, ...rest } = preview;
+    res.json({ ...rest, territoryName: t.name });
+  });
+
+  // Close the current pass and open the next one.
+  app.post("/api/territories/:id/next-pass", requireManager, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const audit = auditContext(req);
+    if (!can(user?.role, "reclaim_territory")) {
+      recordAdminAudit({ ...audit, action: "territory.next_pass", targetType: "territory",
+        targetId: String(req.params.id), outcome: "denied", reason: "missing reclaim_territory" });
+      return res.status(403).json({ error: "not allowed" });
+    }
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+
+    const action: TerritoryPassAction = isTerritoryPassAction(req.body?.territoryAction)
+      ? req.body.territoryAction : "keep";
+    const newRepId = action === "reassign" ? Number(req.body?.newRepId) : null;
+    if (action === "reassign" && !Number.isFinite(newRepId as number)) {
+      return res.status(400).json({ error: "newRepId required for reassign" });
+    }
+    // A rep from another org must never end up owning this area.
+    if (newRepId != null && !repInCallerTenant(user, newRepId)) {
+      return res.status(404).json({ error: "rep not found" });
+    }
+    const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
+    const keepPendingCallbacks = req.body?.keepPendingCallbacks === true;
+
+    const at = new Date().toISOString();
+    const before = { pass: currentPassOf(t.id), repId: t.repId, status: (t as any).status };
+
+    let result;
+    try {
+      result = startNextPass({
+        territoryId: t.id, tenantId: tid ?? null,
+        actorUserId: user?.id ?? null, actorName: user?.name ?? user?.username ?? null,
+        action, newRepId, note, keepPendingCallbacks, now: at,
+        // Runs inside the same transaction as the lead reset: the area's
+        // assignment and its doors can never disagree about which pass they're in.
+        applyTerritoryAction: () => {
+          if (action === "keep") return;
+          const nextRepIds = action === "reassign" && newRepId != null ? [newRepId] : [];
+          const past = Array.from(new Set([
+            ...(safeJson<number[]>((t as any).pastAssigneeIds) ?? []), t.repId,
+          ].filter(Boolean)));
+          let newName = t.name;
+          if (isAutoAreaName(t.name)) {
+            const nr = newRepId != null ? storage.getTeamMemberById(newRepId) : null;
+            newName = nr ? `${nr.name}'s area` : "Unassigned area";
+          }
+          const newPrimary = nextRepIds[0] ?? t.repId;
+          storage.updateTerritory(t.id, {
+            status: action === "reassign" ? "active" : "unassigned",
+            repId: newPrimary, name: newName,
+            assigneeIds: JSON.stringify(nextRepIds),
+            pastAssigneeIds: JSON.stringify(past),
+            color: colorForRep(newPrimary),
+            reclaimedAt: action === "return_to_pool" ? at : (t as any).reclaimedAt ?? null,
+            updatedAt: at,
+          } as any, tid);
+
+          // Detach the doors from the departing rep. Their knock history stays
+          // attributed to them forever — this only changes who works it next.
+          for (const l of storage.getLeadsByTerritory(t.id)) {
+            storage.updateLead(l.id, {
+              assignedRepId: newRepId ?? null,
+              assignedTerritoryId: t.id,
+              assignmentSource: newRepId != null ? "territory-sync" : null,
+              [newRepId != null ? "assignedAt" : "unassignedAt"]: at,
+            } as any, tid);
+          }
+        },
+      });
+    } catch (e: any) {
+      recordAdminAudit({ ...audit, action: "territory.next_pass", targetType: "territory",
+        targetId: t.id, targetLabel: t.name, outcome: "failure", reason: String(e?.message ?? e).slice(0, 200) });
+      return res.status(500).json({ error: "could not start next pass" });
+    }
+
+    recordAdminAudit({
+      ...audit, action: "territory.next_pass", targetType: "territory",
+      targetId: t.id, targetLabel: t.name, outcome: "success",
+      before, after: { pass: result.nextPass, territoryAction: action, newRepId,
+        leadsReset: result.leadsReset, leadsFrozen: result.leadsFrozen },
+    });
+    storage.addTerritoryEvent(t.id, user?.id ?? null, `next_pass:${action}`, {
+      passClosed: result.passNumber, passOpened: result.nextPass,
+      leadsReset: result.leadsReset, leadsFrozen: result.leadsFrozen,
+    });
+
+    res.json({ ok: true, ...result });
+  });
+
+  // Closed passes for an area — the history that must not go away.
+  // team_lead+ so a lead can see what their own area already went through.
+  app.get("/api/territories/:id/passes", requireTeamLead, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    if (!canManageTerritory(user, t)) return res.status(403).json({ error: "not your area" });
+    res.json({
+      currentPass: currentPassOf(t.id),
+      passes: listTerritoryPasses(t.id, tid ?? null, Number(req.query.limit) || 50),
+    });
+  });
+
   app.post("/api/territories/:id/reclaim", requireManager, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
