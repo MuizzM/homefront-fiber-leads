@@ -10,13 +10,15 @@
 //     label in the status color), last-contact/freshness cue, ONE primary
 //     action (Directions), close affordance.
 //   QUICK ACTIONS (default open state, ~35–45% of screen): compact address
-//     header → primary row [Directions, Call (only with a valid phone), More] →
-//     the collapsible More section (Follow-up/Prospect, Copy, Calling, manager
-//     central-mark/delete — permission-gated) → 2-column grid of the four most
-//     likely dispositions (Not Home | Interested / Sold | Not Interested) →
-//     recent-activity line → notes composer chip.
-//   DETAILS (expanded): forced-open More (full status list + admin actions) +
-//     premise facts, assignment (lead.assign only), History with scan evidence.
+//     header (ONE status line: label · time · max one badge) → an icon-sized
+//     utility row (Directions, Call — only with a valid phone —, Copy) → ONE
+//     unified 2-column outcomes grid: the four most likely dispositions lead
+//     (Not Home | Interested / Sold | Not Interested), the rest follow in the
+//     same grid (Follow-up, Prospect) → recent-activity line → flat notes
+//     composer. One action surface, one spacing scale, no nested cards.
+//   DETAILS (expanded): premise facts, assignment (lead.assign only), admin
+//     actions (manager central-mark/delete, gated Calling link), History with
+//     scan evidence.
 // Tapping a status saves immediately (one tap, existing optimistic+queue
 // wiring), flashes a confirmation, recolors the pin upstream, and collapses
 // the card to Peek. Nothing was removed — only reorganized into the levels.
@@ -96,13 +98,16 @@ const CLOSE_OVERDRAG_PX = 80;
 // Flick faster than this decides snap direction regardless of position.
 const FLICK_VELOCITY = 0.5; // px/ms
 
-// Progressive disclosure of the field dispositions: the four most likely
-// outcomes own the quick grid (FIXED FIELD_OUTCOMES order — a button never
-// moves under the finger); everything else lives under "More" (and is forced
-// visible in Details). Together they are exactly FIELD_OUTCOMES.
-const QUICK_GRID_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
-const QUICK_OUTCOMES = FIELD_OUTCOMES.filter(o => QUICK_GRID_KEYS.includes(o.key));
-const MORE_OUTCOMES = FIELD_OUTCOMES.filter(o => !QUICK_GRID_KEYS.includes(o.key));
+// ONE unified outcomes grid: every field disposition in a single 2-col grid,
+// FIXED order (a button never moves under the finger) with the four most
+// likely leading — Not Home | Interested / Sold | Not Interested — and the
+// remaining outcomes (Follow-up, Prospect) following in the same grid. This is
+// exactly FIELD_OUTCOMES, primary-four-first even if the shared list reorders.
+const PRIMARY_GRID_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
+const GRID_OUTCOMES = [
+  ...FIELD_OUTCOMES.filter(o => PRIMARY_GRID_KEYS.includes(o.key)),
+  ...FIELD_OUTCOMES.filter(o => !PRIMARY_GRID_KEYS.includes(o.key)),
+];
 
 // The active outcome mirrors the lead's CURRENT display state.
 const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {
@@ -158,7 +163,6 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
 
   const docked = useDocked();
   const [snap, setSnap] = useState<SheetSnap>("quick"); // QUICK is the default open state
-  const [moreOpen, setMoreOpen] = useState(false);      // "More" disclosure (quick level)
   const [note, setNote] = useState("");                // composer DRAFT — clears once committed
   const [noteOpen, setNoteOpen] = useState(false);     // collapsed "+ Add note" chip → textarea on focus
   const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued" | "conflict">("idle");
@@ -224,7 +228,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     measure();
     let ro: ResizeObserver | null = null;
     try {
-      ro = new ResizeObserver(publish);        // catches note expand / More toggle
+      ro = new ResizeObserver(publish);        // catches note-composer expand
       for (const ref of [handleRef, peekBarRef, headerRef, quickBodyRef]) {
         if (ref.current) ro.observe(ref.current);
       }
@@ -356,7 +360,6 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     prevLeadId.current = id;
     if (id == null) return;
     setSnap("quick"); // default open state for a newly selected lead
-    setMoreOpen(false);
     setNote("");
     setNoteOpen(false);
     setNoteState("idle");
@@ -464,10 +467,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     }
     // Marking is the moment of commitment: confirm, then collapse to Peek so the
     // map (and the freshly recolored pin) is back in view immediately.
-    if (!docked) {
-      setSnap("peek");
-      setMoreOpen(false);
-    }
+    if (!docked) setSnap("peek");
   };
 
   // ── Notes: composer model ────────────────────────────────────────────────────
@@ -574,7 +574,17 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const directionsHref = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
 
   const detailsShown = docked || snap === "details";
-  const moreVisible = moreOpen || detailsShown;
+
+  // ONE status line carries everything: label · relative time · AT MOST ONE
+  // badge (review beats fresh-fiber — a data problem outranks a good-news tag).
+  // No stacked badge rows anywhere in the header.
+  const needsReview = renderedLead.leadStatus === "address_review" || detailQuery.data?.leadStatus === "address_review";
+  const freshFiber = renderedLead.leadTag === "fresh_fiber_confirmed";
+  const statusBadge: { text: string; className: string } | null = needsReview
+    ? { text: "Needs review", className: "border-amber-400/35 bg-amber-400/10 text-amber-300" }
+    : freshFiber
+      ? { text: "Fresh fiber", className: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300" }
+      : null;
 
   const transform = docked
     ? (closing ? "translateX(110%)" : "translateX(0)")
@@ -588,12 +598,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             ? `translateY(${quickY}px)`
             : `translateY(${peekY}px)`;
 
-  // Notes — a distinct inset card. Default is a slim "+ Add note" chip
-  // (reclaims quick-level height); it expands to the textarea on focus. The
+  // Notes — a FLAT section on the one card surface (no nested card): a slim
+  // "+ Add note" chip by default; it expands to the textarea on focus. The
   // commit model is unchanged (Add / blur / card swap = one write, one history
   // event); the just-committed note is pinned as "latest note".
   const notesCard = (
-    <div className="mt-4 rounded-2xl bg-white/[0.03] border border-white/[0.07] p-3">
+    <div className="mt-3 pt-3 border-t border-white/[0.06]">
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
           Notes
@@ -775,19 +785,17 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     </div>
                   );
                 })()}
-                <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1" style={{ color: statusColor }}>
-                  {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
+                <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1 flex items-center gap-1.5" style={{ color: statusColor }}>
+                  <span className="truncate">{statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}</span>
+                  {statusBadge && (
+                    <span
+                      data-testid="knock-status-badge"
+                      className={`shrink-0 inline-flex items-center rounded-full border px-1.5 py-px text-2xs font-bold uppercase tracking-wide ${statusBadge.className}`}
+                    >
+                      {statusBadge.text}
+                    </span>
+                  )}
                 </div>
-                {renderedLead.leadTag === "fresh_fiber_confirmed" && (
-                  <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-emerald-300">
-                    Confirmed fresh fiber
-                  </div>
-                )}
-                {(renderedLead.leadStatus === "address_review" || detailQuery.data?.leadStatus === "address_review") && (
-                  <div data-testid="knock-review-banner" className="mt-1 inline-flex items-center rounded-full border border-amber-400/35 bg-amber-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-amber-300">
-                    Address needs review
-                  </div>
-                )}
               </div>
               <button
                 type="button"
@@ -820,36 +828,19 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               phone={renderedLead.phone}
               copiedAddr={copiedAddr}
               onCopyAddress={copyAddress}
-              canOpenCalling={canOpenCalling}
-              leadId={renderedLead.id}
-              showMoreToggle={!docked && snap === "quick"}
-              moreOpen={moreOpen}
-              moreVisible={moreVisible}
-              onToggleMore={() => setMoreOpen(v => !v)}
-              onOpenDetails={() => setSnap("details")}
-              quickOutcomes={QUICK_OUTCOMES}
-              moreOutcomes={MORE_OUTCOMES}
+              outcomes={GRID_OUTCOMES}
               iconMap={ICON_MAP}
               activeOutcome={activeOutcome}
               flashKey={flashKey}
               onStatusTap={handleStatusTap}
-              canManage={canManage}
-              onCentralMark={onCentralMark}
-              onDelete={onDelete}
-              centralMode={centralMode}
-              deleteArmed={deleteArmed}
-              onToggleCentral={() => { setCentralMode(v => !v); setDeleteArmed(false); }}
-              onDeleteTap={() => {
-                if (!deleteArmed) { setDeleteArmed(true); window.setTimeout(() => setDeleteArmed(false), 4000); return; }
-                onDelete?.();
-              }}
               recent={recent}
               notes={notesCard}
             />
           </div>
 
-          {/* DETAILS level — premise facts, assignment (capability-gated), and
-              the full History timeline with scan evidence. */}
+          {/* DETAILS level — premise facts, assignment (capability-gated),
+              admin actions (manager-gated), and the full History timeline with
+              scan evidence. */}
           <DetailsBody
             hidden={!detailsShown}
             docked={docked}
@@ -858,6 +849,18 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
             assignedRepId={renderedLead.assignedRepId}
             team={teamQuery.data ?? []}
             onAssign={assignLead}
+            canOpenCalling={canOpenCalling}
+            leadId={renderedLead.id}
+            canManage={canManage}
+            onCentralMark={onCentralMark}
+            onDelete={onDelete}
+            centralMode={centralMode}
+            deleteArmed={deleteArmed}
+            onToggleCentral={() => { setCentralMode(v => !v); setDeleteArmed(false); }}
+            onDeleteTap={() => {
+              if (!deleteArmed) { setDeleteArmed(true); window.setTimeout(() => setDeleteArmed(false), 4000); return; }
+              onDelete?.();
+            }}
             history={history}
             historyLoading={historyQuery.isLoading}
           />

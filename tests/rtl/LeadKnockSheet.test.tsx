@@ -7,31 +7,32 @@ import { FIELD_OUTCOMES } from "@shared/knock";
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
- * CONTRACT (v4 lead card, client/src/components/LeadKnockSheet.tsx).
+ * CONTRACT (v4b lead card, client/src/components/LeadKnockSheet.tsx).
  * Props: { lead, onKnock, onSaveNote, onClose, dockOffsetPx?, onPeekHeight?,
  *          canManage?, onCentralMark?, onDelete? }  — unchanged from v3.
  * THREE progressive levels (data-snap on [knock-sheet]):
  *   PEEK   — [knock-peek-bar]: one-line address, one status indicator,
  *            freshness cue, ONE primary action (Directions), close.
- *   QUICK  — the default open state: compact header → primary row
- *            [action-directions, action-call (ONLY with a valid phone),
- *            knock-more-toggle] → [knock-more-section] (remaining outcomes,
- *            action-copy, action-open-calling, manager row) →
- *            [knock-status-grid] with EXACTLY the four most likely outcomes in
- *            2 columns (Not Home | Interested / Sold | Not Interested) →
- *            recent line → notes composer.
- *   DETAILS— More forced open (full status list + admin actions) +
- *            [knock-details-body]: premise facts, assignment (lead.assign
- *            only), History with scan evidence.
+ *   QUICK  — the default open state, ONE unified action surface: compact
+ *            header (ONE status line: label · time · max ONE badge) →
+ *            icon-sized utility row [action-directions, action-call (ONLY
+ *            with a valid phone), action-copy] → ONE 2-column outcomes grid
+ *            [knock-status-grid] with EVERY field disposition in fixed order,
+ *            primary four leading (Not Home | Interested / Sold |
+ *            Not Interested, then Follow-up, Prospect) → recent line →
+ *            flat notes composer. No More section, no nested cards.
+ *   DETAILS— [knock-details-body]: premise facts, assignment (lead.assign
+ *            only), admin actions (manager central-mark/delete, gated Calling
+ *            link), History with scan evidence.
  * Requirements exercised here (testids are the API):
  *   - default open state is QUICK; the handle cycles quick → details → peek;
  *     a status tap saves immediately AND collapses to peek; a prop-driven
  *     status update for the SAME lead never reopens/jumps the card
- *   - the quick grid shows exactly the 4 expected outcomes in FIXED order;
- *     "More" reveals Follow-up + Prospect (together = FIELD_OUTCOMES)
+ *   - the unified grid shows exactly FIELD_OUTCOMES in fixed order with the
+ *     primary four leading; the More chrome is gone entirely
  *   - Call renders ONLY when a valid phone exists (tel: link); no phone →
  *     hidden; raw numbers never render
- *   - manager row (central mark + delete) is hidden for reps, and central
+ *   - manager row lives in DETAILS only — hidden for reps everywhere; central
  *     routing disarms after one mark; delete needs a two-tap confirm
  *   - the 350ms tap guard absorbs a double-fire of the same tap
  *   - Notes composer + History contracts unchanged from v3
@@ -61,8 +62,9 @@ beforeAll(() => {
   }
 });
 
-const GRID_KEYS = ["not_home", "interested", "sold", "not_interested"];
-const MORE_KEYS = FIELD_OUTCOMES.map(o => o.key).filter(k => !GRID_KEYS.includes(k));
+const PRIMARY_KEYS = ["not_home", "interested", "sold", "not_interested"];
+const REST_KEYS = FIELD_OUTCOMES.map(o => o.key).filter(k => !PRIMARY_KEYS.includes(k));
+const ALL_KEYS = FIELD_OUTCOMES.map(o => o.key);
 
 // Unified timeline: status changes, assignments ("assigned by"), note events.
 const HISTORY = [
@@ -128,22 +130,19 @@ const gridOrder = () =>
   [...screen.getByTestId("knock-status-grid").querySelectorAll("[data-testid^='knock-outcome-']")]
     .map(b => (b as HTMLElement).dataset.testid!.replace("knock-outcome-", ""));
 
-const moreOrder = () =>
-  [...screen.getByTestId("knock-more-section").querySelectorAll("[data-testid^='knock-outcome-']")]
-    .map(b => (b as HTMLElement).dataset.testid!.replace("knock-outcome-", ""));
-
-async function openMore() {
-  await userEvent.click(screen.getByTestId("knock-more-toggle"));
+// quick (default) → details via the handle (the keyboard-accessible path).
+async function openDetails() {
+  await userEvent.click(screen.getByTestId("knock-sheet-handle"));
+  expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "details");
 }
 
 describe("<LeadKnockSheet /> — three-level model", () => {
   it("QUICK is the default open state for a newly selected lead", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
-    // Quick level chrome: primary row + the status grid are the working surface.
+    // Quick level chrome: utility row + the unified grid are the working surface.
     expect(screen.getByTestId("knock-action-row")).toBeInTheDocument();
     expect(screen.getByTestId("knock-status-grid")).toBeInTheDocument();
-    expect(screen.getByTestId("knock-more-toggle")).toHaveAttribute("aria-expanded", "false");
     // Details body stays collapsed until the third level.
     expect(screen.getByTestId("knock-details-body")).not.toBeVisible();
   });
@@ -153,9 +152,8 @@ describe("<LeadKnockSheet /> — three-level model", () => {
     const handle = screen.getByTestId("knock-sheet-handle");
     await userEvent.click(handle);
     expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "details");
-    // Details level: full status list (More forced open) + details body shown.
-    expect(screen.getByTestId("knock-more-section")).toBeVisible();
-    expect(moreOrder()).toEqual(MORE_KEYS);
+    // Details level: the grid stays in view (all outcomes) and the deep body opens.
+    expect(gridOrder()).toEqual(ALL_KEYS);
     expect(screen.getByTestId("knock-details-body")).toBeVisible();
     await userEvent.click(handle);
     expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
@@ -209,52 +207,49 @@ describe("<LeadKnockSheet /> — three-level model", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — quick grid + More disclosure", () => {
-  it("the grid shows EXACTLY the four most likely outcomes in FIXED order", () => {
+describe("<LeadKnockSheet /> — unified outcomes grid", () => {
+  it("ONE grid holds every disposition: primary four lead, the rest follow, fixed order", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
-    expect(gridOrder()).toEqual(["not_home", "interested", "sold", "not_interested"]);
-    // The remaining outcomes are NOT in the grid…
-    expect(gridOrder()).not.toContain("follow_up");
-    expect(gridOrder()).not.toContain("prospect");
+    // Exactly FIELD_OUTCOMES, primary-four-first — one grid, one surface.
+    expect(gridOrder()).toEqual(["not_home", "interested", "sold", "not_interested", "follow_up", "prospect"]);
+    expect(gridOrder()).toEqual(ALL_KEYS);
     // …and callback / needs_verification are never offered for new marks.
     expect(screen.queryByTestId("knock-outcome-callback")).not.toBeInTheDocument();
     expect(screen.queryByTestId("knock-outcome-needs_verification")).not.toBeInTheDocument();
-    // More starts collapsed.
-    expect(screen.getByTestId("knock-more-section")).not.toBeVisible();
   });
 
-  it("More reveals the rest: Follow-up + Prospect (grid + More = FIELD_OUTCOMES)", async () => {
+  it("the More chrome is gone: no toggle, no collapsible section, no second pill area", () => {
     renderSheet();
-    await openMore();
-    expect(screen.getByTestId("knock-more-toggle")).toHaveAttribute("aria-expanded", "true");
-    expect(screen.getByTestId("knock-more-section")).toBeVisible();
-    expect(moreOrder()).toEqual(["follow_up", "prospect"]);
-    expect([...gridOrder(), ...moreOrder()]).toEqual(FIELD_OUTCOMES.map(o => o.key));
+    expect(screen.queryByTestId("knock-more-toggle")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("knock-more-section")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("knock-details-open")).not.toBeInTheDocument();
+    // Every outcome lives in the ONE grid — no outcome button outside it.
+    const all = [...document.querySelectorAll("[data-testid^='knock-outcome-']")];
+    expect(all.length).toBe(ALL_KEYS.length);
+    for (const el of all) {
+      expect(screen.getByTestId("knock-status-grid").contains(el)).toBe(true);
+    }
   });
 
   it("a sold door: the Sold cell is pressed IN PLACE (grid order never changes)", () => {
     renderSheet({
       lead: baseLead({ leadStatus: "sold", visited: true, lastOutcome: "sold", lastKnockedAt: new Date().toISOString() }),
     });
-    expect(gridOrder()).toEqual(GRID_KEYS);
+    expect(gridOrder()).toEqual(ALL_KEYS);
     expect(screen.getByTestId("knock-outcome-sold")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("knock-status-line")).toHaveTextContent("SOLD");
   });
 
-  it("every outcome is a one-handed tap target (≥44px), including under More", async () => {
+  it("every outcome is a one-handed tap target (≥44px)", () => {
     renderSheet();
-    for (const key of GRID_KEYS) {
-      expect(screen.getByTestId(`knock-outcome-${key}`).className).toMatch(/\bh-11\b/);
-    }
-    await openMore();
-    for (const key of MORE_KEYS) {
+    for (const key of ALL_KEYS) {
       expect(screen.getByTestId(`knock-outcome-${key}`).className).toMatch(/\bh-11\b/);
     }
   });
 
-  it("tapping grid outcomes fires onKnock immediately with no sub-screen", async () => {
-    for (const key of GRID_KEYS) {
+  it("tapping the primary four fires onKnock immediately with no sub-screen", async () => {
+    for (const key of PRIMARY_KEYS) {
       const { props, unmount } = renderSheet();
       await userEvent.click(screen.getByTestId(`knock-outcome-${key}`));
       expect(props.onKnock).toHaveBeenCalledTimes(1);
@@ -266,10 +261,9 @@ describe("<LeadKnockSheet /> — quick grid + More disclosure", () => {
     }
   });
 
-  it("outcomes under More mark through the same one-tap path", async () => {
-    for (const key of MORE_KEYS) {
+  it("the remaining outcomes (Follow-up, Prospect) mark through the same one-tap path", async () => {
+    for (const key of REST_KEYS) {
       const { props, unmount } = renderSheet();
-      await openMore();
       await userEvent.click(screen.getByTestId(`knock-outcome-${key}`));
       expect(props.onKnock).toHaveBeenCalledTimes(1);
       expect(props.onKnock).toHaveBeenCalledWith(key);
@@ -277,11 +271,10 @@ describe("<LeadKnockSheet /> — quick grid + More disclosure", () => {
     }
   });
 
-  it("the active state mirrors the lead: a prospect door presses the Prospect pill under More", async () => {
+  it("the active state mirrors the lead: a prospect reset presses the Prospect cell", () => {
     renderSheet({
       lead: baseLead({ leadStatus: "prospect", visited: true, lastOutcome: "prospect", lastKnockedAt: new Date().toISOString() }),
     });
-    await openMore();
     expect(screen.getByTestId("knock-outcome-prospect")).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByTestId("knock-outcome-sold")).toHaveAttribute("aria-pressed", "false");
   });
@@ -293,9 +286,33 @@ describe("<LeadKnockSheet /> — quick grid + More disclosure", () => {
         lastKnockedAt: new Date().toISOString(),
       }),
     });
-    expect(gridOrder()).toEqual(GRID_KEYS); // order is invariant of the active status
+    expect(gridOrder()).toEqual(ALL_KEYS); // order is invariant of the active status
     expect(screen.queryByTestId("knock-outcome-callback")).not.toBeInTheDocument();
     expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Callback");
+  });
+});
+
+describe("<LeadKnockSheet /> — header: one status line, max one badge", () => {
+  it("fresh fiber rides the status line as the single badge (no stacked badge rows)", () => {
+    renderSheet({ lead: baseLead({ leadTag: "fresh_fiber_confirmed" }) });
+    const badges = screen.getAllByTestId("knock-status-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toHaveTextContent("Fresh fiber");
+    // The badge is INSIDE the one status line, not a stacked row of its own.
+    expect(screen.getByTestId("knock-status-line").contains(badges[0])).toBe(true);
+  });
+
+  it("a review flag outranks fresh fiber — still exactly one badge", () => {
+    renderSheet({ lead: baseLead({ leadStatus: "address_review", leadTag: "fresh_fiber_confirmed" }) });
+    const badges = screen.getAllByTestId("knock-status-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toHaveTextContent("Needs review");
+  });
+
+  it("no badge for an ordinary door", () => {
+    renderSheet();
+    expect(screen.queryByTestId("knock-status-badge")).not.toBeInTheDocument();
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Prospect");
   });
 });
 
@@ -310,15 +327,20 @@ describe("<LeadKnockSheet /> — double-submit guard", () => {
   });
 });
 
-describe("<LeadKnockSheet /> — actions, Call gating", () => {
-  it("Directions: Google Maps turn-by-turn to the coords, never mapbox; Copy under More", async () => {
+describe("<LeadKnockSheet /> — utility row, Call gating", () => {
+  it("utility row: Directions (Google, never mapbox) + Copy as icon-sized buttons", () => {
     renderSheet();
     const a = screen.getByTestId("action-directions");
     expect(a).toHaveAttribute("href", expect.stringContaining("google.com/maps/dir"));
     expect(a.getAttribute("href")).toContain("34.9,-79.9");
     expect(a.getAttribute("href")).not.toMatch(/mapbox/i);
-    await openMore();
-    expect(screen.getByTestId("action-copy")).toBeInTheDocument();
+    expect(a).toHaveAttribute("aria-label", "Directions");
+    // Icon-sized (40px glyph buttons), not competing with the grid.
+    expect(a.className).toMatch(/\bh-10\b/);
+    expect(a.className).toMatch(/\bw-10\b/);
+    const copy = screen.getByTestId("action-copy");
+    expect(copy).toHaveAttribute("aria-label", "Copy address");
+    expect(copy.className).toMatch(/\bh-10\b/);
     expect(screen.queryByTestId("action-text")).not.toBeInTheDocument();
   });
 
@@ -344,26 +366,30 @@ describe("<LeadKnockSheet /> — actions, Call gating", () => {
     const { container } = renderSheet({ lead: baseLead({ phone: "+1 (555) 867-5309" }) });
     const call = screen.getByTestId("action-call");
     expect(call).toHaveAttribute("href", "tel:+1 (555) 867-5309");
-    expect(call).toHaveTextContent("Call");
-    expect(container).not.toHaveTextContent("555 867 5309"); // label only, no raw number
+    expect(call).toHaveAttribute("aria-label", "Call this lead");
+    expect(container).not.toHaveTextContent("555 867 5309"); // glyph only, no raw number
   });
 });
 
-describe("<LeadKnockSheet /> — manager actions (permission-gated)", () => {
-  it("reps never see the manager row — even with More open", async () => {
+describe("<LeadKnockSheet /> — manager actions (Details only, permission-gated)", () => {
+  it("reps never see the manager row — not in quick, not even in Details", async () => {
     renderSheet(); // canManage defaults to false
-    await openMore();
-    expect(screen.getByTestId("knock-more-section")).toBeVisible();
+    expect(screen.queryByTestId("knock-manager-row")).not.toBeInTheDocument();
+    await openDetails();
+    expect(screen.getByTestId("knock-details-body")).toBeVisible();
     expect(screen.queryByTestId("knock-manager-row")).not.toBeInTheDocument();
     expect(screen.queryByTestId("knock-central-toggle")).not.toBeInTheDocument();
     expect(screen.queryByTestId("knock-delete")).not.toBeInTheDocument();
   });
 
-  it("managers get central mark under More; it routes ONE status tap centrally then disarms", async () => {
+  it("the manager row lives in Details; central mark routes ONE grid tap then disarms", async () => {
     const onCentralMark = vi.fn();
     const { props } = renderSheet({ canManage: true, onCentralMark, onDelete: vi.fn() });
-    await openMore();
-    expect(screen.getByTestId("knock-manager-row")).toBeInTheDocument();
+    // Not on the quick surface (mounted with the collapsed Details body, but
+    // never visible or interactive there)…
+    expect(screen.getByTestId("knock-manager-row")).not.toBeVisible();
+    await openDetails();
+    expect(screen.getByTestId("knock-manager-row")).toBeVisible();
     await userEvent.click(screen.getByTestId("knock-central-toggle"));
     expect(screen.getByTestId("knock-central-toggle")).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
@@ -371,17 +397,19 @@ describe("<LeadKnockSheet /> — manager actions (permission-gated)", () => {
     expect(onCentralMark).toHaveBeenCalledWith("not_home");
     expect(props.onKnock).not.toHaveBeenCalled(); // no rep credit
     // Disarmed: the next mark is a normal knock again. (Wait out the 350ms
-    // double-submit guard — a real rep walks to the next door between marks.)
+    // double-submit guard — a real rep walks to the next door between marks;
+    // the card collapsed to Peek after the mark, so re-open it first.)
     await new Promise(r => setTimeout(r, 400));
+    await userEvent.click(screen.getByTestId("knock-sheet-handle")); // peek → quick
     await userEvent.click(screen.getByTestId("knock-outcome-interested"));
     expect(props.onKnock).toHaveBeenCalledTimes(1);
     expect(onCentralMark).toHaveBeenCalledTimes(1);
   });
 
-  it("delete is a two-tap inline confirm", async () => {
+  it("delete is a two-tap inline confirm in Details", async () => {
     const onDelete = vi.fn();
     renderSheet({ canManage: true, onDelete });
-    await openMore();
+    await openDetails();
     const del = screen.getByTestId("knock-delete");
     await userEvent.click(del); // arms
     expect(onDelete).not.toHaveBeenCalled();
@@ -392,7 +420,7 @@ describe("<LeadKnockSheet /> — manager actions (permission-gated)", () => {
 
   it("no decorative emojis anywhere in the card copy", async () => {
     renderSheet({ canManage: true, onCentralMark: vi.fn(), onDelete: vi.fn() });
-    await openMore();
+    await openDetails();
     expect(screen.getByTestId("knock-sheet").textContent).not.toMatch(
       /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u,
     );
@@ -492,7 +520,7 @@ describe("<LeadKnockSheet /> — notes and history (unchanged model)", () => {
 describe("<LeadKnockSheet /> — chrome and lifecycle", () => {
   it("the assign row is capability-gated OFF for reps (fail-closed without lead.assign)", async () => {
     renderSheet(); // test auth context has no user → useCan fails closed
-    await userEvent.click(screen.getByTestId("knock-sheet-handle")); // → details
+    await openDetails();
     expect(screen.queryByTestId("card-assign-row")).not.toBeInTheDocument();
     expect(screen.queryByTestId("card-assign-select")).not.toBeInTheDocument();
   });
