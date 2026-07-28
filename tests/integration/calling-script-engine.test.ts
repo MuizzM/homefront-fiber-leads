@@ -150,9 +150,9 @@ describe("rules template — deterministic and personalized", () => {
     engine.__clearScriptCacheForTests();
     const lead = { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292",
       leadTag: "fresh_fiber_confirmed", freshConfirmedAt: new Date().toISOString() };
-    const a = await engine.generateScriptForLead({ tenantId, lead, repName: "Riley Rep", companyName: "Home Front Solutions" });
+    const a = await engine.generateScriptForLead({ tenantId, userId: repUserId, lead, repName: "Riley Rep", companyName: "Home Front Solutions" });
     engine.__clearScriptCacheForTests();
-    const b = await engine.generateScriptForLead({ tenantId, lead, repName: "Riley Rep", companyName: "Home Front Solutions" });
+    const b = await engine.generateScriptForLead({ tenantId, userId: repUserId, lead, repName: "Riley Rep", companyName: "Home Front Solutions" });
     expect(a.script).toBe(b.script);
     expect(a.model).toBe("rules");
   });
@@ -181,10 +181,51 @@ describe("rules template — deterministic and personalized", () => {
     expect(quietHook).toContain("Solo Bend");
   });
 
+  it("cache is per calling user: two users never share a cached opener (FIX-1)", async () => {
+    engine.__clearScriptCacheForTests();
+    const lead = { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292",
+      leadTag: "fresh_fiber_confirmed" };
+    const asRep = await engine.generateScriptForLead({ tenantId, userId: repUserId, lead,
+      repName: "Riley Rep", companyName: "Home Front Solutions" });
+    const asManager = await engine.generateScriptForLead({ tenantId, userId: managerUserId, lead,
+      repName: "Morgan Manager", companyName: "Home Front Solutions" });
+    const asRepAgain = await engine.generateScriptForLead({ tenantId, userId: repUserId, lead,
+      repName: "Riley Rep", companyName: "Home Front Solutions" });
+    expect(asRep.cached).toBe(false);
+    expect(asManager.cached).toBe(false); // no cross-user cache hit
+    expect(asRep.sections.opener).toContain("my name is Riley Rep");
+    expect(asManager.sections.opener).toContain("my name is Morgan Manager");
+    expect(asRepAgain.cached).toBe(true); // same user still hits the cache
+    expect(asRepAgain.sections.opener).toContain("my name is Riley Rep");
+  });
+
+  it("momentum window keys on fresh_confirmed_at over created_at (FIX-3)", () => {
+    // Row created 30 days ago but CONFIRMED fresh 3 days ago: the old
+    // created_at-keyed window would exclude it; the spoken claim must match.
+    const old3RowRecentConfirmId = insertLead({ address: "55 Ledger Ct", city: "Midway",
+      leadTag: "fresh_fiber_confirmed",
+      createdAt: new Date(Date.now() - 30 * 86_400_000).toISOString() });
+    rawDb.prepare(`UPDATE leads SET fresh_confirmed_at=? WHERE id=?`)
+      .run(new Date(Date.now() - 3 * 86_400_000).toISOString(), old3RowRecentConfirmId);
+    const context = engine.buildScriptContext({
+      tenantId, repName: "Riley Rep", companyName: "Home Front Solutions",
+      lead: { id: old3RowRecentConfirmId, address: "55 Ledger Ct", city: "Midway", state: "NC", zip: "27292",
+        leadTag: "fresh_fiber_confirmed", freshConfirmedAt: new Date(Date.now() - 3 * 86_400_000).toISOString() },
+    });
+    expect(context.freshCityCount21d).toBe(1);
+    // And the hook no longer claims proximity for the most-recent other fresh lead.
+    const hook = engine.buildTemplateSections(engine.buildScriptContext({
+      tenantId, repName: "Riley Rep", companyName: "Home Front Solutions",
+      lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
+    })).neighborhoodHook;
+    expect(hook).toContain("including homes on Oak Street");
+    expect(hook).not.toContain("over by");
+  });
+
   it("every section is present and compliant, with the footer verbatim", async () => {
     engine.__clearScriptCacheForTests();
     const result = await engine.generateScriptForLead({
-      tenantId, repName: "Riley Rep", companyName: "Home Front Solutions",
+      tenantId, userId: repUserId, repName: "Riley Rep", companyName: "Home Front Solutions",
       lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
     });
     for (const value of [
@@ -210,7 +251,7 @@ describe("LLM enhancement — never fails the endpoint", () => {
   it("falls back to rules when no LLM is configured", async () => {
     engine.__clearScriptCacheForTests();
     const result = await engine.generateScriptForLead({
-      tenantId, repName: "Riley Rep", companyName: "Home Front Solutions",
+      tenantId, userId: repUserId, repName: "Riley Rep", companyName: "Home Front Solutions",
       lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
     });
     expect(result.model).toBe("rules");
@@ -228,7 +269,7 @@ describe("LLM enhancement — never fails the endpoint", () => {
         engine.__setScriptEngineLlmTransportForTests(transport as any);
         engine.__clearScriptCacheForTests();
         const result = await engine.generateScriptForLead({
-          tenantId, repName: "Riley Rep", companyName: "Home Front Solutions",
+          tenantId, userId: repUserId, repName: "Riley Rep", companyName: "Home Front Solutions",
           lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
         });
         expect(result.model).toBe("rules");
@@ -257,11 +298,48 @@ describe("LLM enhancement — never fails the endpoint", () => {
     try {
       engine.__clearScriptCacheForTests();
       const result = await engine.generateScriptForLead({
-        tenantId, repName: "Riley Rep", companyName: "Home Front Solutions",
+        tenantId, userId: repUserId, repName: "Riley Rep", companyName: "Home Front Solutions",
         lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
       });
       expect(result.model).toBe("rules");
       expectCompliantText(result.script);
+    } finally {
+      engine.__setScriptEngineLlmTransportForTests(null);
+      delete process.env.LLM_ENDPOINT;
+    }
+  });
+
+  it("discards LLM output that drops the mandatory disclosure or the rep name (FIX-2)", async () => {
+    process.env.LLM_ENDPOINT = "http://llm.test/chat";
+    const compliant = {
+      neighborhoodHook: "Kinetic Fiber has just arrived on Maple Grove Ln in Lexington, with several homes confirmed for brand-new fiber in the last three weeks.",
+      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours — smooth video calls, streaming without buffering, and low-latency gaming.",
+      objectionHandlers: {
+        price: "Fair question — pricing depends on the tier, and many households pay about the same as they do now. Can I check exact plans?",
+        currentProvider: "Totally understandable. The fiber difference is consistency at busy times. Can I check what your address qualifies for?",
+        renter: "Renters can usually get fiber at serviceable addresses, and the account goes in your name. Can I check while I have you?",
+        worksFine: "That's great to hear. Fiber adds headroom so everything keeps working when everyone is online. Open to a quick check?",
+      },
+      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln — no obligation. Can I run that for you?",
+    };
+    const badOpeners = [
+      // No "sales call" disclosure — mandatory opening language dropped.
+      "Hi there, this is Riley Rep calling on behalf of Home Front Solutions about fiber service at 100 Maple Grove Ln in Lexington. Do you have about a minute?",
+      // Disclosure present but the rep's own name is gone.
+      "Hi there, I'm calling on behalf of Home Front Solutions — this is a sales call about fiber service at 100 Maple Grove Ln in Lexington. Do you have about a minute?",
+    ];
+    try {
+      for (const opener of badOpeners) {
+        engine.__setScriptEngineLlmTransportForTests(async () => JSON.stringify({ opener, ...compliant }));
+        engine.__clearScriptCacheForTests();
+        const result = await engine.generateScriptForLead({
+          tenantId, userId: repUserId, repName: "Riley Rep", companyName: "Home Front Solutions",
+          lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
+        });
+        expect(result.model).toBe("rules");
+        expect(result.sections.opener).toContain("sales call");
+        expect(result.sections.opener).toContain("Riley Rep");
+      }
     } finally {
       engine.__setScriptEngineLlmTransportForTests(null);
       delete process.env.LLM_ENDPOINT;
@@ -285,7 +363,7 @@ describe("LLM enhancement — never fails the endpoint", () => {
     try {
       engine.__clearScriptCacheForTests();
       const result = await engine.generateScriptForLead({
-        tenantId, repName: "Riley Rep", companyName: "Home Front Solutions",
+        tenantId, userId: repUserId, repName: "Riley Rep", companyName: "Home Front Solutions",
         lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
       });
       expect(result.model).toBe("llm");

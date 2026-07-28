@@ -157,12 +157,17 @@ export function buildScriptContext(input: {
     && (Number(lead.isTenured) === 1 || ["available", "tenured", "live"].includes(fiberStatus));
   const fiberCategory: FiberCategory = fresh ? "fresh" : comingSoon ? "coming_soon" : tenured ? "tenured" : "unknown";
 
+  // Window keys on the CONFIRMATION time (falling back to row creation) so the
+  // spoken "confirmed in the last three weeks" claim matches the window.
   const momentum = rawDb.prepare(`SELECT COUNT(*) AS n FROM leads
     WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND lower(city)=lower(?)
-      AND datetime(created_at) >= datetime('now','-21 days')`).get(tenantId, lead.city) as { n: number };
+      AND datetime(coalesce(fresh_confirmed_at,created_at)) >= datetime('now','-21 days')`)
+    .get(tenantId, lead.city) as { n: number };
+  // Most-RECENTLY confirmed other fresh lead in the city — no proximity claim.
   const nearest = rawDb.prepare(`SELECT address FROM leads
     WHERE tenant_id=? AND lead_tag='fresh_fiber_confirmed' AND lower(city)=lower(?) AND id<>?
-    ORDER BY datetime(created_at) DESC LIMIT 1`).get(tenantId, lead.city, lead.id) as { address: string } | undefined;
+    ORDER BY datetime(coalesce(fresh_confirmed_at,created_at)) DESC LIMIT 1`)
+    .get(tenantId, lead.city, lead.id) as { address: string } | undefined;
 
   return {
     tenantId,
@@ -186,7 +191,7 @@ function neighborhoodHook(context: ScriptContext): string {
   switch (fiberCategory) {
     case "fresh": {
       const momentum = freshCityCount21d > 1
-        ? ` ${freshCityCount21d} homes in ${city} have been confirmed for brand-new fiber in the last three weeks${nearestFreshStreet ? `, including over by ${nearestFreshStreet}` : ""}.`
+        ? ` ${freshCityCount21d} homes in ${city} have been confirmed for brand-new fiber in the last three weeks${nearestFreshStreet ? `, including homes on ${nearestFreshStreet}` : ""}.`
         : "";
       return `The reason for my call: Kinetic Fiber just came to ${street} here in ${city}.${momentum} Your address was just confirmed for the new fiber build, so we're calling neighbors to answer questions and offer a quick availability check.`;
     }
@@ -356,6 +361,11 @@ async function enhanceWithLlm(sections: ScriptSections, context: ScriptContext):
     ];
     if (!flat.every((value) => validString(value, 2_000))) return null;
     if (flat.some((value) => containsProhibitedContent(value as string))) return null;
+    // Mandatory opening disclosure must survive rephrasing: the opener is read
+    // verbatim, so the sales-call disclosure and the rep's own name are
+    // non-negotiable. Missing either → discard the model output entirely.
+    if (!/sales call/i.test(candidate.opener)) return null;
+    if (!candidate.opener.toLowerCase().includes(context.repName.trim().toLowerCase())) return null;
     return candidate;
   } catch {
     return null;
@@ -367,8 +377,11 @@ async function enhanceWithLlm(sections: ScriptSections, context: ScriptContext):
 type CacheEntry = { expiresAt: number; payload: Omit<GeneratedScript, "cached"> };
 const scriptCache = new Map<string, CacheEntry>();
 
-function cacheKey(tenantId: number, leadId: number): string {
-  return `${tenantId}:${leadId}:${SCRIPT_ENGINE_VERSION}`;
+// The opener is a read-verbatim verbal disclosure containing the CALLING
+// user's name — the cache key must include the requesting user or a second
+// rep would read the first rep's name aloud from a stale cache entry.
+function cacheKey(tenantId: number, userId: number, leadId: number): string {
+  return `${tenantId}:${userId}:${leadId}:${SCRIPT_ENGINE_VERSION}`;
 }
 
 /** Test hook: drop all cached scripts. */
@@ -376,8 +389,8 @@ export function __clearScriptCacheForTests(): void {
   scriptCache.clear();
 }
 
-function cacheGet(tenantId: number, leadId: number): CacheEntry | null {
-  const key = cacheKey(tenantId, leadId);
+function cacheGet(tenantId: number, userId: number, leadId: number): CacheEntry | null {
+  const key = cacheKey(tenantId, userId, leadId);
   const entry = scriptCache.get(key);
   if (!entry) return null;
   if (entry.expiresAt <= Date.now()) {
@@ -387,7 +400,7 @@ function cacheGet(tenantId: number, leadId: number): CacheEntry | null {
   return entry;
 }
 
-function cacheSet(tenantId: number, leadId: number, payload: Omit<GeneratedScript, "cached">): void {
+function cacheSet(tenantId: number, userId: number, leadId: number, payload: Omit<GeneratedScript, "cached">): void {
   const now = Date.now();
   for (const [key, entry] of scriptCache) {
     if (entry.expiresAt <= now) scriptCache.delete(key);
@@ -396,18 +409,20 @@ function cacheSet(tenantId: number, leadId: number, payload: Omit<GeneratedScrip
     const oldest = scriptCache.keys().next().value;
     if (oldest !== undefined) scriptCache.delete(oldest);
   }
-  scriptCache.set(cacheKey(tenantId, leadId), { expiresAt: now + SCRIPT_CACHE_TTL_MS, payload });
+  scriptCache.set(cacheKey(tenantId, userId, leadId), { expiresAt: now + SCRIPT_CACHE_TTL_MS, payload });
 }
 
 // ── Public entry points ──────────────────────────────────────────────────────
 
 export async function generateScriptForLead(input: {
   tenantId: number;
+  /** Requesting user — part of the cache key because the opener names them. */
+  userId: number;
   lead: ScriptLeadRow;
   repName: string;
   companyName: string;
 }): Promise<GeneratedScript> {
-  const cached = cacheGet(input.tenantId, input.lead.id);
+  const cached = cacheGet(input.tenantId, input.userId, input.lead.id);
   if (cached) return { ...cached.payload, cached: true };
 
   const context = buildScriptContext(input);
@@ -430,7 +445,7 @@ export async function generateScriptForLead(input: {
     sections: { ...sections, complianceFooter: COMPLIANCE_FOOTER },
     script: assembleScript(sections),
   };
-  cacheSet(input.tenantId, input.lead.id, payload);
+  cacheSet(input.tenantId, input.userId, input.lead.id, payload);
   return { ...payload, cached: false };
 }
 

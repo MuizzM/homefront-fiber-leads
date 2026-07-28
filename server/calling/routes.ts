@@ -960,6 +960,7 @@ function registerScriptEngineRoutes(app: Express, deps: CallingRouteDeps): void 
       const profile = ensureCallingProfile(tid);
       const result = await generateScriptForLead({
         tenantId: tid,
+        userId: userId(req),
         lead,
         repName: String(rep?.name ?? "").trim() || "your field representative",
         companyName: profile.sellerName || String(org?.companyName ?? "").trim() || "Kinetic Fiber",
