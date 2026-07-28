@@ -281,6 +281,7 @@ services:
       # hold the write lock well past the 15s default, crashing workers with
       # SQLITE_BUSY. 120s matches the resilience of our ops scripts.
       SQLITE_BUSY_TIMEOUT_MS: "120000"
+      HF_ROLE: "control"
       # UNLIMITED DECODO PLAN (operator, 2026-07-21): the plan is metered as
       # unlimited, so budget pacing NEVER throttles down and an auth/limit-denial
       # (407) burst does NOT freeze scanning. Instead the governor rotates to a
