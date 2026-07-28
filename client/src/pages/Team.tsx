@@ -12,6 +12,8 @@ import {
   UserMinus, UserCheck, ShieldAlert, KeyRound, GitBranch, Archive
 } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
+import { TierEditor } from "@/components/commission/TierEditor";
+import type { CommissionTier } from "@shared/commissionTiers";
 import { canActOnMember, HIRABLE_ROLES, isValidSupervisorRole, type MemberRole } from "@shared/teamHierarchy";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -991,16 +993,18 @@ export default function Team() {
 // Reads the rep's current effective structure, lets a manager set FLAT vs TIERED
 // (a flat rate, or the standard retroactive weekly tiers), and re-assigns via
 // POST /api/commission/assign-structure (which closes the current period first).
-const TIER_LADDER = [
-  { range: "1–7", rate: "$150" }, { range: "8–12", rate: "$200" },
-  { range: "13–16", rate: "$250" }, { range: "17+", rate: "$300" },
-];
 
 function CommissionDialog({ member, onClose }: { member: TeamMember | null; onClose: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [structure, setStructure] = useState<"TIERED" | "FLAT">("TIERED");
   const [flatRate, setFlatRate] = useState("150");
+  // Editable ladder. Defaults to the operator's stated plan: 1–6 at $150, 7+ at
+  // $200 — the final band open-ended so beating it still pays.
+  const [tiers, setTiers] = useState<CommissionTier[]>([
+    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "1–6" },
+    { position: 1, minimumSales: 7, maximumSales: null, rateCents: 20000, label: "7+" },
+  ]);
 
   const { data: current, isLoading } = useQuery<any>({
     queryKey: ["/api/commission/reps", member?.id, "structure"],
@@ -1023,6 +1027,12 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
     mutationFn: async () => {
       const body: any = { repId: member!.id, structure, closeExisting: true };
       if (structure === "FLAT") body.flatRateDollars = parseFloat(flatRate) || 0;
+      // Tiers travel as integer cents; the server re-validates before it books
+      // anything, so this is a request, not a decision.
+      else body.tiers = tiers.map(t => ({
+        minimumSales: t.minimumSales, maximumSales: t.maximumSales,
+        rateCents: t.rateCents, label: t.label || (t.maximumSales == null ? `${t.minimumSales}+` : `${t.minimumSales}–${t.maximumSales}`),
+      }));
       const res = await apiRequest("POST", "/api/commission/assign-structure", body);
       return res.json();
     },
@@ -1079,15 +1089,14 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
 
         {structure === "TIERED" ? (
           <div className="rounded-xl bg-secondary/30 border border-border p-2.5 mt-1">
-            <p className="text-2xs text-muted-foreground mb-2">Total weekly sales set one rate for every sale:</p>
-            <div className="grid grid-cols-4 gap-1.5">
-              {TIER_LADDER.map(t => (
-                <div key={t.range} className="rounded-lg bg-card border border-border px-1 py-1.5 text-center">
-                  <div className="text-2xs text-muted-foreground">{t.range}</div>
-                  <div className="text-xs font-bold text-primary">{t.rate}</div>
-                </div>
-              ))}
-            </div>
+            <p className="text-2xs text-muted-foreground mb-2">
+              Total weekly sales set one rate for <span className="font-semibold text-foreground">every</span> sale
+              — hit the next band and the whole week re-prices at that rate.
+            </p>
+            {/* The ladder was a fixed display. Editable now: bands stay tiled and
+                the last stays open-ended by construction, so a rep can never sell
+                into a gap or past the top and earn nothing. */}
+            <TierEditor tiers={tiers} onChange={setTiers} disabled={assignMutation.isPending} />
           </div>
         ) : (
           <div className="mt-1 space-y-1.5">

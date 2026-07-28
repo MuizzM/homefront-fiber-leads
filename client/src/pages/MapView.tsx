@@ -230,15 +230,22 @@ const FILTERABLE_STATUSES: readonly string[] = FILTER_STATUS_ORDER;
 // One GPU symbol layer paints every door from the canonical six-status SVG set.
 const STATUS_ICON_LAYER = "lead-status-icons";
 
-// Plain status-color dots are the production default (Lane E2: no large icon
-// inside every pin — a pin is a shape + status color at rest; the detail lives
-// in the card). NEW_FIELD_MAP=1 opts a device back into the SVG glyph pins;
-// the whole icon-layer path (register/fallback/visibility) stays intact.
+// SHAPED GLYPH PINS ARE THE DEFAULT. A door-knocking map is read at arm's length
+// in daylight while walking: shape and glyph survive that, a colour-only dot does
+// not. The teardrop-vs-arrow silhouette and the $ / door / star / clock inside it
+// are how a rep tells a sold house from a not-home one without stopping to
+// compare hues — and colour alone fails outright for the ~8% of men with a
+// colour-vision deficiency, for whom the sold green and the prospect green are
+// the same dot.
+//
+// This shipped briefly as colour-only dots and the glyphs were reported missing
+// within the day. NEW_FIELD_MAP=0 still opts a device OUT (the dots path is
+// intact and tested); anything else, including unset, gets the glyphs.
 function newFieldMap(): boolean {
   try {
-    return localStorage.getItem("NEW_FIELD_MAP") === "1";
+    return localStorage.getItem("NEW_FIELD_MAP") !== "0";
   } catch {
-    return false;
+    return true; // storage blocked (private mode) → the legible default
   }
 }
 
