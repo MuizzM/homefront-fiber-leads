@@ -205,6 +205,9 @@ export const leads = sqliteTable("leads", {
   contactName: text("contact_name"),
   contactPhone: text("contact_phone"),
   contactEmail: text("contact_email"),
+  // Permanent, compliance-grade block: the occupant asked us never to return.
+  // Survives every pass reset by design — there is no option that clears it.
+  doNotKnock: integer("do_not_knock", { mode: "boolean" }).notNull().default(false),
   leadStatus: text("lead_status").notNull().default("prospect"),
   // "prospect"|"contacted"|"interested"|"sold"|"not_interested"|"follow_up"
   // ── Outcome recency (P1-1) — stamped by the knock CAS so a stale offline
@@ -304,6 +307,11 @@ export const knockLog = sqliteTable("knock_log", {
   // Idempotency key from the offline knock queue; null for legacy rows. A retried
   // flush with the same clientId returns the existing row instead of double-logging.
   clientId: text("client_id"),
+  // Which sweep of the area this knock belongs to. Stamped server-side from the
+  // lead's territory at insert (never client-supplied), so pass 1's history stays
+  // distinguishable from pass 2's after the area is reset. Null = legacy pre-pass
+  // row, backfilled to 1 by the migration.
+  passNumber: integer("pass_number"),
   // Set when the outcome CAS LOST (a newer outcome already stood): the knock is
   // recorded as field history but applied NO status flip and NO money effects.
   // Persisted so retries, history, and counters can all tell the truth.

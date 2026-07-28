@@ -252,6 +252,23 @@ export interface IStorage {
   getTenantStats(tenantId: number): { reps: number; leads: number; sold: number; territories: number };
 }
 
+// Which sweep a knock belongs to: the current pass of the lead's area. A lead
+// with no territory (unassigned, or worked off-map) is pass 1 — there is no area
+// whose pass could have been advanced. Kept raw + defensive because knocks are
+// written on the hot offline-flush path and must never fail on a legacy schema.
+function currentPassForLead(leadId: number): number {
+  try {
+    const row = rawDb.prepare(
+      `SELECT COALESCE(t.current_pass, 1) AS p
+         FROM leads l LEFT JOIN territories t ON t.id = l.assigned_territory_id
+        WHERE l.id = ?`,
+    ).get(leadId) as { p?: number } | undefined;
+    return Math.max(1, Number(row?.p ?? 1) || 1);
+  } catch {
+    return 1; // column not migrated yet — first pass by definition
+  }
+}
+
 // ── Migrations ────────────────────────────────────────────────────────────────
 export function runMigrations() {
   const raw = (db as any).driver ?? (db as any).$client;
@@ -464,6 +481,17 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS provider_global_control (id INTEGER PRIMARY KEY CHECK(id=1),next_start_at INTEGER NOT NULL DEFAULT 0,updated_at INTEGER NOT NULL)`,
     `INSERT OR IGNORE INTO provider_global_control (id,updated_at) VALUES (1,0)`,
     // Speed up knock lookups (leaderboard, territory progress, knock history)
+    // ── Multi-pass knocking ───────────────────────────────────────────────────
+    // An area can be swept more than once. current_pass tracks which sweep is
+    // open; knock_log.pass_number attributes each knock to its sweep so a reset
+    // re-opens the doors WITHOUT making pass 1's history ambiguous. do_not_knock
+    // is a permanent compliance block that no reset clears.
+    `ALTER TABLE territories ADD COLUMN current_pass INTEGER NOT NULL DEFAULT 1`,
+    `ALTER TABLE knock_log ADD COLUMN pass_number INTEGER`,
+    `ALTER TABLE leads ADD COLUMN do_not_knock INTEGER NOT NULL DEFAULT 0`,
+    // Every knock that predates the concept belongs to the first sweep.
+    `UPDATE knock_log SET pass_number = 1 WHERE pass_number IS NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_pass ON knock_log(lead_id, pass_number)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_lead ON knock_log(lead_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_rep ON knock_log(rep_id)`,
     `CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(lead_status)`,
@@ -2908,9 +2936,15 @@ export class Storage implements IStorage {
     const safeTs = (Number.isFinite(clientTs) && clientTs <= Date.now() + 10 * 60_000)
       ? knock.knockedAt!
       : new Date().toISOString();
+    // Pass attribution is derived the same way tenancy is — from the lead, at
+    // insert, never from the client. Stamping it here rather than in the knock
+    // route means every writer (online tap, offline queue flush, backfill) lands
+    // in the right pass without having to know passes exist.
+    const passNumber = currentPassForLead(knock.leadId);
     return db.insert(knockLog).values({
       ...knock,
       tenantId,
+      passNumber,
       knockedAt: safeTs,
       ...(verdict ?? {}),
     }).returning().get();

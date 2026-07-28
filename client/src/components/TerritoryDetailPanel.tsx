@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus } from "lucide-react";
+import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus, RotateCcw } from "lucide-react";
 import { can, type Role } from "@shared/permissions";
 import { colorForRep } from "@shared/repColors";
 import type { TerritoryStatus } from "@shared/territory";
@@ -34,6 +34,12 @@ export interface TerritoryDetailPanelProps {
   onReassign?: () => void;
   onRename?: (name: string) => void;  // provided for manager+ — shows the pencil
   onViewHistory?: () => void;         // opens the verified activity timeline
+  /** Re-open this area for another sweep (manager+). Opens the confirm dialog
+   *  rather than acting immediately — a pass reset clears the whole team's
+   *  outcomes and has no undo. */
+  onStartNextPass?: () => void;
+  /** Which sweep this area is on. 1 (or absent) means it has never been reset. */
+  currentPass?: number;
   /** Remove ONE rep from this area. Provided only when the caller may manage
    *  assignment; the chip's remove control is hidden entirely without it. */
   onUnassignRep?: (repId: number) => void;
@@ -55,7 +61,7 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
   const swatch = isUnassigned ? colorForRep(null) : (territory.color ?? colorForRep(territory.repIds[0]));
@@ -283,6 +289,19 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
         >
           <History className="h-3.5 w-3.5" /> View Activity
+        </button>
+      )}
+
+      {/* Knock it again. Sits with the other manager actions but reads as its own
+          step, because "start pass 3" is a different decision from "reclaim". */}
+      {onStartNextPass && can(role, "reclaim_territory") && (
+        <button
+          data-testid="next-pass-btn"
+          onClick={onStartNextPass}
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          Start pass {(currentPass ?? 1) + 1}
         </button>
       )}
 
