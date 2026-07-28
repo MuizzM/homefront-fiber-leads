@@ -6,6 +6,7 @@ import { CALLING_DECISIONS } from "@shared/calling";
 import { rawDb } from "../db";
 import { callingEnvironment, sha256, verifyConsentArtifactManifest } from "./crypto";
 import { enrichCallingLead, validateCallingLeadPhone } from "./providers";
+import { baseTemplatePreview, generateScriptForLead } from "./scriptEngine";
 import {
   createConsentRecord,
   evaluateLeadCompliance,
@@ -930,6 +931,59 @@ export function registerCallingRoutes(app: Express, deps: CallingRouteDeps): voi
   });
 
   registerComplianceAdministration(app, deps);
+  registerScriptEngineRoutes(app, deps);
+}
+
+/**
+ * Personalized call-script endpoints (LANE CC1). Scripts are representative
+ * GUIDANCE only — eligibility gating is unchanged and lives in the compliance
+ * engine; the same scopedCandidate tenant/assignment gate as other lead reads
+ * applies here. No new capabilities: lead scripts reuse "calling.lead.read"
+ * (there is no "calling.script.read" in shared/capabilities.ts) and the admin
+ * template preview reuses "calling.compliance.read" like the other script
+ * administration reads.
+ */
+function registerScriptEngineRoutes(app: Express, deps: CallingRouteDeps): void {
+  const cap = deps.requireCapability;
+
+  app.get("/api/v1/calling/leads/:leadId/script", cap("calling.lead.read"), async (req, res) => {
+    const tid = requireTenant(req, res); const leadId = parseLeadId(req, res); if (!tid || !leadId) return;
+    try {
+      const candidate = scopedCandidate(req, res, tid, leadId); if (!candidate) return;
+      const lead = rawDb.prepare(`SELECT id,address,city,state,zip,fiber_status AS fiberStatus,
+        lead_tag AS leadTag,is_tenured AS isTenured,fresh_confirmed_at AS freshConfirmedAt,
+        source_scan_target_id AS sourceScanTargetId
+        FROM leads WHERE tenant_id=? AND id=?`).get(tid, leadId) as any;
+      if (!lead) return res.status(404).json({ error: "Calling lead not found" });
+      const rep = rawDb.prepare(`SELECT name FROM users WHERE tenant_id=? AND id=?`).get(tid, userId(req)) as any;
+      const org = rawDb.prepare(`SELECT company_name AS companyName FROM tenants WHERE id=?`).get(tid) as any;
+      const profile = ensureCallingProfile(tid);
+      const result = await generateScriptForLead({
+        tenantId: tid,
+        lead,
+        repName: String(rep?.name ?? "").trim() || "your field representative",
+        companyName: profile.sellerName || String(org?.companyName ?? "").trim() || "Kinetic Fiber",
+      });
+      appendCallingAudit({
+        tenantId: tid, correlationId: correlationId(req), eventType: "calling.script.generated",
+        entityType: "lead", entityId: String(leadId), actorUserId: userId(req),
+        metadata: { leadId, tenantId: tid, model: result.model, version: result.version, cached: result.cached },
+      });
+      res.json({
+        leadId,
+        ...result,
+        eligibilityNote: "This script is representative guidance only; call eligibility is enforced by the compliance engine and is unchanged by script generation.",
+        fullPhoneNumberExposed: false,
+      });
+    } catch (error) { fail(res, error); }
+  });
+
+  app.get("/api/v1/calling/scripts/templates", cap("calling.compliance.read"), (req, res) => {
+    const tid = requireTenant(req, res); if (!tid) return;
+    try {
+      res.json(baseTemplatePreview());
+    } catch (error) { fail(res, error); }
+  });
 }
 
 function registerComplianceAdministration(app: Express, deps: CallingRouteDeps): void {
