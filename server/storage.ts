@@ -406,6 +406,11 @@ export function runMigrations() {
     // Inbound rep applications carry the org they're joining (null = unrouted).
     // Bootstrap adopts existing null rows into the default tenant.
     `ALTER TABLE rep_applications ADD COLUMN tenant_id INTEGER`,
+    // Territory requests were tenant-blind: no column, so no wall was possible.
+    // Backfilled from the requesting rep's own tenant (below) so existing rows
+    // become visible only to the org that actually owns them.
+    `ALTER TABLE territory_requests ADD COLUMN tenant_id INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_territory_requests_tenant ON territory_requests(tenant_id, status)`,
     `ALTER TABLE rep_applications ADD COLUMN invite_id INTEGER`,
     `ALTER TABLE rep_applications ADD COLUMN application_source TEXT NOT NULL DEFAULT 'public_join'`,
     `ALTER TABLE rep_applications ADD COLUMN desired_role TEXT`,
@@ -1915,6 +1920,15 @@ export function runMigrations() {
   try { backfillAddressReview(raw); }
   catch (e: any) { console.warn("[migration] address review backfill:", e?.message); }
 
+  // Backfill territory_requests.tenant_id from the requesting rep's org. Runs
+  // before tenant bootstrap adopts NULL rows, so a request lands in the SAME
+  // tenant as its rep rather than being swept into the default org.
+  try {
+    raw.prepare(`UPDATE territory_requests SET tenant_id = (
+      SELECT tm.tenant_id FROM team_members tm WHERE tm.id = territory_requests.rep_id
+    ) WHERE tenant_id IS NULL`).run();
+  } catch (e) { console.warn("[migration] territory_requests tenant backfill:", (e as any)?.message); }
+
   bootstrapDefaultTenant(raw);
   // GATE M6: a money invariant that can't build is a FAILED RELEASE, not a
   // quiet warning — the deploy health-gate rolls back instead of running
@@ -3185,15 +3199,25 @@ export class Storage implements IStorage {
   }
 
   // ── Territory Requests ─────────────────────────────────────────────────────
-  getTerritoryRequests(status?: string): TerritoryRequest[] {
-    if (status) return db.select().from(territoryRequests).where(eq(territoryRequests.status, status)).all();
-    return db.select().from(territoryRequests).all();
+  // TENANT WALL. These three carried no tenant predicate at all, so any
+  // manager could read every organization's requests (including rep-authored
+  // free text) and flip another org's rows. The scope is enforced in SQL —
+  // callers pass their session tenant and cannot widen it.
+  getTerritoryRequests(status?: string, tenantId?: number): TerritoryRequest[] {
+    const preds = [] as any[];
+    if (status) preds.push(eq(territoryRequests.status, status));
+    if (tenantId != null) preds.push(eq(territoryRequests.tenantId, tenantId));
+    if (!preds.length) return db.select().from(territoryRequests).all();
+    return db.select().from(territoryRequests).where(preds.length === 1 ? preds[0] : and(...preds)).all();
   }
-  createTerritoryRequest(repId: number, userId: number, message?: string): TerritoryRequest {
-    return db.insert(territoryRequests).values({ repId, userId, message: message || null, createdAt: new Date().toISOString() }).returning().get();
+  createTerritoryRequest(repId: number, userId: number, message?: string, tenantId?: number | null): TerritoryRequest {
+    return db.insert(territoryRequests).values({ repId, userId, tenantId: tenantId ?? null, message: message || null, createdAt: new Date().toISOString() }).returning().get();
   }
-  updateTerritoryRequest(id: number, status: string): TerritoryRequest | undefined {
-    return db.update(territoryRequests).set({ status }).where(eq(territoryRequests.id, id)).returning().get();
+  updateTerritoryRequest(id: number, status: string, tenantId?: number): TerritoryRequest | undefined {
+    const where = tenantId != null
+      ? and(eq(territoryRequests.id, id), eq(territoryRequests.tenantId, tenantId))
+      : eq(territoryRequests.id, id);
+    return db.update(territoryRequests).set({ status }).where(where).returning().get();
   }
 
   // ── Rep Applications ───────────────────────────────────────────────────────

@@ -5083,6 +5083,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     const t = storage.getTerritoryById(Number(req.params.id));
     if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // Every other team_lead-reachable territory route (PATCH/DELETE/assign/history)
+    // gates on ownership; this one did not, so a lead could complete a RIVAL
+    // team's active area and stamp a market-learning outcome from work they
+    // never did. 404 (not 403) keeps it from confirming the area exists.
+    if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
     if (((t as any).status ?? "active") === "archived") return res.status(409).json({ error: "cannot complete an archived area" });
     const at = new Date().toISOString();
     // LEARNING LOOP: capture the field outcome and roll it into the market's
@@ -5100,6 +5105,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const t = storage.getTerritoryById(Number(req.params.id));
     if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
     const repIds: number[] = Array.isArray(req.body?.repIds) ? req.body.repIds.map(Number) : [];
+    // Every OTHER rep-taking territory route validates its input reps; this one
+    // did not, so a foreign rep id could be written into assignee_ids — and
+    // getTerritoriesByRep then served this org's area (name, polygon, briefing)
+    // to that other tenant's rep. Validate tenant AND visibility scope.
+    for (const r of repIds) {
+      if (!Number.isInteger(r) || r <= 0) return res.status(400).json({ error: "invalid repIds" });
+      if (!repInCallerTenant(user, r) || !repInVisibilityScope(user, r)) {
+        return res.status(404).json({ error: "rep not found" });
+      }
+    }
     const merged = Array.from(new Set([t.repId, ...repIds].filter(Boolean)));
     const at = new Date().toISOString();
     storage.updateTerritory(t.id, { status: merged.length > 1 ? "shared" : "active", assigneeIds: JSON.stringify(merged), updatedAt: at } as any, tid);
@@ -5374,7 +5389,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const { message } = req.body;
-    const request = storage.createTerritoryRequest(member.id, user.id, message);
+    // Stamp the requesting rep's tenant so the row is walled from creation.
+    const request = storage.createTerritoryRequest(member.id, user.id, message, (member as any).tenantId ?? user?.tenantId ?? null);
 
     // Email admin
     if (process.env.SMTP_USER && adminInbox()) {
@@ -5397,9 +5413,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Get all territory requests (admin/manager) — enriched with rep name + territory name
   app.get("/api/territory-requests", requireManager, (req, res) => {
     const status = req.query.status as string | undefined;
-    const requests = storage.getTerritoryRequests(status);
-    const team = storage.getTeamMembers();
-    const territories = storage.getTerritories();
+    // Tenant scope on the requests AND on both enrichment reads — the joins
+    // leaked foreign rep names and area names even when the rows were filtered.
+    const tid = (req as any).user?.tenantId ?? undefined;
+    const requests = storage.getTerritoryRequests(status, tid);
+    const team = storage.getTeamMembers(tid);
+    const territories = storage.getTerritories(tid);
     const enriched = requests.map(r => {
       const member = team.find(m => m.id === r.repId);
       // Find the territory currently assigned to this rep
@@ -5420,7 +5439,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!["fulfilled", "dismissed"].includes(status)) {
       return res.status(400).json({ error: "status must be fulfilled or dismissed" });
     }
-    const updated = storage.updateTerritoryRequest(Number(req.params.id), status);
+    const updated = storage.updateTerritoryRequest(Number(req.params.id), status, (req as any).user?.tenantId ?? undefined);
     if (!updated) return res.status(404).json({ error: "Not found" });
     res.json(updated);
   });
@@ -6318,10 +6337,14 @@ export function registerSaasRoutes(app: any) {
   // their role grants, grouped by domain with high-risk flagged. Same shared
   // map as the middleware, so the preview is the real effective permission.
   app.get("/api/governance/user/:id/capabilities", requireCapability("settings.manage.org"), (req: Request, res: Response) => {
-    const member = storage.getTeamMemberById(Number(req.params.id));
+    // Tenant-scoped lookup: this walked the dense team_members id space and
+    // returned foreign members' names + effective roles — a clean org-chart
+    // enumeration primitive for any tenant admin.
+    const govTid = (req as any).user?.tenantId ?? undefined;
+    const member = storage.getTeamMemberById(Number(req.params.id), govTid);
     if (!member) return res.status(404).json({ error: "Not found" });
     // A team member's login role lives on the linked user (fallback: member.role).
-    const linked = storage.getAllUsers().find(u => u.teamMemberId === member.id);
+    const linked = storage.getAllUsers(govTid).find(u => u.teamMemberId === member.id);
     const role = (linked?.role ?? member.role ?? "rep") as Role;
     const granted = new Set(capabilitiesFor(role));
     res.json({
