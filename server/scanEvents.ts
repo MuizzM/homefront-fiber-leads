@@ -162,10 +162,19 @@ export function startScanEvents(): void {
   }
 }
 
-/** In-process subscription for the SSE endpoint. Returns an unsubscribe fn. */
+/** In-process subscription for the SSE endpoints. Returns an unsubscribe fn. */
 export function onScanEvent(cb: (evt: ScanStageEvent & { id: number | null }) => void): () => void {
   relay.on("event", cb);
   return () => relay.off("event", cb);
+}
+
+/** How many SSE relays are currently attached. Every long-lived stream MUST
+ *  unsubscribe on disconnect — a relay listener leak silently grows the fan-out
+ *  cost of every scan event on the hot path (and eventually trips the emitter's
+ *  max-listeners warning). Exposed so tests can assert the count returns to its
+ *  baseline after a client hangs up. */
+export function scanEventListenerCount(): number {
+  return relay.listenerCount("event");
 }
 
 // ── Snapshot / accounting ────────────────────────────────────────────────────

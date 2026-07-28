@@ -16,6 +16,7 @@ import compression from "compression";
 import { structuredLog } from "./structuredLog";
 import { anfParkedSql, provenHourlyCapacity } from "@shared/scanPolicy";
 import { globalApiRateLimitMax, shouldSkipGlobalRateLimit } from "./rateLimitPolicy";
+import { BLOCKED_RESPONSE_FIELDS, scrubSecretText } from "./secretScrub";
 
 // ── Multi-core scan cluster ────────────────────────────────────────────────────
 // The scan pipeline is single-threaded JavaScript (synchronous better-sqlite3 +
@@ -221,28 +222,14 @@ app.use((req, res, next) => {
 
 // ── Response sanitizer — defense-in-depth: strip ALL sensitive fields from every API response ──
 // Prevents passwordHash, tokens, stack traces, and vendor URLs leaking via network tab.
-const BLOCKED_FIELDS = new Set([
-  "passwordHash", "password_hash", "password", "tempPassword",
-  "stack", "trace", "errno", "syscall",
-  "KFS_AUTH_BASIC", "SCANNER_SUBMIT_SECRET", "SMTP_PASS",
-  "RESEND_API_KEY",
-  "kfsAuthBasic", "scannerSecret", "mapboxToken", "enrichmentApiKey",
-]);
-const REDACT_PATTERNS: RegExp[] = [
-  /https?:\/\/[^\s"']*gokinetic[^\s"']*/gi,
-  /gokinetic\.com/gi,
-  /Basic [A-Za-z0-9+/=]{20,}/g,
-  /Bearer eyJ[A-Za-z0-9._-]{20,}/g,
-  /eyJ[A-Za-z0-9._-]{40,}/g,
-  /pk\.eyJ[A-Za-z0-9._-]{20,}/g, // Mapbox public tokens — served via /api/config/map only
-];
+// The field/pattern vocabulary lives in ./secretScrub so routes that must scrub
+// at the point of projection (see the run-scoped scan stage feed, which serves
+// upstream provider text to non-admins) share ONE definition with this global
+// middleware instead of maintaining a second copy that silently drifts.
+const BLOCKED_FIELDS = BLOCKED_RESPONSE_FIELDS;
 function sanitizeVal(v: any): any {
   if (v === null || v === undefined) return v;
-  if (typeof v === "string") {
-    let s = v;
-    for (const re of REDACT_PATTERNS) { re.lastIndex = 0; s = s.replace(re, "[redacted]"); }
-    return s;
-  }
+  if (typeof v === "string") return scrubSecretText(v);
   if (Array.isArray(v)) return v.map(sanitizeVal);
   if (typeof v === "object") {
     const out: any = {};
