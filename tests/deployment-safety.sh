@@ -77,7 +77,16 @@ grep -q -- '--read-only' scripts/backup.sh || fail "backup helper root filesyste
 grep -q 'PRAGMA integrity_check' scripts/backup-container.sh || fail "container backup lacks an integrity check"
 grep -q 'age -r' scripts/backup-container.sh || fail "container backup is not encrypted"
 grep -q '.backup-age-recipient' scripts/deploy.sh || fail "deploy does not require encrypted pre-cutover backups"
-grep -q 'scripts/rollback.sh "$PREV_TAG"' scripts/deploy.sh || fail "failed deploy does not use health-gated rollback"
+# A failed deploy must roll back to a release that is NOT the one that just
+# failed. This previously asserted the literal `rollback.sh "$PREV_TAG"`, which
+# pinned the mechanism rather than the guarantee — and that exact line rolled a
+# failed release onto itself on 2026-07-28, reporting a confusing second failure
+# instead of restoring service. All recovery paths now go through
+# recover_to_previous, which refuses any target equal to the release being
+# deployed (see tests/unit/deploy-rollback-target.test.ts).
+grep -q 'recover_to_previous' scripts/deploy.sh || fail "failed deploy does not use health-gated rollback"
+grep -q 'pick_rollback_target' scripts/deploy.sh || fail "deploy has no rollback-target chooser"
+grep -q 'scripts/rollback.sh "$PREV_TAG"' scripts/deploy.sh && fail "a recovery path still rolls back to the raw running tag (can equal the failing release)"
 grep -q '\^\[0-9a-f\].*7,40' scripts/rollback.sh || fail "rollback accepts mutable image tags"
 if grep -q 'systemctl' scripts/restore.sh; then
   fail "restore still controls a systemd service instead of Compose"

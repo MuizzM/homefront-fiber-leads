@@ -163,11 +163,11 @@ fi
 # 4) SHORT OFFLINE WINDOW — stop, checkpoint, verified encrypted backup, cutover.
 # If anything in the window fails, the trap restores the previous release.
 restore_previous_release() {
-  echo "[deploy] offline window failed — restoring previous release ${PREV_TAG}" >&2
-  if scripts/rollback.sh "$PREV_TAG"; then
-    echo "[deploy] previous release $PREV_TAG is healthy again; production data unchanged" >&2
+  echo "[deploy] offline window failed — restoring the last healthy release" >&2
+  if recover_to_previous; then
+    echo "[deploy] production data unchanged" >&2
   else
-    echo "[deploy] CRITICAL: previous release $PREV_TAG did not come back healthy — see docs/INCIDENT_RUNBOOK.md" >&2
+    echo "[deploy] see docs/INCIDENT_RUNBOOK.md" >&2
   fi
 }
 
@@ -216,17 +216,54 @@ else
   fi
 fi
 
+# ── Choosing a rollback target ───────────────────────────────────────────────
+# Rolling back to the SHA that just failed is not a rollback — it reinstalls the
+# broken release and reports "CRITICAL: rollback also failed", which reads like a
+# second, unrelated fault and buries the real one. Seen live on 2026-07-28:
+# a release failed its health check and the recovery rolled to that same SHA.
+#
+# PREV_TAG is read from the running container before cutover and is normally
+# correct, but it is NOT guaranteed to differ from the target: if a previous
+# attempt already swapped the container onto this SHA, the "previous" image IS
+# the new one. .previous-tag records the last release that actually passed
+# health, so it is the trustworthy fallback. If neither yields something
+# different, say so plainly instead of performing a recovery that cannot work.
+pick_rollback_target() {
+  if [ -n "${PREV_TAG:-}" ] && [ "$PREV_TAG" != "$NEW_TAG" ]; then
+    printf '%s' "$PREV_TAG"; return 0
+  fi
+  local recorded; recorded="$(cat .previous-tag 2>/dev/null || true)"
+  if [ -n "$recorded" ] && [ "$recorded" != "$NEW_TAG" ]; then
+    echo "[deploy] running image already reports $NEW_TAG; using last healthy release $recorded" >&2
+    printf '%s' "$recorded"; return 0
+  fi
+  return 1
+}
+
+# Roll back to the last release known to be good. Never to $NEW_TAG.
+recover_to_previous() {
+  local target
+  if ! target="$(pick_rollback_target)"; then
+    echo "[deploy] CRITICAL: no rollback target distinct from $NEW_TAG (running=$PREV_TAG, recorded=$(cat .previous-tag 2>/dev/null || echo none))." >&2
+    echo "[deploy] production is on a release that failed health. See docs/INCIDENT_RUNBOOK.md — restore a known-good SHA by hand." >&2
+    return 1
+  fi
+  if scripts/rollback.sh "$target"; then
+    echo "[deploy] rollback to $target is healthy" >&2
+    return 0
+  fi
+  echo "[deploy] CRITICAL: rollback to $target also failed its health check" >&2
+  return 1
+}
+
 # 5) Roll out (Caddy waits for app healthy via depends_on).
 echo "[deploy] up…"
 if ! APP_IMAGE_TAG="$NEW_TAG" "${COMPOSE[@]}" up -d; then
   echo "[deploy] Compose cutover failed — restoring the previous image" >&2
   WINDOW_OPEN=0
   trap - EXIT
-  if scripts/rollback.sh "$PREV_TAG"; then
-    echo "[deploy] rollback to $PREV_TAG is healthy" >&2
-  else
-    echo "[deploy] CRITICAL: rollback to $PREV_TAG also failed its health check" >&2
-  fi
+  # recover_to_previous logs its own outcome (healthy, or why it could not).
+  recover_to_previous || true
   exit 1
 fi
 WINDOW_OPEN=0
@@ -271,15 +308,9 @@ if [ "$ok" = "1" ]; then
   docker builder prune -f --keep-storage 2GB >/dev/null 2>&1 || true
   echo "[deploy] pruned old release images + build cache (kept $NEW_TAG + ${PREV_TAG:-none})"
 else
+  # The health gate is the path most likely to fire on a genuinely bad release,
+  # so it above all must not "recover" by reinstalling that same release.
   echo "[deploy] UNHEALTHY after cutover — rolling back" >&2
-  if [ -n "${PREV_TAG:-}" ]; then
-    if scripts/rollback.sh "$PREV_TAG"; then
-      echo "[deploy] rollback to $PREV_TAG is healthy" >&2
-    else
-      echo "[deploy] CRITICAL: rollback to $PREV_TAG also failed its health check" >&2
-    fi
-  else
-    echo "[deploy] no previous tag to roll back to — investigate with docs/INCIDENT_RUNBOOK.md" >&2
-  fi
+  recover_to_previous || true
   exit 1
 fi
