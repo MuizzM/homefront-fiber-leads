@@ -98,6 +98,29 @@ function ensureTable(): void {
   } catch { /* migrations run elsewhere — ledger is best-effort */ }
 }
 
+// ── Fleet-shared state (governor_state) ──────────────────────────────────────
+// C1 (per-process-state defect): the circuit breaker and the token-mint backoff
+// used to live in module-local variables — in the 4-worker cluster a fleet-wide
+// trip needed 8 denials × 4 processes, one worker's recovery probe raced a
+// sibling's failure storm, and mint backoff was computed independently per
+// process (up to 4× concurrent mints against a throttling Cloudflare). Both now
+// persist to a tiny key/value row so every worker trips, cools down, recovers,
+// and backs off mints TOGETHER. The in-memory variables below remain as a
+// read-through/write-through CACHE (TTL-gated reads, write-through on every
+// mutation) so hot paths never hit the DB per request.
+let governorStateEnsured = false;
+function ensureGovernorStateTable(): void {
+  if (governorStateEnsured) return;
+  try {
+    rawDb.exec(`CREATE TABLE IF NOT EXISTS governor_state (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at INTEGER NOT NULL
+    )`);
+    governorStateEnsured = true;
+  } catch { /* best-effort — the in-memory cache keeps the old behavior */ }
+}
+
 // ── Batched ledger writes ────────────────────────────────────────────────────
 let pendingBytes = 0;
 let pendingReqs = 0;
@@ -144,6 +167,49 @@ let recoverStep = -1;       // -1 = closed; else index into RECOVER_STEPS
 let probeStreak = 0;        // consecutive successful probes at the current step
 let circuitLogAt = 0;
 
+// Breaker cache sync: the row value our in-memory cache currently reflects, and
+// when we last read it. Reads are TTL-gated (hot paths ≤1 DB read/SYNC_TTL_MS
+// per process); every mutation writes through immediately so siblings see it.
+const BREAKER_ROW_KEY = "proxy_circuit";
+const SYNC_TTL_MS = 250;
+let breakerCacheReadAt = 0;
+let breakerCacheRaw = "";
+
+function loadBreakerFromDb(): void {
+  try {
+    ensureGovernorStateTable();
+    const row = rawDb.prepare("SELECT value FROM governor_state WHERE key=?").get(BREAKER_ROW_KEY) as any;
+    const raw = String(row?.value ?? "");
+    if (raw === breakerCacheRaw) return; // unchanged since our last read/write
+    breakerCacheRaw = raw;
+    if (!raw) { failTimes = []; cooldownUntil = 0; recoverStep = -1; probeStreak = 0; return; }
+    const v = JSON.parse(raw);
+    failTimes = Array.isArray(v.f) ? v.f.filter((t: any) => Number.isFinite(t)) : [];
+    cooldownUntil = Number(v.c) || 0;
+    recoverStep = Number.isFinite(v.r) ? Math.trunc(v.r) : -1;
+    probeStreak = Number(v.p) || 0;
+  } catch { /* DB best-effort — the cache keeps working standalone */ }
+}
+
+function syncBreaker(force = false): void {
+  const now = Date.now();
+  if (!force && now - breakerCacheReadAt < SYNC_TTL_MS) return;
+  breakerCacheReadAt = now;
+  loadBreakerFromDb();
+}
+
+function persistBreaker(): void {
+  try {
+    ensureGovernorStateTable();
+    const raw = JSON.stringify({ f: failTimes.slice(-CIRCUIT_FAILS), c: cooldownUntil, r: recoverStep, p: probeStreak });
+    rawDb.prepare(
+      `INSERT INTO governor_state (key, value, updated_at) VALUES (?,?,?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+    ).run(BREAKER_ROW_KEY, raw, Date.now());
+    breakerCacheRaw = raw;
+  } catch { /* best-effort */ }
+}
+
 function tripCircuit(now: number, reason: string): void {
   cooldownUntil = now + CIRCUIT_COOLDOWN_MS;
   recoverStep = 0;          // enter recovery at the floor after cooldown
@@ -170,36 +236,49 @@ export function noteProxyAuthFailure(): void {
     }
     return;
   }
+  // C1: pull the fleet view before mutating so a sibling's trip/recovery isn't
+  // clobbered by this process's stale cache (failures are rare — a forced sync
+  // here costs nothing against a proxy request).
+  syncBreaker(true);
   if (recoverStep >= 0) {
     // A failure while recovering: don't blackout — drop back to the floor and
     // re-arm a short cooldown so we keep probing, never hammering.
     recoverStep = 0;
     probeStreak = 0;
     cooldownUntil = now + CIRCUIT_COOLDOWN_MS;
+    persistBreaker();
     return;
   }
   failTimes = failTimes.filter((t) => now - t < CIRCUIT_WINDOW_MS);
   failTimes.push(now);
   if (failTimes.length >= CIRCUIT_FAILS) tripCircuit(now, "proxy auth/limit denials");
+  persistBreaker();
 }
 
 export function noteProxySuccess(): void {
+  // TTL-gated sync: per-response hot path stays off the DB, yet a sibling's
+  // trip is seen within SYNC_TTL_MS so our successes count as fleet probes.
+  syncBreaker();
   if (recoverStep >= 0) {
-    // Probe succeeded — climb the recovery ramp; on the last step, close.
-    probeStreak += 1;
-    if (probeStreak >= PROBES_PER_STEP) {
-      probeStreak = 0;
-      recoverStep += 1;
-      if (recoverStep >= RECOVER_STEPS.length) {
-        recoverStep = -1;   // fully closed / healthy
-        structuredLog("bandwidth.circuit_closed", { reason: "probes recovered" });
-      } else {
-        structuredLog("bandwidth.circuit_recover_step", { scale: RECOVER_STEPS[recoverStep] });
+    syncBreaker(true); // about to mutate — never climb off a stale step
+    if (recoverStep >= 0) {
+      // Probe succeeded — climb the recovery ramp; on the last step, close.
+      probeStreak += 1;
+      if (probeStreak >= PROBES_PER_STEP) {
+        probeStreak = 0;
+        recoverStep += 1;
+        if (recoverStep >= RECOVER_STEPS.length) {
+          recoverStep = -1;   // fully closed / healthy
+          structuredLog("bandwidth.circuit_closed", { reason: "probes recovered" });
+        } else {
+          structuredLog("bandwidth.circuit_recover_step", { scale: RECOVER_STEPS[recoverStep] });
+        }
       }
+      persistBreaker();
+      return;
     }
-    return;
   }
-  if (failTimes.length) failTimes = [];
+  if (failTimes.length) { failTimes = []; persistBreaker(); }
 }
 
 /** True ONLY during the brief post-trip cooldown — the one window where callers
@@ -208,6 +287,7 @@ export function noteProxySuccess(): void {
  *  false and a probe trickle flows (see proxyThrottleScale / budgetScale). */
 export function isProxyCircuitOpen(): boolean {
   if (UNLIMITED) return false; // unlimited plan → scanning is never suspended
+  syncBreaker(); // TTL-gated — a sibling's trip is honored within SYNC_TTL_MS
   // Only meaningful while tripped/recovering; a closed circuit is never "open"
   // even if a stale cooldown timestamp is still nominally in the future (probes
   // may have recovered us early).
@@ -223,14 +303,84 @@ export function isProxyCircuitOpen(): boolean {
  *  brief post-trip cooldown, the current probe-ramp fraction while recovering. */
 export function proxyThrottleScale(now = Date.now()): number {
   if (UNLIMITED) return 1;              // unlimited plan → never throttled
+  syncBreaker();                        // TTL-gated read-through of the shared row
   if (recoverStep < 0) return 1;        // closed / healthy
   if (now < cooldownUntil) return 0;    // brief cooldown — the one full stop
   return RECOVER_STEPS[recoverStep];    // probe trickle, ramping to full
 }
 
+/** Cheap one-call view of the shared breaker for observability (fleet heartbeat). */
+export function circuitBreakerSnapshot(): { open: boolean; step: number; scale: number } {
+  if (UNLIMITED) return { open: false, step: -1, scale: 1 };
+  return { open: isProxyCircuitOpen(), step: recoverStep, scale: proxyThrottleScale() };
+}
+
+// ── Fleet-shared mint backoff (authorizedTokenPool) ──────────────────────────
+// C1: the 403-storm mint backoff was per-process, so 4 workers each computed
+// their own and could fire up to 4× concurrent mints against a throttling
+// Cloudflare. The consecutive-failure counter + last-failure timestamp now live
+// in a shared row; same read-through/write-through cache discipline as the
+// breaker. Mint cadence is low (token lifetime minutes), so a forced read on
+// every failure/success is cheap.
+const MINT_ROW_KEY = "authorized_mint_backoff";
+let mintCache = { failures: 0, lastFailureAt: 0 };
+let mintCacheReadAt = 0;
+let mintCacheRaw = "";
+
+export function getSharedMintBackoff(force = false): { failures: number; lastFailureAt: number } {
+  const now = Date.now();
+  if (!force && now - mintCacheReadAt < SYNC_TTL_MS) return mintCache;
+  mintCacheReadAt = now;
+  try {
+    ensureGovernorStateTable();
+    const row = rawDb.prepare("SELECT value FROM governor_state WHERE key=?").get(MINT_ROW_KEY) as any;
+    const raw = String(row?.value ?? "");
+    if (raw !== mintCacheRaw) {
+      mintCacheRaw = raw;
+      const v = raw ? JSON.parse(raw) : {};
+      mintCache = { failures: Number(v.n) || 0, lastFailureAt: Number(v.at) || 0 };
+    }
+  } catch { /* best-effort — per-process fallback values stay */ }
+  return mintCache;
+}
+
+function persistMintBackoff(): void {
+  try {
+    ensureGovernorStateTable();
+    const raw = JSON.stringify({ n: mintCache.failures, at: mintCache.lastFailureAt });
+    rawDb.prepare(
+      `INSERT INTO governor_state (key, value, updated_at) VALUES (?,?,?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
+    ).run(MINT_ROW_KEY, raw, Date.now());
+    mintCacheRaw = raw;
+  } catch { /* best-effort */ }
+}
+
+/** One more consecutive mint failure, fleet-wide. `at` is wall-clock ms. */
+export function noteSharedMintFailure(at: number): { failures: number; lastFailureAt: number } {
+  getSharedMintBackoff(true); // increment the fleet value, never a stale local one
+  mintCache = { failures: mintCache.failures + 1, lastFailureAt: at };
+  persistMintBackoff();
+  return mintCache;
+}
+
+/** A mint succeeded — clear the fleet storm counter. */
+export function resetSharedMintFailures(): void {
+  getSharedMintBackoff(true);
+  if (!mintCache.failures && !mintCache.lastFailureAt) return;
+  mintCache = { failures: 0, lastFailureAt: 0 };
+  persistMintBackoff();
+}
+
 /** Test-only reset of the breaker state. */
 export function _resetCircuitForTests(): void {
   failTimes = []; cooldownUntil = 0; recoverStep = -1; probeStreak = 0; circuitLogAt = 0; lastRotateAt = 0;
+  breakerCacheReadAt = 0; breakerCacheRaw = "";
+  mintCache = { failures: 0, lastFailureAt: 0 }; mintCacheReadAt = 0; mintCacheRaw = "";
+  try {
+    ensureGovernorStateTable();
+    rawDb.prepare("DELETE FROM governor_state WHERE key IN (?,?)").run(BREAKER_ROW_KEY, MINT_ROW_KEY);
+  } catch { /* best-effort */ }
 }
 
 // ── Billing cycle + pacing ───────────────────────────────────────────────────

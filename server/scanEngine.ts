@@ -19,7 +19,8 @@ import {
 import { scanFrontierAddress } from "./frontierScanner";
 import { emitStage } from "./scanStageBus";
 import { isRevenueAdmissionClass, AdmissionTimeoutError } from "./distributedProviderCoordinator";
-import { adaptivePace } from "./adaptivePace";
+import { adaptivePace, adaptivePaceStats } from "./adaptivePace";
+import { isProxyCircuitOpen, circuitBreakerSnapshot } from "./bandwidthGovernor";
 import { triggerExpansionForTargets } from "./clusterExpansion";
 import crypto from "node:crypto";
 import { storage } from "./storage";
@@ -44,6 +45,10 @@ import {
   getStrandedDoneRuns,
   resetInflightTargets,
   terminalizeQueuedTail,
+  bumpRunReopen,
+  countClaimableQueued,
+  countActiveRuns,
+  countOpenDeadLetters,
   ANF_QUIET_DAYS,
   type ScanRunRow,
 } from "./scanIntelStore";
@@ -179,6 +184,20 @@ const ANF_TERMINAL_ATTEMPTS = Math.max(2, Math.floor(Number(process.env.ADDRESS_
 // workers stop hammering Decodo's depleted rolling window and it can refill.
 const PROVIDER_BLOCK_BACKOFF_FRACTION = Math.min(1, Math.max(0, Number(process.env.PROVIDER_BLOCK_BACKOFF_FRACTION ?? 0.5) || 0.5));
 const PROVIDER_BLOCK_BACKOFF_MS = Math.max(0, Number(process.env.PROVIDER_BLOCK_BACKOFF_MS ?? 15_000) || 15_000);
+// C2 — breaker-wait cadence: how long a worker sleeps between breaker polls
+// while the shared circuit is in COOLDOWN, and the throttle on the wait log
+// (one event per 30s fleet-wide per process — never per batch).
+const BREAKER_WAIT_MS = Math.max(50, Number(process.env.SCAN_BREAKER_WAIT_MS) || 2_000);
+let lastBreakerWaitLogAt = 0;
+function logBreakerWait(runId: string): void {
+  const now = Date.now();
+  if (now - lastBreakerWaitLogAt <= 30_000) return;
+  lastBreakerWaitLogAt = now;
+  structuredLog("scan.engine.breaker_wait", {
+    runId, waitMs: BREAKER_WAIT_MS,
+    reason: "shared proxy circuit COOLDOWN — yielding instead of claiming",
+  }, "warn");
+}
 function dedupSkipSecondsForRun(kind: string): number {
   const v = String(kind ?? "").toLowerCase();
   if (v.includes("manual") || v === "target_ids" || v.includes("lasso") || v.includes("bbox") || v.includes("area") || v.includes("field")) return 0;
@@ -280,6 +299,22 @@ export async function runScanWorker(
       }
 
       const remainingBudget = run.budget - (run.verified + run.failed);
+      // C2 — the engine honors the SHARED proxy breaker (C1). Before this gate
+      // the bulk engine never consulted the breaker: in non-unlimited mode it
+      // kept firing batches through the post-trip COOLDOWN, and every failure
+      // during RECOVERING re-armed the cooldown — a self-perpetuating throttle.
+      // While the circuit is in its brief full-stop, yield instead of claiming
+      // (claiming would just buy a batch of doomed 407s). RECOVERING stays
+      // claimable: the probe trickle is exactly how the breaker climbs shut,
+      // and budgetScale already throttles the trickle. touchRun keeps the
+      // heartbeat fresh so no sibling reaper reclaims the run mid-cooldown.
+      // Unlimited mode: isProxyCircuitOpen() is always false → zero change.
+      if (isProxyCircuitOpen()) {
+        touchRun(runId);
+        logBreakerWait(runId);
+        await new Promise((r) => setTimeout(r, BREAKER_WAIT_MS));
+        continue; // re-check run status at the loop top (a cancel lands promptly)
+      }
       // Atomically CLAIM the batch (marks them inflight) so a racing dispatch can't
       // grab the same targets and double-spend the proxy. Requeued (transient-error)
       // targets are 'queued' again, so the queue only drains once every address has
@@ -899,6 +934,10 @@ const STUCK_RECLAIM_SECONDS = Number(process.env.SCAN_STUCK_RECLAIM_SECONDS ?? 3
 // runs stay 'running' with their queued rows intact until dispatched.
 const RESUME_MAX_PER_TICK = Math.max(1, Number(process.env.SCAN_RESUME_MAX_PER_TICK) || 8);
 
+// C3 — how many times the stranded-tail drain may re-open the same run before
+// concluding it persistently errors on dispatch/claim and leaving it 'error'.
+const REOPEN_BUDGET = Math.max(1, Number(process.env.SCAN_REOPEN_BUDGET) || 5);
+
 export function resumeInterruptedRuns(): void {
   try {
     // First evict zombie leases: runs whose worker is still in activeRuns but whose
@@ -948,7 +987,25 @@ export function resumeInterruptedRuns(): void {
         if (closed > 0) console.log(`[scan-engine] closed budget-exhausted tail on ${run.id} (${closed} skipped)`);
         continue;
       }
+      // C3 — RE-OPEN ERROR BUDGET. A run that persistently errors on
+      // dispatch/claim used to be re-opened every 60s FOREVER (each failed
+      // worker flipped it back to 'error', the tail stayed claimable, the
+      // drain matched it again next tick). The persisted reopen_count (shared
+      // by every worker's reaper, restart-proof) caps the re-opens: past the
+      // budget the run stays 'error', its tail is terminalized so it stops
+      // matching the drain (one alert, not one per tick), and the addresses
+      // remain in scan_targets for the next full sweep.
+      if ((run.reopenCount ?? 0) >= REOPEN_BUDGET) {
+        const closed = terminalizeQueuedTail(run.id, `re-open budget exhausted (${REOPEN_BUDGET} failed re-opens)`);
+        setRunStatus(run.id, "error", `re-open budget exhausted after ${REOPEN_BUDGET} failed re-opens — tail terminalized (${closed} skipped)`);
+        structuredLog("scan.run.reopen_budget_exhausted", {
+          runId: run.id, kind: run.kind, status: run.status,
+          reopens: run.reopenCount ?? 0, tailClosed: closed,
+        }, "error");
+        continue;
+      }
       resetInflightTargets(run.id);
+      bumpRunReopen(run.id);
       setRunStatus(run.id, "running");
       console.log(`[scan-engine] re-opening stranded '${run.status}' run ${run.id} (${countQueued(run.id)} claimable pending)`);
       dispatchRun(run.id, run.tenantId);
@@ -1000,4 +1057,42 @@ export function startScanReaper(intervalMs = 60_000): void {
   if (_reaper) return;
   _reaper = setInterval(() => resumeInterruptedRuns(), intervalMs);
   if (typeof (_reaper as any).unref === "function") (_reaper as any).unref();
+  startFleetHeartbeat(); // C4 — started with the reaper so index.ts needs no new wiring
+}
+
+// ── C4: FLEET HEARTBEAT ──────────────────────────────────────────────────────
+// adaptivePaceStats() had zero consumers and queue depth / breaker state were
+// never emitted — a throttle storm was invisible until leads stopped. One cheap
+// structured snapshot per minute from the CONTROL worker only (the reaper runs
+// in every cluster worker; 4× duplicate events would be noise).
+const FLEET_HEARTBEAT_MS = Math.max(5_000, Number(process.env.SCAN_FLEET_HEARTBEAT_MS) || 60_000);
+let _fleetHeartbeat: ReturnType<typeof setInterval> | null = null;
+
+export function emitFleetHeartbeat(): void {
+  try {
+    const pace = adaptivePaceStats();
+    const breaker = circuitBreakerSnapshot();
+    structuredLog("scan.fleet.heartbeat", {
+      paceMs: pace.paceMs,
+      loopLagP95: pace.loopLagP95,
+      healthMs: pace.healthMs,
+      claimableQueued: countClaimableQueued(),
+      activeRuns: countActiveRuns(),
+      activeWorkers: activeRuns.size,
+      breakerOpen: breaker.open,
+      breakerStep: breaker.step,
+      breakerScale: breaker.scale,
+      openDeadLetters: countOpenDeadLetters(),
+    });
+  } catch { /* heartbeat is best-effort — never wedge the control worker */ }
+}
+
+export function startFleetHeartbeat(intervalMs = FLEET_HEARTBEAT_MS): void {
+  if (_fleetHeartbeat) return;
+  // Control worker only. Single-process / dev (no HF_ROLE) IS the control role,
+  // matching index.ts's IS_CONTROL_ROLE rule; scan-only workers (HF_ROLE=scan)
+  // never emit.
+  if (process.env.HF_ROLE && process.env.HF_ROLE !== "control") return;
+  _fleetHeartbeat = setInterval(emitFleetHeartbeat, intervalMs);
+  if (typeof (_fleetHeartbeat as any).unref === "function") (_fleetHeartbeat as any).unref();
 }

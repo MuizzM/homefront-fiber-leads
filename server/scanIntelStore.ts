@@ -178,7 +178,42 @@ export interface ScanRunRow {
   budget: number; verified: number; newFiber: number; newlyLive: number; failed: number;
   status: string; error: string | null; estBytes: number; createdBy: number | null;
   startedAt: string; heartbeatAt: string | null; completedAt: string | null;
+  reopenCount: number; // C3: how many times the stranded-tail drain re-opened this run
 }
+
+// C3 — the re-open error budget lives IN the row so it survives restarts and is
+// shared by every cluster worker's reaper (an in-memory Map would let each of
+// the 4 workers re-open the same run 5 times). Lazily migrated: storage.ts owns
+// the base DDL, so we ALTER here with a PRAGMA guard (retry until the column
+// exists, then never check again).
+let reopenColEnsured = false;
+function ensureReopenColumn(): void {
+  if (reopenColEnsured) return;
+  try {
+    const cols = rawDb.prepare(`PRAGMA table_info(scan_runs)`).all() as Array<{ name: string }>;
+    if (!cols.length) return; // table not created yet — retry on the next call
+    if (!cols.some((c) => c.name === "reopen_count")) {
+      try { rawDb.exec(`ALTER TABLE scan_runs ADD COLUMN reopen_count INTEGER NOT NULL DEFAULT 0`); }
+      catch { /* a sibling process added it first */ }
+    }
+    reopenColEnsured = true;
+  } catch { /* retry on the next call */ }
+}
+
+// Count one stranded-tail re-open; returns the new count.
+export function bumpRunReopen(runId: string): number {
+  ensureReopenColumn();
+  try {
+    rawDb.prepare(`UPDATE scan_runs SET reopen_count = reopen_count + 1, updated_at=datetime('now') WHERE id=?`).run(runId);
+    const row = g<{ n: number }>(`SELECT reopen_count AS n FROM scan_runs WHERE id=?`, runId);
+    return Number(row?.n ?? 0);
+  } catch { return 0; }
+}
+
+const RUN_COLS = `id, tenant_id AS tenantId, kind, label, city, state, bbox, budget, verified, new_fiber AS newFiber,
+        newly_live AS newlyLive, failed, status, error, est_bytes AS estBytes, created_by AS createdBy,
+        started_at AS startedAt, heartbeat_at AS heartbeatAt, completed_at AS completedAt,
+        reopen_count AS reopenCount`;
 
 export function createScanRun(r: {
   id: string; tenantId: number; kind: string; label: string; city?: string | null; state?: string | null;
@@ -455,20 +490,18 @@ export function setRunStatus(runId: string, status: string, error?: string | nul
 }
 
 export function getRun(runId: string, tenantId: number): ScanRunRow | undefined {
+  ensureReopenColumn();
   return g<ScanRunRow>(
-    `SELECT id, tenant_id AS tenantId, kind, label, city, state, bbox, budget, verified, new_fiber AS newFiber,
-            newly_live AS newlyLive, failed, status, error, est_bytes AS estBytes, created_by AS createdBy,
-            started_at AS startedAt, heartbeat_at AS heartbeatAt, completed_at AS completedAt
+    `SELECT ${RUN_COLS}
        FROM scan_runs WHERE id=? AND tenant_id=?`,
     runId, tenantId,
   );
 }
 
 export function listRuns(tenantId: number, limit = 20): ScanRunRow[] {
+  ensureReopenColumn();
   return all<ScanRunRow>(
-    `SELECT id, tenant_id AS tenantId, kind, label, city, state, bbox, budget, verified, new_fiber AS newFiber,
-            newly_live AS newlyLive, failed, status, error, est_bytes AS estBytes, created_by AS createdBy,
-            started_at AS startedAt, heartbeat_at AS heartbeatAt, completed_at AS completedAt
+    `SELECT ${RUN_COLS}
        FROM scan_runs WHERE tenant_id=? ORDER BY started_at DESC LIMIT ?`,
     tenantId, limit,
   );
@@ -477,10 +510,9 @@ export function listRuns(tenantId: number, limit = 20): ScanRunRow[] {
 // Runs that were 'running' when the process died — the resume set. Only runs
 // whose heartbeat is stale (no live worker) to avoid double-dispatch.
 export function getResumableRuns(staleSeconds = 30): ScanRunRow[] {
+  ensureReopenColumn();
   return all<ScanRunRow>(
-    `SELECT id, tenant_id AS tenantId, kind, label, city, state, bbox, budget, verified, new_fiber AS newFiber,
-            newly_live AS newlyLive, failed, status, error, est_bytes AS estBytes, created_by AS createdBy,
-            started_at AS startedAt, heartbeat_at AS heartbeatAt, completed_at AS completedAt
+    `SELECT ${RUN_COLS}
        FROM scan_runs
       WHERE status='running' AND (heartbeat_at IS NULL OR heartbeat_at <= datetime('now', ?))`,
     `-${staleSeconds} seconds`,
@@ -490,6 +522,28 @@ export function getResumableRuns(staleSeconds = 30): ScanRunRow[] {
 // Pending = still to process (queued OR mid-flight). "Queue drained" means 0.
 export function countQueued(runId: string): number {
   return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE run_id=? AND state IN ('queued','inflight')`, runId).c;
+}
+
+// ── Fleet heartbeat metrics (C4) — one cheap COUNT each, all failure-safe ───
+// Fleet-wide claimable backlog: queued AND due right now (backoff rows excluded).
+export function countClaimableQueued(): number {
+  try {
+    return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_run_targets WHERE state='queued' AND (next_attempt_at IS NULL OR next_attempt_at<=datetime('now'))`).c;
+  } catch { return 0; }
+}
+
+// Runs currently marked running (worker-owned or awaiting the reaper).
+export function countActiveRuns(): number {
+  try {
+    return g<{ c: number }>(`SELECT COUNT(*) c FROM scan_runs WHERE status='running'`).c;
+  } catch { return 0; }
+}
+
+// Open dead letters (NULL when the table isn't migrated on this DB yet).
+export function countOpenDeadLetters(): number | null {
+  try {
+    return g<{ c: number }>(`SELECT COUNT(*) c FROM fiber_dead_letters WHERE resolved_at IS NULL`).c;
+  } catch { return null; }
 }
 
 // STRANDED TAILS: runs marked 'done' OR 'error' that still hold CLAIMABLE queued
@@ -506,7 +560,8 @@ export function getStrandedDoneRuns(limit = 10): ScanRunRow[] {
     `SELECT r.id, r.tenant_id AS tenantId, r.kind, r.label, r.city, r.state, r.bbox, r.budget, r.verified,
             r.new_fiber AS newFiber, r.newly_live AS newlyLive, r.failed, r.status, r.error,
             r.est_bytes AS estBytes, r.created_by AS createdBy, r.started_at AS startedAt,
-            r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt
+            r.heartbeat_at AS heartbeatAt, r.completed_at AS completedAt,
+            r.reopen_count AS reopenCount
        FROM scan_runs r
       WHERE r.status IN ('done','error') AND EXISTS (
         SELECT 1 FROM scan_run_targets t WHERE t.run_id=r.id AND t.state='queued'

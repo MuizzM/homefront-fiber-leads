@@ -89,8 +89,17 @@ export class AuthorizedTokenPool {
   private readonly maxConcurrentRefreshes: number;
   private readonly maxChecksPerToken: number;
   private readonly mint: AuthorizedTokenPoolOptions["mint"];
+  // 403-storm mint backoff. These two fields MIRROR the fleet-shared row in
+  // governor_state (via bandwidthGovernor, C1): in the 4-worker cluster every
+  // process used to count failures and compute backoff independently, so up to
+  // 4× concurrent mints could fire against a throttling Cloudflare. The binding
+  // is lazy (dynamic import) so constructing a pool never opens the DB; if the
+  // shared store is unreachable the pool degrades to its old per-process
+  // behavior with zero other changes.
   private consecutiveMintFailures = 0;
   private lastMintFailureAt = 0;
+  private governorPromise: Promise<typeof import("./bandwidthGovernor") | null> | null = null;
+  private fleetMintSyncAt = 0;
   private readonly now: () => number;
   private readonly slots: TokenSlot[] = [];
   private maintenanceTimer: ReturnType<typeof setInterval> | null = null;
@@ -215,6 +224,9 @@ export class AuthorizedTokenPool {
         // 120s cap. Without it, lease demand re-fires the failed mint hundreds
         // of times a minute — feeding the very throttle that caused the
         // failures (observed live: 500+ mint_failed/3min, zero checks for hours).
+        // C1: sync the FLEET failure count first so a sibling worker's storm
+        // backs this mint off too (and vice versa via the write-through below).
+        await this.syncMintBackoffFromFleet();
         if (process.env.VITEST !== "true" && this.consecutiveMintFailures >= 3) {
           const backoffMs = Math.min(120_000, 5_000 * 2 ** (this.consecutiveMintFailures - 3));
           const wait = this.lastMintFailureAt + backoffMs - this.now();
@@ -230,6 +242,7 @@ export class AuthorizedTokenPool {
         slot.failures = 0;
         slot.lastError = null;
         this.consecutiveMintFailures = 0;
+        this.resetFleetMintBackoff(); // write-through: clear the shared storm counter
       } catch (error) {
         // No cooldown, no backoff — the slot simply becomes EMPTY and is re-minted
         // on the next lease/maintenance. Failures are tracked for health only.
@@ -241,6 +254,7 @@ export class AuthorizedTokenPool {
         slot.state = "EMPTY";
         this.consecutiveMintFailures++;
         this.lastMintFailureAt = this.now();
+        this.noteFleetMintFailure(); // write-through: the whole fleet backs off
         throw error;
       } finally {
         slot.refreshInFlight = null;
@@ -448,6 +462,43 @@ export class AuthorizedTokenPool {
     };
     this.slots.push(slot);
     return slot;
+  }
+
+  // ── C1 fleet-shared mint backoff binding ──────────────────────────────────
+  private governor(): Promise<typeof import("./bandwidthGovernor") | null> {
+    if (!this.governorPromise) {
+      this.governorPromise = import("./bandwidthGovernor").catch(() => null);
+    }
+    return this.governorPromise;
+  }
+
+  /** Refresh the local mirror from the shared row. Forced (bypasses the TTL)
+   *  while we already believe a storm is active, so we never lengthen/shorten
+   *  a backoff off a stale count. */
+  private async syncMintBackoffFromFleet(): Promise<void> {
+    try {
+      const gov = await this.governor();
+      if (!gov) return;
+      const force = this.consecutiveMintFailures > 0;
+      const now = Date.now();
+      if (!force && now - this.fleetMintSyncAt < 5_000) return;
+      this.fleetMintSyncAt = now;
+      const shared = gov.getSharedMintBackoff(force);
+      this.consecutiveMintFailures = shared.failures;
+      this.lastMintFailureAt = shared.lastFailureAt;
+    } catch { /* fleet share best-effort — local mirror stays authoritative */ }
+  }
+
+  private noteFleetMintFailure(): void {
+    void this.governor().then((gov) => {
+      try { gov?.noteSharedMintFailure(Date.now()); } catch { /* best-effort */ }
+    });
+  }
+
+  private resetFleetMintBackoff(): void {
+    void this.governor().then((gov) => {
+      try { gov?.resetSharedMintFailures(); } catch { /* best-effort */ }
+    });
   }
 
   private async withRefreshPermit<T>(task: () => Promise<T>): Promise<T> {
