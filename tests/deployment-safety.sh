@@ -17,6 +17,9 @@ if grep -Eq '^[[:space:]]+push:' "$WORKFLOW"; then
   fail "production deploy must not run on push"
 fi
 grep -q 'commit_sha:' "$WORKFLOW" || fail "release SHA input is missing"
+grep -q 'actions: read' "$WORKFLOW" || fail "deploy validation cannot read CI workflow results"
+grep -q 'actions/workflows/ci.yml/runs?head_sha=' "$WORKFLOW" || fail "deploy does not require CI for the exact release SHA"
+grep -q 'CI has not succeeded for this exact commit' "$WORKFLOW" || fail "deploy lacks an exact-SHA CI failure gate"
 grep -q 'environment:' "$WORKFLOW" || fail "production environment gate is missing"
 grep -q 'name: production' "$WORKFLOW" || fail "production environment is not selected"
 grep -q 'DEPLOY_KNOWN_HOSTS' "$WORKFLOW" || fail "pinned known-host secret is missing"
