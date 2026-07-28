@@ -25,6 +25,13 @@ export interface RepPickerProps {
   reps: RepOption[];
   value?: number | null;
   onChange: (repId: number) => void;
+  /** Multi-select: an area can be worked by several reps at once. When set, rows
+   *  toggle instead of choosing, and `selected` is the full set of holders —
+   *  which is exactly what POST /share expects, so the UI and the API agree on
+   *  what "who holds this area" means. */
+  multiple?: boolean;
+  selected?: number[];
+  onToggle?: (repId: number, next: number[]) => void;
   /** Rendered above the list; use for "Assign this area to…". */
   label?: string;
   placeholder?: string;
@@ -47,7 +54,9 @@ function matches(name: string, q: string): boolean {
 export function RepPicker({
   reps, value, onChange, label, placeholder = "Search reps…",
   searchThreshold = 8, disabled = false, maxRows = 60,
+  multiple = false, selected = [], onToggle,
 }: RepPickerProps) {
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
   const [q, setQ] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const showSearch = reps.length > searchThreshold;
@@ -100,24 +109,32 @@ export function RepPicker({
       ) : (
         <ul role="listbox" aria-label={label ?? "Reps"} className="max-h-64 overflow-y-auto rounded-lg border divide-y">
           {shown.map(rep => {
-            const selected = value === rep.id;
+            const isOn = multiple ? selectedSet.has(rep.id) : value === rep.id;
             return (
               <li key={rep.id}>
                 <button
                   type="button"
                   role="option"
-                  aria-selected={selected}
-                  disabled={disabled || rep.atCap}
-                  onClick={() => onChange(rep.id)}
+                  aria-selected={isOn}
+                  // A rep already ON the area is always removable, even at cap —
+                  // otherwise a full rep could never be taken off anything.
+                  disabled={disabled || (rep.atCap && !isOn)}
+                  onClick={() => {
+                    if (!multiple) return onChange(rep.id);
+                    const next = selectedSet.has(rep.id)
+                      ? selected.filter((id) => id !== rep.id)
+                      : [...selected, rep.id];
+                    onToggle?.(rep.id, next);
+                  }}
                   data-testid={`rep-option-${rep.id}`}
                   className={[
                     "w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm transition",
-                    rep.atCap ? "opacity-55 cursor-not-allowed" : "hover:bg-secondary",
-                    selected ? "bg-primary/10" : "",
+                    rep.atCap && !isOn ? "opacity-55 cursor-not-allowed" : "hover:bg-secondary",
+                    isOn ? "bg-primary/10" : "",
                   ].join(" ")}
                 >
                   <span className="flex items-center gap-2 min-w-0">
-                    {selected && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
+                    {isOn && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
                     <span className="truncate font-medium">{rep.name}</span>
                   </span>
                   <span className="shrink-0 text-xs text-muted-foreground">

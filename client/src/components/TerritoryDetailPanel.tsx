@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus, RotateCcw } from "lucide-react";
+import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus, RotateCcw, Users } from "lucide-react";
 import { can, type Role } from "@shared/permissions";
 import { colorForRep } from "@shared/repColors";
 import { shortDate } from "@shared/territoryLabel";
@@ -43,6 +43,9 @@ export interface TerritoryDetailPanelProps {
   currentPass?: number;
   /** ISO date this area was handed to its current rep. */
   assignedAt?: string | null;
+  /** Open the "who works this area" editor. An area can be shared by several
+   *  reps, so this edits the whole holder set rather than a single owner. */
+  onEditAssignees?: () => void;
   /** Remove ONE rep from this area. Provided only when the caller may manage
    *  assignment; the chip's remove control is hidden entirely without it. */
   onUnassignRep?: (repId: number) => void;
@@ -64,7 +67,7 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
   const swatch = isUnassigned ? colorForRep(null) : (territory.color ?? colorForRep(territory.repIds[0]));
@@ -292,6 +295,23 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
         >
           <History className="h-3.5 w-3.5" /> View Activity
+        </button>
+      )}
+
+      {/* Several reps can work one area. The chips above show who; this edits the
+          set — add a second rep, or take one off — in one place, so "who works
+          this" is a single decision rather than an assign here and a remove there. */}
+      {onEditAssignees && can(role, "assign_territory") && (
+        <button
+          type="button"
+          data-testid="edit-assignees-btn"
+          onClick={onEditAssignees}
+          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+        >
+          <Users className="h-3.5 w-3.5" />
+          {territory.repIds.length > 1
+            ? `${territory.repIds.length} reps on this area`
+            : "Who works this area"}
         </button>
       )}
 
