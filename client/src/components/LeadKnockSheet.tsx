@@ -3,38 +3,49 @@
 // no portal, no backdrop, no body scroll-lock — the map above must stay 100%
 // interactive while the card is open. Snapping is pure transform (translateY)
 // so the map never reflows, and dragging is confined to the handle/header
-// region so the status grid and body scroll are never hijacked.
+// regions so the status grid and body scroll are never hijacked.
 //
-// v3 layout (Mobbin-grounded): status-dot header (address hero + copy + close)
-// → status line (label · relative time, in the status color) → compact action
-// pills (Directions / optional link to the separate Calling workspace / Copy) →
-// a FLEX-WRAP grid of all 7 status pills, no
-// horizontal scroll, fixed order so a pill never moves under the finger →
-// recent-activity line → collapsible Notes composer → History timeline.
-// Tapping a status saves immediately (one tap, no confirm); the dot, status
-// line, active pill, and map pin all update from the same optimistic lead data.
+// v4 — THREE progressive levels (Opus 5 compact-card directive), same features:
+//   PEEK (collapsed): one-line truncated address, ONE status indicator (dot +
+//     label in the status color), last-contact/freshness cue, ONE primary
+//     action (Directions), close affordance.
+//   QUICK ACTIONS (default open state, ~35–45% of screen): compact address
+//     header → primary row [Directions, Call (only with a valid phone), More] →
+//     the collapsible More section (Follow-up/Prospect, Copy, Calling, manager
+//     central-mark/delete — permission-gated) → 2-column grid of the four most
+//     likely dispositions (Not Home | Interested / Sold | Not Interested) →
+//     recent-activity line → notes composer chip.
+//   DETAILS (expanded): forced-open More (full status list + admin actions) +
+//     premise facts, assignment (lead.assign only), History with scan evidence.
+// Tapping a status saves immediately (one tap, existing optimistic+queue
+// wiring), flashes a confirmation, recolors the pin upstream, and collapses
+// the card to Peek. Nothing was removed — only reorganized into the levels.
 
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "wouter";
 import {
-  Navigation, Phone, Copy, Check, Plus, X,
-  DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle,
+  Copy, Check, Plus, X,
+  DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone,
   type LucideIcon,
 } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
 import { mergeNotes, type NoteSaveResult } from "@/lib/leadNotes";
 import { useCan } from "@/lib/capabilities";
 import { apiRequest } from "@/lib/queryClient";
-import { VerificationBadge, formatDistance, type VStatus } from "@/components/verification";
 import {
   FIELD_OUTCOMES, OUTCOME_META, STATE_LABELS, pinDisplayState, isKnockOutcome,
   type KnockOutcome, type PinDisplayState,
 } from "@shared/knock";
 import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
 import { normalizeZip5 } from "@shared/addressKey";
+import { PeekBar } from "@/components/lead-sheet/PeekBar";
+import { QuickBody } from "@/components/lead-sheet/QuickBody";
+import { DetailsBody } from "@/components/lead-sheet/DetailsBody";
+import { relativeTime, prefersReducedMotion, shortRepName, MUTED, BODY_TEXT } from "@/components/lead-sheet/utils";
+import type { HistoryRow, LeadDetail, TeamMember } from "@/components/lead-sheet/types";
 
-export type SheetSnap = "peek" | "expanded";
+// The three snap levels. "quick" is the default open state.
+export type SheetSnap = "peek" | "quick" | "details";
 
 export interface SheetLead {
   id: number; lat?: number | null; lng?: number | null;
@@ -43,6 +54,10 @@ export interface SheetLead {
   assignedRepId?: number | null;  // shown/edited only for lead.assign holders
   visited?: boolean; lastOutcome?: string | null; lastKnockedAt?: string | null;
   leadTag?: string | null; freshConfidence?: string | null;
+  // Opt-in: present only when the caller is authorized to dial this lead. The
+  // Field Map pins payload carries NO phone for ordinary reps, so Call stays
+  // hidden for them; the separate Calling workspace remains the gated path.
+  phone?: string | null;
 }
 
 export interface LeadKnockSheetProps {
@@ -57,8 +72,9 @@ export interface LeadKnockSheetProps {
   // a right-side rail (the leads panel) — a rail-row tap must keep the list
   // visible beside the card, or list-driven triage dies (review finding).
   dockOffsetPx?: number;
-  // Published MEASURED peek height (drag header + peek body) so MapView's camera
-  // bottom-padding tracks the real content instead of a hardcoded constant.
+  // Published MEASURED visible height of the current collapsed level (peek bar
+  // in Peek, quick-actions block in Quick) so MapView's camera bottom-padding
+  // tracks the real sheet lip instead of a hardcoded constant.
   onPeekHeight?: (px: number) => void;
   // MANAGER ACTIONS (owner ask 2026-07-26): central marking (no rep credit) and
   // lead deletion, for manually-added pins that turn out not to be new fiber.
@@ -80,52 +96,20 @@ const CLOSE_OVERDRAG_PX = 80;
 // Flick faster than this decides snap direction regardless of position.
 const FLICK_VELOCITY = 0.5; // px/ms
 
-// Muted secondary text per the card spec.
-const MUTED = "#8A94A6";
-// Slightly brighter than MUTED for note/preview body copy.
-const BODY_TEXT = "#B9C2D0";
+// Progressive disclosure of the field dispositions: the four most likely
+// outcomes own the quick grid (FIXED FIELD_OUTCOMES order — a button never
+// moves under the finger); everything else lives under "More" (and is forced
+// visible in Details). Together they are exactly FIELD_OUTCOMES.
+const QUICK_GRID_KEYS: KnockOutcome[] = ["not_home", "interested", "sold", "not_interested"];
+const QUICK_OUTCOMES = FIELD_OUTCOMES.filter(o => QUICK_GRID_KEYS.includes(o.key));
+const MORE_OUTCOMES = FIELD_OUTCOMES.filter(o => !QUICK_GRID_KEYS.includes(o.key));
 
-// Field actions are fixed and shared across every disposition surface.
-// Order is stable per spec — pills never reshuffle under the finger.
-const GRID_OUTCOMES = FIELD_OUTCOMES;
-
-// The active pill mirrors the lead's CURRENT display state.
+// The active outcome mirrors the lead's CURRENT display state.
 const DS_TO_OUTCOME: Partial<Record<PinDisplayState, KnockOutcome>> = {
   unworked: "prospect", not_home: "not_home", interested: "interested",
   follow_up: "follow_up", callback: "callback", sold: "sold",
   not_interested: "not_interested",
 };
-
-// "5m ago" / "2h ago" / "3d ago" / "Jul 8" — one compact relative-time helper
-// for the header status line, recent-activity line, and History rows.
-function relativeTime(iso?: string | null): string {
-  if (!iso) return "";
-  const t = new Date(iso).getTime();
-  if (!Number.isFinite(t)) return "";
-  const diff = Date.now() - t;
-  if (diff < 60_000) return "just now";
-  const min = Math.floor(diff / 60_000);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const d = Math.floor(hr / 24);
-  if (d < 7) return `${d}d ago`;
-  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function prefersReducedMotion(): boolean {
-  try {
-    return typeof window !== "undefined" && typeof window.matchMedia === "function"
-      && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  } catch { return false; }
-}
-
-// "Muizz Muhammad" → "M. Muhammad" (single names pass through).
-function shortRepName(name: string): string {
-  const parts = name.trim().split(/\s+/);
-  if (parts.length < 2) return name.trim();
-  return `${parts[0][0]}. ${parts.slice(1).join(" ")}`;
-}
 
 // One responsive card, two homes: bottom sheet under ~1024px, docked right
 // panel above it (same components, same behavior — no forked UI).
@@ -159,65 +143,6 @@ function readSafeAreaBottom(): number {
   } catch { return 0; }
 }
 
-interface HistoryRow {
-  id: string;
-  type: "status_change" | "assignment" | "note";
-  actor: string | null;
-  changedAt: string;
-  status?: string;
-  assignedTo?: string;
-  assignedBy?: string;
-  notePreview?: string;
-  // Location verification (status_change rows only) — distance WHEN MARKED.
-  verification?: VStatus;
-  distanceM?: number | null;
-  gpsAccuracyM?: number | null;
-  reviewReason?: string | null;
-}
-interface LeadDetail {
-  id: number;
-  notes?: string | null;
-  updatedAt?: string | null;
-  // Verified-premise facts (GET /api/leads/:id returns the full lead; the
-  // sheet previously discarded everything but notes). All optional — older
-  // records may lack them, and the card renders honest fallbacks.
-  city?: string | null; state?: string | null; zip?: string | null;
-  fiberStatus?: string | null; householdSegmentType?: string | null;
-  billingStatus?: string | null;
-  competitorName?: string | null; competitorTech?: string | null;
-  freshConfirmedAt?: string | null; leadTag?: string | null;
-  leadStatus?: string | null;
-}
-
-// Verified-premise facts under the header: what the scanner actually proved
-// at this address. Rendered only when a fact exists — no guessed fields; the
-// review banner covers the incomplete case.
-function VerifiedPremiseFacts({ detail }: { detail: LeadDetail | undefined }): JSX.Element | null {
-  if (!detail) return null;
-  const facts: Array<[string, string]> = [];
-  if (detail.householdSegmentType) facts.push(["Segment", detail.householdSegmentType]);
-  if (detail.billingStatus) {
-    facts.push(["Occupancy", detail.billingStatus === "N" ? "No current subscriber" : `Billing ${detail.billingStatus}`]);
-  }
-  if (detail.competitorName || detail.competitorTech) {
-    facts.push(["Competitor", [detail.competitorName, detail.competitorTech].filter(Boolean).join(" · ")]);
-  }
-  if (detail.freshConfirmedAt) {
-    facts.push(["Verified", relativeTime(detail.freshConfirmedAt) || detail.freshConfirmedAt]);
-  }
-  if (!facts.length) return null;
-  return (
-    <div data-testid="knock-premise-facts" className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5">
-      {facts.map(([label, value]) => (
-        <span key={label} className="text-[11px] leading-tight" style={{ color: "rgba(255,255,255,0.55)" }}>
-          <span className="uppercase tracking-wide text-[9.5px] mr-1" style={{ color: "rgba(255,255,255,0.35)" }}>{label}</span>
-          {value}
-        </span>
-      ))}
-    </div>
-  );
-}
-
 function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const { canManage = false, onCentralMark, onDelete } = props;
   const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0, onPeekHeight } = props;
@@ -232,7 +157,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   }, [lead]);
 
   const docked = useDocked();
-  const [snap, setSnap] = useState<SheetSnap>("peek");
+  const [snap, setSnap] = useState<SheetSnap>("quick"); // QUICK is the default open state
+  const [moreOpen, setMoreOpen] = useState(false);      // "More" disclosure (quick level)
   const [note, setNote] = useState("");                // composer DRAFT — clears once committed
   const [noteOpen, setNoteOpen] = useState(false);     // collapsed "+ Add note" chip → textarea on focus
   const [noteState, setNoteState] = useState<"idle" | "saving" | "saved" | "queued" | "conflict">("idle");
@@ -245,36 +171,50 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const noteInputRef = useRef<HTMLTextAreaElement>(null);
 
   const sheetRef = useRef<HTMLDivElement>(null);
-  const dragRegionRef = useRef<HTMLDivElement>(null);  // handle + header (measured for peek height)
-  const peekBodyRef = useRef<HTMLDivElement>(null);    // above-the-fold body (measured for peek height)
+  const handleRef = useRef<HTMLDivElement>(null);      // drag handle (measured for both levels)
+  const peekBarRef = useRef<HTMLDivElement>(null);     // peek content (measured; clipped when inactive)
+  const headerRef = useRef<HTMLDivElement>(null);      // compact header (drag region + measured)
+  const quickBodyRef = useRef<HTMLDivElement>(null);   // quick-actions body (measured)
+  const mainRef = useRef<HTMLDivElement>(null);        // quick+details content (inert in peek)
 
-  // ── Geometry: measure sheet + safe area + peek content so snaps are numeric
-  // AND the map camera padding tracks the real peek height (never a constant) ──
+  // ── Geometry: measure sheet + safe area + the two collapsed levels so snaps
+  // are numeric AND the map camera padding tracks the real sheet lip ──────────
   const [sheetH, setSheetH] = useState(0);
   const [safeBottom, setSafeBottom] = useState(0);
-  const [peekContentPx, setPeekContentPx] = useState<number | null>(null);
-  const lastPublishedPeek = useRef<number | null>(null);
+  const [peekPx, setPeekPx] = useState<number | null>(null);   // handle + peek bar
+  const [quickPx, setQuickPx] = useState<number | null>(null); // handle + header + quick body
+  const lastPublished = useRef<{ snap: SheetSnap; px: number } | null>(null);
   const mounted = renderedLead != null;
   useLayoutEffect(() => {
     if (!mounted) {
       setMeasuredPeekPx(null);          // no sheet → camera padding falls back
-      lastPublishedPeek.current = null;
+      lastPublished.current = null;
       return;
     }
-    lastPublishedPeek.current = null;   // new lead/layout → force a fresh publish
-    // Peek height = drag header + the above-the-fold body block. offsetHeight is
-    // a pure layout read (transform- and scroll-independent), so this stays
-    // correct in every snap/drag state.
+    lastPublished.current = null;       // new lead/layout/snap → force a fresh publish
+    // offsetHeight is a pure layout read (transform- and scroll-independent):
+    // the peek bar stays measurable even while clipped inside its h-0 wrapper,
+    // so both levels are known in every snap/drag state.
     const publish = () => {
-      const dr = dragRegionRef.current, pb = peekBodyRef.current;
-      if (!dr || !pb) return;
-      const px = Math.round(dr.offsetHeight + pb.offsetHeight);
+      const handle = handleRef.current?.offsetHeight ?? 0;
+      const peekBar = peekBarRef.current?.offsetHeight ?? 0;
+      const header = headerRef.current?.offsetHeight ?? 0;
+      const quickBody = quickBodyRef.current?.offsetHeight ?? 0;
+      const peek = handle + peekBar;
+      const quick = handle + header + quickBody;
+      if (peek > 0) setPeekPx(p => (p != null && Math.abs(p - peek) < 2 ? p : peek));
+      if (quick > 0) setQuickPx(q => (q != null && Math.abs(q - quick) < 2 ? q : quick));
+      // Publish the CURRENT collapsed level's visible height (peek bar in Peek,
+      // quick block in Quick/Details) → camera padding + bottom-slot track the
+      // sheet lip. The onPeekHeight contract is unchanged: measured px, never a
+      // hardcoded constant.
+      const px = snap === "peek" ? peek : quick;
       if (px <= 0) return;
-      if (lastPublishedPeek.current != null && Math.abs(lastPublishedPeek.current - px) < 2) return;
-      lastPublishedPeek.current = px;
-      setPeekContentPx(px);
+      if (lastPublished.current && lastPublished.current.snap === snap
+          && Math.abs(lastPublished.current.px - px) < 2) return;
+      lastPublished.current = { snap, px };
       setMeasuredPeekPx(px);            // → sheetPeekPaddingPx() (mapPins)
-      onPeekHeight?.(px);              // → MapView re-pads the camera
+      onPeekHeight?.(px);               // → MapView re-pads the camera
     };
     const measure = () => {
       if (sheetRef.current) setSheetH(sheetRef.current.offsetHeight);
@@ -284,9 +224,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     measure();
     let ro: ResizeObserver | null = null;
     try {
-      ro = new ResizeObserver(publish);        // catches note expand / pill wrap
-      if (dragRegionRef.current) ro.observe(dragRegionRef.current);
-      if (peekBodyRef.current) ro.observe(peekBodyRef.current);
+      ro = new ResizeObserver(publish);        // catches note expand / More toggle
+      for (const ref of [handleRef, peekBarRef, headerRef, quickBodyRef]) {
+        if (ref.current) ro.observe(ref.current);
+      }
     } catch { /* jsdom: no ResizeObserver */ }
     window.addEventListener("resize", measure);
     return () => {
@@ -294,12 +235,14 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       try { ro?.disconnect(); } catch { /* noop */ }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mounted, renderedLead?.id, docked]);
+  }, [mounted, renderedLead?.id, docked, snap]);
 
-  const peekBasePx = peekContentPx ?? SHEET_PEEK_BASE_PX;
-  const peekY = Math.max(0, sheetH - (peekBasePx + safeBottom));
+  const peekVisiblePx = peekPx ?? SHEET_PEEK_BASE_PX;
+  const quickVisiblePx = quickPx ?? SHEET_PEEK_BASE_PX;
+  const peekY = Math.max(0, sheetH - (peekVisiblePx + safeBottom));
+  const quickY = Math.max(0, sheetH - (quickVisiblePx + safeBottom));
 
-  // ── Drag (handle + header only) ──────────────────────────────────────────────
+  // ── Drag (handle + peek bar + header only) ─────────────────────────────────
   // Per-frame drag position lives in a REF and is written straight to
   // sheetRef.style.transform — React renders exactly twice per drag (start: drop
   // the transition class; end: snap), never once per pointermove. A stray
@@ -317,7 +260,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const currentOffset = () => {
     if (closing) return sheetH;
     if (dragging) return dragYRef.current;
-    return snap === "expanded" ? 0 : peekY;
+    return snap === "details" ? 0 : snap === "quick" ? quickY : peekY;
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
@@ -350,6 +293,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     if (sheetRef.current) sheetRef.current.style.transform = `translateY(${dragYRef.current}px)`;
   };
 
+  // Snap order from top (fully open) to bottom (collapsed): details → quick → peek.
   const endDrag = (e: React.PointerEvent, cancelled: boolean) => {
     const d = dragRef.current;
     if (!d || e.pointerId !== d.pointerId) return;
@@ -360,9 +304,22 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     setSheetDragActive(false);
     if (cancelled) return; // spring back to the current snap
     const y = Math.max(0, d.startOffset + (d.lastY - d.startClientY));
+    // Swipe down past the peek lip dismisses the sheet.
     if (y > peekY + CLOSE_OVERDRAG_PX) { onClose(); return; }
-    if (Math.abs(d.vy) > FLICK_VELOCITY) setSnap(d.vy > 0 ? "peek" : "expanded");
-    else setSnap(y < peekY / 2 ? "expanded" : "peek");
+    const ORDER: SheetSnap[] = ["details", "quick", "peek"];
+    const OFFSETS = [0, quickY, peekY];
+    if (Math.abs(d.vy) > FLICK_VELOCITY) {
+      const idx = ORDER.indexOf(snap);
+      // Flick up = open one level, flick down = collapse one level.
+      setSnap(d.vy < 0 ? ORDER[Math.max(0, idx - 1)] : ORDER[Math.min(ORDER.length - 1, idx + 1)]);
+    } else {
+      // Settle on the nearest of the three snap points.
+      let best = 0;
+      for (let i = 1; i < OFFSETS.length; i++) {
+        if (Math.abs(y - OFFSETS[i]) < Math.abs(y - OFFSETS[best])) best = i;
+      }
+      setSnap(ORDER[best]);
+    }
   };
 
   // A real drag must not fire the click of whatever the pointer landed on.
@@ -373,6 +330,17 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       e.stopPropagation();
     }
   };
+
+  // Shared drag-region wiring: handle, peek bar, and the compact header all
+  // drag the sheet (buttons inside still tap — TAP_SLOP_PX disambiguates).
+  const dragRegionProps = {
+    "data-drag-region": true,
+    onPointerDown: handlePointerDown,
+    onPointerMove: handlePointerMove,
+    onPointerUp: (e: React.PointerEvent) => endDrag(e, false),
+    onPointerCancel: (e: React.PointerEvent) => endDrag(e, true),
+    onClickCapture: swallowDragClick,
+  } as const;
 
   // ── Per-lead reset ───────────────────────────────────────────────────────────
   const prevLeadId = useRef<number | null>(null);
@@ -387,7 +355,8 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     }
     prevLeadId.current = id;
     if (id == null) return;
-    setSnap("peek");
+    setSnap("quick"); // default open state for a newly selected lead
+    setMoreOpen(false);
     setNote("");
     setNoteOpen(false);
     setNoteState("idle");
@@ -409,6 +378,16 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     return () => window.removeEventListener("keydown", onKey);
   }, [lead, onClose]);
 
+  // In Peek the quick/details content is translated off-screen: pull it out of
+  // the tab order and the accessibility tree so focus never lands on invisible
+  // controls (inert via DOM API — React 18 doesn't own the attribute yet).
+  const peekShown = !docked && snap === "peek";
+  useEffect(() => {
+    mainRef.current?.toggleAttribute("inert", peekShown);
+    if (peekShown) mainRef.current?.setAttribute("aria-hidden", "true");
+    else mainRef.current?.removeAttribute("aria-hidden");
+  }, [peekShown]);
+
   // ── Lead detail (notes seed) + history — fetched per selected lead ──────────
   const leadId = renderedLead?.id ?? 0;
   // staleTime: swapping back to a recently-viewed door renders from cache with
@@ -428,7 +407,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const canAssignLead = useCan("lead.assign");
   const canOpenCalling = useCan("calling.lead.read");
   const qc = useQueryClient();
-  const teamQuery = useQuery<{ id: number; name: string; active: boolean }[]>({
+  const teamQuery = useQuery<TeamMember[]>({
     queryKey: ["/api/team"],
     enabled: canAssignLead && !!lead,
     staleTime: 5 * 60_000,
@@ -466,7 +445,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
 
   const handleStatusTap = (key: KnockOutcome) => {
     const now = Date.now();
-    if (now - tapGuard.current < 350) return;
+    if (now - tapGuard.current < 350) return; // double-submit guard
     tapGuard.current = now;
     try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
     // Brief filled + check flash confirms the tap even before the optimistic
@@ -481,7 +460,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       // and an armed manager silently stripped rep credit on later doors.
       setCentralMode(false);
     } else {
-      onKnock(key); // optimistic upstream: dot, status line, pill, and pin recolor together
+      onKnock(key); // optimistic upstream: dot, status line, active outcome, and pin recolor together
+    }
+    // Marking is the moment of commitment: confirm, then collapse to Peek so the
+    // map (and the freshly recolored pin) is back in view immediately.
+    if (!docked) {
+      setSnap("peek");
+      setMoreOpen(false);
     }
   };
 
@@ -588,27 +573,91 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   // Static deep link only — never a Mapbox API call (billing guardrail).
   const directionsHref = `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`;
 
+  const detailsShown = docked || snap === "details";
+  const moreVisible = moreOpen || detailsShown;
+
   const transform = docked
     ? (closing ? "translateX(110%)" : "translateX(0)")
     : closing
       ? "translateY(100%)"
       : dragging
         ? `translateY(${dragYRef.current}px)`
-        : snap === "expanded"
+        : snap === "details"
           ? "translateY(0px)"
-          : `translateY(${peekY}px)`;
+          : snap === "quick"
+            ? `translateY(${quickY}px)`
+            : `translateY(${peekY}px)`;
 
-  const ghostPill = "h-11 rounded-full bg-white/[0.05] border border-white/[0.08] flex items-center justify-center gap-1.5 text-[13px] font-semibold text-white active:scale-[0.97] transition";
+  // Notes — a distinct inset card. Default is a slim "+ Add note" chip
+  // (reclaims quick-level height); it expands to the textarea on focus. The
+  // commit model is unchanged (Add / blur / card swap = one write, one history
+  // event); the just-committed note is pinned as "latest note".
+  const notesCard = (
+    <div className="mt-4 rounded-2xl bg-white/[0.03] border border-white/[0.07] p-3">
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
+          Notes
+        </span>
+        {noteState !== "idle" && (
+          <span data-testid="note-save-state" data-state={noteState} className="text-2xs font-medium"
+            style={{ color: noteState === "saved" ? "#34d399" : noteState === "conflict" ? "#f59e0b" : MUTED }}>
+            {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved — newer note exists" : "Saved to history"}
+          </span>
+        )}
+      </div>
+      {latestNote && (
+        <div data-testid="note-latest" className="text-[12.5px] leading-snug mb-2 line-clamp-2" style={{ color: BODY_TEXT }}>
+          “{latestNote}”
+        </div>
+      )}
+      {!noteOpen && !note.trim() ? (
+        <button
+          type="button"
+          data-testid="note-add-chip"
+          onClick={() => { setNoteOpen(true); requestAnimationFrame(() => noteInputRef.current?.focus()); }}
+          className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
+        >
+          <Plus className="w-4 h-4" /> Add note
+        </button>
+      ) : (
+        <div className="relative">
+          <textarea
+            ref={noteInputRef}
+            data-testid="knock-note-input"
+            placeholder="Add a note…"
+            value={note}
+            onChange={handleNoteChange}
+            onBlur={() => { commitNote(note); setNoteOpen(false); }}
+            rows={2}
+            className="w-full min-h-[60px] text-[15px] leading-snug bg-white/[0.05] border border-white/[0.08] rounded-xl pl-3.5 pr-16 py-2.5 text-white placeholder:text-white/25 resize-none focus:outline-none focus:border-primary/60"
+          />
+          {note.trim() && (
+            <button
+              type="button"
+              data-testid="note-add-btn"
+              // Fires before blur (pointerdown) so this never double-commits.
+              onPointerDown={(e) => { e.preventDefault(); commitNote(note); }}
+              className="absolute right-2 bottom-2 h-11 px-4 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
+            >
+              Add
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
 
   return (
     <div
       ref={sheetRef}
       data-testid="knock-sheet"
+      data-snap={docked ? "docked" : snap}
       role="dialog"
       aria-label={renderedLead.address}
       className={[
         // glass-sheet: the liquid-glass bottom-sheet surface (18px blur budget,
-        // ink fill, specular top hairline, token shadow) — see index.css.
+        // ink fill, specular top hairline, token shadow) — see index.css. Solid
+        // enough to stay readable over the satellite basemap.
         "glass-sheet fixed z-40 flex flex-col will-change-transform",
         docked
           ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
@@ -621,29 +670,28 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         ...(docked && dockOffsetPx ? { right: dockOffsetPx } : null),
       }}
     >
-      {/* Drag region: handle + header only. touchAction none so the browser
-          never steals the gesture for page scroll. Also the measured "header"
-          half of the peek height. */}
+      {/* Drag handle — one tap cycles the levels (peek → quick → details →
+          peek), the one-hand alternative to the drag (swallowDragClick
+          suppresses this after a real drag). touchAction none so the browser
+          never steals the gesture for page scroll. */}
       <div
-        ref={dragRegionRef}
-        data-drag-region
-        className="cursor-grab select-none shrink-0"
+        ref={handleRef}
+        {...dragRegionProps}
+        className={docked ? "shrink-0" : "cursor-grab select-none shrink-0"}
         style={{ touchAction: "none" }}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={(e) => endDrag(e, false)}
-        onPointerCancel={(e) => endDrag(e, true)}
-        onClickCapture={swallowDragClick}
       >
-        {/* Tap the handle to toggle peek/expanded — one-hand alternative to the
-            drag (swallowDragClick suppresses this after a real drag). */}
         {!docked ? (
           <button
             type="button"
-            aria-label="Expand or collapse card"
+            aria-label={
+              snap === "peek" ? "Open quick actions"
+              : snap === "quick" ? "Open details"
+              : "Collapse card"
+            }
+            aria-expanded={snap !== "peek"}
             data-testid="knock-sheet-handle"
             className="flex justify-center pt-2 pb-1 cursor-pointer bg-transparent border-0 w-full"
-            onClick={() => setSnap(s => (s === "peek" ? "expanded" : "peek"))}
+            onClick={() => setSnap(s => (s === "peek" ? "quick" : s === "quick" ? "details" : "peek"))}
           >
             {/* white/40 clears the 3:1 non-text floor over the 0.86 ink sheet
                 on both basemap extremes (white/25 measured ~2.2:1). */}
@@ -652,361 +700,167 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         ) : (
           <div className="pt-4" />
         )}
+      </div>
 
-        {/* Header: status dot + address hero (with copy glyph) + ✕ close, then
-            the locality sub-line and a status line (label · relative time) in
-            the status color — a rep sees where the door stands at a glance. */}
-        <div className="px-4 pb-3 pt-0.5">
-          <div className="flex items-start gap-2.5">
-            <span
-              data-testid="knock-status-dot"
-              aria-hidden
-              className="w-2.5 h-2.5 rounded-full shrink-0 mt-[9px]"
-              style={{ background: statusColor }}
-            />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-start gap-1 min-w-0">
-                <h2 className="min-w-0 flex-1 text-[21px] leading-[1.15] font-semibold text-white truncate">
-                  {renderedLead.address}
-                </h2>
-                <button
-                  type="button"
-                  data-testid="knock-copy-address"
-                  aria-label="Copy address"
-                  onClick={copyAddress}
-                  className="relative shrink-0 mt-[2px] h-7 w-7 flex items-center justify-center rounded-md text-white/45 hover:text-white active:scale-90 transition after:absolute after:-inset-2"
-                >
-                  {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-[15px] h-[15px]" />}
-                </button>
-              </div>
-              {(() => {
-                const d = detailQuery.data;
-                const city = renderedLead.city ?? d?.city;
-                const state = renderedLead.state ?? d?.state;
-                const zip5 = normalizeZip5(renderedLead.zip ?? d?.zip);
-                const complete = !!(city && state && zip5);
-                return complete ? (
-                  <div data-testid="knock-address-locality" className="text-[12px] truncate mt-0.5" style={{ color: MUTED }}>
-                    {[city, [state, zip5].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
-                  </div>
-                ) : (
-                  <div data-testid="knock-address-review" className="text-[12px] truncate mt-0.5 font-semibold text-amber-400">
-                    Address needs review{city || state ? ` · ${[city, state].filter(Boolean).join(", ")}` : ""}
-                  </div>
-                );
-              })()}
-              <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1" style={{ color: statusColor }}>
-                {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
-              </div>
-              {renderedLead.leadTag === "fresh_fiber_confirmed" && (
-                <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-emerald-300">
-                  Confirmed fresh fiber
-                </div>
-              )}
-              {(renderedLead.leadStatus === "address_review" || detailQuery.data?.leadStatus === "address_review") && (
-                <div data-testid="knock-review-banner" className="mt-1 inline-flex items-center rounded-full border border-amber-400/35 bg-amber-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-amber-300">
-                  Address needs review
-                </div>
-              )}
-              <VerifiedPremiseFacts detail={detailQuery.data} />
-            </div>
-            <button
-              type="button"
-              data-testid="knock-sheet-close"
-              aria-label="Close"
-              onClick={onClose}
-              className="relative shrink-0 -mr-1 -mt-0.5 h-8 w-8 flex items-center justify-center rounded-full text-white/50 hover:text-white hover:bg-white/10 active:scale-90 transition after:absolute after:-inset-2"
-            >
-              <X className="w-[18px] h-[18px]" />
-            </button>
-          </div>
+      {/* PEEK level — clipped to zero height (but kept laid out, so its height
+          stays measurable) whenever another level is active. Draggable. */}
+      <div
+        {...dragRegionProps}
+        className={[
+          docked ? "" : "cursor-grab select-none",
+          peekShown ? "shrink-0" : "h-0 overflow-hidden shrink-0",
+        ].join(" ")}
+        style={{ touchAction: "none" }}
+      >
+        <div key={renderedLead.id} ref={peekBarRef} className="card-swap-in">
+          <PeekBar
+            address={renderedLead.address}
+            statusColor={statusColor}
+            statusLabel={statusLabel}
+            lastKnockedAt={renderedLead.lastKnockedAt}
+            freshFiber={renderedLead.leadTag === "fresh_fiber_confirmed"}
+            directionsHref={directionsHref}
+            onClose={onClose}
+          />
         </div>
       </div>
 
-      {/* Body — scrolls in expanded/docked, clipped in peek. NOT keyed on lead
-          id: only the peek block below crossfades, so History never remounts
-          (and never flashes) on a card swap. */}
-      <div
-        className={[
-          "flex-1 min-h-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
-          docked || snap === "expanded" ? "overflow-y-auto overscroll-contain" : "overflow-hidden",
-        ].join(" ")}
-      >
-        {/* Peek block — everything above the fold. Keyed on lead id so it
-            crossfades (opacity only) when the card swaps to another door. Also
-            the measured half of the peek height. */}
-        <div key={renderedLead.id} ref={peekBodyRef} className="card-swap-in">
-          {/* Field Map never receives or renders a phone. Authorized callers
-              enter the separate Calling workspace, where server gates run. */}
-          <div data-testid="knock-action-row" className="flex items-center gap-2 pt-1">
-            <a
-              data-testid="action-directions"
-              href={directionsHref}
-              target="_blank"
-              rel="noopener"
-              className={`${ghostPill} flex-1 min-w-0`}
-            >
-              <Navigation className="w-4 h-4 opacity-80" />
-              Directions
-            </a>
-            {canOpenCalling && (
-              <Link
-                data-testid="action-open-calling"
-                href={`/calling/lead/${renderedLead.id}`}
-                className={`${ghostPill} flex-1 min-w-0`}
-              >
-                <Phone className="w-4 h-4 opacity-80" />
-                Calling
-              </Link>
-            )}
-            <button
-              type="button"
-              data-testid="action-copy"
-              onClick={copyAddress}
-              className={`${ghostPill} px-4 shrink-0`}
-            >
-              {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4 opacity-80" />}
-              Copy
-            </button>
-          </div>
-
-          {/* MANAGER ACTIONS (owner ask 2026-07-26): central-mark toggle +
-              delete with inline two-tap confirm, for manually-added pins. */}
-          {canManage && (onCentralMark || onDelete) ? (
-            <div className="mt-3 flex items-center gap-2" data-testid="knock-manager-row">
-              {onCentralMark ? (
-                <button
-                  type="button"
-                  data-testid="knock-central-toggle"
-                  aria-pressed={centralMode}
-                  onClick={() => { setCentralMode(v => !v); setDeleteArmed(false); }}
-                  className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
-                    centralMode
-                      ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
-                      : "bg-white/[0.06] border-white/15 text-white/70"
-                  }`}
-                  title="Mark this door on behalf of the central team — no rep credit"
-                >
-                  🏢 {centralMode ? "Central: ON" : "Central mark"}
-                </button>
-              ) : null}
-              {onDelete ? (
-                <button
-                  type="button"
-                  data-testid="knock-delete"
-                  onClick={() => {
-                    if (!deleteArmed) { setDeleteArmed(true); window.setTimeout(() => setDeleteArmed(false), 4000); return; }
-                    onDelete();
-                  }}
-                  className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
-                    deleteArmed
-                      ? "bg-red-500/80 border-red-400 text-white"
-                      : "bg-white/[0.06] border-red-400/40 text-red-300"
-                  }`}
-                  title={deleteArmed ? "Tap again to confirm delete" : "Remove this lead"}
-                >
-                  {deleteArmed ? "⚠️ Confirm delete?" : "🗑 Delete"}
-                </button>
-              ) : null}
-              {centralMode ? (
-                <span className="text-[11px] text-teal-200/80 leading-tight">Next status tap marks centrally (no rep)</span>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* Primary interaction: all 7 status pills, flex-wrap so every one is
-              visible at once (no horizontal scroll, no fade mask), FIXED order so
-              a pill never moves under the finger. Active = filled in its color; a
-              tap briefly flashes filled + a check. */}
-          <div data-testid="knock-status-row" className="mt-3 flex flex-wrap gap-2">
-            {GRID_OUTCOMES.map(o => {
-              const active = activeOutcome === o.key;
-              const flashing = flashKey === o.key;
-              const filled = active || flashing;
-              const Icon = ICON_MAP[o.icon];
-              return (
-                <button
-                  key={o.key}
-                  type="button"
-                  data-testid={`knock-outcome-${o.key}`}
-                  aria-pressed={active}
-                  onClick={() => handleStatusTap(o.key)}
-                  className="h-11 px-3.5 rounded-full border text-[13px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition"
-                  style={filled
-                    ? { background: o.color, borderColor: o.color, color: "#ffffff", boxShadow: `0 2px 12px ${o.color}55` }
-                    : { background: `${o.color}14`, borderColor: `${o.color}55`, color: o.color }}
-                >
-                  {flashing ? <Check className="w-4 h-4" /> : Icon ? <Icon className="w-4 h-4" /> : null}
-                  {o.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Recent-activity line: the last thing that happened at this door. */}
-          {recent && (
-            <div data-testid="knock-recent" className="mt-3 text-[12px] truncate" style={{ color: MUTED }}>
-              <span className="font-semibold" style={{ color: BODY_TEXT }}>Last:</span>{" "}
-              {[recent.label, recent.who, recent.time].filter(Boolean).join(" · ")}
-            </div>
-          )}
-
-          {/* Notes — a distinct inset card. Default is a slim "+ Add note" chip
-              (reclaims peek height); it expands to the textarea on focus. The
-              commit model is unchanged (Add / blur / card swap = one write, one
-              history event); the just-committed note is pinned as "latest note". */}
-          <div className="mt-4 rounded-2xl bg-white/[0.03] border border-white/[0.07] p-3">
-            <div className="flex items-center justify-between mb-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: MUTED }}>
-                Notes
-              </span>
-              {noteState !== "idle" && (
-                <span data-testid="note-save-state" data-state={noteState} className="text-2xs font-medium"
-                  style={{ color: noteState === "saved" ? "#34d399" : noteState === "conflict" ? "#f59e0b" : MUTED }}>
-                  {noteState === "saving" ? "Saving…" : noteState === "queued" ? "Saved offline" : noteState === "conflict" ? "Not saved — newer note exists" : "Saved to history"}
-                </span>
-              )}
-            </div>
-            {latestNote && (
-              <div data-testid="note-latest" className="text-[12.5px] leading-snug mb-2 line-clamp-2" style={{ color: BODY_TEXT }}>
-                “{latestNote}”
-              </div>
-            )}
-            {!noteOpen && !note.trim() ? (
-              <button
-                type="button"
-                data-testid="note-add-chip"
-                onClick={() => { setNoteOpen(true); requestAnimationFrame(() => noteInputRef.current?.focus()); }}
-                className="h-11 inline-flex items-center gap-1.5 pl-3 pr-4 rounded-full bg-white/[0.05] border border-white/[0.08] text-[13px] font-semibold text-white/85 active:scale-95 transition"
-              >
-                <Plus className="w-4 h-4" /> Add note
-              </button>
-            ) : (
-              <div className="relative">
-                <textarea
-                  ref={noteInputRef}
-                  data-testid="knock-note-input"
-                  placeholder="Add a note…"
-                  value={note}
-                  onChange={handleNoteChange}
-                  onBlur={() => { commitNote(note); setNoteOpen(false); }}
-                  rows={2}
-                  className="w-full min-h-[60px] text-[15px] leading-snug bg-white/[0.05] border border-white/[0.08] rounded-xl pl-3.5 pr-16 py-2.5 text-white placeholder:text-white/25 resize-none focus:outline-none focus:border-primary/60"
-                />
-                {note.trim() && (
+      {/* QUICK + DETAILS content — translated off-screen (and inert) in Peek. */}
+      <div ref={mainRef} className="flex-1 min-h-0 flex flex-col">
+        {/* Compact header: status dot + address (with copy glyph) + ✕ close, the
+            locality sub-line, and the ONE status line (label · relative time) in
+            the status color. Draggable. */}
+        <div
+          ref={headerRef}
+          {...dragRegionProps}
+          className={docked ? "shrink-0" : "cursor-grab select-none shrink-0"}
+          style={{ touchAction: "none" }}
+        >
+          <div className="px-4 pb-3 pt-0.5">
+            <div className="flex items-start gap-2.5">
+              <span
+                data-testid="knock-status-dot"
+                aria-hidden
+                className="w-2.5 h-2.5 rounded-full shrink-0 mt-[9px]"
+                style={{ background: statusColor }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-start gap-1 min-w-0">
+                  <h2 className="min-w-0 flex-1 text-[19px] leading-[1.15] font-semibold text-white truncate">
+                    {renderedLead.address}
+                  </h2>
                   <button
                     type="button"
-                    data-testid="note-add-btn"
-                    // Fires before blur (pointerdown) so this never double-commits.
-                    onPointerDown={(e) => { e.preventDefault(); commitNote(note); }}
-                    className="absolute right-2 bottom-2 h-11 px-4 rounded-full bg-primary text-white text-[12px] font-semibold active:scale-95 transition"
+                    data-testid="knock-copy-address"
+                    aria-label="Copy address"
+                    onClick={copyAddress}
+                    className="relative shrink-0 mt-[2px] h-7 w-7 flex items-center justify-center rounded-md text-white/45 hover:text-white active:scale-90 transition after:absolute after:-inset-2"
                   >
-                    Add
+                    {copiedAddr ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-[15px] h-[15px]" />}
                   </button>
+                </div>
+                {(() => {
+                  const d = detailQuery.data;
+                  const city = renderedLead.city ?? d?.city;
+                  const state = renderedLead.state ?? d?.state;
+                  const zip5 = normalizeZip5(renderedLead.zip ?? d?.zip);
+                  const complete = !!(city && state && zip5);
+                  return complete ? (
+                    <div data-testid="knock-address-locality" className="text-[12px] truncate mt-0.5" style={{ color: MUTED }}>
+                      {[city, [state, zip5].filter(Boolean).join(" ")].filter(Boolean).join(", ")}
+                    </div>
+                  ) : (
+                    <div data-testid="knock-address-review" className="text-[12px] truncate mt-0.5 font-semibold text-amber-400">
+                      Address needs review{city || state ? ` · ${[city, state].filter(Boolean).join(", ")}` : ""}
+                    </div>
+                  );
+                })()}
+                <div data-testid="knock-status-line" className="text-[12.5px] font-semibold truncate mt-1" style={{ color: statusColor }}>
+                  {statusLabel}{lastKnockRel ? ` · ${lastKnockRel}` : ""}
+                </div>
+                {renderedLead.leadTag === "fresh_fiber_confirmed" && (
+                  <div className="mt-1 inline-flex items-center rounded-full border border-emerald-400/35 bg-emerald-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-emerald-300">
+                    Confirmed fresh fiber
+                  </div>
+                )}
+                {(renderedLead.leadStatus === "address_review" || detailQuery.data?.leadStatus === "address_review") && (
+                  <div data-testid="knock-review-banner" className="mt-1 inline-flex items-center rounded-full border border-amber-400/35 bg-amber-400/10 px-2 py-0.5 text-2xs font-bold uppercase tracking-wide text-amber-300">
+                    Address needs review
+                  </div>
                 )}
               </div>
-            )}
-          </div>
-
-          {/* Assignment — the ONE role difference on the shared card. Rendered
-              only for lead.assign holders (team lead+); reps never see it. The
-              same server capability gate enforces it, so this is display parity,
-              not security. */}
-          {canAssignLead && (
-            <div className="mt-3 flex items-center gap-2.5" data-testid="card-assign-row">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.08em] shrink-0" style={{ color: MUTED }}>
-                Assigned to
-              </span>
-              <select
-                value={renderedLead.assignedRepId ?? ""}
-                onChange={e => assignLead(e.target.value ? Number(e.target.value) : null)}
-                data-testid="card-assign-select"
-                className="flex-1 h-11 min-w-0 rounded-xl bg-white/[0.04] border border-white/[0.08] px-2.5 text-[13px] text-white focus:outline-none focus:border-primary/60"
+              <button
+                type="button"
+                data-testid="knock-sheet-close"
+                aria-label="Close"
+                onClick={onClose}
+                className="relative shrink-0 -mr-1 -mt-0.5 h-8 w-8 flex items-center justify-center rounded-full text-white/50 hover:text-white hover:bg-white/10 active:scale-90 transition after:absolute after:-inset-2"
               >
-                <option value="" className="text-slate-900">Unassigned</option>
-                {(teamQuery.data ?? []).filter(m => m.active).map(m => (
-                  <option key={m.id} value={m.id} className="text-slate-900">{m.name}</option>
-                ))}
-              </select>
+                <X className="w-[18px] h-[18px]" />
+              </button>
             </div>
-          )}
+          </div>
         </div>
 
-        {/* History — below the fold, newest first. Left-rail dot + bold
-            actor+verb + right-aligned relative time; three event kinds keep
-            VerificationBadge/distance. NOT keyed on lead id → no remount flash
-            while a swap refetches. */}
-        <div className="mt-5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.08em] mb-2.5" style={{ color: MUTED }}>
-            History
+        {/* Body — scrolls in details/docked, clipped otherwise. NOT keyed on
+            lead id: only the quick block below crossfades, so History never
+            remounts (and never flashes) on a card swap. */}
+        <div
+          className={[
+            "flex-1 min-h-0 px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))]",
+            detailsShown ? "overflow-y-auto overscroll-contain" : "overflow-hidden",
+          ].join(" ")}
+        >
+          {/* Quick Actions — the default working level. Keyed on lead id so it
+              crossfades (opacity only) when the card swaps to another door. Also
+              the measured body of the quick level. */}
+          <div key={renderedLead.id} ref={quickBodyRef} className="card-swap-in">
+            <QuickBody
+              directionsHref={directionsHref}
+              phone={renderedLead.phone}
+              copiedAddr={copiedAddr}
+              onCopyAddress={copyAddress}
+              canOpenCalling={canOpenCalling}
+              leadId={renderedLead.id}
+              showMoreToggle={!docked && snap === "quick"}
+              moreOpen={moreOpen}
+              moreVisible={moreVisible}
+              onToggleMore={() => setMoreOpen(v => !v)}
+              onOpenDetails={() => setSnap("details")}
+              quickOutcomes={QUICK_OUTCOMES}
+              moreOutcomes={MORE_OUTCOMES}
+              iconMap={ICON_MAP}
+              activeOutcome={activeOutcome}
+              flashKey={flashKey}
+              onStatusTap={handleStatusTap}
+              canManage={canManage}
+              onCentralMark={onCentralMark}
+              onDelete={onDelete}
+              centralMode={centralMode}
+              deleteArmed={deleteArmed}
+              onToggleCentral={() => { setCentralMode(v => !v); setDeleteArmed(false); }}
+              onDeleteTap={() => {
+                if (!deleteArmed) { setDeleteArmed(true); window.setTimeout(() => setDeleteArmed(false), 4000); return; }
+                onDelete?.();
+              }}
+              recent={recent}
+              notes={notesCard}
+            />
           </div>
-          <div data-testid="knock-history-list" className={`${docked ? "max-h-[42vh]" : "max-h-56"} overflow-y-auto overscroll-contain pr-1 pb-2`}>
-            {historyQuery.isLoading ? (
-              <div className="space-y-3">
-                <div className="h-4 rounded bg-white/[0.06] animate-pulse" />
-                <div className="h-4 rounded bg-white/[0.06] animate-pulse w-2/3" />
-              </div>
-            ) : history.length === 0 ? (
-              <div className="text-xs italic" style={{ color: MUTED }}>No changes yet</div>
-            ) : (
-              // One unified timeline, three event kinds. Left-rail dot colored by
-              // the event (status hue, teal for assignments, slate for notes); a
-              // hairline connects rows. React escapes all text — note previews
-              // render as plain text, never markup.
-              history.map((h, i) => {
-                const meta = h.type === "status_change" && isKnockOutcome(h.status) ? OUTCOME_META[h.status] : null;
-                const dot = h.type === "status_change" ? (meta?.color ?? "#64748b")
-                  : h.type === "assignment" ? "#3EA394" : "#94a3b8";
-                const who = h.type === "assignment"
-                  ? (h.assignedBy ? shortRepName(h.assignedBy) : null)
-                  : (h.actor ? shortRepName(h.actor) : null);
-                const verb = h.type === "status_change" ? `marked ${meta?.label ?? h.status}`
-                  : h.type === "assignment" ? `assigned to ${h.assignedTo ? shortRepName(h.assignedTo) : "—"}`
-                  : "added a note";
-                const isLast = i === history.length - 1;
-                return (
-                  <div
-                    key={h.id}
-                    data-testid={`knock-history-item-${i}`}
-                    data-type={h.type}
-                    className="flex gap-3 min-w-0"
-                  >
-                    {/* Left rail: dot aligned to the title line + a hairline down
-                        to the next event (dropped on the last row). */}
-                    <div className="relative flex flex-col items-center shrink-0">
-                      <span className="w-2.5 h-2.5 rounded-full mt-[3px]" style={{ background: dot }} />
-                      {!isLast && <span className="w-px flex-1 mt-1 -mb-3 bg-white/10" />}
-                    </div>
-                    <div className="min-w-0 flex-1 leading-tight pb-3">
-                      <div className="flex items-baseline justify-between gap-2">
-                        <span className="text-[13px] truncate">
-                          {who && <span className="font-semibold text-white">{who} </span>}
-                          <span className={who ? "text-white/65" : "font-semibold text-white"}>
-                            {who ? verb : (meta?.label ?? verb)}
-                          </span>
-                        </span>
-                        <span className="text-[11px] shrink-0" style={{ color: MUTED }}>{relativeTime(h.changedAt)}</span>
-                      </div>
-                      {h.type === "note" && h.notePreview && (
-                        <div className="text-[12px] mt-0.5 line-clamp-2" style={{ color: BODY_TEXT }}>
-                          “{h.notePreview}”
-                        </div>
-                      )}
-                      {/* Location verification — distance the rep was from the lead
-                          WHEN MARKED (never recomputed against a current position). */}
-                      {h.type === "status_change" && h.verification != null && (
-                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]" style={{ color: BODY_TEXT }}>
-                          <VerificationBadge status={h.verification} />
-                          <span data-testid="history-distance">{formatDistance(h.distanceM)}</span>
-                          {h.gpsAccuracyM != null && <span>· GPS ±{Math.round(h.gpsAccuracyM)} m</span>}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+
+          {/* DETAILS level — premise facts, assignment (capability-gated), and
+              the full History timeline with scan evidence. */}
+          <DetailsBody
+            hidden={!detailsShown}
+            docked={docked}
+            detail={detailQuery.data}
+            canAssignLead={canAssignLead}
+            assignedRepId={renderedLead.assignedRepId}
+            team={teamQuery.data ?? []}
+            onAssign={assignLead}
+            history={history}
+            historyLoading={historyQuery.isLoading}
+          />
         </div>
       </div>
     </div>
