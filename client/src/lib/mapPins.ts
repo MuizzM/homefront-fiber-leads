@@ -26,15 +26,150 @@ export const UNCLUSTERED_PAINT: any = {
   "circle-color": PIN_DS_COLOR,
   // Zoom-scaled radius: small when zoomed out (less overdraw, and no blobby merge
   // in the pin-overlap band) → a real thumb target up close where a rep works
-  // individual doors. Replaces the old flat r=8.
-  "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 4.5, 15, 6.5, 17, 8, 20, 11],
+  // individual doors. Lane E2 tightened every stop ~15-20% (was 4.5/6.5/8/11) —
+  // pin density first; the ±16px fat-finger hit box keeps adjacent doors
+  // individually tappable even though the painted dot is smaller.
+  "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 3.75, 15, 5.25, 17, 6.5, 20, 9],
   // Visited doors keep the bolder ring. NB: a "zoom" expression may only appear at
   // the TOP LEVEL of a paint property (not nested in a case), so the stroke width
   // stays zoom-independent — only the radius is zoom-scaled.
-  "circle-stroke-width": ["case", ["==", ["get", "visited"], 1], 3, 2],
+  "circle-stroke-width": ["case", ["==", ["get", "visited"], 1], 2.5, 1.5],
   "circle-stroke-color": "rgba(255,255,255,0.95)",
   "circle-opacity": PIN_DS_OPACITY,
 };
+
+// ── Selection dimming ─────────────────────────────────────────────────────────
+// While a lead is selected, every OTHER unclustered pin drops to ~45% opacity so
+// the selected door (full color + the white ring) owns the eye; deselect
+// restores the canonical ds-opacity. Pure predicate + expression builder so the
+// rule is unit-testable and the two call sites (circle layer, icon layer) agree.
+export const DIMMED_PIN_OPACITY = 0.45;
+
+export function isPinDimmed(
+  selectedId: number | null | undefined,
+  pinId: number,
+): boolean {
+  return selectedId != null && pinId !== selectedId;
+}
+
+// circle-opacity for lead-unclustered: selected pin keeps its ds-opacity,
+// everything else dims. With no selection this IS PIN_DS_OPACITY (identity).
+// The nested match inside case is legal — only "zoom" is top-level-restricted.
+export function unclusteredOpacityExpr(selectedId: number | null): any {
+  if (selectedId == null) return PIN_DS_OPACITY;
+  return [
+    "case",
+    ["==", ["get", "id"], selectedId],
+    PIN_DS_OPACITY,
+    DIMMED_PIN_OPACITY,
+  ];
+}
+
+// icon-opacity for the (opt-in) glyph pin layer — same rule, flat 1/0.45.
+export function iconOpacityExpr(selectedId: number | null): any {
+  if (selectedId == null) return 1;
+  return ["case", ["==", ["get", "id"], selectedId], 1, DIMMED_PIN_OPACITY];
+}
+
+// ── Secondary-chrome auto-hide ────────────────────────────────────────────────
+// Map-first chrome: secondary controls (tools menu, status filter) fade out the
+// moment the rep starts panning/zooming and fade back ~800ms after the gesture
+// ends. State machine is pure; the component only dispatches events and arms a
+// timer for `reshowAt`. A new gesture inside the wait window re-hides and
+// clears the pending reshow (debounce, not a queue).
+export const CHROME_RESHOW_DELAY_MS = 800;
+
+export interface ChromeAutoHideState {
+  hidden: boolean;
+  reshowAt: number | null; // epoch ms when chrome should reappear (null = none pending)
+}
+
+export const CHROME_AUTO_HIDE_IDLE: ChromeAutoHideState = {
+  hidden: false,
+  reshowAt: null,
+};
+
+export type ChromeAutoHideEvent =
+  | { type: "interact-start"; now: number }
+  | { type: "interact-end"; now: number }
+  | { type: "idle-timer"; now: number };
+
+export function chromeAutoHideNext(
+  state: ChromeAutoHideState,
+  event: ChromeAutoHideEvent,
+): ChromeAutoHideState {
+  switch (event.type) {
+    case "interact-start":
+      return { hidden: true, reshowAt: null };
+    case "interact-end":
+      return { hidden: true, reshowAt: event.now + CHROME_RESHOW_DELAY_MS };
+    case "idle-timer":
+      return state.reshowAt != null && event.now >= state.reshowAt
+        ? CHROME_AUTO_HIDE_IDLE
+        : state;
+  }
+}
+
+// ── Compact status-filter control ─────────────────────────────────────────────
+// The old permanent chip row collapsed into one pill: closed it reads
+// "All · n"; open it is a scrollable status selector; one tap on All resets.
+// The rep's last selection persists across launches. State machine is pure so
+// collapsed/open/select/reset are unit-testable without the map.
+export const FILTER_STATUS_LS_KEY = "hf.mapFilterStatus.v1";
+
+export interface FilterControlState {
+  open: boolean;
+  status: string; // "all" or a PinDisplayState key
+}
+
+export type FilterControlAction =
+  | { type: "toggle" }
+  | { type: "close" }
+  | { type: "select"; status: string }
+  | { type: "reset" };
+
+export function filterControlNext(
+  state: FilterControlState,
+  action: FilterControlAction,
+): FilterControlState {
+  switch (action.type) {
+    case "toggle":
+      return { ...state, open: !state.open };
+    case "close":
+      return state.open ? { ...state, open: false } : state;
+    case "select":
+      return { open: false, status: action.status };
+    case "reset":
+      return { open: false, status: "all" };
+  }
+}
+
+export function readPersistedFilterStatus(validStatuses: readonly string[]): string {
+  try {
+    const v = localStorage.getItem(FILTER_STATUS_LS_KEY);
+    if (!v || v === "all") return "all";
+    return validStatuses.includes(v) ? v : "all";
+  } catch {
+    return "all"; // storage blocked (private mode) — session-only filter
+  }
+}
+
+export function persistFilterStatus(status: string): void {
+  try {
+    localStorage.setItem(FILTER_STATUS_LS_KEY, status);
+  } catch {
+    /* storage blocked — filter just won't survive a reload */
+  }
+}
+
+// Counts are glanceable context, never the headline: raw under 10k, compact
+// above so a 5-6 digit tally can't dominate the pill ("12.3k", "235k").
+export function formatFilterCount(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return "0";
+  if (n < 10_000) return String(Math.round(n));
+  const k = n / 1000;
+  return `${k >= 100 ? Math.round(k) : Math.round(k * 10) / 10}k`;
+}
 
 // (The per-pin glow layer was removed — it was a 2nd fill draw under EVERY pin,
 // doubling the unclustered draw cost at 5.5k+ leads for a barely-visible halo.
