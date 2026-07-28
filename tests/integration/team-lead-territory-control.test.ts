@@ -53,6 +53,17 @@ function pooledArea(lastOwnerId: number) {
   return seedArea([], { repId: lastOwnerId, status: "unassigned", assigneeIds: "[]" });
 }
 
+// Closing a pass needs at least one door linked to the area — an empty area is
+// refused with NO_LINKED_DOORS, which is its own test in territory-passes.
+let leadSeq = 0;
+function seedLead(territoryId: number, repId: number) {
+  return storage.createLead({
+    address: `${++leadSeq} Cap St`, city: "Testburg", state: "NC", zip: "28100",
+    lat: 35.50, lng: -80.40, tenantId: 1, assignedRepId: repId,
+    assignedTerritoryId: territoryId, leadStatus: "prospect",
+  } as any).id;
+}
+
 const areaOf = (id: number) => storage.getTerritoryById(id) as any;
 const assignees = (id: number) => { try { return JSON.parse(areaOf(id).assigneeIds || "[]"); } catch { return []; } };
 
@@ -209,6 +220,7 @@ describe("resetting an area for another sweep stays manager+", () => {
   it.each([["manager", () => fx.manager], ["admin", () => fx.admin]])(
     "%s can still start a new pass", async (_l, who) => {
       const area = seedArea([fx.repA1.memberId]);
+      seedLead(area, fx.repA1.memberId);
       const res = await req(`/api/territories/${area}/next-pass`, who().session, {
         method: "POST", body: JSON.stringify({ territoryAction: "keep" }),
       });
