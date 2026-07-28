@@ -88,3 +88,55 @@ export function reclaimTerritory(state: TerritoryState, mode: ReclaimMode, opts:
     history: [...state.history, { at: opts.at, action: `reclaim:${mode}`, actorId: opts.actorId, from }],
   };
 }
+
+export interface UnassignRepOpts {
+  actorId: number | null;
+  at: string;            // injectable ISO clock for deterministic history
+  /** Leads in this area currently held by the removed rep return to the pool.
+   *  false leaves them where they are (handover already done out-of-band). */
+  releaseLeads?: boolean;
+}
+
+/**
+ * Remove ONE rep from an area, leaving any co-assignees in place. PURE.
+ *
+ * reclaim() is all-or-nothing — it empties the area or hands it to a single new
+ * owner — so there was no way to revoke one person from a shared area. That is
+ * the operation a manager actually reaches for when a rep leaves a patch,
+ * changes teams, or is taken off an account, and the point of it is that the
+ * rep STOPS SEEING the work: their leads inside the polygon go back to the pool
+ * (releaseLeads, the default) so nothing stays visible through lead assignment
+ * after the area itself is gone.
+ *
+ * Removing the last rep leaves the area "unassigned" (in the pool), which is the
+ * same terminal state return_to_pool produces — deliberately, so downstream
+ * consumers only ever reason about one "nobody owns this" state.
+ *
+ * Removing a rep who is not assigned is a NO-OP: same state, no history entry.
+ * Callers can detect it by comparing repIds length.
+ */
+export function unassignRep(state: TerritoryState, repId: number, opts: UnassignRepOpts): TerritoryState {
+  if (!state.repIds.includes(repId)) return state;
+  const from = { status: state.status, repIds: [...state.repIds] };
+  const repIds = state.repIds.filter(id => id !== repId);
+  const releaseLeads = opts.releaseLeads !== false;
+
+  // Only the departing rep's leads move; a co-assignee's doors are never touched.
+  const leads = releaseLeads
+    ? state.leads.map(l => (l.assignedRepId === repId ? { ...l, assignedRepId: null } : { ...l }))
+    : state.leads.map(l => ({ ...l }));
+
+  // Last one out → the area is in the pool. Otherwise it stays a live area:
+  // "shared" while more than one rep holds it, "active" once a single rep does.
+  const status: TerritoryStatus = repIds.length === 0 ? "unassigned"
+    : repIds.length === 1 ? "active"
+    : "shared";
+
+  return {
+    ...state,
+    status,
+    repIds,
+    leads,
+    history: [...state.history, { at: opts.at, action: `unassign:${repId}`, actorId: opts.actorId, from }],
+  };
+}

@@ -184,7 +184,7 @@ export interface IStorage {
   verifyOtp(email: string, code: string): boolean;
   // ── Territories ────────────────────────────────────────────────────────────
   getTerritories(tenantId?: number): Territory[];
-  getTerritoriesByRep(repId: number): Territory[];
+  getTerritoriesByRep(repId: number, tenantId?: number): Territory[];
   getTerritoryById(id: number): Territory | undefined;
   getLeadsByTerritory(territoryId: number): Lead[];
   addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void;
@@ -3144,13 +3144,22 @@ export class Storage implements IStorage {
     const q = db.select().from(territories);
     return (tenantId != null ? q.where(eq(territories.tenantId, tenantId)) : q).all();
   }
-  getTerritoriesByRep(repId: number): Territory[] {
+  getTerritoriesByRep(repId: number, tenantId?: number): Territory[] {
     // A rep sees a territory if they're the primary repId OR in assignee_ids
     // (multi-rep/shared), and it isn't archived.
-    return this.getTerritories().filter((t: any) => {
+    return this.getTerritories(tenantId).filter((t: any) => {
       if (t.status === "archived") return false;
-      if (t.repId === repId) return true;
-      try { return (JSON.parse(t.assigneeIds || "[]") as number[]).includes(repId); } catch { return false; }
+      // assignee_ids is AUTHORITATIVE whenever the column holds a list — it is
+      // what reclaim/unassign rewrite. repId is only the primary-owner marker
+      // kept for colour and history, and it deliberately still names the last
+      // holder after everyone is removed. Matching on it meant a rep kept seeing
+      // an area that had been reclaimed OR taken off them, which is exactly the
+      // visibility guarantee those operations exist to provide. Fall back to
+      // repId only for legacy rows written before assignee_ids existed.
+      let assignees: number[] | null = null;
+      try { assignees = t.assigneeIds == null ? null : (JSON.parse(t.assigneeIds) as number[]); } catch { assignees = null; }
+      if (Array.isArray(assignees)) return assignees.includes(repId);
+      return t.repId === repId;
     });
   }
   // Tenant-aware by option (see getLeadById). Omit tenantId → original behaviour.

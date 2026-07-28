@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler } from "lucide-react";
+import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus } from "lucide-react";
 import { can, type Role } from "@shared/permissions";
 import { colorForRep } from "@shared/repColors";
 import type { TerritoryStatus } from "@shared/territory";
@@ -34,6 +34,11 @@ export interface TerritoryDetailPanelProps {
   onReassign?: () => void;
   onRename?: (name: string) => void;  // provided for manager+ — shows the pencil
   onViewHistory?: () => void;         // opens the verified activity timeline
+  /** Remove ONE rep from this area. Provided only when the caller may manage
+   *  assignment; the chip's remove control is hidden entirely without it. */
+  onUnassignRep?: (repId: number) => void;
+  /** repId currently being removed — disables just that chip, not the list. */
+  unassigningRepId?: number | null;
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -50,12 +55,16 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
   const swatch = isUnassigned ? colorForRep(null) : (territory.color ?? colorForRep(territory.repIds[0]));
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(territory.name);
+  // Two-step remove: taking an area off a rep pulls their doors back too, so it
+  // asks before it acts rather than firing on a mis-tap next to the chip label.
+  const [confirmRemoveId, setConfirmRemoveId] = useState<number | null>(null);
+  const canUnassign = Boolean(onUnassignRep) && can(role, "reclaim_territory");
 
   const saveName = () => {
     const next = draftName.trim();
@@ -131,16 +140,58 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           <span className="text-xs text-muted-foreground italic">Unassigned — in the pool</span>
         ) : (
           <div className="flex flex-wrap gap-1.5">
-            {territory.repIds.map(id => (
-              <span
-                key={id}
-                data-testid="rep-chip"
-                className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full bg-secondary text-foreground"
-              >
-                <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorForRep(id) }} />
-                {teamNames?.[id] ?? `Rep #${id}`}
-              </span>
-            ))}
+            {territory.repIds.map(id => {
+              const name = teamNames?.[id] ?? `Rep #${id}`;
+              const confirming = confirmRemoveId === id;
+              const busy = unassigningRepId === id;
+              return (
+                <span
+                  key={id}
+                  data-testid="rep-chip"
+                  className={`inline-flex items-center gap-1.5 text-[11px] font-medium pl-2 ${canUnassign ? "pr-0.5" : "pr-2"} py-0.5 rounded-full ${
+                    confirming ? "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/40" : "bg-secondary text-foreground"
+                  } ${busy ? "opacity-60" : ""}`}
+                >
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorForRep(id) }} />
+                  {confirming ? `Remove ${name}?` : name}
+                  {canUnassign && (confirming ? (
+                    <span className="inline-flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        aria-label={`Confirm removing ${name} from this area`}
+                        data-testid={`confirm-unassign-${id}`}
+                        disabled={busy}
+                        onClick={() => { setConfirmRemoveId(null); onUnassignRep?.(id); }}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-500/25 text-rose-200 hover:bg-rose-500/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50"
+                      >
+                        <Check className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Keep ${name} assigned`}
+                        data-testid={`cancel-unassign-${id}`}
+                        onClick={() => setConfirmRemoveId(null)}
+                        className="inline-flex h-5 w-5 items-center justify-center rounded-full hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                      >
+                        <X className="w-3 h-3" aria-hidden="true" />
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      aria-label={`Remove ${name} from this area`}
+                      title={`Remove ${name} — their doors here return to the pool`}
+                      data-testid={`unassign-rep-${id}`}
+                      disabled={busy}
+                      onClick={() => setConfirmRemoveId(id)}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:bg-rose-500/20 hover:text-rose-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50"
+                    >
+                      <UserMinus className="w-3 h-3" aria-hidden="true" />
+                    </button>
+                  ))}
+                </span>
+              );
+            })}
           </div>
         )}
       </div>
