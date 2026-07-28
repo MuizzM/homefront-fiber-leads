@@ -14,6 +14,9 @@ import { z } from "zod";
 import { packMapPins, type PackedMapPins } from "@shared/mapPinsWire";
 import { decideFreshFiber, type FreshFiberVerdict } from "@shared/freshFiberVerdict";
 import { structuredLog } from "./structuredLog";
+import {
+  recordAdminAudit, auditContext, queryAdminAudit, adminAuditFacets, ADMIN_AUDIT_OUTCOMES,
+} from "./adminAudit";
 import { rawDb } from "./db";
 import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
@@ -4545,8 +4548,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const session = storage.getSession(token);
       if (session) {
         const u = storage.getUserById(session.userId);
+        // isSuperAdmin ships WITH the user on every hydration. The Central Admin
+        // route gated on the email string matched against a SEPARATELY fetched
+        // allowlist, so after a refresh the console vanished (or flashed and
+        // redirected) whenever that second request was slow, failed, or had been
+        // evicted from cache — the identity the server already knew was simply
+        // never told to the client. It is now part of the session payload.
         if (u && u.active) {
-          currentUser = { id: u.id, name: u.name, email: u.email, role: u.role, teamMemberId: u.teamMemberId, tenantId: (u as any).tenantId ?? null };
+          currentUser = {
+            id: u.id, name: u.name, email: u.email, role: u.role,
+            teamMemberId: u.teamMemberId, tenantId: (u as any).tenantId ?? null,
+            isSuperAdmin: Boolean((u as any).isSuperAdmin),
+          };
         } else if (u) {
           accessRevoked = true;
           // Self-healing: a deactivated account should not keep session rows
@@ -5296,6 +5309,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const next = storage.getGeoConfig(tid);
     storage.logActivity(uid, "settings.geo.update", "settings", undefined, { from: prev, to: next }, req.ip);
+    recordAdminAudit({
+      ...auditContext(req),
+      action: "settings.geo.update", targetType: "settings", targetId: "geo",
+      targetLabel: "Geo verification thresholds",
+      before: prev, after: next, tenantId: tid, outcome: "success",
+    });
     res.json(next);
   });
 
@@ -6458,8 +6477,22 @@ export function registerSaasRoutes(app: any) {
         role: "admin", tenantId: tenant.id, active: true,
       });
       storage.logActivity((req as any).user.id, "tenant.created", "tenant", tenant.id, { slug: slugClean, ownerEmail });
+      recordAdminAudit({
+        ...auditContext(req),
+        action: "tenant.created", targetType: "tenant", targetId: tenant.id,
+        targetLabel: tenant.brandName ?? tenant.companyName,
+        // No `before` — the row did not exist. `after` is the created state
+        // (secrets redacted by the encoder).
+        after: { slug: tenant.slug, companyName: tenant.companyName, ownerEmail: tenant.ownerEmail, plan: tenant.plan, monthlyFee: tenant.monthlyFee, maxReps: tenant.maxReps, status: tenant.status },
+        tenantId: tenant.id, outcome: "success",
+      });
       res.status(201).json({ tenant, adminUser: { ...adminUser, passwordHash: undefined } });
     } catch (e: any) {
+      recordAdminAudit({
+        ...auditContext(req), action: "tenant.created", targetType: "tenant",
+        targetLabel: String(req.body?.slug ?? req.body?.companyName ?? "").slice(0, 120) || null,
+        outcome: "failure", reason: String(e?.message ?? e).slice(0, 200), tenantId: null,
+      });
       res.status(400).json({ error: e.message });
     }
   });
@@ -6469,6 +6502,53 @@ export function registerSaasRoutes(app: any) {
     const tenant = storage.getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: "Not found" });
     res.json({ ...tenant, stats: storage.getTenantStats(tenant.id) });
+  });
+
+  // GET /api/admin/history — the operations console's history feed.
+  //
+  // VISIBILITY: a super admin reads platform-wide (every tenant plus
+  // tenant-less platform actions); any other admin/manager is walled to their
+  // own organization IN SQL, so no filter argument can widen their scope.
+  app.get("/api/admin/history", requireManager, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const isSuper = Boolean(user?.isSuperAdmin) && user?.role === "admin";
+    // Non-super callers MUST have a tenant: an unscoped read would be global.
+    const tenantId = isSuper ? null : (user?.tenantId ?? null);
+    if (!isSuper && tenantId == null) {
+      return res.status(403).json({ error: "Organization context required", code: "TENANT_REQUIRED" });
+    }
+    // A super admin may narrow to one tenant; nobody else may widen.
+    const requested = req.query.tenantId != null ? Number(req.query.tenantId) : null;
+    const scope = isSuper && Number.isInteger(requested) ? requested : tenantId;
+
+    const outcome = typeof req.query.outcome === "string" && (ADMIN_AUDIT_OUTCOMES as readonly string[]).includes(req.query.outcome)
+      ? (req.query.outcome as any) : undefined;
+    const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 120) : undefined);
+    const result = queryAdminAudit({
+      tenantId: scope,
+      action: str(req.query.action),
+      actorUserId: Number.isInteger(Number(req.query.actorUserId)) && req.query.actorUserId != null
+        ? Number(req.query.actorUserId) : undefined,
+      targetType: str(req.query.targetType),
+      outcome,
+      from: str(req.query.from),
+      to: str(req.query.to),
+      q: str(req.query.q),
+      limit: Number(req.query.limit ?? 50),
+      offset: Number(req.query.offset ?? 0),
+    });
+    res.json({ ...result, scope: isSuper ? (scope == null ? "platform" : `tenant:${scope}`) : `tenant:${scope}` });
+  });
+
+  // Filter facets for the console's menus — same scoping rules as the feed.
+  app.get("/api/admin/history/facets", requireManager, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const isSuper = Boolean(user?.isSuperAdmin) && user?.role === "admin";
+    const tenantId = isSuper ? null : (user?.tenantId ?? null);
+    if (!isSuper && tenantId == null) {
+      return res.status(403).json({ error: "Organization context required", code: "TENANT_REQUIRED" });
+    }
+    res.json({ ...adminAuditFacets(tenantId), outcomes: ADMIN_AUDIT_OUTCOMES, canSeeAllTenants: isSuper });
   });
 
   // PATCH /api/sa/tenants/:id      — update tenant settings
@@ -6482,9 +6562,37 @@ export function registerSaasRoutes(app: any) {
     ]);
     const safeTenant: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(req.body ?? {})) if (ALLOWED_TENANT_FIELDS.has(k)) safeTenant[k] = v;
-    const updated = storage.updateTenant(Number(req.params.id), safeTenant);
-    if (!updated) return res.status(404).json({ error: "Not found" });
-    storage.logActivity((req as any).user.id, "tenant.updated", "tenant", updated.id, { fields: Object.keys(safeTenant) });
+    const id = Number(req.params.id);
+    // Read the CURRENT row first so history records real before/after values,
+    // not just which field names were touched. Only the fields this request
+    // actually changed are recorded — an unchanged field is not history.
+    const previous = storage.getTenantById(id);
+    const updated = storage.updateTenant(id, safeTenant);
+    if (!updated) {
+      recordAdminAudit({
+        ...auditContext(req), action: "tenant.updated", targetType: "tenant", targetId: id,
+        outcome: "failure", reason: "Tenant not found", tenantId: null,
+      });
+      return res.status(404).json({ error: "Not found" });
+    }
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+    for (const key of Object.keys(safeTenant)) {
+      const was = (previous as any)?.[key];
+      const now = (updated as any)?.[key];
+      if (was !== now) { before[key] = was; after[key] = now; }
+    }
+    storage.logActivity((req as any).user.id, "tenant.updated", "tenant", updated.id, { fields: Object.keys(after) });
+    recordAdminAudit({
+      ...auditContext(req),
+      action: "tenant.updated", targetType: "tenant", targetId: updated.id,
+      targetLabel: updated.brandName ?? updated.companyName ?? updated.slug,
+      before, after,
+      // File under the tenant that was CHANGED so that org can see its own
+      // history, not under the platform admin who made the change.
+      tenantId: updated.id,
+      outcome: "success",
+    });
     res.json(updated);
   });
 
@@ -6492,8 +6600,15 @@ export function registerSaasRoutes(app: any) {
   app.delete("/api/sa/tenants/:id", requireAuth, requireSuperAdmin, (req: Request, res: Response) => {
     const tenant = storage.getTenantById(Number(req.params.id));
     if (!tenant) return res.status(404).json({ error: "Not found" });
-    storage.updateTenant(tenant.id, { status: "cancelled" });
+    const updated = storage.updateTenant(tenant.id, { status: "cancelled" });
     storage.logActivity((req as any).user.id, "tenant.cancelled", "tenant", tenant.id, {});
+    recordAdminAudit({
+      ...auditContext(req),
+      action: "tenant.cancelled", targetType: "tenant", targetId: tenant.id,
+      targetLabel: tenant.brandName ?? tenant.companyName ?? tenant.slug,
+      before: { status: tenant.status }, after: { status: updated?.status ?? "cancelled" },
+      tenantId: tenant.id, outcome: "success",
+    });
     res.json({ ok: true });
   });
 

@@ -308,10 +308,16 @@ function AppRoutes() {
           <Route path="/super-admin">
             {/* Super-admin is identity-gated (matches the nav): a normal tenant
                 admin who types the URL is redirected, not shown a dead shell.
-                The server independently enforces requireSuperAdmin on all data. */}
-            {!superAdminSettled
+                The server independently enforces requireSuperAdmin on all data.
+
+                The flag now rides on the session user, so the gate resolves
+                immediately on a refresh. We only WAIT on the allowlist request
+                for a legacy user snapshot that predates the flag — otherwise a
+                slow or failed /api/config/app used to redirect the owner away
+                from their own console. */}
+            {user?.isSuperAdmin === undefined && !superAdminSettled
               ? null
-              : isSuperAdmin(user?.email, superAdminEmails)
+              : isSuperAdmin(user, superAdminEmails)
                 ? <SuperAdmin />
                 : <Redirect to="/" />}
           </Route>

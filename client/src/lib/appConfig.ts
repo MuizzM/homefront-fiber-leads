@@ -14,6 +14,18 @@ export function useSuperAdminEmails(): { emails: string[]; settled: boolean } {
   return { emails: data?.superAdminEmails ?? [], settled: isSuccess || isError };
 }
 
-export function isSuperAdmin(email: string | undefined | null, list: string[]): boolean {
-  return !!email && list.includes(email.trim().toLowerCase());
+// Authoritative check: the flag the server stamped on the session user. The
+// email+allowlist comparison is kept ONLY as a fallback for a cached user
+// snapshot minted before the flag existed, so an upgrade doesn't lock the owner
+// out mid-session. Server routes independently enforce requireSuperAdmin, so a
+// stale client flag can never grant real access.
+export function isSuperAdmin(
+  user: { email?: string | null; isSuperAdmin?: boolean } | string | undefined | null,
+  list: string[],
+): boolean {
+  if (user && typeof user === "object") {
+    if (typeof user.isSuperAdmin === "boolean") return user.isSuperAdmin;
+    return !!user.email && list.includes(user.email.trim().toLowerCase());
+  }
+  return !!user && list.includes(String(user).trim().toLowerCase());
 }

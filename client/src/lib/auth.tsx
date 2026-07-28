@@ -15,6 +15,11 @@ export interface AuthUser {
     | "calling_rep" | "calling_manager" | "compliance_admin" | "auditor";
   teamMemberId?: number | null;
   tenantId?: number | null; // the user's organization (tenants.id)
+  // Platform-owner identity, straight from the immutable is_super_admin column.
+  // Gating Central Admin on THIS (rather than matching the email against a
+  // separately-fetched allowlist) is what keeps the console from disappearing
+  // on refresh: it arrives with the session, in the same payload as the role.
+  isSuperAdmin?: boolean;
 }
 
 interface AuthCtx {
