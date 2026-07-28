@@ -80,6 +80,7 @@ export interface LegacyCommissionMutationCommand {
   id: number;
   tenantId: number;
   actorUserId: number;
+  expectedRevision: number;
   expectedStatus: LegacyCommissionStatus;
   status: LegacyCommissionStatus;
   paidDate?: string;
@@ -259,7 +260,6 @@ export interface IStorage {
   getCommissions(tenantId?: number, repId?: number): Commission[];
   getCommissionById(id: number, tenantId: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
-  updateCommission(id: number, updates: Partial<Commission>, tenantId: number): Commission | undefined;
   transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult;
   removePendingCommissionsForLead(leadId: number): Commission[];
   getCommissionSummary(tenantId: number): { repId: number; repName: string; total: number; paid: number; pending: number; sales: number }[];
@@ -413,6 +413,7 @@ export function runMigrations() {
     `ALTER TABLE commissions ADD COLUMN structure_version INTEGER`,
     `ALTER TABLE commissions ADD COLUMN calc_type TEXT`,
     `ALTER TABLE commissions ADD COLUMN sale_amount REAL`,
+    `ALTER TABLE commissions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1`,
     `ALTER TABLE commission_rates ADD COLUMN calc_type TEXT NOT NULL DEFAULT 'flat'`,
     `ALTER TABLE commission_rates ADD COLUMN percentage REAL NOT NULL DEFAULT 0`,
     `ALTER TABLE commission_rates ADD COLUMN tiers TEXT`,
@@ -3732,18 +3733,11 @@ export class Storage implements IStorage {
       throw e;
     }
   }
-  updateCommission(id: number, updates: Partial<Commission>, tenantId: number): Commission | undefined {
-    // P0-2: the tenant predicate is part of the UPDATE so a cross-tenant id can
-    // never be written even if a caller skipped the read-side check.
-    return db.update(commissions).set(updates)
-      .where(and(eq(commissions.id, id), eq(commissions.tenantId, tenantId)))
-      .returning().get();
-  }
-
   transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult {
     const transact = rawDb.transaction((): LegacyCommissionMutationResult => {
       const existing = this.getCommissionById(command.id, command.tenantId);
       if (!existing) return { kind: "not_found" };
+      if (existing.revision !== command.expectedRevision) return { kind: "stale" };
 
       const plan = planLegacyCommissionTransition(existing, command, command.actorUserId);
       if (!plan.ok) {
@@ -3754,8 +3748,9 @@ export class Storage implements IStorage {
 
       const update = rawDb.prepare(
         `UPDATE commissions
-            SET status = ?, paid_date = ?, notes = ?, approved_by = ?
-          WHERE id = ? AND tenant_id = ? AND status = ?`,
+            SET status = ?, paid_date = ?, notes = ?, approved_by = ?,
+                revision = revision + 1
+          WHERE id = ? AND tenant_id = ? AND status = ? AND revision = ?`,
       ).run(
         plan.next.status,
         plan.next.paidDate,
@@ -3764,6 +3759,7 @@ export class Storage implements IStorage {
         command.id,
         command.tenantId,
         command.expectedStatus,
+        command.expectedRevision,
       );
       if (update.changes !== 1) return { kind: "stale" };
 

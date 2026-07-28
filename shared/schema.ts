@@ -502,6 +502,7 @@ export const commissions = sqliteTable("commissions", {
   amount: real("amount").notNull(),             // dollar amount (locked at sale time)
   status: text("status").notNull().default("pending"),
   // "pending" | "approved" | "paid" | "disputed"
+  revision: integer("revision").notNull().default(1),
   saleDate: text("sale_date").notNull(),
   paidDate: text("paid_date"),
   notes: text("notes"),

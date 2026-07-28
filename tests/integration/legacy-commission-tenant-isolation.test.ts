@@ -158,6 +158,12 @@ function commission(id: number, tenantId = 1) {
   return storage.getCommissionById(id, tenantId);
 }
 
+function revision(id: number, tenantId = 1): number {
+  const value = commission(id, tenantId)?.revision;
+  if (!value) throw new Error(`Missing commission ${id} revision`);
+  return value;
+}
+
 function auditCount(id: number): number {
   return Number((rawDb.prepare(
     "SELECT COUNT(*) AS count FROM activity_log WHERE entity_type = 'commission' AND entity_id = ?",
@@ -209,14 +215,23 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(auditCount(tenantBCommissionId)).toBe(0);
   });
 
-  it("requires expectedStatus and rejects unknown status values", async () => {
-    const missingExpected = await patchCommission(illegalCommissionId, {
+  it("requires revision and status preconditions and rejects unknown status values", async () => {
+    const missingRevision = await patchCommission(illegalCommissionId, {
+      expectedStatus: "pending",
       status: "approved",
     });
-    expect(missingExpected.status).toBe(400);
-    expect(await missingExpected.json()).toMatchObject({ error: "Invalid commission update" });
+    expect(missingRevision.status).toBe(400);
+    expect(await missingRevision.json()).toMatchObject({ error: "Invalid commission update" });
+
+    const missingExpectedStatus = await patchCommission(illegalCommissionId, {
+      expectedRevision: revision(illegalCommissionId),
+      status: "approved",
+    });
+    expect(missingExpectedStatus.status).toBe(400);
+    expect(await missingExpectedStatus.json()).toMatchObject({ error: "Invalid commission update" });
 
     const unknown = await patchCommission(illegalCommissionId, {
+      expectedRevision: revision(illegalCommissionId),
       expectedStatus: "pending",
       status: "wire_transfer_complete",
     });
@@ -224,6 +239,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(await unknown.json()).toMatchObject({ error: "Invalid commission update" });
 
     const forgedApprover = await patchCommission(illegalCommissionId, {
+      expectedRevision: revision(illegalCommissionId),
       expectedStatus: "pending",
       status: "approved",
       approvedBy: 999_999,
@@ -236,6 +252,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
 
   it("applies a legal own-tenant transition with one redacted audit event", async () => {
     const response = await patchCommission(ownCommissionId, {
+      expectedRevision: revision(ownCommissionId),
       expectedStatus: "pending",
       status: "approved",
       notes: "manager-reviewed",
@@ -265,6 +282,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
 
   it("rejects an illegal lifecycle transition without a write or audit", async () => {
     const response = await patchCommission(illegalCommissionId, {
+      expectedRevision: revision(illegalCommissionId),
       expectedStatus: "pending",
       status: "paid",
       paidDate: "2026-07-27",
@@ -281,6 +299,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
 
   it("enforces paid-date coherence and terminal paid immutability", async () => {
     const missingDate = await patchCommission(paymentCommissionId, {
+      expectedRevision: revision(paymentCommissionId),
       expectedStatus: "approved",
       status: "paid",
     });
@@ -288,6 +307,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(await missingDate.json()).toMatchObject({ code: "PAID_DATE_REQUIRED" });
 
     const invalidDate = await patchCommission(paymentCommissionId, {
+      expectedRevision: revision(paymentCommissionId),
       expectedStatus: "approved",
       status: "paid",
       paidDate: "2026-02-30",
@@ -296,6 +316,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(await invalidDate.json()).toMatchObject({ code: "INVALID_PAID_DATE" });
 
     const forbiddenDate = await patchCommission(paidDateForbiddenCommissionId, {
+      expectedRevision: revision(paidDateForbiddenCommissionId),
       expectedStatus: "approved",
       status: "approved",
       paidDate: "2026-07-27",
@@ -304,6 +325,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(await forbiddenDate.json()).toMatchObject({ code: "PAID_DATE_FORBIDDEN" });
 
     const paid = await patchCommission(paymentCommissionId, {
+      expectedRevision: revision(paymentCommissionId),
       expectedStatus: "approved",
       status: "paid",
       paidDate: "2026-07-27",
@@ -317,6 +339,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(auditCount(paymentCommissionId)).toBe(1);
 
     const exactRetry = await patchCommission(paymentCommissionId, {
+      expectedRevision: revision(paymentCommissionId),
       expectedStatus: "paid",
       status: "paid",
       paidDate: "2026-07-27",
@@ -326,6 +349,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(auditCount(paymentCommissionId)).toBe(1);
 
     const terminalRewrite = await patchCommission(paymentCommissionId, {
+      expectedRevision: revision(paymentCommissionId),
       expectedStatus: "paid",
       status: "paid",
       paidDate: "2026-07-27",
@@ -342,12 +366,15 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
   });
 
   it("uses expectedStatus as a CAS token for concurrent and repeated commands", async () => {
+    const staleRevision = revision(staleCommissionId);
     const [approve, dispute] = await Promise.all([
       patchCommission(staleCommissionId, {
+        expectedRevision: staleRevision,
         expectedStatus: "pending",
         status: "approved",
       }),
       patchCommission(staleCommissionId, {
+        expectedRevision: staleRevision,
         expectedStatus: "pending",
         status: "disputed",
       }),
@@ -359,12 +386,35 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     expect(auditCount(staleCommissionId)).toBe(1);
 
     const repeatedOldCommand = await patchCommission(staleCommissionId, {
+      expectedRevision: staleRevision,
       expectedStatus: "pending",
       status: "approved",
     });
     expect(repeatedOldCommand.status).toBe(409);
     expect(await repeatedOldCommand.json()).toMatchObject({ code: "STALE_VERSION" });
     expect(auditCount(staleCommissionId)).toBe(1);
+
+    const current = commission(staleCommissionId)!;
+    const [firstNote, secondNote] = await Promise.all([
+      patchCommission(staleCommissionId, {
+        expectedRevision: current.revision,
+        expectedStatus: current.status,
+        status: current.status,
+        notes: "first concurrent note",
+      }),
+      patchCommission(staleCommissionId, {
+        expectedRevision: current.revision,
+        expectedStatus: current.status,
+        status: current.status,
+        notes: "second concurrent note",
+      }),
+    ]);
+    expect([firstNote.status, secondNote.status].sort()).toEqual([200, 409]);
+    const staleNote = firstNote.status === 409 ? firstNote : secondNote;
+    expect(await staleNote.json()).toMatchObject({ code: "STALE_VERSION" });
+    expect(["first concurrent note", "second concurrent note"])
+      .toContain(commission(staleCommissionId)?.notes);
+    expect(auditCount(staleCommissionId)).toBe(2);
   });
 
   it("rolls back the money mutation when the mandatory audit insert fails", async () => {
@@ -378,6 +428,7 @@ describe("legacy commission API tenant and lifecycle correctness", () => {
     `);
     try {
       const response = await patchCommission(rollbackCommissionId, {
+        expectedRevision: revision(rollbackCommissionId),
         expectedStatus: "pending",
         status: "approved",
         notes: "must roll back",

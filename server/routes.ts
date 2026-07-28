@@ -6699,6 +6699,7 @@ export function registerSaasRoutes(app: any) {
       return res.status(404).json({ error: "Not found" });
     }
     const parsed = z.object({
+      expectedRevision: z.number().int().positive(),
       expectedStatus: z.enum(LEGACY_COMMISSION_STATUSES),
       status: z.enum(LEGACY_COMMISSION_STATUSES),
       paidDate: z.string().trim().max(10).optional(),

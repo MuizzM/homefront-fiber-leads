@@ -120,14 +120,36 @@ describe("P0-2 commission PATCH is tenant-walled", () => {
 
     const own = await request(`/api/commissions/${c.id}`, mgr2.session, {
       method: "PATCH",
-      body: JSON.stringify({ expectedStatus: "pending", status: "approved" }),
+      body: JSON.stringify({
+        expectedRevision: c.revision,
+        expectedStatus: "pending",
+        status: "approved",
+      }),
     });
     expect(own.status).toBe(200);
-    expect(storage.getCommissionById(c.id, TENANT_B)!.status).toBe("approved");
+    const approved = storage.getCommissionById(c.id, TENANT_B)!;
+    expect(approved.status).toBe("approved");
 
-    // Storage layer: the tenant predicate is on the UPDATE itself.
-    expect(storage.updateCommission(c.id, { status: "paid" }, 1)).toBeUndefined();
-    expect(storage.updateCommission(c.id, { status: "paid" }, TENANT_B)?.status).toBe("paid");
+    // Storage layer: the canonical lifecycle command carries tenant, status,
+    // and row-revision predicates. There is no unrestricted update bypass.
+    expect(storage.transitionLegacyCommission({
+      id: c.id,
+      tenantId: 1,
+      actorUserId: mgr1.userId,
+      expectedRevision: approved.revision,
+      expectedStatus: "approved",
+      status: "paid",
+      paidDate: "2026-01-02",
+    })).toEqual({ kind: "not_found" });
+    expect(storage.transitionLegacyCommission({
+      id: c.id,
+      tenantId: TENANT_B,
+      actorUserId: mgr2.userId,
+      expectedRevision: approved.revision,
+      expectedStatus: "approved",
+      status: "paid",
+      paidDate: "2026-01-02",
+    })).toMatchObject({ kind: "updated", commission: { status: "paid" } });
   });
 
   it("P0-4: earnings summary is scoped to the caller's org", async () => {
