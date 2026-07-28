@@ -29,7 +29,11 @@ describe("canonical lead status pins", () => {
   it("keeps Sold and Prospect visibly different under glare", () => {
     expect(STATUS_CONFIG.sold).toMatchObject({ shape: "teardrop", glyph: "dollar" });
     expect(STATUS_CONFIG.prospect).toMatchObject({ shape: "down_arrow", glyph: "none" });
-    expect(PIN_SVGS.sold).toContain(">$</text>");
+    // Asserts a dollar is DRAWN, not how. This previously pinned `>$</text>`,
+    // which locked in the one font-dependent glyph in the set — the reason sold
+    // pins came up blank on devices without Arial. Vector strokes now.
+    expect(PIN_SVGS.sold).not.toMatch(/<text[\s>]/);
+    expect(PIN_SVGS.sold).toContain("M20 9.5v21");
     expect(PIN_SVGS.prospect).toContain("M20 10v12");
   });
 

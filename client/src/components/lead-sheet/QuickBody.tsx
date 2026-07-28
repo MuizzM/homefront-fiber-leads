@@ -33,8 +33,15 @@ export interface QuickBodyProps {
 
 // Icon-sized utility affordance: 40px glyph button with an expanded hit area —
 // present, never competing with the outcomes grid.
+// Directions is the one thing a rep standing on a sidewalk needs instantly, and
+// it was a bare 18px arrow in a row of three identical grey circles — findable
+// only if you already knew it was there. Labelled and given the primary weight;
+// Call and Copy stay icon-only, which is fine because they're secondary and the
+// arrow no longer has to be told apart from them by shape alone.
 const utilBtn =
-  "relative h-10 w-10 flex items-center justify-center rounded-full bg-white/[0.05] border border-white/[0.08] text-white/70 hover:text-white active:scale-90 transition after:absolute after:-inset-1";
+  "relative h-10 w-10 flex items-center justify-center rounded-full bg-white/[0.06] border border-white/[0.10] text-white/75 hover:text-white hover:bg-white/[0.12] active:scale-90 transition after:absolute after:-inset-1";
+const primaryUtilBtn =
+  "relative h-10 flex items-center gap-1.5 px-3.5 rounded-full bg-sky-500/15 border border-sky-400/30 text-sky-300 font-semibold text-[12.5px] hover:bg-sky-500/25 hover:text-sky-200 active:scale-95 transition after:absolute after:-inset-1";
 
 export function QuickBody(props: QuickBodyProps): JSX.Element {
   const {
@@ -54,9 +61,10 @@ export function QuickBody(props: QuickBodyProps): JSX.Element {
           target="_blank"
           rel="noopener"
           aria-label="Directions"
-          className={utilBtn}
+          className={primaryUtilBtn}
         >
-          <Navigation className="w-[18px] h-[18px]" />
+          <Navigation className="w-[17px] h-[17px] shrink-0" />
+          Directions
         </a>
         {validPhone(phone) && (
           <a

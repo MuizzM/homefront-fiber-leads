@@ -346,8 +346,11 @@ describe("<LeadKnockSheet /> — utility row, Call gating", () => {
     expect(a.getAttribute("href")).not.toMatch(/mapbox/i);
     expect(a).toHaveAttribute("aria-label", "Directions");
     // Icon-sized (40px glyph buttons), not competing with the grid.
+    // Directions is now a LABELLED pill rather than a bare 40px circle: reps
+    // couldn't find an unlabelled arrow sitting between two identical grey
+    // circles. Height is still the 40px touch target; the width grows for text.
     expect(a.className).toMatch(/\bh-10\b/);
-    expect(a.className).toMatch(/\bw-10\b/);
+    expect(a).toHaveTextContent("Directions");
     const copy = screen.getByTestId("action-copy");
     expect(copy).toHaveAttribute("aria-label", "Copy address");
     expect(copy.className).toMatch(/\bh-10\b/);
