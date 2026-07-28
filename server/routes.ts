@@ -55,7 +55,7 @@ import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenant } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
-import { reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
@@ -4905,7 +4905,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Reps only see territories assigned to them — NEVER others' territories
     // If teamMemberId is null (not linked to a team member yet), return empty
     if (!user.teamMemberId || typeof user.teamMemberId !== "number") return res.json([]);
-    return res.json(storage.getTerritoriesByRep(user.teamMemberId));
+    return res.json(storage.getTerritoriesByRep(user.teamMemberId, user.tenantId ?? undefined));
   });
 
   app.post("/api/territories", requireTeamLead, (req, res) => {
@@ -5120,6 +5120,97 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, { status: merged.length > 1 ? "shared" : "active", assigneeIds: JSON.stringify(merged), updatedAt: at } as any, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged });
     res.json({ ok: true, assigneeIds: merged });
+  });
+
+  // POST /api/territories/:id/unassign { repId, releaseLeads? }
+  //
+  // Remove ONE rep from an area and take the work out of their app. `reclaim`
+  // is all-or-nothing (empty the area, or hand it to a single new owner), so a
+  // manager had no way to revoke one person from a SHARED area — the everyday
+  // case when a rep leaves a patch or changes teams. Removing them also returns
+  // their leads inside the polygon to the pool, because an area the rep can no
+  // longer see is worthless if the doors stay assigned to them.
+  app.post("/api/territories/:id/unassign", requireTeamLead, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const t = storage.getTerritoryById(Number(req.params.id), tid);
+    if (!t) return res.status(404).json({ error: "not found" });
+    // Same ownership gate the other team_lead lifecycle routes use.
+    if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
+    if (((t as any).status ?? "active") === "archived") {
+      return res.status(409).json({ error: "cannot change assignees on an archived area", code: "ARCHIVED" });
+    }
+
+    const repId = Number(req.body?.repId);
+    if (!Number.isInteger(repId) || repId <= 0) return res.status(400).json({ error: "repId required" });
+    // Never let this become a cross-tenant or cross-team write, and never let it
+    // confirm that a foreign rep id exists.
+    if (!repInCallerTenant(user, repId) || !repInVisibilityScope(user, repId)) {
+      return res.status(404).json({ error: "rep not found" });
+    }
+
+    const at = new Date().toISOString();
+    const before = storage.getLeadsByTerritory(t.id);
+    const prev: TerritoryState = {
+      id: t.id,
+      status: ((t as any).status ?? "active") as TerritoryStatus,
+      repIds: safeJson<number[]>((t as any).assigneeIds) ?? [t.repId],
+      color: t.color,
+      leads: before.map((l: any) => ({ id: l.id, assignedRepId: l.assignedRepId })),
+      history: [],
+    };
+    if (!prev.repIds.includes(repId)) {
+      return res.status(409).json({ error: "that rep is not assigned to this area", code: "NOT_ASSIGNED" });
+    }
+
+    const next = unassignRep(prev, repId, {
+      actorId: user?.id ?? null, at,
+      releaseLeads: req.body?.releaseLeads !== false,
+    });
+
+    // Keep repId (the primary owner used for colour/history) pointing at someone
+    // who is still on the area; fall back to the removed rep only when nobody is
+    // left, so history still shows who last held it.
+    const newPrimary = next.repIds[0] ?? t.repId;
+    const past = Array.from(new Set([...(safeJson<number[]>((t as any).pastAssigneeIds) ?? []), repId].filter(Boolean)));
+    let newName = t.name;
+    if (isAutoAreaName(t.name)) {
+      const nr = next.repIds.length ? storage.getTeamMemberById(next.repIds[0], tid) : null;
+      newName = nr ? `${nr.name}'s area` : "Unassigned area";
+    }
+    storage.updateTerritory(t.id, {
+      status: next.status, repId: newPrimary, name: newName,
+      assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
+      color: colorForRep(newPrimary), updatedAt: at,
+    } as any, tid);
+
+    // Persist only the leads whose rep actually changed (the removed rep's).
+    const beforeById = new Map(before.map((l: any) => [l.id, l.assignedRepId]));
+    let leadsReleased = 0;
+    for (const l of next.leads) {
+      if (beforeById.get(l.id) !== l.assignedRepId) {
+        storage.updateLead(l.id, {
+          assignedRepId: l.assignedRepId,
+          assignedTerritoryId: l.assignedRepId == null ? null : t.id,
+          assignmentSource: l.assignedRepId == null ? null : "territory-sync",
+          unassignedAt: l.assignedRepId == null ? at : null,
+        } as any, tid);
+        leadsReleased++;
+      }
+    }
+
+    const removed = storage.getTeamMemberById(repId, tid);
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "unassigned", { repId, repName: removed?.name ?? null, leadsReleased });
+    recordAdminAudit({
+      ...auditContext(req),
+      action: "territory.rep_unassigned", targetType: "territory", targetId: t.id,
+      targetLabel: t.name,
+      before: { repIds: prev.repIds, status: prev.status },
+      after: { repIds: next.repIds, status: next.status, leadsReleased },
+      tenantId: tid ?? null, outcome: "success",
+    });
+
+    res.json({ ok: true, repId, status: next.status, assigneeIds: next.repIds, leadsReleased });
   });
 
   // POST /api/territories/:id/archive
