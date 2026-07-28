@@ -9,6 +9,7 @@ export type Action =
   | "create_territory"
   | "assign_territory"
   | "reclaim_territory"
+  | "reset_territory_pass"
   | "return_leads_to_pool"
   | "archive_territory"
   | "override_territory_sync"
@@ -30,7 +31,16 @@ const MIN_ROLE: Record<Action, Role> = {
   view_all_leads: "team_lead",
   create_territory: "team_lead",
   assign_territory: "team_lead",
-  reclaim_territory: "manager",
+  // Pulling an area back from a rep is everyday assignment work — the same shift
+  // that hands an area out reassigns it — so it sits with assign_territory at
+  // team_lead. A team lead is still scoped to their OWN team's areas by
+  // canManageTerritory; the rank only says the action is theirs to take.
+  reclaim_territory: "team_lead",
+  // Resetting an area for another sweep is NOT the same act: it clears the
+  // outcomes an entire team recorded, across every door, with no undo. It kept
+  // manager+ when reclaim dropped to team_lead, which is the whole reason it
+  // needs its own name rather than riding on reclaim_territory.
+  reset_territory_pass: "manager",
   return_leads_to_pool: "manager",
   archive_territory: "manager",
   override_territory_sync: "manager",

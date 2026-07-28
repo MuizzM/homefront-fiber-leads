@@ -412,12 +412,22 @@ function canReassignLead(user: any, lead: any): boolean {
 // team_lead renaming/deleting another team's area.
 function canManageTerritory(user: any, terr: any): boolean {
   const scope = leadVisibilityScope(user);
-  if (scope === undefined) return true;
+  if (scope === undefined) return true;  // manager+ — unrestricted
   if (!terr) return false;
   let assignees: number[] = [];
   try { assignees = JSON.parse(terr.assigneeIds || "[]"); } catch { /* legacy */ }
-  return (terr.repId != null && (scope as number[]).includes(terr.repId))
-    || assignees.some(id => (scope as number[]).includes(id));
+  if ((terr.repId != null && (scope as number[]).includes(terr.repId))
+      || assignees.some(id => (scope as number[]).includes(id))) return true;
+
+  // An area nobody currently holds belongs to no team, so there is no team to
+  // take it from. A team lead may pick one up out of the pool — the separate
+  // repInVisibilityScope check on the target rep is what stops them handing it
+  // to somebody else's rep. Without this, "team leads can assign" was false for
+  // every freshly drawn or returned area, which is most of them.
+  const status = String(terr.status ?? "");
+  const unowned = assignees.length === 0
+    && (status === "unassigned" || status === "reclaimed" || status === "draft");
+  return unowned;
 }
 
 // Tenant wall for rep-targeting writes (clock, pings, manual commissions):
@@ -5132,7 +5142,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.get("/api/territories/:id/next-pass/preview", requireManager, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    if (!can(user?.role, "reclaim_territory")) return res.status(403).json({ error: "not allowed" });
+    if (!can(user?.role, "reset_territory_pass")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
     // 404 not 403 on a foreign area: a manager should not be able to probe which
     // territory ids exist in another org.
@@ -5151,9 +5161,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const audit = auditContext(req);
-    if (!can(user?.role, "reclaim_territory")) {
+    if (!can(user?.role, "reset_territory_pass")) {
       recordAdminAudit({ ...audit, action: "territory.next_pass", targetType: "territory",
-        targetId: String(req.params.id), outcome: "denied", reason: "missing reclaim_territory" });
+        targetId: String(req.params.id), outcome: "denied", reason: "missing reset_territory_pass" });
       return res.status(403).json({ error: "not allowed" });
     }
     const t = storage.getTerritoryById(Number(req.params.id));
@@ -5251,12 +5261,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
-  app.post("/api/territories/:id/reclaim", requireManager, (req, res) => {
+  app.post("/api/territories/:id/reclaim", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     if (!can(user?.role, "reclaim_territory")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
     if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // Scope, not rank, is what keeps a team lead honest here: they may pull back
+    // an area their OWN reps hold, never one belonging to another team. Managers
+    // and admins have an undefined scope and pass straight through.
+    if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
 
     const mode = (req.body?.mode ?? "return_to_pool") as ReclaimMode;
     const newRepId = req.body?.newRepId ?? req.body?.reassignToRepId ?? undefined;
@@ -5386,11 +5400,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // POST /api/territories/:id/share { repIds: number[] } — multi-rep assignment
-  app.post("/api/territories/:id/share", requireManager, (req, res) => {
+  app.post("/api/territories/:id/share", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
+    if (!can(user?.role, "assign_territory")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
     if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // The target reps were already scoped below, but the AREA was not: without
+    // this a team lead could share another team's area to their own reps, which
+    // is a territory grab wearing an assignment's clothes.
+    if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
     const repIds: number[] = Array.isArray(req.body?.repIds) ? req.body.repIds.map(Number) : [];
     // Every OTHER rep-taking territory route validates its input reps; this one
     // did not, so a foreign rep id could be written into assignee_ids — and
