@@ -148,6 +148,10 @@ export const territories = sqliteTable("territories", {
   updatedAt: text("updated_at"),
   completedAt: text("completed_at"),
   reclaimedAt: text("reclaimed_at"),
+  // When this area was last handed to its current rep. Leads carried an
+  // assignedAt but the AREA never did, so "who has this and since when" could
+  // not be answered without digging through territory_events.
+  assignedAt: text("assigned_at"),
   archivedAt: text("archived_at"),
   // Scan-intelligence: "why this area" briefing captured at deploy time, the
   // field-outcome retrospective, and the scan run this territory came from.

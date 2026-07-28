@@ -124,6 +124,9 @@ import { unpackMapPins } from "@shared/mapPinsWire";
 import { LEAD_MARKS, LEAD_MARK_META, type LeadMark } from "@shared/leadMark";
 import { useCan } from "@/lib/capabilities";
 import { can as roleCan } from "@shared/permissions";
+import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
+import { RepPicker } from "@/components/territory/RepPicker";
+import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
@@ -1345,6 +1348,10 @@ export default function MapView() {
 
   // Reclaim / pull-back an area with one of the 3 modes.
   const [reclaimMenuId, setReclaimMenuId] = useState<number | null>(null);
+  // Drives area-label detail (see detailForZoom). Starts at the full level so a
+  // first paint before zoomend fires shows the complete label rather than a bare
+  // name that then pops into detail.
+  const [labelZoom, setLabelZoom] = useState(15);
   // Two-tap territory delete: first × arms "Sure?" for 3s, second tap deletes.
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const confirmDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2504,11 +2511,23 @@ export default function MapView() {
       if (bboxTimerRef.current) clearTimeout(bboxTimerRef.current);
       bboxTimerRef.current = setTimeout(readBounds, 150);
     };
+    // Area labels shed detail as they get small. Only the BUCKET is stored, not
+    // the raw zoom: the label layer rebuilds when this changes, and storing a
+    // continuous value would rebuild it on every wheel tick.
+    const onZoomEnd = () => {
+      try {
+        const z = map.getZoom();
+        setLabelZoom((prev) => (detailForZoom(prev) === detailForZoom(z) ? prev : z));
+      } catch { /* map mid-teardown */ }
+    };
     map.on("moveend", onMoveEnd);
+    map.on("zoomend", onZoomEnd);
+    onZoomEnd();
     return () => {
       if (bboxTimerRef.current) clearTimeout(bboxTimerRef.current);
       try {
         map.off("moveend", onMoveEnd);
+        map.off("zoomend", onZoomEnd);
       } catch {}
     };
   }, [mapReady, styleEpoch]);
@@ -2751,25 +2770,23 @@ export default function MapView() {
   // Centroid label. Reps: the area NAME only. Managers: name + owner line
   // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's name
   // must NOT linger on the area).
+  // Whose area, since when, how far through — the three things a manager reads
+  // off the map without tapping. Wording and truncation live in
+  // @shared/territoryLabel so they're testable away from Mapbox; here we only
+  // choose the detail level from zoom, since three lines over a block-sized
+  // polygon collide with the neighbours and become unreadable.
   const territoryLabelFor = (t: (typeof territories)[number]): string => {
-    const status = (t as any).status ?? "active";
-    const isPool = status === "unassigned" || status === "reclaimed";
-    const isDone = status === "completed";
     const areaName = (t.name ?? "").trim();
     if (!canAssign) return areaName;
     const prog = territoryProgress.find((p) => p.id === t.id);
-    const repName =
-      team.find((m) => m.id === t.repId)?.name?.split(" ")[0] ?? "";
-    const ownerLine = isPool
-      ? "Unassigned"
-      : isDone
-        ? `Done — ${repName}`
-        : prog
-          ? `${repName}  ${prog.knocked}/${prog.total}`
-          : repName;
-    return areaName && ownerLine && areaName !== ownerLine
-      ? `${areaName}\n${ownerLine}`
-      : areaName || ownerLine;
+    return territoryLabel({
+      areaName,
+      repName: team.find((m) => m.id === t.repId)?.name ?? "",
+      assignedAt: (t as any).assignedAt ?? null,
+      knocked: prog?.knocked ?? null,
+      total: prog?.total ?? null,
+      status: (t as any).status ?? "active",
+    }, detailForZoom(labelZoom));
   };
   const territoryLabelForRef = useRef(territoryLabelFor);
   territoryLabelForRef.current = territoryLabelFor;
@@ -5742,6 +5759,7 @@ export default function MapView() {
                         canResetPass ? () => setNextPassTerritoryId(t.id) : undefined
                       }
                       currentPass={(t as any).currentPass ?? 1}
+                      assignedAt={(t as any).assignedAt ?? null}
                     />
                     {/* Assign-to-next-rep for unassigned/reclaimed areas */}
                     {isPool && (
@@ -5749,27 +5767,22 @@ export default function MapView() {
                         <div className="text-[11px] font-semibold text-foreground mb-1.5">
                           Assign this area to the next rep
                         </div>
-                        <select
-                          data-testid="assign-next-rep"
-                          defaultValue=""
-                          onChange={(e) => {
-                            if (e.target.value)
-                              assignTerritoryMutation.mutate({
-                                id: t.id,
-                                repId: Number(e.target.value),
-                              });
-                          }}
-                          className="w-full h-9 bg-secondary border border-border rounded-lg px-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                        >
-                          <option value="">Choose a rep…</option>
-                          {team
-                            .filter((m) => m.active)
-                            .map((m) => (
-                              <option key={m.id} value={m.id}>
-                                {m.name}
-                              </option>
-                            ))}
-                        </select>
+                        {/* Searchable, and shows how loaded each rep already is
+                            — handing a seventh area to someone at the cap is the
+                            mistake this control exists to prevent. */}
+                        <RepPicker
+                          reps={team.filter((m) => m.active).map((m) => {
+                            const held = territories.filter((x: any) =>
+                              (x.status === "active" || x.status === "shared") &&
+                              (x.repId === m.id ||
+                                (() => { try { return (JSON.parse(x.assigneeIds || "[]") as number[]).includes(m.id); } catch { return false; } })())
+                            ).length;
+                            return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
+                          })}
+                          onChange={(repId) =>
+                            assignTerritoryMutation.mutate({ id: t.id, repId })
+                          }
+                        />
                       </div>
                     )}
                     {/* Inline reclaim 3-mode chooser (reuses the same mutation) */}
