@@ -24,7 +24,8 @@ const MIN_ROLE: Record<Action, Role> = {
   view_all_leads: "team_lead",
   create_territory: "team_lead",
   assign_territory: "team_lead",
-  reclaim_territory: "manager",
+  reclaim_territory: "team_lead",
+  reset_territory_pass: "manager",
   return_leads_to_pool: "manager",
   archive_territory: "manager",
   override_territory_sync: "manager",
@@ -58,6 +59,7 @@ describe("can() — rep fail-closed (highest risk)", () => {
       "create_territory",
       "assign_territory",
       "reclaim_territory",
+      "reset_territory_pass",
       "return_leads_to_pool",
       "archive_territory",
       "override_territory_sync",
@@ -66,10 +68,16 @@ describe("can() — rep fail-closed (highest risk)", () => {
     for (const action of forbidden) expect(can("rep", action)).toBe(false);
   });
 
-  it("team_lead can carve/assign areas but CANNOT reclaim or return-to-pool", () => {
+  it("team_lead can carve, assign and pull back areas — but cannot reset a pass", () => {
     expect(can("team_lead", "create_territory")).toBe(true);
     expect(can("team_lead", "assign_territory")).toBe(true);
-    expect(can("team_lead", "reclaim_territory")).toBe(false);
+    // Pulling an area back is assignment work — a team lead's own job. What they
+    // still cannot do is reset an area for a new sweep, which wipes the whole
+    // team's recorded outcomes.
+    expect(can("team_lead", "reclaim_territory")).toBe(true);
+    expect(can("team_lead", "reset_territory_pass")).toBe(false);
+    expect(can("manager", "reset_territory_pass")).toBe(true);
+    expect(can("rep", "reclaim_territory")).toBe(false);
     expect(can("team_lead", "return_leads_to_pool")).toBe(false);
   });
 

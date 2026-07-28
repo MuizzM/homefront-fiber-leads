@@ -294,7 +294,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
 
       {/* Knock it again. Sits with the other manager actions but reads as its own
           step, because "start pass 3" is a different decision from "reclaim". */}
-      {onStartNextPass && can(role, "reclaim_territory") && (
+      {onStartNextPass && can(role, "reset_territory_pass") && (
         <button
           data-testid="next-pass-btn"
           onClick={onStartNextPass}
