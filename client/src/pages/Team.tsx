@@ -7,7 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   UserPlus, Edit2, Trash2, Phone, Mail,
   User, CheckCircle2, Users, Crown, Star, ChevronUp,
-  Wallet, Layers, DollarSign,
+  Wallet, Layers, DollarSign, ChevronRight,
   DoorOpen, Handshake, PhoneCall, TrendingUp, FileSignature,
   UserMinus, UserCheck, ShieldAlert, KeyRound, GitBranch, Archive
 } from "lucide-react";
@@ -943,6 +943,37 @@ export default function Team() {
               selfId={editMember.id}
               creatorRole={user?.role ?? "team_lead"}
             />
+          )}
+
+          {/* COMMISSION, in the same place you edit everything else about the
+              member. It lived behind a separate button on the roster row, which
+              meant setting up a new rep was two dialogs and a hunt. Kept as a
+              clearly separated section rather than merged into the form: the
+              profile fields save together, pay is its own decision with its own
+              confirmation, and quietly re-pricing someone while renaming them is
+              not a mistake worth enabling. */}
+          {editMember && canManageCommission && editMember.id !== myMemberId && (
+            <div className="mt-1 border-t border-border pt-3">
+              <button
+                type="button"
+                onClick={() => setCommissionMember(editMember)}
+                data-testid="btn-edit-commission-inline"
+                className="w-full flex items-center justify-between gap-2 rounded-xl border border-border bg-secondary/40 px-3 py-2.5 text-left transition-colors hover:bg-secondary/70"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <span className="w-7 h-7 shrink-0 rounded-lg bg-primary/10 text-primary flex items-center justify-center">
+                    <DollarSign className="w-3.5 h-3.5" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-xs font-semibold">Commission</span>
+                    <span className="block text-2xs text-muted-foreground truncate">
+                      Flat per sale, or retroactive weekly tiers
+                    </span>
+                  </span>
+                </span>
+                <ChevronRight className="w-4 h-4 shrink-0 text-muted-foreground" />
+              </button>
+            </div>
           )}
         </DialogContent>
       </Dialog>

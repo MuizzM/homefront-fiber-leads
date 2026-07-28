@@ -5896,25 +5896,6 @@ export default function MapView() {
                                   }
                                 },
                               },
-                              {
-                                key: "add-lead",
-                                testid: "menu-add-lead",
-                                icon: tapResolving ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : addMode ? (
-                                  <Radar className="w-4 h-4" />
-                                ) : (
-                                  <Plus className="w-4 h-4" />
-                                ),
-                                label: addMode
-                                  ? "Cancel add-lead mode"
-                                  : "Add a lead — tap a house",
-                                active: addMode,
-                                onClick: () => {
-                                  setAddMode((v) => !v);
-                                  setToolsMenuOpen(false);
-                                },
-                              },
                             ]
                           : []),
                         ...(canSubmitScan
@@ -6114,10 +6095,46 @@ export default function MapView() {
             </button>
           )}
 
-          {/* Add-lead and Search are tools-menu items now (Lane E2) — no
-              permanent FABs beyond Locate + the contextual primary action.
-              addMode is toggled from the menu; the armed-state affordance is
-              the tap-hint bar below (unchanged). */}
+          {/* ADD A LEAD — a permanent button, stacked directly above Locate.
+              It lived in the tools popover, which cost two taps and a hunt for
+              the single thing a rep does most often while standing in front of a
+              house that isn't on the map yet. It rides the same sheet-aware
+              bottom offset as Locate so the pair move together and neither ends
+              up behind the knock sheet.
+              Armed state is unmistakable: the button turns amber and swaps to
+              the radar glyph, matching the tap-hint bar below it. */}
+          {mapReady && canAssign && (
+            <button
+              type="button"
+              onClick={() => { setAddMode((v) => !v); setToolsMenuOpen(false); }}
+              aria-label={addMode ? "Cancel add-lead mode" : "Add a lead — tap a house"}
+              aria-pressed={addMode}
+              data-testid="fab-add-lead"
+              style={{
+                height: 52,
+                width: 52,
+                // 52px button + 12px gutter above Locate's own offset.
+                bottom:
+                  bottomSlot === "knock" && sheetPeekPx
+                    ? `calc(env(safe-area-inset-bottom) + ${sheetPeekPx + 12 + 64}px)`
+                    : "calc(env(safe-area-inset-bottom) + 2rem + 64px)",
+                boxShadow: "var(--glass-shadow-1)",
+              }}
+              className={`absolute right-3 z-20 rounded-full ring-1 ring-inset ring-white/[0.18] flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform ${
+                addMode
+                  ? "bg-amber-500 text-white hover:bg-amber-500/90"
+                  : "glass-capsule glass-opaque text-white/90 hover:text-white"
+              }`}
+            >
+              {tapResolving ? (
+                <Loader2 className="w-6 h-6 animate-spin motion-reduce:animate-none" />
+              ) : addMode ? (
+                <Radar className="w-6 h-6" />
+              ) : (
+                <Plus className="w-6 h-6" />
+              )}
+            </button>
+          )}
 
           {/* Scan-a-house hint — shown while scan mode is ARMED (sticky: it stays
               armed across scans so a rep can walk a street door after door).
