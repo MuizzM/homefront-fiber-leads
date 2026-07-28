@@ -35,6 +35,7 @@ jobs:
         env:
           REQUESTED_SHA: ${{ inputs.commit_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail

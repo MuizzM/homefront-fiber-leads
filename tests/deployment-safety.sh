@@ -18,6 +18,7 @@ if grep -Eq '^[[:space:]]+push:' "$WORKFLOW"; then
 fi
 grep -q 'commit_sha:' "$WORKFLOW" || fail "release SHA input is missing"
 grep -q 'actions: read' "$WORKFLOW" || fail "deploy validation cannot read CI workflow results"
+grep -q 'GH_TOKEN:.*github.token' "$WORKFLOW" || fail "gh CLI cannot authenticate for exact-SHA CI validation"
 grep -q 'actions/workflows/ci.yml/runs?head_sha=' "$WORKFLOW" || fail "deploy does not require CI for the exact release SHA"
 grep -q 'CI has not succeeded for this exact commit' "$WORKFLOW" || fail "deploy lacks an exact-SHA CI failure gate"
 grep -q 'environment:' "$WORKFLOW" || fail "production environment gate is missing"
