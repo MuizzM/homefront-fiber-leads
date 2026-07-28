@@ -112,6 +112,8 @@ import {
 import { unpackMapPins } from "@shared/mapPinsWire";
 import { LEAD_MARKS, LEAD_MARK_META, type LeadMark } from "@shared/leadMark";
 import { useCan } from "@/lib/capabilities";
+import { can as roleCan } from "@shared/permissions";
+import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
   discoveryApi,
@@ -917,7 +919,12 @@ export default function MapView() {
   }, [scanSummaryJob]);
   const isAdmin = user?.role === "admin";
   const isRep = user?.role === "rep";
-  const canManage = user?.role === "admin" || user?.role === "manager";
+  // Was a hard-coded admin||manager list, which silently outranked the permission
+  // table: team leads gained reclaim/assign server-side but the UI kept hiding
+  // every control from them. Ask the same source of truth the API does.
+  const canManage = roleCan(user?.role, "assign_territory");
+  const canReclaim = roleCan(user?.role, "reclaim_territory");
+  const canResetPass = roleCan(user?.role, "reset_territory_pass");
   // Admin, manager, and team lead can carve out areas and assign them to reps.
   const canAssign =
     user?.role === "admin" ||
@@ -1285,6 +1292,42 @@ export default function MapView() {
   useEffect(() => () => {
     if (confirmDeleteTimer.current) clearTimeout(confirmDeleteTimer.current);
   }, []);
+  // Remove ONE rep from an area (the everyday operation reclaim can't express).
+  // The panel hides its control unless this handler is passed — which is exactly
+  // why the feature was invisible: it was built, tested and shipped, but never
+  // wired here, so no user ever saw it.
+  const [unassigningRepId, setUnassigningRepId] = useState<number | null>(null);
+  const unassignRepMutation = useMutation({
+    mutationFn: async ({ id, repId }: { id: number; repId: number }) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/unassign`, { repId });
+      return res.json();
+    },
+    onMutate: ({ repId }) => setUnassigningRepId(repId),
+    onSettled: () => setUnassigningRepId(null),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+    },
+  });
+
+  // Re-open an area for another sweep.
+  const [nextPassTerritoryId, setNextPassTerritoryId] = useState<number | null>(null);
+  const nextPassMutation = useMutation({
+    mutationFn: async ({ id, ...body }: { id: number; territoryAction: string; newRepId?: number; keepPendingCallbacks?: boolean; note?: string }) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/next-pass`, body);
+      return res.json();
+    },
+    onSuccess: () => {
+      setNextPassTerritoryId(null);
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+    },
+  });
+
   const reclaimMutation = useMutation({
     mutationFn: async ({
       id,
@@ -5427,7 +5470,7 @@ export default function MapView() {
                           : undefined
                       }
                       onReclaim={
-                        !isPool && canManage
+                        !isPool && canReclaim
                           ? () =>
                               setReclaimMenuId(
                                 reclaimMenuId === t.id ? null : t.id,
@@ -5438,6 +5481,16 @@ export default function MapView() {
                         renameTerritoryMutation.mutate({ id: t.id, name })
                       }
                       onViewHistory={() => setActivityTerritoryId(t.id)}
+                      onUnassignRep={
+                        !isPool && canManage
+                          ? (repId) => unassignRepMutation.mutate({ id: t.id, repId })
+                          : undefined
+                      }
+                      unassigningRepId={unassigningRepId ?? undefined}
+                      onStartNextPass={
+                        canResetPass ? () => setNextPassTerritoryId(t.id) : undefined
+                      }
+                      currentPass={(t as any).currentPass ?? 1}
                     />
                     {/* Assign-to-next-rep for unassigned/reclaimed areas */}
                     {isPool && (
@@ -5532,6 +5585,28 @@ export default function MapView() {
             })()}
 
           {/* Territory activity History drawer (opened from the card's View Activity) */}
+          {/* Re-open an area for another sweep. Mounted once, outside the territory
+              loop, so the preview fetch fires for the chosen area only. */}
+          {nextPassTerritoryId != null && (
+            <StartNextPassDialog
+              open
+              territoryId={nextPassTerritoryId}
+              busy={nextPassMutation.isPending}
+              reps={team.filter((m) => m.active).map((m) => ({ id: m.id, name: m.name }))}
+              fetchPreview={async (territoryId, keepPendingCallbacks) => {
+                const res = await apiRequest(
+                  "GET",
+                  `/api/territories/${territoryId}/next-pass/preview?keepPendingCallbacks=${keepPendingCallbacks}`,
+                );
+                return res.json();
+              }}
+              onConfirm={(opts) =>
+                nextPassMutation.mutate({ id: nextPassTerritoryId, ...opts })
+              }
+              onCancel={() => setNextPassTerritoryId(null)}
+            />
+          )}
+
           {activityTerritoryId != null && (
             <TerritoryActivityDrawer
               territoryId={activityTerritoryId}

@@ -140,6 +140,10 @@ export const territories = sqliteTable("territories", {
   assigneeIds: text("assignee_ids"),            // JSON int[] — multi-rep
   pastAssigneeIds: text("past_assignee_ids"),   // JSON int[] — reassignment history
   completionNotes: text("completion_notes"),
+  // Which sweep this area is on. Declared here (not just as a raw ALTER) so it
+  // is actually SELECTed and reaches the client — without it the map had no way
+  // to label "Start pass 3".
+  currentPass: integer("current_pass").notNull().default(1),
   hierarchyParentId: integer("hierarchy_parent_id"),
   updatedAt: text("updated_at"),
   completedAt: text("completed_at"),
