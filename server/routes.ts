@@ -413,6 +413,21 @@ function canReassignLead(user: any, lead: any): boolean {
 // belonging to their team (the area's rep or any assignee is in scope).
 // Admin/manager pass. Guards the destructive territory routes against a
 // team_lead renaming/deleting another team's area.
+// The max-active-areas cap, in one place. /assign checked it inline while
+// reclaim(reassign), share and next-pass(reassign) handed out areas without
+// asking — so the cap was advisory on every path except the least-used one.
+// Returns an error message when the rep is full, null when they have room.
+//
+// Areas the rep ALREADY holds are excluded: re-sharing or re-confirming an area
+// they're on is not a new area, and counting it would refuse a no-op.
+function repAtAreaCap(repId: number, excludeTerritoryId?: number): string | null {
+  const active = storage.getTerritoriesByRep(repId).filter((x: any) =>
+    (x.status === "active" || x.status === "shared") && x.id !== excludeTerritoryId);
+  if (canRepTakeAnotherArea(active.length)) return null;
+  const rep = storage.getTeamMemberById(repId);
+  return `${rep?.name ?? "That rep"} already has ${active.length} active areas (max ${MAX_ACTIVE_AREAS_PER_REP}).`;
+}
+
 function canManageTerritory(user: any, terr: any): boolean {
   const scope = leadVisibilityScope(user);
   if (scope === undefined) return true;  // manager+ — unrestricted
@@ -5210,11 +5225,30 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (newRepId != null && !repInCallerTenant(user, newRepId)) {
       return res.status(404).json({ error: "rep not found" });
     }
+    // Checked BEFORE startNextPass: a refused hand-off must not have already
+    // wiped the area's outcomes on its way to the 409.
+    if (newRepId != null) {
+      const full = repAtAreaCap(newRepId, t.id);
+      if (full) return res.status(409).json({ error: full });
+    }
     const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 500) : null;
     const keepPendingCallbacks = req.body?.keepPendingCallbacks === true;
 
     const at = new Date().toISOString();
     const before = { pass: currentPassOf(t.id), repId: t.repId, status: (t as any).status };
+
+    // An area with no doors linked to it produces an empty pass: a ledger row of
+    // all zeros, a counter advanced for nothing, and a manager told "0 doors
+    // re-open" with no explanation. That happens for real — reclaiming an area
+    // to the pool clears assigned_territory_id on its leads, so a pooled area
+    // reports no doors until it is assigned again and re-linked by polygon.
+    // Refuse with something the manager can act on instead of recording a lie.
+    if (previewNextPass(t.id, tid ?? null).totals.total === 0) {
+      return res.status(409).json({
+        error: "This area has no doors linked to it yet, so there is nothing to re-open. Assign it to a rep first — that links the doors inside its outline.",
+        code: "NO_LINKED_DOORS",
+      });
+    }
 
     let result;
     try {
@@ -5306,6 +5340,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const mode = (req.body?.mode ?? "return_to_pool") as ReclaimMode;
     const newRepId = req.body?.newRepId ?? req.body?.reassignToRepId ?? undefined;
     if (mode === "reassign" && !newRepId) return res.status(400).json({ error: "newRepId required for reassign mode" });
+    // Handing the area straight to someone else is still handing them an area.
+    if (mode === "reassign") {
+      const full = repAtAreaCap(Number(newRepId), t.id);
+      if (full) return res.status(409).json({ error: full });
+    }
 
     const at = new Date().toISOString();
     // Build the pure TerritoryState from DB rows, run the shared transition,
@@ -5451,6 +5490,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (!repInCallerTenant(user, r) || !repInVisibilityScope(user, r)) {
         return res.status(404).json({ error: "rep not found" });
       }
+    }
+    // Sharing adds this area to each rep's plate; the ones already on it are
+    // excluded by repAtAreaCap so re-confirming an existing share never 409s.
+    const alreadyOn = new Set<number>(safeJson<number[]>((t as any).assigneeIds) ?? []);
+    for (const r of repIds) {
+      if (alreadyOn.has(r)) continue;
+      const full = repAtAreaCap(r, t.id);
+      if (full) return res.status(409).json({ error: full });
     }
     const merged = Array.from(new Set([t.repId, ...repIds].filter(Boolean)));
     const at = new Date().toISOString();

@@ -300,6 +300,25 @@ describe("doors that must never re-open", () => {
   });
 });
 
+describe("an area with no doors", () => {
+  it("refuses to close a pass rather than recording an empty one", async () => {
+    // Reclaiming to the pool clears assigned_territory_id on the leads, so a
+    // pooled area genuinely reports zero doors. Closing a pass there would write
+    // an all-zero ledger row and burn a pass number for nothing.
+    const area = seedArea([fx.rep.memberId]);
+    const res = await req(`/api/territories/${area}/next-pass`, fx.manager.session, {
+      method: "POST", body: JSON.stringify({ territoryAction: "keep" }),
+    });
+    expect(res.status).toBe(409);
+    expect((await res.json()).code).toBe("NO_LINKED_DOORS");
+
+    // Nothing recorded, nothing advanced.
+    const { passes, currentPass } = await (await req(`/api/territories/${area}/passes`, fx.manager.session)).json();
+    expect(passes).toHaveLength(0);
+    expect(currentPass).toBe(1);
+  });
+});
+
 // ── Atomicity ─────────────────────────────────────────────────────────────────
 describe("the reset is all-or-nothing", () => {
   it("rolls back completely when the territory step fails", async () => {
