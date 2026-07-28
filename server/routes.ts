@@ -5531,11 +5531,49 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const full = repAtAreaCap(r, t.id);
       if (full) return res.status(409).json({ error: full });
     }
-    const merged = Array.from(new Set([t.repId, ...repIds].filter(Boolean)));
+    // repIds is the COMPLETE set of who holds this area, not an addition to it.
+    // This used to force the previous primary in — Array(new Set([t.repId, ...])) —
+    // so handing an area to a different rep left the old one on it permanently
+    // and there was no request that could ever remove them. Two reps on one area,
+    // no way to unstick it.
+    if (repIds.length === 0) {
+      return res.status(400).json({ error: "repIds required — use /reclaim to empty an area" });
+    }
+    const merged = Array.from(new Set(repIds));
     const at = new Date().toISOString();
-    storage.updateTerritory(t.id, { status: merged.length > 1 ? "shared" : "active", assigneeIds: JSON.stringify(merged), assignedAt: at, updatedAt: at } as any, tid);
-    storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged });
-    res.json({ ok: true, assigneeIds: merged });
+    // The primary drives the map colour, so it has to move with the assignment;
+    // otherwise a reassigned area keeps wearing the previous rep's colour and the
+    // map lies about who is working it.
+    const newPrimary = merged[0];
+    const past = Array.from(new Set([
+      ...(safeJson<number[]>((t as any).pastAssigneeIds) ?? []),
+      ...(safeJson<number[]>((t as any).assigneeIds) ?? []),
+      t.repId,
+    ].filter(Boolean).filter((id) => !merged.includes(id as number))));
+
+    storage.updateTerritory(t.id, {
+      status: merged.length > 1 ? "shared" : "active",
+      repId: newPrimary,
+      color: colorForRep(newPrimary),
+      assigneeIds: JSON.stringify(merged),
+      pastAssigneeIds: JSON.stringify(past),
+      assignedAt: at, updatedAt: at,
+    } as any, tid);
+
+    // Doors follow the area. A rep dropped from the assignment must stop seeing
+    // its leads, and the incoming primary must start — otherwise the area moves
+    // but the work doesn't.
+    for (const l of storage.getLeadsByTerritory(t.id)) {
+      const holder = (l as any).assignedRepId;
+      if (holder != null && merged.includes(holder)) continue; // already on the area
+      storage.updateLead(l.id, {
+        assignedRepId: newPrimary, assignedTerritoryId: t.id,
+        assignmentSource: "territory-sync", assignedAt: at,
+      } as any, tid);
+    }
+
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
+    res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: colorForRep(newPrimary) });
   });
 
   // POST /api/territories/:id/unassign { repId, releaseLeads? }
