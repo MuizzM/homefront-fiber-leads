@@ -5,7 +5,6 @@ import {
   useCallback,
   useMemo,
   useReducer,
-  useSyncExternalStore,
   useDeferredValue,
 } from "react";
 // mapbox-gl loaded via CDN in index.html — do not bundle
@@ -46,11 +45,7 @@ import { TerritoryDetailPanel } from "@/components/TerritoryDetailPanel";
 import { TerritoryActivityDrawer } from "@/components/TerritoryActivityDrawer";
 import { LeadKnockSheet } from "@/components/LeadKnockSheet";
 import { LeadsInViewPanel } from "@/components/LeadsInViewPanel";
-import {
-  getKnockQueue,
-  type KnockQueue,
-  type QueueSnapshot,
-} from "@/lib/knockQueue";
+import { useKnockLogger } from "@/lib/useKnockLogger";
 import { captureFieldFix } from "@/lib/geoFix";
 import {
   OUTCOME_TO_STATUS,
@@ -595,15 +590,6 @@ function ensureTransientMapLayers(map: any): void {
     });
   }
 }
-
-// Stable empty snapshot for useSyncExternalStore before the queue exists —
-// a fresh object per call would loop the store subscription forever.
-const EMPTY_QUEUE_SNAP: QueueSnapshot = {
-  pendingCount: 0,
-  deadCount: 0,
-  byLead: {},
-  online: true,
-};
 
 // Compact "3m ago / 2h ago / 4d ago" for the visited banner.
 
@@ -4081,40 +4067,17 @@ export default function MapView() {
   }, [searchIndex, deferredSearch]);
 
   // ── Knock queue — offline-first saves, idempotent via clientId ──────────────
-  // Module-level singleton per rep: it keeps flushing queued knocks even if the
-  // rep navigates away from the map, so we never destroy() it on unmount.
-  const knockQueue: KnockQueue | null = useMemo(() => {
-    if (!user || !useSheet) return null;
-    return getKnockQueue({
-      repId: user.teamMemberId ?? 0,
-      post: (url, body) => apiRequest("POST", url, body).then((r) => r.json()),
-      patch: (url, body) =>
-        apiRequest("PATCH", url, body).then((r) => r.json()),
-      onSaved: (leadId: number) => {
-        qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
-        qc.invalidateQueries({ queryKey: ["/api/leads"] });
-        // The card's History timeline shows the new entry as soon as the POST lands.
-        qc.invalidateQueries({ queryKey: [`/api/leads/${leadId}/history`] });
-      },
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.teamMemberId, useSheet]);
-  const subscribeQueue = useCallback(
-    (cb: () => void) => (knockQueue ? knockQueue.subscribe(cb) : () => {}),
-    [knockQueue],
-  );
-  const getQueueSnap = useCallback(
-    () => (knockQueue ? knockQueue.getSnapshot() : EMPTY_QUEUE_SNAP),
-    [knockQueue],
-  );
-  const queueSnap = useSyncExternalStore(subscribeQueue, getQueueSnap);
+  // Layout's FieldStatusBar mounts this canonical hook before page content.
+  // MapView consumes the same authenticated-owner singleton instead of
+  // registering another saved callback whose behavior depends on mount order.
+  const { log: logKnock, snap: queueSnap } = useKnockLogger();
 
   const selectedLead =
     selectedLeadId != null ? (leadById.get(selectedLeadId) ?? null) : null;
 
   // One-tap disposition: optimistic pin recolor FIRST (marking a door must feel
-  // instant in the field), then the offline-safe enqueue. The queue owns
-  // retries/idempotency; react-query owns rollback via onSaved invalidations.
+  // instant in the field), then the offline-safe enqueue. useKnockLogger owns
+  // retries, idempotency, and authoritative saved reconciliation.
   // The card's chip, timestamp, and active pill all read from this same
   // optimistic pin data, so a single tap updates everything at once.
   // CENTRAL MARK (owner ask 2026-07-26): managers mark an outcome on behalf of
@@ -4179,26 +4142,12 @@ export default function MapView() {
   );
 
   const handleKnock = useCallback(
-    (outcome: KnockOutcome) => {
+    (outcome: KnockOutcome): boolean => {
       const lead =
         selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
-      if (!lead || !knockQueue) return;
-      const credit = isRep
-        ? user?.teamMemberId
-        : (lead.assignedRepId ?? user?.teamMemberId);
-      if (!credit) {
-        // Managers without a team-member row can't self-credit a knock; the
-        // card's Assign menu (visible to lead.assign holders, right on this
-        // sheet) is the one-tap fix — point straight at it.
-        toast({
-          title: "Pick a rep to credit first",
-          description:
-            "Use the Assign menu on this card, then tap the outcome again.",
-          variant: "destructive",
-        });
-        return;
-      }
-      const at = new Date().toISOString();
+      if (!lead) return false;
+      if (!logKnock(lead, outcome)) return false;
+
       const nextLeadStatus = OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus;
       const nextDisplayState = pinDisplayState({
         leadStatus: nextLeadStatus,
@@ -4221,24 +4170,6 @@ export default function MapView() {
         // duplicate full setData when the optimistic update lands.
         pendingKnockPaintRef.current = lead.id;
       }
-      qc.setQueryData(["/api/leads/map"], (old: any) => {
-        if (!old?.pins) return old;
-        return {
-          ...old,
-          pins: old.pins.map((p: MapPin) =>
-            p.id === lead.id
-              ? {
-                  ...p,
-                  leadStatus: nextLeadStatus,
-                  visited: true,
-                  knockCount: (p.knockCount ?? 0) + 1,
-                  lastOutcome: outcome,
-                  lastKnockedAt: at,
-                }
-              : p,
-          ),
-        };
-      });
       recentIdsRef.current = [...recentIdsRef.current.slice(-9), lead.id];
       // Fire the pin's confirm-flash in the SAME color the card pill flashes (both
       // derive from the shared palette), so tapping an outcome pops the map marker
@@ -4252,37 +4183,9 @@ export default function MapView() {
       } catch {
         /* palette lookup is best-effort — no flash, pin still recolors */
       }
-      // Capture WHERE the rep is standing at the tap so the server can verify the
-      // work. Non-blocking: the pin already recolored above; we attach the fix and
-      // enqueue when it resolves (a recent cached fix returns almost instantly, a
-      // denied/absent one enqueues location-less → server marks it Needs Review).
-      captureFieldFix().then((fix) => {
-        knockQueue.enqueue({
-          leadId: lead.id,
-          repId: credit,
-          outcome,
-          callbackDate: null,
-          callbackTime: null,
-          ...fix,
-        });
-      });
-      // Sold pays: the server auto-creates a pending commission with this knock.
-      // Un-marking a sale reverses it. Refresh the Commission tab either way.
-      if (outcome === "sold") {
-        toast({
-          title: "Sold — commission entry created",
-          description: "Pending review in the Commission tab",
-        });
-        qc.invalidateQueries({ queryKey: ["/api/commissions"] });
-        qc.invalidateQueries({ queryKey: ["/api/commissions/summary"] });
-      } else if (lead.leadStatus === "sold") {
-        // Was sold, now marked otherwise → the server drops its pending commission.
-        toast({ title: "Sale removed — pending commission reversed" });
-        qc.invalidateQueries({ queryKey: ["/api/commissions"] });
-        qc.invalidateQueries({ queryKey: ["/api/commissions/summary"] });
-      }
+      return true;
     },
-    [leadById, selectedLeadId, knockQueue, isRep, user, qc, toast, scheduleClusterSetData],
+    [leadById, selectedLeadId, logKnock, scheduleClusterSetData],
   );
 
   // Lead-level notes: the card owns typing; this owns persistence through the

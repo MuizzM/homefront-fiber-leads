@@ -169,6 +169,16 @@ describe("<LeadKnockSheet /> — three-level model", () => {
     expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
   });
 
+  it("stays open when the field command is rejected before enqueue", async () => {
+    const onKnock = vi.fn(() => false);
+    renderSheet({ onKnock });
+
+    await userEvent.click(screen.getByTestId("knock-outcome-interested"));
+
+    expect(onKnock).toHaveBeenCalledWith("interested");
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "quick");
+  });
+
   it("stable rendering: a prop-driven status update for the SAME lead never reopens the card", async () => {
     const { props, rerenderSheet } = renderSheet();
     await userEvent.click(screen.getByTestId("knock-outcome-sold"));

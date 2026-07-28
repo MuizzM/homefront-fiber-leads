@@ -1,0 +1,111 @@
+export type SavedKnockMessage = {
+  title: "Sale saved" | "Outcome saved" | "A newer outcome already stands";
+  description?: string;
+};
+
+export type MoneyQueryPrefix =
+  | "/api/commission"
+  | "/api/commissions"
+  | "/api/payouts";
+
+export type SavedKnockReconciliationEffects = {
+  notify: (message: SavedKnockMessage) => void;
+  invalidateQuery: (queryKey: readonly unknown[]) => void;
+  invalidatePrefix: (prefix: MoneyQueryPrefix) => void;
+};
+
+export type FieldQueueIdentity = {
+  id: number;
+  role: string;
+  teamMemberId?: number | null;
+};
+
+const FIELD_ROLES = new Set([
+  "rep",
+  "team_lead",
+  "manager",
+  "admin",
+  "super_admin",
+]);
+
+function positiveId(value: number | null | undefined): number | null {
+  return Number.isSafeInteger(value) && Number(value) > 0 ? Number(value) : null;
+}
+
+/**
+ * Queue ownership is an authenticated-client namespace, not sales credit.
+ * Team members retain their existing positive key. Authorized field users
+ * without a team-member row receive a unique negative user key, which cannot
+ * collide with real positive team-member IDs.
+ */
+export function deriveFieldQueueOwnerKey(
+  user: FieldQueueIdentity | null | undefined,
+): number | null {
+  if (!user || !FIELD_ROLES.has(user.role)) return null;
+  const teamMemberId = positiveId(user.teamMemberId);
+  if (teamMemberId != null) return teamMemberId;
+  const userId = positiveId(user.id);
+  return userId == null ? null : -userId;
+}
+
+/**
+ * Resolves authoritative sales credit separately from queue ownership.
+ * Synthetic negative owner keys are never eligible to enter a knock payload.
+ */
+export function resolveCreditedRepId(
+  user: FieldQueueIdentity | null | undefined,
+  assignedRepId?: number | null,
+): number | null {
+  if (!user || !FIELD_ROLES.has(user.role)) return null;
+  const ownRepId = positiveId(user.teamMemberId);
+  if (user.role === "rep") return ownRepId;
+  return positiveId(assignedRepId) ?? ownRepId;
+}
+
+export function queryKeyMatchesApiPrefix(
+  queryKey: readonly unknown[],
+  prefix: MoneyQueryPrefix,
+): boolean {
+  const root = queryKey[0];
+  return (
+    typeof root === "string"
+    && (root === prefix || root.startsWith(`${prefix}/`))
+  );
+}
+
+/**
+ * Reconciles UI state only after KnockQueue has durably saved a knock.
+ * Superseded knocks are history-only: a newer authoritative outcome remains on
+ * the lead, so the optimistic map state is reconciled immediately.
+ */
+export function createSavedKnockReconciliation(
+  effects: SavedKnockReconciliationEffects,
+) {
+  return (
+    leadId: number,
+    outcome?: string,
+    superseded = false,
+  ): void => {
+    if (superseded) {
+      effects.notify({
+        title: "A newer outcome already stands",
+        description:
+          "This knock was recorded as history; the door keeps its latest status.",
+      });
+    } else {
+      effects.notify({
+        title: outcome === "sold" ? "Sale saved" : "Outcome saved",
+      });
+    }
+
+    effects.invalidateQuery(["/api/leads/map"]);
+    effects.invalidateQuery(["/api/leaderboard"]);
+    effects.invalidateQuery(["/api/leads"]);
+    effects.invalidateQuery(["/api/followups"]);
+    effects.invalidateQuery([`/api/leads/${leadId}`]);
+    effects.invalidateQuery([`/api/leads/${leadId}/history`]);
+    effects.invalidatePrefix("/api/commission");
+    effects.invalidatePrefix("/api/commissions");
+    effects.invalidatePrefix("/api/payouts");
+  };
+}

@@ -64,7 +64,9 @@ export interface SheetLead {
 
 export interface LeadKnockSheetProps {
   lead: SheetLead | null;                 // null → animate out then unmount after 300ms
-  onKnock: (outcome: KnockOutcome) => void;
+  // Explicit false means the command was rejected before it could be queued.
+  // Void remains accepted for backward-compatible non-map consumers.
+  onKnock: (outcome: KnockOutcome) => boolean | void;
   // Lead-level notes, persisted inline. Explicit leadId so a pending debounce
   // for the OUTGOING lead can flush during a card swap; returns the save
   // result so the card can render Saving/Saved and merge 409 conflicts.
@@ -450,20 +452,23 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     const now = Date.now();
     if (now - tapGuard.current < 350) return; // double-submit guard
     tapGuard.current = now;
-    try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
-    // Brief filled + check flash confirms the tap even before the optimistic
-    // lead data round-trips. No-op under reduced motion.
-    if (!prefersReducedMotion()) {
-      setFlashKey(key);
-      window.setTimeout(() => setFlashKey(k => (k === key ? null : k)), 150);
-    }
+    let accepted = false;
     if (centralMode && canManage && onCentralMark) {
       onCentralMark(key); // central-team mark: no rep credit, no commission
+      accepted = true;
       // AUDIT FIX: disarm after one mark — the hint says "next status tap",
       // and an armed manager silently stripped rep credit on later doors.
       setCentralMode(false);
     } else {
-      onKnock(key); // optimistic upstream: dot, status line, active outcome, and pin recolor together
+      accepted = onKnock(key) !== false;
+    }
+    if (!accepted) return;
+    try { navigator.vibrate?.(key === "sold" ? [12, 40, 12] : 10); } catch { /* unsupported */ }
+    // Brief filled + check flash confirms only an accepted command. A rejected
+    // manager/rep action stays open so the user can correct assignment/session.
+    if (!prefersReducedMotion()) {
+      setFlashKey(key);
+      window.setTimeout(() => setFlashKey(k => (k === key ? null : k)), 150);
     }
     // Marking is the moment of commitment: confirm, then collapse to Peek so the
     // map (and the freshly recolored pin) is back in view immediately.
