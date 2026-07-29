@@ -488,10 +488,15 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
           <span className="text-muted-foreground"> for every qualified sale.</span>
         </div>
       )}
-      {structure.structure === "TIERED" && (
+      {structure.structure === "TIERED" && structure.tiers.length > 1 && (
+        // The example is derived from THIS rep's actual second band — it used
+        // to hardcode "Hit 8" from the standard ladder, which stated wrong
+        // terms for anyone on a custom plan, on the exact card that freezes
+        // terms to their file.
         <p className="text-[11px] text-muted-foreground mb-4">
           Tiers are <strong className="text-foreground">retroactive</strong>: your total weekly sales set one rate for
-          <em> every</em> sale. Hit 8 and all 8 pay {usd(structure.tiers.find(t => t.minimumSales === 8)?.rateCents ?? 20000)} each.
+          <em> every</em> sale. Hit {structure.tiers[1].minimumSales} and all {structure.tiers[1].minimumSales} pay{" "}
+          {usd(structure.tiers[1].rateCents)} each.
         </p>
       )}
       <button
