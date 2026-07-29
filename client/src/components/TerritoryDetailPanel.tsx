@@ -4,6 +4,7 @@ import { can, type Role } from "@shared/permissions";
 import { colorForRep } from "@shared/repColors";
 import { territoryColor } from "@/lib/territoryStyle";
 import { TerritoryColorPicker } from "@/components/territory/TerritoryColorPicker";
+import { AreaStatsCard } from "@/components/territory/AreaStatsCard";
 import { shortDate } from "@shared/territoryLabel";
 import type { TerritoryStatus } from "@shared/territory";
 
@@ -153,7 +154,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                 className="h-7 min-w-0 flex-1 rounded-md bg-secondary text-foreground text-sm font-semibold px-2 border border-border focus:outline-none focus:ring-2 focus:ring-teal-400/60"
                 placeholder="Area name"
               />
-              <button data-testid="territory-name-save" onClick={saveName} title="Save name"
+              <button type="button" data-testid="territory-name-save" onClick={saveName} title="Save name"
                 className="w-7 h-7 rounded-md flex items-center justify-center text-emerald-400 hover:bg-emerald-500/15 transition-colors flex-shrink-0">
                 <Check className="w-4 h-4" />
               </button>
@@ -167,6 +168,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
               <h3 className="text-sm font-bold text-foreground truncate">{territory.name}</h3>
               {onRename && (
                 <button
+                  type="button"
                   data-testid="territory-rename-btn"
                   onClick={() => { setDraftName(territory.name); setEditingName(true); }}
                   title="Rename area"
@@ -261,49 +263,24 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
               shared/territoryMetrics) so the numbers on this card agree. */}
           {progress.knocked != null && (
             <div className="mb-3 pb-3 border-b border-white/10" data-testid="territory-stats">
-              <div className="text-[13px] font-semibold text-foreground" data-testid="stat-knock-summary">
-                {progress.knocked} of {progress.availableBase ?? progress.total} knocked
-              </div>
-              <div className="mt-0.5 text-[11px] text-muted-foreground">
-                {progress.untouched ?? Math.max(0, (progress.availableBase ?? progress.total) - progress.knocked)} remaining
-                {progress.attempts != null && progress.attempts > progress.knocked && (
-                  <> · {progress.attempts} attempts</>
-                )}
-              </div>
-              <div className="mt-2 grid grid-cols-3 gap-2">
-                <div>
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Sold</div>
-                  <div data-testid="stat-sold" className="text-base font-bold tabular-nums text-emerald-400">{progress.sold ?? 0}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Penetration</div>
-                  <div data-testid="stat-penetration" className="text-base font-bold tabular-nums text-foreground">
-                    {(progress.penetrationRate ?? 0).toFixed(1)}%
-                  </div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Contact</div>
-                  <div data-testid="stat-contact" className="text-base font-bold tabular-nums text-foreground">
-                    {(progress.contactRate ?? 0).toFixed(1)}%
-                  </div>
-                </div>
-              </div>
-              {progress.knockCompletionRate != null && (
-                <div
-                  className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-secondary"
-                  role="progressbar"
-                  aria-valuenow={Math.round(progress.knockCompletionRate)}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-label={`Doors knocked ${progress.knockCompletionRate.toFixed(1)} percent`}
-                  data-testid="stat-knock-bar"
-                >
-                  <div
-                    className="h-full rounded-full bg-teal-400 transition-[width] duration-500"
-                    style={{ width: `${Math.min(100, Math.max(0, progress.knockCompletionRate))}%` }}
-                  />
-                </div>
-              )}
+              {/* One card, one hierarchy. This was a flat 3-column grid of
+                  equal-weight figures plus a separate bar — nine numbers all
+                  shouting at the same volume, so a manager scanning twenty areas
+                  had to read all nine to find the one they came for. The hero
+                  number is now doors worked, with the ring as a garnish on it
+                  rather than a competitor, and every rate states the denominator
+                  it divides by. See AreaStatsCard for the borrowed patterns. */}
+              <AreaStatsCard
+                total={progress.total}
+                availableBase={progress.availableBase}
+                knocked={progress.knocked}
+                sold={progress.sold}
+                untouched={progress.untouched ?? Math.max(0, (progress.availableBase ?? progress.total) - progress.knocked)}
+                penetrationRate={progress.penetrationRate}
+                knockCompletionRate={progress.knockCompletionRate}
+                contactRate={progress.contactRate}
+                color={swatch}
+              />
               {progress.lastActivityAt && (
                 <div className="mt-1.5 text-[10.5px] text-muted-foreground" data-testid="stat-last-activity">
                   Last activity {shortDate(progress.lastActivityAt)}
@@ -386,6 +363,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
       {/* View Activity — opens the verified-activity history */}
       {onViewHistory && (
         <button
+          type="button"
           data-testid="view-history-btn"
           onClick={onViewHistory}
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
@@ -429,6 +407,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           step, because "start pass 3" is a different decision from "reclaim". */}
       {onStartNextPass && can(role, "reset_territory_pass") && (
         <button
+          type="button"
           data-testid="next-pass-btn"
           onClick={onStartNextPass}
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
@@ -438,18 +417,30 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
         </button>
       )}
 
-      {/* Role-gated actions */}
-      {can(role, "reclaim_territory") && (
+      {/* Role-gated actions.
+          Gated on the HANDLER as well as the role. Reclaim used to render
+          whenever the viewer's role permitted it, while MapView only supplies
+          onReclaim for an area somebody actually holds — so on a pool area the
+          button appeared, fully styled and enabled, wired to onClick={undefined}.
+          Tapping it did nothing at all, which reads as "reclaim is broken"
+          because from the outside it is indistinguishable from a failed request.
+          A control you cannot use should not be on screen; the role decides
+          whether you MAY, the handler decides whether there is anything TO do. */}
+      {can(role, "reclaim_territory") && (onReclaim || onReassign || onComplete) && (
         <div className="mt-4 flex flex-wrap gap-2">
+          {onReclaim && (
           <button
+            type="button"
             data-testid="reclaim-btn"
             onClick={onReclaim}
             className="flex-1 h-8 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors"
           >
             Reclaim
           </button>
+          )}
           {onReassign && (
             <button
+              type="button"
               data-testid="reassign-btn"
               onClick={onReassign}
               className="flex-1 h-8 rounded-lg text-xs font-semibold bg-secondary text-foreground hover:bg-secondary/70 transition-colors"
@@ -459,6 +450,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           )}
           {onComplete && (
             <button
+              type="button"
               data-testid="complete-btn"
               onClick={onComplete}
               className="flex-1 h-8 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors"

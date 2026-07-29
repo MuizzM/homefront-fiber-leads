@@ -191,3 +191,86 @@ describe("no control in the lasso panel can navigate or submit", () => {
     expect(src).not.toContain("<form");
   });
 });
+
+// ── The numbers were on the wire and nobody passed them ─────────────────────
+// Reported from production: an area card showing "AREA WORKED 0.00% — 0 of 1150
+// leads worked" and nothing else. No penetration, no completion, no sold count.
+//
+// The metrics were not missing. /api/territories/progress returns knocked, sold,
+// availableBase and the three canonical rates from shared/territoryMetrics, and
+// TerritoryDetailPanel renders all of them — behind `progress.knocked != null`.
+// MapView built the `progress` prop as a hand-picked literal of eight fields
+// that did not include knocked, so the gate never opened and the entire stats
+// block was dead code in the shipped app while passing its own unit tests
+// against a hand-built fixture.
+//
+// Source-level, for the same reason as the rest of this file: the literal lives
+// deep inside a component that cannot be mounted without a GL context.
+describe("the area card is handed the numbers the server sent", () => {
+  const propBlock = (() => {
+    const at = src.indexOf("progress={");
+    expect(at, "progress prop not found — did it move?").toBeGreaterThan(-1);
+    return src.slice(at, at + 2600);
+  })();
+
+  it("passes the operational counts, not just the location-verified ones", () => {
+    // knocked is the one the panel's whole stats section is gated on.
+    for (const field of ["knocked:", "sold:", "availableBase:"]) {
+      expect(propBlock, `${field} is not forwarded — the panel cannot show it`).toContain(field);
+    }
+  });
+
+  it("passes all three canonical rates", () => {
+    // Defined once in shared/territoryMetrics so every surface agrees. Computing
+    // them and then not forwarding them is how two screens end up disagreeing.
+    for (const field of ["penetrationRate:", "knockCompletionRate:", "contactRate:"]) {
+      expect(propBlock, `${field} is not forwarded`).toContain(field);
+    }
+  });
+
+  it("still passes the location-verified fields it always did", () => {
+    // The fix adds; it must not drop what was working.
+    for (const field of ["verifiedWorkedLeads:", "areaWorkedPct:", "maxAllowedDistanceM:"]) {
+      expect(propBlock).toContain(field);
+    }
+  });
+});
+
+// ── Reps keep the numbers, not the controls ─────────────────────────────────
+// The area card is deliberately visible to a rep — knowing how much ground is
+// left is the point of holding an area. What a rep must NOT get is any control
+// that changes who works it, what it is called, or whether it still exists.
+//
+// Every management handler is gated on canManage (assign_territory, which a rep
+// does not have) so the panel receives `undefined` and renders nothing. The
+// pool-assign block was the exception: gated on the area's STATUS alone.
+describe("management controls are gated on the viewer's role, not the area's status", () => {
+  it("gates the pool assign block on canManage, not only isPool", () => {
+    // The one control on this card that hands an area to a rep was the one that
+    // never asked who was looking.
+    expect(src).toContain("{isPool && canManage && (");
+    expect(src).not.toMatch(/\{isPool && \(\s*$/m);
+  });
+
+  it("gates every area-mutating handler on a capability", () => {
+    // Reading these as source is the only option — MapView cannot be mounted
+    // without a GL context. Each must be a conditional, never passed bare.
+    for (const handler of ["onRename=", "onRecolor=", "onUnassignRep=", "onEditAssignees="]) {
+      const at = src.indexOf(handler);
+      expect(at, `${handler} not found — did it move?`).toBeGreaterThan(-1);
+      const block = src.slice(at, at + 220);
+      expect(block, `${handler} is not role-gated`).toMatch(/canManage|canAssign|can\w*\(/);
+    }
+  });
+
+  it("gates the on-map assignee bar too", () => {
+    // The shortcut must not be a way around the gate the long route enforces.
+    expect(src).toContain("selectedTerritoryId != null && canManage");
+  });
+
+  it("gates pass reset on its own capability, not on generic management", () => {
+    // Resetting a pass clears a whole team's outcomes — heavier than assignment,
+    // and manager+ rather than team_lead+.
+    expect(src).toContain("canResetPass ? () => setNextPassTerritoryId(t.id) : undefined");
+  });
+});

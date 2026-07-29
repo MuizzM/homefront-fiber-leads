@@ -42,7 +42,13 @@ export interface RepPickerProps {
   maxRows?: number;
 }
 
-/** Match on any word start, so "riv" finds "Ann Rivera" and "ann" does too. */
+/** Match on any word start, so "riv" finds "Ann Rivera" and "ann" does too —
+ *  with a substring fallback, so "iver" finds her as well. The fallback is
+ *  deliberate leniency for a name box, but it is NOT what this comment used to
+ *  claim (word-start only), and shared/territoryFilter.ts implements the
+ *  stricter documented rule. Two search behaviours in one product is a real
+ *  inconsistency; unifying them is a product decision, not a tidy-up, so it is
+ *  flagged here rather than silently changed in either direction. */
 function matches(name: string, q: string): boolean {
   const n = name.toLowerCase();
   const needle = q.trim().toLowerCase();

@@ -28,6 +28,23 @@ import {
   type Tenant, type InsertTenant,
 } from "@shared/schema";
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+
+/** Statuses that BLOCK a new commission on the same door.
+ *
+ *  "paid" is deliberately NOT here, and that is the whole subtlety. Including it
+ *  looked obviously right — a paid sale is credited, so do not credit it twice —
+ *  but `paid` is TERMINAL in LEGAL_TRANSITIONS (paid → paid only). There is no
+ *  reachable escape: paid→disputed is 409 ILLEGAL_TRANSITION, and "superseded"
+ *  is written only by a one-time migration and is not a legal current status.
+ *  So blocking on `paid` meant that once a door's commission was paid, that door
+ *  could NEVER earn again — a genuine re-sale after a chargeback silently booked
+ *  nothing, HTTP 200, no error, no way for a manager to unblock it.
+ *
+ *  That is a worse bug than the double-pay it was meant to prevent: double-pay
+ *  is visible and clawable, silent non-pay is neither. Pending and approved are
+ *  enough, because those are the states in which an unpaid entitlement for this
+ *  door is still outstanding. */
+export const LIVE_COMMISSION_STATUSES = ["pending", "approved"] as const;
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
 import { syncAssignments } from "./territoryAssignments";
@@ -265,6 +282,9 @@ export interface IStorage {
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(tenantId?: number, repId?: number): Commission[];
+  /** A commission on this door that is still on the money path (pending,
+   *  approved or paid) — the guard against paying one sale twice. */
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined;
   getCommissionById(id: number, tenantId: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
   transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult;
@@ -2051,6 +2071,16 @@ function migrateCommissionsPendingDedupe(raw: import("better-sqlite3").Database)
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_tenant_lead_pending
         ON commissions(tenant_id, lead_id) WHERE status = 'pending' AND lead_id IS NOT NULL`,
     );
+    // The partial index above is UNIQUE and covers only status='pending', so it
+    // cannot serve the double-pay guard, which asks "is there a live commission
+    // on this door" across pending|approved|paid. Without this second, ordinary
+    // index that lookup is a full scan of the tenant's ledger on every sold
+    // knock — the cost grows with the money the company has ever earned, which
+    // is the worst possible thing to put on the sale path.
+    raw.exec(
+      `CREATE INDEX IF NOT EXISTS idx_commissions_lead_status
+        ON commissions(lead_id, status) WHERE lead_id IS NOT NULL`,
+    );
     const idx = raw.prepare(
       "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_commissions_tenant_lead_pending'",
     ).get();
@@ -3740,6 +3770,16 @@ export class Storage implements IStorage {
     if (repId != null) conds.push(eq(commissions.repId, repId));
     const q = db.select().from(commissions);
     return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(commissions.createdAt)).all();
+  }
+  // Indexed lookup, not a scan: this runs on every sold knock, and getCommissions
+  // would read the whole tenant's ledger to answer a single-row question.
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined {
+    const conds = [
+      eq(commissions.leadId, leadId),
+      inArray(commissions.status, LIVE_COMMISSION_STATUSES as unknown as string[]),
+    ];
+    if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
+    return db.select().from(commissions).where(and(...conds)).limit(1).get();
   }
   getCommissionById(id: number, tenantId: number): Commission | undefined {
     return db.select().from(commissions)

@@ -4633,11 +4633,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     // One indexed team scan → O(1) name lookups per row (not a query per knock).
     const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    // Same redaction as GET /api/territories/:id/activity. Applying it there and
+    // not here left the leak reachable one request away: /activity hands back a
+    // leadId, and this route then served that same colleague's NAME and GPS fix
+    // to the same scoped caller. repCanAccessLead passes for a shared area — the
+    // exact case the redaction exists for — so door access is not actor access.
+    // A rep sees who-and-where only for people inside their own scope.
+    const _hScope = leadVisibilityScope(user);
+    const maySeeActor = (repId: number | null | undefined) =>
+      !Array.isArray(_hScope) || (repId != null && _hScope.includes(repId));
     const statusRows = storage.getKnocksByLead(lead.id).map(k => ({
       id: `k${k.id}`,
       knockId: k.id,
       type: "status_change" as const,
-      actor: (k.repId != null ? repNames.get(k.repId) : null) ?? null,
+      actor: (maySeeActor(k.repId) && k.repId != null ? repNames.get(k.repId) : null) ?? null,
       changedAt: k.knockedAt,
       status: k.outcome,
       // ── Location verification (distance WHEN MARKED — never recomputed live) ──
@@ -4649,7 +4658,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       serverTs: k.serverTs ?? null,
       netState: k.netState ?? null,
       // Coordinate pair for the History map preview (rep pin + lead pin + line).
-      repLat: k.repLat ?? null, repLng: k.repLng ?? null,
+      // The DOOR's coordinates stay for everyone — a property is not a person.
+      repLat: maySeeActor(k.repId) ? (k.repLat ?? null) : null,
+      repLng: maySeeActor(k.repId) ? (k.repLng ?? null) : null,
       leadLat: lead.lat ?? null, leadLng: lead.lng ?? null,
     }));
     const eventRows = storage.getLeadEvents(lead.id).map(e => ({
@@ -4788,12 +4799,37 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Auto-create pending commission when outcome = sold (rate snapshot frozen
       // onto the record; P0-3 org-scoped rates; P0-6 server-fixed basis 0).
       if (!sup && outcome === "sold" && knockRow.repId) {
+        // One door, one commission — whatever its status.
+        //
+        // The only uniqueness guard used to be idx_commissions_tenant_lead_pending,
+        // which is partial: WHERE status = 'pending'. The moment a manager
+        // APPROVED the commission the row left that index, so a second sold
+        // knock on the same door inserted a second, fully payable row — two
+        // commissions and double the money for one sale. Re-marking a door sold
+        // is ordinary (a correction, a re-knock, a sync replay), so this was
+        // reachable without anyone doing anything unusual.
+        //
+        // "superseded" and "disputed" are deliberately NOT live: those are the
+        // states a replacement is legitimately allowed to follow.
+        const existing = storage.findLiveCommissionForLead(
+          knockRow.tenantId ?? (req as any).user?.tenantId ?? null,
+          leadId,
+        );
         const rep = storage.getTeamMemberById(knockRow.repId);
         const saleDate = new Date().toISOString().slice(0, 10);
         const rateTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
         const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
         const active = pickActiveStructure(structures, knockRow.repId, rep?.role ?? null, saleDate);
-        if (active) {
+        // Log only a REAL suppression — one where a commission would otherwise
+        // have been created. Logging whenever `existing` is truthy fired even
+        // when no structure covered the sale and nothing would have been booked,
+        // which puts phantom entries in a money audit trail.
+        if (active && existing) {
+          structuredLog("commission.duplicate_suppressed", {
+            leadId, knockId: knockRow.id, existingId: existing.id, existingStatus: existing.status,
+          });
+        }
+        if (active && !existing) {
           const saleAmount = 0;
           const calc = calcCommission(active, saleAmount);
           storage.createCommission({
@@ -5762,7 +5798,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (mode === "reassign" && !newRepId) return res.status(400).json({ error: "newRepId required for reassign mode" });
     // Handing the area straight to someone else is still handing them an area.
     if (mode === "reassign") {
-      const full = repAtAreaCap(Number(newRepId), t.id);
+      // The AREA was scoped above; the TARGET was not. Every other rep-taking
+      // route validates the incoming rep's tenant AND the caller's visibility
+      // scope (see /share and /next-pass) — this one only checked the cap, so a
+      // team lead could reclaim an area they legitimately hold and hand it to a
+      // rep on another team, or another tenant entirely. That is a territory
+      // grab and a cross-tenant write wearing a reclaim's clothes.
+      const target = Number(newRepId);
+      if (!Number.isInteger(target) || target <= 0) return res.status(400).json({ error: "invalid newRepId" });
+      if (!repInCallerTenant(user, target) || !repInVisibilityScope(user, target)) {
+        return res.status(404).json({ error: "rep not found" });
+      }
+      const full = repAtAreaCap(target, t.id);
       if (full) return res.status(409).json({ error: full });
     }
 
@@ -6322,7 +6369,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const territory = storage.getTerritories(tid).find(t => t.id === Number(req.params.id));
     if (!territory) return res.status(404).json({ error: "Not found" });
     const scope = leadVisibilityScope(user);
-    if (Array.isArray(scope) && (territory.repId == null || !scope.includes(territory.repId))) {
+    // territoryHeldByAny, not a repId check. repId still names the LAST holder
+    // after a reclaim, so testing it let a rep the area was taken from keep
+    // reading its knock history — the same defect that was fixed for the lead
+    // stream and the territory list, missed on this route. It also 404'd a
+    // SECONDARY assignee on a shared area, who genuinely holds it.
+    if (Array.isArray(scope) && !territoryHeldByAny(territory as any, scope)) {
       return res.status(404).json({ error: "Not found" });
     }
     let poly: [number, number][] = [];
@@ -6336,14 +6388,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       .filter(k => leadById.has(k.leadId))
       .map(k => {
         const l: any = leadById.get(k.leadId);
+        // A scoped caller (rep / team lead) sees WHO and WHERE only for the
+        // people they are: their own knocks, and for a lead, their own reps'.
+        // A shared area put another rep's name AND their GPS fix on screen for
+        // anyone who held the polygon — door history is legitimate, tracking a
+        // colleague's movements is not. Managers and admins have an undefined
+        // scope and are unaffected.
+        const maySeeActor = !Array.isArray(scope) || (k.repId != null && scope.includes(k.repId));
         return {
           knockId: k.id, leadId: k.leadId,
           leadName: l.address, address: `${l.address}, ${l.city} ${l.state} ${l.zip ?? ""}`.trim(),
-          rep: k.repId != null ? (repNames.get(k.repId) ?? null) : null,
+          rep: maySeeActor && k.repId != null ? (repNames.get(k.repId) ?? null) : null,
           outcome: k.outcome, knockedAt: k.knockedAt, deviceTs: k.deviceTs ?? null, serverTs: k.serverTs ?? null,
           verification: k.verificationStatus ?? null, distanceM: k.distanceM ?? null, gpsAccuracyM: k.gpsAccuracy ?? null,
           reviewReason: k.reviewReason ?? null, netState: k.netState ?? null,
-          repLat: k.repLat ?? null, repLng: k.repLng ?? null, leadLat: l.lat, leadLng: l.lng,
+          // The door's own coordinates stay — they are the property, not a person.
+          repLat: maySeeActor ? (k.repLat ?? null) : null,
+          repLng: maySeeActor ? (k.repLng ?? null) : null,
+          leadLat: l.lat, leadLng: l.lng,
         };
       })
       .sort((a, z) => (a.knockedAt < z.knockedAt ? 1 : a.knockedAt > z.knockedAt ? -1 : 0))
