@@ -19,8 +19,10 @@ export type Capability =
   | "lead.read.assigned" | "lead.read.all"
   | "lead.assign" | "lead.reassign"
   | "lead.disposition.update" | "lead.note.write"
-  // Address discovery / field scans. Reps may submit and observe their own
-  // jobs; operational controls and source configuration stay manager-only.
+  // Address discovery / field scans. Two tiers on purpose: submit starts a scan
+  // and observes your OWN job with provider diagnostics redacted; manage sees
+  // every job in the org unredacted and configures sources. Scanning begins at
+  // team lead — a rep knocking doors never holds either.
   | "scan.submit" | "scan.manage"
   // Calling is deliberately independent from field permissions. A field rep
   // never inherits these grants merely because they can see or knock a lead.
@@ -52,8 +54,12 @@ const REP: readonly Capability[] = [
   "lead.read.assigned", "lead.disposition.update", "lead.note.write",
   "commission.read.self", "dashboard.read.self",
   "onboarding.documents.read.self",
-  "scan.submit",
 ];
+// Deliberately NOT here: scan.submit. Address discovery spends metered upstream
+// geocoding budget, and choosing which streets are worth buying data for is a
+// supervisory call, not field work. A rep knocking doors has no reason to launch
+// one, and every rep holding it multiplied the ways that budget could be spent
+// without anyone deciding to spend it. It starts at team lead (below).
 
 // A team lead assigns/reassigns within scope, sees the team's leads + activity,
 // and may configure commission structures (rates/plans) — but never BOOKS money:
@@ -63,6 +69,18 @@ const TEAM_LEAD: readonly Capability[] = [
   "lead.read.all", "lead.assign", "lead.reassign",
   "commission.read.team", "commission.structure.manage",
   "dashboard.read.team", "audit.read.team",
+  // Scanning starts here. These sets are unions of the tier below, not supersets
+  // of REP — TEAM_LEAD spreads REP and MANAGER spreads TEAM_LEAD — so removing
+  // scan.submit from REP took it off every role at once; granting it back here
+  // restores it for team lead and up, and for nobody beneath.
+  //
+  // It lands on TEAM_LEAD rather than MANAGER on purpose: submit and manage are
+  // two deliberate tiers. Whoever holds submit-without-manage may start a scan
+  // and watch their OWN job, but sees provider diagnostics, failure counts, and
+  // error text redacted (addressDiscovery/routes canManage). Put submit on
+  // MANAGER and no role holds one without the other, which makes that redaction
+  // unreachable and quietly collapses the split.
+  "scan.submit",
 ];
 
 // A manager adds org-wide oversight reads AND the commission write surface
@@ -72,6 +90,9 @@ const MANAGER: readonly Capability[] = [
   ...TEAM_LEAD,
   "commission.read.all", "dashboard.read.org", "audit.read.org",
   "onboarding.documents.manage",
+  // The second half of scanning: a manager inherits scan.submit from TEAM_LEAD
+  // and adds scan.manage, which unredacts provider diagnostics and widens the
+  // view from their own jobs to every job in the org.
   "scan.manage",
   "commission.sales.write", "commission.adjustments.write", "commission.statements.write",
 ];
