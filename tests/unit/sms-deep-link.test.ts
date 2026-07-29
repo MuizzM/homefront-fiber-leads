@@ -27,7 +27,7 @@ const VARS = {
   repName: "Rae",
   companyName: "Home Front",
   dateLabel: "Tue, Aug 4",
-  timeWindowLabel: "8:00–10:00 AM",
+  timeWindowLabel: "8:00-10:00 AM",
 };
 
 describe("the separator differs per platform, and silently on one of them", () => {
@@ -135,15 +135,15 @@ describe("the message refuses to half-render", () => {
     // An installer arriving inside a window is not late. A customer told
     // "8:00 AM" believes otherwise at 8:05, and that call lands on the rep.
     const body = (buildAppointmentMessage(VARS) as any).body;
-    expect(body).toContain("between 8:00–10:00 AM");
+    expect(body).toContain("between 8:00-10:00 AM");
   });
 
   it("includes the timezone when one is given, and reads cleanly without", () => {
     const withTz = buildAppointmentMessage({ ...VARS, timezoneLabel: "CT" });
-    expect((withTz as any).body).toContain("8:00–10:00 AM CT");
+    expect((withTz as any).body).toContain("8:00-10:00 AM CT");
     const withoutTz = (buildAppointmentMessage(VARS) as any).body;
     expect(withoutTz).not.toMatch(/AM\s{2,}/);
-    expect(withoutTz).toContain("8:00–10:00 AM.");
+    expect(withoutTz).toContain("8:00-10:00 AM.");
   });
 
   it("invites a reply, because a text nobody can answer is a dead end", () => {

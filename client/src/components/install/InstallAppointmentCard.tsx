@@ -61,6 +61,12 @@ export interface InstallAppointmentCardProps {
   serviceAddress?: string;
   repName: string;
   companyName: string;
+  /**
+   * The referral reward exactly as the customer should read it — "$100 gift
+   * card". Omitted means no referral ask at all: a tenant not running the offer
+   * must never send a text promising one.
+   */
+  referralRewardLabel?: string;
   /** Injectable for tests and SSR; falls back to the real navigator. */
   platform?: SmsPlatform;
   onTextOpened?: () => void;
@@ -81,6 +87,7 @@ export function InstallAppointmentCard({
   serviceAddress,
   repName,
   companyName,
+  referralRewardLabel,
   platform,
   onTextOpened,
 }: InstallAppointmentCardProps) {
@@ -92,7 +99,7 @@ export function InstallAppointmentCard({
 
   const message = buildAppointmentMessage({
     customerFirstName: firstName(customerName),
-    repName, companyName, dateLabel, timeWindowLabel, timezoneLabel,
+    repName, companyName, dateLabel, timeWindowLabel, timezoneLabel, referralRewardLabel,
   });
 
   const link = message.ok
@@ -189,10 +196,27 @@ export function InstallAppointmentCard({
       )}
 
       {link.ok && (
-        <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
-          Opens your Messages app with the text ready — you send it from your own
-          number, and you'll see it first.
-        </p>
+        <>
+          <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+            Opens your Messages app with the text ready — you send it from your own
+            number, and you'll see it first.
+          </p>
+          {referralRewardLabel?.trim() && (
+            <p data-testid="install-referral-note" className="mt-1 text-[11px] font-medium text-teal-500">
+              Includes the {referralRewardLabel.trim()} referral ask.
+            </p>
+          )}
+          {/* A long text still sends, but it arrives split. Worth saying once,
+              quietly, rather than letting a rep wonder why it looked odd. */}
+          {message.ok && message.segments.segments > 2 && (
+            <p data-testid="install-segment-warning" className="mt-1 text-[11px] text-amber-500">
+              Long text - sends as {message.segments.segments} parts
+              {message.segments.offenders.length > 0
+                ? ` (${message.segments.offenders.join(" ")} shortens each part)`
+                : ""}.
+            </p>
+          )}
+        </>
       )}
     </div>
   );

@@ -55,7 +55,7 @@ describe("the message the customer receives", () => {
 
   it("greets them by first name, not by their full record", () => {
     render(<InstallAppointmentCard {...BASE} />);
-    expect(body()).toContain("Hi Dana,");
+    expect(body()).toContain("Hey Dana,");
     expect(body()).not.toContain("Whitfield");
   });
 
@@ -69,7 +69,29 @@ describe("the message the customer receives", () => {
   it("carries the window and the date", () => {
     render(<InstallAppointmentCard {...BASE} />);
     expect(body()).toContain("Tue, Aug 4");
-    expect(body()).toContain("8:00–10:00 AM");
+    expect(body()).toContain("8:00-10:00 AM");
+  });
+});
+
+describe("the referral offer", () => {
+  const body = () => decodeURIComponent(href().split("body=")[1]);
+
+  it("includes the ask and the reward when one is configured", () => {
+    render(<InstallAppointmentCard {...BASE} referralRewardLabel="$100 gift card" />);
+    expect(body()).toContain("$100 gift card");
+    expect(screen.getByTestId("install-referral-note")).toHaveTextContent("$100 gift card");
+  });
+
+  it("says the card comes once the referral is installed, not on the spot", () => {
+    render(<InstallAppointmentCard {...BASE} referralRewardLabel="$100 gift card" />);
+    expect(body()).toMatch(/once they'?re installed/i);
+  });
+
+  it("leaves the ask out entirely when no reward is set", () => {
+    // A tenant not running the offer must never send a text promising one.
+    render(<InstallAppointmentCard {...BASE} />);
+    expect(body()).not.toMatch(/gift card|refer/i);
+    expect(screen.queryByTestId("install-referral-note")).toBeNull();
   });
 });
 

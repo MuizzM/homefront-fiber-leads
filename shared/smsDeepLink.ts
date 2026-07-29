@@ -87,58 +87,14 @@ export function buildSmsLink({ phone, body, platform }: SmsLinkInput): SmsLinkRe
   return { ok: true, href: `sms:${number}${separator}body=${encodeURIComponent(body)}` };
 }
 
-// ── The message itself ──────────────────────────────────────────────────────
-// Written to be read on a lock screen by someone who spoke to this rep ten
-// minutes ago. It leads with WHO, because an unknown number opening with an
-// install date reads like spam; the rep's name and the company are the reason
-// the customer keeps reading.
-
-export interface AppointmentMessageVars {
-  customerFirstName: string;
-  repName: string;
-  companyName: string;
-  /** Already formatted for humans — "Tue, Aug 4" — not an ISO string. */
-  dateLabel: string;
-  /** "8:00–10:00 AM" including the window, never a bare start time: an
-   *  installer arriving inside a window is not late, and a customer told
-   *  "8:00 AM" believes otherwise at 8:05. */
-  timeWindowLabel: string;
-  /** IANA-derived short label — "CT". Omitted when the rep and customer are
-   *  certainly in the same zone; included whenever it might matter. */
-  timezoneLabel?: string;
-}
-
-export type MessageBuildResult =
-  | { ok: true; body: string }
-  | { ok: false; missing: string[] };
-
-/**
- * Render the appointment text.
- *
- * Refuses on a missing variable rather than emitting "Hi , your install…" — a
- * half-rendered template sent to a real customer is worse than a button that
- * declines to arm, and the rep will not always proofread before hitting send.
- */
-export function buildAppointmentMessage(vars: AppointmentMessageVars): MessageBuildResult {
-  const required: (keyof AppointmentMessageVars)[] = [
-    "customerFirstName", "repName", "companyName", "dateLabel", "timeWindowLabel",
-  ];
-  const missing = required.filter((k) => {
-    const v = vars[k];
-    return typeof v !== "string" || !v.trim();
-  });
-  if (missing.length) return { ok: false, missing };
-
-  const when = vars.timezoneLabel?.trim()
-    ? `${vars.dateLabel} between ${vars.timeWindowLabel} ${vars.timezoneLabel.trim()}`
-    : `${vars.dateLabel} between ${vars.timeWindowLabel}`;
-
-  return {
-    ok: true,
-    body:
-      `Hi ${vars.customerFirstName.trim()}, it's ${vars.repName.trim()} from ${vars.companyName.trim()} — ` +
-      `thanks for signing up today. Your fiber installation is set for ${when}. ` +
-      `Someone should be home and able to show the technician where equipment goes. ` +
-      `Reply here if anything changes and I'll get it moved.`,
-  };
-}
+// The message body itself lives in ./smsMessage — it has its own concern
+// (GSM-7 encoding and segment cost) that has nothing to do with URL building.
+export {
+  buildAppointmentMessage,
+  countSegments,
+  toGsm7Safe,
+  type AppointmentMessageVars,
+  type MessageBuildResult,
+  type SegmentInfo,
+  type SmsEncoding,
+} from "./smsMessage";
