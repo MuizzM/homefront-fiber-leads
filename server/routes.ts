@@ -63,7 +63,7 @@ import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenant } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
-import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, normalizeTerritoryColor, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
@@ -5478,9 +5478,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/territories/assign-area", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const { polygon, repId, name } = req.body as { polygon: [number, number][]; repId: number; name?: string };
+    const { polygon, repId, name, color: requestedColor } = req.body as { polygon: [number, number][]; repId: number; name?: string; color?: string };
     if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
     if (typeof repId !== "number") return res.status(400).json({ error: "repId required" });
+    // The drawer picks a colour before drawing and it has to survive the save —
+    // this endpoint used to drop it on the floor and stamp colorForRep(repId)
+    // instead, so every area came back wearing the rep's palette hue and the
+    // choice made on the way in was invisible on the way out. Reject a malformed
+    // one loudly rather than silently falling back, or "my green area is blue"
+    // becomes unreportable.
+    if (requestedColor !== undefined && normalizeTerritoryColor(requestedColor) === null) {
+      return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
+    }
     const rep = storage.getTeamMemberById(repId);
     if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
     // A team_lead may only assign an area to one of their own reps.
@@ -5493,7 +5502,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const at = new Date().toISOString();
-    const color = colorForRep(repId);
+    // Chosen colour wins; the rep's palette hue is only the default for a caller
+    // that never picked one (older clients, and the API used directly).
+    const color = normalizeTerritoryColor(requestedColor) ?? colorForRep(repId);
     const territory = storage.createTerritory({
       tenantId: tid ?? null, name: (name && name.trim()) || `${rep.name}'s area`,
       repId, polygon: JSON.stringify(polygon), color,
