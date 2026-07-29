@@ -4633,20 +4633,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     // One indexed team scan → O(1) name lookups per row (not a query per knock).
     const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
-    // Same redaction as GET /api/territories/:id/activity. Applying it there and
-    // not here left the leak reachable one request away: /activity hands back a
-    // leadId, and this route then served that same colleague's NAME and GPS fix
-    // to the same scoped caller. repCanAccessLead passes for a shared area — the
-    // exact case the redaction exists for — so door access is not actor access.
-    // A rep sees who-and-where only for people inside their own scope.
+    // WHO knocked is shared-area collaboration; WHERE THEY STOOD is not.
+    //
+    // An earlier revision of this redaction hid both, and broke the thing shared
+    // areas are for: two reps on one area, and B reading the door has to see
+    // that A already worked it. That is the point of sharing, and
+    // shared-area-leads.test.ts asserts it.
+    //
+    // The privacy problem was never the name — it is the recorded GPS fix, which
+    // turns a door history into a colleague's movement log. So the name stays for
+    // anyone entitled to the door, and only the coordinates are scoped.
     const _hScope = leadVisibilityScope(user);
-    const maySeeActor = (repId: number | null | undefined) =>
+    const maySeeActorLocation = (repId: number | null | undefined) =>
       !Array.isArray(_hScope) || (repId != null && _hScope.includes(repId));
     const statusRows = storage.getKnocksByLead(lead.id).map(k => ({
       id: `k${k.id}`,
       knockId: k.id,
       type: "status_change" as const,
-      actor: (maySeeActor(k.repId) && k.repId != null ? repNames.get(k.repId) : null) ?? null,
+      actor: (k.repId != null ? repNames.get(k.repId) : null) ?? null,
       changedAt: k.knockedAt,
       status: k.outcome,
       // ── Location verification (distance WHEN MARKED — never recomputed live) ──
@@ -4659,8 +4663,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       netState: k.netState ?? null,
       // Coordinate pair for the History map preview (rep pin + lead pin + line).
       // The DOOR's coordinates stay for everyone — a property is not a person.
-      repLat: maySeeActor(k.repId) ? (k.repLat ?? null) : null,
-      repLng: maySeeActor(k.repId) ? (k.repLng ?? null) : null,
+      repLat: maySeeActorLocation(k.repId) ? (k.repLat ?? null) : null,
+      repLng: maySeeActorLocation(k.repId) ? (k.repLng ?? null) : null,
       leadLat: lead.lat ?? null, leadLng: lead.lng ?? null,
     }));
     const eventRows = storage.getLeadEvents(lead.id).map(e => ({
@@ -6388,23 +6392,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       .filter(k => leadById.has(k.leadId))
       .map(k => {
         const l: any = leadById.get(k.leadId);
-        // A scoped caller (rep / team lead) sees WHO and WHERE only for the
-        // people they are: their own knocks, and for a lead, their own reps'.
-        // A shared area put another rep's name AND their GPS fix on screen for
-        // anyone who held the polygon — door history is legitimate, tracking a
-        // colleague's movements is not. Managers and admins have an undefined
+        // Same rule as GET /api/leads/:id/history: the NAME stays (knowing a
+        // teammate already worked a door is what a shared area is for), the
+        // recorded GPS fix is scoped, because that is what turns door history
+        // into a colleague's movement log. Managers and admins have an undefined
         // scope and are unaffected.
-        const maySeeActor = !Array.isArray(scope) || (k.repId != null && scope.includes(k.repId));
+        const maySeeActorLocation = !Array.isArray(scope) || (k.repId != null && scope.includes(k.repId));
         return {
           knockId: k.id, leadId: k.leadId,
           leadName: l.address, address: `${l.address}, ${l.city} ${l.state} ${l.zip ?? ""}`.trim(),
-          rep: maySeeActor && k.repId != null ? (repNames.get(k.repId) ?? null) : null,
+          rep: k.repId != null ? (repNames.get(k.repId) ?? null) : null,
           outcome: k.outcome, knockedAt: k.knockedAt, deviceTs: k.deviceTs ?? null, serverTs: k.serverTs ?? null,
           verification: k.verificationStatus ?? null, distanceM: k.distanceM ?? null, gpsAccuracyM: k.gpsAccuracy ?? null,
           reviewReason: k.reviewReason ?? null, netState: k.netState ?? null,
           // The door's own coordinates stay — they are the property, not a person.
-          repLat: maySeeActor ? (k.repLat ?? null) : null,
-          repLng: maySeeActor ? (k.repLng ?? null) : null,
+          repLat: maySeeActorLocation ? (k.repLat ?? null) : null,
+          repLng: maySeeActorLocation ? (k.repLng ?? null) : null,
           leadLat: l.lat, leadLng: l.lng,
         };
       })

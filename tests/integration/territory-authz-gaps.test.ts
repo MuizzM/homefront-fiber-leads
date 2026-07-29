@@ -219,7 +219,7 @@ describe("one rep cannot read another rep's identity or GPS from an area's histo
     return lead.id;
   }
 
-  it("redacts a colleague's name and GPS fix, while keeping the door history", async () => {
+  it("redacts a colleague's GPS fix, while keeping who knocked and what happened", async () => {
     const west = nextWest();
     const r = await req("/api/territories/assign-area", fx.manager.session, {
       method: "POST",
@@ -237,8 +237,13 @@ describe("one rep cannot read another rep's identity or GPS from an area's histo
     const list = Array.isArray(rows) ? rows : rows.activities ?? [];
     const foreignKnock = list.find((a: any) => a.leadLat != null);
 
+    // NARROWED from an earlier revision that hid the name too. That broke what
+    // shared areas exist for — two reps on one area, and the second must see
+    // that the first already worked a door (shared-area-leads.test.ts asserts
+    // it, and CI caught this). The privacy problem was never WHO; it is the
+    // recorded GPS fix, which turns door history into a colleague's movement log.
     expect(foreignKnock, "the knock should still be visible as door history").toBeDefined();
-    expect(foreignKnock.rep).toBeNull();       // who: hidden
+    expect(foreignKnock.rep).toBeTruthy();     // who: kept — that is collaboration
     expect(foreignKnock.repLat).toBeNull();    // where they stood: hidden
     expect(foreignKnock.repLng).toBeNull();
     expect(foreignKnock.outcome).toBeTruthy(); // what happened at the door: kept
