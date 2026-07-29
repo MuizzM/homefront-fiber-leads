@@ -669,6 +669,7 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
 
 const STANDARD_TIERED_PLAN_NAME = "Standard Weekly Tiers";
 const FLAT_PLAN_NAME = "Flat Per-Sale";
+const CUSTOM_TIERED_PLAN_NAME = "Custom Weekly Tiers";
 const today = () => new Date().toISOString().slice(0, 10);
 
 export type CommissionStructure = "FLAT" | "TIERED";
@@ -698,12 +699,46 @@ export function getOrCreateFlatVersion(tenantId: number, actorId: number | null,
   return { planId: plan.id, versionId: version.id };
 }
 
+// A tenant-edited weekly ladder; each distinct ladder is a distinct immutable
+// version under one "Custom Weekly Tiers" plan — the exact design the flat plan
+// already uses for rates. Matching is by the full economic signature (every
+// band boundary and rate), so two reps put on the same ladder share a version
+// and the version history stays readable instead of growing one row per click.
+export function getOrCreateCustomTieredVersion(
+  tenantId: number, actorId: number | null, tiers: CommissionTier[],
+): { planId: number; versionId: number } {
+  const v = validateTiers(tiers || []);
+  if (!v.ok) throw new CommissionError("INVALID_TIER_CONFIGURATION", v.errors.join(" "));
+  const signature = v.normalized
+    .map(t => `${t.minimumSales}-${t.maximumSales ?? "open"}@${t.rateCents}`).join("|");
+
+  let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'TIERED' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, CUSTOM_TIERED_PLAN_NAME) as any;
+  if (!plan) plan = createPlan(tenantId, actorId, { name: CUSTOM_TIERED_PLAN_NAME, type: "TIERED", tierMode: "RETROACTIVE_WEEKLY", description: "Manager-edited retroactive weekly ladders. One immutable version per distinct ladder." });
+
+  const versions = rawDb.prepare(`SELECT id FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ?`).all(tenantId, plan.id) as any[];
+  for (const row of versions) {
+    const existing = getPlanVersionTiers(tenantId, row.id)
+      .map((t: any) => `${t.minimum_sales}-${t.maximum_sales ?? "open"}@${t.rate_cents}`).join("|");
+    if (existing === signature) {
+      if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
+      return { planId: plan.id, versionId: row.id };
+    }
+  }
+  const version = addPlanVersion(tenantId, actorId, plan.id, {
+    effectiveFrom: today(), qualificationBasis: "QUALIFIED_AT", tiers: v.normalized,
+    changeSummary: `Ladder: ${v.normalized.map(t => `${t.label} ${t.rateCents / 100}`).join(", ")}`,
+  });
+  if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
+  return { planId: plan.id, versionId: version.id };
+}
+
 // Assign a FLAT or TIERED structure to a rep. `closeExisting` ends any current
 // open assignment at effectiveFrom (half-open) so re-assigning a rep's structure
 // never trips the overlap guard — this is how "change a rep's commission" works.
 export function assignStructureToRep(tenantId: number, actorId: number | null, input: {
   repId: number; structure: CommissionStructure; flatRateCents?: number | null;
   commissionPlanVersionId?: number | null; effectiveFrom?: string; closeExisting?: boolean;
+  tiers?: CommissionTier[] | null;
 }): { assignment: any; versionId: number; structure: CommissionStructure } {
   const rep = storage.getTeamMemberById(input.repId);
   if (!rep || rep.tenantId !== tenantId) throw new CommissionError("CROSS_TENANT_ACCESS", "Rep not found in tenant.", 404);
@@ -720,6 +755,12 @@ export function assignStructureToRep(tenantId: number, actorId: number | null, i
     structure = v.plan_type === "FLAT" ? "FLAT" : "TIERED";
   } else if (input.structure === "FLAT") {
     versionId = getOrCreateFlatVersion(tenantId, actorId, input.flatRateCents ?? 0).versionId;
+  } else if (input.tiers && input.tiers.length > 0) {
+    // THE BUG THIS BRANCH FIXES: the Team dialog has always sent the manager's
+    // edited ladder, and this function silently dropped it — every "custom"
+    // assignment landed on the standard tiers while the toast said otherwise.
+    // A manager who set 1-6 at $175 believed it; the rep was paid $150.
+    versionId = getOrCreateCustomTieredVersion(tenantId, actorId, input.tiers).versionId;
   } else {
     versionId = getOrCreateStandardTieredVersion(tenantId, actorId).versionId;
   }

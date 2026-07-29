@@ -252,6 +252,86 @@ describe("onboarding-facing structure assignment (flat vs tiered)", () => {
   });
 });
 
+describe("custom edited ladders reach the money engine (the placebo-editor bug)", () => {
+  // Own tenant: these tests seed sales into the same reference week, and the
+  // Sunday-closeout suite aggregates a tenant's WHOLE week — sharing T1 would
+  // change its payroll totals from a distance.
+  const T3 = 9003;
+  // THE BUG: the Team dialog has always sent the manager's edited ladder, and
+  // assignStructureToRep silently dropped it — every "custom" assignment landed
+  // on the standard tiers while the toast said otherwise. A manager who set
+  // 1-6 at $175 believed it; the rep was paid $150. Nothing failed, nothing
+  // logged: the worst kind of money bug, invisible until a paycheck argument.
+  const REP_CUSTOM = 3001;
+  const LADDER = [
+    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17500, label: "1-6" },
+    { position: 1, minimumSales: 7, maximumSales: null, rateCents: 22500, label: "7+" },
+  ];
+  beforeAll(() => {
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T3, "Custom Ladder Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_CUSTOM, T3, null);
+  });
+
+  it("assigning with tiers books THOSE tiers, not the standard ladder", () => {
+    const out = svc.assignStructureToRep(T3, 1, {
+      repId: REP_CUSTOM, structure: "TIERED", tiers: LADDER, effectiveFrom: "2026-01-01",
+    });
+    expect(out.structure).toBe("TIERED");
+    const cur = svc.getCurrentStructureForRep(T3, REP_CUSTOM);
+    expect(cur.tiers).toHaveLength(2);
+    expect(cur.tiers[0]).toMatchObject({ minimumSales: 1, maximumSales: 6, rateCents: 17500 });
+    expect(cur.tiers[1]).toMatchObject({ minimumSales: 7, maximumSales: null, rateCents: 22500 });
+  });
+
+  it("the WEEK'S PAY computes at the custom rate — the end-to-end proof", () => {
+    // 7 sales at the custom 7+ band: retroactive means 7 × $225 = $1,575.
+    // The standard ladder would have paid 7 × $200 = $1,400 — if this asserts
+    // 157500 and gets 140000, the editor is a placebo again.
+    for (let i = 0; i < 7; i++) {
+      svc.upsertSale(T3, 1, { repId: REP_CUSTOM, externalId: `custom-${i}`, status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    }
+    const res = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CUSTOM, weekReference: WEEK_REF, actorId: 1 });
+    expect(res.computation.qualifiedSaleCount).toBe(7);
+    expect(res.statement.gross_commission_cents).toBe(7 * 22500);
+  });
+
+  it("the same ladder assigned twice reuses one immutable version", () => {
+    const a = svc.getOrCreateCustomTieredVersion(T3, 1, LADDER as any);
+    const b = svc.getOrCreateCustomTieredVersion(T3, 1, LADDER as any);
+    expect(a.versionId).toBe(b.versionId);
+  });
+
+  it("a DIFFERENT ladder gets a different version — rates are never shared by accident", () => {
+    const a = svc.getOrCreateCustomTieredVersion(T3, 1, LADDER as any);
+    const c = svc.getOrCreateCustomTieredVersion(T3, 1, [
+      { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17500, label: "1-6" },
+      { position: 1, minimumSales: 7, maximumSales: null, rateCents: 30000, label: "7+" },
+    ] as any);
+    expect(c.versionId).not.toBe(a.versionId);
+  });
+
+  it("an invalid ladder is refused with the shared validator's words", () => {
+    let err: any;
+    try {
+      svc.getOrCreateCustomTieredVersion(T3, 1, [
+        { position: 0, minimumSales: 2, maximumSales: null, rateCents: 15000, label: "2+" },
+      ] as any);
+    } catch (e) { err = e; }
+    expect(err?.code).toBe("INVALID_TIER_CONFIGURATION");
+    expect(String(err?.message)).toMatch(/start at 1/);
+  });
+
+  it("assigning WITHOUT tiers still lands on the standard ladder (onboarding path)", () => {
+    const REP_STD = 3002;
+    seedRep(REP_STD, T3, null);
+    svc.assignStructureToRep(T3, 1, { repId: REP_STD, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    const cur = svc.getCurrentStructureForRep(T3, REP_STD);
+    expect(cur.tiers.length).toBe(DEFAULT_RETRO_TIERS.length);
+    expect(cur.planName).toBe("Standard Weekly Tiers");
+  });
+});
+
 describe("field-sale wiring: door → weekly ledger", () => {
   const REP_FIELD = 1004;
   let leadA: number, leadB: number;
