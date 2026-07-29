@@ -3132,16 +3132,34 @@ export class Storage implements IStorage {
     const midnight = new Date();
     midnight.setHours(0, 0, 0, 0);
     const w = (col = "") => `(@since IS NULL OR k.knocked_at >= @since) AND (@until IS NULL OR k.knocked_at <= @until)${col}`;
+    // A SALE only counts while it is still TRUE. `superseded = 0` alone is not
+    // that: it records whether a knock lost the CAS when it was WRITTEN, so an
+    // accidental "sold" corrected by a NEWER knock kept its flag — the rep fixed
+    // the door, the commission reversed, and the leaderboard still showed the
+    // sale. Two extra conditions close both correction paths:
+    //   rn = 1                    — the sold knock is the lead's latest applied
+    //                               knock (a corrective knock demotes it);
+    //   l.lead_status = 'sold'    — the lead still IS sold (a manager status
+    //                               edit writes no knock row, so recency alone
+    //                               would miss it).
+    // Knocks/contacts/callbacks intentionally still count every applied knock —
+    // those are effort history, not live claims about the door's state.
+    const sold = (extra = "") =>
+      `k.outcome = 'sold' AND k.rn = 1 AND l.lead_status = 'sold'${extra}`;
     const rows = rawDb.prepare(
       `SELECT k.rep_id AS repId,
          SUM(CASE WHEN ${w()} THEN 1 ELSE 0 END) AS knocks,
          SUM(CASE WHEN ${w(" AND k.was_home = 1")} THEN 1 ELSE 0 END) AS contacts,
          SUM(CASE WHEN ${w(" AND k.outcome = 'callback'")} THEN 1 ELSE 0 END) AS callbacks,
-         SUM(CASE WHEN ${w(" AND k.outcome = 'sold'")} THEN 1 ELSE 0 END) AS sales,
+         SUM(CASE WHEN ${w(` AND ${sold()}`)} THEN 1 ELSE 0 END) AS sales,
          SUM(CASE WHEN k.knocked_at >= @midnight THEN 1 ELSE 0 END) AS knocksToday,
-         SUM(CASE WHEN k.knocked_at >= @midnight AND k.outcome = 'sold' THEN 1 ELSE 0 END) AS salesToday
-       FROM knock_log k JOIN team_members t ON t.id = k.rep_id
-       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1 AND k.superseded = 0
+         SUM(CASE WHEN k.knocked_at >= @midnight AND ${sold()} THEN 1 ELSE 0 END) AS salesToday
+       FROM (SELECT kk.*, ROW_NUMBER() OVER (
+               PARTITION BY kk.lead_id ORDER BY kk.knocked_at DESC, kk.id DESC) AS rn
+             FROM knock_log kk WHERE kk.superseded = 0) k
+       JOIN team_members t ON t.id = k.rep_id
+       LEFT JOIN leads l ON l.id = k.lead_id
+       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1
        GROUP BY k.rep_id`
     ).all({ since: window?.since ?? null, until: window?.until ?? null, midnight: midnight.toISOString(), tenantId: tenantId ?? null }) as any[];
     const byRep = new Map(rows.map(r => [r.repId, r]));

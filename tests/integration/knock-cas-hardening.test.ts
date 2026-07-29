@@ -57,7 +57,7 @@ async function knock(leadId: number, session: string, outcome: string, knockedAt
 const pendingFor = (leadId: number) =>
   (rawDb.prepare("SELECT * FROM commissions WHERE lead_id = ? AND status = 'pending'").all(leadId) as any[]);
 
-let mgr1: Fixture, rep1: Fixture, rep6: Fixture, rep7: Fixture;
+let mgr1: Fixture, rep1: Fixture, rep6: Fixture, rep7: Fixture, rep8: Fixture, rep9: Fixture;
 
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-cas-hard-"));
@@ -71,6 +71,8 @@ beforeAll(async () => {
   rep1 = makePerson("Cas Rep", "rep", 1);
   rep6 = makePerson("Cas Rep Six", "rep", 1);
   rep7 = makePerson("Cas Rep Seven", "rep", 1);
+  rep8 = makePerson("Cas Rep Eight", "rep", 1);
+  rep9 = makePerson("Cas Rep Nine", "rep", 1);
 
   const { registerRoutes, registerSaasRoutes } = await import("../../server/routes");
   const app = express();
@@ -299,6 +301,69 @@ describe("M7 — leaderboard excludes superseded sold knocks", () => {
       "SELECT SUM(CASE WHEN k.outcome = 'sold' THEN 1 ELSE 0 END) AS sales FROM knock_log k WHERE k.rep_id = ? AND k.superseded = 0",
     ).get(rep7.memberId) as any;
     expect(rows.sales).toBe(0);
+  });
+});
+
+describe("M8 — a corrected sale leaves the leaderboard", () => {
+  // The reported bug. M7 covers a sold knock that lost the CAS at write time
+  // (superseded = 1). This is the OTHER order — the one reps actually hit:
+  // mark sold by accident, then correct it with a NEWER knock. The sold row
+  // keeps superseded = 0 (it did not lose any race when written), so a
+  // flag-only leaderboard kept showing the sale forever while the commission
+  // correctly reversed. The board and the pay disagreed, and the board was the
+  // one lying.
+  const board = () => storage.getLeaderboard(undefined, 1);
+  const rowFor = (memberId: number) => board().find((r: any) => r.rep.id === memberId) as any;
+
+  it("marking sold then correcting removes the sale but keeps both knocks", async () => {
+    const lead = makeLead(1, rep8.memberId);
+    const accidental = await knock(lead.id, rep8.session, "sold", new Date(Date.now() - 60_000).toISOString());
+    expect(accidental.status).toBe(201);              // applied, NOT superseded
+    expect(rowFor(rep8.memberId).sales).toBe(1);      // board shows the sale
+
+    const fix = await knock(lead.id, rep8.session, "not_interested", new Date().toISOString());
+    expect(fix.status).toBe(201);
+
+    const row = rowFor(rep8.memberId);
+    expect(row.sales).toBe(0);        // the phantom sale is gone…
+    expect(row.knocks).toBe(2);       // …but the door-work history is not
+    // The sold row itself is untouched history — the fix is read-side.
+    const soldRow = rawDb.prepare(
+      "SELECT superseded FROM knock_log WHERE lead_id = ? AND outcome = 'sold'").get(lead.id) as any;
+    expect(soldRow.superseded).toBe(0);
+  });
+
+  it("'already a customer' correction also clears the sale", async () => {
+    const lead = makeLead(1, rep8.memberId);
+    await knock(lead.id, rep8.session, "sold", new Date(Date.now() - 60_000).toISOString());
+    const fix = await knock(lead.id, rep8.session, "already_customer", new Date().toISOString());
+    expect(fix.status).toBe(201);
+    expect(rowFor(rep8.memberId).sales).toBe(0);
+    // And the disposition landed as designed: shared status, distinct outcome.
+    const fresh = storage.getLeadById(lead.id) as any;
+    expect(fresh.leadStatus).toBe("not_interested");
+    expect(fresh.lastOutcome).toBe("already_customer");
+  });
+
+  it("a manager status edit (no knock row) also clears the sale", async () => {
+    // The second correction path: PATCH /api/leads/:id writes no knock, so
+    // knock recency alone would still count the sold knock. The lead's own
+    // status is the second gate.
+    const lead = makeLead(1, rep9.memberId);
+    await knock(lead.id, rep9.session, "sold", new Date().toISOString());
+    expect(rowFor(rep9.memberId).sales).toBe(1);
+    const res = await request(`/api/leads/${lead.id}`, mgr1.session, {
+      method: "PATCH",
+      body: JSON.stringify({ leadStatus: "prospect" }),
+    });
+    expect(res.status).toBe(200);
+    expect(rowFor(rep9.memberId).sales).toBe(0);
+  });
+
+  it("a real, uncorrected sale still counts exactly once", async () => {
+    const lead = makeLead(1, rep9.memberId);
+    await knock(lead.id, rep9.session, "sold", new Date().toISOString());
+    expect(rowFor(rep9.memberId).sales).toBe(1);
   });
 });
 

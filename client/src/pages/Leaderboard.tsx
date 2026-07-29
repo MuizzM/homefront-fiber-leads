@@ -89,6 +89,13 @@ export default function Leaderboard() {
           <p className="text-sm text-muted-foreground mt-1">
             Ranked by sales · <span className="text-foreground/80 font-medium">{rangeLabel}</span>
           </p>
+          {/* The counting rule, stated where the numbers are (Strava's pattern:
+              "manual activities will not count" sits right on the board). A rep
+              whose sale vanished after a correction deserves to read why here,
+              not to file a ticket about a broken leaderboard. */}
+          <p className="text-[11px] text-muted-foreground/80 mt-0.5" data-testid="leaderboard-counting-rule">
+            Only doors still marked sold count — corrected or reversed sales drop off automatically.
+          </p>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0 pt-1" aria-label="Live, updates every 30 seconds">
           <span className="relative flex h-2 w-2">

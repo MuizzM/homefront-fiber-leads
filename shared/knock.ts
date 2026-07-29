@@ -8,7 +8,8 @@ import { STATUS_CONFIG } from "./statusConfig";
 
 export type KnockOutcome =
   | "not_home" | "not_interested" | "interested" | "follow_up"
-  | "callback" | "sold" | "prospect" | "needs_verification";
+  | "callback" | "sold" | "prospect" | "needs_verification"
+  | "already_customer";
 
 export type LeadStatus =
   | "prospect" | "contacted" | "interested" | "sold" | "not_interested" | "follow_up";
@@ -37,6 +38,13 @@ export const OUTCOMES: OutcomeDef[] = [
   { key: "interested",         label: STATUS_CONFIG.interested.label,     color: STATUS_CONFIG.interested.color,     leadStatus: "interested",     worked: true,  icon: STATUS_CONFIG.interested.cardIcon },
   { key: "sold",               label: STATUS_CONFIG.sold.label,           color: STATUS_CONFIG.sold.color,           leadStatus: "sold",           worked: true,  icon: STATUS_CONFIG.sold.cardIcon },
   { key: "not_interested",     label: STATUS_CONFIG.not_interested.label, color: STATUS_CONFIG.not_interested.color, leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.not_interested.cardIcon },
+  // Already a customer: the door is DONE but not hostile. Persists as
+  // not_interested (no new LeadStatus, no schema ripple — the callback
+  // precedent) while lastOutcome keeps it distinct on the map and card. Going
+  // through the normal knock path matters: it wins the outcome CAS, so marking
+  // it over an accidental "sold" reverses the commission and, with the
+  // latest-knock leaderboard rule, removes the phantom sale from the board.
+  { key: "already_customer",   label: STATUS_CONFIG.already_customer.label,     color: STATUS_CONFIG.already_customer.color,     leadStatus: "not_interested", worked: true,  icon: STATUS_CONFIG.already_customer.cardIcon },
   { key: "follow_up",          label: STATUS_CONFIG.follow_up.label,      color: STATUS_CONFIG.follow_up.color,      leadStatus: "follow_up",      worked: true,  icon: STATUS_CONFIG.follow_up.cardIcon },
   // Callback is an action, not a seventh map status. It persists as follow_up
   // and shares the orange clock pin while retaining a phone affordance on-card.
@@ -88,7 +96,7 @@ export function deriveWasHome(outcome: KnockOutcome): boolean {
 // (needs_verification only, never offered on the rep card).
 export type PinDisplayState =
   | "unworked" | "not_home" | "contacted" | "interested"
-  | "follow_up" | "callback" | "sold" | "not_interested";
+  | "follow_up" | "callback" | "sold" | "not_interested" | "already_customer";
 
 // Canonical six-status field-map palette. Callback aliases Follow-up, while the
 // legacy Contacted state stays slate until it receives a current disposition.
@@ -101,6 +109,7 @@ export const STATE_COLORS: Record<PinDisplayState, string> = {
   callback:       STATUS_CONFIG.follow_up.color,
   sold:           STATUS_CONFIG.sold.color,
   not_interested: STATUS_CONFIG.not_interested.color,
+  already_customer: STATUS_CONFIG.already_customer.color,
 };
 
 // Human labels for the display states — lives HERE beside STATE_COLORS so the
@@ -109,6 +118,7 @@ export const STATE_LABELS: Record<PinDisplayState, string> = {
   unworked: STATUS_CONFIG.prospect.label, not_home: STATUS_CONFIG.not_home.label, contacted: "Contacted",
   interested: STATUS_CONFIG.interested.label, follow_up: STATUS_CONFIG.follow_up.label, callback: "Callback",
   sold: STATUS_CONFIG.sold.label, not_interested: STATUS_CONFIG.not_interested.label,
+  already_customer: STATUS_CONFIG.already_customer.label,
 };
 
 export function pinDisplayState(p: {
@@ -116,7 +126,10 @@ export function pinDisplayState(p: {
 }): PinDisplayState {
   switch (p.leadStatus) {
     case "sold":           return "sold";
-    case "not_interested": return "not_interested";
+    case "not_interested":
+      // Same mechanism as callback under follow_up: the stored status is shared,
+      // the last outcome tells the two apart on every surface.
+      return p.lastOutcome === "already_customer" ? "already_customer" : "not_interested";
     case "follow_up":
       // Callback is first-class on the map/card even though it stores follow_up.
       return p.lastOutcome === "callback" ? "callback" : "follow_up";
