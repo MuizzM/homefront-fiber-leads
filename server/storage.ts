@@ -31,6 +31,7 @@ import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
 import { syncAssignments } from "./territoryAssignments";
+import { bumpTerritoryVersion } from "./territoryScopeCache";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 import {
   planLegacyCommissionTransition,
@@ -3286,12 +3287,17 @@ export class Storage implements IStorage {
   }
   createTerritory(t: InsertTerritory): Territory {
     const row = db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();
+    // Unconditional: repCanAccessLead memoises on this stamp, and a bump that
+    // reasons about which fields matter is a bump that will eventually reason
+    // wrong — in the direction of granting access.
+    bumpTerritoryVersion();
     recordAssigneeChange(row);
     return row;
   }
   updateTerritory(id: number, updates: Partial<InsertTerritory>, tenantId?: number): Territory | undefined {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
     const row = db.update(territories).set(updates).where(cond).returning().get();
+    bumpTerritoryVersion();
     // Only when the holder list was part of THIS write. Recording on every
     // update — a rename, a colour change — would be harmless but noisy, and
     // reading assignee_ids off a row the caller did not touch invites drift.
@@ -3300,7 +3306,9 @@ export class Storage implements IStorage {
   }
   deleteTerritory(id: number, tenantId?: number): boolean {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
-    return db.delete(territories).where(cond).run().changes > 0;
+    const gone = db.delete(territories).where(cond).run().changes > 0;
+    bumpTerritoryVersion();
+    return gone;
   }
 
   // ── Territory Requests ─────────────────────────────────────────────────────
