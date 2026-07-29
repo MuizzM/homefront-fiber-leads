@@ -63,7 +63,7 @@ import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenant } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
-import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, normalizeTerritoryColor, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
@@ -399,6 +399,25 @@ function repInVisibilityScope(user: any, repId: number | null | undefined): bool
 // Areas a scoped caller works — as primary OR as one of several assignees.
 // Cached per request-ish by callers that need it in a loop; cheap enough here
 // (one indexed scan) that correctness beats micro-optimisation.
+/**
+ * The colour an area keeps when it changes hands.
+ *
+ * Every reassignment route used to stamp colorForRep(newPrimary), on the theory
+ * that the fill told you who was working the ground. That theory is spent: the
+ * per-rep halos on the pins say who, and an area can be held by three people at
+ * once, so one fill cannot name them. What the fill says now is WHICH AREA this
+ * is — the colour the admin chose while drawing it — and that must not change
+ * because the area was handed to someone else. Draw it green, share it, it is
+ * still green.
+ *
+ * colorForRep remains the fallback for rows with no stored colour (created
+ * before the colour was captured) so nothing renders colourless.
+ */
+function retainedAreaColor(territory: unknown, fallbackRepId: number | null | undefined): string {
+  const stored = normalizeTerritoryColor((territory as any)?.color);
+  return stored ?? colorForRep(fallbackRepId ?? null);
+}
+
 function territoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
   const out = new Set<number>();
   for (const t of storage.getTerritories(tenantId ?? undefined) as any[]) {
@@ -5478,9 +5497,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/territories/assign-area", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const { polygon, repId, name } = req.body as { polygon: [number, number][]; repId: number; name?: string };
+    const { polygon, repId, name, color: requestedColor } = req.body as { polygon: [number, number][]; repId: number; name?: string; color?: string };
     if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
     if (typeof repId !== "number") return res.status(400).json({ error: "repId required" });
+    // The drawer picks a colour before drawing and it has to survive the save —
+    // this endpoint used to drop it on the floor and stamp colorForRep(repId)
+    // instead, so every area came back wearing the rep's palette hue and the
+    // choice made on the way in was invisible on the way out. Reject a malformed
+    // one loudly rather than silently falling back, or "my green area is blue"
+    // becomes unreportable.
+    if (requestedColor !== undefined && normalizeTerritoryColor(requestedColor) === null) {
+      return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
+    }
     const rep = storage.getTeamMemberById(repId);
     if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
     // A team_lead may only assign an area to one of their own reps.
@@ -5493,7 +5521,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const at = new Date().toISOString();
-    const color = colorForRep(repId);
+    // Chosen colour wins; the rep's palette hue is only the default for a caller
+    // that never picked one (older clients, and the API used directly).
+    const color = normalizeTerritoryColor(requestedColor) ?? colorForRep(repId);
     const territory = storage.createTerritory({
       tenantId: tid ?? null, name: (name && name.trim()) || `${rep.name}'s area`,
       repId, polygon: JSON.stringify(polygon), color,
@@ -5630,7 +5660,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             repId: newPrimary, name: newName,
             assigneeIds: JSON.stringify(nextRepIds), assignedAt: at,
             pastAssigneeIds: JSON.stringify(past),
-            color: colorForRep(newPrimary),
+            color: retainedAreaColor(t, newPrimary),
             reclaimedAt: action === "return_to_pool" ? at : (t as any).reclaimedAt ?? null,
             updatedAt: at,
           } as any, tid);
@@ -5733,7 +5763,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: colorForRep(newPrimary), reclaimedAt: at, updatedAt: at,
+      color: retainedAreaColor(t, newPrimary), reclaimedAt: at, updatedAt: at,
       // Reassign starts a new tenure; returning to the pool means nobody holds
       // it, so the "assigned since" date must not linger from the last rep.
       assignedAt: next.repIds.length ? at : null,
@@ -5810,7 +5840,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
     storage.updateTerritory(t.id, {
       repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
-      color: colorForRep(repId), assignedAt: at, updatedAt: at,
+      color: retainedAreaColor(t, repId), assignedAt: at, updatedAt: at,
     } as any, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
 
@@ -5891,7 +5921,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: merged.length > 1 ? "shared" : "active",
       repId: newPrimary,
-      color: colorForRep(newPrimary),
+      color: retainedAreaColor(t, newPrimary),
       assigneeIds: JSON.stringify(merged),
       pastAssigneeIds: JSON.stringify(past),
       assignedAt: at, updatedAt: at,
@@ -5913,7 +5943,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
-    res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: colorForRep(newPrimary) });
+    res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: retainedAreaColor(t, newPrimary) });
   });
 
   // POST /api/territories/:id/unassign { repId, releaseLeads? }
@@ -5975,7 +6005,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: colorForRep(newPrimary), updatedAt: at,
+      color: retainedAreaColor(t, newPrimary), updatedAt: at,
     } as any, tid);
 
     // Persist only the leads whose rep actually changed (the removed rep's).

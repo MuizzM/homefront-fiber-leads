@@ -123,6 +123,8 @@ import {
   repIdsForDoor,
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
+import { territoryPaint, territoryBeforeId } from "@/lib/territoryStyle";
+import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
   subscribeLeadStream,
   createFetchEventSource,
@@ -904,6 +906,10 @@ export default function MapView() {
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
   const [lassoRepId, setLassoRepId] = useState("");
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
+  // Colour chosen BEFORE the stroke, and saved with the area. It describes the
+  // ground, so it must not follow whoever the area is handed to — which is what
+  // the old colorForRep(repId) stamp did.
+  const [lassoColor, setLassoColor] = useState<string>(TERRITORY_SWATCHES[0]);
   // Sales Rabbit-style refine + action state. `lassoDisabled` = display states the
   // user toggled OUT of the action set (default empty = everything selected).
   // `lassoAction` = which bulk action the panel is showing.
@@ -1266,15 +1272,20 @@ export default function MapView() {
       polygon,
       repId,
       name,
+      color,
     }: {
       polygon: [number, number][];
       repId: number;
       name?: string;
+      color?: string;
     }) => {
       const res = await apiRequest("POST", "/api/territories/assign-area", {
         polygon,
         repId,
         ...(name?.trim() ? { name: name.trim() } : {}),
+        // The colour chosen before the stroke. Omitted rather than sent empty so
+        // the server's own default still applies for a caller that never picked.
+        ...(color ? { color } : {}),
       });
       return res.json();
     },
@@ -3056,16 +3067,17 @@ export default function MapView() {
         // Status-aware styling: reclaimed/unassigned areas go GRAY and lose the
         // rep's name; completed areas keep the rep color but muted.
         const isPool = status === "unassigned" || status === "reclaimed";
-        const isDone = status === "completed";
-        const color = isPool ? "#94a3b8" : colorForRep(t.repId);
-        const fillOpacity = !canAssign
-          ? 0.05
-          : isPool
-            ? 0.1
-            : isDone
-              ? 0.08
-              : 0.14;
+        // The area's OWN colour, not the rep's palette hue — that is what the
+        // admin picked while drawing, and it has to be the same on every phone
+        // looking at this ground. colorForRep is only the fallback for rows
+        // written before the colour was captured.
+        const paint = territoryPaint({ color: (t as any).color, status }, colorForRep(t.repId));
+        const color = paint.fillColor;
         const srcId = `territory-${t.id}`;
+        // Areas go UNDER the pins. Without this they were appended on top of
+        // every lead layer already present — a translucent sheet over the doors
+        // the rep opened the map to tap.
+        const beforeId = territoryBeforeId((id) => !!map.getLayer(id));
         if (!map.getSource(srcId)) {
           map.addSource(srcId, {
             type: "geojson",
@@ -3081,8 +3093,8 @@ export default function MapView() {
             id: srcId,
             type: "fill",
             source: srcId,
-            paint: { "fill-color": color, "fill-opacity": fillOpacity },
-          });
+            paint: { "fill-color": paint.fillColor, "fill-opacity": paint.fillOpacity },
+          }, beforeId);
         }
         if (!map.getLayer(srcId + "-outline")) {
           map.addLayer({
@@ -3090,12 +3102,12 @@ export default function MapView() {
             type: "line",
             source: srcId,
             paint: {
-              "line-color": color,
-              "line-width": !canAssign ? 1.75 : isPool ? 2 : 2.5,
-              "line-opacity": !canAssign ? 0.65 : isPool ? 0.7 : 0.9,
-              ...(isPool ? { "line-dasharray": [3, 2] } : {}),
+              "line-color": paint.lineColor,
+              "line-width": paint.lineWidth,
+              "line-opacity": paint.lineOpacity,
+              ...(paint.lineDasharray ? { "line-dasharray": paint.lineDasharray } : {}),
             },
-          });
+          }, beforeId);
         }
         const cx = coords.reduce((s, p) => s + p[0], 0) / coords.length;
         const cy = coords.reduce((s, p) => s + p[1], 0) / coords.length;
@@ -5934,6 +5946,11 @@ export default function MapView() {
                     )}
                     {lassoAction === "area" && (
                       <>
+                        <TerritoryColorPicker
+                          value={lassoColor}
+                          onChange={setLassoColor}
+                          disabled={assignAreaMutation.isPending}
+                        />
                         <input
                           type="text"
                           value={lassoName}
@@ -5975,6 +5992,7 @@ export default function MapView() {
                               polygon: lassoPoints,
                               repId: Number(lassoRepId),
                               name: lassoName,
+                              color: lassoColor,
                             })
                           }
                           data-testid="lasso-assign"

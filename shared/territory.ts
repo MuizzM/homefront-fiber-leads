@@ -29,6 +29,26 @@ export interface TerritoryState {
   history: TerritoryHistoryEvent[];
 }
 
+// ── The area's colour ────────────────────────────────────────────────────────
+// The colour is chosen by whoever draws the area and it describes the GROUND,
+// not the person — so it has to survive the round trip byte-for-byte and mean
+// the same thing to the server validating it and the map painting it. One
+// pattern, shared, rather than a regex on each side that can drift apart.
+//
+// Shorthand is expanded (#0F0 → #00FF00) because the renderer parses fixed
+// offsets, but case is otherwise preserved: the stored value is the admin's
+// exact choice, and re-casing it would make "did the colour change?" answer yes
+// on a value nobody edited.
+export const TERRITORY_COLOR_PATTERN = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+export function normalizeTerritoryColor(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!TERRITORY_COLOR_PATTERN.test(trimmed)) return null;
+  const body = trimmed.slice(1);
+  return body.length === 3 ? `#${body.split("").map((c) => c + c).join("")}` : trimmed;
+}
+
 // ── Who holds an area ────────────────────────────────────────────────────────
 // The single answer to "does this rep work this area", used by every surface
 // that scopes something to a territory: the doors on the map, a single lead

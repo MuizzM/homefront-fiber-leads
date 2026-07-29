@@ -246,7 +246,19 @@ describe("share replaces the holders, it does not accumulate them", () => {
     expect(assignees(area)).not.toContain(fx.repA1.memberId);
   });
 
-  it("recolours the area to the new primary — the map must not lie", async () => {
+  it("moves the primary but KEEPS the area's colour", async () => {
+    // This test used to assert the opposite — that the fill was repainted to the
+    // new primary's hue, on the reasoning that the colour told you who worked
+    // the ground and a stale colour would make the map lie.
+    //
+    // That reasoning no longer holds. Per-rep halos on the pins say who works
+    // each door, and an area can be held by three people at once, so one fill
+    // was never going to name them. The fill now answers a different question —
+    // WHICH AREA is this — using the colour the admin chose while drawing it.
+    // Repainting on reassignment would discard that choice, so the area a
+    // manager drew green would silently turn blue the moment it changed hands.
+    //
+    // The primary still moves; only the colour stays put.
     const area = seedArea([fx.repA1.memberId]);
     const before = areaOf(area).color;
     await req(`/api/territories/${area}/share`, fx.manager.session, {
@@ -254,7 +266,7 @@ describe("share replaces the holders, it does not accumulate them", () => {
     });
     const after = areaOf(area);
     expect(after.repId).toBe(fx.repA2.memberId);
-    expect(after.color).not.toBe(before);
+    expect(after.color).toBe(before);
   });
 
   it("still supports a genuine multi-rep share", async () => {
