@@ -913,14 +913,23 @@ export default function MapView() {
   // ground, so it must not follow whoever the area is handed to — which is what
   // the old colorForRep(repId) stamp did.
   const [lassoColor, setLassoColor] = useState<string>(TERRITORY_SWATCHES[0]);
+  // The stroke handler is bound once at map init, so it cannot close over
+  // lassoColor — it would paint whatever the colour was when the map loaded.
+  const lassoColorRef = useRef<string>(TERRITORY_SWATCHES[0]);
   // Sales Rabbit-style refine + action state. `lassoDisabled` = display states the
   // user toggled OUT of the action set (default empty = everything selected).
   // `lassoAction` = which bulk action the panel is showing.
   const [lassoDisabled, setLassoDisabled] = useState<Set<PinDisplayState>>(
     new Set(),
   );
+  // Drawing a shape means drawing an AREA. This defaulted to "assign", which is
+  // bulk LEAD reassignment and saves no polygon at all — so the ordinary flow
+  // (draw a loop, pick a rep, tap the button) moved the doors and created no
+  // territory. Nothing appeared on the manager's map or the rep's, because
+  // nothing had been created, and the only clue was that "Area" was the fourth
+  // tab. The other three actions are still one tap away.
   const [lassoAction, setLassoAction] = useState<"assign" | "status" | "mark" | "area">(
-    "assign",
+    "area",
   );
   const [lassoStatusOutcome, setLassoStatusOutcome] = useState<KnockOutcome>(
     BULK_STATUS_OUTCOMES[0],
@@ -1599,7 +1608,7 @@ export default function MapView() {
     setLassoRepId("");
     setLassoName("");
     setLassoDisabled(new Set());
-    setLassoAction("assign");
+    setLassoAction("area");
     setLassoStatusOutcome(BULK_STATUS_OUTCOMES[0]);
     const map = mapRef.current;
     if (map) {
@@ -1789,6 +1798,7 @@ export default function MapView() {
   useEffect(() => {
     (window as any).__teamMembers = team;
   }, [team]);
+  useEffect(() => { lassoColorRef.current = lassoColor; }, [lassoColor]);
   useEffect(() => {
     (window as any).__onTerritoryClick = (tid: number | null) =>
       setSelectedTerritoryId(tid);
@@ -3527,14 +3537,16 @@ export default function MapView() {
             id: "lasso-fill",
             type: "fill",
             source: "lasso-polygon",
-            paint: { "fill-color": "#2dd4bf", "fill-opacity": 0.14 },
+            // The colour the area will actually be saved in, so the preview is
+            // a preview of the thing rather than a generic teal smear.
+            paint: { "fill-color": lassoColorRef.current, "fill-opacity": 0.2 },
           });
           map.addLayer({
             id: "lasso-outline",
             type: "line",
             source: "lasso-polygon",
             paint: {
-              "line-color": "#5eead4",
+              "line-color": lassoColorRef.current,
               "line-width": 3,
               "line-cap": "round",
               "line-join": "round",
