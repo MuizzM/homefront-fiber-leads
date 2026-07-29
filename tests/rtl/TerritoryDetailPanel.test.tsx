@@ -264,3 +264,46 @@ describe("<TerritoryDetailPanel /> colour editing", () => {
     expect(screen.getByTestId("territory-color")).toHaveStyle({ backgroundColor: "#14C985" });
   });
 });
+
+// ── The assignee sees the numbers too ───────────────────────────────────────
+// The panel was rendered behind `canAssign && …`, so a rep could never open it.
+// The person actually walking the area had no way to see how much of it was
+// done — and management controls were already role-gated INSIDE the panel, so
+// hiding the whole thing bought no safety, only blindness.
+describe("<TerritoryDetailPanel /> for the rep who works the area", () => {
+  const stats = {
+    total: 84, verifiedWorkedLeads: 20, areaWorkedPct: 25,
+    verified: 20, needsReview: 0, invalid: 0, avgDistanceM: 12, maxAllowedDistanceM: 60,
+    knocked: 24, sold: 8, untouched: 56, availableBase: 80, attempts: 31,
+    penetrationRate: 10, knockCompletionRate: 30, contactRate: 45.8,
+  };
+
+  it("shows a rep the same numbers a manager sees", () => {
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "rep" }} progress={stats} />);
+    expect(screen.getByTestId("stat-knock-summary")).toHaveTextContent("24 of 80 knocked");
+    expect(screen.getByTestId("stat-sold")).toHaveTextContent("8");
+    expect(screen.getByTestId("stat-penetration")).toHaveTextContent("10.0%");
+  });
+
+  it("shows the rep who else is on the area", () => {
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "rep" }} progress={stats} />);
+    expect(screen.getAllByTestId("rep-chip")).toHaveLength(2);
+  });
+
+  it("gives the rep no management controls at all", () => {
+    // Reading the numbers is not permission to change anything. The server
+    // re-checks every one of these regardless; this keeps buttons that would
+    // 403 off a field phone.
+    render(
+      <TerritoryDetailPanel
+        territory={activeTerritory}
+        currentUser={{ role: "rep" }}
+        progress={stats}
+        onReclaim={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("reclaim-btn")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("territory-rename-btn")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("territory-color-edit")).not.toBeInTheDocument();
+  });
+});

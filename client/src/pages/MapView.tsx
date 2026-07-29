@@ -123,7 +123,7 @@ import {
   repIdsForDoor,
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
-import { territoryPaint, territoryBeforeId } from "@/lib/territoryStyle";
+import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
@@ -909,6 +909,9 @@ export default function MapView() {
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
   // Areas under an overlapping tap, awaiting "which one did you mean?".
   const [territoryPickIds, setTerritoryPickIds] = useState<number[]>([]);
+  // Which areas are on this viewer's map right now. Read by the tap handler,
+  // which is bound once at map init and so cannot close over the memo.
+  const visibleTerritoryIdsRef = useRef<Set<number>>(new Set());
   // Colour chosen BEFORE the stroke, and saved with the area. It describes the
   // ground, so it must not follow whoever the area is handed to — which is what
   // the old colorForRep(repId) stamp did.
@@ -1762,6 +1765,15 @@ export default function MapView() {
     enabled: !!user,
     staleTime: 60_000,
   });
+
+  // Each new area starts on a colour nothing else is wearing. Colour IS the
+  // identifier on a map, so two areas sharing one read as a single region split
+  // by a road — worse than any individual colour being unattractive. Still
+  // overridable: this picks the starting point, the picker keeps the last word.
+  const pickFreeColor = useCallback(
+    () => pickUnusedTerritoryColor(territories.map((t) => (t as any).color), TERRITORY_SWATCHES),
+    [territories],
+  );
   const { data: territoryProgress = [] } = useQuery<
     Array<{
       id: number;
@@ -1818,7 +1830,12 @@ export default function MapView() {
   // server is the authority (every route re-checks); this only stops a rep's tap
   // from opening a panel whose every button would come back 403.
   useEffect(() => {
-    (window as any).__canManageTerritory = (_tid: number) => canAssign;
+    // A rep taps their own area to read its numbers. visibleTerritories already
+    // limits a rep to areas they actually hold, so anything they can see, they
+    // may open — the panel itself hides every management control by role, and
+    // the server re-checks each one regardless.
+    (window as any).__canManageTerritory = (tid: number) =>
+      canAssign || visibleTerritoryIdsRef.current.has(tid);
     return () => {
       delete (window as any).__canManageTerritory;
     };
@@ -3037,6 +3054,10 @@ export default function MapView() {
       return true;
     });
   }, [territories, canAssign, user?.teamMemberId]);
+
+  useEffect(() => {
+    visibleTerritoryIdsRef.current = new Set(visibleTerritories.map((t) => t.id));
+  }, [visibleTerritories]);
 
   // Centroid label. Reps: the area NAME only. Managers: name + owner line
   // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's name
@@ -6147,8 +6168,7 @@ export default function MapView() {
           )}
 
           {/* ── Territory detail panel — opens when you tap a region ── */}
-          {canAssign &&
-            selectedTerritoryId != null &&
+          {selectedTerritoryId != null &&
             (() => {
               const t = territories.find((x) => x.id === selectedTerritoryId);
               if (!t) return null;
@@ -6215,8 +6235,10 @@ export default function MapView() {
                               )
                           : undefined
                       }
-                      onRename={(name) =>
-                        renameTerritoryMutation.mutate({ id: t.id, name })
+                      onRename={
+                        canManage
+                          ? (name) => renameTerritoryMutation.mutate({ id: t.id, name })
+                          : undefined
                       }
                       onRecolor={
                         canManage
@@ -6506,6 +6528,9 @@ export default function MapView() {
                                   } else {
                                     exitLasso();
                                     setAddMode(false); // draw tools and add-mode are mutually exclusive
+                                    // Start on a colour nothing else is using, so two areas never
+                                    // read as one region split by a road. The picker overrides it.
+                                    setLassoColor(pickFreeColor());
                                     setLassoMode(true);
                                     setSearchOpen(false);
                                     setLayersOpen(false);

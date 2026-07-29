@@ -27,6 +27,7 @@ import {
   territoryColor,
   territoryPaint,
   territoryVisualStatus,
+  pickUnusedTerritoryColor,
 } from "../../client/src/lib/territoryStyle";
 
 const GREEN = "#14C985";        // the colour from the spec's example feature
@@ -178,5 +179,55 @@ describe("areas sit under the pins", () => {
     // Inserting an area before another AREA would reintroduce the stacking bug
     // one polygon at a time.
     for (const id of TERRITORY_BEFORE_CANDIDATES) expect(id.startsWith("lead-")).toBe(true);
+  });
+});
+
+// ── Choosing a colour for a new area ────────────────────────────────────────
+// Colour IS the identifier on a map. Two areas wearing the same one read as a
+// single region split by a road, which is worse than any individual colour
+// being unattractive.
+describe("a new area takes a colour nothing else is using", () => {
+  const PAL = ["#AA0000", "#00BB00", "#0000CC"];
+
+  it("takes the first free swatch", () => {
+    expect(pickUnusedTerritoryColor(["#AA0000"], PAL)).toBe("#00BB00");
+  });
+
+  it("takes the first swatch when nothing is drawn yet", () => {
+    expect(pickUnusedTerritoryColor([], PAL)).toBe("#AA0000");
+  });
+
+  it("does not collide the way random would", () => {
+    // The real point. Random over 12 swatches is better-than-even to duplicate
+    // by the fifth area — exactly the size of a working patch. Taking every
+    // area in turn must yield the whole palette before anything repeats.
+    const used: string[] = [];
+    for (let i = 0; i < PAL.length; i++) used.push(pickUnusedTerritoryColor(used, PAL));
+    expect(new Set(used).size).toBe(PAL.length);
+  });
+
+  it("spreads instead of clumping once every swatch is taken", () => {
+    // Past the palette size a repeat is unavoidable. It should land on the
+    // LEAST used colour, not always on the first one.
+    const used = ["#AA0000", "#AA0000", "#00BB00", "#0000CC"];
+    expect(pickUnusedTerritoryColor(used, PAL)).toBe("#00BB00");
+  });
+
+  it("matches case-insensitively, so #aa0000 counts as taken", () => {
+    // Stored colours preserve the case they were saved in, so a case-sensitive
+    // comparison would hand out a duplicate that merely looked different.
+    expect(pickUnusedTerritoryColor(["#aa0000"], PAL)).toBe("#00BB00");
+  });
+
+  it("ignores rows with no colour, or an unreadable one", () => {
+    expect(pickUnusedTerritoryColor([null, undefined, "", "nonsense"], PAL)).toBe("#AA0000");
+  });
+
+  it("counts a shorthand colour as the swatch it expands to", () => {
+    expect(pickUnusedTerritoryColor(["#A00"], ["#AA0000", "#00BB00"])).toBe("#00BB00");
+  });
+
+  it("returns something paintable even with an empty palette", () => {
+    expect(pickUnusedTerritoryColor([], [])).toBe(TERRITORY_POOL_COLOR);
   });
 });

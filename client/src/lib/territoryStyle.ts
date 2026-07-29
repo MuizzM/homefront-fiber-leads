@@ -138,3 +138,42 @@ export function territoryBeforeId(hasLayer: (id: string) => boolean): string | u
     }
   });
 }
+
+
+// ── Choosing a colour for a NEW area ─────────────────────────────────────────
+// "Whatever isn't already taken." Two areas in the same colour are worse than a
+// dull colour: on a map, colour IS the identifier, and two identical fills read
+// as one region split by a road.
+//
+// Not random — random collides. With 12 swatches, picking at random gives a
+// better-than-even chance of a duplicate by the fifth area (birthday problem),
+// which is exactly the size of a working patch. This takes the first genuinely
+// unused swatch, and only once every swatch is in play does it fall back to the
+// least-used one, so duplicates start as late as arithmetic allows and then
+// spread evenly instead of clustering.
+//
+// O(n + p): one pass to count what is in use, one pass over the palette. n is
+// the areas on screen, p is 12.
+export function pickUnusedTerritoryColor(
+  usedColors: Iterable<string | null | undefined>,
+  palette: readonly string[],
+): string {
+  if (!palette.length) return TERRITORY_POOL_COLOR;
+
+  const counts = new Map<string, number>();
+  for (const c of usedColors) {
+    const normalized = typeof c === "string" ? normalizeTerritoryColor(c.trim()) : null;
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+
+  let leastKey = palette[0];
+  let leastCount = Infinity;
+  for (const swatch of palette) {
+    const used = counts.get(swatch.toLowerCase()) ?? 0;
+    if (used === 0) return swatch;          // free — take it
+    if (used < leastCount) { leastCount = used; leastKey = swatch; }
+  }
+  return leastKey;                           // all taken — spread, do not clump
+}
