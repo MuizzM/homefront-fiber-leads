@@ -14,6 +14,11 @@ let rawDb: import("better-sqlite3").Database;
 
 let fieldRepSession: string;
 let fieldUserId: number;
+// Scanning starts at team lead, so the lowest identity that can own a discovery
+// job — and therefore the one the diagnostic redaction actually protects — is
+// this one, not the rep.
+let teamLeadSession: string;
+let teamLeadUserId: number;
 let fieldRepId: number;
 let otherRepId: number;
 let ownKnockId: number;
@@ -59,6 +64,16 @@ beforeAll(async () => {
   } as any);
   fieldUserId = fieldUser.id;
   fieldRepSession = storage.createSession(fieldUser.id).id;
+
+  const teamLeadUser = storage.createUser({
+    name: "Field Team Lead",
+    email: "team-lead@field-boundary.example.test",
+    role: "team_lead",
+    active: true,
+    tenantId: 1,
+  } as any);
+  teamLeadUserId = teamLeadUser.id;
+  teamLeadSession = storage.createSession(teamLeadUser.id).id;
 
   for (const role of ["calling_rep", "calling_manager", "compliance_admin", "auditor"] as const) {
     const user = storage.createUser({
@@ -206,29 +221,22 @@ describe.each(["calling_rep", "calling_manager", "compliance_admin", "auditor"] 
 );
 
 describe("field rep scope", () => {
-  it("receives scan progress without provider diagnostics or negative-result counts", async () => {
+  it("cannot see a discovery job at all — scanning is not field work", async () => {
+    // The Scan Map used to be on every rep's field map because scan.submit sat
+    // in the REP set. It starts at team lead now; this is the half that holds
+    // when someone calls the endpoint directly instead of tapping the UI.
     const discoveryStore = await import("../../server/addressDiscovery/store");
     const { job } = discoveryStore.createDiscoveryJob({
       tenantId: 1,
-      idempotencyKey: "rep-diagnostic-redaction",
-      requestHash: "rep-diagnostic-redaction-hash",
+      idempotencyKey: "rep-refused-discovery",
+      requestHash: "rep-refused-discovery-hash",
       geometry: { type: "Polygon", coordinates: [[[-80.26, 35.81], [-80.25, 35.81], [-80.25, 35.82], [-80.26, 35.82], [-80.26, 35.81]]] },
       state: "NC",
       createdBy: fieldUserId,
     });
-    rawDb.prepare(`UPDATE discovery_jobs SET status='partial',phase='qualification',qualification_checked=4,
-      qualification_failed=2,failed_tiles=1,no_service_found=3,error_summary='provider timeout 401 token detail' WHERE id=?`).run(job.id);
-
     const response = await request(`/api/discovery/jobs/${job.id}`, fieldRepSession);
-    expect(response.status).toBe(200);
-    const body = await response.json() as any;
-    expect(body.job).toMatchObject({ checkedCount: 7, failedCount: 0, noServiceCount: 0, sourceWarnings: [], error: null });
-    // \b401\b (not bare 401) so the redaction check matches a real, delimited
-    // HTTP-status leak in error_summary — never an incidental "401" inside the
-    // job's random hex UUID (e.g. ...-401e-...), which flaked this test ~0.7%
-    // of runs. UUID groups are 8/4/4/4/12 hex chars, so "401" can never be
-    // hyphen-isolated: word boundaries kill the collision without weakening intent.
-    expect(JSON.stringify(body)).not.toMatch(/provider timeout|\b401\b|token detail/i);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: "Forbidden", need: "scan.submit" });
   });
 
   it("can read the safe roster projection, without roster PII", async () => {
@@ -317,5 +325,35 @@ describe("denied field mutations stay side-effect free", () => {
     expect((rawDb.prepare("SELECT COUNT(*) AS count FROM location_pings WHERE rep_id <> ?").get(fieldRepId) as any).count).toBe(0);
     expect((rawDb.prepare("SELECT COUNT(*) AS count FROM clock_sessions WHERE rep_id <> ?").get(fieldRepId) as any).count).toBe(0);
     expect((rawDb.prepare("SELECT COUNT(*) AS count FROM commissions").get() as any).count).toBe(2);
+  });
+});
+
+describe("team lead scan scope", () => {
+  it("receives scan progress without provider diagnostics or negative-result counts", async () => {
+    // A team lead may start a scan and watch their OWN job, but scan.manage is
+    // what unredacts provider text and failure counts — so the tier below it
+    // must still see a scrubbed projection.
+    const discoveryStore = await import("../../server/addressDiscovery/store");
+    const { job } = discoveryStore.createDiscoveryJob({
+      tenantId: 1,
+      idempotencyKey: "lead-diagnostic-redaction",
+      requestHash: "lead-diagnostic-redaction-hash",
+      geometry: { type: "Polygon", coordinates: [[[-80.26, 35.81], [-80.25, 35.81], [-80.25, 35.82], [-80.26, 35.82], [-80.26, 35.81]]] },
+      state: "NC",
+      createdBy: teamLeadUserId,
+    });
+    rawDb.prepare(`UPDATE discovery_jobs SET status='partial',phase='qualification',qualification_checked=4,
+      qualification_failed=2,failed_tiles=1,no_service_found=3,error_summary='provider timeout 401 token detail' WHERE id=?`).run(job.id);
+
+    const response = await request(`/api/discovery/jobs/${job.id}`, teamLeadSession);
+    expect(response.status).toBe(200);
+    const body = await response.json() as any;
+    expect(body.job).toMatchObject({ checkedCount: 7, failedCount: 0, noServiceCount: 0, sourceWarnings: [], error: null });
+    // \b401\b (not bare 401) so the redaction check matches a real, delimited
+    // HTTP-status leak in error_summary — never an incidental "401" inside the
+    // job's random hex UUID (e.g. ...-401e-...), which flaked this test ~0.7%
+    // of runs. UUID groups are 8/4/4/4/12 hex chars, so "401" can never be
+    // hyphen-isolated: word boundaries kill the collision without weakening intent.
+    expect(JSON.stringify(body)).not.toMatch(/provider timeout|\b401\b|token detail/i);
   });
 });
