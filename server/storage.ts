@@ -2060,6 +2060,16 @@ function migrateCommissionsPendingDedupe(raw: import("better-sqlite3").Database)
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_tenant_lead_pending
         ON commissions(tenant_id, lead_id) WHERE status = 'pending' AND lead_id IS NOT NULL`,
     );
+    // The partial index above is UNIQUE and covers only status='pending', so it
+    // cannot serve the double-pay guard, which asks "is there a live commission
+    // on this door" across pending|approved|paid. Without this second, ordinary
+    // index that lookup is a full scan of the tenant's ledger on every sold
+    // knock — the cost grows with the money the company has ever earned, which
+    // is the worst possible thing to put on the sale path.
+    raw.exec(
+      `CREATE INDEX IF NOT EXISTS idx_commissions_lead_status
+        ON commissions(lead_id, status) WHERE lead_id IS NOT NULL`,
+    );
     const idx = raw.prepare(
       "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_commissions_tenant_lead_pending'",
     ).get();
