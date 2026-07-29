@@ -123,7 +123,7 @@ import {
   repIdsForDoor,
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
-import { territoryPaint, territoryBeforeId } from "@/lib/territoryStyle";
+import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
@@ -909,18 +909,30 @@ export default function MapView() {
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
   // Areas under an overlapping tap, awaiting "which one did you mean?".
   const [territoryPickIds, setTerritoryPickIds] = useState<number[]>([]);
+  // Which areas are on this viewer's map right now. Read by the tap handler,
+  // which is bound once at map init and so cannot close over the memo.
+  const visibleTerritoryIdsRef = useRef<Set<number>>(new Set());
   // Colour chosen BEFORE the stroke, and saved with the area. It describes the
   // ground, so it must not follow whoever the area is handed to — which is what
   // the old colorForRep(repId) stamp did.
   const [lassoColor, setLassoColor] = useState<string>(TERRITORY_SWATCHES[0]);
+  // The stroke handler is bound once at map init, so it cannot close over
+  // lassoColor — it would paint whatever the colour was when the map loaded.
+  const lassoColorRef = useRef<string>(TERRITORY_SWATCHES[0]);
   // Sales Rabbit-style refine + action state. `lassoDisabled` = display states the
   // user toggled OUT of the action set (default empty = everything selected).
   // `lassoAction` = which bulk action the panel is showing.
   const [lassoDisabled, setLassoDisabled] = useState<Set<PinDisplayState>>(
     new Set(),
   );
+  // Drawing a shape means drawing an AREA. This defaulted to "assign", which is
+  // bulk LEAD reassignment and saves no polygon at all — so the ordinary flow
+  // (draw a loop, pick a rep, tap the button) moved the doors and created no
+  // territory. Nothing appeared on the manager's map or the rep's, because
+  // nothing had been created, and the only clue was that "Area" was the fourth
+  // tab. The other three actions are still one tap away.
   const [lassoAction, setLassoAction] = useState<"assign" | "status" | "mark" | "area">(
-    "assign",
+    "area",
   );
   const [lassoStatusOutcome, setLassoStatusOutcome] = useState<KnockOutcome>(
     BULK_STATUS_OUTCOMES[0],
@@ -1418,6 +1430,25 @@ export default function MapView() {
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  // Recolour an area. The colour describes the ground, so it is the field a
+  // manager is most likely to get wrong on the first pass — and until now it was
+  // the one field with no edit path at all. Same PATCH the rename uses.
+  const recolorTerritoryMutation = useMutation({
+    mutationFn: async ({ id, color }: { id: number; color: string }) => {
+      const res = await apiRequest("PATCH", `/api/territories/${id}`, { color });
+      return res.json();
+    },
+    onSuccess: () => {
+      // The polygon paints from territories.color, so the map must refetch for
+      // the new colour to land; invalidating progress too keeps the panel swatch
+      // and the region on screen in step.
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      toast({ title: "Area colour updated" });
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
   const deleteTerritoryMutation = useMutation({
     mutationFn: async (id: number) => {
       const res = await apiRequest("DELETE", `/api/territories/${id}`);
@@ -1580,7 +1611,7 @@ export default function MapView() {
     setLassoRepId("");
     setLassoName("");
     setLassoDisabled(new Set());
-    setLassoAction("assign");
+    setLassoAction("area");
     setLassoStatusOutcome(BULK_STATUS_OUTCOMES[0]);
     const map = mapRef.current;
     if (map) {
@@ -1734,6 +1765,15 @@ export default function MapView() {
     enabled: !!user,
     staleTime: 60_000,
   });
+
+  // Each new area starts on a colour nothing else is wearing. Colour IS the
+  // identifier on a map, so two areas sharing one read as a single region split
+  // by a road — worse than any individual colour being unattractive. Still
+  // overridable: this picks the starting point, the picker keeps the last word.
+  const pickFreeColor = useCallback(
+    () => pickUnusedTerritoryColor(territories.map((t) => (t as any).color), TERRITORY_SWATCHES),
+    [territories],
+  );
   const { data: territoryProgress = [] } = useQuery<
     Array<{
       id: number;
@@ -1770,6 +1810,7 @@ export default function MapView() {
   useEffect(() => {
     (window as any).__teamMembers = team;
   }, [team]);
+  useEffect(() => { lassoColorRef.current = lassoColor; }, [lassoColor]);
   useEffect(() => {
     (window as any).__onTerritoryClick = (tid: number | null) =>
       setSelectedTerritoryId(tid);
@@ -1789,7 +1830,12 @@ export default function MapView() {
   // server is the authority (every route re-checks); this only stops a rep's tap
   // from opening a panel whose every button would come back 403.
   useEffect(() => {
-    (window as any).__canManageTerritory = (_tid: number) => canAssign;
+    // A rep taps their own area to read its numbers. visibleTerritories already
+    // limits a rep to areas they actually hold, so anything they can see, they
+    // may open — the panel itself hides every management control by role, and
+    // the server re-checks each one regardless.
+    (window as any).__canManageTerritory = (tid: number) =>
+      canAssign || visibleTerritoryIdsRef.current.has(tid);
     return () => {
       delete (window as any).__canManageTerritory;
     };
@@ -3009,6 +3055,10 @@ export default function MapView() {
     });
   }, [territories, canAssign, user?.teamMemberId]);
 
+  useEffect(() => {
+    visibleTerritoryIdsRef.current = new Set(visibleTerritories.map((t) => t.id));
+  }, [visibleTerritories]);
+
   // Centroid label. Reps: the area NAME only. Managers: name + owner line
   // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's name
   // must NOT linger on the area).
@@ -3508,14 +3558,16 @@ export default function MapView() {
             id: "lasso-fill",
             type: "fill",
             source: "lasso-polygon",
-            paint: { "fill-color": "#2dd4bf", "fill-opacity": 0.14 },
+            // The colour the area will actually be saved in, so the preview is
+            // a preview of the thing rather than a generic teal smear.
+            paint: { "fill-color": lassoColorRef.current, "fill-opacity": 0.2 },
           });
           map.addLayer({
             id: "lasso-outline",
             type: "line",
             source: "lasso-polygon",
             paint: {
-              "line-color": "#5eead4",
+              "line-color": lassoColorRef.current,
               "line-width": 3,
               "line-cap": "round",
               "line-join": "round",
@@ -6116,8 +6168,7 @@ export default function MapView() {
           )}
 
           {/* ── Territory detail panel — opens when you tap a region ── */}
-          {canAssign &&
-            selectedTerritoryId != null &&
+          {selectedTerritoryId != null &&
             (() => {
               const t = territories.find((x) => x.id === selectedTerritoryId);
               if (!t) return null;
@@ -6184,8 +6235,15 @@ export default function MapView() {
                               )
                           : undefined
                       }
-                      onRename={(name) =>
-                        renameTerritoryMutation.mutate({ id: t.id, name })
+                      onRename={
+                        canManage
+                          ? (name) => renameTerritoryMutation.mutate({ id: t.id, name })
+                          : undefined
+                      }
+                      onRecolor={
+                        canManage
+                          ? (color) => recolorTerritoryMutation.mutate({ id: t.id, color })
+                          : undefined
                       }
                       onViewHistory={() => setActivityTerritoryId(t.id)}
                       onUnassignRep={
@@ -6470,6 +6528,9 @@ export default function MapView() {
                                   } else {
                                     exitLasso();
                                     setAddMode(false); // draw tools and add-mode are mutually exclusive
+                                    // Start on a colour nothing else is using, so two areas never
+                                    // read as one region split by a road. The picker overrides it.
+                                    setLassoColor(pickFreeColor());
                                     setLassoMode(true);
                                     setSearchOpen(false);
                                     setLayersOpen(false);

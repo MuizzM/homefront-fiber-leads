@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus, RotateCcw, Users } from "lucide-react";
 import { can, type Role } from "@shared/permissions";
 import { colorForRep } from "@shared/repColors";
+import { territoryColor } from "@/lib/territoryStyle";
+import { TerritoryColorPicker } from "@/components/territory/TerritoryColorPicker";
 import { shortDate } from "@shared/territoryLabel";
 import type { TerritoryStatus } from "@shared/territory";
 
@@ -10,6 +12,19 @@ export interface TerritoryProgress {
   total: number;
   verifiedWorkedLeads: number;
   areaWorkedPct: number;          // verifiedWorkedLeads ÷ total × 100 (2dp)
+  // The operational figures. The progress endpoint has been returning knocked
+  // and sold all along; this type simply dropped them, so the panel could not
+  // show numbers that were already on the wire. Optional because older cached
+  // responses predate the rest.
+  knocked?: number;
+  sold?: number;
+  untouched?: number;
+  availableBase?: number;
+  attempts?: number;
+  penetrationRate?: number;
+  knockCompletionRate?: number;
+  contactRate?: number;
+  lastActivityAt?: string | null;
   verified: number;
   needsReview: number;
   invalid: number;
@@ -34,6 +49,9 @@ export interface TerritoryDetailPanelProps {
   onComplete?: () => void;
   onReassign?: () => void;
   onRename?: (name: string) => void;  // provided for manager+ — shows the pencil
+  /** Change the area's colour. Provided only when the caller may edit the area;
+   *  without it the swatch stays a read-only dot, as it was. */
+  onRecolor?: (color: string) => void;
   onViewHistory?: () => void;         // opens the verified activity timeline
   /** Re-open this area for another sweep (manager+). Opens the confirm dialog
    *  rather than acting immediately — a pass reset clears the whole team's
@@ -67,16 +85,22 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onRecolor, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
-  // Computed, never territory.color. The stored column is a snapshot taken when
-  // the area was last assigned, and the rep chips below derive their dots from
-  // colorForRep — so preferring the stored value let this one panel disagree
-  // with itself the moment the two drifted apart. The map paints polygons from
-  // colorForRep too, so computing here is what keeps the swatch, the chips, and
-  // the region on the map all showing one rep as one color.
-  const swatch = isUnassigned ? colorForRep(null) : colorForRep(territory.repIds[0]);
+  // The SAME rule the map paints the polygon with: the area's own stored colour,
+  // falling back to the primary rep's hue only for rows written before the
+  // colour was captured. An earlier revision computed this from colorForRep
+  // unconditionally, which was right when the map did too — but the map now
+  // prefers the stored value, so this swatch would have shown one colour while
+  // the region on screen showed another. One rule, one source.
+  //
+  // The rep chips below stay on colorForRep deliberately: those dots identify a
+  // PERSON, and a person's hue is not a property of the ground.
+  const swatch = territoryColor(
+    { color: territory.color, status: territory.status },
+    colorForRep(isUnassigned ? null : territory.repIds[0]),
+  );
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(territory.name);
   // Two-step remove: taking an area off a rep pulls their doors back too, so it
@@ -102,11 +126,19 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
     <div className="glass-surface glass-opaque glass-ink-scope w-72 p-4" data-testid="territory-panel">
       {/* Header */}
       <div className="flex items-start gap-2.5">
-        <span
-          data-testid="territory-color"
-          className="mt-1 w-3.5 h-3.5 rounded-full flex-shrink-0 border border-white/20"
-          style={{ backgroundColor: swatch }}
-        />
+        {onRecolor ? (
+          // Editable: the swatch IS the control, so changing an area's colour is
+          // where you already look for its colour rather than behind a menu.
+          <div className="mt-0.5 flex-shrink-0 scale-[0.42] origin-top-left -mr-6 -mb-4" data-testid="territory-color-edit">
+            <TerritoryColorPicker value={swatch} onChange={onRecolor} label="Area colour" />
+          </div>
+        ) : (
+          <span
+            data-testid="territory-color"
+            className="mt-1 w-3.5 h-3.5 rounded-full flex-shrink-0 border border-white/20"
+            style={{ backgroundColor: swatch }}
+          />
+        )}
         <div className="min-w-0 flex-1">
           {editingName ? (
             /* Inline rename — Enter/check saves, Esc/x cancels */
@@ -222,6 +254,64 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
       {/* ── Area Worked — the primary metric (location-verified only) ── */}
       {progress ? (
         <div className="mt-3.5">
+          {/* Operational figures. The endpoint has returned knocked and sold all
+              along; the panel simply never showed them, so a manager had a
+              location-verification percentage and no idea how much of the area was
+              actually walked. Every rate divides by the same base (see
+              shared/territoryMetrics) so the numbers on this card agree. */}
+          {progress.knocked != null && (
+            <div className="mb-3 pb-3 border-b border-white/10" data-testid="territory-stats">
+              <div className="text-[13px] font-semibold text-foreground" data-testid="stat-knock-summary">
+                {progress.knocked} of {progress.availableBase ?? progress.total} knocked
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                {progress.untouched ?? Math.max(0, (progress.availableBase ?? progress.total) - progress.knocked)} remaining
+                {progress.attempts != null && progress.attempts > progress.knocked && (
+                  <> · {progress.attempts} attempts</>
+                )}
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Sold</div>
+                  <div data-testid="stat-sold" className="text-base font-bold tabular-nums text-emerald-400">{progress.sold ?? 0}</div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Penetration</div>
+                  <div data-testid="stat-penetration" className="text-base font-bold tabular-nums text-foreground">
+                    {(progress.penetrationRate ?? 0).toFixed(1)}%
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] uppercase tracking-wide text-muted-foreground">Contact</div>
+                  <div data-testid="stat-contact" className="text-base font-bold tabular-nums text-foreground">
+                    {(progress.contactRate ?? 0).toFixed(1)}%
+                  </div>
+                </div>
+              </div>
+              {progress.knockCompletionRate != null && (
+                <div
+                  className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-secondary"
+                  role="progressbar"
+                  aria-valuenow={Math.round(progress.knockCompletionRate)}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-label={`Doors knocked ${progress.knockCompletionRate.toFixed(1)} percent`}
+                  data-testid="stat-knock-bar"
+                >
+                  <div
+                    className="h-full rounded-full bg-teal-400 transition-[width] duration-500"
+                    style={{ width: `${Math.min(100, Math.max(0, progress.knockCompletionRate))}%` }}
+                  />
+                </div>
+              )}
+              {progress.lastActivityAt && (
+                <div className="mt-1.5 text-[10.5px] text-muted-foreground" data-testid="stat-last-activity">
+                  Last activity {shortDate(progress.lastActivityAt)}
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex items-baseline justify-between">
             <span
               className="text-2xs uppercase tracking-wide text-muted-foreground inline-flex items-center gap-1"

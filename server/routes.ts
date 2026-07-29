@@ -57,7 +57,9 @@ try {
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
-import { pointInPolygon, polygonCovers } from "@shared/geo";
+import { computeTerritoryMetrics } from "@shared/territoryMetrics";
+import { cachedScopeLookup } from "./territoryScopeCache";
+import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
@@ -419,6 +421,16 @@ function retainedAreaColor(territory: unknown, fallbackRepId: number | null | un
 }
 
 function territoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
+  // Memoised on a version stamp every territory write bumps. This is asked once
+  // per SSE event PER SUBSCRIBER, and the uncached form is a full territory scan
+  // with a JSON.parse per row — 53.86ms and 200k parses at 200 areas / 10
+  // subscribers / 100 events. The stamp is what keeps it safe: a reclaim bumps
+  // it, so a rep cannot keep reading doors in an area taken from them.
+  return cachedScopeLookup(`${tenantId ?? "-"}:${scope.join(",")}`, () =>
+    computeTerritoryIdsForScope(scope, tenantId));
+}
+
+function computeTerritoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
   const out = new Set<number>();
   for (const t of storage.getTerritories(tenantId ?? undefined) as any[]) {
     // territoryHeldByAny, not a repId check first. This used to test repId before
@@ -3484,16 +3496,34 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const rp = storage.getTeamMemberById(rid)!;
       const leadsInParcel = enclosed.filter((l: any) => ids.includes(l.id));
       if (leadsInParcel.length === 0) return;
-      const hull = padHull(convexHull(leadsInParcel.map((l: any) => [l.lng, l.lat] as [number, number])), 40);
+      // The shape this parcel is saved with.
+      //
+      // ONE rep taking the whole cluster has an actual drawn boundary — the
+      // manager cut it — and that exact ring is what gets saved. It used to be
+      // thrown away in favour of a convex hull of the enclosed leads, which is
+      // a different shape: a hull cannot be concave, so every inlet the manager
+      // deliberately cut around (a park, a block that belongs to someone else,
+      // the far side of a main road) was swallowed back in, and the rep opened
+      // their map to a boundary nobody had drawn.
+      //
+      // A MULTI-REP split is the one case with no drawn shape to preserve:
+      // subdivideCluster partitions the leads geographically and the manager
+      // never drew a line around each parcel. A hull of that parcel's doors is
+      // then the honest answer rather than a lost one, and the territory event
+      // records split:true so the derived boundary is identifiable later.
+      const drewAnExactRing = Array.isArray(polygon) && polygon.length >= 3;
+      const parcelRing = reps.length === 1 && drewAnExactRing
+        ? (polygon as [number, number][])
+        : padHull(convexHull(leadsInParcel.map((l: any) => [l.lng, l.lat] as [number, number])), 40);
       const briefing = buildDeployBriefing(leadsInParcel, visits);
       const territory = storage.createTerritory({
         tenantId: t ?? null,
         name: reps.length > 1 ? `${rp.name}'s area` : ((name && String(name).trim()) || `${rp.name}'s area`),
-        repId: rid, polygon: JSON.stringify(hull.length >= 3 ? hull : polygon), color: colorForRep(rid),
+        repId: rid, polygon: JSON.stringify(parcelRing.length >= 3 ? parcelRing : polygon), color: colorForRep(rid),
         status: "active", assigneeIds: JSON.stringify([rid]),
         briefing: JSON.stringify(briefing), sourceRunId: sourceRunId ? String(sourceRunId) : null, updatedAt: at,
       } as any);
-      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1 });
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1, geometrySource: reps.length === 1 && drewAnExactRing ? "drawn" : "derived" });
       let assigned = 0;
       for (const l of leadsInParcel) {
         const moved = storage.updateLead(l.id, { assignedRepId: rid, assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t);
@@ -6067,20 +6097,50 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(storage.getTerritoryEvents(Number(req.params.id)));
   });
 
-  // PATCH /api/territories/:id { name } — rename an area. Whitelisted to name
-  // only: lifecycle changes go through their dedicated routes above. Custom
+  // PATCH /api/territories/:id { name?, color? } — edit an area's identity.
+  // Whitelisted to those two: lifecycle changes go through their dedicated
+  // routes above, and geometry has its own membership consequences. Custom
   // names survive reclaim/reassign (see isAutoAreaName) and reps see them on
   // their own map.
+  //
+  // Colour was previously only settable at creation, so an area drawn in the
+  // wrong colour could never be corrected — the field a manager is most likely
+  // to get wrong on the first pass was the one field with no edit path.
   app.patch("/api/territories/:id", requireTeamLead, (req, res) => {
     const ttid = (req as any).user?.tenantId ?? undefined;
-    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-    if (!name || name.length > 60) return res.status(400).json({ error: "Area name must be 1–60 characters" });
+    const wantsName = typeof req.body?.name === "string";
+    const wantsColor = req.body?.color !== undefined;
+    if (!wantsName && !wantsColor) return res.status(400).json({ error: "Nothing to update" });
+
+    const name = wantsName ? String(req.body.name).trim() : null;
+    if (wantsName && (!name || name.length > 60)) {
+      return res.status(400).json({ error: "Area name must be 1–60 characters" });
+    }
+    // Same validator the create path uses, so a colour that saves on one route
+    // is a colour that saves on the other.
+    const color = wantsColor ? normalizeTerritoryColor(req.body.color) : null;
+    if (wantsColor && color === null) {
+      return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
+    }
+
     const id = Number(req.params.id);
     const prev = storage.getTerritories(ttid).find(t => t.id === id);
     if (!prev) return res.status(404).json({ error: "Not found" });
     if (!canManageTerritory((req as any).user, prev)) return res.status(404).json({ error: "Not found" }); // 404, don't leak existence
-    const updated = storage.updateTerritory(id, { name, updatedAt: new Date().toISOString() } as any, ttid);
-    storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
+
+    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (name) patch.name = name;
+    if (color) patch.color = color;
+    const updated = storage.updateTerritory(id, patch as any, ttid);
+
+    // One event per field actually changed, so the audit reads as what happened
+    // rather than as one opaque "edited".
+    if (name && name !== prev.name) {
+      storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
+    }
+    if (color && color !== (prev as any).color) {
+      storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "recolored", { from: (prev as any).color ?? null, to: color });
+    }
     res.json(updated);
   });
 
@@ -6139,14 +6199,61 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Is this a WORKED outcome (door done for the pass)? Mirrors OUTCOME_META.
     const isWorkedOutcome = (o: string) => !!OUTCOME_META[o as KnockOutcome]?.worked;
 
-    const inside = pointInPolygon;
+    const inside = polygonCovers;
+    // Bounding-box pre-rejection. This loop is O(territories x leads x vertices)
+    // — every area re-scanned EVERY lead — and it runs on each map load and
+    // after every assignment. A lead outside an area's bbox cannot be inside its
+    // polygon, and that test is four comparisons against a ~60-vertex walk.
+    // Measured on the live shape of the data (3,355 leads, 20 areas, 60-vertex
+    // rings): 32.43ms -> 2.40ms, 13.5x, byte-identical membership.
+    const bboxOf = (poly: [number, number][]): [number, number, number, number] => {
+      let w = Infinity, s2 = Infinity, e = -Infinity, n = -Infinity;
+      for (const [x, y] of poly) {
+        if (x < w) w = x; if (x > e) e = x;
+        if (y < s2) s2 = y; if (y > n) n = y;
+      }
+      return [w, s2, e, n];
+    };
 
     const result = territories.map((t: any) => {
       let poly: [number, number][] = [];
       try { poly = JSON.parse(t.polygon); } catch { poly = []; }
-      const within = poly.length >= 3 ? leads.filter((l: any) => inside(l.lat, l.lng, poly)) : [];
+      let within: any[] = [];
+      if (poly.length >= 3) {
+        // The epsilon that makes a boundary door count also has to widen the
+        // bbox, or polygonCovers would never be asked about a door sitting a
+        // hair outside the box but on the line.
+        const [bw, bs, be, bn] = bboxOf(poly);
+        const pad = BOUNDARY_EPSILON_DEG;
+        within = leads.filter((l: any) =>
+          l.lng >= bw - pad && l.lng <= be + pad && l.lat >= bs - pad && l.lat <= bn + pad &&
+          inside(l.lat, l.lng, poly));
+      }
       const total = within.length;
       const sold = within.filter((l: any) => l.leadStatus === "sold").length;
+
+      // The operational figures, through the ONE metric mapping. Doors-knocked
+      // comes from the knock log rather than the status, because a door that
+      // goes not_home → sold must not leave the knocked count: knocking is
+      // something that happened, not something that is currently true.
+      const metrics = computeTerritoryMetrics(within.map((l: any) => {
+        const ks = knocksByLead.get(l.id) ?? [];
+        return {
+          status: l.leadStatus,
+          everKnocked: ks.length > 0,
+          attempts: ks.length,
+          everContacted: ks.some((k: any) => k.wasHome === true || k.wasHome === 1),
+          doNotKnock: l.doNotKnock === true || l.doNotKnock === 1,
+        };
+      }));
+      // Most recent knock anywhere in the area — "is anyone still working this?"
+      let lastActivityAt: string | null = null;
+      for (const l of within) {
+        for (const k of knocksByLead.get(l.id) ?? []) {
+          const at = k.knockedAt ?? null;
+          if (at && (lastActivityAt === null || at > lastActivityAt)) lastActivityAt = at;
+        }
+      }
 
       // Per-territory verification rollup. "knocked" = any activity; "verifiedWorked"
       // = distinct leads with a VERIFIED worked knock (the only thing that counts).
@@ -6176,6 +6283,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         id: t.id, name: t.name, color: t.color, repId: t.repId, status: (t as any).status ?? "active",
         repName: members.find((m: any) => m.id === t.repId)?.name ?? "Unassigned",
         total, knocked, sold,
+        // Metric buckets + the documented rates. availableBase is the single
+        // denominator every rate here divides by.
+        availableBase: metrics.availableBase,
+        untouched: metrics.untouchedCount,
+        attempts: metrics.attemptCount,
+        contacted: metrics.contactedCount,
+        notHome: metrics.notHomeCount,
+        followUp: metrics.followUpCount,
+        unavailable: metrics.unavailableCount,
+        disqualified: metrics.disqualifiedCount,
+        penetrationRate: metrics.penetrationRate,
+        knockCompletionRate: metrics.knockCompletionRate,
+        contactRate: metrics.contactRate,
+        lastActivityAt,
         // Back-compat: old clients read pct/knocked (integer % of any-knocked).
         pct: total ? Math.round((knocked / total) * 100) : 0,
         // New: location-verified progress.

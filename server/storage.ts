@@ -29,7 +29,9 @@ import {
 } from "@shared/schema";
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
-import { territoryHeldByAny } from "@shared/territory";
+import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
+import { syncAssignments } from "./territoryAssignments";
+import { bumpTerritoryVersion } from "./territoryScopeCache";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 import {
   planLegacyCommissionTransition,
@@ -3284,15 +3286,29 @@ export class Storage implements IStorage {
       .map((r: any) => ({ ...r, payload: r.payload ? (() => { try { return JSON.parse(r.payload); } catch { return null; } })() : null }));
   }
   createTerritory(t: InsertTerritory): Territory {
-    return db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();
+    const row = db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();
+    // Unconditional: repCanAccessLead memoises on this stamp, and a bump that
+    // reasons about which fields matter is a bump that will eventually reason
+    // wrong — in the direction of granting access.
+    bumpTerritoryVersion();
+    recordAssigneeChange(row);
+    return row;
   }
   updateTerritory(id: number, updates: Partial<InsertTerritory>, tenantId?: number): Territory | undefined {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
-    return db.update(territories).set(updates).where(cond).returning().get();
+    const row = db.update(territories).set(updates).where(cond).returning().get();
+    bumpTerritoryVersion();
+    // Only when the holder list was part of THIS write. Recording on every
+    // update — a rename, a colour change — would be harmless but noisy, and
+    // reading assignee_ids off a row the caller did not touch invites drift.
+    if (row && "assigneeIds" in updates) recordAssigneeChange(row);
+    return row;
   }
   deleteTerritory(id: number, tenantId?: number): boolean {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
-    return db.delete(territories).where(cond).run().changes > 0;
+    const gone = db.delete(territories).where(cond).run().changes > 0;
+    bumpTerritoryVersion();
+    return gone;
   }
 
   // ── Territory Requests ─────────────────────────────────────────────────────
@@ -3948,6 +3964,34 @@ export class Storage implements IStorage {
     const sold = allLeads.filter(l => l.leadStatus === 'sold').length;
     const terrs = db.select().from(territories).where(eq(territories.tenantId, tenantId)).all().length;
     return { reps, leads: allLeads.length, sold, territories: terrs };
+  }
+}
+
+// The assignment RECORD follows the holder list, wherever the list is written.
+//
+// territories.assignee_ids is written from seven different routes — draw-and-
+// assign, scan-derived areas, share, assign, unassign, and both reclaim modes.
+// Hooking each one would eventually miss a path, and a missed path is exactly
+// how the array and the record silently diverge. Hooking the two functions that
+// actually perform the write cannot be bypassed by a route that forgets.
+//
+// Deliberately best-effort: an area assignment must not fail because its audit
+// row could not be written. The record is reconstructible from the array; the
+// array is not reconstructible from anything.
+function recordAssigneeChange(row: any): void {
+  if (!row?.id) return;
+  try {
+    const repIds = parseAssigneeIds(row.assigneeIds);
+    if (!repIds) return; // legacy row with no list — nothing authoritative to sync
+    syncAssignments({
+      tenantId: row.tenantId ?? null,
+      territoryId: row.id,
+      repIds,
+      actorUserId: null, // storage has no session; routes that care pass their own
+      primaryRepId: row.repId ?? null,
+    });
+  } catch {
+    /* never let bookkeeping break an assignment */
   }
 }
 
