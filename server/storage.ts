@@ -2506,8 +2506,28 @@ export class Storage implements IStorage {
     }
     if (Array.isArray(assignedRep)) {
       if (!assignedRep.length) return [];
-      clauses.push(`l.assigned_rep_id IN (${assignedRep.map(() => "?").join(",")})`);
-      params.push(...assignedRep);
+      // An area can be worked by several reps, and assigned_rep_id names only
+      // ONE of them — so filtering on that column alone hid every shared door
+      // from everybody except the primary. A lead is visible when the caller
+      // holds it directly OR holds the AREA it sits in, which is where "who
+      // works this" is genuinely many-to-many (territories.assignee_ids).
+      //
+      // EXISTS against the area rather than a join: one indexed lookup per row,
+      // no fan-out, and no duplicate pins when several reps share the area —
+      // which a join would produce and which the map must never show.
+      const ph = assignedRep.map(() => "?").join(",");
+      clauses.push(`(
+        l.assigned_rep_id IN (${ph})
+        OR EXISTS (
+          SELECT 1 FROM territories t
+           WHERE t.id = l.assigned_territory_id
+             AND (t.rep_id IN (${ph}) OR EXISTS (
+               SELECT 1 FROM json_each(COALESCE(t.assignee_ids, '[]')) je
+                WHERE je.value IN (${ph})
+             ))
+        )
+      )`);
+      params.push(...assignedRep, ...assignedRep, ...assignedRep);
     } else if (assignedRep != null) {
       clauses.push("l.assigned_rep_id = ?");
       params.push(assignedRep);

@@ -43,7 +43,14 @@ export const UNCLUSTERED_PAINT: any = {
 // the selected door (full color + the white ring) owns the eye; deselect
 // restores the canonical ds-opacity. Pure predicate + expression builder so the
 // rule is unit-testable and the two call sites (circle layer, icon layer) agree.
-export const DIMMED_PIN_OPACITY = 0.45;
+// NO dimming. Pins hold their canonical opacity before, during and after a
+// selection. 0.45 washed the map out — a rep almost always has a door selected,
+// so the dimmed state WAS the resting state, and full colour only ever appeared
+// under the pin already beneath their thumb. On a shared area several reps read
+// the same doors at once, and a pin that changes strength because someone
+// touched something else is noise. The selected pin is carried by its heavier
+// ring and its open card; it never needed its neighbours dimmed.
+export const DIMMED_PIN_OPACITY = 1;
 
 export function isPinDimmed(
   selectedId: number | null | undefined,
