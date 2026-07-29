@@ -91,8 +91,32 @@
     --chart-4: 280 45% 62%;
     --chart-5: 0 65% 60%;
 
+    /* Scrollbar thumb — intentionally NOT re-declared under `.light`; it reads
+       as a neutral steel on both grounds and always has. */
+    --scrollbar-thumb:       hsl(210 35% 26%);
+    --scrollbar-thumb-hover: hsl(210 35% 34%);
+
     /* 12px base radius — cards/buttons/inputs inherit (design-system standard) */
     --radius: 0.75rem;
+
+    /* ── Foundation primitives ────────────────────────────────────────────
+       Non-colour values that BOTH stylesheets and runtime JS need. Each one
+       is mirrored in client/src/lib/designTokens.ts and in the Tailwind
+       theme; tests/unit/design-tokens.test.ts parses this file and fails the
+       build if the three copies ever disagree. Add a value here first. */
+
+    /* Legibility floor — the smallest sanctioned text size (11px). Tailwind
+       exposes it as `text-2xs`. AUDIT: 351 call sites still spell the same
+       pixel as `text-[11px]` and 181 use `text-2xs`; CommissionConsole.tsx
+       uses BOTH. Migrating those call sites is a separate task. */
+    --text-2xs: 0.6875rem;
+    /* Dense secondary body text (13px). Falls between Tailwind's `text-xs`
+       (12px) and `text-sm` (14px), which is exactly why 146 call sites reach
+       for `text-[13px]`. Tailwind exposes it as `text-sm-minus`. */
+    --text-sm-minus: 0.8125rem;
+    /* One-handed hit-area floor (WCAG 2.5.5, iOS HIG). Identical to `h-11`
+       / `min-h-tap`; LeadKnockSheet's outcome grid is tested against it. */
+    --tap-target-min: 44px;
   }
 
   /* Light theme tokens — same brand hues on light surfaces (WCAG AA). Applied
@@ -233,10 +257,13 @@
   }
 
   /* A finger needs a larger hit area than a mouse, including custom controls
-     that do not use the shared Button primitive. */
+     that do not use the shared Button primitive. AUDIT: this class currently
+     has ZERO call sites — the 44px floor is carried in practice by `h-11`
+     (153 uses) and hand-written `min-h-[44px]` (7 uses, plus 1 `min-w-[44px]`).
+     Tailwind now exposes the same value as `h-tap` / `min-h-tap`. */
   .touch-target {
-    min-width: 44px;
-    min-height: 44px;
+    min-width: var(--tap-target-min);
+    min-height: var(--tap-target-min);
   }
 }
 
@@ -245,12 +272,23 @@
   border-radius: 0.5rem;
 }
 
+/* Map chrome ink — the dark-theme values of --card / --foreground / --border,
+   pinned as their own tokens BECAUSE they must not follow `.light`: the basemap
+   tiles never lighten. Previously these three literals were re-typed across six
+   declarations below, so a palette change silently skipped the map. Mirrored in
+   designTokens.ts for the popups Mapbox builds in JS. */
+:root {
+  --map-chrome-surface: hsl(216 20% 9%);
+  --map-chrome-foreground: hsl(210 16% 96%);
+  --map-chrome-border: hsl(216 15% 16%);
+}
+
 /* Popups/controls stay ink-dark to match the (always-dark) map, aligned to the v3
    ink surfaces — deliberately not theme-switched, since the map tiles don't change. */
 .mapboxgl-popup-content {
-  background: hsl(216 20% 9%) !important;
-  color: hsl(210 16% 96%) !important;
-  border: 1px solid hsl(216 15% 16%) !important;
+  background: var(--map-chrome-surface) !important;
+  color: var(--map-chrome-foreground) !important;
+  border: 1px solid var(--map-chrome-border) !important;
   border-radius: 12px !important;
   padding: 12px 14px !important;
   font-family: 'Geist Variable', 'Inter Variable', system-ui, sans-serif !important;
@@ -260,12 +298,12 @@
 }
 
 .mapboxgl-popup-tip {
-  border-top-color: hsl(216 20% 9%) !important;
+  border-top-color: var(--map-chrome-surface) !important;
 }
 
 .mapboxgl-ctrl-group {
-  background: hsl(216 20% 9%) !important;
-  border: 1px solid hsl(216 15% 16%) !important;
+  background: var(--map-chrome-surface) !important;
+  border: 1px solid var(--map-chrome-border) !important;
 }
 
 .mapboxgl-ctrl-group button {
@@ -302,14 +340,15 @@
     color: hsl(var(--foreground));
   }
 
-  /* Thin, themed scrollbars */
+  /* Thin, themed scrollbars. The thumb colour was typed three times (standard
+     property + webkit thumb + its hover); one token now feeds all three. */
   * {
     scrollbar-width: thin;
-    scrollbar-color: hsl(210 35% 26%) transparent;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
   }
   *::-webkit-scrollbar { width: 8px; height: 8px; }
-  *::-webkit-scrollbar-thumb { background: hsl(210 35% 26%); border-radius: 4px; }
-  *::-webkit-scrollbar-thumb:hover { background: hsl(210 35% 34%); }
+  *::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
+  *::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
   *::-webkit-scrollbar-track { background: transparent; }
 
   /* Scroll rows that should show no scrollbar (e.g. the map status-filter bar) */
@@ -355,6 +394,21 @@
   --glass-shadow-2: 0 2px 8px hsl(220 60% 3% / 0.28),
                     0 18px 44px -16px hsl(220 60% 3% / 0.60);  /* panel   */
   --glass-shadow-sheet: 0 -14px 44px hsl(220 60% 3% / 0.45);
+
+  /* Blur/saturation budget, previously re-typed inside every glass class (and
+     twice each, for the -webkit- prefix). These ARE the documented phone-GPU
+     budget above, so they belong next to the fills they pair with. */
+  --glass-blur-capsule: 10px;
+  --glass-blur-panel:   14px;
+  --glass-blur-sheet:   18px;
+  --glass-saturate:       150%;
+  --glass-saturate-sheet: 140%;
+  /* Panel corner. Capsules stay 9999px (a pill is not a radius on a scale). */
+  --glass-radius-panel: 20px;
+  /* Specular top edge — the inset highlight every glass surface shares. */
+  --glass-edge:      inset 0 1px 0 hsl(0 0% 100% / 0.12);
+  --glass-edge-soft: inset 0 1px 0 hsl(0 0% 100% / 0.10);
+  --glass-divider:   hsl(0 0% 100% / 0.10);
 }
 
 @layer components {
@@ -362,32 +416,33 @@
   .glass-surface {
     background-color: var(--glass-fill-strong);
     background-image: var(--glass-specular);            /* liquid sheen */
-    -webkit-backdrop-filter: blur(14px) saturate(150%);
-    backdrop-filter: blur(14px) saturate(150%);
+    -webkit-backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
     border: 1px solid var(--glass-stroke);
-    border-radius: 20px;
-    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.12),    /* specular top edge */
+    border-radius: var(--glass-radius-panel);
+    box-shadow: var(--glass-edge),                      /* specular top edge */
                 var(--glass-shadow-2);
   }
   /* Pills & FABs: menu FAB, legend pill, filter pill, lasso bar, badges */
   .glass-capsule {
     background-color: var(--glass-fill);
     background-image: var(--glass-specular);
-    -webkit-backdrop-filter: blur(10px) saturate(150%);
-    backdrop-filter: blur(10px) saturate(150%);
+    -webkit-backdrop-filter: blur(var(--glass-blur-capsule)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur-capsule)) saturate(var(--glass-saturate));
     border: 1px solid var(--glass-stroke);
     border-radius: 9999px;
-    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.12), var(--glass-shadow-1);
+    box-shadow: var(--glass-edge), var(--glass-shadow-1);
   }
   /* Bottom sheet / docked card */
   .glass-sheet {
     background-color: var(--glass-fill-sheet);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
-    backdrop-filter: blur(18px) saturate(140%);
-    box-shadow: inset 0 1px 0 hsl(0 0% 100% / 0.10), var(--glass-shadow-sheet);
+    -webkit-backdrop-filter: blur(var(--glass-blur-sheet)) saturate(var(--glass-saturate-sheet));
+    backdrop-filter: blur(var(--glass-blur-sheet)) saturate(var(--glass-saturate-sheet));
+    box-shadow: var(--glass-edge-soft), var(--glass-shadow-sheet);
   }
-  /* Hairline divider inside any glass */
-  .glass-hairline { height: 1px; background: hsl(0 0% 100% / 0.10); }
+  /* Hairline divider inside any glass. AUDIT: zero call sites today — the
+     dividers that exist are hand-written `border-white/[0.08]` etc. */
+  .glass-hairline { height: 1px; background: var(--glass-divider); }
   /* Budget overflow / secondary banners: same look, ZERO blur cost */
   .glass-opaque {
     -webkit-backdrop-filter: none !important;
@@ -464,11 +519,23 @@
    smoother; a CSS transition here would rubber-band the puck behind the camera. */
 /* pointer-events !important: mapbox Marker sets pointer-events:auto INLINE on the
    element; without !important the puck would swallow a tap on the house under the rep. */
+/* Puck ink, tokenised because the SAME blue was typed three ways (hex for the
+   core, rgba() for the glow, rgba() again for the heading beam) and the stale
+   grey twice — five literals for two colours. Mirrored in designTokens.ts so a
+   JS-drawn marker can never pick a different blue. */
+:root {
+  --nav-puck:            #2f7bff;
+  --nav-puck-glow:       rgba(47, 123, 255, 0.55);
+  --nav-puck-beam:       rgba(47, 123, 255, 0.95);
+  --nav-puck-ring:       #ffffff;
+  --nav-puck-stale:      #94a3b8;
+  --nav-puck-stale-glow: rgba(148, 163, 184, 0.5);
+}
 .hf-nav-puck { position: relative; width: 20px; height: 20px; pointer-events: none !important; }
 .hf-nav-puck::after {
   content: ""; position: absolute; inset: 0; border-radius: 50%;
-  background-color: #2f7bff;
-  box-shadow: 0 0 0 3px #ffffff, 0 2px 10px 2px rgba(47, 123, 255, 0.55);
+  background-color: var(--nav-puck);
+  box-shadow: 0 0 0 3px var(--nav-puck-ring), 0 2px 10px 2px var(--nav-puck-glow);
 }
 /* Heading beam — a triangle orbiting the puck centre; MapView sets rotate() from the
    smoothed heading. The element origin sits at the puck centre (left/top 50%,
@@ -477,12 +544,12 @@
 .hf-nav-puck-arrow::before {
   content: ""; position: absolute; left: -6px; top: -23px;
   border-left: 6px solid transparent; border-right: 6px solid transparent;
-  border-bottom: 11px solid rgba(47, 123, 255, 0.95);
+  border-bottom: 11px solid var(--nav-puck-beam);
 }
 /* GPS lost — desaturate + pulse so a frozen puck reads as "searching", not live. */
 .hf-nav-puck-stale::after {
-  background-color: #94a3b8;
-  box-shadow: 0 0 0 3px #ffffff, 0 2px 8px 2px rgba(148, 163, 184, 0.5);
+  background-color: var(--nav-puck-stale);
+  box-shadow: 0 0 0 3px var(--nav-puck-ring), 0 2px 8px 2px var(--nav-puck-stale-glow);
   animation: hf-puck-pulse 1.4s ease-in-out infinite;
 }
 @keyframes hf-puck-pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
