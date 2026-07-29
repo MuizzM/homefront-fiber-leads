@@ -29,6 +29,7 @@ import {
 } from "@shared/schema";
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
+import { territoryHeldByAny } from "@shared/territory";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 import {
   planLegacyCommissionTransition,
@@ -3240,20 +3241,14 @@ export class Storage implements IStorage {
   getTerritoriesByRep(repId: number, tenantId?: number): Territory[] {
     // A rep sees a territory if they're the primary repId OR in assignee_ids
     // (multi-rep/shared), and it isn't archived.
-    return this.getTerritories(tenantId).filter((t: any) => {
-      if (t.status === "archived") return false;
-      // assignee_ids is AUTHORITATIVE whenever the column holds a list — it is
-      // what reclaim/unassign rewrite. repId is only the primary-owner marker
-      // kept for colour and history, and it deliberately still names the last
-      // holder after everyone is removed. Matching on it meant a rep kept seeing
-      // an area that had been reclaimed OR taken off them, which is exactly the
-      // visibility guarantee those operations exist to provide. Fall back to
-      // repId only for legacy rows written before assignee_ids existed.
-      let assignees: number[] | null = null;
-      try { assignees = t.assigneeIds == null ? null : (JSON.parse(t.assigneeIds) as number[]); } catch { assignees = null; }
-      if (Array.isArray(assignees)) return assignees.includes(repId);
-      return t.repId === repId;
-    });
+    // The rule (assignee_ids authoritative, repId only for legacy rows) lives in
+    // shared/territory.ts. It was written out longhand here and paraphrased in
+    // two other places, and both paraphrases checked repId first — which hands a
+    // reclaimed area back to the rep it was taken from, the exact guarantee
+    // reclaim exists to provide. One definition, three callers.
+    return this.getTerritories(tenantId).filter(
+      (t: any) => t.status !== "archived" && territoryHeldByAny(t, [repId]),
+    );
   }
   // Tenant-aware by option (see getLeadById). Omit tenantId → original behaviour.
   getTerritoryById(id: number, tenantId?: number): Territory | undefined {
