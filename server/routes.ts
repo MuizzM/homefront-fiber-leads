@@ -63,7 +63,7 @@ import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenant } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
-import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
@@ -402,11 +402,10 @@ function repInVisibilityScope(user: any, repId: number | null | undefined): bool
 function territoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
   const out = new Set<number>();
   for (const t of storage.getTerritories(tenantId ?? undefined) as any[]) {
-    if (t.repId != null && scope.includes(t.repId)) { out.add(t.id); continue; }
-    try {
-      const a = JSON.parse(t.assigneeIds || "[]") as number[];
-      if (a.some((id) => scope.includes(id))) out.add(t.id);
-    } catch { /* legacy row */ }
+    // territoryHeldByAny, not a repId check first. This used to test repId before
+    // falling back to assignee_ids, and repId still names the last holder after a
+    // reclaim — so a rep who had an area taken off them kept reading its doors.
+    if (territoryHeldByAny(t, scope)) out.add(t.id);
   }
   return out;
 }
@@ -6087,8 +6086,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Reps only see their own territory's progress; managers/admins see all.
     const scope = leadVisibilityScope(user);
     if (Array.isArray(scope) && !scope.length) return res.json([]);
+    // Areas are many-to-many, so this cannot key on repId. Matching that column
+    // showed the card only to the PRIMARY holder — the second and third rep on a
+    // shared area got no numbers for ground they were actively working — and
+    // because repId still names the last holder after a reclaim, it kept showing
+    // the card to whoever the area had been taken FROM. One rule fixes both.
     const territories = Array.isArray(scope)
-      ? storage.getTerritories(tid).filter((territory) => territory.repId != null && scope.includes(territory.repId))
+      ? storage.getTerritories(tid).filter((territory) => territoryHeldByAny(territory, scope))
       : storage.getTerritories(tid);
     if (territories.length === 0) return res.json([]);
 
