@@ -124,6 +124,7 @@ import {
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
 import { territoryPaint, territoryBeforeId } from "@/lib/territoryStyle";
+import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
   subscribeLeadStream,
@@ -906,6 +907,8 @@ export default function MapView() {
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
   const [lassoRepId, setLassoRepId] = useState("");
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
+  // Areas under an overlapping tap, awaiting "which one did you mean?".
+  const [territoryPickIds, setTerritoryPickIds] = useState<number[]>([]);
   // Colour chosen BEFORE the stroke, and saved with the area. It describes the
   // ground, so it must not follow whoever the area is handed to — which is what
   // the old colorForRep(repId) stamp did.
@@ -1770,10 +1773,27 @@ export default function MapView() {
   useEffect(() => {
     (window as any).__onTerritoryClick = (tid: number | null) =>
       setSelectedTerritoryId(tid);
+    // Overlapping areas open a chooser rather than resolving to whichever
+    // polygon happens to be on top — picking arbitrarily is how a manager pulls
+    // back the wrong territory.
+    (window as any).__onTerritoryPick = (ids: number[]) => {
+      setSelectedTerritoryId(null);
+      setTerritoryPickIds(ids);
+    };
     return () => {
       delete (window as any).__onTerritoryClick;
+      delete (window as any).__onTerritoryPick;
     };
   }, []);
+  // Whether a tap on this area should open the management panel at all. The
+  // server is the authority (every route re-checks); this only stops a rep's tap
+  // from opening a panel whose every button would come back 403.
+  useEffect(() => {
+    (window as any).__canManageTerritory = (_tid: number) => canAssign;
+    return () => {
+      delete (window as any).__canManageTerritory;
+    };
+  }, [canAssign]);
   // Map→React bridge for the knock sheet (same pattern as __onTerritoryClick).
   // The pin click handler is bound once at map init; it checks this global at
   // call time, so sheet-vs-popup routing follows role/viewport without rebinds.
@@ -2481,14 +2501,27 @@ export default function MapView() {
         }
         // Tapping empty map dismisses the knock sheet (its map stays interactive).
         (window as any).__closeLeadSheet?.();
-        const terr = feats.find(
-          (f: any) =>
-            typeof f.layer?.id === "string" &&
-            /^territory-\d+$/.test(f.layer.id),
-        );
+        // Which area did they mean? Three things were wrong here.
+        //
+        // The old test was /^territory-\d+$/ against the layer id, which matches
+        // the FILL layer and rejects `territory-42-outline` — so a tap on the
+        // boundary was queried, found, and then thrown away. Managers aim at the
+        // line, because the line is the thing they can see.
+        //
+        // It also took feats.find(), the first match, which on overlapping areas
+        // is whichever happens to be drawn on top. Silently opening an arbitrary
+        // polygon is how someone pulls back the wrong territory.
+        //
+        // And it ran for every role, so a rep's tap opened a panel whose every
+        // button would 403.
         const cb = (window as any).__onTerritoryClick;
-        if (terr && cb) cb(Number(terr.layer.id.replace("territory-", "")));
-        else if (cb) cb(null); // click on empty map closes the panel
+        const pick = (window as any).__onTerritoryPick;
+        const outcome = resolveTerritoryTap(feats, (id) =>
+          (window as any).__canManageTerritory?.(id) !== false,
+        );
+        if (outcome.kind === "select") cb?.(outcome.territoryId);
+        else if (outcome.kind === "choose") pick?.(outcome.territoryIds);
+        else cb?.(null); // empty map closes the panel
       });
 
       mapRef.current = map;
@@ -6020,6 +6053,65 @@ export default function MapView() {
                   )}
                 </div>
               )}
+            </div>
+          )}
+
+          {/* ── Overlapping areas: which one did you mean? ──
+              Tapping where two territories overlap used to resolve to whichever
+              was drawn on top, which is how you pull back the wrong area.
+              Listing them costs one extra tap and removes the guess. */}
+          {canAssign && territoryPickIds.length > 1 && (
+            <div
+              data-testid="territory-picker"
+              role="dialog"
+              aria-label="Choose an area"
+              className="absolute bottom-28 left-1/2 -translate-x-1/2 z-40 w-[min(20rem,90vw)] glass-surface glass-opaque glass-ink-scope rounded-2xl p-3"
+            >
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+                {territoryPickIds.length} areas here
+              </div>
+              <ul className="space-y-1">
+                {territoryPickIds.map((id) => {
+                  const t = territories.find((x) => x.id === id);
+                  if (!t) return null;
+                  const status = (t as any).status ?? "active";
+                  return (
+                    <li key={id}>
+                      <button
+                        type="button"
+                        data-testid={`territory-pick-${id}`}
+                        onClick={() => {
+                          setTerritoryPickIds([]);
+                          setSelectedTerritoryId(id);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-sm hover:bg-secondary transition"
+                      >
+                        <span
+                          className="w-3 h-3 rounded-full flex-shrink-0 border border-white/20"
+                          style={{
+                            backgroundColor: territoryPaint(
+                              { color: (t as any).color, status },
+                              colorForRep(t.repId),
+                            ).fillColor,
+                          }}
+                        />
+                        <span className="truncate font-medium">{t.name}</span>
+                        <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                          {status}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <button
+                type="button"
+                onClick={() => setTerritoryPickIds([])}
+                data-testid="territory-pick-cancel"
+                className="mt-2 w-full h-9 rounded-lg text-[13px] text-muted-foreground hover:bg-secondary transition"
+              >
+                Cancel
+              </button>
             </div>
           )}
 
