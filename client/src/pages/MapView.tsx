@@ -123,6 +123,13 @@ import {
   repIdsForDoor,
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
+import {
+  dedupeVertices,
+  simplifyRing,
+  validateRing,
+  crossesAntimeridian,
+  type RingValidationFailure,
+} from "@shared/polygonGeometry";
 import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
 import { lockGesturesForDrawing, lockDocumentPullToRefresh, mapGestureTarget } from "@/lib/lassoGestureLock";
 import { AreaAssigneeBar } from "@/components/territory/AreaAssigneeBar";
@@ -599,6 +606,65 @@ const SCAN_RESULTS_SOURCE = "scan-results";
 const SCAN_RESULTS_CLUSTER_LAYER = "scan-results-clusters";
 const SCAN_RESULTS_COUNT_LAYER = "scan-results-count";
 const SCAN_RESULTS_POINT_LAYER = "scan-results-points";
+
+// ── Lasso ring cleanup ────────────────────────────────────────────────────────────
+/**
+ * Douglas-Peucker tolerance for a freehand lasso stroke, in DEGREES.
+ *
+ * simplifyRing's invariant is that every point of the input lies within this
+ * distance of the output boundary, so the constant is a hard ceiling on how far
+ * the saved edge can move from the drawn one. 1e-5° is ~1.11 m of latitude
+ * (~0.91 m of longitude at 35°N, where this product operates).
+ *
+ * Why that is below "visible": the stroke is sampled at MIN_PX_DIST = 5 screen
+ * pixels, so the input itself has a ~5 px noise floor. Territories are drawn
+ * between roughly z14 and z18, where a pixel is ~15 m down to ~0.5 m — a 1.11 m
+ * ceiling is well under a tenth of a pixel at z14, half a pixel at z16, and
+ * still barely two pixels at the deepest zoom anyone draws a whole area at.
+ * In every case it is a fraction of the 5 px quantum the finger was digitised
+ * at, so it can only collapse points that are already redundant along a
+ * near-straight run; a corner the manager actually turned deviates far more
+ * than a metre from its chord and Douglas-Peucker keeps it. The boundary does
+ * not visibly move — the vertex count does.
+ *
+ * Going bigger (1e-4°, ~11 m) would start rounding off the notch a manager cuts
+ * around a park, which is exactly the shape-fidelity guarantee territories are
+ * sold on. Going smaller stops removing the noise it exists to remove.
+ */
+const LASSO_SIMPLIFY_TOLERANCE_DEG = 1e-5;
+
+/**
+ * What a rejected ring says to the person who drew it.
+ *
+ * validateRing reports a string union aimed at code. A manager standing on a
+ * driveway needs to know what to do differently, so each reason maps to a plain
+ * sentence — never the raw enum, which reads as a crash.
+ */
+const LASSO_RING_REJECTION: Record<
+  RingValidationFailure,
+  { title: string; description: string }
+> = {
+  "too-few-points": {
+    title: "That shape wasn't a loop",
+    description:
+      "Fewer than three distinct corners came through, so there is no area to save. Draw a slower loop right around the ground you want.",
+  },
+  degenerate: {
+    title: "That's a line, not an area",
+    description:
+      "The stroke went out and came back along itself without enclosing any ground. Draw a loop that curves around and closes.",
+  },
+  "self-intersecting": {
+    title: "That loop crosses over itself",
+    description:
+      "Where the line crosses, there is no single inside — some doors would land outside the area you can see. Draw one clean loop without crossing back over your own line.",
+  },
+  "too-small": {
+    title: "That area is too small to assign",
+    description:
+      "The loop came out under 100 m² — about the size of a single garage. Zoom out a little and draw around the doors you want to hand over.",
+  },
+};
 
 const emptyFeatureCollection = () => ({
   type: "FeatureCollection" as const,
@@ -3643,6 +3709,55 @@ export default function MapView() {
         clearPreview();
         return;
       }
+
+      // ── Clean the stroke before anyone treats it as a polygon ──────────────
+      // A finger produces a stream of samples, not a ring: repeated coordinates
+      // where it paused, a hairline doubling-back where it wobbled, and up to
+      // MAX_POINTS vertices that every subsequent point-in-polygon call has to
+      // walk. shared/polygonGeometry turns that into a ring — or says why it
+      // cannot. Nothing below this point ever touches the raw `stroke` again.
+      const deduped = dedupeVertices(stroke);
+
+      // Screened before anything measures the ring: every routine here (and
+      // pointInPolygon on the server) is planar, so an edge spanning >180° of
+      // longitude is computed the long way round the world and the area, the
+      // enclosure test and the rendered fill are all meaningless.
+      if (crossesAntimeridian(deduped)) {
+        stroke = [];
+        clearPreview();
+        setLassoPoints([]);
+        setLassoSelected([]);
+        toast({
+          title: "That loop wrapped around the world",
+          description:
+            "The shape spans more than half the globe, which usually means the map jumped while you were drawing. Try drawing it again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const cleaned = simplifyRing(deduped, LASSO_SIMPLIFY_TOLERANCE_DEG);
+
+      const verdict = validateRing(cleaned);
+      if (!verdict.ok) {
+        stroke = [];
+        clearPreview();
+        setLassoPoints([]);
+        setLassoSelected([]);
+        const message = LASSO_RING_REJECTION[verdict.reason];
+        toast({
+          title: message.title,
+          description: message.description,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // The validated ring — not the raw stroke — is what gets previewed,
+      // saved and selected against, so the shape on screen, the shape in the
+      // database and the shape the doors were tested against are one shape.
+      const ring = verdict.ring;
+      stroke = ring;
       render(true);
       // Select from the VISIBLE set (territory-clip + rep + status filters), so
       // a lasso only ever selects leads the user can actually see and assign —
@@ -3650,8 +3765,8 @@ export default function MapView() {
       // a filtered set yet. Bbox-rejected O(n + k·v) (see lib/mapGeo.ts).
       const source: MapPin[] =
         (window as any).__visibleLeads ?? (window as any).__allLeads ?? [];
-      const selected = selectPointsInPolygon(source, stroke);
-      setLassoPoints(stroke);
+      const selected = selectPointsInPolygon(source, ring);
+      setLassoPoints(ring);
       setLassoSelected(selected);
     };
 
