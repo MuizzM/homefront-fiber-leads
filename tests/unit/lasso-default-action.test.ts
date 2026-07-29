@@ -235,3 +235,42 @@ describe("the area card is handed the numbers the server sent", () => {
     }
   });
 });
+
+// ── Reps keep the numbers, not the controls ─────────────────────────────────
+// The area card is deliberately visible to a rep — knowing how much ground is
+// left is the point of holding an area. What a rep must NOT get is any control
+// that changes who works it, what it is called, or whether it still exists.
+//
+// Every management handler is gated on canManage (assign_territory, which a rep
+// does not have) so the panel receives `undefined` and renders nothing. The
+// pool-assign block was the exception: gated on the area's STATUS alone.
+describe("management controls are gated on the viewer's role, not the area's status", () => {
+  it("gates the pool assign block on canManage, not only isPool", () => {
+    // The one control on this card that hands an area to a rep was the one that
+    // never asked who was looking.
+    expect(src).toContain("{isPool && canManage && (");
+    expect(src).not.toMatch(/\{isPool && \(\s*$/m);
+  });
+
+  it("gates every area-mutating handler on a capability", () => {
+    // Reading these as source is the only option — MapView cannot be mounted
+    // without a GL context. Each must be a conditional, never passed bare.
+    for (const handler of ["onRename=", "onRecolor=", "onUnassignRep=", "onEditAssignees="]) {
+      const at = src.indexOf(handler);
+      expect(at, `${handler} not found — did it move?`).toBeGreaterThan(-1);
+      const block = src.slice(at, at + 220);
+      expect(block, `${handler} is not role-gated`).toMatch(/canManage|canAssign|can\w*\(/);
+    }
+  });
+
+  it("gates the on-map assignee bar too", () => {
+    // The shortcut must not be a way around the gate the long route enforces.
+    expect(src).toContain("selectedTerritoryId != null && canManage");
+  });
+
+  it("gates pass reset on its own capability, not on generic management", () => {
+    // Resetting a pass clears a whole team's outcomes — heavier than assignment,
+    // and manager+ rather than team_lead+.
+    expect(src).toContain("canResetPass ? () => setNextPassTerritoryId(t.id) : undefined");
+  });
+});

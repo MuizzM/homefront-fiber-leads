@@ -6375,8 +6375,18 @@ export default function MapView() {
                           : undefined
                       }
                     />
-                    {/* Assign-to-next-rep for unassigned/reclaimed areas */}
-                    {isPool && (
+                    {/* Assign-to-next-rep for unassigned/reclaimed areas.
+                        canManage as well as isPool: this was gated on the area's
+                        STATUS alone, so the one management control on the card
+                        that did not check the viewer's role was the one that
+                        hands an area to a rep. A rep is unlikely to have a pool
+                        area in their list — /api/territories serves them only
+                        what they hold — but "unlikely to be reachable" is not a
+                        permission check, and every sibling control here already
+                        makes the same test. The server refuses a rep either way
+                        (requireTeamLead on /assign); this stops the UI offering
+                        an action it knows will fail. */}
+                    {isPool && canManage && (
                       <div className="mt-2 w-72 rounded-xl border border-border bg-card p-3">
                         <div className="text-[11px] font-semibold text-foreground mb-1.5">
                           Assign this area to the next rep
