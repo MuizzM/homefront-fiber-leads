@@ -34,6 +34,7 @@ let manager: Person;   // org-wide, on no area at all
 let caller: Person;    // calling_rep: authenticated, but no field.app.use
 // tenant 2
 let repZ: Person;
+let managerZ: Person;  // org-wide in ANOTHER org — the only identity the rep-scope check cannot stop
 
 let sharedArea: number;
 let privateArea: number;
@@ -72,6 +73,7 @@ beforeAll(async () => {
   manager = person("Mona Vance", "manager", 1);
   caller = person("Kit Dial", "calling_rep", 1);
   repZ = person("Zed Foreign", "rep", 2);
+  managerZ = person("Mo Foreign", "manager", 2);
 
   // Many-to-many by design: the shared area is why lead access cannot hang on
   // leads.assigned_rep_id, which names exactly one person.
@@ -380,6 +382,30 @@ describe("tenant isolation", () => {
     await knock(t1Door, repA.session);
     await knock(t2Door, repZ.session);
 
+    expect(await stream.awaitLead(t2Door)).toBe(true);
+    expect(stream.leadIds()).not.toContain(t1Door);
+    for (const frame of stream.leads()) expect(frame.data.tenantId).toBe(2);
+    await stream.close();
+  });
+
+  // The three tests around this one all use REP identities, and a rep is stopped
+  // by the rep-scope check before the tenant wall is ever consulted — so they
+  // stay green with `evt.tenantId !== tenantId` deleted, and the tenant wall was
+  // untested by the very file that exists to test it. An org-wide role is the
+  // case that separates them: leadVisibilityScope() returns undefined for
+  // manager/admin, so repCanAccessLead() answers TRUE for every door in every
+  // org and the tenant comparison is the ONLY thing left standing.
+  it("a tenant-2 MANAGER never receives a tenant-1 event — the rep-scope check cannot help here", async () => {
+    const t1Door = door(sharedArea, repA.memberId, 1);
+    const t2Door = door(foreignArea, repZ.memberId, 2);
+    const stream = await open(managerZ.session);
+    await stream.ready();
+
+    await knock(t1Door, repA.session);   // forbidden — emitted FIRST
+    await knock(t2Door, repZ.session);   // positive control — emitted AFTER
+
+    // Once the control lands, the forbidden frame has had its chance and been
+    // dropped; no sleep is doing the work here.
     expect(await stream.awaitLead(t2Door)).toBe(true);
     expect(stream.leadIds()).not.toContain(t1Door);
     for (const frame of stream.leads()) expect(frame.data.tenantId).toBe(2);
