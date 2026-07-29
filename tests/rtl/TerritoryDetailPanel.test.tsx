@@ -192,36 +192,52 @@ describe("<TerritoryDetailPanel /> stats", () => {
   };
 
   it("says how many of the workable doors are done, and how many are left", () => {
+    // Rewritten for AreaStatsCard, which replaced the flat grid this used to
+    // assert. Same two claims — progress against the AVAILABLE base, and what is
+    // left — read off the new hierarchy: hero number + Untouched tile.
     render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
-    expect(screen.getByTestId("stat-knock-summary")).toHaveTextContent("24 of 80 knocked");
-    expect(screen.getByTestId("territory-stats")).toHaveTextContent("56 remaining");
+    expect(screen.getByTestId("stat-knocked")).toHaveTextContent("24");
+    expect(screen.getByTestId("territory-stats")).toHaveTextContent("of 80 worked");
+    expect(screen.getByTestId("stat-untouched")).toHaveTextContent("56");
   });
 
-  it("separates doors knocked from total attempts", () => {
-    // 31 knocks across 24 doors. Conflating them would overstate coverage.
+  it("does not conflate doors knocked with total attempts", () => {
+    // 31 knocks across 24 doors. The old card printed "31 attempts" as a
+    // secondary line; the new one drops that line to keep one hierarchy, so what
+    // is asserted now is the claim that actually mattered — the HERO number is
+    // doors, never the attempt count, because conflating them overstates
+    // coverage.
     render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
-    expect(screen.getByTestId("territory-stats")).toHaveTextContent("31 attempts");
+    expect(screen.getByTestId("stat-knocked")).toHaveTextContent("24");
+    expect(screen.getByTestId("stat-knocked")).not.toHaveTextContent("31");
   });
 
-  it("hides the attempts line when nobody has gone back to a door", () => {
-    // attempts === knocked is the ordinary case; showing it would be noise.
-    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }}
-      progress={{ ...stats, attempts: 24 }} />);
-    expect(screen.getByTestId("territory-stats")).not.toHaveTextContent("attempts");
+  it("shows no attempts line at all, in either direction", () => {
+    // Superseded: the attempts line is gone from the design entirely, so the old
+    // "hide it when attempts === knocked" case now holds unconditionally.
+    for (const attempts of [24, 31]) {
+      const { unmount } = render(<TerritoryDetailPanel territory={activeTerritory}
+        currentUser={{ role: "manager" }} progress={{ ...stats, attempts }} />);
+      expect(screen.getByTestId("territory-stats")).not.toHaveTextContent("attempts");
+      unmount();
+    }
   });
 
   it("shows sold, penetration and contact rate", () => {
     render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
     expect(screen.getByTestId("stat-sold")).toHaveTextContent("8");
-    expect(screen.getByTestId("stat-penetration")).toHaveTextContent("10.0%");
+    // "10%" not "10.0%": the new formatter drops a trailing zero that carries no
+    // information, while keeping a decimal that does (0.4% stays 0.4%).
+    expect(screen.getByTestId("stat-penetration")).toHaveTextContent("10%");
     expect(screen.getByTestId("stat-contact")).toHaveTextContent("45.8%");
   });
 
-  it("exposes knock completion as an accessible progress bar, not colour alone", () => {
+  it("exposes knock completion to screen readers, not through colour alone", () => {
+    // The linear bar became a ring. The accessibility requirement is unchanged
+    // and is what this test was always really about: the figure must be
+    // announced, because an arc is purely visual.
     render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
-    const bar = screen.getByTestId("stat-knock-bar");
-    expect(bar).toHaveAttribute("aria-valuenow", "30");
-    expect(bar).toHaveAccessibleName(/30.0 percent/i);
+    expect(screen.getByRole("img", { name: "30% complete" })).toBeInTheDocument();
   });
 
   it("stays silent rather than showing zeros when the figures are absent", () => {
@@ -280,9 +296,9 @@ describe("<TerritoryDetailPanel /> for the rep who works the area", () => {
 
   it("shows a rep the same numbers a manager sees", () => {
     render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "rep" }} progress={stats} />);
-    expect(screen.getByTestId("stat-knock-summary")).toHaveTextContent("24 of 80 knocked");
+    expect(screen.getByTestId("stat-knocked")).toHaveTextContent("24");
     expect(screen.getByTestId("stat-sold")).toHaveTextContent("8");
-    expect(screen.getByTestId("stat-penetration")).toHaveTextContent("10.0%");
+    expect(screen.getByTestId("stat-penetration")).toHaveTextContent("10%");
   });
 
   it("shows the rep who else is on the area", () => {
