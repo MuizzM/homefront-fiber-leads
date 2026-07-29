@@ -13,7 +13,11 @@
 // These specs pin the second half of arming: the browser's gestures have to go
 // down with the map's, and come back with them.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { lockGesturesForDrawing, mapGestureTarget } from "../../client/src/lib/lassoGestureLock";
+import {
+  lockDocumentPullToRefresh,
+  lockGesturesForDrawing,
+  mapGestureTarget,
+} from "../../client/src/lib/lassoGestureLock";
 
 function container(withCanvas = true): HTMLElement {
   const el = document.createElement("div");
@@ -24,6 +28,10 @@ function container(withCanvas = true): HTMLElement {
 
 beforeEach(() => {
   document.body.innerHTML = "";
+  // documentElement survives between tests in a file, so a spec that locks the
+  // root without releasing would otherwise become the "previous value" the next
+  // one saves and restores.
+  document.documentElement.removeAttribute("style");
 });
 
 describe("the browser stops scrolling while a finger draws", () => {
@@ -173,6 +181,46 @@ describe("arming the tool can never take the map down", () => {
   it("handles a container with no canvas yet", () => {
     const el = container(false);
     expect(() => lockGesturesForDrawing(el)()).not.toThrow();
+  });
+});
+
+describe("pull-to-refresh is also killed at the document root", () => {
+  // body already carries `overscroll-behavior-y: none` app-wide, and per spec
+  // that propagates to the viewport while the root's own value is `auto`. This
+  // does not depend on that rule still holding after some future stylesheet edit.
+  //
+  // Chrome/Android belt to the canvas lock's braces — NOT the iOS mechanism.
+  // WebKit ignores overscroll-behavior for the rubber-band gesture, which is why
+  // the canvas lock uses touch-action plus a cancelled touchmove instead.
+  it("sets it on the root element for the duration of the draw", () => {
+    lockDocumentPullToRefresh(document);
+    expect((document.documentElement.style as any).overscrollBehaviorY).toBe("none");
+    expect((document.documentElement.style as any).overscrollBehaviorX).toBe("none");
+  });
+
+  it("puts the root back exactly as it found it", () => {
+    const root = document.documentElement;
+    (root.style as any).overscrollBehaviorY = "contain";
+
+    lockDocumentPullToRefresh(document)();
+
+    expect((root.style as any).overscrollBehaviorY).toBe("contain");
+    expect((root.style as any).overscrollBehaviorX ?? "").toBe("");
+    (root.style as any).overscrollBehaviorY = "";
+  });
+
+  it("is idempotent, like the canvas lock", () => {
+    const release = lockDocumentPullToRefresh(document);
+    release();
+    const relock = lockDocumentPullToRefresh(document);
+    release();
+    expect((document.documentElement.style as any).overscrollBehaviorY).toBe("none");
+    relock();
+  });
+
+  it("no-ops without a document instead of throwing during SSR or teardown", () => {
+    expect(() => lockDocumentPullToRefresh(null)()).not.toThrow();
+    expect(() => lockDocumentPullToRefresh(undefined)()).not.toThrow();
   });
 });
 

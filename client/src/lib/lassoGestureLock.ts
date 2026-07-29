@@ -103,6 +103,41 @@ export function lockGesturesForDrawing(element: HTMLElement | null | undefined):
 }
 
 /**
+ * Kill pull-to-refresh at the document root for the duration of a stroke.
+ *
+ * `body { overscroll-behavior-y: none }` is already set app-wide, and per spec
+ * that propagates to the viewport — but only while the root element's own value
+ * computes to `auto`. That is one stylesheet edit away from silently ceasing to
+ * be true, and the failure is invisible until someone reports the page
+ * reloading. Setting it on the root directly during a draw does not depend on
+ * the propagation rule holding.
+ *
+ * This is the Chrome/Android belt to the canvas lock's braces. It is NOT the
+ * mechanism that fixes iOS: WebKit does not honour overscroll-behavior for the
+ * rubber-band / pull-to-refresh gesture, which is why the canvas lock relies on
+ * touch-action plus a cancelled touchmove instead.
+ */
+export function lockDocumentPullToRefresh(doc: Document | null | undefined): () => void {
+  const root = doc?.documentElement;
+  if (!root) return () => {};
+
+  const previous = {
+    overscrollBehaviorY: (root.style as any).overscrollBehaviorY ?? "",
+    overscrollBehaviorX: (root.style as any).overscrollBehaviorX ?? "",
+  };
+  (root.style as any).overscrollBehaviorY = "none";
+  (root.style as any).overscrollBehaviorX = "none";
+
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    (root.style as any).overscrollBehaviorY = previous.overscrollBehaviorY;
+    (root.style as any).overscrollBehaviorX = previous.overscrollBehaviorX;
+  };
+}
+
+/**
  * The element Mapbox actually attaches its touch handling to.
  *
  * `map.getCanvasContainer()` is the documented accessor and is what carries the

@@ -124,7 +124,7 @@ import {
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
 import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
-import { lockGesturesForDrawing, mapGestureTarget } from "@/lib/lassoGestureLock";
+import { lockGesturesForDrawing, lockDocumentPullToRefresh, mapGestureTarget } from "@/lib/lassoGestureLock";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
@@ -3542,7 +3542,12 @@ export default function MapView() {
     // which is the "it reloads when I finish a lasso" report. See
     // lib/lassoGestureLock.ts. Released in this effect's cleanup, so it lifts on
     // completion, cancel, unmount, style swap and error alike.
-    const releaseGestures = lockGesturesForDrawing(mapGestureTarget(map));
+    const releaseCanvas = lockGesturesForDrawing(mapGestureTarget(map));
+    const releaseRoot = lockDocumentPullToRefresh(typeof document === "undefined" ? null : document);
+    const releaseGestures = () => {
+      releaseCanvas();
+      releaseRoot();
+    };
 
     // Point-in-polygon lives in lib/mapGeo.ts (bbox-rejected, unit-tested).
 
