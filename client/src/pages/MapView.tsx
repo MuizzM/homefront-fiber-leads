@@ -125,6 +125,7 @@ import {
 } from "@/lib/leadHalos";
 import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
 import { lockGesturesForDrawing, lockDocumentPullToRefresh, mapGestureTarget } from "@/lib/lassoGestureLock";
+import { AreaAssigneeBar } from "@/components/territory/AreaAssigneeBar";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
@@ -6167,6 +6168,37 @@ export default function MapView() {
               )}
             </div>
           )}
+
+          {/* ── Who works this area, on the area ──
+              Editing the holder set already existed, but only down a four-step
+              path: tap the area, open the detail card, scroll to the bottom,
+              "Who works this area", full-screen modal over the map you were
+              looking at. This is the same decision made where it is made, with
+              the polygon still visible above it. Same /share call, same complete
+              holder-set contract; only the route to it is shorter. */}
+          {selectedTerritoryId != null && canManage && !lassoMode && (() => {
+            const t = territories.find((x) => x.id === selectedTerritoryId);
+            if (!t) return null;
+            const holders = repIdsForDoor((t as any).repId, (t as any).assigneeIds);
+            if (!holders.length) return null; // pool areas assign via the card
+            return (
+              <AreaAssigneeBar
+                areaName={territoryLabel(t)}
+                color={territoryPaint(
+                  { color: (t as any).color, status: (t as any).status },
+                  colorForRep((t as any).repId),
+                ).fillColor}
+                assigneeIds={holders}
+                pending={shareMutation.isPending}
+                onClose={() => setSelectedTerritoryId(null)}
+                onChange={(next) => shareMutation.mutate({ id: t.id, repIds: next })}
+                reps={team.filter((m) => m.active).map((m) => {
+                  const held = activeAreaCountByRep.get(m.id) ?? 0;
+                  return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
+                })}
+              />
+            );
+          })()}
 
           {/* ── Overlapping areas: which one did you mean? ──
               Tapping where two territories overlap used to resolve to whichever
