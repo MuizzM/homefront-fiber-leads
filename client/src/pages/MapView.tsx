@@ -1392,6 +1392,30 @@ export default function MapView() {
     },
   });
 
+  // Multiple reps on one area. /share takes the COMPLETE holder set, so the UI
+  // sends who should be on it after the change — not a delta — and the two can
+  // never disagree about what "who holds this area" means.
+  const [shareTerritoryId, setShareTerritoryId] = useState<number | null>(null);
+  const [shareRepIds, setShareRepIds] = useState<number[]>([]);
+  const shareMutation = useMutation({
+    mutationFn: async ({ id, repIds }: { id: number; repIds: number[] }) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/share`, { repIds });
+      return res.json();
+    },
+    onSuccess: () => {
+      setShareTerritoryId(null);
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+    },
+    onError: (e: any) => toast({
+      title: "Could not update who works this area",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
+  });
+
   const reclaimMutation = useMutation({
     mutationFn: async ({
       id,
@@ -5707,6 +5731,11 @@ export default function MapView() {
                       }
                       currentPass={(t as any).currentPass ?? 1}
                       assignedAt={(t as any).assignedAt ?? null}
+                      onEditAssignees={
+                        canManage
+                          ? () => { setShareRepIds(repIds); setShareTerritoryId(t.id); }
+                          : undefined
+                      }
                     />
                     {/* Assign-to-next-rep for unassigned/reclaimed areas */}
                     {isPool && (
@@ -5794,6 +5823,51 @@ export default function MapView() {
           {/* Territory activity History drawer (opened from the card's View Activity) */}
           {/* Re-open an area for another sweep. Mounted once, outside the territory
               loop, so the preview fetch fires for the chosen area only. */}
+          {/* Who works this area. Multi-select, because an area can legitimately be
+              shared — the set you leave here IS the set that ends up on it. */}
+          {shareTerritoryId != null && (
+            <div role="dialog" aria-modal="true" aria-label="Who works this area"
+                 className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50">
+              <div className="w-full sm:max-w-md max-h-[85vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-background border p-4 space-y-3">
+                <h2 className="text-base font-semibold">Who works this area</h2>
+                <p className="text-xs text-muted-foreground">
+                  Tap to add or remove. Everyone selected shares the area; the first is the
+                  primary and sets its colour on the map.
+                </p>
+                <RepPicker
+                  multiple
+                  selected={shareRepIds}
+                  onToggle={(_id, next) => setShareRepIds(next)}
+                  onChange={() => {}}
+                  disabled={shareMutation.isPending}
+                  reps={team.filter((m) => m.active).map((m) => {
+                    const held = activeAreaCountByRep.get(m.id) ?? 0;
+                    return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
+                  })}
+                />
+                <div className="flex justify-end gap-2 pt-1">
+                  <button type="button" onClick={() => setShareTerritoryId(null)}
+                          className="rounded-lg border px-4 py-2 text-sm font-medium">Cancel</button>
+                  <button
+                    type="button"
+                    disabled={shareRepIds.length === 0 || shareMutation.isPending}
+                    onClick={() => shareMutation.mutate({ id: shareTerritoryId, repIds: shareRepIds })}
+                    className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50"
+                  >
+                    {shareMutation.isPending ? "Saving…" : "Save"}
+                  </button>
+                </div>
+                {shareRepIds.length === 0 && (
+                  // The API refuses an empty set; say why here rather than let them press
+                  // Save and get an error. Emptying an area is Reclaim's job.
+                  <p className="text-xs text-amber-500">
+                    Pick at least one rep — to empty the area entirely, use Reclaim.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {nextPassTerritoryId != null && (
             <StartNextPassDialog
               open
