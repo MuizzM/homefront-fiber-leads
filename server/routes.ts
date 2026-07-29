@@ -57,6 +57,7 @@ try {
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
+import { computeTerritoryMetrics } from "@shared/territoryMetrics";
 import { pointInPolygon, polygonCovers } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
@@ -6085,20 +6086,50 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(storage.getTerritoryEvents(Number(req.params.id)));
   });
 
-  // PATCH /api/territories/:id { name } — rename an area. Whitelisted to name
-  // only: lifecycle changes go through their dedicated routes above. Custom
+  // PATCH /api/territories/:id { name?, color? } — edit an area's identity.
+  // Whitelisted to those two: lifecycle changes go through their dedicated
+  // routes above, and geometry has its own membership consequences. Custom
   // names survive reclaim/reassign (see isAutoAreaName) and reps see them on
   // their own map.
+  //
+  // Colour was previously only settable at creation, so an area drawn in the
+  // wrong colour could never be corrected — the field a manager is most likely
+  // to get wrong on the first pass was the one field with no edit path.
   app.patch("/api/territories/:id", requireTeamLead, (req, res) => {
     const ttid = (req as any).user?.tenantId ?? undefined;
-    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-    if (!name || name.length > 60) return res.status(400).json({ error: "Area name must be 1–60 characters" });
+    const wantsName = typeof req.body?.name === "string";
+    const wantsColor = req.body?.color !== undefined;
+    if (!wantsName && !wantsColor) return res.status(400).json({ error: "Nothing to update" });
+
+    const name = wantsName ? String(req.body.name).trim() : null;
+    if (wantsName && (!name || name.length > 60)) {
+      return res.status(400).json({ error: "Area name must be 1–60 characters" });
+    }
+    // Same validator the create path uses, so a colour that saves on one route
+    // is a colour that saves on the other.
+    const color = wantsColor ? normalizeTerritoryColor(req.body.color) : null;
+    if (wantsColor && color === null) {
+      return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
+    }
+
     const id = Number(req.params.id);
     const prev = storage.getTerritories(ttid).find(t => t.id === id);
     if (!prev) return res.status(404).json({ error: "Not found" });
     if (!canManageTerritory((req as any).user, prev)) return res.status(404).json({ error: "Not found" }); // 404, don't leak existence
-    const updated = storage.updateTerritory(id, { name, updatedAt: new Date().toISOString() } as any, ttid);
-    storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
+
+    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (name) patch.name = name;
+    if (color) patch.color = color;
+    const updated = storage.updateTerritory(id, patch as any, ttid);
+
+    // One event per field actually changed, so the audit reads as what happened
+    // rather than as one opaque "edited".
+    if (name && name !== prev.name) {
+      storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
+    }
+    if (color && color !== (prev as any).color) {
+      storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "recolored", { from: (prev as any).color ?? null, to: color });
+    }
     res.json(updated);
   });
 
@@ -6166,6 +6197,29 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const total = within.length;
       const sold = within.filter((l: any) => l.leadStatus === "sold").length;
 
+      // The operational figures, through the ONE metric mapping. Doors-knocked
+      // comes from the knock log rather than the status, because a door that
+      // goes not_home → sold must not leave the knocked count: knocking is
+      // something that happened, not something that is currently true.
+      const metrics = computeTerritoryMetrics(within.map((l: any) => {
+        const ks = knocksByLead.get(l.id) ?? [];
+        return {
+          status: l.leadStatus,
+          everKnocked: ks.length > 0,
+          attempts: ks.length,
+          everContacted: ks.some((k: any) => k.wasHome === true || k.wasHome === 1),
+          doNotKnock: l.doNotKnock === true || l.doNotKnock === 1,
+        };
+      }));
+      // Most recent knock anywhere in the area — "is anyone still working this?"
+      let lastActivityAt: string | null = null;
+      for (const l of within) {
+        for (const k of knocksByLead.get(l.id) ?? []) {
+          const at = k.knockedAt ?? null;
+          if (at && (lastActivityAt === null || at > lastActivityAt)) lastActivityAt = at;
+        }
+      }
+
       // Per-territory verification rollup. "knocked" = any activity; "verifiedWorked"
       // = distinct leads with a VERIFIED worked knock (the only thing that counts).
       let knocked = 0, verifiedWorkedLeads = 0;
@@ -6194,6 +6248,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         id: t.id, name: t.name, color: t.color, repId: t.repId, status: (t as any).status ?? "active",
         repName: members.find((m: any) => m.id === t.repId)?.name ?? "Unassigned",
         total, knocked, sold,
+        // Metric buckets + the documented rates. availableBase is the single
+        // denominator every rate here divides by.
+        availableBase: metrics.availableBase,
+        untouched: metrics.untouchedCount,
+        attempts: metrics.attemptCount,
+        contacted: metrics.contactedCount,
+        notHome: metrics.notHomeCount,
+        followUp: metrics.followUpCount,
+        unavailable: metrics.unavailableCount,
+        disqualified: metrics.disqualifiedCount,
+        penetrationRate: metrics.penetrationRate,
+        knockCompletionRate: metrics.knockCompletionRate,
+        contactRate: metrics.contactRate,
+        lastActivityAt,
         // Back-compat: old clients read pct/knocked (integer % of any-knocked).
         pct: total ? Math.round((knocked / total) * 100) : 0,
         // New: location-verified progress.

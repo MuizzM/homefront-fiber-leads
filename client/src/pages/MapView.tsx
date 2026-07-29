@@ -1418,6 +1418,25 @@ export default function MapView() {
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
 
+  // Recolour an area. The colour describes the ground, so it is the field a
+  // manager is most likely to get wrong on the first pass — and until now it was
+  // the one field with no edit path at all. Same PATCH the rename uses.
+  const recolorTerritoryMutation = useMutation({
+    mutationFn: async ({ id, color }: { id: number; color: string }) => {
+      const res = await apiRequest("PATCH", `/api/territories/${id}`, { color });
+      return res.json();
+    },
+    onSuccess: () => {
+      // The polygon paints from territories.color, so the map must refetch for
+      // the new colour to land; invalidating progress too keeps the panel swatch
+      // and the region on screen in step.
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      toast({ title: "Area colour updated" });
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
   const deleteTerritoryMutation = useMutation({
     mutationFn: async (id: number) => {
       const res = await apiRequest("DELETE", `/api/territories/${id}`);
@@ -6186,6 +6205,11 @@ export default function MapView() {
                       }
                       onRename={(name) =>
                         renameTerritoryMutation.mutate({ id: t.id, name })
+                      }
+                      onRecolor={
+                        canManage
+                          ? (color) => recolorTerritoryMutation.mutate({ id: t.id, color })
+                          : undefined
                       }
                       onViewHistory={() => setActivityTerritoryId(t.id)}
                       onUnassignRep={
