@@ -5762,7 +5762,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (mode === "reassign" && !newRepId) return res.status(400).json({ error: "newRepId required for reassign mode" });
     // Handing the area straight to someone else is still handing them an area.
     if (mode === "reassign") {
-      const full = repAtAreaCap(Number(newRepId), t.id);
+      // The AREA was scoped above; the TARGET was not. Every other rep-taking
+      // route validates the incoming rep's tenant AND the caller's visibility
+      // scope (see /share and /next-pass) — this one only checked the cap, so a
+      // team lead could reclaim an area they legitimately hold and hand it to a
+      // rep on another team, or another tenant entirely. That is a territory
+      // grab and a cross-tenant write wearing a reclaim's clothes.
+      const target = Number(newRepId);
+      if (!Number.isInteger(target) || target <= 0) return res.status(400).json({ error: "invalid newRepId" });
+      if (!repInCallerTenant(user, target) || !repInVisibilityScope(user, target)) {
+        return res.status(404).json({ error: "rep not found" });
+      }
+      const full = repAtAreaCap(target, t.id);
       if (full) return res.status(409).json({ error: full });
     }
 
@@ -6322,7 +6333,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const territory = storage.getTerritories(tid).find(t => t.id === Number(req.params.id));
     if (!territory) return res.status(404).json({ error: "Not found" });
     const scope = leadVisibilityScope(user);
-    if (Array.isArray(scope) && (territory.repId == null || !scope.includes(territory.repId))) {
+    // territoryHeldByAny, not a repId check. repId still names the LAST holder
+    // after a reclaim, so testing it let a rep the area was taken from keep
+    // reading its knock history — the same defect that was fixed for the lead
+    // stream and the territory list, missed on this route. It also 404'd a
+    // SECONDARY assignee on a shared area, who genuinely holds it.
+    if (Array.isArray(scope) && !territoryHeldByAny(territory as any, scope)) {
       return res.status(404).json({ error: "Not found" });
     }
     let poly: [number, number][] = [];
@@ -6336,14 +6352,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       .filter(k => leadById.has(k.leadId))
       .map(k => {
         const l: any = leadById.get(k.leadId);
+        // A scoped caller (rep / team lead) sees WHO and WHERE only for the
+        // people they are: their own knocks, and for a lead, their own reps'.
+        // A shared area put another rep's name AND their GPS fix on screen for
+        // anyone who held the polygon — door history is legitimate, tracking a
+        // colleague's movements is not. Managers and admins have an undefined
+        // scope and are unaffected.
+        const maySeeActor = !Array.isArray(scope) || (k.repId != null && scope.includes(k.repId));
         return {
           knockId: k.id, leadId: k.leadId,
           leadName: l.address, address: `${l.address}, ${l.city} ${l.state} ${l.zip ?? ""}`.trim(),
-          rep: k.repId != null ? (repNames.get(k.repId) ?? null) : null,
+          rep: maySeeActor && k.repId != null ? (repNames.get(k.repId) ?? null) : null,
           outcome: k.outcome, knockedAt: k.knockedAt, deviceTs: k.deviceTs ?? null, serverTs: k.serverTs ?? null,
           verification: k.verificationStatus ?? null, distanceM: k.distanceM ?? null, gpsAccuracyM: k.gpsAccuracy ?? null,
           reviewReason: k.reviewReason ?? null, netState: k.netState ?? null,
-          repLat: k.repLat ?? null, repLng: k.repLng ?? null, leadLat: l.lat, leadLng: l.lng,
+          // The door's own coordinates stay — they are the property, not a person.
+          repLat: maySeeActor ? (k.repLat ?? null) : null,
+          repLng: maySeeActor ? (k.repLng ?? null) : null,
+          leadLat: l.lat, leadLng: l.lng,
         };
       })
       .sort((a, z) => (a.knockedAt < z.knockedAt ? 1 : a.knockedAt > z.knockedAt ? -1 : 0))
