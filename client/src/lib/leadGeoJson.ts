@@ -1,5 +1,6 @@
 import { pinDisplayState } from "@shared/knock";
 import { toLeadMapStatus } from "@shared/statusConfig";
+import { haloFeatureProps, type HaloFeatureProps } from "./leadHalos";
 
 export interface GeoJsonLead {
   id: number;
@@ -13,7 +14,19 @@ export interface GeoJsonLead {
   freshConfidence?: string | null;
   carrier?: string | null;
   assignedRepId?: number | null;
+  /** The area the door belongs to — the only link to the crew that works it.
+   *  Not read here; it is what the caller's LeadRepIdsFn resolves against. */
+  assignedTerritoryId?: number | null;
 }
+
+/** Resolves the full ordered rep set for a door. Injected rather than derived
+ *  here because the mapping lives in territories (assignee_ids), which this
+ *  module has no business knowing about — and because the caller is the only
+ *  one who can precompute it per AREA and hand back the same array for every
+ *  door in it, keeping this O(1) per lead instead of a scan. */
+export type LeadRepIdsFn = (lead: GeoJsonLead) => readonly number[] | null | undefined;
+
+const NO_HALO: HaloFeatureProps = { haloCount: 0 };
 
 export interface LeadPointFeature {
   type: "Feature";
@@ -29,7 +42,7 @@ export interface LeadPointFeature {
     carrier: string;
     assignedRepId: number;
     repColor: string;
-  };
+  } & HaloFeatureProps;
 }
 
 export interface CachedLeadFeature {
@@ -39,10 +52,18 @@ export interface CachedLeadFeature {
 
 export type LeadFeatureCache = Map<number, CachedLeadFeature>;
 
-export function leadFeatureSignature(lead: GeoJsonLead): string {
+export function leadFeatureSignature(lead: GeoJsonLead, halo: HaloFeatureProps = NO_HALO): string {
   const ds = pinDisplayState(lead);
   const fresh = lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0;
-  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic", lead.assignedRepId ?? 0].join("\u001f");
+  // Halo props are passed IN, never recomputed here: reconcileLeadFeatures
+  // needs them for the feature body too, and deriving the rep colours a second
+  // time is a whole extra pass over 5k+ doors on every snapshot.
+  //
+  // haloCount rides the string alongside the ring colours. Past HALO_MAX_RINGS
+  // the outermost ring goes neutral slate, so a 4-rep and a 5-rep door carry an
+  // IDENTICAL colour list — the count is the only thing still telling them
+  // apart, and a prop left stale on a feature is a trap for whatever reads it next.
+  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic", lead.assignedRepId ?? 0, halo.haloCount, halo.halo0 ?? "", halo.halo1 ?? "", halo.halo2 ?? ""].join("\u001f");
 }
 
 import { colorForRep } from "@shared/repColors";
@@ -55,6 +76,7 @@ export { colorForRep as repColorFor };
 export function reconcileLeadFeatures(
   leads: readonly GeoJsonLead[],
   cache: LeadFeatureCache,
+  repIdsFor?: LeadRepIdsFn,
 ): {
   data: { type: "FeatureCollection"; features: LeadPointFeature[] };
   byId: Map<number, LeadPointFeature>;
@@ -76,7 +98,12 @@ export function reconcileLeadFeatures(
   for (const lead of leads) {
     if (!Number.isFinite(lead.lat) || !Number.isFinite(lead.lng)) continue;
     seen.add(lead.id);
-    const signature = leadFeatureSignature(lead);
+    // Computed once and used by BOTH the signature and the feature body. When no
+    // resolver is supplied (tests, any caller without territory data) every door
+    // reports haloCount 0 and carries no slot keys, so the halo layers filter to
+    // nothing and the map behaves exactly as it did before halos existed.
+    const halo = repIdsFor ? haloFeatureProps(repIdsFor(lead)) : NO_HALO;
+    const signature = leadFeatureSignature(lead, halo);
     let cached = cache.get(lead.id);
     if (!cached || cached.signature !== signature) {
       const ds = pinDisplayState(lead);
@@ -96,6 +123,7 @@ export function reconcileLeadFeatures(
             carrier: lead.carrier ?? "kinetic",
             assignedRepId: lead.assignedRepId ?? 0,
             repColor: colorForRep(lead.assignedRepId),
+            ...halo,
           },
         },
       };

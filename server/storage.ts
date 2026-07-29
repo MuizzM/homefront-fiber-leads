@@ -123,6 +123,10 @@ export interface MapPinRow {
   leadStatus: string;
   fiberStatus: string | null;
   assignedRepId: number | null;
+  // The area the door belongs to. Carried purely so the client can resolve WHO
+  // works this door — assignedRepId is one primary, but an area is many-to-many
+  // (territories.assignee_ids), and the client already holds the territory list.
+  assignedTerritoryId?: number | null;
   leadScore: number | null;
   leadTag: string | null;
   freshConfidence: string | null;
@@ -2538,7 +2542,8 @@ export class Storage implements IStorage {
         SELECT
           l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
           l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
-          l.assigned_rep_id AS assignedRepId, l.lead_score AS leadScore,
+          l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
+          l.lead_score AS leadScore,
           l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
           l.assign_mark AS assignMark
         FROM leads l
@@ -2562,7 +2567,7 @@ export class Storage implements IStorage {
       )
       SELECT
         s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
-        s.leadStatus, s.fiberStatus, s.assignedRepId, s.leadScore,
+        s.leadStatus, s.fiberStatus, s.assignedRepId, s.assignedTerritoryId, s.leadScore,
         s.leadTag, s.freshConfidence, s.carrier, s.assignMark,
         rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
       FROM scoped s

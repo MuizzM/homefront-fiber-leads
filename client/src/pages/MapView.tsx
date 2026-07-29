@@ -114,7 +114,22 @@ import {
   reconcileLeadFeatures,
   repColorFor,
   type LeadFeatureCache,
+  type LeadRepIdsFn,
 } from "@/lib/leadGeoJson";
+import {
+  haloFeatureProps,
+  haloLayerSpecs,
+  haloBeforeId,
+  repIdsForDoor,
+  HALO_LAYER_IDS,
+} from "@/lib/leadHalos";
+import {
+  subscribeLeadStream,
+  createFetchEventSource,
+  type LeadStreamEvent,
+  type LeadStreamHandle,
+  type LeadStreamPin,
+} from "@/lib/leadStream";
 import { unpackMapPins } from "@shared/mapPinsWire";
 import { LEAD_MARKS, LEAD_MARK_META, type LeadMark } from "@shared/leadMark";
 import { useCan } from "@/lib/capabilities";
@@ -156,6 +171,10 @@ interface MapPin {
   leadStatus: string;
   fiberStatus: string;
   assignedRepId: number | null;
+  // Which AREA the door sits in. assignedRepId names one primary, but areas are
+  // many-to-many (territories.assignee_ids) — this is the only handle the client
+  // has on the full crew, and it is what the per-rep halo resolves against.
+  assignedTerritoryId?: number | null;
   leadScore: number;
   leadTag?: string | null;
   freshConfidence?: string | null;
@@ -479,6 +498,94 @@ function inBBox(lat: number, lng: number, b: BBox) {
 // Stable empty pin array — `mapPinData?.pins ?? EMPTY_PINS` must not allocate a
 // fresh [] per render, or every downstream useMemo re-runs until data lands.
 const EMPTY_PINS: MapPin[] = [];
+
+// ── Merging a pushed lead into a map pin ─────────────────────────────────────
+// A stream event is NEVER spread wholesale over a pin. LeadStreamPin is
+// deliberately narrower than MapPin — it has no knockCount / freshConfidence /
+// carrier, because those are JOINED by the map query and the write path does
+// not hold them — so `{...pin, ...event.lead}` would erase them with nulls.
+// Fields are therefore taken one at a time, in two groups:
+//
+//  • Always: geometry, address, and the assignment fields. Nothing local ever
+//    owns these, and assignedTerritoryId in particular has to land or a door
+//    that just changed hands keeps painting the old crew's halo.
+//  • Knock-owned (leadStatus / lastOutcome / lastKnockedAt / visited): only when
+//    the push is at least as recent as what the pin already shows. This mirrors
+//    the server's own outcome-recency CAS on the knock path rather than
+//    inventing a second rule, so client and server can never disagree about who
+//    won a race between two reps on one door.
+//
+// knockCount is deliberately NOT touched: the event does not carry it, and
+// guessing +1 for a knock we cannot attribute would drift a number the rep is
+// paid on. The 60s map poll re-joins the true count.
+//
+// Returns `prev` UNCHANGED when nothing moved, so a no-op push costs zero
+// re-renders and zero re-clusters.
+function mergePushedPin(prev: MapPin, pin: LeadStreamPin): MapPin {
+  let next: MapPin | null = null;
+  const write = (key: keyof MapPin, value: unknown): void => {
+    if ((prev as any)[key] === value) return;
+    next = next ?? { ...prev };
+    (next as any)[key] = value;
+  };
+  // The projection nulls what the writer did not hold, so for these an absent
+  // value means "no news", never "cleared".
+  const take = (key: keyof MapPin, value: string | number | null): void => {
+    if (value !== null) write(key, value);
+  };
+  take("address", pin.address);
+  take("city", pin.city);
+  take("state", pin.state);
+  take("zip", pin.zip);
+  take("lat", pin.lat);
+  take("lng", pin.lng);
+  take("fiberStatus", pin.fiberStatus);
+  take("leadTag", pin.leadTag);
+  take("leadScore", pin.leadScore);
+  // These two are the exception: the server read them to answer
+  // repCanAccessLead before it sent the frame, so it definitely holds them and
+  // null genuinely means unassigned — the state that must clear a halo.
+  write("assignedRepId", pin.assignedRepId);
+  write("assignedTerritoryId", pin.assignedTerritoryId);
+
+  // ISO-8601 compares lexicographically in timestamp order, so no Date parse.
+  // A pin with no local knock has nothing to defend and always takes the push.
+  const localAt = prev.lastKnockedAt ?? null;
+  const pushedAt = pin.lastOutcomeAt ?? null;
+  const outcomeWins = localAt == null || (pushedAt != null && pushedAt >= localAt);
+  if (outcomeWins) {
+    take("leadStatus", pin.leadStatus);
+    take("lastOutcome", pin.lastOutcome);
+    take("lastKnockedAt", pin.lastOutcomeAt);
+    if (pin.lastOutcome) write("visited", true);
+  }
+  return next ?? prev;
+}
+
+// The pin a never-before-seen door starts life as. Reduced-field exactly like
+// the two optimistic add paths (map tap, AddLeadSheet): the joined columns are
+// simply absent until the next map GET fills them, and every consumer already
+// reads the optional fields by truthiness.
+function pinFromPushedLead(pin: LeadStreamPin): MapPin {
+  return {
+    id: pin.id,
+    address: pin.address ?? "",
+    city: pin.city ?? "",
+    state: pin.state ?? "",
+    zip: pin.zip ?? "",
+    lat: pin.lat as number,
+    lng: pin.lng as number,
+    leadStatus: pin.leadStatus ?? "prospect",
+    fiberStatus: pin.fiberStatus ?? "",
+    assignedRepId: pin.assignedRepId,
+    assignedTerritoryId: pin.assignedTerritoryId,
+    leadScore: pin.leadScore ?? 0,
+    leadTag: pin.leadTag,
+    visited: !!pin.lastOutcome,
+    lastOutcome: pin.lastOutcome,
+    lastKnockedAt: pin.lastOutcomeAt,
+  };
+}
 
 const SEARCH_RESULT_SOURCE = "search-result";
 const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
@@ -2164,6 +2271,16 @@ export default function MapView() {
         "lead-unclustered",
       );
 
+      // ── Per-rep colour halos ───────────────────────────────────────────────
+      // Concentric rings UNDER the pin, one per rep who works the door, so a
+      // shared area reads as shared without a tap. Specs come from
+      // @/lib/leadHalos — same import in the style.load re-add block below, so
+      // the two can never drift (the drift that silently reverted the Frontier
+      // fresh-halo colour after a basemap toggle).
+      for (const spec of haloLayerSpecs()) {
+        map.addLayer(spec, haloBeforeId((id) => !!map.getLayer(id)));
+      }
+
       // Worked-vs-unworked is color-only: knocked doors render in their status
       // hue (terminal states pre-dimmed) with a thicker white stroke — no glyph
       // badges on pins, per the field design language. (The per-pin glow layer
@@ -2484,6 +2601,10 @@ export default function MapView() {
   // Set by the knock handler after its imperative one-pin paint; consumed once
   // by the cluster reconcile effect to skip the duplicate full setData.
   const pendingKnockPaintRef = useRef<number | null>(null);
+  // Last styleEpoch this map's source was actually filled for. -1 = never, which
+  // is also every fresh style: setStyle drops the source, so a "nothing changed"
+  // reconcile must still repaint. See the guard in the reconcile effect.
+  const paintedStyleEpochRef = useRef(-1);
   // One worker re-cluster + repaint per animation frame MAX. Disposition taps
   // mutate their single pin synchronously (instant feedback), then schedule
   // the full-collection setData here; back-to-back taps inside one frame
@@ -2590,6 +2711,46 @@ export default function MapView() {
       .map(([, l]) => l);
   }, [mapTotalLeads, viewBBox]);
 
+  // ── Who works this door → the per-rep halo ────────────────────────────────
+  // Resolved ONCE PER AREA, never per lead. The naive shape here is
+  // `territories.find(t => t.id === lead.assignedTerritoryId)` plus a
+  // JSON.parse of assignee_ids inside the 5k-lead reconcile loop — the exact
+  // O(leads x areas) + 5,000-JSON.parse pattern activeAreaCountByRep and
+  // progressById were introduced to kill. This memo pays the parse once per
+  // area (a few hundred, and only when the area list actually changes) and the
+  // per-lead lookup below is a Map hit that usually returns a SHARED array, so
+  // an entire street of doors in one area allocates nothing at all.
+  const repIdsByArea = useMemo(() => {
+    const byArea = new Map<number, number[]>();
+    for (const t of territories as any[]) {
+      // Primary first — the innermost ring hugging the pin is always the owner.
+      byArea.set(t.id, repIdsForDoor(t.repId, t.assigneeIds));
+    }
+    return byArea;
+  }, [territories]);
+
+  const haloRepIdsFor = useCallback<LeadRepIdsFn>(
+    (lead) => {
+      const areaRepIds = lead.assignedTerritoryId != null
+        ? repIdsByArea.get(lead.assignedTerritoryId)
+        : undefined;
+      // A door assigned to a rep but not to an area (direct assignment, or an
+      // area the rep list has not caught up with) still shows its owner's ring.
+      if (!areaRepIds) return lead.assignedRepId ? [lead.assignedRepId] : null;
+      // Fast path — the door's owner IS the area's primary, which is what every
+      // assignment path writes. Hand back the area's shared array untouched.
+      if (!lead.assignedRepId || areaRepIds[0] === lead.assignedRepId) return areaRepIds;
+      // Divergent (a reclaim, a per-lead reassignment inside a shared area):
+      // the DOOR's owner takes the inner ring, the rest of the crew follows.
+      return repIdsForDoor(lead.assignedRepId, areaRepIds);
+    },
+    [repIdsByArea],
+  );
+  // Read by the push handler, which lives far below and must not re-subscribe
+  // the stream every time the area list is refetched.
+  const haloRepIdsForRef = useRef(haloRepIdsFor);
+  haloRepIdsForRef.current = haloRepIdsFor;
+
   // ── Update cluster GeoJSON when leads/filter/territory changes ───────────
   useEffect(() => {
     const map = mapRef.current;
@@ -2603,6 +2764,7 @@ export default function MapView() {
     const reconciled = reconcileLeadFeatures(
       visibleLeads,
       featureCacheRef.current,
+      haloRepIdsFor,
     );
     geoJsonDataRef.current = reconciled.data;
     featureByIdRef.current = reconciled.byId;
@@ -2612,14 +2774,33 @@ export default function MapView() {
     // setData + re-cluster is pure duplicate work — skip the paint, keep refs.
     const skipId = pendingKnockPaintRef.current;
     pendingKnockPaintRef.current = null;
-    if (skipId == null || reconciled.soleChangedId !== skipId) {
+    // Nothing created and nothing pruned means every surviving feature is the
+    // SAME object as last pass — the painted set is identical and a setData
+    // would re-cluster 5.5k features to produce the picture already on screen.
+    // This is what lets haloRepIdsFor sit in the dep array below: an
+    // /api/territories refetch that changed no assignment now costs one O(n)
+    // signature pass instead of a full worker round-trip.
+    //
+    // The epoch check is NOT optional. setStyle wipes the source, so the run
+    // triggered by the styleEpoch bump finds an EMPTY source and a fully warm
+    // feature cache — created 0, removed 0 — and skipping it would leave every
+    // pin off the map after a basemap toggle. Same on the first run for a map
+    // instance. Only an epoch we have already painted may be skipped.
+    const samePaintedStyle = paintedStyleEpochRef.current === styleEpoch;
+    paintedStyleEpochRef.current = styleEpoch;
+    const unchanged = samePaintedStyle && reconciled.created === 0 && reconciled.removed === 0;
+    if (!unchanged && (skipId == null || reconciled.soleChangedId !== skipId)) {
       src.setData(reconciled.data);
     }
     // NOTE: this dep array must NEVER gain selection/sheet state — a pin tap must
     // rebuild zero GeoJSON. Selection is a setFilter on its own effect below.
-    // It must also stay free of poll-churned identities (team, territories, user):
-    // the memoized visibleLeads absorbs those upstream.
-  }, [visibleLeads, mapReady, styleEpoch]);
+    // It must also stay free of poll-churned identities (team, user): the
+    // memoized visibleLeads absorbs those upstream. haloRepIdsFor is the one
+    // exception and it has to be here — reassigning an area changes which reps
+    // a door belongs to without touching the lead rows at all, so without this
+    // dep a shared door would keep painting the previous crew's colours until
+    // something unrelated happened to it. The `unchanged` guard above pays for it.
+  }, [visibleLeads, mapReady, styleEpoch, haloRepIdsFor]);
 
   // Admin assignment view: recolor unclustered pins by repColor (or restore
   // the canonical status palette). Pure style-thread paint swap — no setData.
@@ -2988,6 +3169,11 @@ export default function MapView() {
       "lead-fresh-confirmed-halo",
       "lead-unclustered-glow",
       "lead-visited-check",
+      // The rep halos follow showLeads like every other lead layer — a ring
+      // left floating under a hidden pin is worse than no ring at all. They are
+      // NOT swapped out in NEW_FIELD_MAP mode: the halo sits under the glyph
+      // pin exactly as it sits under the dot.
+      ...HALO_LAYER_IDS,
       STATUS_ICON_LAYER,
     ]) {
       if (!map.getLayer(id)) continue;
@@ -3148,6 +3334,10 @@ export default function MapView() {
           },
           "lead-unclustered",
         );
+        // Per-rep halos — identical specs to the init block (see @/lib/leadHalos).
+        for (const spec of haloLayerSpecs()) {
+          map.addLayer(spec, haloBeforeId((id: string) => !!map.getLayer(id)));
+        }
         // Selected-pin ring — its filter is re-applied by the selection effect
         // (styleEpoch dep) right after this block bumps the epoch.
         map.addLayer(SELECTED_RING_SPEC);
@@ -4147,6 +4337,174 @@ export default function MapView() {
   // MapView consumes the same authenticated-owner singleton instead of
   // registering another saved callback whose behavior depends on mount order.
   const { log: logKnock, snap: queueSnap } = useKnockLogger();
+
+  // ── Live lead pushes ────────────────────────────────────────────────────────
+  // GET /api/leads/stream carries server-authored, access-checked per-lead
+  // changes. This is a strict upgrade on the data-free `map-changed` ping below
+  // it, which can only say "something moved, refetch everything": a rep now
+  // sees a teammate close the house next door as it happens, and a 5.5k-row
+  // refetch is not the price of a one-pin change.
+  //
+  // Both channels stay wired on purpose. The stream patches; the 60s poll and
+  // the map-changed invalidate remain the floor, and are the only thing running
+  // when the stream is degraded (see onFallback).
+  const canUseFieldApp = useCan("field.app.use");
+  const [leadStream, setLeadStream] = useState<LeadStreamHandle | null>(null);
+  const streamHoldsRef = useRef(new Map<number, () => void>());
+
+  const applyLeadEvent = useCallback(
+    (evt: LeadStreamEvent) => {
+      const pushed = evt.lead;
+      // No row left to project — the door was deleted. Same cache shape as
+      // handleDeleteLead; the reconcile effect prunes the feature from the
+      // rebuilt collection, so there is nothing to paint imperatively.
+      if (!pushed) {
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          if (!old?.pins?.some((p: MapPin) => p.id === evt.leadId)) return old;
+          return {
+            ...old,
+            total: Math.max(0, (old.total ?? old.pins.length) - 1),
+            pins: old.pins.filter((p: MapPin) => p.id !== evt.leadId),
+          };
+        });
+        return;
+      }
+
+      // Holder rather than a plain `let`: the updater runs inside setQueryData,
+      // and TS narrows a closure-assigned local to its initializer.
+      const out: { pin?: MapPin } = {};
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        // Cache not warm yet: the first GET is still in flight and will carry
+        // this row itself. Seeding a lone pin here would render a map of one.
+        if (!old?.pins) return old;
+        const index = old.pins.findIndex((p: MapPin) => p.id === pushed.id);
+        if (index < 0) {
+          // A door that just entered this user's scope (assigned to their area,
+          // or created by a scan). The server already ran repCanAccessLead
+          // against the post-write row, so it is theirs to see.
+          if (pushed.lat == null || pushed.lng == null) return old;
+          out.pin = pinFromPushedLead(pushed);
+          return { ...old, total: (old.total ?? old.pins.length) + 1, pins: [...old.pins, out.pin] };
+        }
+        const prev = old.pins[index] as MapPin;
+        const next = mergePushedPin(prev, pushed);
+        if (next === prev) return old; // no-op push — do not churn the cache
+        out.pin = next;
+        const pins = old.pins.slice();
+        pins[index] = next;
+        return { ...old, pins };
+      });
+      const merged = out.pin;
+      if (!merged) return;
+
+      // Paint the one pin NOW rather than waiting for the render the cache write
+      // just scheduled, then let the reconcile effect skip its duplicate full
+      // setData — the exact path handleKnock uses. There is no second repaint
+      // mechanism here on purpose.
+      const feature = featureByIdRef.current.get(pushed.id);
+      if (!feature) return; // brand-new door — reconcile builds and paints it
+      // EVERY property mergePushedPin can move is rewritten here, not just the
+      // ones this event happened to change. The skip-guard below hands Mapbox
+      // this mutated feature and then suppresses the rebuild's setData, so the
+      // two representations must agree exactly — a prop the merge moved but the
+      // mutation missed (a leadTag flipping to fresh, a geocode correction)
+      // would sit unpainted until something unrelated forced a full setData.
+      const ds = pinDisplayState(merged);
+      const props = feature.properties;
+      feature.geometry.coordinates = [merged.lng, merged.lat];
+      props.status = toLeadMapStatus(ds);
+      props.ds = ds;
+      props.address = merged.address;
+      props.visited = merged.visited ? 1 : 0;
+      props.fresh = merged.leadTag === "fresh_fiber_confirmed" ? 1 : 0;
+      props.assignedRepId = merged.assignedRepId ?? 0;
+      props.repColor = repColorFor(merged.assignedRepId);
+      // An assignment event is exactly the case the halo exists for, so the
+      // rings have to move with it. Slots are written even when undefined:
+      // leaving a stale halo1 behind on a door that lost a rep would paint a
+      // ring for someone who no longer works it.
+      const halo = haloFeatureProps(haloRepIdsForRef.current(merged));
+      props.haloCount = halo.haloCount;
+      props.halo0 = halo.halo0;
+      props.halo1 = halo.halo1;
+      props.halo2 = halo.halo2;
+      pendingKnockPaintRef.current = pushed.id;
+      scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
+    },
+    [qc, scheduleClusterSetData],
+  );
+  // Kept behind a ref so the subscription below depends only on identity, not
+  // on every render — reconnecting the stream costs a full replay window.
+  const applyLeadEventRef = useRef(applyLeadEvent);
+  applyLeadEventRef.current = applyLeadEvent;
+
+  useEffect(() => {
+    // Same gate the endpoint enforces (requireCapability("field.app.use")).
+    // Opening a socket a calling-only role will be 403'd on is pure radio burn.
+    if (!user || !canUseFieldApp) return;
+    const handle = subscribeLeadStream({
+      // Sessions here are an x-session-id HEADER, which native EventSource
+      // cannot send — it would 401 forever. Read per connect so a refreshed
+      // token is picked up on reconnect instead of frozen at subscribe time.
+      EventSourceImpl: createFetchEventSource({
+        headers: (): Record<string, string> => {
+          const sessionId = getStoredSessionId();
+          return sessionId ? { "x-session-id": sessionId } : {};
+        },
+      }),
+      onEvent: (evt) => applyLeadEventRef.current(evt),
+      // The cursor is gone (evicted from the reconnect ring, or minted by a
+      // process that has since restarted). Patching from here would leave holes
+      // nothing downstream can detect, so the whole scope is refetched.
+      onResync: () => {
+        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      },
+      // Fallback = the pre-existing refetch behaviour is the only truth again.
+      // It never stopped running, so there is nothing to switch on; what this
+      // edge buys is immediacy. Going degraded pulls once so the map is not up
+      // to 60s stale on the way down, and recovering pulls once to close the
+      // window between the last poll and the first live frame.
+      onFallback: () => {
+        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      },
+    });
+    setLeadStream(handle);
+    return () => {
+      handle.close();
+      // Holds live inside the handle that just died; the map must not keep
+      // release closures pointing at it.
+      streamHoldsRef.current.clear();
+      setLeadStream(null);
+    };
+  }, [user?.id, canUseFieldApp, qc]);
+
+  // ── Do not repaint a door the rep is still saving ───────────────────────────
+  // A push applied over an in-flight knock shows the rep their own tap being
+  // undone by their own network. The queue's byLead map is the right source for
+  // "mine, unsettled": it is durable (rehydrated from localStorage on reload),
+  // it already exists, and it cannot leak a hold the way a hand-wired
+  // hold/release pair around each mutation would — knockQueue's dead-letter
+  // path has no success callback at all.
+  //
+  // "error" (dead-lettered) deliberately does NOT hold. That knock is not
+  // coming back on its own, and the optimistic recolor useKnockLogger wrote is
+  // never rolled back — so continuing to defend it would pin a wrong colour on
+  // the door indefinitely. Releasing lets the server's truth correct it.
+  useEffect(() => {
+    const held = streamHoldsRef.current;
+    if (!leadStream) return;
+    const byLead = queueSnap.byLead;
+    const unsettled = (id: number) => byLead[id] === "saving" || byLead[id] === "queued";
+    for (const [leadId, release] of held) {
+      if (unsettled(leadId)) continue;
+      release(); // delivers the newest push withheld while this door was busy
+      held.delete(leadId);
+    }
+    for (const key of Object.keys(byLead)) {
+      const leadId = Number(key);
+      if (unsettled(leadId) && !held.has(leadId)) held.set(leadId, leadStream.hold(leadId));
+    }
+  }, [leadStream, queueSnap]);
 
   const selectedLead =
     selectedLeadId != null ? (leadById.get(selectedLeadId) ?? null) : null;

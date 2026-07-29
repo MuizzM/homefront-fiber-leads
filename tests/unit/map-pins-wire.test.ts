@@ -55,6 +55,11 @@ describe("packed map-pin wire format", () => {
       zip: "27292",
       fiberStatus: "available",
       assignedRepId: (i % 20) + 1,
+      // An assigned door sits in an area — the two travel together in every
+      // real payload, so a fixture carrying the rep but not the area would
+      // charge the packed format for a null the object format never pays for
+      // and understate the saving it is here to measure.
+      assignedTerritoryId: (i % 20) + 1,
       leadScore: 80,
       visited: i % 3 === 0,
       knockCount: i % 3 === 0 ? 1 : undefined,

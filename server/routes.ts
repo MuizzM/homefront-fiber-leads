@@ -22,6 +22,10 @@ import {
 } from "./territoryPass";
 import { isTerritoryPassAction, type TerritoryPassAction } from "@shared/territoryPass";
 import { rawDb } from "./db";
+import {
+  emitLeadEvent, onLeadEvent, eventsSince, leadEventsCursor, leadEventsEpoch,
+  type LeadEvent, type LeadEventType,
+} from "./leadEvents";
 import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
 
@@ -473,6 +477,61 @@ function canManageTerritory(user: any, terr: any): boolean {
   const unowned = assignees.length === 0
     && (status === "unassigned" || status === "reclaimed" || status === "draft");
   return unowned;
+}
+
+// ── Live lead events: the one way a completed write reaches GET /api/leads/stream ──
+// Every call site below is one line so that adding a lead mutation and forgetting
+// the live update look different in a diff. Three rules the helpers encode once:
+//
+//  • POST-WRITE ROW, always. The stream authorizes each event by running
+//    repCanAccessLead() against the projection the event carries, so a pre-write
+//    row would address the update using assignment state that no longer exists —
+//    i.e. deliver it to the previous holder and nobody else.
+//  • AFTER COMMIT, never inside a transaction. Several call sites wrap their loop
+//    in rawDb.transaction(); emitting in there would announce a change a rollback
+//    then erases, and the ring has no retraction.
+//  • BEST-EFFORT. emitLeadEvent never throws and returns null for input it cannot
+//    wall, so a notification problem can never change a write's outcome or shape
+//    its response. The durable record is the leads table; this is the edge.
+function emitLeadChange(type: LeadEventType, lead: any, actor: any, tenantIdFallback?: number | null): void {
+  if (lead?.id == null) return;
+  emitLeadEvent({
+    // The row's own tenant first: on the territory paths the caller may be an
+    // org-wide admin whose session tenant is not the door's.
+    tenantId: Number(lead.tenantId ?? tenantIdFallback ?? actor?.tenantId ?? 0),
+    leadId: Number(lead.id),
+    type,
+    actorId: actor?.id ?? null,
+    actorName: actor?.name ?? null,
+    lead,
+  });
+}
+
+// Same contract for the write paths that hand back a count or a boolean instead
+// of the row — the bulk loops and every raw-SQL UPDATE. One indexed point-read
+// per CHANGED lead (never per candidate id) buys the state the subscriber has to
+// authorize against; without it the event carries no pin and every scoped rep
+// fails the access check on it.
+function emitLeadChangeById(type: LeadEventType, leadId: number, actor: any, tenantIdFallback?: number | null): void {
+  const fresh = storage.getLeadById(Number(leadId));
+  if (fresh) emitLeadChange(type, fresh, actor, tenantIdFallback);
+}
+
+// A lasso or an area reset can move more doors than the event ring holds (25k is
+// a legal bulk-assign). Past a point, per-lead events stop helping and start
+// hurting: they evict the reconnect window of every OTHER tenant sharing the
+// process, while the client they were meant for is told `gapped` and refetches
+// anyway. So a bulk path emits up to this many and then stops. The bound is the
+// module's own per-replay cap, so one bulk action can never overflow a single
+// replay call; the rest is covered by the tenant-wide map-changed ping that all
+// of these paths already fire through bustMapCache — one refetch instead of tens
+// of thousands of frames.
+const LEAD_EVENT_BULK_MAX = 200;
+
+function emitLeadChangesBulk(type: LeadEventType, leadIds: number[], actor: any, tenantIdFallback?: number | null): void {
+  for (let i = 0; i < leadIds.length && i < LEAD_EVENT_BULK_MAX; i++) {
+    emitLeadChangeById(type, leadIds[i], actor, tenantIdFallback);
+  }
 }
 
 // Tenant wall for rep-targeting writes (clock, pings, manual commissions):
@@ -1378,6 +1437,158 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
+  // ── Per-lead live stream (FIELD-facing) ─────────────────────────────────────
+  // /api/leads/events above is a data-free ping, so every change costs the client
+  // a full role-scoped map refetch. That is the right fallback and it stays, but
+  // it is also why a SHARED area feels dead: two reps working the same street see
+  // nothing of each other until a refetch lands. This stream carries the one pin
+  // that changed so the map can patch it in place.
+  //
+  // Carrying lead identity means this endpoint owns an authorization decision the
+  // ping never had to make. Two walls, and BOTH are re-applied per event because
+  // the bus is process-wide — same shape as the run-stage feed's `evt.runId !==
+  // run.id` filter, for the same reason: subscribing tells you nothing about who
+  // the event belongs to.
+  //   1. Tenant, resolved from the SESSION. Never a query param.
+  //   2. repCanAccessLead — the SAME predicate every single-lead read uses, fed
+  //      the assignedRepId/assignedTerritoryId the event carries for exactly this
+  //      purpose. Areas are many-to-many, so a rep-column check here would hide
+  //      every door from every assignee but one.
+  //
+  // Deliberately NOT covered: a rep who just LOST a door receives nothing, since
+  // the post-write row no longer authorizes them, so their pin lingers until the
+  // next refetch. That case belongs to the data-free map-changed ping — every
+  // path that moves an assignment busts the map cache — and it is the safe
+  // direction to fail: a late removal costs one stale pin, whereas addressing the
+  // event to the PREVIOUS holder would hand lead data to someone who just lost
+  // access to it.
+  //
+  // Concurrency is capped process-wide (the run-stage feed's shape) rather than
+  // per tenant, because the cost this bounds is process-wide: every lead write
+  // fans out to every listener, and each listener answers repCanAccessLead, which
+  // for a scoped rep is a tenant-filtered territory scan. 200 sits under the
+  // bus's 500 max-listeners ceiling, so the cap trips before the leak warning
+  // that ceiling exists to raise.
+  const LEAD_STREAM_MAX = 200;
+  let leadStreams = 0;
+
+  app.get("/api/leads/stream", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const user = req.user;
+    // A session with no org cannot be walled at all, so it is refused rather than
+    // defaulted to 0 — the bus drops tenant-less events for the same reason.
+    const tenantId = Number(user?.tenantId ?? 0);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(403).json({ error: "Organization membership required" });
+    }
+    // Checked BEFORE any header is written: past the cap the caller gets a clean
+    // 503 + JSON and falls back to polling, never a half-opened stream.
+    if (leadStreams >= LEAD_STREAM_MAX) {
+      return res.status(503).json({ error: "Too many live lead streams open; use the polling fallback." });
+    }
+
+    // Resume cursor. The SSE frame id is `<epoch>.<seq>`, not a bare number, so
+    // Last-Event-ID carries the identity of the seq space it was minted in: seq
+    // restarts at 1 on every boot, and a cursor from the previous process (or
+    // another node behind the balancer) would otherwise look perfectly valid
+    // while naming completely different events.
+    //
+    // Header before ?since= — the browser resends Last-Event-ID by itself, so
+    // when both arrive the header is the fresher of the two. Either source may
+    // carry either form: the full frame id we minted, or a bare seq, which has no
+    // boot identity to check and can therefore only mean "in the current epoch".
+    const rawCursor = String(req.headers["last-event-id"] ?? req.query.since ?? "").trim();
+    const dot = rawCursor.lastIndexOf(".");
+    const epoch = leadEventsEpoch();
+    const cursorSeq = Number(dot > 0 ? rawCursor.slice(dot + 1) : rawCursor);
+    let cursor = Number.isSafeInteger(cursorSeq) && cursorSeq >= 0 ? cursorSeq : 0;
+    // `resync` is the client's instruction to drop its cursor and refetch the
+    // scope through /api/leads/map. It is never inferred from silence.
+    let resync = dot > 0 && rawCursor.slice(0, dot) !== epoch;
+    // No cursor at all → TAIL, don't replay. A fresh connection has just loaded
+    // the map through the role-scoped endpoint, so the window holds changes it
+    // already has. Tenant-local by construction: the global counter would leak
+    // every other tenant's write volume to anyone with a browser.
+    if (rawCursor === "") cursor = leadEventsCursor(tenantId);
+
+    res.status(200);
+    res.set({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+
+    const send = (event: string, data: unknown, id?: string) => {
+      // The id line goes FIRST so a browser that drops mid-frame never records a
+      // cursor for an event it did not finish reading.
+      if (id) res.write(`id: ${id}\n`);
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const deliver = (evt: LeadEvent) => {
+      if (evt.tenantId !== tenantId) return;
+      if (!repCanAccessLead(user, evt.lead)) return;
+      send("lead", evt, `${evt.epoch}.${evt.seq}`);
+    };
+
+    // Drain the reconnect window into a list BEFORE writing anything, so the
+    // opening frame can tell the client whether its cursor survived. A client
+    // that learns "resync" only after applying 200 patches has done the work
+    // twice. eventsSince() caps each call, hence the loop; the ring is finite so
+    // it terminates in a couple of passes, and the bound is only there so a
+    // future ring resize cannot turn this into a spin.
+    const replay: LeadEvent[] = [];
+    for (let pass = 0; !resync && pass < 8; pass++) {
+      const batch = eventsSince(tenantId, cursor);
+      // A gap means events this client needed are already evicted. Reported, not
+      // papered over: replaying the surviving tail would leave a hole nothing
+      // downstream can detect — a sold door silently missing from a map.
+      if (batch.gapped) { resync = true; break; }
+      if (batch.events.length === 0 || batch.nextSeq === cursor) break;
+      replay.push(...batch.events);
+      cursor = batch.nextSeq;
+    }
+    if (resync) { replay.length = 0; cursor = leadEventsCursor(tenantId); }
+
+    // Immediate first frame — a fresh or refreshed client paints without waiting
+    // for the first lead write. `since` is the resume token to send back if this
+    // connection ends before any lead frame does.
+    send("ready", { epoch, since: `${epoch}.${cursor}`, resync });
+    for (const evt of replay) deliver(evt);
+
+    // Subscribing AFTER the replay is race-free without a buffer: emitLeadEvent
+    // and this handler are both synchronous, so nothing can be emitted between
+    // the last replayed event and this line. The seq guard covers the reverse —
+    // the ring hands out the same frozen object to replay and to listeners.
+    const unsub = onLeadEvent((evt) => {
+      if (evt.seq <= cursor) return;
+      cursor = evt.seq;
+      try { deliver(evt); } catch { /* socket gone; the close handler cleans up */ }
+    });
+    leadStreams++;
+
+    // 15s, matching the field-facing scan feed: a phone on LTE pays a radio
+    // wakeup for every keepalive, and this stream has no periodic payload to
+    // piggyback on.
+    const hb = setInterval(() => {
+      if (!res.writableEnded) { try { res.write(`: ping\n\n`); } catch { /* closed */ } }
+    }, 15_000);
+    hb.unref();   // a keepalive must never be the reason the process won't exit
+
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;      // 'close' fires on req AND res, and alongside error paths
+      closed = true;
+      clearInterval(hb);
+      unsub();                 // MUST run, or every lead write pays this listener forever
+      leadStreams = Math.max(0, leadStreams - 1);
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+  });
+
   // GET /api/leads/fresh — confirmed fresh-fiber leads published within the last
   // ?days (default 30, clamped 1..365), as slim GeoJSON for map pins. Row-level
   // scoped exactly like /api/leads/map (reps see only their own). ?city & ?state
@@ -1531,7 +1742,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         (safeLead as any).lng = geo.lng;
       }
     }
-    res.status(201).json(stripProviderIds(storage.createLead(safeLead as any), req.user));
+    const created = storage.createLead(safeLead as any);
+    // A brand-new door is a pin appearing, not a pin changing — "status" is the
+    // closest the wire type gets, and the projection tells the map everything it
+    // needs to draw it without a refetch.
+    emitLeadChange("status", created, req.user, tenantId);
+    res.status(201).json(stripProviderIds(created, req.user));
   });
   app.patch("/api/leads/:id", requireManager, (req, res) => {
     // Allowlist only safe fields — prevent mass-assignment of internal fields
@@ -1559,11 +1775,27 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const updated = storage.updateLead(Number(req.params.id), safeUpdate as any, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    // One PATCH is three different stories to a client: who owns the door, what
+    // happened at it, or what someone wrote about it. Classify from what was
+    // actually allowlisted in, so a note edit doesn't make every open map repaint.
+    emitLeadChange(
+      "assignedRepId" in safeUpdate ? "assignment" : "leadStatus" in safeUpdate ? "status" : "notes",
+      updated, (req as any).user, tid,
+    );
     res.json(stripProviderIds(updated, (req as any).user));
   });
   app.delete("/api/leads/:id", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
     if (!storage.deleteLead(Number(req.params.id), tid)) return res.status(404).json({ error: "Not found" });
+    // No projection: after the row is gone there is nothing left to authorize
+    // against, and shipping the PRE-delete pin would hand every subscriber a
+    // patch that re-draws the door it is telling them to forget. Managers (whose
+    // scope is org-wide) still receive it; a scoped rep learns the pin vanished
+    // from the data-free map-changed ping deleteLead already fires.
+    emitLeadEvent({
+      tenantId: Number(tid ?? 0), leadId: Number(req.params.id), type: "status",
+      actorId: (req as any).user?.id ?? null, actorName: (req as any).user?.name ?? null, lead: null,
+    });
     res.json({ success: true });
   });
 
@@ -3246,9 +3478,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1 });
       let assigned = 0;
       for (const l of leadsInParcel) {
-        if (storage.updateLead(l.id, { assignedRepId: rid, assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t)) {
+        const moved = storage.updateLead(l.id, { assignedRepId: rid, assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t);
+        if (moved) {
           assigned++;
           storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rp.name, assignedBy: user?.name ?? null });
+          if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, t ?? l.tenantId);
         }
       }
       storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId: rid, assigned });
@@ -3996,6 +4230,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const repName = storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`;
       storage.addLeadEvent(updated.id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
     }
+    // Emitted for an unassign (repId null) too: the incoming holder is null, so
+    // only org-wide roles receive it — which is exactly right, since after the
+    // write there is no rep the door belongs to.
+    emitLeadChange("assignment", updated, user, tid);
     res.json(stripProviderIds(updated, user));
   });
 
@@ -4032,6 +4270,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const eventDetail = JSON.stringify({ assignedTo: repName, assignedBy });
     const CHUNK = 500;
     let updated = 0;
+    // Carried across chunks so the bulk-event bound applies to the REQUEST, not
+    // to each 500-lead chunk of it.
+    let emitted = 0;
 
     for (let i = 0; i < ids.length; i += CHUNK) {
       const chunk = ids.slice(i, i + CHUNK);
@@ -4048,14 +4289,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
           ).run(user?.name ?? null, eventDetail, ...chunk);
         }
+        // RETURNING id, not .changes. `chunk` is the CANDIDATE list — the tenant
+        // and scope predicates are inlined into this statement, so they filter
+        // silently and a live event addressed from `chunk` would announce doors
+        // that were never touched. One returned row per updated row, so the
+        // caller's count is unchanged.
         return rawDb.prepare(
           `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?,
                   unassigned_at = CASE WHEN ? IS NULL THEN datetime('now') ELSE unassigned_at END,
                   updated_at = datetime('now')
-            WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
-        ).run(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk).changes;
+            WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}
+        RETURNING id`,
+        ).all(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk) as Array<{ id: number }>;
       });
-      updated += applyChunk.immediate() as number;
+      const changed = applyChunk.immediate() as Array<{ id: number }>;
+      updated += changed.length;
+      // AFTER the chunk's transaction commits — an event emitted inside it would
+      // survive a rollback that erased the write it describes.
+      emitLeadChangesBulk("assignment", changed.slice(0, Math.max(0, LEAD_EVENT_BULK_MAX - emitted)).map((r) => r.id), user, tid);
+      emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + changed.length);
       // Yield so /api/health, the Field Map, and every other request keep
       // flowing while a large territory assignment completes.
       if (i + CHUNK < ids.length) await new Promise((resolve) => setImmediate(resolve));
@@ -4086,19 +4338,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     const apply = rawDb.transaction(() => {
       let updated = 0, skipped = 0;
+      // Ids are COLLECTED here and broadcast after commit — emitting inside the
+      // transaction would announce doors a rollback then un-changes, and the ring
+      // has no retraction.
+      const changed: number[] = [];
       for (const raw of leadIds) {
         const id = Number(raw);
         const lead = storage.getLeadById(id);
         // Silently skip cross-tenant or out-of-scope leads (don't leak, don't act) —
         // count them so the UI can be honest about what changed.
         if (!lead || (tid != null && lead.tenantId !== tid) || !repCanAccessLead(user, lead)) { skipped++; continue; }
-        if (storage.updateLead(id, { leadStatus: newStatus, lastOutcome: newStatus, lastOutcomeAt: new Date().toISOString() } as any, tid)) updated++;
+        if (storage.updateLead(id, { leadStatus: newStatus, lastOutcome: newStatus, lastOutcomeAt: new Date().toISOString() } as any, tid)) { updated++; changed.push(id); }
       }
-      return { updated, skipped };
+      return { updated, skipped, changed };
     });
-    const { updated, skipped } = apply.immediate();
+    const { updated, skipped, changed } = apply.immediate();
     if (updated > 0) {
       bustMapCache(tid);
+      emitLeadChangesBulk("status", changed, user, tid);
       storage.logActivity(user?.id ?? null, "lead.bulk_status", "lead", undefined, { outcome, leadStatus: newStatus, updated, skipped }, req.ip);
     }
     res.json({ updated, skipped, outcome, leadStatus: newStatus });
@@ -4122,19 +4379,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     const apply = rawDb.transaction(() => {
       let updated = 0, skipped = 0;
+      const changed: number[] = [];   // broadcast after commit — see bulk-status
       for (const raw of leadIds) {
         const id = Number(raw);
         const lead = storage.getLeadById(id);
         // Skip cross-tenant / out-of-scope leads silently (don't leak, don't act);
         // sameTenant is the shared tenant wall, canReassignLead the bulk-assign scope.
         if (!sameTenant(lead, tid) || !canReassignLead(user, lead!)) { skipped++; continue; }
-        if (storage.updateLead(id, { assignMark: value } as any, tid)) updated++;
+        if (storage.updateLead(id, { assignMark: value } as any, tid)) { updated++; changed.push(id); }
       }
-      return { updated, skipped };
+      return { updated, skipped, changed };
     });
-    const { updated, skipped } = apply.immediate();
+    const { updated, skipped, changed } = apply.immediate();
     if (updated > 0) {
       bustMapCache(tid);
+      // A mark is triage state on the pin, not a change of holder — "status", so
+      // a client that only repaints on assignment doesn't reshuffle its map.
+      emitLeadChangesBulk("status", changed, user, tid);
       storage.logActivity(user?.id ?? null, "lead.bulk_mark", "lead", undefined, { mark: value, updated, skipped }, req.ip);
     }
     res.json({ updated, skipped, mark: value });
@@ -4206,7 +4467,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (ownerName) enrichmentUpdate.ownerName = ownerName;
     if (incomeRange) enrichmentUpdate.incomeRange = incomeRange;
     if (homeValue) enrichmentUpdate.homeValue = homeValue;
-    storage.updateLead(lead.id, enrichmentUpdate as any);
+    const enriched = storage.updateLead(lead.id, enrichmentUpdate as any);
+    // A GET that writes: the enrichment is persisted on read, so an open card on
+    // another device is stale the moment this returns. "notes" — none of these
+    // columns are pin fields, so the client refreshes the card, not the map.
+    emitLeadChange("notes", enriched, _user, lead.tenantId);
 
     res.json({
       ownerName: ownerName ?? lead.ownerName ?? null,
@@ -4253,6 +4518,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       isHomeowner: isHomeowner ?? lead.isHomeowner,
     } as any);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    emitLeadChange("notes", updated, _euser, lead.tenantId);
     res.json(stripProviderIds(updated, (req as any).user));
   });
 
@@ -4298,6 +4564,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Note events join the lead's unified history with a short preview.
     const preview = notes.trim().slice(0, 100);
     if (preview) storage.addLeadEvent(lead.id, "note", user?.name ?? null, { preview });
+    // The note BODY never rides the bus (see LeadEventPin) — "notes" tells the
+    // client to refresh an open card through /api/leads/:id, which re-checks
+    // access for that one lead before handing over rep-typed free text.
+    emitLeadChange("notes", updated, user, lead.tenantId);
     storage.logActivity(user?.id ?? null, "lead.note_updated", "lead", lead.id, {}, req.ip);
     res.json({ id: lead.id, notes: updated?.notes ?? notes, updatedAt: updated?.updatedAt ?? null });
   });
@@ -4417,6 +4687,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       storage.logActivity(u?.id ?? null, "lead.central_disposition", "lead", lead.id,
         { outcome, newStatus, markedBy: u?.name ?? "central", address: lead.address }, req.ip, u?.tenantId ?? null);
     } catch { /* audit is best-effort */ }
+    // One event for the whole request, not two: the [central] knock row above is
+    // this same disposition's history entry, and the client reloads history from
+    // /api/leads/:id/history on any event for a lead whose card is open.
+    emitLeadChange("outcome", updated, u, lead.tenantId);
     res.json({ ...updated, central: true });
   });
 
@@ -4513,6 +4787,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           if (healed !== !!(existing as any).superseded) {
             rawDb.prepare("UPDATE knock_log SET superseded = ? WHERE id = ?").run(healed ? 1 : 0, existing.id);
           }
+          // The heal is the whole point of this branch — a mid-crash knock may
+          // only NOW have reached the lead, so the live update belongs here too.
+          // Skipped when the replay re-superseded, because then it applied to
+          // nothing. Re-read rather than reuse the tenant wall's row: `_knl` is
+          // block-scoped above, and only the POST-bundle row can authorize the
+          // event correctly.
+          if (!healed) emitLeadChangeById("outcome", Number(req.params.id), _knu);
           return res.status(200).json({ ...existing, deduped: true, superseded: healed || undefined });
         } catch (e: any) {
           console.warn("[knock] dedupe-heal failed:", e?.message);
@@ -4615,6 +4896,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // A knock changes the pin's visited state even when leadStatus is unchanged
     // (not_home) — bust this org's map layer explicitly.
     bustMapCache((req as any).user?.tenantId ?? undefined);
+    // Same trigger, same reason, one layer up: emitted even for a superseded
+    // knock, because the door was still worked and a teammate watching the same
+    // street needs the card and history to move. The read is POST-bundle, so the
+    // projection carries whatever the CAS actually settled on.
+    emitLeadChangeById("outcome", Number(req.params.id), _knu, knock.tenantId ?? lead?.tenantId);
     // ── Commission audit (post-commit; never blocks the knock) ───────────────
     if (!superseded && parsed.data.outcome === "sold" && parsed.data.repId) {
       try {
@@ -4659,6 +4945,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (_ktid && _klead && _klead.tenantId !== _ktid) return res.status(404).json({ error: "Not found" });
     if (user?.role === "rep" && knock.repId !== user.teamMemberId) return res.status(404).json({ error: "Not found" });
     const updated = storage.updateKnockNotes(knock.id, notes);
+    // The lead row did not change, but the card's History did. Guarded on
+    // knock.leadId: an orphaned knock has no door to address the event to, and
+    // _klead is null in exactly that case, which is why the tenant comes from the
+    // re-read rather than from a variable that can be null here.
+    if (knock.leadId != null) emitLeadChangeById("notes", knock.leadId, user, _klead?.tenantId);
     storage.logActivity(user?.id ?? null, "knock.note_updated", "knock", knock.id, { leadId: knock.leadId }, req.ip);
     res.json(updated);
   });
@@ -5217,9 +5508,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon) && canReassignLead(user, l));
     let assigned = 0;
     for (const l of enclosed) {
-      if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid)) {
+      const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid);
+      if (moved) {
         assigned++;
         storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
+        if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? l.tenantId);
       }
     }
     storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, assigned });
@@ -5305,12 +5598,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
     }
 
+    // Collected inside applyTerritoryAction, which runs INSIDE startNextPass's
+    // transaction — broadcast only once that transaction has committed.
+    const movedByAction: number[] = [];
     let result;
     try {
       result = startNextPass({
         territoryId: t.id, tenantId: tid ?? null,
         actorUserId: user?.id ?? null, actorName: user?.name ?? user?.username ?? null,
         action, newRepId, note, keepPendingCallbacks, now: at,
+        // The reset clears lead_status/last_outcome/assign_mark through raw SQL
+        // inside territoryPass.ts, so this is the only place the changed ids
+        // exist. Fires for every action including "keep", which re-opens doors
+        // without touching the territory at all.
+        onLeadsReset: (ids) => emitLeadChangesBulk("status", ids, user, tid),
         // Runs inside the same transaction as the lead reset: the area's
         // assignment and its doors can never disagree about which pass they're in.
         applyTerritoryAction: () => {
@@ -5344,6 +5645,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               assignmentSource: newRepId != null ? "territory-sync" : null,
               [newRepId != null ? "assignedAt" : "unassignedAt"]: at,
             } as any, tid);
+            movedByAction.push(l.id);
           }
         },
       });
@@ -5363,6 +5665,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       passClosed: result.passNumber, passOpened: result.nextPass,
       leadsReset: result.leadsReset, leadsFrozen: result.leadsFrozen,
     });
+    // The pass RESET itself is announced from inside startNextPass, where the
+    // reset id list lives; this covers only the hand-off half, which the route
+    // owns. Both are post-commit.
+    emitLeadChangesBulk("assignment", movedByAction, user, tid);
 
     res.json({ ok: true, ...result });
   });
@@ -5439,13 +5745,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let leadsAffected = 0;
     for (const l of next.leads) {
       if (beforeById.get(l.id) !== l.assignedRepId) {
-        storage.updateLead(l.id, {
+        const moved = storage.updateLead(l.id, {
           assignedRepId: l.assignedRepId,
           assignedTerritoryId: l.assignedRepId == null ? null : t.id,
           assignmentSource: l.assignedRepId == null ? null : "territory-sync",
           [l.assignedRepId == null ? "unassignedAt" : "assignedAt"]: at,
         } as any, tid);
         leadsAffected++;
+        // next.leads elements are pure {id, assignedRepId} domain objects from
+        // @shared/territory with no tenant on them — the tenant comes from the
+        // persisted row, or the request's as a fallback.
+        if (moved && leadsAffected <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid);
       }
     }
     storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected });
@@ -5488,9 +5798,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const inside = storage.getLeads(tid).filter((l: any) =>
         l.lat != null && l.lng != null && l.assignedRepId == null && pointInPolygon(l.lat, l.lng, polygon));
       for (const l of inside) {
-        if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid)) {
+        const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid);
+        if (moved) {
           assigned++;
           storage.addLeadEvent(l.id, "assignment", (req as any).user?.name ?? null, { assignedTo: rep.name, assignedBy: (req as any).user?.name ?? null });
+          if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? l.tenantId);
         }
       }
     }
@@ -5589,13 +5901,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Doors follow the area. A rep dropped from the assignment must stop seeing
     // its leads, and the incoming primary must start — otherwise the area moves
     // but the work doesn't.
+    let handedOver = 0;
     for (const l of storage.getLeadsByTerritory(t.id)) {
       const holder = (l as any).assignedRepId;
       if (holder != null && merged.includes(holder)) continue; // already on the area
-      storage.updateLead(l.id, {
+      const moved = storage.updateLead(l.id, {
         assignedRepId: newPrimary, assignedTerritoryId: t.id,
         assignmentSource: "territory-sync", assignedAt: at,
       } as any, tid);
+      handedOver++;
+      if (moved && handedOver <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? (l as any).tenantId);
     }
 
     storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
@@ -5669,13 +5984,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let leadsReleased = 0;
     for (const l of next.leads) {
       if (beforeById.get(l.id) !== l.assignedRepId) {
-        storage.updateLead(l.id, {
+        const moved = storage.updateLead(l.id, {
           assignedRepId: l.assignedRepId,
           assignedTerritoryId: l.assignedRepId == null ? null : t.id,
           assignmentSource: l.assignedRepId == null ? null : "territory-sync",
           unassignedAt: l.assignedRepId == null ? at : null,
         } as any, tid);
         leadsReleased++;
+        // Released doors go back to the pool, so the post-write row authorizes
+        // only org-wide roles — the removed rep's own copy is retired by the
+        // map-changed ping, which is the only safe way to tell someone about a
+        // lead they can no longer see.
+        if (moved && leadsReleased <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid);
       }
     }
 
@@ -5744,9 +6064,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // DETACH its leads (clear their territory ref, keep the rep) BEFORE deleting —
     // the old hard-delete left leads pointing at a ghost territory (2,855 orphans).
     scanSvc.recordTerritoryOutcome(ttid ?? getDefaultTenantId(), id, (terr as any).createdAt ?? null);
+    // Captured BEFORE the detach: clearTerritoryFromLeads is a set-based UPDATE
+    // that hands back only a row count, and once assigned_territory_id is cleared
+    // there is no way left to ask which doors it cleared it from.
+    const detachedIds = storage.getLeadsByTerritory(id).map((l: any) => l.id);
     const detached = scanSvc.detachTerritoryLeads(id);
     if (!storage.deleteTerritory(id, ttid)) return res.status(404).json({ error: "Not found" });
     if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(ttid);
+    // The doors keep their rep and lose their area, so a rep who held them only
+    // THROUGH the area (many-to-many assignee, never assigned_rep_id) drops out
+    // of the recipient set here — correctly, since that is what the write did.
+    emitLeadChangesBulk("assignment", detachedIds, (req as any).user, ttid);
     res.json({ success: true, detached });
   });
 
@@ -5925,6 +6253,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const updated = storage.overrideKnockVerification(Number(req.params.id), status, reason.trim(), user?.id ?? null, user?.name ?? null);
     if (!updated) return res.status(404).json({ error: "Activity not found" });
+    // A verdict change rewrites what the lead's History says about a rep's visit
+    // without touching the pin — "notes", i.e. refresh the card, don't repaint.
+    emitLeadChange("notes", _ovLead, user, _ovLead.tenantId);
     storage.logActivity(user?.id ?? null, "verification.override", "knock", Number(req.params.id), { newStatus: status, reason: reason.trim() }, req.ip);
     res.json(updated);
   });
@@ -6180,6 +6511,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       leadId: lead.id, userId: user.id, repId: user.teamMemberId ?? null,
       path: "lead-photos/" + req.file.filename,
     });
+    // The lead row is untouched; the card gained a photo. Same "refresh the card"
+    // contract as a note — the photo itself is fetched through its own authorized
+    // route, never carried on a broadcast bus.
+    emitLeadChange("notes", lead, user, lead.tenantId);
     storage.logActivity(user.id, "lead.photo_added", "lead", lead.id, { photoId: photo.id }, req.ip);
     res.status(201).json({ id: photo.id, createdAt: photo.createdAt });
   });
