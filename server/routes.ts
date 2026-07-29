@@ -392,10 +392,36 @@ function repInVisibilityScope(user: any, repId: number | null | undefined): bool
 // A rep may only read/act on a lead assigned to their own team member; a
 // team_lead only on leads within their team scope. Non-scoped roles pass.
 // Guards single-lead endpoints against IDOR (fetch-by-id) AND cross-team writes.
+// Areas a scoped caller works — as primary OR as one of several assignees.
+// Cached per request-ish by callers that need it in a loop; cheap enough here
+// (one indexed scan) that correctness beats micro-optimisation.
+function territoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
+  const out = new Set<number>();
+  for (const t of storage.getTerritories(tenantId ?? undefined) as any[]) {
+    if (t.repId != null && scope.includes(t.repId)) { out.add(t.id); continue; }
+    try {
+      const a = JSON.parse(t.assigneeIds || "[]") as number[];
+      if (a.some((id) => scope.includes(id))) out.add(t.id);
+    } catch { /* legacy row */ }
+  }
+  return out;
+}
+
+// An area can be worked by SEVERAL reps. Lead access therefore cannot hang on
+// leads.assigned_rep_id alone — that column names ONE rep, so on a shared area
+// exactly one assignee could see the doors and everyone else got a 404 for
+// ground they were assigned to. Access now also passes when the caller holds the
+// lead's TERRITORY, which is where "who works this" is already many-to-many.
+//
+// The tenant wall is unaffected: callers reach this only after the lead's tenant
+// has been checked, and the territory scan is tenant-filtered too.
 function repCanAccessLead(user: any, lead: any): boolean {
   const scope = leadVisibilityScope(user);
   if (scope === undefined) return true;
-  return !!lead && lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId);
+  if (!lead) return false;
+  if (lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId)) return true;
+  if (lead.assignedTerritoryId == null) return false;
+  return territoryIdsForScope(scope as number[], user?.tenantId).has(lead.assignedTerritoryId);
 }
 
 // May the caller REASSIGN this lead? A scoped role (team_lead) may claim an

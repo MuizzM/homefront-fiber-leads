@@ -163,7 +163,8 @@ describe("selected-pin dimming", () => {
     expect(expr[1]).toEqual(["==", ["get", "id"], 42]);
     expect(expr[2]).toBe(PIN_DS_OPACITY);
     expect(expr[3]).toBe(DIMMED_PIN_OPACITY);
-    expect(DIMMED_PIN_OPACITY).toBe(0.45);
+    // Fully lit before, during and after selection — no wash on tap.
+    expect(DIMMED_PIN_OPACITY).toBe(1);
   });
 });
 
