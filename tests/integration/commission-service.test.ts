@@ -322,6 +322,36 @@ describe("custom edited ladders reach the money engine (the placebo-editor bug)"
     expect(String(err?.message)).toMatch(/start at 1/);
   });
 
+  it("a canceled sale that drops the band CLAWS BACK the whole week's difference", () => {
+    // The operator's exact scenario. 7 sales at the 7+ band: 7 x $225 = $1,575.
+    // The 7th deal cancels. The rep does NOT just lose one sale's $225 — the
+    // whole week falls back to the 1-6 band: 6 x $175 = $1,050. The $525 swing
+    // ($225 for the lost sale + $50 x 6 repriced survivors) is the retroactive
+    // rule running in reverse, and it must happen on recalculation with no
+    // manual adjustment.
+    const REP_CLAW = 3003;
+    seedRep(REP_CLAW, T3, null);
+    svc.assignStructureToRep(T3, 1, { repId: REP_CLAW, structure: "TIERED", tiers: LADDER, effectiveFrom: "2026-01-01" });
+    for (let i = 0; i < 7; i++) {
+      svc.upsertSale(T3, 1, { repId: REP_CLAW, externalId: `claw-${i}`, status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs, leadId: 91000 + i });
+    }
+    const before = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CLAW, weekReference: WEEK_REF, actorId: 1 });
+    expect(before.statement.gross_commission_cents).toBe(7 * 22500);  // $1,575
+
+    svc.transitionSale(T3, 1, "claw-6", "REVERSE");
+    const after = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CLAW, weekReference: WEEK_REF, actorId: 1 });
+    expect(after.computation.qualifiedSaleCount).toBe(6);
+    expect(after.statement.gross_commission_cents).toBe(6 * 17500);   // $1,050 — not $1,350
+  });
+
+  it("re-qualifying the canceled deal restores the higher band for the whole week", () => {
+    // The inverse must also hold: cancellations are sometimes mistakes.
+    const REP_CLAW = 3003;
+    svc.upsertSale(T3, 1, { repId: REP_CLAW, externalId: "claw-6", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs, leadId: 91006 });
+    const res = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CLAW, weekReference: WEEK_REF, actorId: 1 });
+    expect(res.statement.gross_commission_cents).toBe(7 * 22500);
+  });
+
   it("assigning WITHOUT tiers still lands on the standard ladder (onboarding path)", () => {
     const REP_STD = 3002;
     seedRep(REP_STD, T3, null);

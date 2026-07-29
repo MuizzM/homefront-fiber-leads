@@ -7,9 +7,10 @@ import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
   FileSignature, CheckCircle2, Home, FileText, Printer,
-  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2,
+  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown,
 } from "lucide-react";
 import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
+import { calculateRetroactiveCommission } from "@shared/commissionTiers";
 
 // Map the live week / a past-week snapshot into the printable statement shape.
 function currentWeekModel(data: WeekResponse, repName: string): StatementModel {
@@ -351,6 +352,43 @@ function WeekView({ data }: { data: WeekResponse }) {
           </div>
         )}
       </div>
+
+      {/* Why the week dropped MORE than one sale — the retroactive rule in
+          reverse, said out loud. When a canceled deal pulls the count below a
+          band boundary, every surviving sale reprices down too: losing the 7th
+          on a 1-6 $175 / 7+ $225 ladder is not −$225, it is −$525. Without
+          this panel that difference is an unexplained hole in the number the
+          rep saw yesterday, and the complaint lands on their manager. Computed
+          with the SAME shared module the server pays from, so the panel can
+          never disagree with the paycheck. (Same transparency rule as the
+          adjustments block: a deduction is never an unexplained number.) */}
+      {(() => {
+        if (!isTiered || tiers.length === 0 || stateKey !== "OPEN") return null;
+        const reversedCount = (data.sales ?? []).filter(sale => sale.status === "REVERSED").length;
+        if (reversedCount === 0 || count === 0) return null;
+        const wouldBe = calculateRetroactiveCommission(count + reversedCount, tiers as any);
+        if (wouldBe.rateCents <= rateCents) return null;  // no band was lost
+        const dropCents = wouldBe.grossCommissionCents - grossCents;
+        return (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4" data-testid="band-drop-notice">
+            <div className="flex items-center gap-2">
+              <TrendingDown className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-sm font-semibold text-foreground">Why this week dropped more than one sale</span>
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+              {reversedCount === 1 ? "A canceled deal" : `${reversedCount} canceled deals`} pulled you out of the{" "}
+              <span className="font-semibold text-foreground">{wouldBe.tierLabel}</span> band — tiers are retroactive,
+              so your {count} remaining sale{count === 1 ? "" : "s"} repriced from {usd(wouldBe.rateCents)} to{" "}
+              {usd(rateCents)} each. That's {usd(dropCents)} in total, not just the lost sale.
+            </p>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Win it back: the week is still open — {retro?.salesUntilNextTier != null
+                ? `${retro.salesUntilNextTier} more sale${retro.salesUntilNextTier === 1 ? "" : "s"} puts every door back at the higher rate.`
+                : "another qualified sale can restore the band."}
+            </p>
+          </div>
+        );
+      })()}
 
       {/* Next-tier nudge (tiered only) */}
       {isTiered && retro && retro.salesUntilNextTier != null && retro.nextTierRateCents != null && retro.nextTierMinimumSales != null && (
