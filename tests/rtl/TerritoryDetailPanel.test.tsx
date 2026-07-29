@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TerritoryDetailPanel } from "@/components/TerritoryDetailPanel";
 import { colorForRep } from "@shared/repColors";
@@ -153,13 +153,17 @@ describe("<TerritoryDetailPanel />", () => {
     expect(swatch).toHaveStyle({ backgroundColor: "#94a3b8" });
   });
 
-  it("paints the swatch the same colour as its own first rep chip", () => {
-    // The panel used to prefer the stored territory.color for the header swatch
-    // while deriving the rep chips from colorForRep, so it could contradict
-    // ITSELF. The fixture still carries that drift on purpose: repIds[0] is 7,
-    // whose colour is #EF4444, but the stored colour says #F97316 — a snapshot
-    // from whenever the area was last assigned. The swatch must follow the rep,
-    // not the snapshot, because the map paints the region from colorForRep too.
+  it("paints the swatch the AREA's colour, matching the polygon on the map", () => {
+    // This assertion was the other way round one revision ago, and its stated
+    // reason — "the map paints the region from colorForRep too" — stopped being
+    // true in the same change that introduced it: the map now prefers
+    // territories.color, the colour the admin picked while drawing.
+    //
+    // So the rule is: the header swatch describes the GROUND and follows the
+    // area's own colour, exactly like the polygon beside it. The rep chips below
+    // keep following colorForRep, because those dots identify a PERSON and a
+    // person's hue is not a property of the ground. The fixture keeps the two
+    // deliberately different so this cannot pass by coincidence.
     expect(activeTerritory.color).not.toBe(colorForRep(activeTerritory.repIds[0]));
     render(
       <TerritoryDetailPanel
@@ -169,7 +173,285 @@ describe("<TerritoryDetailPanel />", () => {
       />
     );
     const swatch = screen.getByTestId("territory-color");
-    expect(swatch).toHaveStyle({ backgroundColor: colorForRep(7) });
-    expect(swatch).not.toHaveStyle({ backgroundColor: activeTerritory.color });
+    expect(swatch).toHaveStyle({ backgroundColor: activeTerritory.color });
+    expect(swatch).not.toHaveStyle({ backgroundColor: colorForRep(7) });
+  });
+});
+
+// ── The operational numbers ─────────────────────────────────────────────────
+// The progress endpoint has returned knocked and sold all along; the panel's own
+// prop type dropped them, so a manager saw a location-verification percentage
+// and had no idea how much of the area had actually been walked.
+describe("<TerritoryDetailPanel /> stats", () => {
+  const stats = {
+    total: 84, verifiedWorkedLeads: 20, areaWorkedPct: 25,
+    verified: 20, needsReview: 0, invalid: 0, avgDistanceM: 12, maxAllowedDistanceM: 60,
+    knocked: 24, sold: 8, untouched: 56, availableBase: 80, attempts: 31,
+    penetrationRate: 10, knockCompletionRate: 30, contactRate: 45.8,
+    lastActivityAt: "2026-07-28T14:00:00Z",
+  };
+
+  it("says how many of the workable doors are done, and how many are left", () => {
+    // Rewritten for AreaStatsCard, which replaced the flat grid this used to
+    // assert. Same two claims — progress against the AVAILABLE base, and what is
+    // left — read off the new hierarchy: hero number + Untouched tile.
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
+    expect(screen.getByTestId("stat-knocked")).toHaveTextContent("24");
+    expect(screen.getByTestId("territory-stats")).toHaveTextContent("of 80 worked");
+    expect(screen.getByTestId("stat-untouched")).toHaveTextContent("56");
+  });
+
+  it("does not conflate doors knocked with total attempts", () => {
+    // 31 knocks across 24 doors. The old card printed "31 attempts" as a
+    // secondary line; the new one drops that line to keep one hierarchy, so what
+    // is asserted now is the claim that actually mattered — the HERO number is
+    // doors, never the attempt count, because conflating them overstates
+    // coverage.
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
+    expect(screen.getByTestId("stat-knocked")).toHaveTextContent("24");
+    expect(screen.getByTestId("stat-knocked")).not.toHaveTextContent("31");
+  });
+
+  it("shows no attempts line at all, in either direction", () => {
+    // Superseded: the attempts line is gone from the design entirely, so the old
+    // "hide it when attempts === knocked" case now holds unconditionally.
+    for (const attempts of [24, 31]) {
+      const { unmount } = render(<TerritoryDetailPanel territory={activeTerritory}
+        currentUser={{ role: "manager" }} progress={{ ...stats, attempts }} />);
+      expect(screen.getByTestId("territory-stats")).not.toHaveTextContent("attempts");
+      unmount();
+    }
+  });
+
+  it("shows sold, penetration and contact rate", () => {
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
+    expect(screen.getByTestId("stat-sold")).toHaveTextContent("8");
+    // "10%" not "10.0%": the new formatter drops a trailing zero that carries no
+    // information, while keeping a decimal that does (0.4% stays 0.4%).
+    expect(screen.getByTestId("stat-penetration")).toHaveTextContent("10%");
+    expect(screen.getByTestId("stat-contact")).toHaveTextContent("45.8%");
+  });
+
+  it("exposes knock completion to screen readers, not through colour alone", () => {
+    // The linear bar became a ring. The accessibility requirement is unchanged
+    // and is what this test was always really about: the figure must be
+    // announced, because an arc is purely visual.
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} progress={stats} />);
+    expect(screen.getByRole("img", { name: "30% complete" })).toBeInTheDocument();
+  });
+
+  it("stays silent rather than showing zeros when the figures are absent", () => {
+    // An older cached response predates these fields. "0 of 0 knocked" would be
+    // a claim about the area; showing nothing is the honest state.
+    const { total, verifiedWorkedLeads, areaWorkedPct, verified, needsReview, invalid, avgDistanceM, maxAllowedDistanceM } = stats;
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }}
+      progress={{ total, verifiedWorkedLeads, areaWorkedPct, verified, needsReview, invalid, avgDistanceM, maxAllowedDistanceM }} />);
+    expect(screen.queryByTestId("territory-stats")).not.toBeInTheDocument();
+  });
+});
+
+// ── Editing the area's colour ───────────────────────────────────────────────
+describe("<TerritoryDetailPanel /> colour editing", () => {
+  it("turns the swatch into a picker when the caller may edit", async () => {
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} onRecolor={vi.fn()} />);
+    expect(screen.getByTestId("territory-color-edit")).toBeInTheDocument();
+  });
+
+  it("reports the chosen colour", async () => {
+    const onRecolor = vi.fn();
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "manager" }} onRecolor={onRecolor} />);
+    await userEvent.click(screen.getByTestId("territory-color-trigger"));
+    await userEvent.click(screen.getByTestId("territory-color-16a34a"));
+    expect(onRecolor).toHaveBeenCalledWith("#16A34A");
+  });
+
+  it("stays a read-only dot for someone who cannot edit", () => {
+    // Server authorization is the real gate; this keeps a control that would
+    // 403 off the screen entirely.
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "rep" }} />);
+    expect(screen.queryByTestId("territory-color-edit")).not.toBeInTheDocument();
+    expect(screen.getByTestId("territory-color")).toBeInTheDocument();
+  });
+
+  it("shows the area's OWN colour, matching the polygon on the map", () => {
+    // The map paints from territories.color. A swatch computed from the rep's
+    // palette would disagree with the region right next to it.
+    render(<TerritoryDetailPanel territory={{ ...activeTerritory, color: "#14C985" }} currentUser={{ role: "manager" }} />);
+    expect(screen.getByTestId("territory-color")).toHaveStyle({ backgroundColor: "#14C985" });
+  });
+});
+
+// ── The assignee sees the numbers too ───────────────────────────────────────
+// The panel was rendered behind `canAssign && …`, so a rep could never open it.
+// The person actually walking the area had no way to see how much of it was
+// done — and management controls were already role-gated INSIDE the panel, so
+// hiding the whole thing bought no safety, only blindness.
+describe("<TerritoryDetailPanel /> for the rep who works the area", () => {
+  const stats = {
+    total: 84, verifiedWorkedLeads: 20, areaWorkedPct: 25,
+    verified: 20, needsReview: 0, invalid: 0, avgDistanceM: 12, maxAllowedDistanceM: 60,
+    knocked: 24, sold: 8, untouched: 56, availableBase: 80, attempts: 31,
+    penetrationRate: 10, knockCompletionRate: 30, contactRate: 45.8,
+  };
+
+  it("shows a rep the same numbers a manager sees", () => {
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "rep" }} progress={stats} />);
+    expect(screen.getByTestId("stat-knocked")).toHaveTextContent("24");
+    expect(screen.getByTestId("stat-sold")).toHaveTextContent("8");
+    expect(screen.getByTestId("stat-penetration")).toHaveTextContent("10%");
+  });
+
+  it("shows the rep who else is on the area", () => {
+    render(<TerritoryDetailPanel territory={activeTerritory} currentUser={{ role: "rep" }} progress={stats} />);
+    expect(screen.getAllByTestId("rep-chip")).toHaveLength(2);
+  });
+
+  it("gives the rep no management controls at all", () => {
+    // Reading the numbers is not permission to change anything. The server
+    // re-checks every one of these regardless; this keeps buttons that would
+    // 403 off a field phone.
+    render(
+      <TerritoryDetailPanel
+        territory={activeTerritory}
+        currentUser={{ role: "rep" }}
+        progress={stats}
+        onReclaim={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("reclaim-btn")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("territory-rename-btn")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("territory-color-edit")).not.toBeInTheDocument();
+  });
+});
+
+// ── A control you cannot use must not be on screen ──────────────────────────
+// Reported from production, on a real pool area: "claim and reclaim are not
+// working, it's just refresh."
+//
+// Reclaim was gated on the viewer's ROLE alone, while MapView only supplies
+// onReclaim for an area somebody actually holds. On an unassigned area the
+// button therefore rendered — full colour, no disabled state, correct label —
+// wired to onClick={undefined}. Tapping it did nothing whatsoever, which from
+// the outside is indistinguishable from a request that silently failed. Hence
+// "not working": the control was never connected to anything.
+//
+// onReassign and onComplete each guarded themselves. Reclaim was the one that
+// did not, which is why it was the one that got reported.
+describe("actions render only when there is something to do", () => {
+  const poolArea = {
+    id: 99,
+    name: "Unassigned area",
+    status: "unassigned" as const,
+    repIds: [],
+    leadCount: 1150,
+  };
+
+  it("hides Reclaim on a pool area, where the handler is not supplied", () => {
+    render(
+      <TerritoryDetailPanel
+        territory={poolArea}
+        currentUser={{ role: "manager" }}
+        // MapView passes `!isPool && canReclaim ? fn : undefined` — this IS the
+        // production shape for an area in the pool.
+      />,
+    );
+    expect(screen.queryByTestId("reclaim-btn")).toBeNull();
+  });
+
+  it("shows Reclaim when an area is actually held", () => {
+    // The fix must not remove the feature — this is the case that matters.
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "manager" }}
+        onReclaim={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("reclaim-btn")).toBeInTheDocument();
+  });
+
+  it("never renders a reclaim-row button without a handler behind it", () => {
+    // The general form of the bug, across all three buttons in that row.
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "manager" }}
+        onReclaim={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("reclaim-btn")).toBeInTheDocument();
+    expect(screen.queryByTestId("reassign-btn")).toBeNull();  // not supplied
+    expect(screen.queryByTestId("complete-btn")).toBeNull();  // not supplied
+  });
+
+  it("drops the whole action row when no action is available", () => {
+    // A permitted role with nothing to do should get no empty strip of chrome.
+    const { container } = render(
+      <TerritoryDetailPanel territory={poolArea} currentUser={{ role: "manager" }} />,
+    );
+    for (const id of ["reclaim-btn", "reassign-btn", "complete-btn"]) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+    expect(container.querySelector(".mt-4.flex.flex-wrap")).toBeNull();
+  });
+
+  it("still hides the row from a role that may not reclaim, even with handlers", () => {
+    // Permission is still the first gate — the handler check is an ADDITIONAL
+    // condition, not a replacement for the role check.
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "rep" }}
+        onReclaim={() => {}}
+        onComplete={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("reclaim-btn")).toBeNull();
+    expect(screen.queryByTestId("complete-btn")).toBeNull();
+  });
+
+  it("calls the handler when Reclaim is actually pressed", () => {
+    const onReclaim = vi.fn();
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "manager" }}
+        onReclaim={onReclaim}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("reclaim-btn"));
+    expect(onReclaim).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("no panel control can submit a form", () => {
+  // "It's just refresh" is also what an implicit submit looks like. A bare
+  // <button> defaults to type="submit"; there is no <form> around this panel
+  // today, so nothing submitted — but that is a property of the surrounding
+  // markup, not of these controls, and it costs one attribute to stop relying
+  // on it.
+  it("declares type=button on every button it renders", () => {
+    const { container } = render(
+      <TerritoryDetailPanel
+        territory={{ id: 1, name: "Held", status: "active" as const, repIds: [7], leadCount: 10 }}
+        currentUser={{ role: "manager" }}
+        teamNames={{ 7: "Rae Rivera" }}
+        onReclaim={() => {}}
+        onReassign={() => {}}
+        onComplete={() => {}}
+        onViewHistory={() => {}}
+        onStartNextPass={() => {}}
+        onEditAssignees={() => {}}
+        onRename={() => {}}
+        onUnassignRep={() => {}}
+      />,
+    );
+    const untyped = Array.from(container.querySelectorAll("button")).filter(
+      (b) => b.getAttribute("type") !== "button",
+    );
+    expect(
+      untyped.map((b) => b.getAttribute("data-testid") ?? b.textContent?.trim()),
+      "these default to type=submit",
+    ).toEqual([]);
   });
 });

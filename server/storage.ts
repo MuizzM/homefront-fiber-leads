@@ -28,8 +28,27 @@ import {
   type Tenant, type InsertTenant,
 } from "@shared/schema";
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+
+/** Statuses that BLOCK a new commission on the same door.
+ *
+ *  "paid" is deliberately NOT here, and that is the whole subtlety. Including it
+ *  looked obviously right — a paid sale is credited, so do not credit it twice —
+ *  but `paid` is TERMINAL in LEGAL_TRANSITIONS (paid → paid only). There is no
+ *  reachable escape: paid→disputed is 409 ILLEGAL_TRANSITION, and "superseded"
+ *  is written only by a one-time migration and is not a legal current status.
+ *  So blocking on `paid` meant that once a door's commission was paid, that door
+ *  could NEVER earn again — a genuine re-sale after a chargeback silently booked
+ *  nothing, HTTP 200, no error, no way for a manager to unblock it.
+ *
+ *  That is a worse bug than the double-pay it was meant to prevent: double-pay
+ *  is visible and clawable, silent non-pay is neither. Pending and approved are
+ *  enough, because those are the states in which an unpaid entitlement for this
+ *  door is still outstanding. */
+export const LIVE_COMMISSION_STATUSES = ["pending", "approved"] as const;
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
-import { territoryHeldByAny } from "@shared/territory";
+import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
+import { syncAssignments } from "./territoryAssignments";
+import { bumpTerritoryVersion } from "./territoryScopeCache";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 import {
   planLegacyCommissionTransition,
@@ -263,6 +282,9 @@ export interface IStorage {
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(tenantId?: number, repId?: number): Commission[];
+  /** A commission on this door that is still on the money path (pending,
+   *  approved or paid) — the guard against paying one sale twice. */
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined;
   getCommissionById(id: number, tenantId: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
   transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult;
@@ -2049,6 +2071,16 @@ function migrateCommissionsPendingDedupe(raw: import("better-sqlite3").Database)
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_tenant_lead_pending
         ON commissions(tenant_id, lead_id) WHERE status = 'pending' AND lead_id IS NOT NULL`,
     );
+    // The partial index above is UNIQUE and covers only status='pending', so it
+    // cannot serve the double-pay guard, which asks "is there a live commission
+    // on this door" across pending|approved|paid. Without this second, ordinary
+    // index that lookup is a full scan of the tenant's ledger on every sold
+    // knock — the cost grows with the money the company has ever earned, which
+    // is the worst possible thing to put on the sale path.
+    raw.exec(
+      `CREATE INDEX IF NOT EXISTS idx_commissions_lead_status
+        ON commissions(lead_id, status) WHERE lead_id IS NOT NULL`,
+    );
     const idx = raw.prepare(
       "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_commissions_tenant_lead_pending'",
     ).get();
@@ -3284,15 +3316,29 @@ export class Storage implements IStorage {
       .map((r: any) => ({ ...r, payload: r.payload ? (() => { try { return JSON.parse(r.payload); } catch { return null; } })() : null }));
   }
   createTerritory(t: InsertTerritory): Territory {
-    return db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();
+    const row = db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();
+    // Unconditional: repCanAccessLead memoises on this stamp, and a bump that
+    // reasons about which fields matter is a bump that will eventually reason
+    // wrong — in the direction of granting access.
+    bumpTerritoryVersion();
+    recordAssigneeChange(row);
+    return row;
   }
   updateTerritory(id: number, updates: Partial<InsertTerritory>, tenantId?: number): Territory | undefined {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
-    return db.update(territories).set(updates).where(cond).returning().get();
+    const row = db.update(territories).set(updates).where(cond).returning().get();
+    bumpTerritoryVersion();
+    // Only when the holder list was part of THIS write. Recording on every
+    // update — a rename, a colour change — would be harmless but noisy, and
+    // reading assignee_ids off a row the caller did not touch invites drift.
+    if (row && "assigneeIds" in updates) recordAssigneeChange(row);
+    return row;
   }
   deleteTerritory(id: number, tenantId?: number): boolean {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
-    return db.delete(territories).where(cond).run().changes > 0;
+    const gone = db.delete(territories).where(cond).run().changes > 0;
+    bumpTerritoryVersion();
+    return gone;
   }
 
   // ── Territory Requests ─────────────────────────────────────────────────────
@@ -3725,6 +3771,16 @@ export class Storage implements IStorage {
     const q = db.select().from(commissions);
     return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(commissions.createdAt)).all();
   }
+  // Indexed lookup, not a scan: this runs on every sold knock, and getCommissions
+  // would read the whole tenant's ledger to answer a single-row question.
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined {
+    const conds = [
+      eq(commissions.leadId, leadId),
+      inArray(commissions.status, LIVE_COMMISSION_STATUSES as unknown as string[]),
+    ];
+    if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
+    return db.select().from(commissions).where(and(...conds)).limit(1).get();
+  }
   getCommissionById(id: number, tenantId: number): Commission | undefined {
     return db.select().from(commissions)
       .where(and(eq(commissions.id, id), eq(commissions.tenantId, tenantId)))
@@ -3948,6 +4004,34 @@ export class Storage implements IStorage {
     const sold = allLeads.filter(l => l.leadStatus === 'sold').length;
     const terrs = db.select().from(territories).where(eq(territories.tenantId, tenantId)).all().length;
     return { reps, leads: allLeads.length, sold, territories: terrs };
+  }
+}
+
+// The assignment RECORD follows the holder list, wherever the list is written.
+//
+// territories.assignee_ids is written from seven different routes — draw-and-
+// assign, scan-derived areas, share, assign, unassign, and both reclaim modes.
+// Hooking each one would eventually miss a path, and a missed path is exactly
+// how the array and the record silently diverge. Hooking the two functions that
+// actually perform the write cannot be bypassed by a route that forgets.
+//
+// Deliberately best-effort: an area assignment must not fail because its audit
+// row could not be written. The record is reconstructible from the array; the
+// array is not reconstructible from anything.
+function recordAssigneeChange(row: any): void {
+  if (!row?.id) return;
+  try {
+    const repIds = parseAssigneeIds(row.assigneeIds);
+    if (!repIds) return; // legacy row with no list — nothing authoritative to sync
+    syncAssignments({
+      tenantId: row.tenantId ?? null,
+      territoryId: row.id,
+      repIds,
+      actorUserId: null, // storage has no session; routes that care pass their own
+      primaryRepId: row.repId ?? null,
+    });
+  } catch {
+    /* never let bookkeeping break an assignment */
   }
 }
 

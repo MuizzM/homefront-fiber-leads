@@ -123,7 +123,9 @@ import {
   repIdsForDoor,
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
-import { territoryPaint, territoryBeforeId } from "@/lib/territoryStyle";
+import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
+import { lockGesturesForDrawing, lockDocumentPullToRefresh, mapGestureTarget } from "@/lib/lassoGestureLock";
+import { AreaAssigneeBar } from "@/components/territory/AreaAssigneeBar";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
@@ -909,18 +911,30 @@ export default function MapView() {
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
   // Areas under an overlapping tap, awaiting "which one did you mean?".
   const [territoryPickIds, setTerritoryPickIds] = useState<number[]>([]);
+  // Which areas are on this viewer's map right now. Read by the tap handler,
+  // which is bound once at map init and so cannot close over the memo.
+  const visibleTerritoryIdsRef = useRef<Set<number>>(new Set());
   // Colour chosen BEFORE the stroke, and saved with the area. It describes the
   // ground, so it must not follow whoever the area is handed to — which is what
   // the old colorForRep(repId) stamp did.
   const [lassoColor, setLassoColor] = useState<string>(TERRITORY_SWATCHES[0]);
+  // The stroke handler is bound once at map init, so it cannot close over
+  // lassoColor — it would paint whatever the colour was when the map loaded.
+  const lassoColorRef = useRef<string>(TERRITORY_SWATCHES[0]);
   // Sales Rabbit-style refine + action state. `lassoDisabled` = display states the
   // user toggled OUT of the action set (default empty = everything selected).
   // `lassoAction` = which bulk action the panel is showing.
   const [lassoDisabled, setLassoDisabled] = useState<Set<PinDisplayState>>(
     new Set(),
   );
+  // Drawing a shape means drawing an AREA. This defaulted to "assign", which is
+  // bulk LEAD reassignment and saves no polygon at all — so the ordinary flow
+  // (draw a loop, pick a rep, tap the button) moved the doors and created no
+  // territory. Nothing appeared on the manager's map or the rep's, because
+  // nothing had been created, and the only clue was that "Area" was the fourth
+  // tab. The other three actions are still one tap away.
   const [lassoAction, setLassoAction] = useState<"assign" | "status" | "mark" | "area">(
-    "assign",
+    "area",
   );
   const [lassoStatusOutcome, setLassoStatusOutcome] = useState<KnockOutcome>(
     BULK_STATUS_OUTCOMES[0],
@@ -1403,6 +1417,18 @@ export default function MapView() {
     () => lassoActive.map((l) => l.id),
     [lassoActive],
   );
+  // A loop was drawn. This is what opens the action panel — NOT whether the loop
+  // caught any leads. The panel used to branch on lassoSelected.length, so a loop
+  // over ground with no doors in it (exactly what carving fresh territory looks
+  // like) left the "Drag a loop around the area" hint up forever: the shape was
+  // sitting in lassoPoints with no button anywhere on screen that could save it.
+  const lassoDrawn = lassoPoints.length > 0;
+  // Assign / Status / Mark all operate on lead IDs and are meaningless with an
+  // empty selection. Area needs only the polygon and a rep, so an empty loop
+  // resolves to it regardless of which tab was last used — otherwise the panel
+  // would open on a tab whose only control is a disabled button.
+  const lassoHasLeads = lassoSelected.length > 0;
+  const lassoEffectiveAction = lassoHasLeads ? lassoAction : "area";
 
   // Rename an area — the friendly name reps see on their map. Server keeps an
   // audit trail (territory "renamed" event) and custom names survive reassign.
@@ -1414,6 +1440,25 @@ export default function MapView() {
     onSuccess: (t: { name?: string }) => {
       qc.invalidateQueries({ queryKey: ["/api/territories"] });
       toast({ title: `Area renamed to "${t?.name ?? "area"}"` });
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  // Recolour an area. The colour describes the ground, so it is the field a
+  // manager is most likely to get wrong on the first pass — and until now it was
+  // the one field with no edit path at all. Same PATCH the rename uses.
+  const recolorTerritoryMutation = useMutation({
+    mutationFn: async ({ id, color }: { id: number; color: string }) => {
+      const res = await apiRequest("PATCH", `/api/territories/${id}`, { color });
+      return res.json();
+    },
+    onSuccess: () => {
+      // The polygon paints from territories.color, so the map must refetch for
+      // the new colour to land; invalidating progress too keeps the panel swatch
+      // and the region on screen in step.
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      toast({ title: "Area colour updated" });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -1580,7 +1625,7 @@ export default function MapView() {
     setLassoRepId("");
     setLassoName("");
     setLassoDisabled(new Set());
-    setLassoAction("assign");
+    setLassoAction("area");
     setLassoStatusOutcome(BULK_STATUS_OUTCOMES[0]);
     const map = mapRef.current;
     if (map) {
@@ -1734,6 +1779,15 @@ export default function MapView() {
     enabled: !!user,
     staleTime: 60_000,
   });
+
+  // Each new area starts on a colour nothing else is wearing. Colour IS the
+  // identifier on a map, so two areas sharing one read as a single region split
+  // by a road — worse than any individual colour being unattractive. Still
+  // overridable: this picks the starting point, the picker keeps the last word.
+  const pickFreeColor = useCallback(
+    () => pickUnusedTerritoryColor(territories.map((t) => (t as any).color), TERRITORY_SWATCHES),
+    [territories],
+  );
   const { data: territoryProgress = [] } = useQuery<
     Array<{
       id: number;
@@ -1770,6 +1824,7 @@ export default function MapView() {
   useEffect(() => {
     (window as any).__teamMembers = team;
   }, [team]);
+  useEffect(() => { lassoColorRef.current = lassoColor; }, [lassoColor]);
   useEffect(() => {
     (window as any).__onTerritoryClick = (tid: number | null) =>
       setSelectedTerritoryId(tid);
@@ -1789,7 +1844,12 @@ export default function MapView() {
   // server is the authority (every route re-checks); this only stops a rep's tap
   // from opening a panel whose every button would come back 403.
   useEffect(() => {
-    (window as any).__canManageTerritory = (_tid: number) => canAssign;
+    // A rep taps their own area to read its numbers. visibleTerritories already
+    // limits a rep to areas they actually hold, so anything they can see, they
+    // may open — the panel itself hides every management control by role, and
+    // the server re-checks each one regardless.
+    (window as any).__canManageTerritory = (tid: number) =>
+      canAssign || visibleTerritoryIdsRef.current.has(tid);
     return () => {
       delete (window as any).__canManageTerritory;
     };
@@ -3009,6 +3069,10 @@ export default function MapView() {
     });
   }, [territories, canAssign, user?.teamMemberId]);
 
+  useEffect(() => {
+    visibleTerritoryIdsRef.current = new Set(visibleTerritories.map((t) => t.id));
+  }, [visibleTerritories]);
+
   // Centroid label. Reps: the area NAME only. Managers: name + owner line
   // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's name
   // must NOT linger on the area).
@@ -3471,6 +3535,20 @@ export default function MapView() {
       map.touchZoomRotate.disable();
       map.touchPitch?.disable();
     } catch {}
+    // …and suspend the BROWSER's gestures too, which the four lines above are
+    // what re-enable. Mapbox drives the canvas's touch-action from classes it
+    // only applies while drag-pan + touch-zoom-rotate are on, so disabling them
+    // drops the canvas to touch-action: auto and the finger starts scrolling the
+    // page — a downward stroke from scroll top being the pull-to-refresh gesture,
+    // which is the "it reloads when I finish a lasso" report. See
+    // lib/lassoGestureLock.ts. Released in this effect's cleanup, so it lifts on
+    // completion, cancel, unmount, style swap and error alike.
+    const releaseCanvas = lockGesturesForDrawing(mapGestureTarget(map));
+    const releaseRoot = lockDocumentPullToRefresh(typeof document === "undefined" ? null : document);
+    const releaseGestures = () => {
+      releaseCanvas();
+      releaseRoot();
+    };
 
     // Point-in-polygon lives in lib/mapGeo.ts (bbox-rejected, unit-tested).
 
@@ -3508,14 +3586,16 @@ export default function MapView() {
             id: "lasso-fill",
             type: "fill",
             source: "lasso-polygon",
-            paint: { "fill-color": "#2dd4bf", "fill-opacity": 0.14 },
+            // The colour the area will actually be saved in, so the preview is
+            // a preview of the thing rather than a generic teal smear.
+            paint: { "fill-color": lassoColorRef.current, "fill-opacity": 0.2 },
           });
           map.addLayer({
             id: "lasso-outline",
             type: "line",
             source: "lasso-polygon",
             paint: {
-              "line-color": "#5eead4",
+              "line-color": lassoColorRef.current,
               "line-width": 3,
               "line-cap": "round",
               "line-join": "round",
@@ -3611,6 +3691,10 @@ export default function MapView() {
 
     return () => {
       (window as any).__lassoActive = false;
+      // Give the page its gestures back FIRST. If a later line throws (a map
+      // already torn down by unmount), the browser must not be left unable to
+      // scroll — that failure mode is worse than the bug this fixes.
+      releaseGestures();
       // Defensive: on unmount the map may already be removed (getCanvas → undefined)
       try {
         map.off("mousedown", onMouseDown);
@@ -5751,7 +5835,7 @@ export default function MapView() {
               style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.5rem)" }}
               className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100vw-24px)]"
             >
-              {lassoSelected.length === 0 ? (
+              {!lassoDrawn ? (
                 /* Armed, nothing drawn yet → drawing hint */
                 <div className="glass-capsule flex items-center gap-2.5 border-teal-300/40 pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
                   <Pencil className="w-4 h-4 text-teal-400 flex-shrink-0" />
@@ -5759,6 +5843,7 @@ export default function MapView() {
                     Drag a loop around the area
                   </span>
                   <button
+                    type="button"
                     onClick={exitLasso}
                     className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors"
                     title="Exit"
@@ -5772,7 +5857,20 @@ export default function MapView() {
                    refine), then an action on the refined set — Assign owner, Set
                    status, or Save as area. */
                 <div className="glass-surface flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))]">
-                  {/* Count + per-status breakdown; tap a chip to include/exclude it */}
+                  {/* Count + per-status breakdown; tap a chip to include/exclude it.
+                      With no doors in the loop there is nothing to break down and
+                      nothing to refine — say so plainly instead of showing "0/0"
+                      beside a row of chips that cannot exist. */}
+                  {!lassoHasLeads ? (
+                    <span
+                      className="text-[12px] text-white/60 leading-tight"
+                      aria-live="polite"
+                      data-testid="lasso-empty-note"
+                    >
+                      No mapped doors inside this loop — it can still be saved as
+                      an area.
+                    </span>
+                  ) : (
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span
                       className="text-[14px] font-bold text-white whitespace-nowrap mr-0.5"
@@ -5826,6 +5924,7 @@ export default function MapView() {
                       );
                     })}
                   </div>
+                  )}
 
                   {/* Action switcher */}
                   <div className="flex items-center gap-1 rounded-full bg-white/10 p-0.5">
@@ -5836,23 +5935,29 @@ export default function MapView() {
                         ["mark", "Mark"],
                         ["area", "Area"],
                       ] as const
-                    ).map(([key, label]) => (
+                    ).map(([key, label]) => {
+                      // Only "Area" works on an empty loop; the rest need lead IDs.
+                      const disabled = !lassoHasLeads && key !== "area";
+                      return (
                       <button
                         key={key}
                         type="button"
+                        disabled={disabled}
+                        title={disabled ? "No doors in this loop" : undefined}
                         onClick={() => setLassoAction(key)}
                         data-testid={`lasso-action-${key}`}
-                        aria-pressed={lassoAction === key}
-                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition ${lassoAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
+                        aria-pressed={lassoEffectiveAction === key}
+                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition disabled:opacity-35 disabled:cursor-not-allowed ${lassoEffectiveAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
                       >
                         {label}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* Mode control + Apply + Exit */}
                   <div className="flex items-center gap-2">
-                    {lassoAction === "assign" && (
+                    {lassoEffectiveAction === "assign" && (
                       <>
                         <select
                           value={lassoRepId}
@@ -5887,6 +5992,7 @@ export default function MapView() {
                               repId: Number(lassoRepId),
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5896,7 +6002,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "status" && (
+                    {lassoEffectiveAction === "status" && (
                       <>
                         <select
                           value={lassoStatusOutcome}
@@ -5929,6 +6035,7 @@ export default function MapView() {
                               outcome: lassoStatusOutcome,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-status"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5938,7 +6045,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "mark" && (
+                    {lassoEffectiveAction === "mark" && (
                       <>
                         <select
                           value={lassoMark}
@@ -5966,6 +6073,7 @@ export default function MapView() {
                               mark: lassoMark,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-mark"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5977,7 +6085,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "area" && (
+                    {lassoEffectiveAction === "area" && (
                       <>
                         <TerritoryColorPicker
                           value={lassoColor}
@@ -6028,6 +6136,7 @@ export default function MapView() {
                               color: lassoColor,
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -6036,6 +6145,7 @@ export default function MapView() {
                       </>
                     )}
                     <button
+                      type="button"
                       onClick={exitLasso}
                       className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
                       title="Exit"
@@ -6045,16 +6155,50 @@ export default function MapView() {
                     </button>
                   </div>
 
-                  {lassoAction === "area" && (
+                  {lassoEffectiveAction === "area" && (
                     <span className="text-[10.5px] text-white/45 leading-tight">
                       Area assigns every house in the loop + saves a colored
-                      territory. The refine chips apply to Assign &amp; Status.
+                      territory.
+                      {lassoHasLeads
+                        ? " The refine chips apply to Assign & Status."
+                        : " Doors added inside it later belong to the area too."}
                     </span>
                   )}
                 </div>
               )}
             </div>
           )}
+
+          {/* ── Who works this area, on the area ──
+              Editing the holder set already existed, but only down a four-step
+              path: tap the area, open the detail card, scroll to the bottom,
+              "Who works this area", full-screen modal over the map you were
+              looking at. This is the same decision made where it is made, with
+              the polygon still visible above it. Same /share call, same complete
+              holder-set contract; only the route to it is shorter. */}
+          {selectedTerritoryId != null && canManage && !lassoMode && (() => {
+            const t = territories.find((x) => x.id === selectedTerritoryId);
+            if (!t) return null;
+            const holders = repIdsForDoor((t as any).repId, (t as any).assigneeIds);
+            if (!holders.length) return null; // pool areas assign via the card
+            return (
+              <AreaAssigneeBar
+                areaName={territoryLabel(t)}
+                color={territoryPaint(
+                  { color: (t as any).color, status: (t as any).status },
+                  colorForRep((t as any).repId),
+                ).fillColor}
+                assigneeIds={holders}
+                pending={shareMutation.isPending}
+                onClose={() => setSelectedTerritoryId(null)}
+                onChange={(next) => shareMutation.mutate({ id: t.id, repIds: next })}
+                reps={team.filter((m) => m.active).map((m) => {
+                  const held = activeAreaCountByRep.get(m.id) ?? 0;
+                  return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
+                })}
+              />
+            );
+          })()}
 
           {/* ── Overlapping areas: which one did you mean? ──
               Tapping where two territories overlap used to resolve to whichever
@@ -6116,8 +6260,7 @@ export default function MapView() {
           )}
 
           {/* ── Territory detail panel — opens when you tap a region ── */}
-          {canAssign &&
-            selectedTerritoryId != null &&
+          {selectedTerritoryId != null &&
             (() => {
               const t = territories.find((x) => x.id === selectedTerritoryId);
               if (!t) return null;
@@ -6163,11 +6306,31 @@ export default function MapView() {
                       currentUser={{ role: user?.role ?? "rep" }}
                       teamNames={teamNames}
                       progress={
+                        // The operational numbers were on the wire the whole
+                        // time and this literal dropped them. /progress returns
+                        // knocked, sold, availableBase and the three canonical
+                        // rates from shared/territoryMetrics; only eight fields
+                        // were copied across, and the panel gates its entire
+                        // stats block on `progress.knocked != null`. So
+                        // penetration and completion were defined, tested, and
+                        // rendered nowhere in the product — the card showed
+                        // "AREA WORKED 0.00%" and nothing else. Hand-picking
+                        // fields is what made that possible; the shape is now
+                        // carried whole and the type decides what is read.
                         prog
                           ? {
                               total: prog.total,
                               verifiedWorkedLeads: prog.verifiedWorkedLeads,
                               areaWorkedPct: prog.areaWorkedPct,
+                              knocked: prog.knocked,
+                              sold: prog.sold,
+                              untouched: prog.untouched,
+                              availableBase: prog.availableBase,
+                              attempts: prog.attempts,
+                              penetrationRate: prog.penetrationRate,
+                              knockCompletionRate: prog.knockCompletionRate,
+                              contactRate: prog.contactRate,
+                              lastActivityAt: prog.lastActivityAt ?? null,
                               verified: prog.verified,
                               needsReview: prog.needsReview,
                               invalid: prog.invalid,
@@ -6184,8 +6347,15 @@ export default function MapView() {
                               )
                           : undefined
                       }
-                      onRename={(name) =>
-                        renameTerritoryMutation.mutate({ id: t.id, name })
+                      onRename={
+                        canManage
+                          ? (name) => renameTerritoryMutation.mutate({ id: t.id, name })
+                          : undefined
+                      }
+                      onRecolor={
+                        canManage
+                          ? (color) => recolorTerritoryMutation.mutate({ id: t.id, color })
+                          : undefined
                       }
                       onViewHistory={() => setActivityTerritoryId(t.id)}
                       onUnassignRep={
@@ -6205,8 +6375,18 @@ export default function MapView() {
                           : undefined
                       }
                     />
-                    {/* Assign-to-next-rep for unassigned/reclaimed areas */}
-                    {isPool && (
+                    {/* Assign-to-next-rep for unassigned/reclaimed areas.
+                        canManage as well as isPool: this was gated on the area's
+                        STATUS alone, so the one management control on the card
+                        that did not check the viewer's role was the one that
+                        hands an area to a rep. A rep is unlikely to have a pool
+                        area in their list — /api/territories serves them only
+                        what they hold — but "unlikely to be reachable" is not a
+                        permission check, and every sibling control here already
+                        makes the same test. The server refuses a rep either way
+                        (requireTeamLead on /assign); this stops the UI offering
+                        an action it knows will fail. */}
+                    {isPool && canManage && (
                       <div className="mt-2 w-72 rounded-xl border border-border bg-card p-3">
                         <div className="text-[11px] font-semibold text-foreground mb-1.5">
                           Assign this area to the next rep
@@ -6470,6 +6650,9 @@ export default function MapView() {
                                   } else {
                                     exitLasso();
                                     setAddMode(false); // draw tools and add-mode are mutually exclusive
+                                    // Start on a colour nothing else is using, so two areas never
+                                    // read as one region split by a road. The picker overrides it.
+                                    setLassoColor(pickFreeColor());
                                     setLassoMode(true);
                                     setSearchOpen(false);
                                     setLayersOpen(false);
