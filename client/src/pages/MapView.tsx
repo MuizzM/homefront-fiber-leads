@@ -124,6 +124,7 @@ import {
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
 import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
+import { lockGesturesForDrawing, mapGestureTarget } from "@/lib/lassoGestureLock";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
@@ -3533,6 +3534,15 @@ export default function MapView() {
       map.touchZoomRotate.disable();
       map.touchPitch?.disable();
     } catch {}
+    // …and suspend the BROWSER's gestures too, which the four lines above are
+    // what re-enable. Mapbox drives the canvas's touch-action from classes it
+    // only applies while drag-pan + touch-zoom-rotate are on, so disabling them
+    // drops the canvas to touch-action: auto and the finger starts scrolling the
+    // page — a downward stroke from scroll top being the pull-to-refresh gesture,
+    // which is the "it reloads when I finish a lasso" report. See
+    // lib/lassoGestureLock.ts. Released in this effect's cleanup, so it lifts on
+    // completion, cancel, unmount, style swap and error alike.
+    const releaseGestures = lockGesturesForDrawing(mapGestureTarget(map));
 
     // Point-in-polygon lives in lib/mapGeo.ts (bbox-rejected, unit-tested).
 
@@ -3675,6 +3685,10 @@ export default function MapView() {
 
     return () => {
       (window as any).__lassoActive = false;
+      // Give the page its gestures back FIRST. If a later line throws (a map
+      // already torn down by unmount), the browser must not be left unable to
+      // scroll — that failure mode is worse than the bug this fixes.
+      releaseGestures();
       // Defensive: on unmount the map may already be removed (getCanvas → undefined)
       try {
         map.off("mousedown", onMouseDown);
@@ -5823,6 +5837,7 @@ export default function MapView() {
                     Drag a loop around the area
                   </span>
                   <button
+                    type="button"
                     onClick={exitLasso}
                     className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors"
                     title="Exit"
@@ -5971,6 +5986,7 @@ export default function MapView() {
                               repId: Number(lassoRepId),
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -6013,6 +6029,7 @@ export default function MapView() {
                               outcome: lassoStatusOutcome,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-status"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -6050,6 +6067,7 @@ export default function MapView() {
                               mark: lassoMark,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-mark"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -6112,6 +6130,7 @@ export default function MapView() {
                               color: lassoColor,
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -6120,6 +6139,7 @@ export default function MapView() {
                       </>
                     )}
                     <button
+                      type="button"
                       onClick={exitLasso}
                       className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
                       title="Exit"
