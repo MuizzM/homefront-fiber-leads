@@ -4788,12 +4788,33 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Auto-create pending commission when outcome = sold (rate snapshot frozen
       // onto the record; P0-3 org-scoped rates; P0-6 server-fixed basis 0).
       if (!sup && outcome === "sold" && knockRow.repId) {
+        // One door, one commission — whatever its status.
+        //
+        // The only uniqueness guard used to be idx_commissions_tenant_lead_pending,
+        // which is partial: WHERE status = 'pending'. The moment a manager
+        // APPROVED the commission the row left that index, so a second sold
+        // knock on the same door inserted a second, fully payable row — two
+        // commissions and double the money for one sale. Re-marking a door sold
+        // is ordinary (a correction, a re-knock, a sync replay), so this was
+        // reachable without anyone doing anything unusual.
+        //
+        // "superseded" and "disputed" are deliberately NOT live: those are the
+        // states a replacement is legitimately allowed to follow.
+        const existing = storage.findLiveCommissionForLead(
+          knockRow.tenantId ?? (req as any).user?.tenantId ?? null,
+          leadId,
+        );
+        if (existing) {
+          structuredLog("commission.duplicate_suppressed", {
+            leadId, knockId: knockRow.id, existingId: existing.id, existingStatus: existing.status,
+          });
+        }
         const rep = storage.getTeamMemberById(knockRow.repId);
         const saleDate = new Date().toISOString().slice(0, 10);
         const rateTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
         const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
         const active = pickActiveStructure(structures, knockRow.repId, rep?.role ?? null, saleDate);
-        if (active) {
+        if (active && !existing) {
           const saleAmount = 0;
           const calc = calcCommission(active, saleAmount);
           storage.createCommission({

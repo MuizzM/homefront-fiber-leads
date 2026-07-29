@@ -28,6 +28,12 @@ import {
   type Tenant, type InsertTenant,
 } from "@shared/schema";
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+
+/** Statuses that still represent money owed or paid for a sale. A commission in
+ *  any of these means the door has already been credited; "superseded" and
+ *  "disputed" are deliberately absent, because those are the states a replacement
+ *  is legitimately allowed to follow. */
+export const LIVE_COMMISSION_STATUSES = ["pending", "approved", "paid"] as const;
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
 import { syncAssignments } from "./territoryAssignments";
@@ -265,6 +271,9 @@ export interface IStorage {
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(tenantId?: number, repId?: number): Commission[];
+  /** A commission on this door that is still on the money path (pending,
+   *  approved or paid) — the guard against paying one sale twice. */
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined;
   getCommissionById(id: number, tenantId: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
   transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult;
@@ -3740,6 +3749,16 @@ export class Storage implements IStorage {
     if (repId != null) conds.push(eq(commissions.repId, repId));
     const q = db.select().from(commissions);
     return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(commissions.createdAt)).all();
+  }
+  // Indexed lookup, not a scan: this runs on every sold knock, and getCommissions
+  // would read the whole tenant's ledger to answer a single-row question.
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined {
+    const conds = [
+      eq(commissions.leadId, leadId),
+      inArray(commissions.status, LIVE_COMMISSION_STATUSES as unknown as string[]),
+    ];
+    if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
+    return db.select().from(commissions).where(and(...conds)).limit(1).get();
   }
   getCommissionById(id: number, tenantId: number): Commission | undefined {
     return db.select().from(commissions)
