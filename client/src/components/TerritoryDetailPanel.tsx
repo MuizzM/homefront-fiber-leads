@@ -153,7 +153,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                 className="h-7 min-w-0 flex-1 rounded-md bg-secondary text-foreground text-sm font-semibold px-2 border border-border focus:outline-none focus:ring-2 focus:ring-teal-400/60"
                 placeholder="Area name"
               />
-              <button data-testid="territory-name-save" onClick={saveName} title="Save name"
+              <button type="button" data-testid="territory-name-save" onClick={saveName} title="Save name"
                 className="w-7 h-7 rounded-md flex items-center justify-center text-emerald-400 hover:bg-emerald-500/15 transition-colors flex-shrink-0">
                 <Check className="w-4 h-4" />
               </button>
@@ -167,6 +167,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
               <h3 className="text-sm font-bold text-foreground truncate">{territory.name}</h3>
               {onRename && (
                 <button
+                  type="button"
                   data-testid="territory-rename-btn"
                   onClick={() => { setDraftName(territory.name); setEditingName(true); }}
                   title="Rename area"
@@ -386,6 +387,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
       {/* View Activity — opens the verified-activity history */}
       {onViewHistory && (
         <button
+          type="button"
           data-testid="view-history-btn"
           onClick={onViewHistory}
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
@@ -429,6 +431,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           step, because "start pass 3" is a different decision from "reclaim". */}
       {onStartNextPass && can(role, "reset_territory_pass") && (
         <button
+          type="button"
           data-testid="next-pass-btn"
           onClick={onStartNextPass}
           className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
@@ -438,18 +441,30 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
         </button>
       )}
 
-      {/* Role-gated actions */}
-      {can(role, "reclaim_territory") && (
+      {/* Role-gated actions.
+          Gated on the HANDLER as well as the role. Reclaim used to render
+          whenever the viewer's role permitted it, while MapView only supplies
+          onReclaim for an area somebody actually holds — so on a pool area the
+          button appeared, fully styled and enabled, wired to onClick={undefined}.
+          Tapping it did nothing at all, which reads as "reclaim is broken"
+          because from the outside it is indistinguishable from a failed request.
+          A control you cannot use should not be on screen; the role decides
+          whether you MAY, the handler decides whether there is anything TO do. */}
+      {can(role, "reclaim_territory") && (onReclaim || onReassign || onComplete) && (
         <div className="mt-4 flex flex-wrap gap-2">
+          {onReclaim && (
           <button
+            type="button"
             data-testid="reclaim-btn"
             onClick={onReclaim}
             className="flex-1 h-8 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors"
           >
             Reclaim
           </button>
+          )}
           {onReassign && (
             <button
+              type="button"
               data-testid="reassign-btn"
               onClick={onReassign}
               className="flex-1 h-8 rounded-lg text-xs font-semibold bg-secondary text-foreground hover:bg-secondary/70 transition-colors"
@@ -459,6 +474,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           )}
           {onComplete && (
             <button
+              type="button"
               data-testid="complete-btn"
               onClick={onComplete}
               className="flex-1 h-8 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors"

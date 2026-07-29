@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TerritoryDetailPanel } from "@/components/TerritoryDetailPanel";
 import { colorForRep } from "@shared/repColors";
@@ -305,5 +305,137 @@ describe("<TerritoryDetailPanel /> for the rep who works the area", () => {
     expect(screen.queryByTestId("reclaim-btn")).not.toBeInTheDocument();
     expect(screen.queryByTestId("territory-rename-btn")).not.toBeInTheDocument();
     expect(screen.queryByTestId("territory-color-edit")).not.toBeInTheDocument();
+  });
+});
+
+// ── A control you cannot use must not be on screen ──────────────────────────
+// Reported from production, on a real pool area: "claim and reclaim are not
+// working, it's just refresh."
+//
+// Reclaim was gated on the viewer's ROLE alone, while MapView only supplies
+// onReclaim for an area somebody actually holds. On an unassigned area the
+// button therefore rendered — full colour, no disabled state, correct label —
+// wired to onClick={undefined}. Tapping it did nothing whatsoever, which from
+// the outside is indistinguishable from a request that silently failed. Hence
+// "not working": the control was never connected to anything.
+//
+// onReassign and onComplete each guarded themselves. Reclaim was the one that
+// did not, which is why it was the one that got reported.
+describe("actions render only when there is something to do", () => {
+  const poolArea = {
+    id: 99,
+    name: "Unassigned area",
+    status: "unassigned" as const,
+    repIds: [],
+    leadCount: 1150,
+  };
+
+  it("hides Reclaim on a pool area, where the handler is not supplied", () => {
+    render(
+      <TerritoryDetailPanel
+        territory={poolArea}
+        currentUser={{ role: "manager" }}
+        // MapView passes `!isPool && canReclaim ? fn : undefined` — this IS the
+        // production shape for an area in the pool.
+      />,
+    );
+    expect(screen.queryByTestId("reclaim-btn")).toBeNull();
+  });
+
+  it("shows Reclaim when an area is actually held", () => {
+    // The fix must not remove the feature — this is the case that matters.
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "manager" }}
+        onReclaim={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("reclaim-btn")).toBeInTheDocument();
+  });
+
+  it("never renders a reclaim-row button without a handler behind it", () => {
+    // The general form of the bug, across all three buttons in that row.
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "manager" }}
+        onReclaim={() => {}}
+      />,
+    );
+    expect(screen.getByTestId("reclaim-btn")).toBeInTheDocument();
+    expect(screen.queryByTestId("reassign-btn")).toBeNull();  // not supplied
+    expect(screen.queryByTestId("complete-btn")).toBeNull();  // not supplied
+  });
+
+  it("drops the whole action row when no action is available", () => {
+    // A permitted role with nothing to do should get no empty strip of chrome.
+    const { container } = render(
+      <TerritoryDetailPanel territory={poolArea} currentUser={{ role: "manager" }} />,
+    );
+    for (const id of ["reclaim-btn", "reassign-btn", "complete-btn"]) {
+      expect(screen.queryByTestId(id)).toBeNull();
+    }
+    expect(container.querySelector(".mt-4.flex.flex-wrap")).toBeNull();
+  });
+
+  it("still hides the row from a role that may not reclaim, even with handlers", () => {
+    // Permission is still the first gate — the handler check is an ADDITIONAL
+    // condition, not a replacement for the role check.
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "rep" }}
+        onReclaim={() => {}}
+        onComplete={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId("reclaim-btn")).toBeNull();
+    expect(screen.queryByTestId("complete-btn")).toBeNull();
+  });
+
+  it("calls the handler when Reclaim is actually pressed", () => {
+    const onReclaim = vi.fn();
+    render(
+      <TerritoryDetailPanel
+        territory={{ ...poolArea, status: "active", repIds: [7] }}
+        currentUser={{ role: "manager" }}
+        onReclaim={onReclaim}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("reclaim-btn"));
+    expect(onReclaim).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("no panel control can submit a form", () => {
+  // "It's just refresh" is also what an implicit submit looks like. A bare
+  // <button> defaults to type="submit"; there is no <form> around this panel
+  // today, so nothing submitted — but that is a property of the surrounding
+  // markup, not of these controls, and it costs one attribute to stop relying
+  // on it.
+  it("declares type=button on every button it renders", () => {
+    const { container } = render(
+      <TerritoryDetailPanel
+        territory={{ id: 1, name: "Held", status: "active" as const, repIds: [7], leadCount: 10 }}
+        currentUser={{ role: "manager" }}
+        teamNames={{ 7: "Rae Rivera" }}
+        onReclaim={() => {}}
+        onReassign={() => {}}
+        onComplete={() => {}}
+        onViewHistory={() => {}}
+        onStartNextPass={() => {}}
+        onEditAssignees={() => {}}
+        onRename={() => {}}
+        onUnassignRep={() => {}}
+      />,
+    );
+    const untyped = Array.from(container.querySelectorAll("button")).filter(
+      (b) => b.getAttribute("type") !== "button",
+    );
+    expect(
+      untyped.map((b) => b.getAttribute("data-testid") ?? b.textContent?.trim()),
+      "these default to type=submit",
+    ).toEqual([]);
   });
 });

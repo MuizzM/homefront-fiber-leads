@@ -191,3 +191,47 @@ describe("no control in the lasso panel can navigate or submit", () => {
     expect(src).not.toContain("<form");
   });
 });
+
+// ── The numbers were on the wire and nobody passed them ─────────────────────
+// Reported from production: an area card showing "AREA WORKED 0.00% — 0 of 1150
+// leads worked" and nothing else. No penetration, no completion, no sold count.
+//
+// The metrics were not missing. /api/territories/progress returns knocked, sold,
+// availableBase and the three canonical rates from shared/territoryMetrics, and
+// TerritoryDetailPanel renders all of them — behind `progress.knocked != null`.
+// MapView built the `progress` prop as a hand-picked literal of eight fields
+// that did not include knocked, so the gate never opened and the entire stats
+// block was dead code in the shipped app while passing its own unit tests
+// against a hand-built fixture.
+//
+// Source-level, for the same reason as the rest of this file: the literal lives
+// deep inside a component that cannot be mounted without a GL context.
+describe("the area card is handed the numbers the server sent", () => {
+  const propBlock = (() => {
+    const at = src.indexOf("progress={");
+    expect(at, "progress prop not found — did it move?").toBeGreaterThan(-1);
+    return src.slice(at, at + 2600);
+  })();
+
+  it("passes the operational counts, not just the location-verified ones", () => {
+    // knocked is the one the panel's whole stats section is gated on.
+    for (const field of ["knocked:", "sold:", "availableBase:"]) {
+      expect(propBlock, `${field} is not forwarded — the panel cannot show it`).toContain(field);
+    }
+  });
+
+  it("passes all three canonical rates", () => {
+    // Defined once in shared/territoryMetrics so every surface agrees. Computing
+    // them and then not forwarding them is how two screens end up disagreeing.
+    for (const field of ["penetrationRate:", "knockCompletionRate:", "contactRate:"]) {
+      expect(propBlock, `${field} is not forwarded`).toContain(field);
+    }
+  });
+
+  it("still passes the location-verified fields it always did", () => {
+    // The fix adds; it must not drop what was working.
+    for (const field of ["verifiedWorkedLeads:", "areaWorkedPct:", "maxAllowedDistanceM:"]) {
+      expect(propBlock).toContain(field);
+    }
+  });
+});

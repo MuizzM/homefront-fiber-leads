@@ -6306,11 +6306,31 @@ export default function MapView() {
                       currentUser={{ role: user?.role ?? "rep" }}
                       teamNames={teamNames}
                       progress={
+                        // The operational numbers were on the wire the whole
+                        // time and this literal dropped them. /progress returns
+                        // knocked, sold, availableBase and the three canonical
+                        // rates from shared/territoryMetrics; only eight fields
+                        // were copied across, and the panel gates its entire
+                        // stats block on `progress.knocked != null`. So
+                        // penetration and completion were defined, tested, and
+                        // rendered nowhere in the product — the card showed
+                        // "AREA WORKED 0.00%" and nothing else. Hand-picking
+                        // fields is what made that possible; the shape is now
+                        // carried whole and the type decides what is read.
                         prog
                           ? {
                               total: prog.total,
                               verifiedWorkedLeads: prog.verifiedWorkedLeads,
                               areaWorkedPct: prog.areaWorkedPct,
+                              knocked: prog.knocked,
+                              sold: prog.sold,
+                              untouched: prog.untouched,
+                              availableBase: prog.availableBase,
+                              attempts: prog.attempts,
+                              penetrationRate: prog.penetrationRate,
+                              knockCompletionRate: prog.knockCompletionRate,
+                              contactRate: prog.contactRate,
+                              lastActivityAt: prog.lastActivityAt ?? null,
                               verified: prog.verified,
                               needsReview: prog.needsReview,
                               invalid: prog.invalid,
