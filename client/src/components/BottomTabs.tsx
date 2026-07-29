@@ -1,6 +1,13 @@
 // Mobile field navigation follows the five-destination pattern used by shipped
 // workforce and map apps: work queue, leads, one prominent map action, pay, and
 // a More gateway. Every target is thumb-reachable and safe-area aware.
+//
+// The bar itself is LIQUID chrome (TIDE / Moonly via Mobbin, the iOS-26-era
+// pattern): detached from the screen edges, fully rounded, blurred glass with
+// a hairline and specular edge, and the active destination marked by a solid
+// pill INSIDE the glass rather than an underline at its rim. Floating means
+// page content scrolls visibly BEHIND the bar — that see-through moment is
+// what makes it read as material instead of a painted footer.
 
 import { Link } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
@@ -29,10 +36,10 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef }: { 
     <nav
       data-testid="bottom-tabs"
       aria-label="Primary navigation"
-      className="md:hidden fixed inset-x-0 bottom-0 z-30 border-t border-border/70 bg-card/92 shadow-[0_-10px_32px_rgba(0,0,0,0.22)] backdrop-blur-xl supports-[backdrop-filter]:bg-card/78"
-      style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 8px)" }}
+      className="liquid-bar md:hidden fixed inset-x-3 z-30"
+      style={{ bottom: "calc(env(safe-area-inset-bottom) + 10px)" }}
     >
-      <div className={`grid ${GRID_COLS[visibleTabs.length]} h-[58px] px-1`}>
+      <div className={`grid ${GRID_COLS[visibleTabs.length]} h-[62px] px-1.5`}>
       {visibleTabs.map(({ href, label, icon: Icon, ...tab }) => {
         // Reps land on "/" (App redirects to /today) — light the Today tab for
         // either location so the home screen always has an active tab.
@@ -44,17 +51,16 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef }: { 
             href={href}
             data-testid={`tab-${label.toLowerCase()}`}
             aria-current={active ? "page" : undefined}
-            className={`relative flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform ${primary ? "-mt-3" : ""}`}
+            className={`relative flex flex-col items-center justify-center gap-0.5 active:scale-95 transition-transform ${primary ? "-mt-2.5" : ""}`}
           >
             <span className={primary
               ? `grid h-11 w-11 place-items-center rounded-full border-4 border-card shadow-lg ${active ? "bg-primary text-primary-foreground" : "bg-foreground text-background"}`
-              : `grid h-7 w-9 place-items-center rounded-lg ${active ? "bg-primary/[0.12] text-primary" : "text-muted-foreground"}`}>
+              : `grid h-7 w-11 place-items-center rounded-full transition-colors ${active ? "bg-primary/[0.16] text-primary" : "text-muted-foreground"}`}>
               <Icon className={primary ? "w-5 h-5" : "w-[19px] h-[19px]"} strokeWidth={active ? 2.4 : 2} />
             </span>
             <span className={`text-2xs font-semibold ${active ? "text-primary" : "text-muted-foreground"}`}>
               {label}
             </span>
-            {active && !primary && <span className="absolute bottom-0.5 h-0.5 w-4 rounded-full bg-primary" aria-hidden="true" />}
           </Link>
         );
       })}
@@ -68,7 +74,7 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef }: { 
         onClick={() => onMore ? onMore() : window.dispatchEvent(new CustomEvent("hfs:open-menu"))}
         className="flex flex-col items-center justify-center gap-0.5 active:scale-95"
       >
-        <span className={`grid h-7 w-9 place-items-center rounded-lg ${moreOpen ? "bg-primary/[0.12] text-primary" : "text-muted-foreground"}`}><Menu className="w-[19px] h-[19px]" /></span>
+        <span className={`grid h-7 w-11 place-items-center rounded-full transition-colors ${moreOpen ? "bg-primary/[0.16] text-primary" : "text-muted-foreground"}`}><Menu className="w-[19px] h-[19px]" /></span>
         <span className={`text-2xs font-semibold ${moreOpen ? "text-primary" : "text-muted-foreground"}`}>More</span>
       </button>
       </div>

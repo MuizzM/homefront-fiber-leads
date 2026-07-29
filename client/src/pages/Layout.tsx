@@ -371,7 +371,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             the Field Map is full-bleed (owner spec) with its own floating menu. */}
         {!onMap && (
         <header
-          className="md:hidden sticky top-0 z-30 flex min-h-14 items-center gap-2 border-b border-border/70 bg-card/80 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-card/70"
+          className="liquid-header md:hidden sticky top-0 z-30 flex min-h-14 items-center gap-2 px-3"
           style={{ paddingTop: "calc(env(safe-area-inset-top) + 12px)", paddingBottom: "8px" }}
         >
           <button type="button" aria-label="Open navigation menu" aria-expanded={mobileOpen}
@@ -400,7 +400,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
-        <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(70px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+        <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
         {!onMap && !onCalling && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
@@ -418,10 +418,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             role="dialog"
             aria-modal="true"
             aria-label="More navigation"
-            className="absolute inset-x-0 bottom-0 max-h-[86dvh] overflow-y-auto rounded-t-[28px] border-t border-border bg-card shadow-2xl animate-in slide-in-from-bottom duration-300 ease-out motion-reduce:duration-0"
+            className="liquid-glass absolute inset-x-0 bottom-0 max-h-[86dvh] overflow-y-auto rounded-t-[28px] border-t border-border animate-in slide-in-from-bottom duration-300 ease-out motion-reduce:duration-0"
             style={{ paddingBottom: "max(1rem,env(safe-area-inset-bottom))" }}
           >
-            <div className="sticky top-0 z-10 bg-card/95 px-4 pb-3 pt-2 backdrop-blur-xl">
+            <div className="sticky top-0 z-10 bg-card/80 px-4 pb-3 pt-2">
               <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-muted-foreground/25" aria-hidden="true" />
               <div className="flex items-center gap-3">
                 <div className={`grid h-11 w-11 place-items-center rounded-full text-sm font-bold text-white ${avatarBg(role)}`}>{user?.name?.slice(0, 2).toUpperCase()}</div>
