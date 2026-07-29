@@ -114,7 +114,34 @@ import {
   reconcileLeadFeatures,
   repColorFor,
   type LeadFeatureCache,
+  type LeadRepIdsFn,
 } from "@/lib/leadGeoJson";
+import {
+  haloFeatureProps,
+  haloLayerSpecs,
+  haloBeforeId,
+  repIdsForDoor,
+  HALO_LAYER_IDS,
+} from "@/lib/leadHalos";
+import {
+  dedupeVertices,
+  simplifyRing,
+  validateRing,
+  crossesAntimeridian,
+  type RingValidationFailure,
+} from "@shared/polygonGeometry";
+import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
+import { lockGesturesForDrawing, lockDocumentPullToRefresh, mapGestureTarget } from "@/lib/lassoGestureLock";
+import { AreaAssigneeBar } from "@/components/territory/AreaAssigneeBar";
+import { resolveTerritoryTap } from "@/lib/territoryPick";
+import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
+import {
+  subscribeLeadStream,
+  createFetchEventSource,
+  type LeadStreamEvent,
+  type LeadStreamHandle,
+  type LeadStreamPin,
+} from "@/lib/leadStream";
 import { unpackMapPins } from "@shared/mapPinsWire";
 import { LEAD_MARKS, LEAD_MARK_META, type LeadMark } from "@shared/leadMark";
 import { useCan } from "@/lib/capabilities";
@@ -156,6 +183,10 @@ interface MapPin {
   leadStatus: string;
   fiberStatus: string;
   assignedRepId: number | null;
+  // Which AREA the door sits in. assignedRepId names one primary, but areas are
+  // many-to-many (territories.assignee_ids) — this is the only handle the client
+  // has on the full crew, and it is what the per-rep halo resolves against.
+  assignedTerritoryId?: number | null;
   leadScore: number;
   leadTag?: string | null;
   freshConfidence?: string | null;
@@ -480,6 +511,94 @@ function inBBox(lat: number, lng: number, b: BBox) {
 // fresh [] per render, or every downstream useMemo re-runs until data lands.
 const EMPTY_PINS: MapPin[] = [];
 
+// ── Merging a pushed lead into a map pin ─────────────────────────────────────
+// A stream event is NEVER spread wholesale over a pin. LeadStreamPin is
+// deliberately narrower than MapPin — it has no knockCount / freshConfidence /
+// carrier, because those are JOINED by the map query and the write path does
+// not hold them — so `{...pin, ...event.lead}` would erase them with nulls.
+// Fields are therefore taken one at a time, in two groups:
+//
+//  • Always: geometry, address, and the assignment fields. Nothing local ever
+//    owns these, and assignedTerritoryId in particular has to land or a door
+//    that just changed hands keeps painting the old crew's halo.
+//  • Knock-owned (leadStatus / lastOutcome / lastKnockedAt / visited): only when
+//    the push is at least as recent as what the pin already shows. This mirrors
+//    the server's own outcome-recency CAS on the knock path rather than
+//    inventing a second rule, so client and server can never disagree about who
+//    won a race between two reps on one door.
+//
+// knockCount is deliberately NOT touched: the event does not carry it, and
+// guessing +1 for a knock we cannot attribute would drift a number the rep is
+// paid on. The 60s map poll re-joins the true count.
+//
+// Returns `prev` UNCHANGED when nothing moved, so a no-op push costs zero
+// re-renders and zero re-clusters.
+function mergePushedPin(prev: MapPin, pin: LeadStreamPin): MapPin {
+  let next: MapPin | null = null;
+  const write = (key: keyof MapPin, value: unknown): void => {
+    if ((prev as any)[key] === value) return;
+    next = next ?? { ...prev };
+    (next as any)[key] = value;
+  };
+  // The projection nulls what the writer did not hold, so for these an absent
+  // value means "no news", never "cleared".
+  const take = (key: keyof MapPin, value: string | number | null): void => {
+    if (value !== null) write(key, value);
+  };
+  take("address", pin.address);
+  take("city", pin.city);
+  take("state", pin.state);
+  take("zip", pin.zip);
+  take("lat", pin.lat);
+  take("lng", pin.lng);
+  take("fiberStatus", pin.fiberStatus);
+  take("leadTag", pin.leadTag);
+  take("leadScore", pin.leadScore);
+  // These two are the exception: the server read them to answer
+  // repCanAccessLead before it sent the frame, so it definitely holds them and
+  // null genuinely means unassigned — the state that must clear a halo.
+  write("assignedRepId", pin.assignedRepId);
+  write("assignedTerritoryId", pin.assignedTerritoryId);
+
+  // ISO-8601 compares lexicographically in timestamp order, so no Date parse.
+  // A pin with no local knock has nothing to defend and always takes the push.
+  const localAt = prev.lastKnockedAt ?? null;
+  const pushedAt = pin.lastOutcomeAt ?? null;
+  const outcomeWins = localAt == null || (pushedAt != null && pushedAt >= localAt);
+  if (outcomeWins) {
+    take("leadStatus", pin.leadStatus);
+    take("lastOutcome", pin.lastOutcome);
+    take("lastKnockedAt", pin.lastOutcomeAt);
+    if (pin.lastOutcome) write("visited", true);
+  }
+  return next ?? prev;
+}
+
+// The pin a never-before-seen door starts life as. Reduced-field exactly like
+// the two optimistic add paths (map tap, AddLeadSheet): the joined columns are
+// simply absent until the next map GET fills them, and every consumer already
+// reads the optional fields by truthiness.
+function pinFromPushedLead(pin: LeadStreamPin): MapPin {
+  return {
+    id: pin.id,
+    address: pin.address ?? "",
+    city: pin.city ?? "",
+    state: pin.state ?? "",
+    zip: pin.zip ?? "",
+    lat: pin.lat as number,
+    lng: pin.lng as number,
+    leadStatus: pin.leadStatus ?? "prospect",
+    fiberStatus: pin.fiberStatus ?? "",
+    assignedRepId: pin.assignedRepId,
+    assignedTerritoryId: pin.assignedTerritoryId,
+    leadScore: pin.leadScore ?? 0,
+    leadTag: pin.leadTag,
+    visited: !!pin.lastOutcome,
+    lastOutcome: pin.lastOutcome,
+    lastKnockedAt: pin.lastOutcomeAt,
+  };
+}
+
 const SEARCH_RESULT_SOURCE = "search-result";
 const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
 const SEARCH_RESULT_POINT_LAYER = "search-result-point";
@@ -487,6 +606,65 @@ const SCAN_RESULTS_SOURCE = "scan-results";
 const SCAN_RESULTS_CLUSTER_LAYER = "scan-results-clusters";
 const SCAN_RESULTS_COUNT_LAYER = "scan-results-count";
 const SCAN_RESULTS_POINT_LAYER = "scan-results-points";
+
+// ── Lasso ring cleanup ────────────────────────────────────────────────────────────
+/**
+ * Douglas-Peucker tolerance for a freehand lasso stroke, in DEGREES.
+ *
+ * simplifyRing's invariant is that every point of the input lies within this
+ * distance of the output boundary, so the constant is a hard ceiling on how far
+ * the saved edge can move from the drawn one. 1e-5° is ~1.11 m of latitude
+ * (~0.91 m of longitude at 35°N, where this product operates).
+ *
+ * Why that is below "visible": the stroke is sampled at MIN_PX_DIST = 5 screen
+ * pixels, so the input itself has a ~5 px noise floor. Territories are drawn
+ * between roughly z14 and z18, where a pixel is ~15 m down to ~0.5 m — a 1.11 m
+ * ceiling is well under a tenth of a pixel at z14, half a pixel at z16, and
+ * still barely two pixels at the deepest zoom anyone draws a whole area at.
+ * In every case it is a fraction of the 5 px quantum the finger was digitised
+ * at, so it can only collapse points that are already redundant along a
+ * near-straight run; a corner the manager actually turned deviates far more
+ * than a metre from its chord and Douglas-Peucker keeps it. The boundary does
+ * not visibly move — the vertex count does.
+ *
+ * Going bigger (1e-4°, ~11 m) would start rounding off the notch a manager cuts
+ * around a park, which is exactly the shape-fidelity guarantee territories are
+ * sold on. Going smaller stops removing the noise it exists to remove.
+ */
+const LASSO_SIMPLIFY_TOLERANCE_DEG = 1e-5;
+
+/**
+ * What a rejected ring says to the person who drew it.
+ *
+ * validateRing reports a string union aimed at code. A manager standing on a
+ * driveway needs to know what to do differently, so each reason maps to a plain
+ * sentence — never the raw enum, which reads as a crash.
+ */
+const LASSO_RING_REJECTION: Record<
+  RingValidationFailure,
+  { title: string; description: string }
+> = {
+  "too-few-points": {
+    title: "That shape wasn't a loop",
+    description:
+      "Fewer than three distinct corners came through, so there is no area to save. Draw a slower loop right around the ground you want.",
+  },
+  degenerate: {
+    title: "That's a line, not an area",
+    description:
+      "The stroke went out and came back along itself without enclosing any ground. Draw a loop that curves around and closes.",
+  },
+  "self-intersecting": {
+    title: "That loop crosses over itself",
+    description:
+      "Where the line crosses, there is no single inside — some doors would land outside the area you can see. Draw one clean loop without crossing back over your own line.",
+  },
+  "too-small": {
+    title: "That area is too small to assign",
+    description:
+      "The loop came out under 100 m² — about the size of a single garage. Zoom out a little and draw around the doors you want to hand over.",
+  },
+};
 
 const emptyFeatureCollection = () => ({
   type: "FeatureCollection" as const,
@@ -797,14 +975,32 @@ export default function MapView() {
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
   const [lassoRepId, setLassoRepId] = useState("");
   const [lassoName, setLassoName] = useState(""); // optional custom area name; blank → "<Rep>'s area"
+  // Areas under an overlapping tap, awaiting "which one did you mean?".
+  const [territoryPickIds, setTerritoryPickIds] = useState<number[]>([]);
+  // Which areas are on this viewer's map right now. Read by the tap handler,
+  // which is bound once at map init and so cannot close over the memo.
+  const visibleTerritoryIdsRef = useRef<Set<number>>(new Set());
+  // Colour chosen BEFORE the stroke, and saved with the area. It describes the
+  // ground, so it must not follow whoever the area is handed to — which is what
+  // the old colorForRep(repId) stamp did.
+  const [lassoColor, setLassoColor] = useState<string>(TERRITORY_SWATCHES[0]);
+  // The stroke handler is bound once at map init, so it cannot close over
+  // lassoColor — it would paint whatever the colour was when the map loaded.
+  const lassoColorRef = useRef<string>(TERRITORY_SWATCHES[0]);
   // Sales Rabbit-style refine + action state. `lassoDisabled` = display states the
   // user toggled OUT of the action set (default empty = everything selected).
   // `lassoAction` = which bulk action the panel is showing.
   const [lassoDisabled, setLassoDisabled] = useState<Set<PinDisplayState>>(
     new Set(),
   );
+  // Drawing a shape means drawing an AREA. This defaulted to "assign", which is
+  // bulk LEAD reassignment and saves no polygon at all — so the ordinary flow
+  // (draw a loop, pick a rep, tap the button) moved the doors and created no
+  // territory. Nothing appeared on the manager's map or the rep's, because
+  // nothing had been created, and the only clue was that "Area" was the fourth
+  // tab. The other three actions are still one tap away.
   const [lassoAction, setLassoAction] = useState<"assign" | "status" | "mark" | "area">(
-    "assign",
+    "area",
   );
   const [lassoStatusOutcome, setLassoStatusOutcome] = useState<KnockOutcome>(
     BULK_STATUS_OUTCOMES[0],
@@ -1159,15 +1355,20 @@ export default function MapView() {
       polygon,
       repId,
       name,
+      color,
     }: {
       polygon: [number, number][];
       repId: number;
       name?: string;
+      color?: string;
     }) => {
       const res = await apiRequest("POST", "/api/territories/assign-area", {
         polygon,
         repId,
         ...(name?.trim() ? { name: name.trim() } : {}),
+        // The colour chosen before the stroke. Omitted rather than sent empty so
+        // the server's own default still applies for a caller that never picked.
+        ...(color ? { color } : {}),
       });
       return res.json();
     },
@@ -1282,6 +1483,18 @@ export default function MapView() {
     () => lassoActive.map((l) => l.id),
     [lassoActive],
   );
+  // A loop was drawn. This is what opens the action panel — NOT whether the loop
+  // caught any leads. The panel used to branch on lassoSelected.length, so a loop
+  // over ground with no doors in it (exactly what carving fresh territory looks
+  // like) left the "Drag a loop around the area" hint up forever: the shape was
+  // sitting in lassoPoints with no button anywhere on screen that could save it.
+  const lassoDrawn = lassoPoints.length > 0;
+  // Assign / Status / Mark all operate on lead IDs and are meaningless with an
+  // empty selection. Area needs only the polygon and a rep, so an empty loop
+  // resolves to it regardless of which tab was last used — otherwise the panel
+  // would open on a tab whose only control is a disabled button.
+  const lassoHasLeads = lassoSelected.length > 0;
+  const lassoEffectiveAction = lassoHasLeads ? lassoAction : "area";
 
   // Rename an area — the friendly name reps see on their map. Server keeps an
   // audit trail (territory "renamed" event) and custom names survive reassign.
@@ -1293,6 +1506,25 @@ export default function MapView() {
     onSuccess: (t: { name?: string }) => {
       qc.invalidateQueries({ queryKey: ["/api/territories"] });
       toast({ title: `Area renamed to "${t?.name ?? "area"}"` });
+    },
+    onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
+  });
+
+  // Recolour an area. The colour describes the ground, so it is the field a
+  // manager is most likely to get wrong on the first pass — and until now it was
+  // the one field with no edit path at all. Same PATCH the rename uses.
+  const recolorTerritoryMutation = useMutation({
+    mutationFn: async ({ id, color }: { id: number; color: string }) => {
+      const res = await apiRequest("PATCH", `/api/territories/${id}`, { color });
+      return res.json();
+    },
+    onSuccess: () => {
+      // The polygon paints from territories.color, so the map must refetch for
+      // the new colour to land; invalidating progress too keeps the panel swatch
+      // and the region on screen in step.
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      toast({ title: "Area colour updated" });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -1392,6 +1624,30 @@ export default function MapView() {
     },
   });
 
+  // Multiple reps on one area. /share takes the COMPLETE holder set, so the UI
+  // sends who should be on it after the change — not a delta — and the two can
+  // never disagree about what "who holds this area" means.
+  const [shareTerritoryId, setShareTerritoryId] = useState<number | null>(null);
+  const [shareRepIds, setShareRepIds] = useState<number[]>([]);
+  const shareMutation = useMutation({
+    mutationFn: async ({ id, repIds }: { id: number; repIds: number[] }) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/share`, { repIds });
+      return res.json();
+    },
+    onSuccess: () => {
+      setShareTerritoryId(null);
+      qc.invalidateQueries({ queryKey: ["/api/territories"] });
+      qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+    },
+    onError: (e: any) => toast({
+      title: "Could not update who works this area",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
+  });
+
   const reclaimMutation = useMutation({
     mutationFn: async ({
       id,
@@ -1435,7 +1691,7 @@ export default function MapView() {
     setLassoRepId("");
     setLassoName("");
     setLassoDisabled(new Set());
-    setLassoAction("assign");
+    setLassoAction("area");
     setLassoStatusOutcome(BULK_STATUS_OUTCOMES[0]);
     const map = mapRef.current;
     if (map) {
@@ -1589,6 +1845,15 @@ export default function MapView() {
     enabled: !!user,
     staleTime: 60_000,
   });
+
+  // Each new area starts on a colour nothing else is wearing. Colour IS the
+  // identifier on a map, so two areas sharing one read as a single region split
+  // by a road — worse than any individual colour being unattractive. Still
+  // overridable: this picks the starting point, the picker keeps the last word.
+  const pickFreeColor = useCallback(
+    () => pickUnusedTerritoryColor(territories.map((t) => (t as any).color), TERRITORY_SWATCHES),
+    [territories],
+  );
   const { data: territoryProgress = [] } = useQuery<
     Array<{
       id: number;
@@ -1625,13 +1890,36 @@ export default function MapView() {
   useEffect(() => {
     (window as any).__teamMembers = team;
   }, [team]);
+  useEffect(() => { lassoColorRef.current = lassoColor; }, [lassoColor]);
   useEffect(() => {
     (window as any).__onTerritoryClick = (tid: number | null) =>
       setSelectedTerritoryId(tid);
+    // Overlapping areas open a chooser rather than resolving to whichever
+    // polygon happens to be on top — picking arbitrarily is how a manager pulls
+    // back the wrong territory.
+    (window as any).__onTerritoryPick = (ids: number[]) => {
+      setSelectedTerritoryId(null);
+      setTerritoryPickIds(ids);
+    };
     return () => {
       delete (window as any).__onTerritoryClick;
+      delete (window as any).__onTerritoryPick;
     };
   }, []);
+  // Whether a tap on this area should open the management panel at all. The
+  // server is the authority (every route re-checks); this only stops a rep's tap
+  // from opening a panel whose every button would come back 403.
+  useEffect(() => {
+    // A rep taps their own area to read its numbers. visibleTerritories already
+    // limits a rep to areas they actually hold, so anything they can see, they
+    // may open — the panel itself hides every management control by role, and
+    // the server re-checks each one regardless.
+    (window as any).__canManageTerritory = (tid: number) =>
+      canAssign || visibleTerritoryIdsRef.current.has(tid);
+    return () => {
+      delete (window as any).__canManageTerritory;
+    };
+  }, [canAssign]);
   // Map→React bridge for the knock sheet (same pattern as __onTerritoryClick).
   // The pin click handler is bound once at map init; it checks this global at
   // call time, so sheet-vs-popup routing follows role/viewport without rebinds.
@@ -2140,6 +2428,16 @@ export default function MapView() {
         "lead-unclustered",
       );
 
+      // ── Per-rep colour halos ───────────────────────────────────────────────
+      // Concentric rings UNDER the pin, one per rep who works the door, so a
+      // shared area reads as shared without a tap. Specs come from
+      // @/lib/leadHalos — same import in the style.load re-add block below, so
+      // the two can never drift (the drift that silently reverted the Frontier
+      // fresh-halo colour after a basemap toggle).
+      for (const spec of haloLayerSpecs()) {
+        map.addLayer(spec, haloBeforeId((id) => !!map.getLayer(id)));
+      }
+
       // Worked-vs-unworked is color-only: knocked doors render in their status
       // hue (terminal states pre-dimmed) with a thicker white stroke — no glyph
       // badges on pins, per the field design language. (The per-pin glow layer
@@ -2329,14 +2627,27 @@ export default function MapView() {
         }
         // Tapping empty map dismisses the knock sheet (its map stays interactive).
         (window as any).__closeLeadSheet?.();
-        const terr = feats.find(
-          (f: any) =>
-            typeof f.layer?.id === "string" &&
-            /^territory-\d+$/.test(f.layer.id),
-        );
+        // Which area did they mean? Three things were wrong here.
+        //
+        // The old test was /^territory-\d+$/ against the layer id, which matches
+        // the FILL layer and rejects `territory-42-outline` — so a tap on the
+        // boundary was queried, found, and then thrown away. Managers aim at the
+        // line, because the line is the thing they can see.
+        //
+        // It also took feats.find(), the first match, which on overlapping areas
+        // is whichever happens to be drawn on top. Silently opening an arbitrary
+        // polygon is how someone pulls back the wrong territory.
+        //
+        // And it ran for every role, so a rep's tap opened a panel whose every
+        // button would 403.
         const cb = (window as any).__onTerritoryClick;
-        if (terr && cb) cb(Number(terr.layer.id.replace("territory-", "")));
-        else if (cb) cb(null); // click on empty map closes the panel
+        const pick = (window as any).__onTerritoryPick;
+        const outcome = resolveTerritoryTap(feats, (id) =>
+          (window as any).__canManageTerritory?.(id) !== false,
+        );
+        if (outcome.kind === "select") cb?.(outcome.territoryId);
+        else if (outcome.kind === "choose") pick?.(outcome.territoryIds);
+        else cb?.(null); // empty map closes the panel
       });
 
       mapRef.current = map;
@@ -2460,6 +2771,10 @@ export default function MapView() {
   // Set by the knock handler after its imperative one-pin paint; consumed once
   // by the cluster reconcile effect to skip the duplicate full setData.
   const pendingKnockPaintRef = useRef<number | null>(null);
+  // Last styleEpoch this map's source was actually filled for. -1 = never, which
+  // is also every fresh style: setStyle drops the source, so a "nothing changed"
+  // reconcile must still repaint. See the guard in the reconcile effect.
+  const paintedStyleEpochRef = useRef(-1);
   // One worker re-cluster + repaint per animation frame MAX. Disposition taps
   // mutate their single pin synchronously (instant feedback), then schedule
   // the full-collection setData here; back-to-back taps inside one frame
@@ -2566,6 +2881,46 @@ export default function MapView() {
       .map(([, l]) => l);
   }, [mapTotalLeads, viewBBox]);
 
+  // ── Who works this door → the per-rep halo ────────────────────────────────
+  // Resolved ONCE PER AREA, never per lead. The naive shape here is
+  // `territories.find(t => t.id === lead.assignedTerritoryId)` plus a
+  // JSON.parse of assignee_ids inside the 5k-lead reconcile loop — the exact
+  // O(leads x areas) + 5,000-JSON.parse pattern activeAreaCountByRep and
+  // progressById were introduced to kill. This memo pays the parse once per
+  // area (a few hundred, and only when the area list actually changes) and the
+  // per-lead lookup below is a Map hit that usually returns a SHARED array, so
+  // an entire street of doors in one area allocates nothing at all.
+  const repIdsByArea = useMemo(() => {
+    const byArea = new Map<number, number[]>();
+    for (const t of territories as any[]) {
+      // Primary first — the innermost ring hugging the pin is always the owner.
+      byArea.set(t.id, repIdsForDoor(t.repId, t.assigneeIds));
+    }
+    return byArea;
+  }, [territories]);
+
+  const haloRepIdsFor = useCallback<LeadRepIdsFn>(
+    (lead) => {
+      const areaRepIds = lead.assignedTerritoryId != null
+        ? repIdsByArea.get(lead.assignedTerritoryId)
+        : undefined;
+      // A door assigned to a rep but not to an area (direct assignment, or an
+      // area the rep list has not caught up with) still shows its owner's ring.
+      if (!areaRepIds) return lead.assignedRepId ? [lead.assignedRepId] : null;
+      // Fast path — the door's owner IS the area's primary, which is what every
+      // assignment path writes. Hand back the area's shared array untouched.
+      if (!lead.assignedRepId || areaRepIds[0] === lead.assignedRepId) return areaRepIds;
+      // Divergent (a reclaim, a per-lead reassignment inside a shared area):
+      // the DOOR's owner takes the inner ring, the rest of the crew follows.
+      return repIdsForDoor(lead.assignedRepId, areaRepIds);
+    },
+    [repIdsByArea],
+  );
+  // Read by the push handler, which lives far below and must not re-subscribe
+  // the stream every time the area list is refetched.
+  const haloRepIdsForRef = useRef(haloRepIdsFor);
+  haloRepIdsForRef.current = haloRepIdsFor;
+
   // ── Update cluster GeoJSON when leads/filter/territory changes ───────────
   useEffect(() => {
     const map = mapRef.current;
@@ -2579,6 +2934,7 @@ export default function MapView() {
     const reconciled = reconcileLeadFeatures(
       visibleLeads,
       featureCacheRef.current,
+      haloRepIdsFor,
     );
     geoJsonDataRef.current = reconciled.data;
     featureByIdRef.current = reconciled.byId;
@@ -2588,14 +2944,33 @@ export default function MapView() {
     // setData + re-cluster is pure duplicate work — skip the paint, keep refs.
     const skipId = pendingKnockPaintRef.current;
     pendingKnockPaintRef.current = null;
-    if (skipId == null || reconciled.soleChangedId !== skipId) {
+    // Nothing created and nothing pruned means every surviving feature is the
+    // SAME object as last pass — the painted set is identical and a setData
+    // would re-cluster 5.5k features to produce the picture already on screen.
+    // This is what lets haloRepIdsFor sit in the dep array below: an
+    // /api/territories refetch that changed no assignment now costs one O(n)
+    // signature pass instead of a full worker round-trip.
+    //
+    // The epoch check is NOT optional. setStyle wipes the source, so the run
+    // triggered by the styleEpoch bump finds an EMPTY source and a fully warm
+    // feature cache — created 0, removed 0 — and skipping it would leave every
+    // pin off the map after a basemap toggle. Same on the first run for a map
+    // instance. Only an epoch we have already painted may be skipped.
+    const samePaintedStyle = paintedStyleEpochRef.current === styleEpoch;
+    paintedStyleEpochRef.current = styleEpoch;
+    const unchanged = samePaintedStyle && reconciled.created === 0 && reconciled.removed === 0;
+    if (!unchanged && (skipId == null || reconciled.soleChangedId !== skipId)) {
       src.setData(reconciled.data);
     }
     // NOTE: this dep array must NEVER gain selection/sheet state — a pin tap must
     // rebuild zero GeoJSON. Selection is a setFilter on its own effect below.
-    // It must also stay free of poll-churned identities (team, territories, user):
-    // the memoized visibleLeads absorbs those upstream.
-  }, [visibleLeads, mapReady, styleEpoch]);
+    // It must also stay free of poll-churned identities (team, user): the
+    // memoized visibleLeads absorbs those upstream. haloRepIdsFor is the one
+    // exception and it has to be here — reassigning an area changes which reps
+    // a door belongs to without touching the lead rows at all, so without this
+    // dep a shared door would keep painting the previous crew's colours until
+    // something unrelated happened to it. The `unchanged` guard above pays for it.
+  }, [visibleLeads, mapReady, styleEpoch, haloRepIdsFor]);
 
   // Admin assignment view: recolor unclustered pins by repColor (or restore
   // the canonical status palette). Pure style-thread paint swap — no setData.
@@ -2760,6 +3135,10 @@ export default function MapView() {
     });
   }, [territories, canAssign, user?.teamMemberId]);
 
+  useEffect(() => {
+    visibleTerritoryIdsRef.current = new Set(visibleTerritories.map((t) => t.id));
+  }, [visibleTerritories]);
+
   // Centroid label. Reps: the area NAME only. Managers: name + owner line
   // ("Rep knocked/total"); "Unassigned" once reclaimed (the old rep's name
   // must NOT linger on the area).
@@ -2851,16 +3230,17 @@ export default function MapView() {
         // Status-aware styling: reclaimed/unassigned areas go GRAY and lose the
         // rep's name; completed areas keep the rep color but muted.
         const isPool = status === "unassigned" || status === "reclaimed";
-        const isDone = status === "completed";
-        const color = isPool ? "#94a3b8" : colorForRep(t.repId);
-        const fillOpacity = !canAssign
-          ? 0.05
-          : isPool
-            ? 0.1
-            : isDone
-              ? 0.08
-              : 0.14;
+        // The area's OWN colour, not the rep's palette hue — that is what the
+        // admin picked while drawing, and it has to be the same on every phone
+        // looking at this ground. colorForRep is only the fallback for rows
+        // written before the colour was captured.
+        const paint = territoryPaint({ color: (t as any).color, status }, colorForRep(t.repId));
+        const color = paint.fillColor;
         const srcId = `territory-${t.id}`;
+        // Areas go UNDER the pins. Without this they were appended on top of
+        // every lead layer already present — a translucent sheet over the doors
+        // the rep opened the map to tap.
+        const beforeId = territoryBeforeId((id) => !!map.getLayer(id));
         if (!map.getSource(srcId)) {
           map.addSource(srcId, {
             type: "geojson",
@@ -2876,8 +3256,8 @@ export default function MapView() {
             id: srcId,
             type: "fill",
             source: srcId,
-            paint: { "fill-color": color, "fill-opacity": fillOpacity },
-          });
+            paint: { "fill-color": paint.fillColor, "fill-opacity": paint.fillOpacity },
+          }, beforeId);
         }
         if (!map.getLayer(srcId + "-outline")) {
           map.addLayer({
@@ -2885,12 +3265,12 @@ export default function MapView() {
             type: "line",
             source: srcId,
             paint: {
-              "line-color": color,
-              "line-width": !canAssign ? 1.75 : isPool ? 2 : 2.5,
-              "line-opacity": !canAssign ? 0.65 : isPool ? 0.7 : 0.9,
-              ...(isPool ? { "line-dasharray": [3, 2] } : {}),
+              "line-color": paint.lineColor,
+              "line-width": paint.lineWidth,
+              "line-opacity": paint.lineOpacity,
+              ...(paint.lineDasharray ? { "line-dasharray": paint.lineDasharray } : {}),
             },
-          });
+          }, beforeId);
         }
         const cx = coords.reduce((s, p) => s + p[0], 0) / coords.length;
         const cy = coords.reduce((s, p) => s + p[1], 0) / coords.length;
@@ -2964,6 +3344,11 @@ export default function MapView() {
       "lead-fresh-confirmed-halo",
       "lead-unclustered-glow",
       "lead-visited-check",
+      // The rep halos follow showLeads like every other lead layer — a ring
+      // left floating under a hidden pin is worse than no ring at all. They are
+      // NOT swapped out in NEW_FIELD_MAP mode: the halo sits under the glyph
+      // pin exactly as it sits under the dot.
+      ...HALO_LAYER_IDS,
       STATUS_ICON_LAYER,
     ]) {
       if (!map.getLayer(id)) continue;
@@ -3124,6 +3509,10 @@ export default function MapView() {
           },
           "lead-unclustered",
         );
+        // Per-rep halos — identical specs to the init block (see @/lib/leadHalos).
+        for (const spec of haloLayerSpecs()) {
+          map.addLayer(spec, haloBeforeId((id: string) => !!map.getLayer(id)));
+        }
         // Selected-pin ring — its filter is re-applied by the selection effect
         // (styleEpoch dep) right after this block bumps the epoch.
         map.addLayer(SELECTED_RING_SPEC);
@@ -3212,6 +3601,20 @@ export default function MapView() {
       map.touchZoomRotate.disable();
       map.touchPitch?.disable();
     } catch {}
+    // …and suspend the BROWSER's gestures too, which the four lines above are
+    // what re-enable. Mapbox drives the canvas's touch-action from classes it
+    // only applies while drag-pan + touch-zoom-rotate are on, so disabling them
+    // drops the canvas to touch-action: auto and the finger starts scrolling the
+    // page — a downward stroke from scroll top being the pull-to-refresh gesture,
+    // which is the "it reloads when I finish a lasso" report. See
+    // lib/lassoGestureLock.ts. Released in this effect's cleanup, so it lifts on
+    // completion, cancel, unmount, style swap and error alike.
+    const releaseCanvas = lockGesturesForDrawing(mapGestureTarget(map));
+    const releaseRoot = lockDocumentPullToRefresh(typeof document === "undefined" ? null : document);
+    const releaseGestures = () => {
+      releaseCanvas();
+      releaseRoot();
+    };
 
     // Point-in-polygon lives in lib/mapGeo.ts (bbox-rejected, unit-tested).
 
@@ -3249,14 +3652,16 @@ export default function MapView() {
             id: "lasso-fill",
             type: "fill",
             source: "lasso-polygon",
-            paint: { "fill-color": "#2dd4bf", "fill-opacity": 0.14 },
+            // The colour the area will actually be saved in, so the preview is
+            // a preview of the thing rather than a generic teal smear.
+            paint: { "fill-color": lassoColorRef.current, "fill-opacity": 0.2 },
           });
           map.addLayer({
             id: "lasso-outline",
             type: "line",
             source: "lasso-polygon",
             paint: {
-              "line-color": "#5eead4",
+              "line-color": lassoColorRef.current,
               "line-width": 3,
               "line-cap": "round",
               "line-join": "round",
@@ -3304,6 +3709,55 @@ export default function MapView() {
         clearPreview();
         return;
       }
+
+      // ── Clean the stroke before anyone treats it as a polygon ──────────────
+      // A finger produces a stream of samples, not a ring: repeated coordinates
+      // where it paused, a hairline doubling-back where it wobbled, and up to
+      // MAX_POINTS vertices that every subsequent point-in-polygon call has to
+      // walk. shared/polygonGeometry turns that into a ring — or says why it
+      // cannot. Nothing below this point ever touches the raw `stroke` again.
+      const deduped = dedupeVertices(stroke);
+
+      // Screened before anything measures the ring: every routine here (and
+      // pointInPolygon on the server) is planar, so an edge spanning >180° of
+      // longitude is computed the long way round the world and the area, the
+      // enclosure test and the rendered fill are all meaningless.
+      if (crossesAntimeridian(deduped)) {
+        stroke = [];
+        clearPreview();
+        setLassoPoints([]);
+        setLassoSelected([]);
+        toast({
+          title: "That loop wrapped around the world",
+          description:
+            "The shape spans more than half the globe, which usually means the map jumped while you were drawing. Try drawing it again.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const cleaned = simplifyRing(deduped, LASSO_SIMPLIFY_TOLERANCE_DEG);
+
+      const verdict = validateRing(cleaned);
+      if (!verdict.ok) {
+        stroke = [];
+        clearPreview();
+        setLassoPoints([]);
+        setLassoSelected([]);
+        const message = LASSO_RING_REJECTION[verdict.reason];
+        toast({
+          title: message.title,
+          description: message.description,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // The validated ring — not the raw stroke — is what gets previewed,
+      // saved and selected against, so the shape on screen, the shape in the
+      // database and the shape the doors were tested against are one shape.
+      const ring = verdict.ring;
+      stroke = ring;
       render(true);
       // Select from the VISIBLE set (territory-clip + rep + status filters), so
       // a lasso only ever selects leads the user can actually see and assign —
@@ -3311,8 +3765,8 @@ export default function MapView() {
       // a filtered set yet. Bbox-rejected O(n + k·v) (see lib/mapGeo.ts).
       const source: MapPin[] =
         (window as any).__visibleLeads ?? (window as any).__allLeads ?? [];
-      const selected = selectPointsInPolygon(source, stroke);
-      setLassoPoints(stroke);
+      const selected = selectPointsInPolygon(source, ring);
+      setLassoPoints(ring);
       setLassoSelected(selected);
     };
 
@@ -3352,6 +3806,10 @@ export default function MapView() {
 
     return () => {
       (window as any).__lassoActive = false;
+      // Give the page its gestures back FIRST. If a later line throws (a map
+      // already torn down by unmount), the browser must not be left unable to
+      // scroll — that failure mode is worse than the bug this fixes.
+      releaseGestures();
       // Defensive: on unmount the map may already be removed (getCanvas → undefined)
       try {
         map.off("mousedown", onMouseDown);
@@ -4124,6 +4582,174 @@ export default function MapView() {
   // registering another saved callback whose behavior depends on mount order.
   const { log: logKnock, snap: queueSnap } = useKnockLogger();
 
+  // ── Live lead pushes ────────────────────────────────────────────────────────
+  // GET /api/leads/stream carries server-authored, access-checked per-lead
+  // changes. This is a strict upgrade on the data-free `map-changed` ping below
+  // it, which can only say "something moved, refetch everything": a rep now
+  // sees a teammate close the house next door as it happens, and a 5.5k-row
+  // refetch is not the price of a one-pin change.
+  //
+  // Both channels stay wired on purpose. The stream patches; the 60s poll and
+  // the map-changed invalidate remain the floor, and are the only thing running
+  // when the stream is degraded (see onFallback).
+  const canUseFieldApp = useCan("field.app.use");
+  const [leadStream, setLeadStream] = useState<LeadStreamHandle | null>(null);
+  const streamHoldsRef = useRef(new Map<number, () => void>());
+
+  const applyLeadEvent = useCallback(
+    (evt: LeadStreamEvent) => {
+      const pushed = evt.lead;
+      // No row left to project — the door was deleted. Same cache shape as
+      // handleDeleteLead; the reconcile effect prunes the feature from the
+      // rebuilt collection, so there is nothing to paint imperatively.
+      if (!pushed) {
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          if (!old?.pins?.some((p: MapPin) => p.id === evt.leadId)) return old;
+          return {
+            ...old,
+            total: Math.max(0, (old.total ?? old.pins.length) - 1),
+            pins: old.pins.filter((p: MapPin) => p.id !== evt.leadId),
+          };
+        });
+        return;
+      }
+
+      // Holder rather than a plain `let`: the updater runs inside setQueryData,
+      // and TS narrows a closure-assigned local to its initializer.
+      const out: { pin?: MapPin } = {};
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        // Cache not warm yet: the first GET is still in flight and will carry
+        // this row itself. Seeding a lone pin here would render a map of one.
+        if (!old?.pins) return old;
+        const index = old.pins.findIndex((p: MapPin) => p.id === pushed.id);
+        if (index < 0) {
+          // A door that just entered this user's scope (assigned to their area,
+          // or created by a scan). The server already ran repCanAccessLead
+          // against the post-write row, so it is theirs to see.
+          if (pushed.lat == null || pushed.lng == null) return old;
+          out.pin = pinFromPushedLead(pushed);
+          return { ...old, total: (old.total ?? old.pins.length) + 1, pins: [...old.pins, out.pin] };
+        }
+        const prev = old.pins[index] as MapPin;
+        const next = mergePushedPin(prev, pushed);
+        if (next === prev) return old; // no-op push — do not churn the cache
+        out.pin = next;
+        const pins = old.pins.slice();
+        pins[index] = next;
+        return { ...old, pins };
+      });
+      const merged = out.pin;
+      if (!merged) return;
+
+      // Paint the one pin NOW rather than waiting for the render the cache write
+      // just scheduled, then let the reconcile effect skip its duplicate full
+      // setData — the exact path handleKnock uses. There is no second repaint
+      // mechanism here on purpose.
+      const feature = featureByIdRef.current.get(pushed.id);
+      if (!feature) return; // brand-new door — reconcile builds and paints it
+      // EVERY property mergePushedPin can move is rewritten here, not just the
+      // ones this event happened to change. The skip-guard below hands Mapbox
+      // this mutated feature and then suppresses the rebuild's setData, so the
+      // two representations must agree exactly — a prop the merge moved but the
+      // mutation missed (a leadTag flipping to fresh, a geocode correction)
+      // would sit unpainted until something unrelated forced a full setData.
+      const ds = pinDisplayState(merged);
+      const props = feature.properties;
+      feature.geometry.coordinates = [merged.lng, merged.lat];
+      props.status = toLeadMapStatus(ds);
+      props.ds = ds;
+      props.address = merged.address;
+      props.visited = merged.visited ? 1 : 0;
+      props.fresh = merged.leadTag === "fresh_fiber_confirmed" ? 1 : 0;
+      props.assignedRepId = merged.assignedRepId ?? 0;
+      props.repColor = repColorFor(merged.assignedRepId);
+      // An assignment event is exactly the case the halo exists for, so the
+      // rings have to move with it. Slots are written even when undefined:
+      // leaving a stale halo1 behind on a door that lost a rep would paint a
+      // ring for someone who no longer works it.
+      const halo = haloFeatureProps(haloRepIdsForRef.current(merged));
+      props.haloCount = halo.haloCount;
+      props.halo0 = halo.halo0;
+      props.halo1 = halo.halo1;
+      props.halo2 = halo.halo2;
+      pendingKnockPaintRef.current = pushed.id;
+      scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
+    },
+    [qc, scheduleClusterSetData],
+  );
+  // Kept behind a ref so the subscription below depends only on identity, not
+  // on every render — reconnecting the stream costs a full replay window.
+  const applyLeadEventRef = useRef(applyLeadEvent);
+  applyLeadEventRef.current = applyLeadEvent;
+
+  useEffect(() => {
+    // Same gate the endpoint enforces (requireCapability("field.app.use")).
+    // Opening a socket a calling-only role will be 403'd on is pure radio burn.
+    if (!user || !canUseFieldApp) return;
+    const handle = subscribeLeadStream({
+      // Sessions here are an x-session-id HEADER, which native EventSource
+      // cannot send — it would 401 forever. Read per connect so a refreshed
+      // token is picked up on reconnect instead of frozen at subscribe time.
+      EventSourceImpl: createFetchEventSource({
+        headers: (): Record<string, string> => {
+          const sessionId = getStoredSessionId();
+          return sessionId ? { "x-session-id": sessionId } : {};
+        },
+      }),
+      onEvent: (evt) => applyLeadEventRef.current(evt),
+      // The cursor is gone (evicted from the reconnect ring, or minted by a
+      // process that has since restarted). Patching from here would leave holes
+      // nothing downstream can detect, so the whole scope is refetched.
+      onResync: () => {
+        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      },
+      // Fallback = the pre-existing refetch behaviour is the only truth again.
+      // It never stopped running, so there is nothing to switch on; what this
+      // edge buys is immediacy. Going degraded pulls once so the map is not up
+      // to 60s stale on the way down, and recovering pulls once to close the
+      // window between the last poll and the first live frame.
+      onFallback: () => {
+        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      },
+    });
+    setLeadStream(handle);
+    return () => {
+      handle.close();
+      // Holds live inside the handle that just died; the map must not keep
+      // release closures pointing at it.
+      streamHoldsRef.current.clear();
+      setLeadStream(null);
+    };
+  }, [user?.id, canUseFieldApp, qc]);
+
+  // ── Do not repaint a door the rep is still saving ───────────────────────────
+  // A push applied over an in-flight knock shows the rep their own tap being
+  // undone by their own network. The queue's byLead map is the right source for
+  // "mine, unsettled": it is durable (rehydrated from localStorage on reload),
+  // it already exists, and it cannot leak a hold the way a hand-wired
+  // hold/release pair around each mutation would — knockQueue's dead-letter
+  // path has no success callback at all.
+  //
+  // "error" (dead-lettered) deliberately does NOT hold. That knock is not
+  // coming back on its own, and the optimistic recolor useKnockLogger wrote is
+  // never rolled back — so continuing to defend it would pin a wrong colour on
+  // the door indefinitely. Releasing lets the server's truth correct it.
+  useEffect(() => {
+    const held = streamHoldsRef.current;
+    if (!leadStream) return;
+    const byLead = queueSnap.byLead;
+    const unsettled = (id: number) => byLead[id] === "saving" || byLead[id] === "queued";
+    for (const [leadId, release] of held) {
+      if (unsettled(leadId)) continue;
+      release(); // delivers the newest push withheld while this door was busy
+      held.delete(leadId);
+    }
+    for (const key of Object.keys(byLead)) {
+      const leadId = Number(key);
+      if (unsettled(leadId) && !held.has(leadId)) held.set(leadId, leadStream.hold(leadId));
+    }
+  }, [leadStream, queueSnap]);
+
   const selectedLead =
     selectedLeadId != null ? (leadById.get(selectedLeadId) ?? null) : null;
 
@@ -4154,6 +4780,13 @@ export default function MapView() {
           if (!old?.pins) return old;
           return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome } : p) };
         });
+        // The server writes a [central]-flagged knock row, so History HAS a new
+        // entry — but the card fetched that query when it opened and nothing
+        // told it to look again. Result: "No changes yet" under a mark you just
+        // made. The knock path invalidates these; this path updated the pin and
+        // the map cache and forgot the card it was rendered inside.
+        qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}/history`] });
+        qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}`] });
         try { navigator.vibrate?.(10); } catch { /* */ }
         toast({ title: "🏢 Marked centrally", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
         return true;
@@ -5317,7 +5950,7 @@ export default function MapView() {
               style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.5rem)" }}
               className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100vw-24px)]"
             >
-              {lassoSelected.length === 0 ? (
+              {!lassoDrawn ? (
                 /* Armed, nothing drawn yet → drawing hint */
                 <div className="glass-capsule flex items-center gap-2.5 border-teal-300/40 pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
                   <Pencil className="w-4 h-4 text-teal-400 flex-shrink-0" />
@@ -5325,6 +5958,7 @@ export default function MapView() {
                     Drag a loop around the area
                   </span>
                   <button
+                    type="button"
                     onClick={exitLasso}
                     className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors"
                     title="Exit"
@@ -5338,7 +5972,20 @@ export default function MapView() {
                    refine), then an action on the refined set — Assign owner, Set
                    status, or Save as area. */
                 <div className="glass-surface flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))]">
-                  {/* Count + per-status breakdown; tap a chip to include/exclude it */}
+                  {/* Count + per-status breakdown; tap a chip to include/exclude it.
+                      With no doors in the loop there is nothing to break down and
+                      nothing to refine — say so plainly instead of showing "0/0"
+                      beside a row of chips that cannot exist. */}
+                  {!lassoHasLeads ? (
+                    <span
+                      className="text-[12px] text-white/60 leading-tight"
+                      aria-live="polite"
+                      data-testid="lasso-empty-note"
+                    >
+                      No mapped doors inside this loop — it can still be saved as
+                      an area.
+                    </span>
+                  ) : (
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span
                       className="text-[14px] font-bold text-white whitespace-nowrap mr-0.5"
@@ -5392,6 +6039,7 @@ export default function MapView() {
                       );
                     })}
                   </div>
+                  )}
 
                   {/* Action switcher */}
                   <div className="flex items-center gap-1 rounded-full bg-white/10 p-0.5">
@@ -5402,23 +6050,29 @@ export default function MapView() {
                         ["mark", "Mark"],
                         ["area", "Area"],
                       ] as const
-                    ).map(([key, label]) => (
+                    ).map(([key, label]) => {
+                      // Only "Area" works on an empty loop; the rest need lead IDs.
+                      const disabled = !lassoHasLeads && key !== "area";
+                      return (
                       <button
                         key={key}
                         type="button"
+                        disabled={disabled}
+                        title={disabled ? "No doors in this loop" : undefined}
                         onClick={() => setLassoAction(key)}
                         data-testid={`lasso-action-${key}`}
-                        aria-pressed={lassoAction === key}
-                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition ${lassoAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
+                        aria-pressed={lassoEffectiveAction === key}
+                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition disabled:opacity-35 disabled:cursor-not-allowed ${lassoEffectiveAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
                       >
                         {label}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* Mode control + Apply + Exit */}
                   <div className="flex items-center gap-2">
-                    {lassoAction === "assign" && (
+                    {lassoEffectiveAction === "assign" && (
                       <>
                         <select
                           value={lassoRepId}
@@ -5453,6 +6107,7 @@ export default function MapView() {
                               repId: Number(lassoRepId),
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5462,7 +6117,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "status" && (
+                    {lassoEffectiveAction === "status" && (
                       <>
                         <select
                           value={lassoStatusOutcome}
@@ -5495,6 +6150,7 @@ export default function MapView() {
                               outcome: lassoStatusOutcome,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-status"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5504,7 +6160,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "mark" && (
+                    {lassoEffectiveAction === "mark" && (
                       <>
                         <select
                           value={lassoMark}
@@ -5532,6 +6188,7 @@ export default function MapView() {
                               mark: lassoMark,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-mark"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5543,8 +6200,13 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "area" && (
+                    {lassoEffectiveAction === "area" && (
                       <>
+                        <TerritoryColorPicker
+                          value={lassoColor}
+                          onChange={setLassoColor}
+                          disabled={assignAreaMutation.isPending}
+                        />
                         <input
                           type="text"
                           value={lassoName}
@@ -5586,8 +6248,10 @@ export default function MapView() {
                               polygon: lassoPoints,
                               repId: Number(lassoRepId),
                               name: lassoName,
+                              color: lassoColor,
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5596,6 +6260,7 @@ export default function MapView() {
                       </>
                     )}
                     <button
+                      type="button"
                       onClick={exitLasso}
                       className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
                       title="Exit"
@@ -5605,10 +6270,13 @@ export default function MapView() {
                     </button>
                   </div>
 
-                  {lassoAction === "area" && (
+                  {lassoEffectiveAction === "area" && (
                     <span className="text-[10.5px] text-white/45 leading-tight">
                       Area assigns every house in the loop + saves a colored
-                      territory. The refine chips apply to Assign &amp; Status.
+                      territory.
+                      {lassoHasLeads
+                        ? " The refine chips apply to Assign & Status."
+                        : " Doors added inside it later belong to the area too."}
                     </span>
                   )}
                 </div>
@@ -5616,9 +6284,98 @@ export default function MapView() {
             </div>
           )}
 
+          {/* ── Who works this area, on the area ──
+              Editing the holder set already existed, but only down a four-step
+              path: tap the area, open the detail card, scroll to the bottom,
+              "Who works this area", full-screen modal over the map you were
+              looking at. This is the same decision made where it is made, with
+              the polygon still visible above it. Same /share call, same complete
+              holder-set contract; only the route to it is shorter. */}
+          {selectedTerritoryId != null && canManage && !lassoMode && (() => {
+            const t = territories.find((x) => x.id === selectedTerritoryId);
+            if (!t) return null;
+            const holders = repIdsForDoor((t as any).repId, (t as any).assigneeIds);
+            if (!holders.length) return null; // pool areas assign via the card
+            return (
+              <AreaAssigneeBar
+                areaName={territoryLabel(t)}
+                color={territoryPaint(
+                  { color: (t as any).color, status: (t as any).status },
+                  colorForRep((t as any).repId),
+                ).fillColor}
+                assigneeIds={holders}
+                pending={shareMutation.isPending}
+                onClose={() => setSelectedTerritoryId(null)}
+                onChange={(next) => shareMutation.mutate({ id: t.id, repIds: next })}
+                reps={team.filter((m) => m.active).map((m) => {
+                  const held = activeAreaCountByRep.get(m.id) ?? 0;
+                  return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
+                })}
+              />
+            );
+          })()}
+
+          {/* ── Overlapping areas: which one did you mean? ──
+              Tapping where two territories overlap used to resolve to whichever
+              was drawn on top, which is how you pull back the wrong area.
+              Listing them costs one extra tap and removes the guess. */}
+          {canAssign && territoryPickIds.length > 1 && (
+            <div
+              data-testid="territory-picker"
+              role="dialog"
+              aria-label="Choose an area"
+              className="absolute bottom-28 left-1/2 -translate-x-1/2 z-40 w-[min(20rem,90vw)] glass-surface glass-opaque glass-ink-scope rounded-2xl p-3"
+            >
+              <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">
+                {territoryPickIds.length} areas here
+              </div>
+              <ul className="space-y-1">
+                {territoryPickIds.map((id) => {
+                  const t = territories.find((x) => x.id === id);
+                  if (!t) return null;
+                  const status = (t as any).status ?? "active";
+                  return (
+                    <li key={id}>
+                      <button
+                        type="button"
+                        data-testid={`territory-pick-${id}`}
+                        onClick={() => {
+                          setTerritoryPickIds([]);
+                          setSelectedTerritoryId(id);
+                        }}
+                        className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-left text-sm hover:bg-secondary transition"
+                      >
+                        <span
+                          className="w-3 h-3 rounded-full flex-shrink-0 border border-white/20"
+                          style={{
+                            backgroundColor: territoryPaint(
+                              { color: (t as any).color, status },
+                              colorForRep(t.repId),
+                            ).fillColor,
+                          }}
+                        />
+                        <span className="truncate font-medium">{t.name}</span>
+                        <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                          {status}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+              <button
+                type="button"
+                onClick={() => setTerritoryPickIds([])}
+                data-testid="territory-pick-cancel"
+                className="mt-2 w-full h-9 rounded-lg text-[13px] text-muted-foreground hover:bg-secondary transition"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
           {/* ── Territory detail panel — opens when you tap a region ── */}
-          {canAssign &&
-            selectedTerritoryId != null &&
+          {selectedTerritoryId != null &&
             (() => {
               const t = territories.find((x) => x.id === selectedTerritoryId);
               if (!t) return null;
@@ -5664,11 +6421,31 @@ export default function MapView() {
                       currentUser={{ role: user?.role ?? "rep" }}
                       teamNames={teamNames}
                       progress={
+                        // The operational numbers were on the wire the whole
+                        // time and this literal dropped them. /progress returns
+                        // knocked, sold, availableBase and the three canonical
+                        // rates from shared/territoryMetrics; only eight fields
+                        // were copied across, and the panel gates its entire
+                        // stats block on `progress.knocked != null`. So
+                        // penetration and completion were defined, tested, and
+                        // rendered nowhere in the product — the card showed
+                        // "AREA WORKED 0.00%" and nothing else. Hand-picking
+                        // fields is what made that possible; the shape is now
+                        // carried whole and the type decides what is read.
                         prog
                           ? {
                               total: prog.total,
                               verifiedWorkedLeads: prog.verifiedWorkedLeads,
                               areaWorkedPct: prog.areaWorkedPct,
+                              knocked: prog.knocked,
+                              sold: prog.sold,
+                              untouched: prog.untouched,
+                              availableBase: prog.availableBase,
+                              attempts: prog.attempts,
+                              penetrationRate: prog.penetrationRate,
+                              knockCompletionRate: prog.knockCompletionRate,
+                              contactRate: prog.contactRate,
+                              lastActivityAt: prog.lastActivityAt ?? null,
                               verified: prog.verified,
                               needsReview: prog.needsReview,
                               invalid: prog.invalid,
@@ -5685,8 +6462,15 @@ export default function MapView() {
                               )
                           : undefined
                       }
-                      onRename={(name) =>
-                        renameTerritoryMutation.mutate({ id: t.id, name })
+                      onRename={
+                        canManage
+                          ? (name) => renameTerritoryMutation.mutate({ id: t.id, name })
+                          : undefined
+                      }
+                      onRecolor={
+                        canManage
+                          ? (color) => recolorTerritoryMutation.mutate({ id: t.id, color })
+                          : undefined
                       }
                       onViewHistory={() => setActivityTerritoryId(t.id)}
                       onUnassignRep={
@@ -5700,9 +6484,24 @@ export default function MapView() {
                       }
                       currentPass={(t as any).currentPass ?? 1}
                       assignedAt={(t as any).assignedAt ?? null}
+                      onEditAssignees={
+                        canManage
+                          ? () => { setShareRepIds(repIds); setShareTerritoryId(t.id); }
+                          : undefined
+                      }
                     />
-                    {/* Assign-to-next-rep for unassigned/reclaimed areas */}
-                    {isPool && (
+                    {/* Assign-to-next-rep for unassigned/reclaimed areas.
+                        canManage as well as isPool: this was gated on the area's
+                        STATUS alone, so the one management control on the card
+                        that did not check the viewer's role was the one that
+                        hands an area to a rep. A rep is unlikely to have a pool
+                        area in their list — /api/territories serves them only
+                        what they hold — but "unlikely to be reachable" is not a
+                        permission check, and every sibling control here already
+                        makes the same test. The server refuses a rep either way
+                        (requireTeamLead on /assign); this stops the UI offering
+                        an action it knows will fail. */}
+                    {isPool && canManage && (
                       <div className="mt-2 w-72 rounded-xl border border-border bg-card p-3">
                         <div className="text-[11px] font-semibold text-foreground mb-1.5">
                           Assign this area to the next rep
@@ -5787,6 +6586,51 @@ export default function MapView() {
           {/* Territory activity History drawer (opened from the card's View Activity) */}
           {/* Re-open an area for another sweep. Mounted once, outside the territory
               loop, so the preview fetch fires for the chosen area only. */}
+          {/* Who works this area. Multi-select, because an area can legitimately be
+              shared — the set you leave here IS the set that ends up on it. */}
+          {shareTerritoryId != null && (
+            <div role="dialog" aria-modal="true" aria-label="Who works this area"
+                 className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50">
+              <div className="w-full sm:max-w-md max-h-[85vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-background border p-4 space-y-3">
+                <h2 className="text-base font-semibold">Who works this area</h2>
+                <p className="text-xs text-muted-foreground">
+                  Tap to add or remove. Everyone selected shares the area; the first is the
+                  primary and sets its colour on the map.
+                </p>
+                <RepPicker
+                  multiple
+                  selected={shareRepIds}
+                  onToggle={(_id, next) => setShareRepIds(next)}
+                  onChange={() => {}}
+                  disabled={shareMutation.isPending}
+                  reps={team.filter((m) => m.active).map((m) => {
+                    const held = activeAreaCountByRep.get(m.id) ?? 0;
+                    return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
+                  })}
+                />
+                <div className="flex justify-end gap-2 pt-1">
+                  <button type="button" onClick={() => setShareTerritoryId(null)}
+                          className="rounded-lg border px-4 py-2 text-sm font-medium">Cancel</button>
+                  <button
+                    type="button"
+                    disabled={shareRepIds.length === 0 || shareMutation.isPending}
+                    onClick={() => shareMutation.mutate({ id: shareTerritoryId, repIds: shareRepIds })}
+                    className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50"
+                  >
+                    {shareMutation.isPending ? "Saving…" : "Save"}
+                  </button>
+                </div>
+                {shareRepIds.length === 0 && (
+                  // The API refuses an empty set; say why here rather than let them press
+                  // Save and get an error. Emptying an area is Reclaim's job.
+                  <p className="text-xs text-amber-500">
+                    Pick at least one rep — to empty the area entirely, use Reclaim.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
           {nextPassTerritoryId != null && (
             <StartNextPassDialog
               open
@@ -5921,6 +6765,9 @@ export default function MapView() {
                                   } else {
                                     exitLasso();
                                     setAddMode(false); // draw tools and add-mode are mutually exclusive
+                                    // Start on a colour nothing else is using, so two areas never
+                                    // read as one region split by a road. The picker overrides it.
+                                    setLassoColor(pickFreeColor());
                                     setLassoMode(true);
                                     setSearchOpen(false);
                                     setLayersOpen(false);

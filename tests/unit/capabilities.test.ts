@@ -25,9 +25,32 @@ describe("capability matrix — hard permission rules", () => {
     // ...but NOT the whole org's leads or others' commissions.
     expect(can("rep", "lead.read.all")).toBe(false);
     expect(can("rep", "commission.read.team")).toBe(false);
-    // Field discovery is a normal rep workflow; operational source controls are not.
-    expect(can("rep", "scan.submit")).toBe(true);
+    // Scanning is an operational spend decision — which streets are worth buying
+    // metered geocoding data for — not field work. A rep holds neither half.
+    expect(can("rep", "scan.submit")).toBe(false);
     expect(can("rep", "scan.manage")).toBe(false);
+  });
+
+  it("starts scanning at team lead, and keeps submit and manage as two tiers", () => {
+    // Two traps in one. First: the role sets are unions of the tier below, not
+    // supersets of REP — TEAM_LEAD spreads REP and MANAGER spreads TEAM_LEAD —
+    // so removing scan.submit from REP took it off EVERY role at once, and it
+    // had to be granted back explicitly or nobody below admin could scan.
+    expect(can("rep", "scan.submit")).toBe(false);
+    expect(can("rep", "scan.manage")).toBe(false);
+
+    // Second: submit and manage are deliberately separate. A team lead may start
+    // a scan and watch their own job, but provider diagnostics, failure counts,
+    // and error text stay redacted — addressDiscovery/routes keys that redaction
+    // on scan.manage. If submit ever moves up to MANAGER, no role holds one
+    // without the other and that redaction becomes unreachable.
+    expect(can("team_lead", "scan.submit")).toBe(true);
+    expect(can("team_lead", "scan.manage")).toBe(false);
+
+    for (const role of ["manager", "admin"] as const) {
+      expect(can(role, "scan.submit")).toBe(true);
+      expect(can(role, "scan.manage")).toBe(true);
+    }
   });
 
   it("team lead CAN assign leads and manage commission structures", () => {

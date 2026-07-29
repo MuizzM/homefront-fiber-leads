@@ -113,3 +113,62 @@ describe("RepPicker", () => {
     expect(screen.getByRole("listbox", { name: "Assign this area to…" })).toBeInTheDocument();
   });
 });
+
+// ── Multi-select: several reps can work one area ─────────────────────────────
+describe("RepPicker in multiple mode", () => {
+  it("toggles a rep on, reporting the FULL holder set", async () => {
+    // /share takes the complete set, not a delta — so the callback hands back
+    // everyone who should be on the area after the change.
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(<RepPicker multiple selected={[7]} onToggle={onToggle} onChange={vi.fn()}
+      reps={[{ id: 7, name: "Ann Rivera" }, { id: 9, name: "Bo Chen" }]} />);
+    await user.click(screen.getByTestId("rep-option-9"));
+    expect(onToggle).toHaveBeenCalledWith(9, [7, 9]);
+  });
+
+  it("toggles a rep off", async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(<RepPicker multiple selected={[7, 9]} onToggle={onToggle} onChange={vi.fn()}
+      reps={[{ id: 7, name: "Ann Rivera" }, { id: 9, name: "Bo Chen" }]} />);
+    await user.click(screen.getByTestId("rep-option-7"));
+    expect(onToggle).toHaveBeenCalledWith(7, [9]);
+  });
+
+  it("marks every selected rep, not just one", () => {
+    render(<RepPicker multiple selected={[7, 9]} onToggle={vi.fn()} onChange={vi.fn()}
+      reps={[{ id: 7, name: "Ann" }, { id: 9, name: "Bo" }, { id: 11, name: "Cam" }]} />);
+    expect(screen.getByTestId("rep-option-7")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("rep-option-9")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("rep-option-11")).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("lets a rep at the cap be REMOVED even though they can't be added", async () => {
+    // Otherwise a full rep could never be taken off anything — the cap would
+    // trap them on every area they already hold.
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(<RepPicker multiple selected={[7]} onToggle={onToggle} onChange={vi.fn()}
+      reps={[{ id: 7, name: "Ann", areaCount: 5, atCap: true }]} />);
+    const row = screen.getByTestId("rep-option-7");
+    expect(row).toBeEnabled();
+    await user.click(row);
+    expect(onToggle).toHaveBeenCalledWith(7, []);
+  });
+
+  it("still blocks adding a capped rep who is NOT on the area", () => {
+    render(<RepPicker multiple selected={[]} onToggle={vi.fn()} onChange={vi.fn()}
+      reps={[{ id: 7, name: "Ann", areaCount: 5, atCap: true }]} />);
+    expect(screen.getByTestId("rep-option-7")).toBeDisabled();
+  });
+
+  it("does not call the single-select handler in multiple mode", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<RepPicker multiple selected={[]} onToggle={vi.fn()} onChange={onChange}
+      reps={[{ id: 7, name: "Ann" }]} />);
+    await user.click(screen.getByTestId("rep-option-7"));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+});

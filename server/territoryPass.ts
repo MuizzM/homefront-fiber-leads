@@ -198,6 +198,17 @@ export interface StartNextPassInput {
    *  the assignment rules stay in routes.ts with the rest of them, and this file
    *  keeps a single job: the atomic boundary. Runs INSIDE the transaction. */
   applyTerritoryAction?: (ctx: { passNumber: number; nextPass: number }) => void;
+  /** The doors that were actually re-opened, handed over AFTER the transaction
+   *  commits. Injected for the same reason as applyTerritoryAction — and it has
+   *  to be a callback rather than a return value because the reset ids are the
+   *  one thing this function knows that its caller cannot reconstruct: once
+   *  last_outcome is NULL there is no query that says which doors it cleared.
+   *
+   *  Post-commit is not a detail. A notification sent from inside the boundary
+   *  would outlive a rollback that erased the reset it describes, and nothing
+   *  downstream can retract it. Note this fires for `keep` too — the action that
+   *  changes nothing about the territory still re-opens every eligible door. */
+  onLeadsReset?: (leadIds: number[]) => void;
 }
 
 export interface StartNextPassResult {
@@ -283,6 +294,12 @@ export function startNextPass(input: StartNextPassInput): StartNextPassResult {
   });
 
   tx();
+
+  // Outside the boundary by construction. Swallowed on throw: a subscriber's
+  // problem must not turn a committed pass reset into a 500 the caller retries.
+  if (plan.reset.length) {
+    try { input.onLeadsReset?.(plan.reset); } catch { /* best-effort notification */ }
+  }
 
   return {
     passNumber, nextPass,

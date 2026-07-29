@@ -6,10 +6,11 @@ import {
 import { LEAD_MAP_STATUSES, STATUS_CONFIG, toLeadMapStatus } from "../../shared/statusConfig";
 
 describe("canonical lead status pins", () => {
-  it("has exactly the six requested statuses and colors", () => {
+  it("has exactly the seven statuses and colors", () => {
     expect(LEAD_MAP_STATUSES).toEqual([
-      "not_home", "interested", "sold", "not_interested", "prospect", "follow_up",
+      "not_home", "interested", "sold", "not_interested", "prospect", "follow_up", "already_customer",
     ]);
+    expect(STATUS_CONFIG.already_customer.color).toBe("#2563EB");
     expect(STATUS_CONFIG.not_home.color).toBe("#EAB308");
     expect(STATUS_CONFIG.interested.color).toBe("#8B5CF6");
     expect(STATUS_CONFIG.sold.color).toBe("#14532D");
@@ -23,7 +24,7 @@ describe("canonical lead status pins", () => {
       const config = STATUS_CONFIG[status];
       return `${config.shape}/${config.glyph}/${config.color}`;
     });
-    expect(new Set(tuples).size).toBe(6);
+    expect(new Set(tuples).size).toBe(7);
   });
 
   it("keeps Sold and Prospect visibly different under glare", () => {
@@ -67,7 +68,7 @@ describe("data-driven Mapbox symbol mapping", () => {
     expect(STATUS_ICON.unworked.key).toBe("pin-prospect");
   });
 
-  it("registers all six inline assets through loadImage + addImage", async () => {
+  it("registers all seven inline assets through loadImage + addImage", async () => {
     const images = new Set<string>();
     const loaded: string[] = [];
     const map = {
@@ -79,7 +80,7 @@ describe("data-driven Mapbox symbol mapping", () => {
       addImage: (id: string) => { images.add(id); },
     };
     await registerPinImages(map);
-    expect(loaded).toHaveLength(6);
+    expect(loaded).toHaveLength(7);
     expect([...images].sort()).toEqual(LEAD_MAP_STATUSES.map(status => `pin-${status}`).sort());
   });
 });

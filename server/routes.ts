@@ -22,6 +22,10 @@ import {
 } from "./territoryPass";
 import { isTerritoryPassAction, type TerritoryPassAction } from "@shared/territoryPass";
 import { rawDb } from "./db";
+import {
+  emitLeadEvent, onLeadEvent, eventsSince, leadEventsCursor, leadEventsEpoch,
+  type LeadEvent, type LeadEventType,
+} from "./leadEvents";
 import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
 
@@ -53,13 +57,15 @@ try {
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
-import { pointInPolygon } from "@shared/geo";
+import { computeTerritoryMetrics } from "@shared/territoryMetrics";
+import { cachedScopeLookup } from "./territoryScopeCache";
+import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenant } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
-import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, normalizeTerritoryColor, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
@@ -392,10 +398,64 @@ function repInVisibilityScope(user: any, repId: number | null | undefined): bool
 // A rep may only read/act on a lead assigned to their own team member; a
 // team_lead only on leads within their team scope. Non-scoped roles pass.
 // Guards single-lead endpoints against IDOR (fetch-by-id) AND cross-team writes.
+// Areas a scoped caller works — as primary OR as one of several assignees.
+// Cached per request-ish by callers that need it in a loop; cheap enough here
+// (one indexed scan) that correctness beats micro-optimisation.
+/**
+ * The colour an area keeps when it changes hands.
+ *
+ * Every reassignment route used to stamp colorForRep(newPrimary), on the theory
+ * that the fill told you who was working the ground. That theory is spent: the
+ * per-rep halos on the pins say who, and an area can be held by three people at
+ * once, so one fill cannot name them. What the fill says now is WHICH AREA this
+ * is — the colour the admin chose while drawing it — and that must not change
+ * because the area was handed to someone else. Draw it green, share it, it is
+ * still green.
+ *
+ * colorForRep remains the fallback for rows with no stored colour (created
+ * before the colour was captured) so nothing renders colourless.
+ */
+function retainedAreaColor(territory: unknown, fallbackRepId: number | null | undefined): string {
+  const stored = normalizeTerritoryColor((territory as any)?.color);
+  return stored ?? colorForRep(fallbackRepId ?? null);
+}
+
+function territoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
+  // Memoised on a version stamp every territory write bumps. This is asked once
+  // per SSE event PER SUBSCRIBER, and the uncached form is a full territory scan
+  // with a JSON.parse per row — 53.86ms and 200k parses at 200 areas / 10
+  // subscribers / 100 events. The stamp is what keeps it safe: a reclaim bumps
+  // it, so a rep cannot keep reading doors in an area taken from them.
+  return cachedScopeLookup(`${tenantId ?? "-"}:${scope.join(",")}`, () =>
+    computeTerritoryIdsForScope(scope, tenantId));
+}
+
+function computeTerritoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
+  const out = new Set<number>();
+  for (const t of storage.getTerritories(tenantId ?? undefined) as any[]) {
+    // territoryHeldByAny, not a repId check first. This used to test repId before
+    // falling back to assignee_ids, and repId still names the last holder after a
+    // reclaim — so a rep who had an area taken off them kept reading its doors.
+    if (territoryHeldByAny(t, scope)) out.add(t.id);
+  }
+  return out;
+}
+
+// An area can be worked by SEVERAL reps. Lead access therefore cannot hang on
+// leads.assigned_rep_id alone — that column names ONE rep, so on a shared area
+// exactly one assignee could see the doors and everyone else got a 404 for
+// ground they were assigned to. Access now also passes when the caller holds the
+// lead's TERRITORY, which is where "who works this" is already many-to-many.
+//
+// The tenant wall is unaffected: callers reach this only after the lead's tenant
+// has been checked, and the territory scan is tenant-filtered too.
 function repCanAccessLead(user: any, lead: any): boolean {
   const scope = leadVisibilityScope(user);
   if (scope === undefined) return true;
-  return !!lead && lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId);
+  if (!lead) return false;
+  if (lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId)) return true;
+  if (lead.assignedTerritoryId == null) return false;
+  return territoryIdsForScope(scope as number[], user?.tenantId).has(lead.assignedTerritoryId);
 }
 
 // May the caller REASSIGN this lead? A scoped role (team_lead) may claim an
@@ -447,6 +507,61 @@ function canManageTerritory(user: any, terr: any): boolean {
   const unowned = assignees.length === 0
     && (status === "unassigned" || status === "reclaimed" || status === "draft");
   return unowned;
+}
+
+// ── Live lead events: the one way a completed write reaches GET /api/leads/stream ──
+// Every call site below is one line so that adding a lead mutation and forgetting
+// the live update look different in a diff. Three rules the helpers encode once:
+//
+//  • POST-WRITE ROW, always. The stream authorizes each event by running
+//    repCanAccessLead() against the projection the event carries, so a pre-write
+//    row would address the update using assignment state that no longer exists —
+//    i.e. deliver it to the previous holder and nobody else.
+//  • AFTER COMMIT, never inside a transaction. Several call sites wrap their loop
+//    in rawDb.transaction(); emitting in there would announce a change a rollback
+//    then erases, and the ring has no retraction.
+//  • BEST-EFFORT. emitLeadEvent never throws and returns null for input it cannot
+//    wall, so a notification problem can never change a write's outcome or shape
+//    its response. The durable record is the leads table; this is the edge.
+function emitLeadChange(type: LeadEventType, lead: any, actor: any, tenantIdFallback?: number | null): void {
+  if (lead?.id == null) return;
+  emitLeadEvent({
+    // The row's own tenant first: on the territory paths the caller may be an
+    // org-wide admin whose session tenant is not the door's.
+    tenantId: Number(lead.tenantId ?? tenantIdFallback ?? actor?.tenantId ?? 0),
+    leadId: Number(lead.id),
+    type,
+    actorId: actor?.id ?? null,
+    actorName: actor?.name ?? null,
+    lead,
+  });
+}
+
+// Same contract for the write paths that hand back a count or a boolean instead
+// of the row — the bulk loops and every raw-SQL UPDATE. One indexed point-read
+// per CHANGED lead (never per candidate id) buys the state the subscriber has to
+// authorize against; without it the event carries no pin and every scoped rep
+// fails the access check on it.
+function emitLeadChangeById(type: LeadEventType, leadId: number, actor: any, tenantIdFallback?: number | null): void {
+  const fresh = storage.getLeadById(Number(leadId));
+  if (fresh) emitLeadChange(type, fresh, actor, tenantIdFallback);
+}
+
+// A lasso or an area reset can move more doors than the event ring holds (25k is
+// a legal bulk-assign). Past a point, per-lead events stop helping and start
+// hurting: they evict the reconnect window of every OTHER tenant sharing the
+// process, while the client they were meant for is told `gapped` and refetches
+// anyway. So a bulk path emits up to this many and then stops. The bound is the
+// module's own per-replay cap, so one bulk action can never overflow a single
+// replay call; the rest is covered by the tenant-wide map-changed ping that all
+// of these paths already fire through bustMapCache — one refetch instead of tens
+// of thousands of frames.
+const LEAD_EVENT_BULK_MAX = 200;
+
+function emitLeadChangesBulk(type: LeadEventType, leadIds: number[], actor: any, tenantIdFallback?: number | null): void {
+  for (let i = 0; i < leadIds.length && i < LEAD_EVENT_BULK_MAX; i++) {
+    emitLeadChangeById(type, leadIds[i], actor, tenantIdFallback);
+  }
 }
 
 // Tenant wall for rep-targeting writes (clock, pings, manual commissions):
@@ -1352,6 +1467,158 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
+  // ── Per-lead live stream (FIELD-facing) ─────────────────────────────────────
+  // /api/leads/events above is a data-free ping, so every change costs the client
+  // a full role-scoped map refetch. That is the right fallback and it stays, but
+  // it is also why a SHARED area feels dead: two reps working the same street see
+  // nothing of each other until a refetch lands. This stream carries the one pin
+  // that changed so the map can patch it in place.
+  //
+  // Carrying lead identity means this endpoint owns an authorization decision the
+  // ping never had to make. Two walls, and BOTH are re-applied per event because
+  // the bus is process-wide — same shape as the run-stage feed's `evt.runId !==
+  // run.id` filter, for the same reason: subscribing tells you nothing about who
+  // the event belongs to.
+  //   1. Tenant, resolved from the SESSION. Never a query param.
+  //   2. repCanAccessLead — the SAME predicate every single-lead read uses, fed
+  //      the assignedRepId/assignedTerritoryId the event carries for exactly this
+  //      purpose. Areas are many-to-many, so a rep-column check here would hide
+  //      every door from every assignee but one.
+  //
+  // Deliberately NOT covered: a rep who just LOST a door receives nothing, since
+  // the post-write row no longer authorizes them, so their pin lingers until the
+  // next refetch. That case belongs to the data-free map-changed ping — every
+  // path that moves an assignment busts the map cache — and it is the safe
+  // direction to fail: a late removal costs one stale pin, whereas addressing the
+  // event to the PREVIOUS holder would hand lead data to someone who just lost
+  // access to it.
+  //
+  // Concurrency is capped process-wide (the run-stage feed's shape) rather than
+  // per tenant, because the cost this bounds is process-wide: every lead write
+  // fans out to every listener, and each listener answers repCanAccessLead, which
+  // for a scoped rep is a tenant-filtered territory scan. 200 sits under the
+  // bus's 500 max-listeners ceiling, so the cap trips before the leak warning
+  // that ceiling exists to raise.
+  const LEAD_STREAM_MAX = 200;
+  let leadStreams = 0;
+
+  app.get("/api/leads/stream", requireCapability("field.app.use"), (req: any, res: Response) => {
+    const user = req.user;
+    // A session with no org cannot be walled at all, so it is refused rather than
+    // defaulted to 0 — the bus drops tenant-less events for the same reason.
+    const tenantId = Number(user?.tenantId ?? 0);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) {
+      return res.status(403).json({ error: "Organization membership required" });
+    }
+    // Checked BEFORE any header is written: past the cap the caller gets a clean
+    // 503 + JSON and falls back to polling, never a half-opened stream.
+    if (leadStreams >= LEAD_STREAM_MAX) {
+      return res.status(503).json({ error: "Too many live lead streams open; use the polling fallback." });
+    }
+
+    // Resume cursor. The SSE frame id is `<epoch>.<seq>`, not a bare number, so
+    // Last-Event-ID carries the identity of the seq space it was minted in: seq
+    // restarts at 1 on every boot, and a cursor from the previous process (or
+    // another node behind the balancer) would otherwise look perfectly valid
+    // while naming completely different events.
+    //
+    // Header before ?since= — the browser resends Last-Event-ID by itself, so
+    // when both arrive the header is the fresher of the two. Either source may
+    // carry either form: the full frame id we minted, or a bare seq, which has no
+    // boot identity to check and can therefore only mean "in the current epoch".
+    const rawCursor = String(req.headers["last-event-id"] ?? req.query.since ?? "").trim();
+    const dot = rawCursor.lastIndexOf(".");
+    const epoch = leadEventsEpoch();
+    const cursorSeq = Number(dot > 0 ? rawCursor.slice(dot + 1) : rawCursor);
+    let cursor = Number.isSafeInteger(cursorSeq) && cursorSeq >= 0 ? cursorSeq : 0;
+    // `resync` is the client's instruction to drop its cursor and refetch the
+    // scope through /api/leads/map. It is never inferred from silence.
+    let resync = dot > 0 && rawCursor.slice(0, dot) !== epoch;
+    // No cursor at all → TAIL, don't replay. A fresh connection has just loaded
+    // the map through the role-scoped endpoint, so the window holds changes it
+    // already has. Tenant-local by construction: the global counter would leak
+    // every other tenant's write volume to anyone with a browser.
+    if (rawCursor === "") cursor = leadEventsCursor(tenantId);
+
+    res.status(200);
+    res.set({
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders?.();
+
+    const send = (event: string, data: unknown, id?: string) => {
+      // The id line goes FIRST so a browser that drops mid-frame never records a
+      // cursor for an event it did not finish reading.
+      if (id) res.write(`id: ${id}\n`);
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    const deliver = (evt: LeadEvent) => {
+      if (evt.tenantId !== tenantId) return;
+      if (!repCanAccessLead(user, evt.lead)) return;
+      send("lead", evt, `${evt.epoch}.${evt.seq}`);
+    };
+
+    // Drain the reconnect window into a list BEFORE writing anything, so the
+    // opening frame can tell the client whether its cursor survived. A client
+    // that learns "resync" only after applying 200 patches has done the work
+    // twice. eventsSince() caps each call, hence the loop; the ring is finite so
+    // it terminates in a couple of passes, and the bound is only there so a
+    // future ring resize cannot turn this into a spin.
+    const replay: LeadEvent[] = [];
+    for (let pass = 0; !resync && pass < 8; pass++) {
+      const batch = eventsSince(tenantId, cursor);
+      // A gap means events this client needed are already evicted. Reported, not
+      // papered over: replaying the surviving tail would leave a hole nothing
+      // downstream can detect — a sold door silently missing from a map.
+      if (batch.gapped) { resync = true; break; }
+      if (batch.events.length === 0 || batch.nextSeq === cursor) break;
+      replay.push(...batch.events);
+      cursor = batch.nextSeq;
+    }
+    if (resync) { replay.length = 0; cursor = leadEventsCursor(tenantId); }
+
+    // Immediate first frame — a fresh or refreshed client paints without waiting
+    // for the first lead write. `since` is the resume token to send back if this
+    // connection ends before any lead frame does.
+    send("ready", { epoch, since: `${epoch}.${cursor}`, resync });
+    for (const evt of replay) deliver(evt);
+
+    // Subscribing AFTER the replay is race-free without a buffer: emitLeadEvent
+    // and this handler are both synchronous, so nothing can be emitted between
+    // the last replayed event and this line. The seq guard covers the reverse —
+    // the ring hands out the same frozen object to replay and to listeners.
+    const unsub = onLeadEvent((evt) => {
+      if (evt.seq <= cursor) return;
+      cursor = evt.seq;
+      try { deliver(evt); } catch { /* socket gone; the close handler cleans up */ }
+    });
+    leadStreams++;
+
+    // 15s, matching the field-facing scan feed: a phone on LTE pays a radio
+    // wakeup for every keepalive, and this stream has no periodic payload to
+    // piggyback on.
+    const hb = setInterval(() => {
+      if (!res.writableEnded) { try { res.write(`: ping\n\n`); } catch { /* closed */ } }
+    }, 15_000);
+    hb.unref();   // a keepalive must never be the reason the process won't exit
+
+    let closed = false;
+    const cleanup = () => {
+      if (closed) return;      // 'close' fires on req AND res, and alongside error paths
+      closed = true;
+      clearInterval(hb);
+      unsub();                 // MUST run, or every lead write pays this listener forever
+      leadStreams = Math.max(0, leadStreams - 1);
+    };
+    req.on("close", cleanup);
+    res.on("close", cleanup);
+  });
+
   // GET /api/leads/fresh — confirmed fresh-fiber leads published within the last
   // ?days (default 30, clamped 1..365), as slim GeoJSON for map pins. Row-level
   // scoped exactly like /api/leads/map (reps see only their own). ?city & ?state
@@ -1505,7 +1772,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         (safeLead as any).lng = geo.lng;
       }
     }
-    res.status(201).json(stripProviderIds(storage.createLead(safeLead as any), req.user));
+    const created = storage.createLead(safeLead as any);
+    // A brand-new door is a pin appearing, not a pin changing — "status" is the
+    // closest the wire type gets, and the projection tells the map everything it
+    // needs to draw it without a refetch.
+    emitLeadChange("status", created, req.user, tenantId);
+    res.status(201).json(stripProviderIds(created, req.user));
   });
   app.patch("/api/leads/:id", requireManager, (req, res) => {
     // Allowlist only safe fields — prevent mass-assignment of internal fields
@@ -1533,11 +1805,27 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const updated = storage.updateLead(Number(req.params.id), safeUpdate as any, tid);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    // One PATCH is three different stories to a client: who owns the door, what
+    // happened at it, or what someone wrote about it. Classify from what was
+    // actually allowlisted in, so a note edit doesn't make every open map repaint.
+    emitLeadChange(
+      "assignedRepId" in safeUpdate ? "assignment" : "leadStatus" in safeUpdate ? "status" : "notes",
+      updated, (req as any).user, tid,
+    );
     res.json(stripProviderIds(updated, (req as any).user));
   });
   app.delete("/api/leads/:id", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
     if (!storage.deleteLead(Number(req.params.id), tid)) return res.status(404).json({ error: "Not found" });
+    // No projection: after the row is gone there is nothing left to authorize
+    // against, and shipping the PRE-delete pin would hand every subscriber a
+    // patch that re-draws the door it is telling them to forget. Managers (whose
+    // scope is org-wide) still receive it; a scoped rep learns the pin vanished
+    // from the data-free map-changed ping deleteLead already fires.
+    emitLeadEvent({
+      tenantId: Number(tid ?? 0), leadId: Number(req.params.id), type: "status",
+      actorId: (req as any).user?.id ?? null, actorName: (req as any).user?.name ?? null, lead: null,
+    });
     res.json({ success: true });
   });
 
@@ -3208,21 +3496,41 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const rp = storage.getTeamMemberById(rid)!;
       const leadsInParcel = enclosed.filter((l: any) => ids.includes(l.id));
       if (leadsInParcel.length === 0) return;
-      const hull = padHull(convexHull(leadsInParcel.map((l: any) => [l.lng, l.lat] as [number, number])), 40);
+      // The shape this parcel is saved with.
+      //
+      // ONE rep taking the whole cluster has an actual drawn boundary — the
+      // manager cut it — and that exact ring is what gets saved. It used to be
+      // thrown away in favour of a convex hull of the enclosed leads, which is
+      // a different shape: a hull cannot be concave, so every inlet the manager
+      // deliberately cut around (a park, a block that belongs to someone else,
+      // the far side of a main road) was swallowed back in, and the rep opened
+      // their map to a boundary nobody had drawn.
+      //
+      // A MULTI-REP split is the one case with no drawn shape to preserve:
+      // subdivideCluster partitions the leads geographically and the manager
+      // never drew a line around each parcel. A hull of that parcel's doors is
+      // then the honest answer rather than a lost one, and the territory event
+      // records split:true so the derived boundary is identifiable later.
+      const drewAnExactRing = Array.isArray(polygon) && polygon.length >= 3;
+      const parcelRing = reps.length === 1 && drewAnExactRing
+        ? (polygon as [number, number][])
+        : padHull(convexHull(leadsInParcel.map((l: any) => [l.lng, l.lat] as [number, number])), 40);
       const briefing = buildDeployBriefing(leadsInParcel, visits);
       const territory = storage.createTerritory({
         tenantId: t ?? null,
         name: reps.length > 1 ? `${rp.name}'s area` : ((name && String(name).trim()) || `${rp.name}'s area`),
-        repId: rid, polygon: JSON.stringify(hull.length >= 3 ? hull : polygon), color: colorForRep(rid),
+        repId: rid, polygon: JSON.stringify(parcelRing.length >= 3 ? parcelRing : polygon), color: colorForRep(rid),
         status: "active", assigneeIds: JSON.stringify([rid]),
         briefing: JSON.stringify(briefing), sourceRunId: sourceRunId ? String(sourceRunId) : null, updatedAt: at,
       } as any);
-      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1 });
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1, geometrySource: reps.length === 1 && drewAnExactRing ? "drawn" : "derived" });
       let assigned = 0;
       for (const l of leadsInParcel) {
-        if (storage.updateLead(l.id, { assignedRepId: rid, assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t)) {
+        const moved = storage.updateLead(l.id, { assignedRepId: rid, assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t);
+        if (moved) {
           assigned++;
           storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rp.name, assignedBy: user?.name ?? null });
+          if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, t ?? l.tenantId);
         }
       }
       storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId: rid, assigned });
@@ -3970,6 +4278,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const repName = storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`;
       storage.addLeadEvent(updated.id, "assignment", user?.name ?? null, { assignedTo: repName, assignedBy: user?.name ?? null });
     }
+    // Emitted for an unassign (repId null) too: the incoming holder is null, so
+    // only org-wide roles receive it — which is exactly right, since after the
+    // write there is no rep the door belongs to.
+    emitLeadChange("assignment", updated, user, tid);
     res.json(stripProviderIds(updated, user));
   });
 
@@ -4006,6 +4318,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const eventDetail = JSON.stringify({ assignedTo: repName, assignedBy });
     const CHUNK = 500;
     let updated = 0;
+    // Carried across chunks so the bulk-event bound applies to the REQUEST, not
+    // to each 500-lead chunk of it.
+    let emitted = 0;
 
     for (let i = 0; i < ids.length; i += CHUNK) {
       const chunk = ids.slice(i, i + CHUNK);
@@ -4022,14 +4337,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
           ).run(user?.name ?? null, eventDetail, ...chunk);
         }
+        // RETURNING id, not .changes. `chunk` is the CANDIDATE list — the tenant
+        // and scope predicates are inlined into this statement, so they filter
+        // silently and a live event addressed from `chunk` would announce doors
+        // that were never touched. One returned row per updated row, so the
+        // caller's count is unchanged.
         return rawDb.prepare(
           `UPDATE leads SET assigned_rep_id = ?, assigned_by = ?, assigned_at = ?,
                   unassigned_at = CASE WHEN ? IS NULL THEN datetime('now') ELSE unassigned_at END,
                   updated_at = datetime('now')
-            WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}`,
-        ).run(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk).changes;
+            WHERE id IN (${placeholders}) AND ${tenantSql} AND ${scopeSql}
+        RETURNING id`,
+        ).all(repId ?? null, assignedBy, assignedAt, repId ?? null, ...chunk) as Array<{ id: number }>;
       });
-      updated += applyChunk.immediate() as number;
+      const changed = applyChunk.immediate() as Array<{ id: number }>;
+      updated += changed.length;
+      // AFTER the chunk's transaction commits — an event emitted inside it would
+      // survive a rollback that erased the write it describes.
+      emitLeadChangesBulk("assignment", changed.slice(0, Math.max(0, LEAD_EVENT_BULK_MAX - emitted)).map((r) => r.id), user, tid);
+      emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + changed.length);
       // Yield so /api/health, the Field Map, and every other request keep
       // flowing while a large territory assignment completes.
       if (i + CHUNK < ids.length) await new Promise((resolve) => setImmediate(resolve));
@@ -4060,19 +4386,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     const apply = rawDb.transaction(() => {
       let updated = 0, skipped = 0;
+      // Ids are COLLECTED here and broadcast after commit — emitting inside the
+      // transaction would announce doors a rollback then un-changes, and the ring
+      // has no retraction.
+      const changed: number[] = [];
       for (const raw of leadIds) {
         const id = Number(raw);
         const lead = storage.getLeadById(id);
         // Silently skip cross-tenant or out-of-scope leads (don't leak, don't act) —
         // count them so the UI can be honest about what changed.
         if (!lead || (tid != null && lead.tenantId !== tid) || !repCanAccessLead(user, lead)) { skipped++; continue; }
-        if (storage.updateLead(id, { leadStatus: newStatus, lastOutcome: newStatus, lastOutcomeAt: new Date().toISOString() } as any, tid)) updated++;
+        if (storage.updateLead(id, { leadStatus: newStatus, lastOutcome: newStatus, lastOutcomeAt: new Date().toISOString() } as any, tid)) { updated++; changed.push(id); }
       }
-      return { updated, skipped };
+      return { updated, skipped, changed };
     });
-    const { updated, skipped } = apply.immediate();
+    const { updated, skipped, changed } = apply.immediate();
     if (updated > 0) {
       bustMapCache(tid);
+      emitLeadChangesBulk("status", changed, user, tid);
       storage.logActivity(user?.id ?? null, "lead.bulk_status", "lead", undefined, { outcome, leadStatus: newStatus, updated, skipped }, req.ip);
     }
     res.json({ updated, skipped, outcome, leadStatus: newStatus });
@@ -4096,19 +4427,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     const apply = rawDb.transaction(() => {
       let updated = 0, skipped = 0;
+      const changed: number[] = [];   // broadcast after commit — see bulk-status
       for (const raw of leadIds) {
         const id = Number(raw);
         const lead = storage.getLeadById(id);
         // Skip cross-tenant / out-of-scope leads silently (don't leak, don't act);
         // sameTenant is the shared tenant wall, canReassignLead the bulk-assign scope.
         if (!sameTenant(lead, tid) || !canReassignLead(user, lead!)) { skipped++; continue; }
-        if (storage.updateLead(id, { assignMark: value } as any, tid)) updated++;
+        if (storage.updateLead(id, { assignMark: value } as any, tid)) { updated++; changed.push(id); }
       }
-      return { updated, skipped };
+      return { updated, skipped, changed };
     });
-    const { updated, skipped } = apply.immediate();
+    const { updated, skipped, changed } = apply.immediate();
     if (updated > 0) {
       bustMapCache(tid);
+      // A mark is triage state on the pin, not a change of holder — "status", so
+      // a client that only repaints on assignment doesn't reshuffle its map.
+      emitLeadChangesBulk("status", changed, user, tid);
       storage.logActivity(user?.id ?? null, "lead.bulk_mark", "lead", undefined, { mark: value, updated, skipped }, req.ip);
     }
     res.json({ updated, skipped, mark: value });
@@ -4180,7 +4515,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (ownerName) enrichmentUpdate.ownerName = ownerName;
     if (incomeRange) enrichmentUpdate.incomeRange = incomeRange;
     if (homeValue) enrichmentUpdate.homeValue = homeValue;
-    storage.updateLead(lead.id, enrichmentUpdate as any);
+    const enriched = storage.updateLead(lead.id, enrichmentUpdate as any);
+    // A GET that writes: the enrichment is persisted on read, so an open card on
+    // another device is stale the moment this returns. "notes" — none of these
+    // columns are pin fields, so the client refreshes the card, not the map.
+    emitLeadChange("notes", enriched, _user, lead.tenantId);
 
     res.json({
       ownerName: ownerName ?? lead.ownerName ?? null,
@@ -4227,6 +4566,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       isHomeowner: isHomeowner ?? lead.isHomeowner,
     } as any);
     if (!updated) return res.status(404).json({ error: "Not found" });
+    emitLeadChange("notes", updated, _euser, lead.tenantId);
     res.json(stripProviderIds(updated, (req as any).user));
   });
 
@@ -4272,6 +4612,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Note events join the lead's unified history with a short preview.
     const preview = notes.trim().slice(0, 100);
     if (preview) storage.addLeadEvent(lead.id, "note", user?.name ?? null, { preview });
+    // The note BODY never rides the bus (see LeadEventPin) — "notes" tells the
+    // client to refresh an open card through /api/leads/:id, which re-checks
+    // access for that one lead before handing over rep-typed free text.
+    emitLeadChange("notes", updated, user, lead.tenantId);
     storage.logActivity(user?.id ?? null, "lead.note_updated", "lead", lead.id, {}, req.ip);
     res.json({ id: lead.id, notes: updated?.notes ?? notes, updatedAt: updated?.updatedAt ?? null });
   });
@@ -4289,6 +4633,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     // One indexed team scan → O(1) name lookups per row (not a query per knock).
     const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    // WHO knocked is shared-area collaboration; WHERE THEY STOOD is not.
+    //
+    // An earlier revision of this redaction hid both, and broke the thing shared
+    // areas are for: two reps on one area, and B reading the door has to see
+    // that A already worked it. That is the point of sharing, and
+    // shared-area-leads.test.ts asserts it.
+    //
+    // The privacy problem was never the name — it is the recorded GPS fix, which
+    // turns a door history into a colleague's movement log. So the name stays for
+    // anyone entitled to the door, and only the coordinates are scoped.
+    const _hScope = leadVisibilityScope(user);
+    const maySeeActorLocation = (repId: number | null | undefined) =>
+      !Array.isArray(_hScope) || (repId != null && _hScope.includes(repId));
     const statusRows = storage.getKnocksByLead(lead.id).map(k => ({
       id: `k${k.id}`,
       knockId: k.id,
@@ -4305,7 +4662,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       serverTs: k.serverTs ?? null,
       netState: k.netState ?? null,
       // Coordinate pair for the History map preview (rep pin + lead pin + line).
-      repLat: k.repLat ?? null, repLng: k.repLng ?? null,
+      // The DOOR's coordinates stay for everyone — a property is not a person.
+      repLat: maySeeActorLocation(k.repId) ? (k.repLat ?? null) : null,
+      repLng: maySeeActorLocation(k.repId) ? (k.repLng ?? null) : null,
       leadLat: lead.lat ?? null, leadLng: lead.lng ?? null,
     }));
     const eventRows = storage.getLeadEvents(lead.id).map(e => ({
@@ -4377,11 +4736,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           knockedAt: at,
         } as any);
       }
-    } catch (e: any) { console.warn("[central] history knock row skipped:", e?.message); }
+    } catch (e: any) {
+      // Was a silent console.warn: if this write failed, the mark still returned
+      // 200 and History simply stayed empty, with nothing anywhere saying why.
+      // That is precisely the shape of the bug this endpoint was reported for.
+      // Still non-fatal — the disposition itself succeeded and must not be rolled
+      // back over a timeline row — but it is now recorded where operators look.
+      structuredLog("central.history_row_failed", {
+        leadId: lead.id, actorUserId: u?.id ?? null, reason: String(e?.message ?? e).slice(0, 200),
+      }, "warn");
+    }
     try {
       storage.logActivity(u?.id ?? null, "lead.central_disposition", "lead", lead.id,
         { outcome, newStatus, markedBy: u?.name ?? "central", address: lead.address }, req.ip, u?.tenantId ?? null);
     } catch { /* audit is best-effort */ }
+    // One event for the whole request, not two: the [central] knock row above is
+    // this same disposition's history entry, and the client reloads history from
+    // /api/leads/:id/history on any event for a lead whose card is open.
+    emitLeadChange("outcome", updated, u, lead.tenantId);
     res.json({ ...updated, central: true });
   });
 
@@ -4431,12 +4803,37 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       // Auto-create pending commission when outcome = sold (rate snapshot frozen
       // onto the record; P0-3 org-scoped rates; P0-6 server-fixed basis 0).
       if (!sup && outcome === "sold" && knockRow.repId) {
+        // One door, one commission — whatever its status.
+        //
+        // The only uniqueness guard used to be idx_commissions_tenant_lead_pending,
+        // which is partial: WHERE status = 'pending'. The moment a manager
+        // APPROVED the commission the row left that index, so a second sold
+        // knock on the same door inserted a second, fully payable row — two
+        // commissions and double the money for one sale. Re-marking a door sold
+        // is ordinary (a correction, a re-knock, a sync replay), so this was
+        // reachable without anyone doing anything unusual.
+        //
+        // "superseded" and "disputed" are deliberately NOT live: those are the
+        // states a replacement is legitimately allowed to follow.
+        const existing = storage.findLiveCommissionForLead(
+          knockRow.tenantId ?? (req as any).user?.tenantId ?? null,
+          leadId,
+        );
         const rep = storage.getTeamMemberById(knockRow.repId);
         const saleDate = new Date().toISOString().slice(0, 10);
         const rateTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
         const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
         const active = pickActiveStructure(structures, knockRow.repId, rep?.role ?? null, saleDate);
-        if (active) {
+        // Log only a REAL suppression — one where a commission would otherwise
+        // have been created. Logging whenever `existing` is truthy fired even
+        // when no structure covered the sale and nothing would have been booked,
+        // which puts phantom entries in a money audit trail.
+        if (active && existing) {
+          structuredLog("commission.duplicate_suppressed", {
+            leadId, knockId: knockRow.id, existingId: existing.id, existingStatus: existing.status,
+          });
+        }
+        if (active && !existing) {
           const saleAmount = 0;
           const calc = calcCommission(active, saleAmount);
           storage.createCommission({
@@ -4478,6 +4875,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           if (healed !== !!(existing as any).superseded) {
             rawDb.prepare("UPDATE knock_log SET superseded = ? WHERE id = ?").run(healed ? 1 : 0, existing.id);
           }
+          // The heal is the whole point of this branch — a mid-crash knock may
+          // only NOW have reached the lead, so the live update belongs here too.
+          // Skipped when the replay re-superseded, because then it applied to
+          // nothing. Re-read rather than reuse the tenant wall's row: `_knl` is
+          // block-scoped above, and only the POST-bundle row can authorize the
+          // event correctly.
+          if (!healed) emitLeadChangeById("outcome", Number(req.params.id), _knu);
           return res.status(200).json({ ...existing, deduped: true, superseded: healed || undefined });
         } catch (e: any) {
           console.warn("[knock] dedupe-heal failed:", e?.message);
@@ -4580,6 +4984,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // A knock changes the pin's visited state even when leadStatus is unchanged
     // (not_home) — bust this org's map layer explicitly.
     bustMapCache((req as any).user?.tenantId ?? undefined);
+    // Same trigger, same reason, one layer up: emitted even for a superseded
+    // knock, because the door was still worked and a teammate watching the same
+    // street needs the card and history to move. The read is POST-bundle, so the
+    // projection carries whatever the CAS actually settled on.
+    emitLeadChangeById("outcome", Number(req.params.id), _knu, knock.tenantId ?? lead?.tenantId);
     // ── Commission audit (post-commit; never blocks the knock) ───────────────
     if (!superseded && parsed.data.outcome === "sold" && parsed.data.repId) {
       try {
@@ -4624,6 +5033,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (_ktid && _klead && _klead.tenantId !== _ktid) return res.status(404).json({ error: "Not found" });
     if (user?.role === "rep" && knock.repId !== user.teamMemberId) return res.status(404).json({ error: "Not found" });
     const updated = storage.updateKnockNotes(knock.id, notes);
+    // The lead row did not change, but the card's History did. Guarded on
+    // knock.leadId: an orphaned knock has no door to address the event to, and
+    // _klead is null in exactly that case, which is why the tenant comes from the
+    // re-read rather than from a variable that can be null here.
+    if (knock.leadId != null) emitLeadChangeById("notes", knock.leadId, user, _klead?.tenantId);
     storage.logActivity(user?.id ?? null, "knock.note_updated", "knock", knock.id, { leadId: knock.leadId }, req.ip);
     res.json(updated);
   });
@@ -5153,9 +5567,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   app.post("/api/territories/assign-area", requireTeamLead, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
-    const { polygon, repId, name } = req.body as { polygon: [number, number][]; repId: number; name?: string };
+    const { polygon, repId, name, color: requestedColor } = req.body as { polygon: [number, number][]; repId: number; name?: string; color?: string };
     if (!Array.isArray(polygon) || polygon.length < 3) return res.status(400).json({ error: "polygon needs ≥3 points" });
     if (typeof repId !== "number") return res.status(400).json({ error: "repId required" });
+    // The drawer picks a colour before drawing and it has to survive the save —
+    // this endpoint used to drop it on the floor and stamp colorForRep(repId)
+    // instead, so every area came back wearing the rep's palette hue and the
+    // choice made on the way in was invisible on the way out. Reject a malformed
+    // one loudly rather than silently falling back, or "my green area is blue"
+    // becomes unreportable.
+    if (requestedColor !== undefined && normalizeTerritoryColor(requestedColor) === null) {
+      return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
+    }
     const rep = storage.getTeamMemberById(repId);
     if (!rep || (tid && rep.tenantId !== tid)) return res.status(404).json({ error: "rep not found" });
     // A team_lead may only assign an area to one of their own reps.
@@ -5168,7 +5591,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const at = new Date().toISOString();
-    const color = colorForRep(repId);
+    // Chosen colour wins; the rep's palette hue is only the default for a caller
+    // that never picked one (older clients, and the API used directly).
+    const color = normalizeTerritoryColor(requestedColor) ?? colorForRep(repId);
     const territory = storage.createTerritory({
       tenantId: tid ?? null, name: (name && name.trim()) || `${rep.name}'s area`,
       repId, polygon: JSON.stringify(polygon), color,
@@ -5179,12 +5604,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Only leads the caller may reassign (unassigned or own-team for a team_lead;
     // all for admin/manager) — an area draw never poaches another team's doors.
     const enclosed = storage.getLeads(tid).filter((l: any) =>
-      l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon) && canReassignLead(user, l));
+      l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, polygon) && canReassignLead(user, l));
     let assigned = 0;
     for (const l of enclosed) {
-      if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid)) {
+      const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid);
+      if (moved) {
         assigned++;
         storage.addLeadEvent(l.id, "assignment", user?.name ?? null, { assignedTo: rep.name, assignedBy: user?.name ?? null });
+        if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? l.tenantId);
       }
     }
     storage.addTerritoryEvent(territory.id, user?.id ?? null, "assigned", { repId, assigned });
@@ -5270,12 +5697,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       });
     }
 
+    // Collected inside applyTerritoryAction, which runs INSIDE startNextPass's
+    // transaction — broadcast only once that transaction has committed.
+    const movedByAction: number[] = [];
     let result;
     try {
       result = startNextPass({
         territoryId: t.id, tenantId: tid ?? null,
         actorUserId: user?.id ?? null, actorName: user?.name ?? user?.username ?? null,
         action, newRepId, note, keepPendingCallbacks, now: at,
+        // The reset clears lead_status/last_outcome/assign_mark through raw SQL
+        // inside territoryPass.ts, so this is the only place the changed ids
+        // exist. Fires for every action including "keep", which re-opens doors
+        // without touching the territory at all.
+        onLeadsReset: (ids) => emitLeadChangesBulk("status", ids, user, tid),
         // Runs inside the same transaction as the lead reset: the area's
         // assignment and its doors can never disagree about which pass they're in.
         applyTerritoryAction: () => {
@@ -5295,7 +5730,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             repId: newPrimary, name: newName,
             assigneeIds: JSON.stringify(nextRepIds), assignedAt: at,
             pastAssigneeIds: JSON.stringify(past),
-            color: colorForRep(newPrimary),
+            color: retainedAreaColor(t, newPrimary),
             reclaimedAt: action === "return_to_pool" ? at : (t as any).reclaimedAt ?? null,
             updatedAt: at,
           } as any, tid);
@@ -5309,6 +5744,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
               assignmentSource: newRepId != null ? "territory-sync" : null,
               [newRepId != null ? "assignedAt" : "unassignedAt"]: at,
             } as any, tid);
+            movedByAction.push(l.id);
           }
         },
       });
@@ -5328,6 +5764,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       passClosed: result.passNumber, passOpened: result.nextPass,
       leadsReset: result.leadsReset, leadsFrozen: result.leadsFrozen,
     });
+    // The pass RESET itself is announced from inside startNextPass, where the
+    // reset id list lives; this covers only the hand-off half, which the route
+    // owns. Both are post-commit.
+    emitLeadChangesBulk("assignment", movedByAction, user, tid);
 
     res.json({ ok: true, ...result });
   });
@@ -5362,7 +5802,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (mode === "reassign" && !newRepId) return res.status(400).json({ error: "newRepId required for reassign mode" });
     // Handing the area straight to someone else is still handing them an area.
     if (mode === "reassign") {
-      const full = repAtAreaCap(Number(newRepId), t.id);
+      // The AREA was scoped above; the TARGET was not. Every other rep-taking
+      // route validates the incoming rep's tenant AND the caller's visibility
+      // scope (see /share and /next-pass) — this one only checked the cap, so a
+      // team lead could reclaim an area they legitimately hold and hand it to a
+      // rep on another team, or another tenant entirely. That is a territory
+      // grab and a cross-tenant write wearing a reclaim's clothes.
+      const target = Number(newRepId);
+      if (!Number.isInteger(target) || target <= 0) return res.status(400).json({ error: "invalid newRepId" });
+      if (!repInCallerTenant(user, target) || !repInVisibilityScope(user, target)) {
+        return res.status(404).json({ error: "rep not found" });
+      }
+      const full = repAtAreaCap(target, t.id);
       if (full) return res.status(409).json({ error: full });
     }
 
@@ -5393,7 +5844,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: colorForRep(newPrimary), reclaimedAt: at, updatedAt: at,
+      color: retainedAreaColor(t, newPrimary), reclaimedAt: at, updatedAt: at,
       // Reassign starts a new tenure; returning to the pool means nobody holds
       // it, so the "assigned since" date must not linger from the last rep.
       assignedAt: next.repIds.length ? at : null,
@@ -5404,13 +5855,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let leadsAffected = 0;
     for (const l of next.leads) {
       if (beforeById.get(l.id) !== l.assignedRepId) {
-        storage.updateLead(l.id, {
+        const moved = storage.updateLead(l.id, {
           assignedRepId: l.assignedRepId,
           assignedTerritoryId: l.assignedRepId == null ? null : t.id,
           assignmentSource: l.assignedRepId == null ? null : "territory-sync",
           [l.assignedRepId == null ? "unassignedAt" : "assignedAt"]: at,
         } as any, tid);
         leadsAffected++;
+        // next.leads elements are pure {id, assignedRepId} domain objects from
+        // @shared/territory with no tenant on them — the tenant comes from the
+        // persisted row, or the request's as a fallback.
+        if (moved && leadsAffected <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid);
       }
     }
     storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected });
@@ -5451,11 +5906,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let assigned = 0;
     if (polygon.length >= 3) {
       const inside = storage.getLeads(tid).filter((l: any) =>
-        l.lat != null && l.lng != null && l.assignedRepId == null && pointInPolygon(l.lat, l.lng, polygon));
+        l.lat != null && l.lng != null && l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon));
       for (const l of inside) {
-        if (storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid)) {
+        const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid);
+        if (moved) {
           assigned++;
           storage.addLeadEvent(l.id, "assignment", (req as any).user?.name ?? null, { assignedTo: rep.name, assignedBy: (req as any).user?.name ?? null });
+          if (assigned <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? l.tenantId);
         }
       }
     }
@@ -5464,7 +5921,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
     storage.updateTerritory(t.id, {
       repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
-      color: colorForRep(repId), assignedAt: at, updatedAt: at,
+      color: retainedAreaColor(t, repId), assignedAt: at, updatedAt: at,
     } as any, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
 
@@ -5522,11 +5979,52 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const full = repAtAreaCap(r, t.id);
       if (full) return res.status(409).json({ error: full });
     }
-    const merged = Array.from(new Set([t.repId, ...repIds].filter(Boolean)));
+    // repIds is the COMPLETE set of who holds this area, not an addition to it.
+    // This used to force the previous primary in — Array(new Set([t.repId, ...])) —
+    // so handing an area to a different rep left the old one on it permanently
+    // and there was no request that could ever remove them. Two reps on one area,
+    // no way to unstick it.
+    if (repIds.length === 0) {
+      return res.status(400).json({ error: "repIds required — use /reclaim to empty an area" });
+    }
+    const merged = Array.from(new Set(repIds));
     const at = new Date().toISOString();
-    storage.updateTerritory(t.id, { status: merged.length > 1 ? "shared" : "active", assigneeIds: JSON.stringify(merged), assignedAt: at, updatedAt: at } as any, tid);
-    storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged });
-    res.json({ ok: true, assigneeIds: merged });
+    // The primary drives the map colour, so it has to move with the assignment;
+    // otherwise a reassigned area keeps wearing the previous rep's colour and the
+    // map lies about who is working it.
+    const newPrimary = merged[0];
+    const past = Array.from(new Set([
+      ...(safeJson<number[]>((t as any).pastAssigneeIds) ?? []),
+      ...(safeJson<number[]>((t as any).assigneeIds) ?? []),
+      t.repId,
+    ].filter(Boolean).filter((id) => !merged.includes(id as number))));
+
+    storage.updateTerritory(t.id, {
+      status: merged.length > 1 ? "shared" : "active",
+      repId: newPrimary,
+      color: retainedAreaColor(t, newPrimary),
+      assigneeIds: JSON.stringify(merged),
+      pastAssigneeIds: JSON.stringify(past),
+      assignedAt: at, updatedAt: at,
+    } as any, tid);
+
+    // Doors follow the area. A rep dropped from the assignment must stop seeing
+    // its leads, and the incoming primary must start — otherwise the area moves
+    // but the work doesn't.
+    let handedOver = 0;
+    for (const l of storage.getLeadsByTerritory(t.id)) {
+      const holder = (l as any).assignedRepId;
+      if (holder != null && merged.includes(holder)) continue; // already on the area
+      const moved = storage.updateLead(l.id, {
+        assignedRepId: newPrimary, assignedTerritoryId: t.id,
+        assignmentSource: "territory-sync", assignedAt: at,
+      } as any, tid);
+      handedOver++;
+      if (moved && handedOver <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid ?? (l as any).tenantId);
+    }
+
+    storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
+    res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: retainedAreaColor(t, newPrimary) });
   });
 
   // POST /api/territories/:id/unassign { repId, releaseLeads? }
@@ -5588,7 +6086,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: colorForRep(newPrimary), updatedAt: at,
+      color: retainedAreaColor(t, newPrimary), updatedAt: at,
     } as any, tid);
 
     // Persist only the leads whose rep actually changed (the removed rep's).
@@ -5596,13 +6094,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let leadsReleased = 0;
     for (const l of next.leads) {
       if (beforeById.get(l.id) !== l.assignedRepId) {
-        storage.updateLead(l.id, {
+        const moved = storage.updateLead(l.id, {
           assignedRepId: l.assignedRepId,
           assignedTerritoryId: l.assignedRepId == null ? null : t.id,
           assignmentSource: l.assignedRepId == null ? null : "territory-sync",
           unassignedAt: l.assignedRepId == null ? at : null,
         } as any, tid);
         leadsReleased++;
+        // Released doors go back to the pool, so the post-write row authorizes
+        // only org-wide roles — the removed rep's own copy is retired by the
+        // map-changed ping, which is the only safe way to tell someone about a
+        // lead they can no longer see.
+        if (moved && leadsReleased <= LEAD_EVENT_BULK_MAX) emitLeadChange("assignment", moved, user, tid);
       }
     }
 
@@ -5645,20 +6148,50 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json(storage.getTerritoryEvents(Number(req.params.id)));
   });
 
-  // PATCH /api/territories/:id { name } — rename an area. Whitelisted to name
-  // only: lifecycle changes go through their dedicated routes above. Custom
+  // PATCH /api/territories/:id { name?, color? } — edit an area's identity.
+  // Whitelisted to those two: lifecycle changes go through their dedicated
+  // routes above, and geometry has its own membership consequences. Custom
   // names survive reclaim/reassign (see isAutoAreaName) and reps see them on
   // their own map.
+  //
+  // Colour was previously only settable at creation, so an area drawn in the
+  // wrong colour could never be corrected — the field a manager is most likely
+  // to get wrong on the first pass was the one field with no edit path.
   app.patch("/api/territories/:id", requireTeamLead, (req, res) => {
     const ttid = (req as any).user?.tenantId ?? undefined;
-    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
-    if (!name || name.length > 60) return res.status(400).json({ error: "Area name must be 1–60 characters" });
+    const wantsName = typeof req.body?.name === "string";
+    const wantsColor = req.body?.color !== undefined;
+    if (!wantsName && !wantsColor) return res.status(400).json({ error: "Nothing to update" });
+
+    const name = wantsName ? String(req.body.name).trim() : null;
+    if (wantsName && (!name || name.length > 60)) {
+      return res.status(400).json({ error: "Area name must be 1–60 characters" });
+    }
+    // Same validator the create path uses, so a colour that saves on one route
+    // is a colour that saves on the other.
+    const color = wantsColor ? normalizeTerritoryColor(req.body.color) : null;
+    if (wantsColor && color === null) {
+      return res.status(400).json({ error: "color must be a hex value like #14C985", code: "BAD_COLOR" });
+    }
+
     const id = Number(req.params.id);
     const prev = storage.getTerritories(ttid).find(t => t.id === id);
     if (!prev) return res.status(404).json({ error: "Not found" });
     if (!canManageTerritory((req as any).user, prev)) return res.status(404).json({ error: "Not found" }); // 404, don't leak existence
-    const updated = storage.updateTerritory(id, { name, updatedAt: new Date().toISOString() } as any, ttid);
-    storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
+
+    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+    if (name) patch.name = name;
+    if (color) patch.color = color;
+    const updated = storage.updateTerritory(id, patch as any, ttid);
+
+    // One event per field actually changed, so the audit reads as what happened
+    // rather than as one opaque "edited".
+    if (name && name !== prev.name) {
+      storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "renamed", { from: prev.name, to: name });
+    }
+    if (color && color !== (prev as any).color) {
+      storage.addTerritoryEvent(id, (req as any).user?.id ?? null, "recolored", { from: (prev as any).color ?? null, to: color });
+    }
     res.json(updated);
   });
 
@@ -5671,9 +6204,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // DETACH its leads (clear their territory ref, keep the rep) BEFORE deleting —
     // the old hard-delete left leads pointing at a ghost territory (2,855 orphans).
     scanSvc.recordTerritoryOutcome(ttid ?? getDefaultTenantId(), id, (terr as any).createdAt ?? null);
+    // Captured BEFORE the detach: clearTerritoryFromLeads is a set-based UPDATE
+    // that hands back only a row count, and once assigned_territory_id is cleared
+    // there is no way left to ask which doors it cleared it from.
+    const detachedIds = storage.getLeadsByTerritory(id).map((l: any) => l.id);
     const detached = scanSvc.detachTerritoryLeads(id);
     if (!storage.deleteTerritory(id, ttid)) return res.status(404).json({ error: "Not found" });
     if (typeof (globalThis as any).__bustMapCache === "function") (globalThis as any).__bustMapCache(ttid);
+    // The doors keep their rep and lose their area, so a rep who held them only
+    // THROUGH the area (many-to-many assignee, never assigned_rep_id) drops out
+    // of the recipient set here — correctly, since that is what the write did.
+    emitLeadChangesBulk("assignment", detachedIds, (req as any).user, ttid);
     res.json({ success: true, detached });
   });
 
@@ -5686,8 +6227,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Reps only see their own territory's progress; managers/admins see all.
     const scope = leadVisibilityScope(user);
     if (Array.isArray(scope) && !scope.length) return res.json([]);
+    // Areas are many-to-many, so this cannot key on repId. Matching that column
+    // showed the card only to the PRIMARY holder — the second and third rep on a
+    // shared area got no numbers for ground they were actively working — and
+    // because repId still names the last holder after a reclaim, it kept showing
+    // the card to whoever the area had been taken FROM. One rule fixes both.
     const territories = Array.isArray(scope)
-      ? storage.getTerritories(tid).filter((territory) => territory.repId != null && scope.includes(territory.repId))
+      ? storage.getTerritories(tid).filter((territory) => territoryHeldByAny(territory, scope))
       : storage.getTerritories(tid);
     if (territories.length === 0) return res.json([]);
 
@@ -5704,14 +6250,61 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Is this a WORKED outcome (door done for the pass)? Mirrors OUTCOME_META.
     const isWorkedOutcome = (o: string) => !!OUTCOME_META[o as KnockOutcome]?.worked;
 
-    const inside = pointInPolygon;
+    const inside = polygonCovers;
+    // Bounding-box pre-rejection. This loop is O(territories x leads x vertices)
+    // — every area re-scanned EVERY lead — and it runs on each map load and
+    // after every assignment. A lead outside an area's bbox cannot be inside its
+    // polygon, and that test is four comparisons against a ~60-vertex walk.
+    // Measured on the live shape of the data (3,355 leads, 20 areas, 60-vertex
+    // rings): 32.43ms -> 2.40ms, 13.5x, byte-identical membership.
+    const bboxOf = (poly: [number, number][]): [number, number, number, number] => {
+      let w = Infinity, s2 = Infinity, e = -Infinity, n = -Infinity;
+      for (const [x, y] of poly) {
+        if (x < w) w = x; if (x > e) e = x;
+        if (y < s2) s2 = y; if (y > n) n = y;
+      }
+      return [w, s2, e, n];
+    };
 
     const result = territories.map((t: any) => {
       let poly: [number, number][] = [];
       try { poly = JSON.parse(t.polygon); } catch { poly = []; }
-      const within = poly.length >= 3 ? leads.filter((l: any) => inside(l.lat, l.lng, poly)) : [];
+      let within: any[] = [];
+      if (poly.length >= 3) {
+        // The epsilon that makes a boundary door count also has to widen the
+        // bbox, or polygonCovers would never be asked about a door sitting a
+        // hair outside the box but on the line.
+        const [bw, bs, be, bn] = bboxOf(poly);
+        const pad = BOUNDARY_EPSILON_DEG;
+        within = leads.filter((l: any) =>
+          l.lng >= bw - pad && l.lng <= be + pad && l.lat >= bs - pad && l.lat <= bn + pad &&
+          inside(l.lat, l.lng, poly));
+      }
       const total = within.length;
       const sold = within.filter((l: any) => l.leadStatus === "sold").length;
+
+      // The operational figures, through the ONE metric mapping. Doors-knocked
+      // comes from the knock log rather than the status, because a door that
+      // goes not_home → sold must not leave the knocked count: knocking is
+      // something that happened, not something that is currently true.
+      const metrics = computeTerritoryMetrics(within.map((l: any) => {
+        const ks = knocksByLead.get(l.id) ?? [];
+        return {
+          status: l.leadStatus,
+          everKnocked: ks.length > 0,
+          attempts: ks.length,
+          everContacted: ks.some((k: any) => k.wasHome === true || k.wasHome === 1),
+          doNotKnock: l.doNotKnock === true || l.doNotKnock === 1,
+        };
+      }));
+      // Most recent knock anywhere in the area — "is anyone still working this?"
+      let lastActivityAt: string | null = null;
+      for (const l of within) {
+        for (const k of knocksByLead.get(l.id) ?? []) {
+          const at = k.knockedAt ?? null;
+          if (at && (lastActivityAt === null || at > lastActivityAt)) lastActivityAt = at;
+        }
+      }
 
       // Per-territory verification rollup. "knocked" = any activity; "verifiedWorked"
       // = distinct leads with a VERIFIED worked knock (the only thing that counts).
@@ -5741,6 +6334,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         id: t.id, name: t.name, color: t.color, repId: t.repId, status: (t as any).status ?? "active",
         repName: members.find((m: any) => m.id === t.repId)?.name ?? "Unassigned",
         total, knocked, sold,
+        // Metric buckets + the documented rates. availableBase is the single
+        // denominator every rate here divides by.
+        availableBase: metrics.availableBase,
+        untouched: metrics.untouchedCount,
+        attempts: metrics.attemptCount,
+        contacted: metrics.contactedCount,
+        notHome: metrics.notHomeCount,
+        followUp: metrics.followUpCount,
+        unavailable: metrics.unavailableCount,
+        disqualified: metrics.disqualifiedCount,
+        penetrationRate: metrics.penetrationRate,
+        knockCompletionRate: metrics.knockCompletionRate,
+        contactRate: metrics.contactRate,
+        lastActivityAt,
         // Back-compat: old clients read pct/knocked (integer % of any-knocked).
         pct: total ? Math.round((knocked / total) * 100) : 0,
         // New: location-verified progress.
@@ -5766,13 +6373,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const territory = storage.getTerritories(tid).find(t => t.id === Number(req.params.id));
     if (!territory) return res.status(404).json({ error: "Not found" });
     const scope = leadVisibilityScope(user);
-    if (Array.isArray(scope) && (territory.repId == null || !scope.includes(territory.repId))) {
+    // territoryHeldByAny, not a repId check. repId still names the LAST holder
+    // after a reclaim, so testing it let a rep the area was taken from keep
+    // reading its knock history — the same defect that was fixed for the lead
+    // stream and the territory list, missed on this route. It also 404'd a
+    // SECONDARY assignee on a shared area, who genuinely holds it.
+    if (Array.isArray(scope) && !territoryHeldByAny(territory as any, scope)) {
       return res.status(404).json({ error: "Not found" });
     }
     let poly: [number, number][] = [];
     try { poly = JSON.parse(territory.polygon); } catch { poly = []; }
     const within = poly.length >= 3
-      ? storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, poly))
+      ? storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, poly))
       : [];
     const leadById = new Map(within.map((l: any) => [l.id, l]));
     const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
@@ -5780,6 +6392,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       .filter(k => leadById.has(k.leadId))
       .map(k => {
         const l: any = leadById.get(k.leadId);
+        // Same rule as GET /api/leads/:id/history: the NAME stays (knowing a
+        // teammate already worked a door is what a shared area is for), the
+        // recorded GPS fix is scoped, because that is what turns door history
+        // into a colleague's movement log. Managers and admins have an undefined
+        // scope and are unaffected.
+        const maySeeActorLocation = !Array.isArray(scope) || (k.repId != null && scope.includes(k.repId));
         return {
           knockId: k.id, leadId: k.leadId,
           leadName: l.address, address: `${l.address}, ${l.city} ${l.state} ${l.zip ?? ""}`.trim(),
@@ -5787,7 +6405,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           outcome: k.outcome, knockedAt: k.knockedAt, deviceTs: k.deviceTs ?? null, serverTs: k.serverTs ?? null,
           verification: k.verificationStatus ?? null, distanceM: k.distanceM ?? null, gpsAccuracyM: k.gpsAccuracy ?? null,
           reviewReason: k.reviewReason ?? null, netState: k.netState ?? null,
-          repLat: k.repLat ?? null, repLng: k.repLng ?? null, leadLat: l.lat, leadLng: l.lng,
+          // The door's own coordinates stay — they are the property, not a person.
+          repLat: maySeeActorLocation ? (k.repLat ?? null) : null,
+          repLng: maySeeActorLocation ? (k.repLng ?? null) : null,
+          leadLat: l.lat, leadLng: l.lng,
         };
       })
       .sort((a, z) => (a.knockedAt < z.knockedAt ? 1 : a.knockedAt > z.knockedAt ? -1 : 0))
@@ -5852,6 +6473,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const updated = storage.overrideKnockVerification(Number(req.params.id), status, reason.trim(), user?.id ?? null, user?.name ?? null);
     if (!updated) return res.status(404).json({ error: "Activity not found" });
+    // A verdict change rewrites what the lead's History says about a rep's visit
+    // without touching the pin — "notes", i.e. refresh the card, don't repaint.
+    emitLeadChange("notes", _ovLead, user, _ovLead.tenantId);
     storage.logActivity(user?.id ?? null, "verification.override", "knock", Number(req.params.id), { newStatus: status, reason: reason.trim() }, req.ip);
     res.json(updated);
   });
@@ -6107,6 +6731,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       leadId: lead.id, userId: user.id, repId: user.teamMemberId ?? null,
       path: "lead-photos/" + req.file.filename,
     });
+    // The lead row is untouched; the card gained a photo. Same "refresh the card"
+    // contract as a note — the photo itself is fetched through its own authorized
+    // route, never carried on a broadcast bus.
+    emitLeadChange("notes", lead, user, lead.tenantId);
     storage.logActivity(user.id, "lead.photo_added", "lead", lead.id, { photoId: photo.id }, req.ip);
     res.status(201).json({ id: photo.id, createdAt: photo.createdAt });
   });

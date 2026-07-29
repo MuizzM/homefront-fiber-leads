@@ -1,6 +1,6 @@
 // ── Spatial helpers for the field map — bbox-accelerated lasso selection ───────
 // The exact enclosure test is the ONE shared, server-authoritative
-// `@shared/geo.pointInPolygon` (used by assign-area, reclaim, territory
+// `@shared/geo.polygonCovers` (used by assign-area, reclaim, territory
 // progress AND this lasso — a single source of truth, no drift). This module
 // only adds the bounding-box pre-rejection wrapper:
 //
@@ -14,7 +14,7 @@
 // one-shot on the mouseup handler (a single dropped frame, not sustained jank).
 // Space: O(1) extra (the bbox). Planar even-odd, NC-scoped (no antimeridian).
 
-import { pointInPolygon } from "@shared/geo";
+import { polygonCovers } from "@shared/geo";
 
 export interface BBox2 { minLng: number; minLat: number; maxLng: number; maxLat: number }
 
@@ -33,7 +33,7 @@ export function bboxOfRing(ring: Array<[number, number]>): BBox2 {
 // Exact enclosure — delegates to the shared server-authoritative test so the
 // client preview can never disagree with what the server assigns. O(v).
 export function pointInRing(lat: number, lng: number, ring: Array<[number, number]>): boolean {
-  return pointInPolygon(lat, lng, ring);
+  return polygonCovers(lat, lng, ring);
 }
 
 // Select the items whose coordinates fall inside the polygon. Bounding-box
@@ -51,7 +51,7 @@ export function selectPointsInPolygon<T extends { lat?: number | null; lng?: num
     const lat = it.lat, lng = it.lng;
     if (lat == null || lng == null) continue;
     if (lng < b.minLng || lng > b.maxLng || lat < b.minLat || lat > b.maxLat) continue; // O(1) reject
-    if (pointInPolygon(lat, lng, ring)) out.push(it);
+    if (polygonCovers(lat, lng, ring)) out.push(it);
   }
   return out;
 }

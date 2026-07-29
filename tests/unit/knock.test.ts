@@ -44,17 +44,18 @@ const CANONICAL_STATUSES = [
 
 const ALL_PIN_STATES: PinDisplayState[] = [
   "unworked", "not_home", "contacted", "interested", "follow_up", "callback", "sold", "not_interested",
+  "already_customer",
 ];
 
 describe("OUTCOMES — totality", () => {
-  it("defines exactly 8 outcomes with unique keys (7 rep statuses + needs_verification)", () => {
-    expect(OUTCOMES).toHaveLength(8);
-    expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(8);
+  it("defines exactly 9 outcomes with unique keys (8 rep statuses + needs_verification)", () => {
+    expect(OUTCOMES).toHaveLength(9);
+    expect(new Set(OUTCOMES.map((o) => o.key)).size).toBe(9);
   });
 
   it("does not offer Callback or Needs Verification for new field entries", () => {
     expect(FIELD_OUTCOMES.map((outcome) => outcome.key)).toEqual([
-      "not_home", "interested", "sold", "not_interested", "follow_up", "prospect",
+      "not_home", "interested", "sold", "not_interested", "already_customer", "follow_up", "prospect",
     ]);
   });
 
@@ -150,7 +151,7 @@ describe("pinDisplayState — truth table", () => {
     expect(pinDisplayState({ leadStatus: "prospect", visited: false })).toBe("unworked");
   });
 
-  it("STATE_COLORS covers all 8 pin states with valid hex colors", () => {
+  it("STATE_COLORS covers all 9 pin states with valid hex colors", () => {
     expect(Object.keys(STATE_COLORS).sort()).toEqual([...ALL_PIN_STATES].sort());
     for (const state of ALL_PIN_STATES) {
       expect(STATE_COLORS[state]).toMatch(/^#[0-9a-f]{6}$/i);
@@ -347,5 +348,44 @@ describe("makeClientId", () => {
     expect(id).toMatch(/^k-/);
     expect(id.length).toBeGreaterThan(10);
     expect(makeClientId()).not.toBe(id); // still unique without crypto
+  });
+});
+
+describe("already_customer — the door is done, but it is not hostile", () => {
+  // "They already have fiber" was previously forced into Not Interested, which
+  // is wrong twice: the map paints the block red (burned turf, when it is
+  // actually competitor-density data), and an accidental "sold" had no
+  // correction that said what the door really was.
+  it("persists as not_interested — no new LeadStatus, no schema ripple", () => {
+    expect(OUTCOME_TO_STATUS.already_customer).toBe("not_interested");
+  });
+
+  it("renders its own pin, split from not_interested by lastOutcome — the callback precedent", () => {
+    expect(pinDisplayState({ leadStatus: "not_interested", lastOutcome: "already_customer" }))
+      .toBe("already_customer");
+    expect(pinDisplayState({ leadStatus: "not_interested", lastOutcome: "not_interested" }))
+      .toBe("not_interested");
+    // Legacy rows with no lastOutcome keep the red pin untouched.
+    expect(pinDisplayState({ leadStatus: "not_interested" })).toBe("not_interested");
+  });
+
+  it("counts as a worked door and a home contact", () => {
+    const def = OUTCOME_META.already_customer;
+    expect(def.worked).toBe(true);
+    expect(deriveWasHome("already_customer")).toBe(true);
+  });
+
+  it("is offered for new field entries, next to Not Interested", () => {
+    const keys = FIELD_OUTCOMES.map((o) => o.key);
+    expect(keys.indexOf("already_customer")).toBe(keys.indexOf("not_interested") + 1);
+  });
+
+  it("is NOT a bulk-lasso status — its pin needs a real knock's lastOutcome", () => {
+    expect(isBulkStatusOutcome("already_customer")).toBe(false);
+  });
+
+  it("wears its own color — never sold's green, never not_interested's red", () => {
+    expect(STATE_COLORS.already_customer).not.toBe(STATE_COLORS.not_interested);
+    expect(STATE_COLORS.already_customer).not.toBe(STATE_COLORS.sold);
   });
 });

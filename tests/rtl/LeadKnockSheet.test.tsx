@@ -222,7 +222,7 @@ describe("<LeadKnockSheet /> — unified outcomes grid", () => {
     renderSheet();
     expect(screen.getByTestId("knock-sheet")).toHaveTextContent("148 Maple St");
     // Exactly FIELD_OUTCOMES, primary-four-first — one grid, one surface.
-    expect(gridOrder()).toEqual(["not_home", "interested", "sold", "not_interested", "follow_up", "prospect"]);
+    expect(gridOrder()).toEqual(["not_home", "interested", "sold", "not_interested", "already_customer", "follow_up", "prospect"]);
     expect(gridOrder()).toEqual(ALL_KEYS);
     // …and callback / needs_verification are never offered for new marks.
     expect(screen.queryByTestId("knock-outcome-callback")).not.toBeInTheDocument();

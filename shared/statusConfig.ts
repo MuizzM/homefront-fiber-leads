@@ -12,17 +12,18 @@ export type LeadMapStatus =
   | "sold"
   | "not_interested"
   | "prospect"
-  | "follow_up";
+  | "follow_up"
+  | "already_customer";
 
 export type PinShape = "teardrop" | "down_arrow";
-export type PinGlyph = "door" | "star" | "dollar" | "x" | "clock" | "none";
+export type PinGlyph = "door" | "star" | "dollar" | "x" | "clock" | "user" | "none";
 
 export interface LeadStatusConfig {
   label: string;
   color: string;
   shape: PinShape;
   glyph: PinGlyph;
-  cardIcon: "DoorClosed" | "Star" | "DollarSign" | "X" | "ArrowDown" | "Clock";
+  cardIcon: "DoorClosed" | "Star" | "DollarSign" | "X" | "ArrowDown" | "Clock" | "UserCheck";
   /** Text/icon colour for use ON THE DARK CARD. `color` is tuned for a filled
    *  map pin (white glyph on a saturated fill) and a few of those are far too
    *  dark to use as TEXT on a dark sheet — sold's #14532D lands at 2.1:1 against
@@ -53,6 +54,15 @@ export const STATUS_CONFIG: Readonly<Record<LeadMapStatus, Readonly<LeadStatusCo
   },
   follow_up: {
     label: "Follow-up", color: "#F97316", shape: "teardrop", glyph: "clock", cardIcon: "Clock",
+  },
+  already_customer: {
+    // BLUE, deliberately outside the hot/cold axis every other pin sits on. The
+    // door is closed but NOT hostile: a red street reads "burned turf", a blue
+    // one reads "competitor's block — or ours already", which is targeting
+    // data. blue-600 fill keeps the white glyph legible in sunlight; the card
+    // uses blue-400 for the 4.5:1 dark-sheet minimum (same split as sold).
+    label: "Already a Customer", color: "#2563EB", shape: "teardrop", glyph: "user", cardIcon: "UserCheck",
+    onDark: "#60A5FA",
   },
 } as const;
 

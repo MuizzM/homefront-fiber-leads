@@ -5,18 +5,27 @@
  * allocate. The packed response sends the schema once in shared code and rows
  * as arrays. The object response remains available for backward compatibility.
  */
-// Bumped 2 → 3 when `carrier` was added; 3 → 4 when `assignMark` was added.
+// Bumped 2 → 3 when `carrier` was added; 3 → 4 when `assignMark` was added;
+// 4 → 5 when `assignedTerritoryId` was added.
 // unpackMapPins hard-fails on a row-length mismatch, so a version skew returns
 // empty pins — server + client MUST ship together. `carrier` lets a Frontier
 // confirmed-fresh lead paint red instead of Kinetic-green; `assignMark` lets a
 // manager's pre-assignment priority/hold triage show on the pin at a glance.
-export const MAP_PINS_WIRE_VERSION = 4 as const;
+//
+// `assignedTerritoryId` is the ONLY link from a door to the crew working it.
+// `assignedRepId` names a single primary, but areas are many-to-many
+// (territories.assignee_ids), so a shared door painted from the primary alone
+// looks like one rep's — which is how two reps knock the same house. The client
+// already holds the territory list, so shipping the 4-byte area id lets it
+// resolve the full rep set in O(1) per pin instead of a second request or a
+// per-lead point-in-polygon scan.
+export const MAP_PINS_WIRE_VERSION = 5 as const;
 
 export const MAP_PIN_WIRE_FIELDS = [
   "id", "lat", "lng", "leadStatus", "address", "city", "state", "zip",
   "fiberStatus", "assignedRepId", "leadScore", "visited", "knockCount",
   "lastOutcome", "lastKnockedAt", "leadTag", "freshConfidence", "carrier",
-  "assignMark",
+  "assignMark", "assignedTerritoryId",
 ] as const;
 
 export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];

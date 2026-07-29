@@ -28,7 +28,27 @@ import {
   type Tenant, type InsertTenant,
 } from "@shared/schema";
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+
+/** Statuses that BLOCK a new commission on the same door.
+ *
+ *  "paid" is deliberately NOT here, and that is the whole subtlety. Including it
+ *  looked obviously right — a paid sale is credited, so do not credit it twice —
+ *  but `paid` is TERMINAL in LEGAL_TRANSITIONS (paid → paid only). There is no
+ *  reachable escape: paid→disputed is 409 ILLEGAL_TRANSITION, and "superseded"
+ *  is written only by a one-time migration and is not a legal current status.
+ *  So blocking on `paid` meant that once a door's commission was paid, that door
+ *  could NEVER earn again — a genuine re-sale after a chargeback silently booked
+ *  nothing, HTTP 200, no error, no way for a manager to unblock it.
+ *
+ *  That is a worse bug than the double-pay it was meant to prevent: double-pay
+ *  is visible and clawable, silent non-pay is neither. Pending and approved are
+ *  enough, because those are the states in which an unpaid entitlement for this
+ *  door is still outstanding. */
+export const LIVE_COMMISSION_STATUSES = ["pending", "approved"] as const;
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
+import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
+import { syncAssignments } from "./territoryAssignments";
+import { bumpTerritoryVersion } from "./territoryScopeCache";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
 import {
   planLegacyCommissionTransition,
@@ -123,6 +143,10 @@ export interface MapPinRow {
   leadStatus: string;
   fiberStatus: string | null;
   assignedRepId: number | null;
+  // The area the door belongs to. Carried purely so the client can resolve WHO
+  // works this door — assignedRepId is one primary, but an area is many-to-many
+  // (territories.assignee_ids), and the client already holds the territory list.
+  assignedTerritoryId?: number | null;
   leadScore: number | null;
   leadTag: string | null;
   freshConfidence: string | null;
@@ -258,6 +282,9 @@ export interface IStorage {
   getScanTargetStats(): { total: number; scanned: number; neverScanned: number; newFiber: number; lastScannedAt: string | null };
   // ── Commissions ────────────────────────────────────────────────────────────
   getCommissions(tenantId?: number, repId?: number): Commission[];
+  /** A commission on this door that is still on the money path (pending,
+   *  approved or paid) — the guard against paying one sale twice. */
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined;
   getCommissionById(id: number, tenantId: number): Commission | undefined;
   createCommission(c: InsertCommission): Commission;
   transitionLegacyCommission(command: LegacyCommissionMutationCommand): LegacyCommissionMutationResult;
@@ -2044,6 +2071,16 @@ function migrateCommissionsPendingDedupe(raw: import("better-sqlite3").Database)
       `CREATE UNIQUE INDEX IF NOT EXISTS idx_commissions_tenant_lead_pending
         ON commissions(tenant_id, lead_id) WHERE status = 'pending' AND lead_id IS NOT NULL`,
     );
+    // The partial index above is UNIQUE and covers only status='pending', so it
+    // cannot serve the double-pay guard, which asks "is there a live commission
+    // on this door" across pending|approved|paid. Without this second, ordinary
+    // index that lookup is a full scan of the tenant's ledger on every sold
+    // knock — the cost grows with the money the company has ever earned, which
+    // is the worst possible thing to put on the sale path.
+    raw.exec(
+      `CREATE INDEX IF NOT EXISTS idx_commissions_lead_status
+        ON commissions(lead_id, status) WHERE lead_id IS NOT NULL`,
+    );
     const idx = raw.prepare(
       "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_commissions_tenant_lead_pending'",
     ).get();
@@ -2506,8 +2543,28 @@ export class Storage implements IStorage {
     }
     if (Array.isArray(assignedRep)) {
       if (!assignedRep.length) return [];
-      clauses.push(`l.assigned_rep_id IN (${assignedRep.map(() => "?").join(",")})`);
-      params.push(...assignedRep);
+      // An area can be worked by several reps, and assigned_rep_id names only
+      // ONE of them — so filtering on that column alone hid every shared door
+      // from everybody except the primary. A lead is visible when the caller
+      // holds it directly OR holds the AREA it sits in, which is where "who
+      // works this" is genuinely many-to-many (territories.assignee_ids).
+      //
+      // EXISTS against the area rather than a join: one indexed lookup per row,
+      // no fan-out, and no duplicate pins when several reps share the area —
+      // which a join would produce and which the map must never show.
+      const ph = assignedRep.map(() => "?").join(",");
+      clauses.push(`(
+        l.assigned_rep_id IN (${ph})
+        OR EXISTS (
+          SELECT 1 FROM territories t
+           WHERE t.id = l.assigned_territory_id
+             AND (t.rep_id IN (${ph}) OR EXISTS (
+               SELECT 1 FROM json_each(COALESCE(t.assignee_ids, '[]')) je
+                WHERE je.value IN (${ph})
+             ))
+        )
+      )`);
+      params.push(...assignedRep, ...assignedRep, ...assignedRep);
     } else if (assignedRep != null) {
       clauses.push("l.assigned_rep_id = ?");
       params.push(assignedRep);
@@ -2518,7 +2575,8 @@ export class Storage implements IStorage {
         SELECT
           l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
           l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
-          l.assigned_rep_id AS assignedRepId, l.lead_score AS leadScore,
+          l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
+          l.lead_score AS leadScore,
           l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
           l.assign_mark AS assignMark
         FROM leads l
@@ -2542,7 +2600,7 @@ export class Storage implements IStorage {
       )
       SELECT
         s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
-        s.leadStatus, s.fiberStatus, s.assignedRepId, s.leadScore,
+        s.leadStatus, s.fiberStatus, s.assignedRepId, s.assignedTerritoryId, s.leadScore,
         s.leadTag, s.freshConfidence, s.carrier, s.assignMark,
         rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
       FROM scoped s
@@ -3074,16 +3132,34 @@ export class Storage implements IStorage {
     const midnight = new Date();
     midnight.setHours(0, 0, 0, 0);
     const w = (col = "") => `(@since IS NULL OR k.knocked_at >= @since) AND (@until IS NULL OR k.knocked_at <= @until)${col}`;
+    // A SALE only counts while it is still TRUE. `superseded = 0` alone is not
+    // that: it records whether a knock lost the CAS when it was WRITTEN, so an
+    // accidental "sold" corrected by a NEWER knock kept its flag — the rep fixed
+    // the door, the commission reversed, and the leaderboard still showed the
+    // sale. Two extra conditions close both correction paths:
+    //   rn = 1                    — the sold knock is the lead's latest applied
+    //                               knock (a corrective knock demotes it);
+    //   l.lead_status = 'sold'    — the lead still IS sold (a manager status
+    //                               edit writes no knock row, so recency alone
+    //                               would miss it).
+    // Knocks/contacts/callbacks intentionally still count every applied knock —
+    // those are effort history, not live claims about the door's state.
+    const sold = (extra = "") =>
+      `k.outcome = 'sold' AND k.rn = 1 AND l.lead_status = 'sold'${extra}`;
     const rows = rawDb.prepare(
       `SELECT k.rep_id AS repId,
          SUM(CASE WHEN ${w()} THEN 1 ELSE 0 END) AS knocks,
          SUM(CASE WHEN ${w(" AND k.was_home = 1")} THEN 1 ELSE 0 END) AS contacts,
          SUM(CASE WHEN ${w(" AND k.outcome = 'callback'")} THEN 1 ELSE 0 END) AS callbacks,
-         SUM(CASE WHEN ${w(" AND k.outcome = 'sold'")} THEN 1 ELSE 0 END) AS sales,
+         SUM(CASE WHEN ${w(` AND ${sold()}`)} THEN 1 ELSE 0 END) AS sales,
          SUM(CASE WHEN k.knocked_at >= @midnight THEN 1 ELSE 0 END) AS knocksToday,
-         SUM(CASE WHEN k.knocked_at >= @midnight AND k.outcome = 'sold' THEN 1 ELSE 0 END) AS salesToday
-       FROM knock_log k JOIN team_members t ON t.id = k.rep_id
-       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1 AND k.superseded = 0
+         SUM(CASE WHEN k.knocked_at >= @midnight AND ${sold()} THEN 1 ELSE 0 END) AS salesToday
+       FROM (SELECT kk.*, ROW_NUMBER() OVER (
+               PARTITION BY kk.lead_id ORDER BY kk.knocked_at DESC, kk.id DESC) AS rn
+             FROM knock_log kk WHERE kk.superseded = 0) k
+       JOIN team_members t ON t.id = k.rep_id
+       LEFT JOIN leads l ON l.id = k.lead_id
+       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1
        GROUP BY k.rep_id`
     ).all({ since: window?.since ?? null, until: window?.until ?? null, midnight: midnight.toISOString(), tenantId: tenantId ?? null }) as any[];
     const byRep = new Map(rows.map(r => [r.repId, r]));
@@ -3215,20 +3291,14 @@ export class Storage implements IStorage {
   getTerritoriesByRep(repId: number, tenantId?: number): Territory[] {
     // A rep sees a territory if they're the primary repId OR in assignee_ids
     // (multi-rep/shared), and it isn't archived.
-    return this.getTerritories(tenantId).filter((t: any) => {
-      if (t.status === "archived") return false;
-      // assignee_ids is AUTHORITATIVE whenever the column holds a list — it is
-      // what reclaim/unassign rewrite. repId is only the primary-owner marker
-      // kept for colour and history, and it deliberately still names the last
-      // holder after everyone is removed. Matching on it meant a rep kept seeing
-      // an area that had been reclaimed OR taken off them, which is exactly the
-      // visibility guarantee those operations exist to provide. Fall back to
-      // repId only for legacy rows written before assignee_ids existed.
-      let assignees: number[] | null = null;
-      try { assignees = t.assigneeIds == null ? null : (JSON.parse(t.assigneeIds) as number[]); } catch { assignees = null; }
-      if (Array.isArray(assignees)) return assignees.includes(repId);
-      return t.repId === repId;
-    });
+    // The rule (assignee_ids authoritative, repId only for legacy rows) lives in
+    // shared/territory.ts. It was written out longhand here and paraphrased in
+    // two other places, and both paraphrases checked repId first — which hands a
+    // reclaimed area back to the rep it was taken from, the exact guarantee
+    // reclaim exists to provide. One definition, three callers.
+    return this.getTerritories(tenantId).filter(
+      (t: any) => t.status !== "archived" && territoryHeldByAny(t, [repId]),
+    );
   }
   // Tenant-aware by option (see getLeadById). Omit tenantId → original behaviour.
   getTerritoryById(id: number, tenantId?: number): Territory | undefined {
@@ -3264,15 +3334,29 @@ export class Storage implements IStorage {
       .map((r: any) => ({ ...r, payload: r.payload ? (() => { try { return JSON.parse(r.payload); } catch { return null; } })() : null }));
   }
   createTerritory(t: InsertTerritory): Territory {
-    return db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();
+    const row = db.insert(territories).values({ ...t, createdAt: new Date().toISOString() }).returning().get();
+    // Unconditional: repCanAccessLead memoises on this stamp, and a bump that
+    // reasons about which fields matter is a bump that will eventually reason
+    // wrong — in the direction of granting access.
+    bumpTerritoryVersion();
+    recordAssigneeChange(row);
+    return row;
   }
   updateTerritory(id: number, updates: Partial<InsertTerritory>, tenantId?: number): Territory | undefined {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
-    return db.update(territories).set(updates).where(cond).returning().get();
+    const row = db.update(territories).set(updates).where(cond).returning().get();
+    bumpTerritoryVersion();
+    // Only when the holder list was part of THIS write. Recording on every
+    // update — a rename, a colour change — would be harmless but noisy, and
+    // reading assignee_ids off a row the caller did not touch invites drift.
+    if (row && "assigneeIds" in updates) recordAssigneeChange(row);
+    return row;
   }
   deleteTerritory(id: number, tenantId?: number): boolean {
     const cond = tenantId != null ? and(eq(territories.id, id), eq(territories.tenantId, tenantId)) : eq(territories.id, id);
-    return db.delete(territories).where(cond).run().changes > 0;
+    const gone = db.delete(territories).where(cond).run().changes > 0;
+    bumpTerritoryVersion();
+    return gone;
   }
 
   // ── Territory Requests ─────────────────────────────────────────────────────
@@ -3705,6 +3789,16 @@ export class Storage implements IStorage {
     const q = db.select().from(commissions);
     return (conds.length ? q.where(and(...conds)) : q).orderBy(desc(commissions.createdAt)).all();
   }
+  // Indexed lookup, not a scan: this runs on every sold knock, and getCommissions
+  // would read the whole tenant's ledger to answer a single-row question.
+  findLiveCommissionForLead(tenantId: number | null | undefined, leadId: number): Commission | undefined {
+    const conds = [
+      eq(commissions.leadId, leadId),
+      inArray(commissions.status, LIVE_COMMISSION_STATUSES as unknown as string[]),
+    ];
+    if (tenantId != null) conds.push(eq(commissions.tenantId, tenantId));
+    return db.select().from(commissions).where(and(...conds)).limit(1).get();
+  }
   getCommissionById(id: number, tenantId: number): Commission | undefined {
     return db.select().from(commissions)
       .where(and(eq(commissions.id, id), eq(commissions.tenantId, tenantId)))
@@ -3928,6 +4022,34 @@ export class Storage implements IStorage {
     const sold = allLeads.filter(l => l.leadStatus === 'sold').length;
     const terrs = db.select().from(territories).where(eq(territories.tenantId, tenantId)).all().length;
     return { reps, leads: allLeads.length, sold, territories: terrs };
+  }
+}
+
+// The assignment RECORD follows the holder list, wherever the list is written.
+//
+// territories.assignee_ids is written from seven different routes — draw-and-
+// assign, scan-derived areas, share, assign, unassign, and both reclaim modes.
+// Hooking each one would eventually miss a path, and a missed path is exactly
+// how the array and the record silently diverge. Hooking the two functions that
+// actually perform the write cannot be bypassed by a route that forgets.
+//
+// Deliberately best-effort: an area assignment must not fail because its audit
+// row could not be written. The record is reconstructible from the array; the
+// array is not reconstructible from anything.
+function recordAssigneeChange(row: any): void {
+  if (!row?.id) return;
+  try {
+    const repIds = parseAssigneeIds(row.assigneeIds);
+    if (!repIds) return; // legacy row with no list — nothing authoritative to sync
+    syncAssignments({
+      tenantId: row.tenantId ?? null,
+      territoryId: row.id,
+      repIds,
+      actorUserId: null, // storage has no session; routes that care pass their own
+      primaryRepId: row.repId ?? null,
+    });
+  } catch {
+    /* never let bookkeeping break an assignment */
   }
 }
 

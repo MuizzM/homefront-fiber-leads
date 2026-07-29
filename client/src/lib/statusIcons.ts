@@ -26,6 +26,7 @@ export const STATUS_ICON: Record<PinDisplayState | "neutral", {
   callback:       { key: "pin-follow_up",      glyph: "clock",  tint: "callback" },
   sold:           { key: "pin-sold",           glyph: "dollar", tint: "sold" },
   not_interested: { key: "pin-not_interested", glyph: "x",      tint: "not_interested" },
+  already_customer: { key: "pin-already_customer", glyph: "user", tint: "already_customer" },
   neutral:        { key: "pin-prospect",       glyph: "none",   tint: "unworked" },
 });
 
@@ -48,6 +49,8 @@ const GLYPHS = {
   dollar: `<path d="M20 9.5v21" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><path d="M25 15.1c0-2.2-2.2-3.7-5-3.7s-5 1.4-5 3.4c0 2.3 2 3.1 5 3.8s5.2 1.5 5.2 4c0 2.2-2.3 3.9-5.2 3.9s-5.2-1.7-5.2-4" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>`,
   x: `<path d="m13 13 14 14m0-14L13 27" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round"/>`,
   clock: `<circle cx="20" cy="20" r="9" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M20 14v6l4.4 2.7" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>`,
+  // Head-and-shoulders, vector like every other glyph (no <text>, no font).
+  user: `<circle cx="20" cy="15.5" r="4.2" fill="#fff"/><path d="M12 29.5c0-4.4 3.6-7.5 8-7.5s8 3.1 8 7.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/>`,
 } as const;
 
 const PROSPECT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="52" viewBox="0 0 40 52" role="img" aria-label="Prospect">
@@ -56,7 +59,7 @@ const PROSPECT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height=
   <path d="M20 10v12m-5-5 5 5 5-5" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
-/** Six inline SVG assets. The teardrops and prospect arrow have a common 52px bottom tip. */
+/** Seven inline SVG assets. The teardrops and prospect arrow have a common 52px bottom tip. */
 export const PIN_SVGS: Readonly<Record<LeadMapStatus, string>> = Object.freeze({
   not_home: tearDrop(STATUS_CONFIG.not_home.color, GLYPHS.door, STATUS_CONFIG.not_home.label),
   interested: tearDrop(STATUS_CONFIG.interested.color, GLYPHS.star, STATUS_CONFIG.interested.label),
@@ -64,6 +67,7 @@ export const PIN_SVGS: Readonly<Record<LeadMapStatus, string>> = Object.freeze({
   not_interested: tearDrop(STATUS_CONFIG.not_interested.color, GLYPHS.x, STATUS_CONFIG.not_interested.label),
   prospect: PROSPECT_SVG,
   follow_up: tearDrop(STATUS_CONFIG.follow_up.color, GLYPHS.clock, STATUS_CONFIG.follow_up.label),
+  already_customer: tearDrop(STATUS_CONFIG.already_customer.color, GLYPHS.user, STATUS_CONFIG.already_customer.label),
 });
 
 export const PIN_DATA_URLS: Readonly<Record<LeadMapStatus, string>> = Object.freeze(

@@ -29,6 +29,66 @@ export interface TerritoryState {
   history: TerritoryHistoryEvent[];
 }
 
+// ── The area's colour ────────────────────────────────────────────────────────
+// The colour is chosen by whoever draws the area and it describes the GROUND,
+// not the person — so it has to survive the round trip byte-for-byte and mean
+// the same thing to the server validating it and the map painting it. One
+// pattern, shared, rather than a regex on each side that can drift apart.
+//
+// Shorthand is expanded (#0F0 → #00FF00) because the renderer parses fixed
+// offsets, but case is otherwise preserved: the stored value is the admin's
+// exact choice, and re-casing it would make "did the colour change?" answer yes
+// on a value nobody edited.
+export const TERRITORY_COLOR_PATTERN = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+export function normalizeTerritoryColor(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!TERRITORY_COLOR_PATTERN.test(trimmed)) return null;
+  const body = trimmed.slice(1);
+  return body.length === 3 ? `#${body.split("").map((c) => c + c).join("")}` : trimmed;
+}
+
+// ── Who holds an area ────────────────────────────────────────────────────────
+// The single answer to "does this rep work this area", used by every surface
+// that scopes something to a territory: the doors on the map, a single lead
+// read, the progress cards.
+//
+// Two columns can answer it and only one is authoritative. `assignee_ids` is the
+// many-to-many holder list that reclaim and unassign rewrite. `repId` is the
+// PRIMARY-owner marker kept for colour and history, and it deliberately still
+// names the last holder after everyone has been removed — so consulting it
+// first, or at all when a list exists, hands a reclaimed area straight back to
+// the person it was taken from. An EMPTY list is a real answer meaning "nobody",
+// not a missing one.
+//
+// repId is the fallback ONLY for legacy rows written before assignee_ids
+// existed, where the column is genuinely absent rather than empty.
+//
+// This lived in three places with three subtly different orderings, two of which
+// checked repId first and leaked; it lives here now so there is one rule to get
+// right.
+export function parseAssigneeIds(value: unknown): number[] | null {
+  if (Array.isArray(value)) return value.filter((n): n is number => typeof n === "number");
+  if (typeof value !== "string" || value.trim() === "") return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((n): n is number => typeof n === "number") : null;
+  } catch {
+    return null; // unparseable → treat as legacy, fall back to repId
+  }
+}
+
+export function territoryHeldByAny(
+  territory: { repId?: number | null; assigneeIds?: unknown },
+  repIds: readonly number[],
+): boolean {
+  if (!repIds.length) return false;
+  const assignees = parseAssigneeIds(territory.assigneeIds);
+  if (assignees) return assignees.some((id) => repIds.includes(id));
+  return territory.repId != null && repIds.includes(territory.repId);
+}
+
 // Company rule: recommended 3–5 active areas per rep. Callers pass the count of
 // the rep's territories already in an active-like status (active/shared).
 export const MAX_ACTIVE_AREAS_PER_REP = 5;

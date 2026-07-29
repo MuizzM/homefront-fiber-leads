@@ -27,7 +27,7 @@ import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Copy, Check, Plus, X,
-  DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone,
+  DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone, UserCheck,
   type LucideIcon,
 } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
@@ -90,7 +90,7 @@ export interface LeadKnockSheetProps {
 // lucide icon NAME (from OutcomeDef.icon) → component. Pins and card share one
 // palette; this is the one place a name string becomes a rendered glyph.
 const ICON_MAP: Record<string, LucideIcon> = {
-  DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle,
+  DoorClosed, Star, DollarSign, X, Clock, Phone, ArrowDown, HelpCircle, UserCheck,
 };
 
 // Tap-vs-drag threshold: header taps must still land.

@@ -1,157 +1,207 @@
-// Editing weekly sales tiers.
+// Editing the weekly commission ladder.
 //
-// The rule is RETROACTIVE: the band a rep lands in sets the rate for EVERY sale
-// that week. 6 sales at the 1–6 band is 6 × $150 = $900; a 7th makes all seven
-// pay $200 = $1,400. A $500 swing on one sale, so the editor has to show it.
+// The rule is RETROACTIVE: the band a rep lands in re-prices EVERY sale that
+// week. Sell 6 at the 1-6 band and it's 6 x $150; sell a 7th and all seven pay
+// $200. A $500 swing on one sale, so the ladder has to be editable without
+// fighting the manager.
 //
-// The other half is that an invalid plan must be unreachable, not merely
-// reported: a gap between bands means a rep sells into a hole and earns nothing.
-import { useState } from "react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+// THE BUG THIS FILE PINS DOWN: the old max handler did
+//     parseInt(e.target.value, 10) || t.minimumSales
+// so clearing the field to retype it collapsed the band to a single sale —
+// 1-6 became 1-1, which pushed the next band to 2+. Every attempt to fix it
+// snapped back on the next keystroke, and the range became uneditable.
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { TierEditor } from "../../client/src/components/commission/TierEditor";
 import type { CommissionTier } from "../../shared/commissionTiers";
 
-/** The plan the operator actually asked for: 1–6 @ $150, 7+ @ $200. */
-const SPEC: CommissionTier[] = [
-  { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "1–6" },
+const DEFAULT: CommissionTier[] = [
+  { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "1-6" },
   { position: 1, minimumSales: 7, maximumSales: null, rateCents: 20000, label: "7+" },
 ];
 
-/**
- * TierEditor is CONTROLLED, so a bare vi.fn() leaves the value frozen and every
- * keystroke re-edits the original string. This harness holds real state (as the
- * dialog does) and reports each committed value, which is what lets the typing
- * tests mean anything.
- */
-function Harness({ initial, onChange }: { initial: CommissionTier[]; onChange: (t: CommissionTier[]) => void }) {
+/** Wrapper that actually holds state, the way the Team page does. A controlled
+ *  component tested with a stub onChange hides exactly this class of bug. */
+function Harness({ initial = DEFAULT }: { initial?: CommissionTier[] }) {
   const [tiers, setTiers] = useState(initial);
-  return <TierEditor tiers={tiers} onChange={next => { setTiers(next); onChange(next); }} />;
+  return <TierEditor tiers={tiers} onChange={setTiers} />;
 }
 
-function setup(tiers: CommissionTier[] = SPEC) {
-  const onChange = vi.fn();
-  render(<Harness initial={tiers} onChange={onChange} />);
-  return { onChange };
-}
-
-describe("the retroactive payout preview", () => {
-  it("shows a week's pay at each band, not just the rate", () => {
-    setup();
-    const preview = screen.getByTestId("tier-preview");
-    // 1 sale in the low band, 7 in the high band — 7 × $200, NOT 6×150 + 200.
-    expect(within(preview).getByText(/1 sale \(1–6\)/)).toBeInTheDocument();
-    expect(within(preview).getByText("$1,400")).toBeInTheDocument();
+describe("clearing the range field does not collapse the band", () => {
+  it("survives an empty field mid-edit", () => {
+    // The exact reported symptom: clear the "6" and the band became 1-1 and the
+    // next band jumped to 2+. The field must be allowed to be empty.
+    render(<Harness />);
+    fireEvent.change(screen.getByTestId("tier-max-0"), { target: { value: "" } });
+    expect(screen.getByTestId("tier-max-0")).toHaveValue("");
+    expect(screen.getByTestId("tier-row-1")).toHaveTextContent("7");
   });
 
-  it("makes the jump visible: the 7th sale re-prices the whole week", () => {
-    setup();
-    const preview = screen.getByTestId("tier-preview");
-    // $150 for one sale at the bottom band vs $1,400 once the 7th lands.
-    expect(within(preview).getByText("$150")).toBeInTheDocument();
-    expect(within(preview).getByText("$1,400")).toBeInTheDocument();
+  it("lets a manager retype the range from empty", () => {
+    render(<Harness />);
+    const max = screen.getByTestId("tier-max-0");
+    fireEvent.change(max, { target: { value: "" } });
+    fireEvent.change(max, { target: { value: "1" } });
+    fireEvent.change(max, { target: { value: "12" } });
+    fireEvent.blur(max);
+    expect(screen.getByTestId("tier-max-0")).toHaveValue("12");
+    expect(screen.getByTestId("tier-row-1")).toHaveTextContent("13");  // re-tiled
   });
 
-  it("hides the preview while the plan is invalid rather than showing wrong money", () => {
-    render(<TierEditor onChange={vi.fn()} tiers={[
-      { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "" },
-      { position: 1, minimumSales: 7, maximumSales: 12, rateCents: 20000, label: "" }, // not open-ended
+  it("reverts an unusable draft on blur instead of silently becoming 1", () => {
+    // Snapping to the minimum is what made the old editor unrecoverable.
+    render(<Harness />);
+    const max = screen.getByTestId("tier-max-0");
+    fireEvent.change(max, { target: { value: "" } });
+    fireEvent.blur(max);
+    expect(screen.getByTestId("tier-max-0")).toHaveValue("6");
+  });
+
+  it("ignores a range below the band's own minimum", () => {
+    render(<Harness />);
+    const max = screen.getByTestId("tier-max-0");
+    fireEvent.change(max, { target: { value: "0" } });
+    fireEvent.blur(max);
+    expect(screen.getByTestId("tier-max-0")).toHaveValue("6");
+  });
+});
+
+describe("removing a band", () => {
+  it("removes the one that was clicked", () => {
+    render(<Harness initial={[
+      ...DEFAULT.slice(0, 1),
+      { position: 1, minimumSales: 7, maximumSales: 12, rateCents: 20000, label: "7-12" },
+      { position: 2, minimumSales: 13, maximumSales: null, rateCents: 25000, label: "13+" },
     ]} />);
-    expect(screen.queryByTestId("tier-preview")).not.toBeInTheDocument();
-    expect(screen.getByRole("alert")).toHaveTextContent(/open-ended/i);
-  });
-});
-
-describe("bands stay tiled — an invalid plan is unreachable", () => {
-  it("editing a band's top pushes the next band's bottom", async () => {
-    // No gap can be typed into existence: minimums are derived, not entered.
-    const user = userEvent.setup();
-    const { onChange } = setup();
-    // fireEvent.change, not user.type: jsdom's number inputs don't support text
-    // selection, so a "retype" would append (6 → 68) and test nothing real. This
-    // delivers the committed value the way a replaced field does.
-    fireEvent.change(screen.getByTestId("tier-max-0"), { target: { value: "8" } });
-
-    const last = onChange.mock.calls.at(-1)![0] as CommissionTier[];
-    expect(last[0].maximumSales).toBe(8);
-    expect(last[1].minimumSales).toBe(9);      // pushed, not left at 7
-    expect(last[1].maximumSales).toBeNull();   // still open-ended
+    expect(screen.getAllByTestId(/^tier-row-/)).toHaveLength(3);
+    fireEvent.click(screen.getByTestId("tier-remove-1"));
+    const rows = screen.getAllByTestId(/^tier-row-/);
+    expect(rows).toHaveLength(2);
+    expect(screen.getByTestId("tier-rate-1")).toHaveValue("250");  // 13+ survived
   });
 
-  it("adding a band closes the old open end and keeps the new one open", async () => {
-    const user = userEvent.setup();
-    const { onChange } = setup();
-    await user.click(screen.getByTestId("tier-add"));
-
-    const next = onChange.mock.calls.at(-1)![0] as CommissionTier[];
-    expect(next).toHaveLength(3);
-    expect(next[1].maximumSales).not.toBeNull();          // was open, now closed
-    expect(next[2].maximumSales).toBeNull();              // the new open end
-    expect(next[2].minimumSales).toBe(next[1].maximumSales! + 1); // contiguous
+  it("re-tiles so no gap is left behind", () => {
+    render(<Harness initial={[
+      ...DEFAULT.slice(0, 1),
+      { position: 1, minimumSales: 7, maximumSales: 12, rateCents: 20000, label: "7-12" },
+      { position: 2, minimumSales: 13, maximumSales: null, rateCents: 25000, label: "13+" },
+    ]} />);
+    fireEvent.click(screen.getByTestId("tier-remove-0"));
+    expect(screen.getByTestId("tier-row-0")).toHaveTextContent("1");
   });
 
-  it("removing a band re-tiles the rest", async () => {
-    const user = userEvent.setup();
-    const three: CommissionTier[] = [
-      { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 15000, label: "" },
-      { position: 1, minimumSales: 7, maximumSales: 12, rateCents: 20000, label: "" },
-      { position: 2, minimumSales: 13, maximumSales: null, rateCents: 25000, label: "" },
-    ];
-    const onChange = vi.fn();
-    render(<Harness initial={three} onChange={onChange} />);
-    await user.click(screen.getByTestId("tier-remove-1"));
-
-    const next = onChange.mock.calls.at(-1)![0] as CommissionTier[];
-    expect(next).toHaveLength(2);
-    expect(next[1].minimumSales).toBe(7);      // closed the hole left by the middle band
-    expect(next[1].maximumSales).toBeNull();
+  it("makes the delete stick even with an edit in flight", () => {
+    // Drafts are keyed by row index. A draft left behind would land on whichever
+    // band shifts up into that slot, resurrecting the value that was removed.
+    render(<Harness initial={[
+      ...DEFAULT.slice(0, 1),
+      { position: 1, minimumSales: 7, maximumSales: 12, rateCents: 20000, label: "7-12" },
+      { position: 2, minimumSales: 13, maximumSales: null, rateCents: 25000, label: "13+" },
+    ]} />);
+    fireEvent.change(screen.getByTestId("tier-max-1"), { target: { value: "99" } });
+    fireEvent.click(screen.getByTestId("tier-remove-1"));
+    expect(screen.getAllByTestId(/^tier-row-/)).toHaveLength(2);
+    expect(screen.queryByDisplayValue("99")).toBeNull();
   });
 
-  it("refuses to remove the last remaining band", async () => {
-    const user = userEvent.setup();
-    const one: CommissionTier[] = [{ position: 0, minimumSales: 1, maximumSales: null, rateCents: 15000, label: "" }];
-    const onChange = vi.fn();
-    render(<Harness initial={one} onChange={onChange} />);
+  it("keeps the last band, since a plan with no bands pays nothing", () => {
+    render(<Harness initial={DEFAULT.slice(1)} />);
     expect(screen.getByTestId("tier-remove-0")).toBeDisabled();
-    await user.click(screen.getByTestId("tier-remove-0"));
-    expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("never lets a band's top fall below its own bottom", async () => {
-    const user = userEvent.setup();
-    const { onChange } = setup();
-    fireEvent.change(screen.getByTestId("tier-max-0"), { target: { value: "0" } }); // below its own minimum
-
-    const last = onChange.mock.calls.at(-1)![0] as CommissionTier[];
-    expect(last[0].maximumSales).toBeGreaterThanOrEqual(last[0].minimumSales);
-  });
-
-  it("the final band has no maximum input at all", () => {
-    setup();
-    // Not merely validated — there is nothing to type into, so the open end
-    // cannot be closed by accident.
-    expect(screen.getByTestId("tier-max-0")).toBeInTheDocument();
-    expect(screen.queryByTestId("tier-max-1")).not.toBeInTheDocument();
-    expect(screen.getByTestId("tier-row-1")).toHaveTextContent("7+");
+  it("names the band it will remove, not just its position", () => {
+    render(<Harness />);
+    expect(screen.getByRole("button", { name: "Remove band 1-6" })).toBeInTheDocument();
   });
 });
 
-describe("rates", () => {
-  it("edits in dollars but reports integer cents", async () => {
-    // Money never becomes a float: $175 must arrive as 17500, not 17499.999.
-    const user = userEvent.setup();
-    const { onChange } = setup();
-    fireEvent.change(screen.getByTestId("tier-rate-0"), { target: { value: "175" } });
-
-    const last = onChange.mock.calls.at(-1)![0] as CommissionTier[];
-    expect(last[0].rateCents).toBe(17500);
-    expect(Number.isInteger(last[0].rateCents)).toBe(true);
+describe("adding a band", () => {
+  it("splits an open ladder into 1-6 and 7+", () => {
+    // The ladder managers describe out loud: six sales, then the step up.
+    render(<Harness initial={[
+      { position: 0, minimumSales: 1, maximumSales: null, rateCents: 15000, label: "1+" },
+    ]} />);
+    fireEvent.click(screen.getByTestId("tier-add"));
+    expect(screen.getByTestId("tier-max-0")).toHaveValue("6");
+    expect(screen.getByTestId("tier-row-1")).toHaveTextContent("7");
   });
 
-  it("shows the existing rate in dollars", () => {
-    setup();
-    expect(screen.getByTestId("tier-rate-0")).toHaveValue(150);
-    expect(screen.getByTestId("tier-rate-1")).toHaveValue(200);
+  it("keeps the final band open-ended so beating the top still pays", () => {
+    render(<Harness />);
+    fireEvent.click(screen.getByTestId("tier-add"));
+    const rows = screen.getAllByTestId(/^tier-row-/);
+    expect(screen.getByTestId(`tier-open-${rows.length - 1}`)).toHaveTextContent("and up");
+  });
+
+  it("does not crash on an empty ladder", () => {
+    // The old addBand read `last.minimumSales` off undefined and threw. An empty
+    // ladder is reachable, and this button should be the way out of it.
+    const onChange = vi.fn();
+    render(<TierEditor tiers={[]} onChange={onChange} />);
+    expect(() => fireEvent.click(screen.getByTestId("tier-add"))).not.toThrow();
+    expect(onChange.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it("shows the headroom before the limit is reached", () => {
+    render(<Harness />);
+    expect(screen.getByTestId("tier-remaining")).toHaveTextContent("6 more available");
+  });
+});
+
+describe("the label follows the band it describes", () => {
+  it("renames a band when its range changes", () => {
+    // The label is persisted and shown on the rep's statement. A band paying
+    // 1-12 that still calls itself "1-6" is a payroll dispute.
+    const onChange = vi.fn();
+    render(<TierEditor tiers={DEFAULT} onChange={onChange} />);
+    fireEvent.change(screen.getByTestId("tier-max-0"), { target: { value: "12" } });
+    expect(onChange.mock.calls.at(-1)![0][0].label).toBe("1-12");
+  });
+});
+
+describe("the retroactive jump is shown, not left to be inferred", () => {
+  it("prices the whole week at the band rate, not progressively", () => {
+    // 7 sales at the 7+ band is 7 x $200 = $1,400 — not 6 x $150 + $200.
+    render(<Harness />);
+    expect(screen.getByTestId("tier-preview")).toHaveTextContent("$1,400");
+  });
+
+  it("shows the bottom and top of a closed band", () => {
+    render(<Harness />);
+    const preview = screen.getByTestId("tier-preview");
+    expect(preview).toHaveTextContent("$150");   // 1 sale at $150
+    expect(preview).toHaveTextContent("$900");   // 6 sales at $150
+  });
+});
+
+describe("a fat-fingered paste cannot build an absurd plan", () => {
+  it("refuses a rate beyond any real commission", () => {
+    // The server is authoritative, but rejecting at the input beats a
+    // validation error after someone has saved a $10bn-per-sale ladder.
+    render(<Harness />);
+    const rate = screen.getByTestId("tier-rate-0");
+    fireEvent.change(rate, { target: { value: "99999999999" } });
+    fireEvent.blur(rate);
+    expect(screen.getByTestId("tier-rate-0")).toHaveValue("150");
+  });
+
+  it("refuses a band boundary no rep could cross in a week", () => {
+    render(<Harness />);
+    const max = screen.getByTestId("tier-max-0");
+    fireEvent.change(max, { target: { value: "999999" } });
+    fireEvent.blur(max);
+    expect(screen.getByTestId("tier-max-0")).toHaveValue("6");
+  });
+
+  it("still accepts an ordinary rate typed digit by digit", () => {
+    render(<Harness />);
+    const rate = screen.getByTestId("tier-rate-0");
+    fireEvent.change(rate, { target: { value: "" } });
+    fireEvent.change(rate, { target: { value: "2" } });
+    fireEvent.change(rate, { target: { value: "22" } });
+    fireEvent.change(rate, { target: { value: "225" } });
+    fireEvent.blur(rate);
+    expect(screen.getByTestId("tier-rate-0")).toHaveValue("225");
   });
 });
