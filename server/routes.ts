@@ -4306,7 +4306,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       updated += changed.length;
       // AFTER the chunk's transaction commits — an event emitted inside it would
       // survive a rollback that erased the write it describes.
-      emitLeadChangesBulk("assignment", changed.slice(0, LEAD_EVENT_BULK_MAX - emitted).map((r) => r.id), user, tid);
+      emitLeadChangesBulk("assignment", changed.slice(0, Math.max(0, LEAD_EVENT_BULK_MAX - emitted)).map((r) => r.id), user, tid);
       emitted = Math.min(LEAD_EVENT_BULK_MAX, emitted + changed.length);
       // Yield so /api/health, the Field Map, and every other request keep
       // flowing while a large territory assignment completes.
@@ -4467,10 +4467,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (ownerName) enrichmentUpdate.ownerName = ownerName;
     if (incomeRange) enrichmentUpdate.incomeRange = incomeRange;
     if (homeValue) enrichmentUpdate.homeValue = homeValue;
+    const enriched = storage.updateLead(lead.id, enrichmentUpdate as any);
     // A GET that writes: the enrichment is persisted on read, so an open card on
     // another device is stale the moment this returns. "notes" — none of these
     // columns are pin fields, so the client refreshes the card, not the map.
-    emitLeadChange("notes", storage.updateLead(lead.id, enrichmentUpdate as any), _user, lead.tenantId);
+    emitLeadChange("notes", enriched, _user, lead.tenantId);
 
     res.json({
       ownerName: ownerName ?? lead.ownerName ?? null,
@@ -5606,6 +5607,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         territoryId: t.id, tenantId: tid ?? null,
         actorUserId: user?.id ?? null, actorName: user?.name ?? user?.username ?? null,
         action, newRepId, note, keepPendingCallbacks, now: at,
+        // The reset clears lead_status/last_outcome/assign_mark through raw SQL
+        // inside territoryPass.ts, so this is the only place the changed ids
+        // exist. Fires for every action including "keep", which re-opens doors
+        // without touching the territory at all.
+        onLeadsReset: (ids) => emitLeadChangesBulk("status", ids, user, tid),
         // Runs inside the same transaction as the lead reset: the area's
         // assignment and its doors can never disagree about which pass they're in.
         applyTerritoryAction: () => {
