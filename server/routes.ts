@@ -399,6 +399,25 @@ function repInVisibilityScope(user: any, repId: number | null | undefined): bool
 // Areas a scoped caller works — as primary OR as one of several assignees.
 // Cached per request-ish by callers that need it in a loop; cheap enough here
 // (one indexed scan) that correctness beats micro-optimisation.
+/**
+ * The colour an area keeps when it changes hands.
+ *
+ * Every reassignment route used to stamp colorForRep(newPrimary), on the theory
+ * that the fill told you who was working the ground. That theory is spent: the
+ * per-rep halos on the pins say who, and an area can be held by three people at
+ * once, so one fill cannot name them. What the fill says now is WHICH AREA this
+ * is — the colour the admin chose while drawing it — and that must not change
+ * because the area was handed to someone else. Draw it green, share it, it is
+ * still green.
+ *
+ * colorForRep remains the fallback for rows with no stored colour (created
+ * before the colour was captured) so nothing renders colourless.
+ */
+function retainedAreaColor(territory: unknown, fallbackRepId: number | null | undefined): string {
+  const stored = normalizeTerritoryColor((territory as any)?.color);
+  return stored ?? colorForRep(fallbackRepId ?? null);
+}
+
 function territoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
   const out = new Set<number>();
   for (const t of storage.getTerritories(tenantId ?? undefined) as any[]) {
@@ -5641,7 +5660,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             repId: newPrimary, name: newName,
             assigneeIds: JSON.stringify(nextRepIds), assignedAt: at,
             pastAssigneeIds: JSON.stringify(past),
-            color: colorForRep(newPrimary),
+            color: retainedAreaColor(t, newPrimary),
             reclaimedAt: action === "return_to_pool" ? at : (t as any).reclaimedAt ?? null,
             updatedAt: at,
           } as any, tid);
@@ -5744,7 +5763,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: colorForRep(newPrimary), reclaimedAt: at, updatedAt: at,
+      color: retainedAreaColor(t, newPrimary), reclaimedAt: at, updatedAt: at,
       // Reassign starts a new tenure; returning to the pool means nobody holds
       // it, so the "assigned since" date must not linger from the last rep.
       assignedAt: next.repIds.length ? at : null,
@@ -5821,7 +5840,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const newName = isAutoAreaName(t.name) ? `${rep.name}'s area` : t.name;
     storage.updateTerritory(t.id, {
       repId, assigneeIds: JSON.stringify([repId]), status: "active", name: newName,
-      color: colorForRep(repId), assignedAt: at, updatedAt: at,
+      color: retainedAreaColor(t, repId), assignedAt: at, updatedAt: at,
     } as any, tid);
     storage.addTerritoryEvent(t.id, user?.id ?? null, "assigned", { repId, assigned });
 
@@ -5902,7 +5921,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: merged.length > 1 ? "shared" : "active",
       repId: newPrimary,
-      color: colorForRep(newPrimary),
+      color: retainedAreaColor(t, newPrimary),
       assigneeIds: JSON.stringify(merged),
       pastAssigneeIds: JSON.stringify(past),
       assignedAt: at, updatedAt: at,
@@ -5924,7 +5943,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     storage.addTerritoryEvent(t.id, user?.id ?? null, "shared", { repIds: merged, dropped: past });
-    res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: colorForRep(newPrimary) });
+    res.json({ ok: true, assigneeIds: merged, repId: newPrimary, color: retainedAreaColor(t, newPrimary) });
   });
 
   // POST /api/territories/:id/unassign { repId, releaseLeads? }
@@ -5986,7 +6005,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     storage.updateTerritory(t.id, {
       status: next.status, repId: newPrimary, name: newName,
       assigneeIds: JSON.stringify(next.repIds), pastAssigneeIds: JSON.stringify(past),
-      color: colorForRep(newPrimary), updatedAt: at,
+      color: retainedAreaColor(t, newPrimary), updatedAt: at,
     } as any, tid);
 
     // Persist only the leads whose rep actually changed (the removed rep's).

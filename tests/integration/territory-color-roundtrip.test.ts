@@ -149,6 +149,46 @@ describe("the rep reads back the same colour", () => {
     expect(seenByRep.color).toBe(seenByManager.color);
   });
 
+  it("keeps the drawn colour when the area is SHARED with more reps", async () => {
+    // Every reassignment route used to stamp colorForRep(newPrimary) over the
+    // stored value, on the old theory that the fill told you who worked the
+    // ground. Per-rep halos say who now, and three people can hold one area, so
+    // one fill cannot name them. Draw it green, share it, it stays green —
+    // otherwise adding a second rep silently repaints the map.
+    const a = freshRep(), b = freshRep();
+    const { body } = await drawArea({ color: "#14C985", repId: a.memberId });
+    const id = body.territory.id;
+
+    const shared = await req(`/api/territories/${id}/share`, fx.manager.session, {
+      method: "POST",
+      body: JSON.stringify({ repIds: [b.memberId, a.memberId] }),
+    });
+    expect(shared.status).toBe(200);
+    expect((await shared.json() as any).color).toBe("#14C985");
+
+    // And it is the stored row that changed, not just the response body.
+    const rows = await (await req("/api/territories", b.session)).json() as any[];
+    expect(rows.find((t) => t.id === id)?.color).toBe("#14C985");
+  });
+
+  it("keeps the drawn colour when a rep is REMOVED from the area", async () => {
+    // Acceptance: removing one rep must not modify what the others see.
+    const a = freshRep(), b = freshRep();
+    const { body } = await drawArea({ color: "#DB2777", repId: a.memberId });
+    const id = body.territory.id;
+    await req(`/api/territories/${id}/share`, fx.manager.session, {
+      method: "POST", body: JSON.stringify({ repIds: [a.memberId, b.memberId] }),
+    });
+
+    const removed = await req(`/api/territories/${id}/unassign`, fx.manager.session, {
+      method: "POST", body: JSON.stringify({ repId: b.memberId }),
+    });
+    expect(removed.status).toBe(200);
+
+    const rows = await (await req("/api/territories", a.session)).json() as any[];
+    expect(rows.find((t) => t.id === id)?.color).toBe("#DB2777");
+  });
+
   it("reports how many doors came with the area", async () => {
     // "Area assigned with N leads" needs a real number, and 0 is a legitimate
     // answer that must still save.
