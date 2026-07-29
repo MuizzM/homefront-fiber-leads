@@ -29,11 +29,22 @@ import {
 } from "@shared/schema";
 import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 
-/** Statuses that still represent money owed or paid for a sale. A commission in
- *  any of these means the door has already been credited; "superseded" and
- *  "disputed" are deliberately absent, because those are the states a replacement
- *  is legitimately allowed to follow. */
-export const LIVE_COMMISSION_STATUSES = ["pending", "approved", "paid"] as const;
+/** Statuses that BLOCK a new commission on the same door.
+ *
+ *  "paid" is deliberately NOT here, and that is the whole subtlety. Including it
+ *  looked obviously right — a paid sale is credited, so do not credit it twice —
+ *  but `paid` is TERMINAL in LEGAL_TRANSITIONS (paid → paid only). There is no
+ *  reachable escape: paid→disputed is 409 ILLEGAL_TRANSITION, and "superseded"
+ *  is written only by a one-time migration and is not a legal current status.
+ *  So blocking on `paid` meant that once a door's commission was paid, that door
+ *  could NEVER earn again — a genuine re-sale after a chargeback silently booked
+ *  nothing, HTTP 200, no error, no way for a manager to unblock it.
+ *
+ *  That is a worse bug than the double-pay it was meant to prevent: double-pay
+ *  is visible and clawable, silent non-pay is neither. Pending and approved are
+ *  enough, because those are the states in which an unpaid entitlement for this
+ *  door is still outstanding. */
+export const LIVE_COMMISSION_STATUSES = ["pending", "approved"] as const;
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
 import { syncAssignments } from "./territoryAssignments";

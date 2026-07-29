@@ -100,7 +100,12 @@ export function AreaStatsCard({
   contactRate,
   color,
 }: AreaStatsCardProps) {
-  const base = num(availableBase) || num(total);
+  // ?? not ||: availableBase is legitimately 0 when every door in the area is
+  // unavailable or disqualified (territoryMetrics clamps it at 0). With || that
+  // real 0 fell through to `total`, so the card read "0 of 500 worked" while
+  // every rate beside it divided by 0 — the hero number contradicting its own
+  // tooltips.
+  const base = num(availableBase ?? total);
   const done = num(knocked);
   const completion = Math.max(0, Math.min(100, num(knockCompletionRate)));
   const offset = CIRCUMFERENCE * (1 - completion / 100);

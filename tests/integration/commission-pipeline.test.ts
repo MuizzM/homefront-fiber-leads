@@ -626,3 +626,62 @@ describe("a sale cannot be paid twice", () => {
     expect(rows.reduce((s, r) => s + r.amount, 0)).toBe(100);
   });
 });
+
+// ── A paid door must still be able to earn again ────────────────────────────
+// The double-pay guard originally blocked on pending | approved | PAID. That
+// looked obviously right — a paid sale is credited, do not credit it twice —
+// and it was worse than the bug it replaced.
+//
+// `paid` is TERMINAL in LEGAL_TRANSITIONS (paid → paid only). Neither escape the
+// guard's comment named is reachable: paid→disputed is 409 ILLEGAL_TRANSITION,
+// and "superseded" is written only by a one-time migration and is not a legal
+// current status. So once a door's commission was paid, that door could never
+// earn again. A genuine re-sale — new customer at the same address, or the same
+// customer after a cancellation — booked NOTHING, returned HTTP 200, logged a
+// line nobody reads, and no manager action could unblock it.
+//
+// Silent non-pay is worse than double-pay: double-pay is visible and clawable.
+describe("a door that has already been paid can still earn again", () => {
+  it("books a new commission after the previous one is paid", async () => {
+    const lead = makeLead(TENANT_A, repA.memberId);
+    await knock(lead.id, repA.session, "sold");
+    const first = commissionsFor(lead.id)[0];
+
+    const approve = await req(`/api/commissions/${first.id}`, mgrA.session, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: first.revision, expectedStatus: "pending", status: "approved" }),
+    });
+    expect(approve.status).toBe(200);
+    const approved = commissionsFor(lead.id)[0];
+    const pay = await req(`/api/commissions/${first.id}`, mgrA.session, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: approved.revision, expectedStatus: "approved", status: "paid", paidDate: "2026-02-01" }),
+    });
+    expect(pay.status).toBe(200);
+
+    // The door sells again. This must produce a SECOND entitlement.
+    await knock(lead.id, repA.session, "sold");
+
+    const rows = commissionsFor(lead.id);
+    expect(rows, "a paid door was permanently barred from earning").toHaveLength(2);
+    expect(rows.map((r) => r.status).sort()).toEqual(["paid", "pending"]);
+  });
+
+  it("still blocks a duplicate while the first is only APPROVED", async () => {
+    // The guard the fix narrowed must not be lost with it: an UNPAID
+    // entitlement on this door still blocks. Asserted behaviourally rather than
+    // by reading the constant, because importing server/storage statically runs
+    // migrations before beforeAll sets DATA_DIR and silently skips the file.
+    const lead = makeLead(TENANT_A, repA.memberId);
+    await knock(lead.id, repA.session, "sold");
+    const first = commissionsFor(lead.id)[0];
+    await req(`/api/commissions/${first.id}`, mgrA.session, {
+      method: "PATCH",
+      body: JSON.stringify({ expectedRevision: first.revision, expectedStatus: "pending", status: "approved" }),
+    });
+
+    await knock(lead.id, repA.session, "sold");
+
+    expect(commissionsFor(lead.id)).toHaveLength(1);
+  });
+});

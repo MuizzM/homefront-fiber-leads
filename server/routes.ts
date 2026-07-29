@@ -4633,11 +4633,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!repCanAccessLead(user, lead)) return res.status(404).json({ error: "Not found" });
     // One indexed team scan → O(1) name lookups per row (not a query per knock).
     const repNames = new Map(storage.getTeamMembers().map(m => [m.id, m.name]));
+    // Same redaction as GET /api/territories/:id/activity. Applying it there and
+    // not here left the leak reachable one request away: /activity hands back a
+    // leadId, and this route then served that same colleague's NAME and GPS fix
+    // to the same scoped caller. repCanAccessLead passes for a shared area — the
+    // exact case the redaction exists for — so door access is not actor access.
+    // A rep sees who-and-where only for people inside their own scope.
+    const _hScope = leadVisibilityScope(user);
+    const maySeeActor = (repId: number | null | undefined) =>
+      !Array.isArray(_hScope) || (repId != null && _hScope.includes(repId));
     const statusRows = storage.getKnocksByLead(lead.id).map(k => ({
       id: `k${k.id}`,
       knockId: k.id,
       type: "status_change" as const,
-      actor: (k.repId != null ? repNames.get(k.repId) : null) ?? null,
+      actor: (maySeeActor(k.repId) && k.repId != null ? repNames.get(k.repId) : null) ?? null,
       changedAt: k.knockedAt,
       status: k.outcome,
       // ── Location verification (distance WHEN MARKED — never recomputed live) ──
@@ -4649,7 +4658,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       serverTs: k.serverTs ?? null,
       netState: k.netState ?? null,
       // Coordinate pair for the History map preview (rep pin + lead pin + line).
-      repLat: k.repLat ?? null, repLng: k.repLng ?? null,
+      // The DOOR's coordinates stay for everyone — a property is not a person.
+      repLat: maySeeActor(k.repId) ? (k.repLat ?? null) : null,
+      repLng: maySeeActor(k.repId) ? (k.repLng ?? null) : null,
       leadLat: lead.lat ?? null, leadLng: lead.lng ?? null,
     }));
     const eventRows = storage.getLeadEvents(lead.id).map(e => ({
@@ -4804,16 +4815,20 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           knockRow.tenantId ?? (req as any).user?.tenantId ?? null,
           leadId,
         );
-        if (existing) {
-          structuredLog("commission.duplicate_suppressed", {
-            leadId, knockId: knockRow.id, existingId: existing.id, existingStatus: existing.status,
-          });
-        }
         const rep = storage.getTeamMemberById(knockRow.repId);
         const saleDate = new Date().toISOString().slice(0, 10);
         const rateTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId() ?? undefined;
         const structures = storage.getCommissionRates(rateTenant).map(rateToStructure);
         const active = pickActiveStructure(structures, knockRow.repId, rep?.role ?? null, saleDate);
+        // Log only a REAL suppression — one where a commission would otherwise
+        // have been created. Logging whenever `existing` is truthy fired even
+        // when no structure covered the sale and nothing would have been booked,
+        // which puts phantom entries in a money audit trail.
+        if (active && existing) {
+          structuredLog("commission.duplicate_suppressed", {
+            leadId, knockId: knockRow.id, existingId: existing.id, existingStatus: existing.status,
+          });
+        }
         if (active && !existing) {
           const saleAmount = 0;
           const calc = calcCommission(active, saleAmount);
