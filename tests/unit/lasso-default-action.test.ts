@@ -56,3 +56,49 @@ describe("the lasso draws an area by default", () => {
     expect(src).toContain("lassoColorRef.current = lassoColor");
   });
 });
+
+// ── The second half of "I draw and nothing happens" ─────────────────────────
+// Making "area" the default fixed WHICH tab is preselected. It did not fix
+// whether you can reach any tab at all: the panel opened on
+//
+//     {lassoSelected.length === 0 ? (hint) : (actions)}
+//
+// and lassoSelected is the LEADS caught by the loop, not the loop. Draw around
+// ground with no mapped doors — carving fresh territory, the exact case the
+// feature exists for — and the hint stayed up. The stroke was already in
+// lassoPoints; there was simply no Save button anywhere on screen.
+//
+// finish() sets lassoPoints unconditionally and lassoSelected to whatever it
+// found, so the shape is the honest signal that a loop exists.
+describe("the action panel opens on the SHAPE, not on what it caught", () => {
+  it("gates the panel on the drawn stroke", () => {
+    expect(src).toContain("const lassoDrawn = lassoPoints.length > 0");
+    expect(src).toContain("{!lassoDrawn ? (");
+  });
+
+  it("never gates it on the lead selection again", () => {
+    // The literal regression. An empty loop is a valid loop.
+    expect(src).not.toContain("lassoSelected.length === 0 ?");
+  });
+
+  it("resolves an empty loop to Area, whatever tab was last used", () => {
+    // Opening on "Assign" with nothing selected shows one disabled button and
+    // reads as broken — the same dead end by a shorter route.
+    expect(src).toContain("const lassoEffectiveAction = lassoHasLeads ? lassoAction : \"area\"");
+    for (const key of ["assign", "status", "mark", "area"]) {
+      expect(src).toContain(`{lassoEffectiveAction === "${key}" && (`);
+    }
+  });
+
+  it("disables only the three actions that need lead IDs", () => {
+    // Area needs the polygon and a rep. The others operate on lassoActiveIds and
+    // would post an empty array.
+    expect(src).toContain('const disabled = !lassoHasLeads && key !== "area"');
+  });
+
+  it("still sends the polygon, not the selection, when saving an area", () => {
+    // Guards against a "fix" that derives the ring from the enclosed leads —
+    // which for an empty loop is no ring at all.
+    expect(src).toContain("polygon: lassoPoints");
+  });
+});

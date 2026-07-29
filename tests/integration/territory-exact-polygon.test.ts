@@ -205,3 +205,79 @@ describe("the rep reads back the same shape", () => {
     expect(JSON.parse(seenByB.polygon)).toEqual(ring);
   });
 });
+
+// ── An area drawn over ground with no mapped doors ───────────────────────────
+// Carving fresh territory is the case where the loop catches NOTHING: you draw
+// around a subdivision before any of it has been scanned in. The client used to
+// make this unreachable — the action panel opened on `lassoSelected.length`, the
+// count of LEADS inside the loop, so an empty loop left the "Drag a loop around
+// the area" hint up and never rendered the Area tab or its Save button. The
+// polygon sat in component state with no control on screen that could send it.
+//
+// The server was always willing. These specs pin that, so a future guard like
+// "reject an area with no leads" has to fail a test rather than quietly restore
+// a dead end.
+describe("an area with no doors inside it", () => {
+  it("is created, and comes back carrying the exact ring", async () => {
+    const ring = cShape(nextWest(), 35.2);
+    const greenfield = person("Gil Green", "rep", 1, { reportsToId: fx.manager.memberId });
+
+    const response = await req("/api/territories/assign-area", fx.manager.session, {
+      method: "POST",
+      body: JSON.stringify({ polygon: ring, repId: greenfield.memberId, color: "#22D3EE", name: "Phase 2" }),
+    });
+
+    expect(response.status).toBe(201);
+    const body = await response.json() as any;
+    expect(body.assigned).toBe(0);        // nothing to move — that is the point
+    expect(body.total).toBe(0);
+    expect(body.territory.name).toBe("Phase 2");
+    expect(JSON.parse(body.territory.polygon)).toEqual(ring);
+  });
+
+  it("shows up on the assigned rep's map like any other area", async () => {
+    // The user-visible claim: draw around empty ground, the rep opens the app
+    // and the boundary is there.
+    const ring = cShape(nextWest(), 35.2);
+    const greenfield = person("Ida Green", "rep", 1, { reportsToId: fx.manager.memberId });
+
+    const created = await req("/api/territories/assign-area", fx.manager.session, {
+      method: "POST",
+      body: JSON.stringify({ polygon: ring, repId: greenfield.memberId, color: "#A855F7" }),
+    });
+    const id = (await created.json() as any).territory.id;
+
+    const seenByRep = ((await (await req("/api/territories", greenfield.session)).json()) as any[])
+      .find((t) => t.id === id);
+
+    expect(seenByRep).toBeDefined();
+    expect(seenByRep.status).toBe("active");
+    expect(seenByRep.color).toBe("#A855F7");
+    expect(JSON.parse(seenByRep.polygon)).toEqual(ring);
+  });
+
+  it("claims doors added inside it afterwards", async () => {
+    // Membership is geometric at read time (polygonCovers), not a snapshot taken
+    // at save time — which is what makes drawing ahead of the scan worth doing.
+    const west = nextWest();
+    const ring = cShape(west, 35.2);
+    const greenfield = person("Ned Green", "rep", 1, { reportsToId: fx.manager.memberId });
+
+    const created = await req("/api/territories/assign-area", fx.manager.session, {
+      method: "POST",
+      body: JSON.stringify({ polygon: ring, repId: greenfield.memberId, color: "#F43F5E" }),
+    });
+    const territory = (await created.json() as any).territory;
+    const saved = JSON.parse(territory.polygon) as [number, number][];
+
+    // A door in the body of the C — inside the real ring, added after the save.
+    const s = 0.02;
+    const inside = { lat: 35.2 + s * 0.5, lng: west + s * 1.5 };
+    expect(polygonCovers(inside.lat, inside.lng, saved)).toBe(true);
+
+    // And still nothing in the mouth, so "claims what is inside" is not "claims
+    // everything near it".
+    const mouth = inTheMouth(west, 35.2);
+    expect(polygonCovers(mouth.lat, mouth.lng, saved)).toBe(false);
+  });
+});
