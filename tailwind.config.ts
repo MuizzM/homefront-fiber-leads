@@ -79,19 +79,36 @@ export default {
           foreground: "hsl(var(--sidebar-accent-foreground) / <alpha-value>)",
           border: "var(--sidebar-accent-border)"
         },
-        status: {
-          online: "rgb(34 197 94)",
-          away: "rgb(245 158 11)",
-          busy: "rgb(239 68 68)",
-          offline: "rgb(156 163 175)",
-        },
+        // NOTE: a second, conflicting `status` palette used to live here
+        // (online/away/busy/offline as raw rgb()). It had ZERO call sites and
+        // its greens/ambers/reds did not match the canonical field-status
+        // palette in shared/statusConfig.ts — e.g. rgb(34 197 94) vs the real
+        // prospect #16A34A. Two status vocabularies with different values is
+        // precisely the drift designTokens.ts exists to prevent, so the dead
+        // one is gone. STATUS_CONFIG / STATE_COLORS are the single source.
       },
+      // Sub-`text-sm` steps. ALL size-only (no line-height tuple) so swapping an
+      // arbitrary `text-[Npx]` for the named token never reflows a line box.
+      // Values are mirrored by --text-* in client/src/index.css and by
+      // designTokens.ts; tests/unit/design-tokens.test.ts fails on any drift.
+      //
       // Legibility floor: 11px is the smallest sanctioned text size (reps read
-      // this on phones in sunlight). Size-only — no line-height override — so
-      // sweeping arbitrary text-[9px]/text-[10px] to text-2xs never reflows
-      // line boxes. Do not introduce arbitrary sizes below this.
+      // this on phones in sunlight). Do NOT add a token below it — the 16
+      // `text-[10px]`, 11 `text-[10.5px]` and 3 sub-10px call sites in the app
+      // are floor violations to be raised, not sizes to be blessed.
       fontSize: {
-        "2xs": "0.6875rem",
+        "2xs": "0.6875rem",     // 11px — meta, captions, pill text
+        // 13px sits between Tailwind's text-xs (12px) and text-sm (14px), a real
+        // gap in the default scale; 146 call sites reach past it for
+        // `text-[13px]`. Named relative to the existing scale rather than
+        // starting a parallel one.
+        "sm-minus": "0.8125rem", // 13px — dense secondary body text
+      },
+      // One-handed hit-area floor (WCAG 2.5.5 / iOS HIG), so intent is legible
+      // at the call site: `min-h-tap` says what `min-h-[44px]` only implies.
+      // Identical metrics to the h-11 the app already uses.
+      spacing: {
+        tap: "2.75rem", // 44px — matches --tap-target-min
       },
       fontFamily: {
         /* Real stacks — the old var(--font-*) custom properties were never defined */
