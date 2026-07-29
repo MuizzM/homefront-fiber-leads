@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TerritoryDetailPanel } from "@/components/TerritoryDetailPanel";
+import { colorForRep } from "@shared/repColors";
 
 /**
  * ────────────────────────────────────────────────────────────────────────────
@@ -150,5 +151,25 @@ describe("<TerritoryDetailPanel />", () => {
     const swatch = screen.getByTestId("territory-color");
     // Gray = the unassigned color from shared/repColors.ts colorForRep(null).
     expect(swatch).toHaveStyle({ backgroundColor: "#94a3b8" });
+  });
+
+  it("paints the swatch the same colour as its own first rep chip", () => {
+    // The panel used to prefer the stored territory.color for the header swatch
+    // while deriving the rep chips from colorForRep, so it could contradict
+    // ITSELF. The fixture still carries that drift on purpose: repIds[0] is 7,
+    // whose colour is #EF4444, but the stored colour says #F97316 — a snapshot
+    // from whenever the area was last assigned. The swatch must follow the rep,
+    // not the snapshot, because the map paints the region from colorForRep too.
+    expect(activeTerritory.color).not.toBe(colorForRep(activeTerritory.repIds[0]));
+    render(
+      <TerritoryDetailPanel
+        territory={activeTerritory}
+        currentUser={{ role: "manager" }}
+        onReclaim={() => {}}
+      />
+    );
+    const swatch = screen.getByTestId("territory-color");
+    expect(swatch).toHaveStyle({ backgroundColor: colorForRep(7) });
+    expect(swatch).not.toHaveStyle({ backgroundColor: activeTerritory.color });
   });
 });

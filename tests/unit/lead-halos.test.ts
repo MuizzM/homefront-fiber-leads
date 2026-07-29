@@ -99,10 +99,10 @@ function evalZoomInterpolate(expr: unknown, zoom: number): number {
   return last[1];
 }
 
-/** Two reps can collide on a hue (palette is repId % 12), which would make a
- *  "distinct colours" assertion pass for the wrong reason. Every fixture below
- *  is checked against this so a palette resize fails loudly instead of quietly
- *  weakening the test. */
+/** Two reps can collide on a hue (allocation is repId % REP_PALETTE.length),
+ *  which would make a "distinct colours" assertion pass for the wrong reason.
+ *  Every fixture below is checked against this so a palette resize fails loudly
+ *  instead of quietly weakening the test. */
 function assertDistinctHues(...repIds: number[]): void {
   const hues = new Set(repIds.map((id) => colorForRep(id)));
   expect(hues.size, `fixture reps ${repIds.join(",")} collide on a hue`).toBe(repIds.length);
@@ -212,13 +212,61 @@ describe("a shared door", () => {
   });
 
   it("counts distinct COLOURS, so a hue collision does not fake a second rep", () => {
-    // The palette is repId % 12, so reps 1 and 13 genuinely share a hue. Two
-    // identical concentric rings would read as one fat ring — a lie about how
-    // many people are on the door — so the duplicate collapses.
-    expect(colorForRep(13)).toBe(colorForRep(1));
-    const props = haloFeatureProps(repIdsForDoor(1, [13]));
+    // Allocation is repId % REP_PALETTE.length, so a rep one full palette away
+    // genuinely shares a hue. Two identical concentric rings would read as one
+    // fat ring — a lie about how many people are on the door — so the duplicate
+    // collapses. Derived from the palette length rather than hard-coded: the
+    // point is the behaviour at the wrap boundary, wherever that boundary sits.
+    const twin = 1 + REP_PALETTE.length;
+    expect(colorForRep(twin)).toBe(colorForRep(1));
+    const props = haloFeatureProps(repIdsForDoor(1, [twin]));
     expect(props.haloCount).toBe(1);
     expect(props.halo1).toBeUndefined();
+  });
+
+  // ── The collision boundary itself ──────────────────────────────────────────
+  // Collapsing a duplicate is the honest answer to two reps who truly share a
+  // hue, but it costs the second rep their ring — on a shared door they see no
+  // color of their own, and the door reads as one rep's. That is tolerable at
+  // the edge of the palette and NOT tolerable at a dozen reps, which is an
+  // ordinary sales team. These pin how far the boundary now sits.
+  it("gives every rep in a 24-person org a hue of their own", () => {
+    // Fails against the old 12-hue palette: rep 13 collided with rep 1.
+    const hues = new Set(Array.from({ length: 24 }, (_, i) => colorForRep(i + 1)));
+    expect(hues.size).toBe(24);
+  });
+
+  it("keeps reps 12-23 off their old twins, and leaves reps 1-11 exactly where they were", () => {
+    // The second twelve are append-only precisely so the first twelve never move
+    // — a working rep's territory must not repaint because the palette grew.
+    expect(REP_PALETTE.slice(0, 12)).toEqual([
+      "#2563EB", "#F97316", "#16A34A", "#DB2777", "#06B6D4", "#EAB308",
+      "#8B5CF6", "#EF4444", "#14B8A6", "#EC4899", "#84CC16", "#A855F7",
+    ]);
+    for (let id = 12; id <= 23; id++) expect(colorForRep(id)).not.toBe(colorForRep(id - 12));
+  });
+
+  it("paints TWO rings on a door shared by reps a dozen apart", () => {
+    // The bug this whole boundary exists to kill: reps 3 and 15 shared #DB2777,
+    // so a door they worked together collapsed to one ring and was pixel-
+    // identical to a door only rep 3 works. Fails against the 12-hue palette.
+    expect(colorForRep(15)).not.toBe(colorForRep(3));
+    const shared = haloFeatureProps(repIdsForDoor(3, [15]));
+    const solo = haloFeatureProps(repIdsForDoor(3, []));
+    expect(shared.haloCount).toBe(2);
+    expect(solo.haloCount).toBe(1);
+    expect(shared.halo1).toBeDefined();       // rep 15 has a ring of their own
+    expect(shared.halo0).not.toBe(shared.halo1);
+  });
+
+  it("never hands a real rep the unassigned slate", () => {
+    // #94a3b8 is the "nobody" sentinel. A rep allocated that exact hue would
+    // render as an unowned door — worse than a collision, because it is wrong
+    // rather than merely ambiguous.
+    const slate = colorForRep(null);
+    for (let id = 1; id <= REP_PALETTE.length * 2; id++) {
+      expect(colorForRep(id)).not.toBe(slate);
+    }
   });
 });
 

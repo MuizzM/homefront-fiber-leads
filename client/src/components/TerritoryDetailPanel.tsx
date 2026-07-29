@@ -70,7 +70,13 @@ const STATUS_STYLE: Record<string, string> = {
 export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
-  const swatch = isUnassigned ? colorForRep(null) : (territory.color ?? colorForRep(territory.repIds[0]));
+  // Computed, never territory.color. The stored column is a snapshot taken when
+  // the area was last assigned, and the rep chips below derive their dots from
+  // colorForRep — so preferring the stored value let this one panel disagree
+  // with itself the moment the two drifted apart. The map paints polygons from
+  // colorForRep too, so computing here is what keeps the swatch, the chips, and
+  // the region on the map all showing one rep as one color.
+  const swatch = isUnassigned ? colorForRep(null) : colorForRep(territory.repIds[0]);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(territory.name);
   // Two-step remove: taking an area off a rep pulls their doors back too, so it
