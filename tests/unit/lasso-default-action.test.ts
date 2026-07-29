@@ -56,3 +56,138 @@ describe("the lasso draws an area by default", () => {
     expect(src).toContain("lassoColorRef.current = lassoColor");
   });
 });
+
+// ── The second half of "I draw and nothing happens" ─────────────────────────
+// Making "area" the default fixed WHICH tab is preselected. It did not fix
+// whether you can reach any tab at all: the panel opened on
+//
+//     {lassoSelected.length === 0 ? (hint) : (actions)}
+//
+// and lassoSelected is the LEADS caught by the loop, not the loop. Draw around
+// ground with no mapped doors — carving fresh territory, the exact case the
+// feature exists for — and the hint stayed up. The stroke was already in
+// lassoPoints; there was simply no Save button anywhere on screen.
+//
+// finish() sets lassoPoints unconditionally and lassoSelected to whatever it
+// found, so the shape is the honest signal that a loop exists.
+describe("the action panel opens on the SHAPE, not on what it caught", () => {
+  it("gates the panel on the drawn stroke", () => {
+    expect(src).toContain("const lassoDrawn = lassoPoints.length > 0");
+    expect(src).toContain("{!lassoDrawn ? (");
+  });
+
+  it("never gates it on the lead selection again", () => {
+    // The literal regression. An empty loop is a valid loop.
+    expect(src).not.toContain("lassoSelected.length === 0 ?");
+  });
+
+  it("resolves an empty loop to Area, whatever tab was last used", () => {
+    // Opening on "Assign" with nothing selected shows one disabled button and
+    // reads as broken — the same dead end by a shorter route.
+    expect(src).toContain("const lassoEffectiveAction = lassoHasLeads ? lassoAction : \"area\"");
+    for (const key of ["assign", "status", "mark", "area"]) {
+      expect(src).toContain(`{lassoEffectiveAction === "${key}" && (`);
+    }
+  });
+
+  it("disables only the three actions that need lead IDs", () => {
+    // Area needs the polygon and a rep. The others operate on lassoActiveIds and
+    // would post an empty array.
+    expect(src).toContain('const disabled = !lassoHasLeads && key !== "area"');
+  });
+
+  it("still sends the polygon, not the selection, when saving an area", () => {
+    // Guards against a "fix" that derives the ring from the enclosed leads —
+    // which for an empty loop is no ring at all.
+    expect(src).toContain("polygon: lassoPoints");
+  });
+});
+
+// ── Drawing on a phone ──────────────────────────────────────────────────────
+// Completing a freshly drawn lasso on mobile web scrolled the page down and,
+// from scroll top, reloaded it. The arming step is the cause: Mapbox drives the
+// canvas's touch-action from classes it applies only while drag-pan AND
+// touch-zoom-rotate are enabled, so disabling both — which the lasso must do to
+// stop the map sliding under the stroke — drops the canvas to touch-action:auto
+// and hands the finger to the browser. Behaviour of the lock itself is covered
+// in lasso-gesture-lock.test.ts; these pin the wiring.
+describe("arming the lasso suspends the browser's gestures too", () => {
+  it("takes the lock in the same effect that disables the map's handlers", () => {
+    // The two must move together. Disabling map gestures without taking the
+    // lock IS the bug, so they belong in one place with no branch between them.
+    const armIndex = src.indexOf("map.touchZoomRotate.disable()");
+    const lockIndex = src.indexOf("lockGesturesForDrawing(mapGestureTarget(map))");
+    expect(armIndex, "map gesture disable not found — did it move?").toBeGreaterThan(-1);
+    expect(lockIndex, "gesture lock is never acquired").toBeGreaterThan(armIndex);
+  });
+
+  it("releases before anything that could throw in the cleanup", () => {
+    // Cleanup then calls map.off / map.dragPan.enable inside try blocks against
+    // a map that may already be torn down. Releasing after them would risk
+    // leaving the page permanently unable to scroll — worse than the original.
+    const cleanup = src.slice(src.indexOf("(window as any).__lassoActive = false;"));
+    const release = cleanup.indexOf("releaseGestures()");
+    const reEnable = cleanup.indexOf("map.dragPan.enable()");
+    expect(release).toBeGreaterThan(-1);
+    expect(reEnable).toBeGreaterThan(-1);
+    expect(release).toBeLessThan(reEnable);
+  });
+
+  it("re-enables the map's own gestures when the tool disarms", () => {
+    // Restoring one half without the other leaves the map dead to touch.
+    for (const call of [
+      "map.dragPan.enable()",
+      "map.touchZoomRotate.enable()",
+      "map.doubleClickZoom.enable()",
+    ]) {
+      expect(src).toContain(call);
+    }
+  });
+});
+
+describe("no control in the lasso panel can navigate or submit", () => {
+  // A <button> with no type attribute defaults to type="submit". The panel sits
+  // in a page that has no <form> today, so nothing submits — but that is an
+  // accident of the surrounding markup, not a property of these controls, and
+  // "the page reloaded when I finished a lasso" is exactly the symptom an
+  // implicit submit produces if a form is ever wrapped around this.
+  const PANEL_CONTROLS = ["lasso-exit", "lasso-assign", "lasso-set-status", "lasso-set-mark"];
+
+  it("declares type=\"button\" on every one of them", () => {
+    for (const testid of PANEL_CONTROLS) {
+      const attr = `data-testid="${testid}"`;
+      let from = 0;
+      let seen = 0;
+      for (;;) {
+        const at = src.indexOf(attr, from);
+        if (at === -1) break;
+        seen++;
+        from = at + attr.length;
+        // The opening "<button" / "<Button" for this control, then everything
+        // between it and the testid — where the type attribute must appear.
+        const tagStart = Math.max(
+          src.lastIndexOf("<button", at),
+          src.lastIndexOf("<Button", at),
+        );
+        expect(tagStart, `${testid}: no button tag before it`).toBeGreaterThan(-1);
+        expect(
+          src.slice(tagStart, at).includes('type="button"'),
+          `${testid} has no explicit type="button" — it would submit a surrounding form`,
+        ).toBe(true);
+      }
+      expect(seen, `${testid} not found in MapView`).toBeGreaterThan(0);
+    }
+  });
+
+  it("types the four action tabs, whose testid is interpolated", () => {
+    // Rendered from a map(), so `lasso-action-assign` never appears literally.
+    const tab = src.indexOf("data-testid={`lasso-action-${key}`}");
+    expect(tab, "action tab not found — did the testid change?").toBeGreaterThan(-1);
+    const tagStart = src.lastIndexOf("<button", tab);
+    expect(src.slice(tagStart, tab)).toContain('type="button"');
+  });
+
+  it("has no form element around the map at all", () => {
+    expect(src).not.toContain("<form");
+  });
+});

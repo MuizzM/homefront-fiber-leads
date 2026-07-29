@@ -124,6 +124,7 @@ import {
   HALO_LAYER_IDS,
 } from "@/lib/leadHalos";
 import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/lib/territoryStyle";
+import { lockGesturesForDrawing, lockDocumentPullToRefresh, mapGestureTarget } from "@/lib/lassoGestureLock";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
 import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
@@ -1415,6 +1416,18 @@ export default function MapView() {
     () => lassoActive.map((l) => l.id),
     [lassoActive],
   );
+  // A loop was drawn. This is what opens the action panel — NOT whether the loop
+  // caught any leads. The panel used to branch on lassoSelected.length, so a loop
+  // over ground with no doors in it (exactly what carving fresh territory looks
+  // like) left the "Drag a loop around the area" hint up forever: the shape was
+  // sitting in lassoPoints with no button anywhere on screen that could save it.
+  const lassoDrawn = lassoPoints.length > 0;
+  // Assign / Status / Mark all operate on lead IDs and are meaningless with an
+  // empty selection. Area needs only the polygon and a rep, so an empty loop
+  // resolves to it regardless of which tab was last used — otherwise the panel
+  // would open on a tab whose only control is a disabled button.
+  const lassoHasLeads = lassoSelected.length > 0;
+  const lassoEffectiveAction = lassoHasLeads ? lassoAction : "area";
 
   // Rename an area — the friendly name reps see on their map. Server keeps an
   // audit trail (territory "renamed" event) and custom names survive reassign.
@@ -3521,6 +3534,20 @@ export default function MapView() {
       map.touchZoomRotate.disable();
       map.touchPitch?.disable();
     } catch {}
+    // …and suspend the BROWSER's gestures too, which the four lines above are
+    // what re-enable. Mapbox drives the canvas's touch-action from classes it
+    // only applies while drag-pan + touch-zoom-rotate are on, so disabling them
+    // drops the canvas to touch-action: auto and the finger starts scrolling the
+    // page — a downward stroke from scroll top being the pull-to-refresh gesture,
+    // which is the "it reloads when I finish a lasso" report. See
+    // lib/lassoGestureLock.ts. Released in this effect's cleanup, so it lifts on
+    // completion, cancel, unmount, style swap and error alike.
+    const releaseCanvas = lockGesturesForDrawing(mapGestureTarget(map));
+    const releaseRoot = lockDocumentPullToRefresh(typeof document === "undefined" ? null : document);
+    const releaseGestures = () => {
+      releaseCanvas();
+      releaseRoot();
+    };
 
     // Point-in-polygon lives in lib/mapGeo.ts (bbox-rejected, unit-tested).
 
@@ -3663,6 +3690,10 @@ export default function MapView() {
 
     return () => {
       (window as any).__lassoActive = false;
+      // Give the page its gestures back FIRST. If a later line throws (a map
+      // already torn down by unmount), the browser must not be left unable to
+      // scroll — that failure mode is worse than the bug this fixes.
+      releaseGestures();
       // Defensive: on unmount the map may already be removed (getCanvas → undefined)
       try {
         map.off("mousedown", onMouseDown);
@@ -5803,7 +5834,7 @@ export default function MapView() {
               style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.5rem)" }}
               className="absolute left-1/2 -translate-x-1/2 z-30 max-w-[calc(100vw-24px)]"
             >
-              {lassoSelected.length === 0 ? (
+              {!lassoDrawn ? (
                 /* Armed, nothing drawn yet → drawing hint */
                 <div className="glass-capsule flex items-center gap-2.5 border-teal-300/40 pl-4 pr-2 py-2 animate-in fade-in slide-in-from-bottom-2 duration-200">
                   <Pencil className="w-4 h-4 text-teal-400 flex-shrink-0" />
@@ -5811,6 +5842,7 @@ export default function MapView() {
                     Drag a loop around the area
                   </span>
                   <button
+                    type="button"
                     onClick={exitLasso}
                     className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors"
                     title="Exit"
@@ -5824,7 +5856,20 @@ export default function MapView() {
                    refine), then an action on the refined set — Assign owner, Set
                    status, or Save as area. */
                 <div className="glass-surface flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))]">
-                  {/* Count + per-status breakdown; tap a chip to include/exclude it */}
+                  {/* Count + per-status breakdown; tap a chip to include/exclude it.
+                      With no doors in the loop there is nothing to break down and
+                      nothing to refine — say so plainly instead of showing "0/0"
+                      beside a row of chips that cannot exist. */}
+                  {!lassoHasLeads ? (
+                    <span
+                      className="text-[12px] text-white/60 leading-tight"
+                      aria-live="polite"
+                      data-testid="lasso-empty-note"
+                    >
+                      No mapped doors inside this loop — it can still be saved as
+                      an area.
+                    </span>
+                  ) : (
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <span
                       className="text-[14px] font-bold text-white whitespace-nowrap mr-0.5"
@@ -5878,6 +5923,7 @@ export default function MapView() {
                       );
                     })}
                   </div>
+                  )}
 
                   {/* Action switcher */}
                   <div className="flex items-center gap-1 rounded-full bg-white/10 p-0.5">
@@ -5888,23 +5934,29 @@ export default function MapView() {
                         ["mark", "Mark"],
                         ["area", "Area"],
                       ] as const
-                    ).map(([key, label]) => (
+                    ).map(([key, label]) => {
+                      // Only "Area" works on an empty loop; the rest need lead IDs.
+                      const disabled = !lassoHasLeads && key !== "area";
+                      return (
                       <button
                         key={key}
                         type="button"
+                        disabled={disabled}
+                        title={disabled ? "No doors in this loop" : undefined}
                         onClick={() => setLassoAction(key)}
                         data-testid={`lasso-action-${key}`}
-                        aria-pressed={lassoAction === key}
-                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition ${lassoAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
+                        aria-pressed={lassoEffectiveAction === key}
+                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition disabled:opacity-35 disabled:cursor-not-allowed ${lassoEffectiveAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
                       >
                         {label}
                       </button>
-                    ))}
+                      );
+                    })}
                   </div>
 
                   {/* Mode control + Apply + Exit */}
                   <div className="flex items-center gap-2">
-                    {lassoAction === "assign" && (
+                    {lassoEffectiveAction === "assign" && (
                       <>
                         <select
                           value={lassoRepId}
@@ -5939,6 +5991,7 @@ export default function MapView() {
                               repId: Number(lassoRepId),
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5948,7 +6001,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "status" && (
+                    {lassoEffectiveAction === "status" && (
                       <>
                         <select
                           value={lassoStatusOutcome}
@@ -5981,6 +6034,7 @@ export default function MapView() {
                               outcome: lassoStatusOutcome,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-status"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -5990,7 +6044,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "mark" && (
+                    {lassoEffectiveAction === "mark" && (
                       <>
                         <select
                           value={lassoMark}
@@ -6018,6 +6072,7 @@ export default function MapView() {
                               mark: lassoMark,
                             })
                           }
+                          type="button"
                           data-testid="lasso-set-mark"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -6029,7 +6084,7 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoAction === "area" && (
+                    {lassoEffectiveAction === "area" && (
                       <>
                         <TerritoryColorPicker
                           value={lassoColor}
@@ -6080,6 +6135,7 @@ export default function MapView() {
                               color: lassoColor,
                             })
                           }
+                          type="button"
                           data-testid="lasso-assign"
                           className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
                         >
@@ -6088,6 +6144,7 @@ export default function MapView() {
                       </>
                     )}
                     <button
+                      type="button"
                       onClick={exitLasso}
                       className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
                       title="Exit"
@@ -6097,10 +6154,13 @@ export default function MapView() {
                     </button>
                   </div>
 
-                  {lassoAction === "area" && (
+                  {lassoEffectiveAction === "area" && (
                     <span className="text-[10.5px] text-white/45 leading-tight">
                       Area assigns every house in the loop + saves a colored
-                      territory. The refine chips apply to Assign &amp; Status.
+                      territory.
+                      {lassoHasLeads
+                        ? " The refine chips apply to Assign & Status."
+                        : " Doors added inside it later belong to the area too."}
                     </span>
                   )}
                 </div>
