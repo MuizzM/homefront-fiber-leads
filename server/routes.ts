@@ -3484,16 +3484,34 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const rp = storage.getTeamMemberById(rid)!;
       const leadsInParcel = enclosed.filter((l: any) => ids.includes(l.id));
       if (leadsInParcel.length === 0) return;
-      const hull = padHull(convexHull(leadsInParcel.map((l: any) => [l.lng, l.lat] as [number, number])), 40);
+      // The shape this parcel is saved with.
+      //
+      // ONE rep taking the whole cluster has an actual drawn boundary — the
+      // manager cut it — and that exact ring is what gets saved. It used to be
+      // thrown away in favour of a convex hull of the enclosed leads, which is
+      // a different shape: a hull cannot be concave, so every inlet the manager
+      // deliberately cut around (a park, a block that belongs to someone else,
+      // the far side of a main road) was swallowed back in, and the rep opened
+      // their map to a boundary nobody had drawn.
+      //
+      // A MULTI-REP split is the one case with no drawn shape to preserve:
+      // subdivideCluster partitions the leads geographically and the manager
+      // never drew a line around each parcel. A hull of that parcel's doors is
+      // then the honest answer rather than a lost one, and the territory event
+      // records split:true so the derived boundary is identifiable later.
+      const drewAnExactRing = Array.isArray(polygon) && polygon.length >= 3;
+      const parcelRing = reps.length === 1 && drewAnExactRing
+        ? (polygon as [number, number][])
+        : padHull(convexHull(leadsInParcel.map((l: any) => [l.lng, l.lat] as [number, number])), 40);
       const briefing = buildDeployBriefing(leadsInParcel, visits);
       const territory = storage.createTerritory({
         tenantId: t ?? null,
         name: reps.length > 1 ? `${rp.name}'s area` : ((name && String(name).trim()) || `${rp.name}'s area`),
-        repId: rid, polygon: JSON.stringify(hull.length >= 3 ? hull : polygon), color: colorForRep(rid),
+        repId: rid, polygon: JSON.stringify(parcelRing.length >= 3 ? parcelRing : polygon), color: colorForRep(rid),
         status: "active", assigneeIds: JSON.stringify([rid]),
         briefing: JSON.stringify(briefing), sourceRunId: sourceRunId ? String(sourceRunId) : null, updatedAt: at,
       } as any);
-      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1 });
+      storage.addTerritoryEvent(territory.id, user?.id ?? null, "created", { repId: rid, name: territory.name, fromScan: true, sourceRunId: sourceRunId ?? null, split: reps.length > 1, geometrySource: reps.length === 1 && drewAnExactRing ? "drawn" : "derived" });
       let assigned = 0;
       for (const l of leadsInParcel) {
         const moved = storage.updateLead(l.id, { assignedRepId: rid, assignedTerritoryId: territory.id, assignmentSource: "scan-deploy", assignedBy: user?.name ?? null, assignedAt: at } as any, t);
