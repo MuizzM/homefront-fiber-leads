@@ -57,7 +57,7 @@ try {
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
-import { pointInPolygon } from "@shared/geo";
+import { pointInPolygon, polygonCovers } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
@@ -5534,7 +5534,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Only leads the caller may reassign (unassigned or own-team for a team_lead;
     // all for admin/manager) — an area draw never poaches another team's doors.
     const enclosed = storage.getLeads(tid).filter((l: any) =>
-      l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, polygon) && canReassignLead(user, l));
+      l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, polygon) && canReassignLead(user, l));
     let assigned = 0;
     for (const l of enclosed) {
       const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: territory.id, assignmentSource: "territory-sync", assignedBy: user?.name ?? null, assignedAt: at } as any, tid);
@@ -5825,7 +5825,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let assigned = 0;
     if (polygon.length >= 3) {
       const inside = storage.getLeads(tid).filter((l: any) =>
-        l.lat != null && l.lng != null && l.assignedRepId == null && pointInPolygon(l.lat, l.lng, polygon));
+        l.lat != null && l.lng != null && l.assignedRepId == null && polygonCovers(l.lat, l.lng, polygon));
       for (const l of inside) {
         const moved = storage.updateLead(l.id, { assignedRepId: repId, assignedTerritoryId: t.id, assignmentSource: "territory-sync", assignedBy: (req as any).user?.name ?? null, assignedAt: at } as any, tid);
         if (moved) {
@@ -6207,7 +6207,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let poly: [number, number][] = [];
     try { poly = JSON.parse(territory.polygon); } catch { poly = []; }
     const within = poly.length >= 3
-      ? storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && pointInPolygon(l.lat, l.lng, poly))
+      ? storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, poly))
       : [];
     const leadById = new Map(within.map((l: any) => [l.id, l]));
     const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
