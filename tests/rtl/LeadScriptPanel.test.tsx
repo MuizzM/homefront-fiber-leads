@@ -27,8 +27,8 @@ const wireFixture: callingApi.LeadScriptWire = {
     freshCityCount21d: 3, onComingSoonWatchlist: false, nearestFreshStreet: "Maple St",
   },
   sections: {
-    opener: "Hi, my name is Alex, and I'm calling on behalf of Homefront Solutions, an authorized seller of Kinetic Fiber internet from Windstream. This is a sales call about fiber internet service at 148 Maple St in Lexington.",
-    neighborhoodHook: "The reason for my call: Kinetic Fiber just came to Maple St here in Lexington.",
+    opener: "Hi, this is Alex with Homefront Solutions — Kinetic's authorized fiber partner. Quick one, this is a sales call: Kinetic just dropped brand-new fiber in your neighborhood and we're running the rollout right now.",
+    neighborhoodHook: "Kinetic just dropped brand-new fiber in your neighborhood — 3 homes in Lexington connected in the last three weeks, including homes on Maple St.",
     valueProposition: "Kinetic Fiber runs on a fiber-optic line rather than older cable or copper, which means symmetrical upload and download speeds and a connection that holds up when everyone is home.",
     objectionHandlers: {
       price: "That's a completely fair question. Pricing depends on the speed tier you choose.",
@@ -37,7 +37,7 @@ const wireFixture: callingApi.LeadScriptWire = {
       worksFine: "Glad to hear it's working — that's honestly the best starting point.",
     },
     close: "Here's all I'd suggest: let me run a quick availability and speed check for 148 Maple St right now.",
-    complianceFooter: "---- COMPLIANCE NOTES (REP GUIDANCE — NEVER READ ALOUD UNLESS REQUIRED) ----\n1. Opening disclosure (REQUIRED at the start of every call): state your name, the company, that this is a sales call, and the purpose.",
+    complianceFooter: "---- COMPLIANCE NOTES (REP GUIDANCE — NEVER READ ALOUD UNLESS REQUIRED) ----\n1. Open every call the way the opener does: your real first name, Homefront Solutions (Kinetic's authorized fiber partner), the words \"sales call\", and why you're calling.",
   },
   script: "[OPENER — read verbatim]\n...",
 };
@@ -82,9 +82,10 @@ describe("LeadScriptPanel", () => {
   it("renders the literal server shape — 4 objection rows, no crash", async () => {
     const user = userEvent.setup();
     renderPanel(7);
-    expect(await screen.findByTestId("script-opener")).toHaveTextContent("Hi, my name is Alex");
+    expect(await screen.findByTestId("script-opener")).toHaveTextContent("Hi, this is Alex with Homefront Solutions");
+    expect(screen.getByTestId("script-opener")).toHaveTextContent("sales call");
     expect(callingApi.getLeadScript).toHaveBeenCalledWith(7);
-    expect(screen.getByTestId("script-hook")).toHaveTextContent("Kinetic Fiber just came to Maple St");
+    expect(screen.getByTestId("script-hook")).toHaveTextContent("Kinetic just dropped brand-new fiber in your neighborhood");
     expect(screen.getByText("Value prop (1)")).toBeInTheDocument();
     expect(screen.getByText("Close")).toBeInTheDocument();
     expect(screen.getByTestId("script-disclosure")).toHaveTextContent("COMPLIANCE NOTES");
@@ -165,6 +166,6 @@ describe("LeadScriptPanel", () => {
     expect(disclosure.closest("details")).toBeNull();
     // No provenance badge and none of the personalized fixture leaks through.
     expect(screen.queryByTestId("script-provenance")).not.toBeInTheDocument();
-    expect(screen.queryByText(/Kinetic Fiber just came to Maple St/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/including homes on Maple St/)).not.toBeInTheDocument();
   });
 });

@@ -29,8 +29,8 @@ const CACHE_MAX_ENTRIES = 500;
 /** Fixed compliance footer — ALWAYS appended verbatim, never model-generated. */
 export const COMPLIANCE_FOOTER = [
   "---- COMPLIANCE NOTES (REP GUIDANCE — NEVER READ ALOUD UNLESS REQUIRED) ----",
-  "1. Opening disclosure (REQUIRED at the start of every call): state your name, the company you are calling on behalf of, that this is a sales call, and that the purpose of the call is to offer Kinetic Fiber internet service.",
-  "2. Do-Not-Call check: if this household is on any Do-Not-Call list, has an active opt-out, or asks not to be called, DO NOT read this script. End the call politely and record the DO_NOT_CALL disposition immediately.",
+  "1. Open every call the way the opener does — all four, every time: your real first name, Homefront Solutions (Kinetic's authorized fiber partner — you are a partner, never a Kinetic or Windstream employee), the words \"sales call\", and why you're calling: to offer Kinetic Fiber internet service.",
+  "2. If this household is on any Do-Not-Call list, has an active opt-out, or asks not to be called, stop — do not read this script. End the call politely and record the DO_NOT_CALL disposition right away. If someone would rather not get these calls, all they have to do is say so, and we won't call again.",
   "3. Never claim that service or equipment costs nothing, never invent deadlines or urgency, and never criticize or disparage a competitor by name.",
   "4. This script is guidance only. Call eligibility is enforced separately by the compliance engine; a generated script is never authorization to dial.",
 ].join("\n");
@@ -42,11 +42,30 @@ const PROHIBITED_PATTERNS: RegExp[] = [
   /\b(spectrum|comcast|xfinity|at&t|verizon|frontier|centurylink|hughesnet|t-mobile|dish network|directv)\b/i,
 ];
 
+/**
+ * Bare Kinetic/Windstream employment claims ("Kinetic employee", "work for
+ * Kinetic", "from Kinetic") are prohibited: the caller is an AUTHORIZED
+ * PARTNER/DEALER, never an employee. A claim that is qualified as an
+ * authorized partner/dealer/seller relationship — e.g. the legitimate phrase
+ * "Kinetic's authorized fiber partner" — is truthful and must PASS the screen.
+ */
+const BARE_AFFILIATION_PATTERNS: RegExp[] = [
+  /\b(?:kinetic|windstream)[- ]employees?\b/i,
+  /\bwork(?:ing|s)?\s+for\s+(?:kinetic|windstream)\b/i,
+  /\bfrom\s+(?:kinetic|windstream)\b/i,
+];
+const PARTNER_QUALIFIER_PATTERN =
+  /\bauthorized\s+(?:\w+\s+){0,3}(?:partner|dealer|seller)s?\b|\b(?:partner|dealer)s?\s+(?:of|for)\s+(?:kinetic|windstream)\b/i;
+
 export const PROHIBITED_CONTENT_DESCRIPTION =
-  "No no-cost claims, no fabricated urgency or deadlines, no named-competitor disparagement.";
+  "No no-cost claims, no fabricated urgency or deadlines, no named-competitor disparagement, no unqualified Kinetic/Windstream employment claims (authorized partner/dealer only).";
 
 export function containsProhibitedContent(text: string): boolean {
-  return PROHIBITED_PATTERNS.some((pattern) => pattern.test(text));
+  if (PROHIBITED_PATTERNS.some((pattern) => pattern.test(text))) return true;
+  // An affiliation claim is prohibited only when it is BARE — i.e. not
+  // qualified as an authorized partner/dealer/seller relationship.
+  return BARE_AFFILIATION_PATTERNS.some((pattern) => pattern.test(text))
+    && !PARTNER_QUALIFIER_PATTERN.test(text);
 }
 
 export type FiberCategory = "fresh" | "coming_soon" | "tenured" | "unknown";
@@ -186,28 +205,42 @@ export function buildScriptContext(input: {
   };
 }
 
+/** Real first name only (first token of the full rep name) — never a persona. */
+function repFirstName(repName: string): string {
+  const first = String(repName ?? "").trim().split(/\s+/).filter(Boolean)[0] ?? "";
+  // Route fallback "your field representative" must not surface as a name.
+  return first && !/^your$/i.test(first) ? first : "your Homefront rep";
+}
+
 function neighborhoodHook(context: ScriptContext): string {
   const { city, street, fiberCategory, freshCityCount21d, onComingSoonWatchlist, nearestFreshStreet } = context;
   switch (fiberCategory) {
     case "fresh": {
+      // Same 21-day momentum logic as before: the window keys on the
+      // CONFIRMATION time, so the spoken "connected in the last three weeks"
+      // claim matches the window. The count>1 guard and zero-count variant
+      // are unchanged, and "including homes on X" is never a proximity claim.
       const momentum = freshCityCount21d > 1
-        ? ` ${freshCityCount21d} homes in ${city} have been confirmed for brand-new fiber in the last three weeks${nearestFreshStreet ? `, including homes on ${nearestFreshStreet}` : ""}.`
+        ? ` — ${freshCityCount21d} homes in ${city} connected in the last three weeks${nearestFreshStreet ? `, including homes on ${nearestFreshStreet}` : ""}`
         : "";
-      return `The reason for my call: Kinetic Fiber just came to ${street} here in ${city}.${momentum} Your address was just confirmed for the new fiber build, so we're calling neighbors to answer questions and offer a quick availability check.`;
+      return `Kinetic just dropped brand-new fiber in your neighborhood${momentum}. Your address on ${street} was just confirmed for the new build, so we're calling neighbors to answer questions and run a quick availability check.`;
     }
     case "coming_soon":
-      return `The reason for my call: Kinetic Fiber construction is underway in ${city}, and ${street} is in the coming-soon build area.${onComingSoonWatchlist ? " Your address is on our watch list, which means we'll know the moment service can be installed." : ""} I'm calling so you're first to know when your address can order.`;
+      return `Kinetic fiber construction is underway in ${city}, and ${street} is in the coming-soon build area.${onComingSoonWatchlist ? " Your address is on our watch list, so we'll know the moment service can be installed." : ""} I'm calling so you're first to know when your address can order.`;
     case "tenured":
-      return `The reason for my call: Kinetic Fiber has been available in ${city} for a while now, and we've found a lot of households on ${street} haven't taken a fresh look at what fiber offers compared with what they've had for years.`;
+      return `Kinetic fiber has been in ${city} for a while now, and a lot of households on ${street} haven't taken a fresh look at what fiber offers compared with what they've had for years.`;
     default:
-      return `The reason for my call: we're expanding Kinetic Fiber service across ${city}, and I wanted to check what your address on ${street} currently qualifies for.`;
+      return `We're expanding Kinetic fiber across ${city}, and I wanted to check what your address on ${street} currently qualifies for.`;
   }
 }
 
 /** Deterministic rules template — always works, always compliant. */
 export function buildTemplateSections(context: ScriptContext): ScriptSections {
   return {
-    opener: `Hi, my name is ${context.repName}, and I'm calling on behalf of ${context.companyName}, an authorized seller of Kinetic Fiber internet from Windstream. This is a sales call about fiber internet service at ${context.address} in ${context.city}. Did I catch you at an okay time for about one minute?`,
+    // Every compliance element stays: the rep's REAL first name, the company,
+    // "authorized fiber partner" (never a Kinetic employee claim), the words
+    // "sales call", and the purpose — the Kinetic fiber rollout.
+    opener: `Hi, this is ${repFirstName(context.repName)} with ${context.companyName} — Kinetic's authorized fiber partner. Quick one, this is a sales call: Kinetic just dropped brand-new fiber in your neighborhood and we're running the rollout right now.`,
     neighborhoodHook: neighborhoodHook(context),
     valueProposition: `Kinetic Fiber runs on a fiber-optic line rather than older cable or copper, which means symmetrical upload and download speeds and a connection that holds up when everyone is home. For working from home, that means video calls that don't freeze; for streaming, no buffering at dinner time; and for gaming, low, consistent latency. It's a straightforward reliability upgrade, and I can check exactly what your address qualifies for.`,
     objectionHandlers: {
@@ -322,7 +355,7 @@ async function enhanceWithLlm(sections: ScriptSections, context: ScriptContext):
           role: "system",
           content: [
             "You rephrase outbound sales-call script sections for Kinetic Fiber (Windstream) internet so they sound natural and conversational.",
-            "Hard rules: keep every fact and placeholder value unchanged; never claim anything is free; never invent urgency, scarcity, or deadlines; never name or disparage a competitor; keep the opening sales-call disclosure intact.",
+            "Hard rules: keep every fact and placeholder value unchanged; never claim anything is free; never invent urgency, scarcity, or deadlines; never name or disparage a competitor; never remove or weaken the opening sales-call disclosure; never claim the caller is a Kinetic or Windstream employee — the caller is an authorized partner/dealer only; use only the rep's real name from the provided script and never invent a persona name.",
             `Respond with strict JSON only: {"opener": string, "neighborhoodHook": string, "valueProposition": string, "objectionHandlers": {"price": string, "currentProvider": string, "renter": string, "worksFine": string}, "close": string}.`,
           ].join(" "),
         },

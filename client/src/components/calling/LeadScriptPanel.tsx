@@ -24,17 +24,18 @@ import { getLeadScript, type LeadScript } from "@/lib/callingApi";
 // Mirrors the required opening disclosure elements: the rep's name, the
 // company, that this is a sales call, and the purpose of the call.
 export const STANDARD_OPENER =
-  "Hi, my name is [your name], and I'm calling on behalf of Homefront Solutions, " +
-  "an authorized seller of Kinetic Fiber internet from Windstream. " +
-  "This is a sales call about fiber internet service at your address. " +
-  "Did I catch you at an okay time for about one minute?";
+  "Hi, this is [your first name] with Homefront Solutions — Kinetic's authorized fiber partner. " +
+  "Quick one, this is a sales call: Kinetic just dropped brand-new fiber in your neighborhood " +
+  "and we're running the rollout right now.";
 
 /** Static boilerplate disclosure reminder — shown whenever the server's own
  *  compliance footer is unavailable (error state or partial payload). Always
  *  labeled as standard; never presented as the lead's personalized script. */
 export const GENERIC_DISCLOSURE_REMINDER =
-  "Required at the start of every call: state your name, the company you are calling on behalf of, " +
-  "that this is a sales call, and that the purpose of the call is to offer Kinetic Fiber internet service.";
+  "Required at the start of every call: your real first name, Homefront Solutions " +
+  "(Kinetic's authorized fiber partner — a partner, never a Kinetic employee), " +
+  "the words \"sales call\", and the purpose — offering Kinetic Fiber internet service. " +
+  "If they'd rather not get these calls, they just say so and we won't call again.";
 
 function valueBullets(value: string | string[] | undefined): string[] {
   if (Array.isArray(value)) return value.map(item => String(item).trim()).filter(Boolean).slice(0, 3);

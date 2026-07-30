@@ -193,10 +193,10 @@ describe("rules template — deterministic and personalized", () => {
       repName: "Riley Rep", companyName: "Home Front Solutions" });
     expect(asRep.cached).toBe(false);
     expect(asManager.cached).toBe(false); // no cross-user cache hit
-    expect(asRep.sections.opener).toContain("my name is Riley Rep");
-    expect(asManager.sections.opener).toContain("my name is Morgan Manager");
+    expect(asRep.sections.opener).toContain("this is Riley with Home Front Solutions");
+    expect(asManager.sections.opener).toContain("this is Morgan with Home Front Solutions");
     expect(asRepAgain.cached).toBe(true); // same user still hits the cache
-    expect(asRepAgain.sections.opener).toContain("my name is Riley Rep");
+    expect(asRepAgain.sections.opener).toContain("this is Riley with Home Front Solutions");
   });
 
   it("momentum window keys on fresh_confirmed_at over created_at (FIX-3)", () => {
@@ -240,9 +240,13 @@ describe("rules template — deterministic and personalized", () => {
     }
     expect(result.sections.complianceFooter).toBe(engine.COMPLIANCE_FOOTER);
     expect(result.script.endsWith(engine.COMPLIANCE_FOOTER)).toBe(true);
-    expect(result.script).toContain("Riley Rep");
+    // New-voice opener: real first name, company, authorized-partner wording,
+    // the words "sales call", and the purpose — never an employee claim.
+    expect(result.sections.opener).toContain("this is Riley with Home Front Solutions");
+    expect(result.sections.opener).toContain("Kinetic's authorized fiber partner");
     expect(result.script).toContain("Home Front Solutions");
     expect(result.script).toContain("sales call");
+    expect(result.script).not.toMatch(/\bkinetic employee\b/i);
     expectCompliantText(result.script);
   });
 });
@@ -273,7 +277,8 @@ describe("LLM enhancement — never fails the endpoint", () => {
           lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
         });
         expect(result.model).toBe("rules");
-        expect(result.script).toContain("Kinetic Fiber just came to Maple Grove Ln");
+        expect(result.script).toContain("Kinetic just dropped brand-new fiber in your neighborhood");
+        expect(result.script).toContain("Your address on Maple Grove Ln was just confirmed");
       }
     } finally {
       engine.__setScriptEngineLlmTransportForTests(null);
@@ -302,6 +307,59 @@ describe("LLM enhancement — never fails the endpoint", () => {
         lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
       });
       expect(result.model).toBe("rules");
+      expectCompliantText(result.script);
+    } finally {
+      engine.__setScriptEngineLlmTransportForTests(null);
+      delete process.env.LLM_ENDPOINT;
+    }
+  });
+
+  it("screens bare Kinetic/Windstream employment claims but allows authorized-partner wording", () => {
+    // Bare affiliation claims (no partner/dealer qualifier) are prohibited.
+    for (const bad of [
+      "Hi, I'm a Kinetic employee calling about fiber in your area today.",
+      "I work for Kinetic and we are upgrading service across the neighborhood.",
+      "Hi, this is Riley from Kinetic with a quick question about your internet.",
+      "I'm a Windstream employee following up on the new fiber build nearby.",
+    ]) {
+      expect(engine.containsProhibitedContent(bad)).toBe(true);
+    }
+    // The legitimate qualified phrases must PASS the screen.
+    for (const good of [
+      "Hi, this is Riley with Homefront Solutions — Kinetic's authorized fiber partner.",
+      "We're an authorized Kinetic dealer running the local fiber rollout right now.",
+      "I'm calling on behalf of Homefront Solutions, an authorized seller of Kinetic Fiber internet from Windstream.",
+      "Homefront Solutions is an authorized partner for Kinetic fiber in this area.",
+    ]) {
+      expect(engine.containsProhibitedContent(good)).toBe(false);
+    }
+  });
+
+  it("rejects LLM output that claims Kinetic employment and falls back to rules", async () => {
+    process.env.LLM_ENDPOINT = "http://llm.test/chat";
+    engine.__setScriptEngineLlmTransportForTests(async () => JSON.stringify({
+      // Disclosure + rep name survive, but the opener claims employment — the
+      // prohibited-content screen must catch it before validation passes.
+      opener: "Hi, this is Riley Rep — I'm a Kinetic employee, and this is a sales call about new fiber service at 100 Maple Grove Ln in Lexington.",
+      neighborhoodHook: "Kinetic just dropped brand-new fiber in your neighborhood, with several homes connected in the last three weeks.",
+      valueProposition: "Fiber gives you matching upload and download speeds that hold up at busy hours — smooth video calls, streaming without buffering, and low-latency gaming.",
+      objectionHandlers: {
+        price: "Fair question — pricing depends on the tier, and many households pay about the same as they do now. Can I check exact plans?",
+        currentProvider: "Totally understandable. The fiber difference is consistency at busy times. Can I check what your address qualifies for?",
+        renter: "Renters can usually get fiber at serviceable addresses, and the account goes in your name. Can I check while I have you?",
+        worksFine: "That's great to hear. Fiber adds headroom so everything keeps working when everyone is online. Open to a quick check?",
+      },
+      close: "All I'd suggest is a one-minute availability check for 100 Maple Grove Ln — no obligation. Can I run that for you?",
+    }));
+    try {
+      engine.__clearScriptCacheForTests();
+      const result = await engine.generateScriptForLead({
+        tenantId, userId: repUserId, repName: "Riley Rep", companyName: "Home Front Solutions",
+        lead: { id: mainLeadId, address: "100 Maple Grove Ln", city: "Lexington", state: "NC", zip: "27292", leadTag: "fresh_fiber_confirmed" },
+      });
+      expect(result.model).toBe("rules");
+      expect(result.script).not.toMatch(/\bkinetic employee\b/i);
+      expect(result.sections.opener).toContain("Kinetic's authorized fiber partner");
       expectCompliantText(result.script);
     } finally {
       engine.__setScriptEngineLlmTransportForTests(null);
@@ -338,7 +396,7 @@ describe("LLM enhancement — never fails the endpoint", () => {
         });
         expect(result.model).toBe("rules");
         expect(result.sections.opener).toContain("sales call");
-        expect(result.sections.opener).toContain("Riley Rep");
+        expect(result.sections.opener).toContain("this is Riley with Home Front Solutions");
       }
     } finally {
       engine.__setScriptEngineLlmTransportForTests(null);
@@ -421,7 +479,8 @@ describe("HTTP endpoints — gating, cache, footer", () => {
     expect(scriptResponse.status).toBe(leadResponse.status);
     if (scriptResponse.status === 200) {
       const body = await scriptResponse.json();
-      expect(body.script).toContain("DO NOT read this script");
+      expect(body.script).toContain("do not read this script");
+      expect(body.script).toContain("DO_NOT_CALL");
     }
   });
 
