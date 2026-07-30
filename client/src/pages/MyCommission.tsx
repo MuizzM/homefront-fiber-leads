@@ -7,7 +7,7 @@ import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
   FileSignature, CheckCircle2, Home, FileText, Printer,
-  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown,
+  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown, PiggyBank,
 } from "lucide-react";
 import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
 import { calculateRetroactiveCommission } from "@shared/commissionTiers";
@@ -73,6 +73,10 @@ interface WeekResponse {
   structure?: { structure: "FLAT" | "TIERED"; flatRateCents: number | null; tiers: Tier[]; planName: string; acceptedAt: string | null } | null;
   sales?: WeekSale[];
   adjustments?: Array<{ id: number; amount_cents: number; reason: string; type: string; approved_at: string | null }>;
+  holdback?: {
+    current: { reservePercent: number; reserveCents: number; netPayableCents: number; earnedCents: number };
+    ledger: { reservePercent: number; reserveBalanceCents: number; netPaidCents: number; earnedToDateCents: number };
+  } | null;
   noPlan?: boolean; noRepProfile?: boolean; locked?: boolean;
 }
 
@@ -274,6 +278,57 @@ export default function MyCommission() {
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+// ── Chargeback reserve (holdback) ─────────────────────────────────────────────
+// Grammar from shipped payout UIs (Mobbin): the alias breakdown (earned → cut →
+// net as stacked lines), Whatnot's available/processing split, and Linktree's
+// pending-vs-lifetime with a plain-language explainer. Only renders when the
+// tenant actually runs a reserve (percent > 0) — a disabled tenant sees nothing
+// invented. Every number is the authoritative split from the server, so the
+// "paid this week" line always reconciles with the hero above it.
+function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdback"]> }) {
+  const { current, ledger } = holdback;
+  if (!current || current.reservePercent <= 0) return null;   // reserve disabled → no card
+  return (
+    <div className="rounded-xl bg-card border border-border overflow-hidden" data-testid="holdback-card">
+      <header className="px-4 py-3 border-b border-border flex items-center gap-2">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-amber-500/15 text-amber-400">
+          <PiggyBank className="w-4 h-4" aria-hidden="true" />
+        </span>
+        <span className="text-sm font-semibold tracking-tight text-foreground">Chargeback reserve</span>
+        <span className="ml-auto text-[11px] font-semibold text-amber-400 tabular-nums">{current.reservePercent}% held</span>
+      </header>
+
+      {/* This week's split — earned → −reserve → net paid (the alias pattern). */}
+      <dl className="px-4 py-3 space-y-2 text-[13px]">
+        <div className="flex items-center justify-between">
+          <dt className="text-muted-foreground">Earned this week</dt>
+          <dd className="tabular-nums text-foreground">{usd(current.earnedCents)}</dd>
+        </div>
+        <div className="flex items-center justify-between">
+          <dt className="text-muted-foreground">Reserve held ({current.reservePercent}%)</dt>
+          <dd className="tabular-nums text-amber-400" data-testid="holdback-reserve">−{usd(current.reserveCents)}</dd>
+        </div>
+        <div className="flex items-center justify-between border-t border-border pt-2">
+          <dt className="font-semibold text-foreground">Paid to you this week</dt>
+          <dd className="tabular-nums font-bold text-emerald-400" data-testid="holdback-net">{usd(current.netPayableCents)}</dd>
+        </div>
+      </dl>
+
+      {/* Running balance (Linktree pending-vs-lifetime) + release explainer. */}
+      <div className="px-4 py-3 border-t border-border bg-secondary/30">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Reserve balance</span>
+          <span className="tabular-nums text-base font-bold text-foreground" data-testid="holdback-balance">{usd(ledger.reserveBalanceCents)}</span>
+        </div>
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          Held as a chargeback reserve across your paid weeks. After your contract ends, the remaining
+          balance is released within 90 days, less any valid chargebacks, reversals, or amounts owed.
+        </p>
+      </div>
     </div>
   );
 }
@@ -503,6 +558,10 @@ function WeekView({ data }: { data: WeekResponse }) {
           </div>
         );
       })()}
+
+      {/* Reserve holdback — this week's earned/held/paid split + running balance.
+          Renders only when the tenant runs a reserve; numbers are authoritative. */}
+      {data.holdback && <HoldbackCard holdback={data.holdback} />}
 
       {/* Rank card — the bands with names on them (tiered + open weeks only).
           Grammar from the shipped tier systems on Mobbin: Grab Driver (medal +

@@ -9,6 +9,7 @@ import crypto from "crypto";
 import { rawDb } from "./db";
 import { storage } from "./storage";
 import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
+import { computeHoldback, rollupReserve, type Holdback, type ReserveLedger } from "@shared/commissionReserve";
 import {
   validateTiers, calculateRetroactiveCommission, calculateFlatCommission, formatUsdCents,
   type CommissionTier, type RetroResult, DEFAULT_RETRO_TIERS,
@@ -35,6 +36,10 @@ export interface OrgCommissionConfig extends WorkweekConfig {
   finalizationDelayHours: number;
   correctionWindowDays: number;
   autoFinalizeEnabled: boolean;
+  /** Chargeback-reserve holdback rate, whole percent. 0 = disabled (default),
+   *  so no tenant's payroll changes until an operator sets it (the agreement's
+   *  10% is a deliberate opt-in, gated by the same counsel review). */
+  reservePercent: number;
 }
 export type QualificationBasis = "SOLD_AT" | "QUALIFIED_AT" | "INSTALLED_AT" | "ACTIVATED_AT";
 const BASIS_COLUMN: Record<QualificationBasis, string> = {
@@ -54,7 +59,8 @@ export function loadOrgConfig(tenantId: number): OrgCommissionConfig {
             commission_qualification_basis AS basis,
             commission_finalization_delay_hours AS finalizationDelayHours,
             commission_correction_window_days AS correctionWindowDays,
-            commission_auto_finalize_enabled AS autoFinalizeEnabled
+            commission_auto_finalize_enabled AS autoFinalizeEnabled,
+            commission_reserve_percent AS reservePercent
      FROM tenants WHERE id = ?`
   ).get(tenantId) as any;
   const tz = row?.tz || DEFAULT_WORKWEEK.timezone;
@@ -71,6 +77,7 @@ export function loadOrgConfig(tenantId: number): OrgCommissionConfig {
     finalizationDelayHours: Number(row?.finalizationDelayHours ?? 0),
     correctionWindowDays: Number(row?.correctionWindowDays ?? 30),
     autoFinalizeEnabled: !!row?.autoFinalizeEnabled,
+    reservePercent: Math.min(100, Math.max(0, Number(row?.reservePercent ?? 0))),
   };
 }
 
@@ -1196,4 +1203,26 @@ export function listWeekSalesForRep(tenantId: number, repId: number, weekReferen
        AND COALESCE(cs.${basisCol}, cs.sold_at) >= ? AND COALESCE(cs.${basisCol}, cs.sold_at) < ?
      ORDER BY COALESCE(cs.${basisCol}, cs.sold_at) DESC`
   ).all(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc) as any[];
+}
+
+// ── Reserve (holdback) read model ─────────────────────────────────────────────
+// Presentation-layer split of the AUTHORITATIVE final commission: the statement
+// stays the source of truth for what's earned; this shows how that earned amount
+// divides into the withheld reserve and the net paid this period. Consistent
+// everywhere it's rendered (rep screen, admin view, API), so the split is a real
+// payroll instruction, not a cosmetic overlay. Disabled tenants (percent 0) get
+// an all-net holdback — the UI simply shows no reserve.
+export function holdbackForStatement(tenantId: number, finalCommissionCents: number): Holdback {
+  return computeHoldback({ earnedCents: Math.trunc(finalCommissionCents || 0), reservePercent: loadOrgConfig(tenantId).reservePercent });
+}
+
+/** Running reserve accrued across ALL of a rep's statements, rolled up from the
+ *  same per-period split each statement shows, so the balance can never disagree
+ *  with the sum of the parts. */
+export function getReserveLedgerForRep(tenantId: number, repId: number): ReserveLedger {
+  const pct = loadOrgConfig(tenantId).reservePercent;
+  const rows = rawDb.prepare(
+    `SELECT final_commission_cents AS finalCents FROM commission_statements WHERE tenant_id = ? AND rep_id = ?`,
+  ).all(tenantId, repId) as Array<{ finalCents: number }>;
+  return rollupReserve(rows.map(r => Number(r.finalCents || 0)), pct);
 }

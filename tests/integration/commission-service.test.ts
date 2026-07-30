@@ -252,6 +252,38 @@ describe("onboarding-facing structure assignment (flat vs tiered)", () => {
   });
 });
 
+describe("chargeback reserve (holdback) read model", () => {
+  const T5 = 9005, REP_R = 5001;
+  beforeAll(() => {
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T5, "Reserve Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_R, T5, null);
+    svc.assignStructureToRep(T5, 1, { repId: REP_R, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+    for (let i = 0; i < 5; i++) svc.upsertSale(T5, 1, { repId: REP_R, externalId: `res-${i}`, status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs, serverReceivedAt: inWeekTs });
+    svc.calculateOrRecalculateStatement({ tenantId: T5, repId: REP_R, weekReference: WEEK_REF, actorId: 1 });
+  });
+
+  it("splits an earned week into a 10% reserve and 90% net when configured", () => {
+    rawDb.prepare("UPDATE tenants SET commission_reserve_percent = 10 WHERE id = ?").run(T5);
+    // 5 × $200 = $1,000 earned. Reserve $100, net $900.
+    const h = svc.holdbackForStatement(T5, 100000);
+    expect(h.reservePercent).toBe(10);
+    expect(h.reserveCents).toBe(10000);
+    expect(h.netPayableCents).toBe(90000);
+    const ledger = svc.getReserveLedgerForRep(T5, REP_R);
+    expect(ledger.reserveBalanceCents).toBe(10000);           // one $1,000 statement
+    expect(ledger.reserveBalanceCents + ledger.netPaidCents).toBe(ledger.earnedToDateCents);
+  });
+
+  it("withholds nothing when the tenant runs no reserve (default off)", () => {
+    rawDb.prepare("UPDATE tenants SET commission_reserve_percent = 0 WHERE id = ?").run(T5);
+    const h = svc.holdbackForStatement(T5, 100000);
+    expect(h.reserveCents).toBe(0);
+    expect(h.netPayableCents).toBe(100000);
+    expect(svc.getReserveLedgerForRep(T5, REP_R).reserveBalanceCents).toBe(0);
+  });
+});
+
 describe("custom edited ladders reach the money engine (the placebo-editor bug)", () => {
   // Own tenant: these tests seed sales into the same reference week, and the
   // Sunday-closeout suite aggregates a tenant's WHOLE week — sharing T1 would

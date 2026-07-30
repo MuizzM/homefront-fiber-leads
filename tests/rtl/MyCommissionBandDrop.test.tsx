@@ -194,3 +194,46 @@ describe("the rank card — Bronze/Silver/Gold/Platinum on the rep's own ladder"
     expect(bar).toHaveAttribute("aria-valuenow");
   });
 });
+
+describe("the chargeback reserve (holdback) card", () => {
+  const withHoldback = (over: Record<string, any> = {}) => weekPayload({
+    holdback: {
+      current: { reservePercent: 10, reserveCents: 10500, netPayableCents: 94500, earnedCents: 105000 },
+      ledger: { reservePercent: 10, reserveBalanceCents: 31500, netPaidCents: 283500, earnedToDateCents: 315000 },
+    },
+    ...over,
+  });
+
+  it("shows the earned → reserve → net split and the running balance, all from server numbers", async () => {
+    renderPage(withHoldback());
+    const card = await screen.findByTestId("holdback-card");
+    expect(card).toHaveTextContent("10% held");
+    expect(screen.getByTestId("holdback-reserve")).toHaveTextContent("−$105");   // 10% of $1,050
+    expect(screen.getByTestId("holdback-net")).toHaveTextContent("$945");        // paid this week
+    expect(screen.getByTestId("holdback-balance")).toHaveTextContent("$315");    // running reserve
+    // reserve + net reconcile with the earned line (no invented cent on screen)
+    expect(card).toHaveTextContent("$1,050");
+  });
+
+  it("explains release at termination without overpromising", async () => {
+    renderPage(withHoldback());
+    const card = await screen.findByTestId("holdback-card");
+    expect(card).toHaveTextContent(/released within 90 days/i);
+    expect(card).toHaveTextContent(/less any valid chargebacks/i);
+  });
+
+  it("renders nothing when the tenant runs no reserve (percent 0) — never a fake $0 card", async () => {
+    renderPage(withHoldback({ holdback: {
+      current: { reservePercent: 0, reserveCents: 0, netPayableCents: 105000, earnedCents: 105000 },
+      ledger: { reservePercent: 0, reserveBalanceCents: 0, netPaidCents: 105000, earnedToDateCents: 105000 },
+    } }));
+    await screen.findByTestId("week-sales");
+    expect(screen.queryByTestId("holdback-card")).toBeNull();
+  });
+
+  it("is absent entirely when the server sends no holdback (legacy payload)", async () => {
+    renderPage(weekPayload());
+    await screen.findByTestId("week-sales");
+    expect(screen.queryByTestId("holdback-card")).toBeNull();
+  });
+});

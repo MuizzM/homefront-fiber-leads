@@ -222,7 +222,21 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     // never an unexplained number on the rep's own paycheck screen.
     const adjustmentsFor = (statementId: number | null | undefined) =>
       statementId ? svc.getStatementAdjustments(tid(req), statementId).filter((a: any) => a.status === "APPROVED") : [];
-    const withExtras = (payload: any) => ({ ...payload, sales: svc.listWeekSalesForRep(tid(req), repId, now), adjustments: adjustmentsFor(payload?.statement?.id) });
+    // Holdback: the current week's reserve split + the rep's running reserve
+    // ledger, computed from the authoritative statement finals — so "what you're
+    // paid this week" and "what's held" always agree with the number above them.
+    const withExtras = (payload: any) => {
+      const finalCents = Number(payload?.statement?.final_commission_cents ?? payload?.computation?.finalCommissionCents ?? 0);
+      return {
+        ...payload,
+        sales: svc.listWeekSalesForRep(tid(req), repId, now),
+        adjustments: adjustmentsFor(payload?.statement?.id),
+        holdback: {
+          current: svc.holdbackForStatement(tid(req), finalCents),
+          ledger: svc.getReserveLedgerForRep(tid(req), repId),
+        },
+      };
+    };
     try {
       const out = svc.calculateOrRecalculateStatement({ tenantId: tid(req), repId, weekReference: now, actorId: uid(req), requestId: rid(req) });
       res.json(withExtras({ ...out, structure: svc.getCurrentStructureForRep(tid(req), repId) }));
