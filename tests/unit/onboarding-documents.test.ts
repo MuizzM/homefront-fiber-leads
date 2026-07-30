@@ -62,3 +62,61 @@ describe("Home Front Sign regulated core", () => {
     expect(pdf.length).toBeGreaterThan(3_000);
   });
 });
+
+describe("Commission Agreement — required terms (spec)", () => {
+  const commission = buildAgreementSnapshot({
+    documentType: "commission_agreement",
+    companyName: "Home Front Solutions LLC",
+    signerName: "Jordan Rep",
+    signerEmail: "jordan@example.com",
+    issuedAt: "2026-08-01T12:00:00.000Z",
+  });
+  const text = commission.sections.flatMap(s => [s.heading, ...(s.paragraphs ?? []), ...(s.bullets ?? [])]).join("\n");
+
+  it("names the Company with its legal address, then uses 'the Company' thereafter", () => {
+    expect(text).toContain("HomeFront Solutions LLC");
+    expect(text).toContain("605 Abbie Ave, High Point, NC 27263");
+    expect(text).toContain("the “Company”");
+    // The full legal name is used sparingly — not on every reference.
+    expect((text.match(/HomeFront Solutions LLC/g) ?? []).length).toBeLessThanOrEqual(2);
+  });
+
+  it("states the 10% chargeback reserve and the 90-day post-termination release", () => {
+    expect(text).toMatch(/withhold 10% of otherwise payable commissions as a chargeback reserve/i);
+    expect(text).toMatch(/within 90 days after the effective termination date/i);
+    expect(text).toMatch(/less valid chargebacks, reversals, offsets, debts, overpayments/i);
+  });
+
+  it("defines how the reserve is calculated, displayed, and reconciled", () => {
+    expect(text).toMatch(/calculated per pay period/i);
+    expect(text).toMatch(/shown on the Contractor’s commission statements/i);
+    expect(text).toMatch(/drawn first against the reserve/i);
+    expect(text).toMatch(/below any limit imposed by applicable law/i);
+  });
+
+  it("lists the full validation / reversal grounds", () => {
+    for (const ground of ["validation", "cancellation", "nonpayment", "fraud", "duplicate orders",
+      "installation requirements", "customer eligibility", "carrier", "reversals", "chargebacks"]) {
+      expect(text.toLowerCase()).toContain(ground.toLowerCase());
+    }
+  });
+
+  it("binds obligations to the Company alone with NO personal liability or guarantee", () => {
+    expect(text).toMatch(/obligations of the Company alone/i);
+    expect(text).toMatch(/representative capacity/i);
+    expect(text).toMatch(/not personally liable/i);
+    expect(text).toMatch(/does not create any personal guarantee/i);
+    // Muizz Muhammad is never named as a personal obligor in the signer-facing text.
+    expect(text).not.toContain("Muizz");
+  });
+
+  it("does not smuggle the internal counsel-review note into the signed agreement", () => {
+    expect(text).not.toMatch(/North Carolina counsel/i);
+    expect(text).not.toMatch(/INTERNAL LEGAL-REVIEW/i);
+  });
+
+  it("bumped the version so existing reps must re-accept the material change", () => {
+    expect(AGREEMENT_VERSION).toBe("2026.08.1");
+    expect(commission.documentVersion).toBe("2026.08.1");
+  });
+});

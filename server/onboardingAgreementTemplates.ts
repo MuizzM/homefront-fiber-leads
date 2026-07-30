@@ -5,7 +5,29 @@ import {
   type OnboardingDocumentType,
 } from "../shared/onboardingDocuments";
 
-export const AGREEMENT_VERSION = "2026.07.1";
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️  INTERNAL LEGAL-REVIEW NOTE — NOT signer-facing. Do not remove.
+// The Commission Agreement below (reserve mechanics, classification, offset,
+// release, and liability language) is a good-faith draft. It MUST be reviewed
+// and approved by qualified North Carolina counsel before production use, and
+// re-checked for NC wage-payment, independent-contractor-classification, and
+// consumer-protection requirements. This code comment is the conspicuous
+// internal notice; it is intentionally absent from the rendered agreement the
+// contractor signs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Bumped from 2026.07.1: the Commission Agreement changed materially (10%
+// chargeback reserve, representative-capacity signature, expanded validation
+// grounds). A version bump re-triggers acceptance for every rep — the system's
+// "sign the current version" gate is how material-term changes get re-consented.
+export const AGREEMENT_VERSION = "2026.08.1";
+
+// The Company's legal identity, stated once. Sections use "the Company"
+// thereafter, per the requirement to minimize use of the full legal name.
+const COMPANY_LEGAL_NAME = "HomeFront Solutions LLC";
+const COMPANY_ADDRESS = "605 Abbie Ave, High Point, NC 27263";
+const CHARGEBACK_RESERVE_PERCENT = 10;
+const RESERVE_RELEASE_DAYS = 90;
 
 interface TemplateContext {
   companyName: string;
@@ -56,36 +78,54 @@ function contractorSections({ companyName }: TemplateContext): AgreementSection[
   ];
 }
 
-function commissionSections({ companyName }: TemplateContext): AgreementSection[] {
+function commissionSections(_ctx: TemplateContext): AgreementSection[] {
   return [
     {
-      heading: "1. Commission plan",
+      heading: "1. Parties and commission plan",
       paragraphs: [
-        `${companyName} will compensate the Contractor under the commission structure assigned to the Contractor in the Home Front portal. The portal’s effective-dated rate, tier, qualification rule, and commission statement are incorporated into this Agreement. Rates may be changed prospectively by a new written or electronic notice; an earned commission will not be reduced solely because of a later rate change.`,
+        `This Commission Agreement is between ${COMPANY_LEGAL_NAME}, ${COMPANY_ADDRESS} (the “Company”), and the signer (the “Contractor”). The Company will compensate the Contractor under the commission structure assigned to the Contractor in the Home Front portal. The portal’s effective-dated rate, tier ladder, qualification rule, carrier, territory, and commission statement are incorporated into this Agreement.`,
+        "The Company may change the commission structure prospectively by a new written or electronic notice with an effective date. A commission already earned under a prior effective-dated structure will not be reduced solely because the structure changes afterward.",
       ],
     },
     {
       heading: "2. When a commission is earned",
       paragraphs: [
-        "A commission is earned only when the order is attributed to the Contractor, contains accurate customer and service information, is accepted by the provider, satisfies the active qualification rule shown in the portal, and is not fraudulent, duplicated, cancelled, rescinded, or disqualified. A submitted order or verbal commitment alone is not an earned commission.",
+        "A commission is earned only when the order is attributed to the Contractor, contains accurate customer and service information, satisfies the active qualification rule shown in the portal, and clears validation. A submitted order or a customer’s verbal commitment alone is not an earned commission.",
+        "Commissions remain subject to validation, cancellation, nonpayment, fraud, duplicate orders, installation requirements, customer eligibility, carrier or service-provider rejection, reversals, and chargebacks. If any of these conditions applies before or after payment, the affected commission is not earned and any amount already paid for it may be reversed or offset as described below.",
       ],
     },
     {
       heading: "3. Statements and payment",
       paragraphs: [
-        "The Company will make commission statements available through the portal and pay finalized, undisputed balances according to the published payout schedule. Contractor must review each statement and report a specific dispute within 30 calendar days after it becomes available. The Company will investigate documented disputes in good faith and correct confirmed errors.",
+        "The Company will make commission statements available through the portal and pay finalized, undisputed balances, net of the chargeback reserve in Section 4, according to the published payout schedule. Each statement itemizes qualified sales, the applied rate or tier, adjustments, the reserve amount withheld or released, and the net payable.",
+        "Contractor must review each statement and report a specific dispute within 30 calendar days after it becomes available. The Company will investigate documented disputes in good faith and correct confirmed errors.",
       ],
     },
     {
-      heading: "4. Adjustments and chargebacks",
+      heading: "4. Chargeback reserve",
       paragraphs: [
-        "The Company may reverse or offset an amount that was paid for a cancelled, duplicated, fraudulent, provider-rejected, customer-rescinded, or otherwise unqualified order. Each adjustment must appear on a commission statement with the related sale or reason. No offset may reduce compensation below limits imposed by applicable law.",
+        `The Company will withhold ${CHARGEBACK_RESERVE_PERCENT}% of otherwise payable commissions as a chargeback reserve. The remaining ${100 - CHARGEBACK_RESERVE_PERCENT}% is paid on the normal payout schedule. The reserve secures the Company against later chargebacks, reversals, and related amounts described in this Agreement.`,
+        `The reserve is calculated per pay period as ${CHARGEBACK_RESERVE_PERCENT}% of the Contractor’s otherwise payable commissions for that period, tracked as a running balance. Each contribution to, draw against, and release from the reserve is shown on the Contractor’s commission statements in the portal, so the balance can be reconciled against the underlying sales.`,
+        "Valid chargebacks, reversals, offsets, debts owed to the Company, overpayments, and other deductions permitted by this Agreement and applicable law are drawn first against the reserve balance and are reflected on the statement that records them.",
+        `Following termination of the engagement for any reason, the Company will pay any remaining reserve balance to the Contractor within ${RESERVE_RELEASE_DAYS} days after the effective termination date, less valid chargebacks, reversals, offsets, debts, overpayments, or other deductions permitted by this Agreement and applicable law. If permitted deductions exceed the reserve balance, the excess remains payable by the Contractor only to the extent applicable law allows. No deduction or offset will reduce compensation below any limit imposed by applicable law.`,
       ],
     },
     {
-      heading: "5. No other compensation promise",
+      heading: "5. Adjustments",
+      paragraphs: [
+        "The Company may reverse or offset an amount that was paid for a cancelled, duplicated, fraudulent, provider-rejected, customer-rescinded, or otherwise unqualified order. Each adjustment appears on a commission statement identifying the related sale or the reason, so it can be reconciled.",
+      ],
+    },
+    {
+      heading: "6. No other compensation promise",
       paragraphs: [
         "This Agreement does not promise a minimum number of leads, territories, hours, sales, or earnings. Contractor is not authorized to alter customer pricing or make compensation commitments on behalf of the Company.",
+      ],
+    },
+    {
+      heading: "7. Company obligations only; signature in a representative capacity",
+      paragraphs: [
+        "All obligations under this Agreement are obligations of the Company alone and are satisfied solely from Company assets. The Company’s authorized representative signs only in that representative capacity on behalf of the Company. That individual, and the Company’s owners, members, managers, employees, and agents, do not assume and are not personally liable for any obligation under this Agreement, and this Agreement does not create any personal guarantee or individual obligation of any of them.",
       ],
     },
   ];

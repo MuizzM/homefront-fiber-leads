@@ -132,25 +132,34 @@ async function sendInvitation(input: { email: string; name: string; count: numbe
   });
 }
 
+// A CODE-FREE approval notification. It used to embed a live one-time sign-in
+// code, which meant approval (a manager action, not the rep's) minted and
+// mailed an authentication secret — the exact anti-pattern where a code is
+// generated before the rep ever asks for one: it sits in an inbox for its whole
+// lifetime, is emitted on every approval/resend, and reveals to anyone who sees
+// the mail that the account exists. Now the email only tells the rep they are
+// approved and links them to the sign-in screen, where THEY enter their email
+// and request a fresh, short-lived code through /api/auth/otp/request. The code
+// is born from the rep's explicit tap and nowhere else.
 export async function sendOnboardingWelcome(input: {
   email: string;
   name: string;
-  otp: string;
   origin: string;
 }) {
   const link = `${input.origin}/#/my-documents`;
   return sendResendEmail({
     to: input.email,
-    subject: "Welcome to Home Front Solutions — your sign-in code",
-    idempotencyKey: `onboarding-welcome-${sha256(`${input.email.toLowerCase()}|${input.otp}`).slice(0, 48)}`,
+    subject: "Your Home Front Solutions application is approved",
+    // Idempotent on the recipient alone (no code to key on) so a double-tapped
+    // approval or a manager resend collapses to one email per applicant.
+    idempotencyKey: `onboarding-welcome-${sha256(input.email.toLowerCase()).slice(0, 48)}`,
     tags: [{ name: "category", value: "onboarding_welcome" }],
-    text: `Welcome to the team, ${input.name}. Your one-time sign-in code is ${input.otp}. It expires in 10 minutes. Sign in and review your documents: ${link}`,
+    text: `Welcome to the team, ${input.name}. Your application has been approved. Sign in to review and complete your onboarding: ${link} — on the sign-in screen, enter this email and tap "Send code" to get a one-time sign-in code.`,
     html: emailShell("Welcome to the team", `
-      <p style="margin:0 0 16px">Hi ${escapeHtml(input.name)}, your application has been approved.</p>
-      <p style="margin:0 0 8px">Use this one-time code to sign in:</p>
-      <div style="margin:0 0 18px;padding:16px;border-radius:12px;background:#eef8f6;text-align:center;font-size:32px;font-weight:800;letter-spacing:8px;color:#12314c">${escapeHtml(input.otp)}</div>
-      <p style="margin:0 0 20px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Sign in and review documents</a></p>
-      <p style="margin:0;font-size:12px;color:#8a97a4">The code expires in 10 minutes. You can request a new code from the sign-in screen at any time.</p>`),
+      <p style="margin:0 0 16px">Hi ${escapeHtml(input.name)}, your application has been <strong>approved</strong>.</p>
+      <p style="margin:0 0 20px">Sign in to review and complete your onboarding documents:</p>
+      <p style="margin:0 0 20px"><a href="${escapeHtml(link)}" style="display:inline-block;padding:12px 18px;border-radius:10px;background:#3EA394;color:#fff;text-decoration:none;font-weight:700">Sign in to get started</a></p>
+      <p style="margin:0;font-size:12px;color:#8a97a4">On the sign-in screen, enter this email and tap &ldquo;Send code&rdquo; — a one-time sign-in code will arrive that expires in 10 minutes.</p>`),
   });
 }
 
@@ -405,21 +414,25 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
     }
   });
 
+  // Resend the CODE-FREE approval notification (the sign-in invite), not a
+  // login code. A manager can nudge an approved applicant who lost the email,
+  // but the code itself is only ever minted by the rep's own request on the
+  // sign-in screen — a manager can never push an authentication secret into
+  // someone's inbox. (Endpoint path kept for client compatibility.)
   app.post("/api/onboarding/pipeline/:id/resend-login", requireAuth, requireCapability("onboarding.documents.manage"), recruitingInviteLimiter, async (req, res) => {
     const parsedId = documentIdSchema.safeParse(req.params.id);
     const invite = parsedId.success ? getRecruitingInvite(parsedId.data) : null;
     if (!invite || invite.tenantId !== tenantId(req)) return res.status(404).json({ error: "Onboarding record not found" });
     const application = invite.applicationId ? storage.getRepApplicationById(invite.applicationId) : null;
-    if (!application || application.status !== "approved" || !application.userId) return res.status(409).json({ error: "Approve the application before sending a login code" });
+    if (!application || application.status !== "approved" || !application.userId) return res.status(409).json({ error: "Approve the application before sending the sign-in invite" });
     try {
-      const otp = storage.createOtp(application.email);
-      const welcome = await sendOnboardingWelcome({ email: application.email, name: application.fullName, otp, origin: onboardingAppOrigin(req) });
+      const welcome = await sendOnboardingWelcome({ email: application.email, name: application.fullName, origin: onboardingAppOrigin(req) });
       markInviteLoginSent(invite.id, welcome.id);
       storage.logActivity(userId(req), "onboarding.welcome.resent", "rep_application", application.id,
         { candidateEmail: application.email.toLowerCase(), emailProvider: "resend", emailId: welcome.id }, req.ip);
       res.json({ sent: true });
     } catch (error: any) {
-      res.status(502).json({ error: error?.message || "The login code could not be sent" });
+      res.status(502).json({ error: error?.message || "The sign-in invite could not be sent" });
     }
   });
 
