@@ -75,6 +75,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/calling", label: "Calling Queue", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
   { href: "/calling/compliance", label: "Calling Compliance", icon: ShieldCheck, show: r => can(r, "calling.compliance.read"), group: "Calling" },
   // ── Field ─────────────────────────────────────────────────────────────────
+  { href: "/ready-to-call", label: "Ready to Call", icon: PhoneCall,  show: isFieldRole,                              group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
   { href: "/my-commission",label: "My Commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },

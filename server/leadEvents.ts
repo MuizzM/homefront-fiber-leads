@@ -22,7 +22,7 @@ import { scrubSecretText } from "./secretScrub";
 
 /** What changed. The client branches on this to decide how loud the update is
  *  (an outcome flip repaints a pin; a note edit only refreshes an open card). */
-export type LeadEventType = "outcome" | "notes" | "assignment" | "status";
+export type LeadEventType = "outcome" | "notes" | "assignment" | "status" | "calling_lock";
 
 /**
  * The lead projection carried on the wire — an ALLOWLIST, not a denylist, for

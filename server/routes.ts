@@ -26,6 +26,7 @@ import {
   emitLeadEvent, onLeadEvent, eventsSince, leadEventsCursor, leadEventsEpoch,
   type LeadEvent, type LeadEventType,
 } from "./leadEvents";
+import * as readyToCall from "./readyToCallStore";
 import { persistKineticObservation, type PersistKineticObservationResult } from "./kineticObservation";
 import type { ProviderRequestPriority } from "./providerRequestQueue";
 
@@ -5044,6 +5045,77 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (knock.leadId != null) emitLeadChangeById("notes", knock.leadId, user, _klead?.tenantId);
     storage.logActivity(user?.id ?? null, "knock.note_updated", "knock", knock.id, { leadId: knock.leadId }, req.ip);
     res.json(updated);
+  });
+
+  // ── Ready-to-Call workspace ────────────────────────────────────────────────
+  // One deduplicated queue of phone-bearing leads, an advisory soft-lock so two
+  // reps don't unknowingly dial the same record, and idempotent phone outcomes.
+  app.get("/api/ready-to-call/queue", requireCapability("field.app.use"), (req, res) => {
+    const user = (req as any).user;
+    const tenantId = user?.tenantId;
+    // A null tenant must never build a queue — getReadyToCallQueue would otherwise
+    // be handed an unscoped read. Reps/leads are walled to their own leads.
+    if (tenantId == null) return res.json({ queue: [], noTenant: true });
+    readyToCall.reapExpiredLeadLocks(); // self-cleaning sweep — a closed tab frees its leads
+    const scope = leadVisibilityScope(user); // undefined = whole tenant, [] handled inside
+    const queue = readyToCall.getReadyToCallQueue({ tenantId, scope: scope === undefined ? undefined : (Array.isArray(scope) ? scope : [scope]) });
+    res.json({ queue, meId: user?.id ?? null });
+  });
+
+  app.post("/api/ready-to-call/:leadId/claim", requireCapability("field.app.use"), (req, res) => {
+    const user = (req as any).user;
+    const leadId = Number(req.params.leadId);
+    const lead = storage.getLeadById(leadId);
+    if (!lead || (user?.role !== "super_admin" && user?.tenantId != null && lead.tenantId !== user.tenantId) || !repCanAccessLead(user, lead)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    const result = readyToCall.claimLead({ tenantId: user.tenantId, leadId, userId: user.id, userName: user.name });
+    if (result.ok) {
+      emitLeadEvent({ tenantId: user.tenantId, leadId, type: "calling_lock", actorId: user.id, actorName: user.name, lead: { ...(lead as any), callingLockUntil: result.holder?.until } as any });
+    }
+    res.status(result.ok ? 200 : 409).json(result);
+  });
+
+  app.post("/api/ready-to-call/:leadId/heartbeat", requireCapability("field.app.use"), (req, res) => {
+    const user = (req as any).user;
+    if (user?.tenantId == null) return res.status(400).json({ error: "No tenant" });
+    res.json({ held: readyToCall.refreshLeadClaim({ tenantId: user.tenantId, leadId: Number(req.params.leadId), userId: user.id }) });
+  });
+
+  app.post("/api/ready-to-call/:leadId/release", requireCapability("field.app.use"), (req, res) => {
+    const user = (req as any).user;
+    if (user?.tenantId == null) return res.status(400).json({ error: "No tenant" });
+    const leadId = Number(req.params.leadId);
+    readyToCall.releaseLeadClaim({ tenantId: user.tenantId, leadId, userId: user.id });
+    const lead = storage.getLeadById(leadId);
+    if (lead) emitLeadEvent({ tenantId: user.tenantId, leadId, type: "calling_lock", actorId: user.id, actorName: user.name, lead: { ...(lead as any), callingLockUntil: null } as any });
+    res.json({ released: true });
+  });
+
+  app.post("/api/ready-to-call/:leadId/outcome", requireCapability("lead.disposition.update"), (req, res) => {
+    const user = (req as any).user;
+    const leadId = Number(req.params.leadId);
+    const lead = storage.getLeadById(leadId);
+    if (!lead || (user?.role !== "super_admin" && user?.tenantId != null && lead.tenantId !== user.tenantId) || !repCanAccessLead(user, lead)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    const { outcome, notes, callbackDate, callbackTime, dialedE164, clientId } = req.body ?? {};
+    try {
+      const result = readyToCall.recordCallOutcome({
+        tenantId: user.tenantId, leadId, repId: user.teamMemberId ?? null, userId: user.id ?? null,
+        outcome, notes, callbackDate, callbackTime, dialedE164, clientId,
+      });
+      // Free the lock and tell other reps the lead moved.
+      readyToCall.releaseLeadClaim({ tenantId: user.tenantId, leadId, userId: user.id });
+      const after = storage.getLeadById(leadId);
+      if (after) emitLeadEvent({ tenantId: user.tenantId, leadId, type: "status", actorId: user.id, actorName: user.name, lead: after as any });
+      storage.logActivity(user?.id ?? null, "call.outcome", "lead", leadId, { outcome, terminal: result.terminal }, req.ip);
+      res.json(result);
+    } catch (e: any) {
+      const code = e?.message;
+      const status = code === "CALLBACK_REQUIRED" ? 400 : code === "UNKNOWN_OUTCOME" ? 400 : code === "LEAD_NOT_FOUND" ? 404 : 500;
+      res.status(status).json({ error: code === "CALLBACK_REQUIRED" ? "Pick a callback date and time." : code === "UNKNOWN_OUTCOME" ? "Unknown outcome." : "Could not save the outcome." });
+    }
   });
 
   // ── Leaderboard ──────────────────────────────────────────────────────────────

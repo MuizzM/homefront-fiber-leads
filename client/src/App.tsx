@@ -48,6 +48,7 @@ const LoginActivity = lazy(() => import("@/pages/LoginActivity"));
 const Governance = lazy(() => import("@/pages/Governance"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
+const ReadyToCall = lazy(() => import("@/pages/ReadyToCall"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
 const CallingLead = lazy(() => import("@/pages/CallingLead"));
 const CallingCompliance = lazy(() => import("@/pages/CallingCompliance"));
@@ -212,6 +213,7 @@ function AppRoutes() {
           </Route>
           <Route path="/today"><CapabilityGuard role={role} capability="field.app.use"><Today /></CapabilityGuard></Route>
           <Route path="/followups"><CapabilityGuard role={role} capability="field.app.use"><FollowUps /></CapabilityGuard></Route>
+          <Route path="/ready-to-call"><CapabilityGuard role={role} capability="field.app.use"><ReadyToCall /></CapabilityGuard></Route>
           <Route path="/lead/:id"><CapabilityGuard role={role} capability="field.app.use"><PropertyDetail /></CapabilityGuard></Route>
           <Route path="/map"><CapabilityGuard role={role} capability="field.app.use"><MapView /></CapabilityGuard></Route>
           <Route path="/leads"><CapabilityGuard role={role} capability="field.app.use"><Leads /></CapabilityGuard></Route>

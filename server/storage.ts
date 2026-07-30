@@ -1912,6 +1912,30 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_coming_soon_watch_tenant ON coming_soon_watchlist(tenant_id, status, last_checked_at)`,
     `CREATE INDEX IF NOT EXISTS idx_coming_soon_watch_due ON coming_soon_watchlist(status, last_checked_at)`,
 
+    // ── Ready-to-Call workspace ────────────────────────────────────────────────
+    // Calling consent is distinct from knocking consent (a Do-Not-Call is not a
+    // Do-Not-Knock), so calling gets its own flag. last_call_* let the queue put
+    // never-called leads first and drop terminally-dispositioned ones.
+    `ALTER TABLE leads ADD COLUMN do_not_call INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE leads ADD COLUMN last_call_outcome TEXT`,
+    `ALTER TABLE leads ADD COLUMN last_call_at TEXT`,
+    // Phone dispositions live in their OWN log (never the knock/commission path).
+    // client_id is the idempotency key — a double-tap or two-tab replay collapses.
+    `CREATE TABLE IF NOT EXISTS call_log (
+       id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, lead_id INTEGER NOT NULL,
+       rep_id INTEGER, user_id INTEGER, outcome TEXT NOT NULL, notes TEXT,
+       callback_date TEXT, callback_time TEXT, dialed_e164 TEXT, client_id TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_call_log_client ON call_log(tenant_id, client_id) WHERE client_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_call_log_lead ON call_log(tenant_id, lead_id, created_at DESC)`,
+    // Advisory soft-lock so two reps don't unknowingly dial the same lead. TTL
+    // lease (INSERT OR IGNORE winner-gating); a stuck holder self-clears at expiry.
+    `CREATE TABLE IF NOT EXISTS calling_lead_locks (
+       tenant_id INTEGER NOT NULL, lead_id INTEGER NOT NULL, owner_user_id INTEGER NOT NULL,
+       owner_name TEXT, expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (tenant_id, lead_id))`,
+    `CREATE INDEX IF NOT EXISTS idx_calling_locks_exp ON calling_lead_locks(expires_at)`,
+
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
