@@ -243,6 +243,7 @@ export interface IStorage {
   addTerritoryEvent(territoryId: number, actorUserId: number | null, type: string, payload?: unknown): void;
   addLeadEvent(leadId: number, type: "assignment" | "note", actor: string | null, detail?: unknown): void;
   getLeadEvents(leadId: number, limit?: number): { id: number; leadId: number; type: string; actor: string | null; detail: any; at: string }[];
+  recordLeadStatusEvent(input: { leadId: number; displayActor: string; source: string; outcome: string; newStatus: string; prevStatus: string | null; actorUserId: number | null; actorName: string | null; assignee: number | null; idemKey?: string | null; at?: string }): { inserted: boolean };
   getTerritoryEvents(territoryId: number): any[];
   createTerritory(t: InsertTerritory): Territory;
   updateTerritory(id: number, updates: Partial<InsertTerritory>): Territory | undefined;
@@ -576,6 +577,11 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_territory_events_terr ON territory_events(territory_id)`,
     `CREATE TABLE IF NOT EXISTS lead_events (id INTEGER PRIMARY KEY AUTOINCREMENT, lead_id INTEGER NOT NULL, type TEXT NOT NULL, actor TEXT, detail TEXT, at TEXT NOT NULL)`,
     `CREATE INDEX IF NOT EXISTS idx_lead_events_lead ON lead_events(lead_id)`,
+    // Idempotency for status events (Central Mark): a UNIQUE (lead_id, idem_key)
+    // collapses a double-tap / offline replay into one row — no duplicate or
+    // contradictory history entries.
+    `ALTER TABLE lead_events ADD COLUMN idem_key TEXT`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_events_idem ON lead_events(lead_id, idem_key) WHERE idem_key IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_leads_assigned_territory ON leads(assigned_territory_id)`,
     // Offline knock queue idempotency — a retried flush with the same client_id
     // must return the existing row, never double-log. Partial unique index so all
@@ -3348,6 +3354,25 @@ export class Storage implements IStorage {
       rawDb.prepare("INSERT INTO lead_events (lead_id, type, actor, detail, at) VALUES (?,?,?,?,?)")
         .run(leadId, type, actor ?? null, detail != null ? JSON.stringify(detail) : null, new Date().toISOString());
     } catch (e: any) { console.warn("lead event log failed:", e.message); }
+  }
+  // Append-only STATUS event with EXPLICIT attribution — the store for a Central
+  // Mark. `displayActor` is the customer-facing label ("Central Admin"); the
+  // real actor + assignee live in `detail` for audit. Idempotent on idemKey:
+  // INSERT OR IGNORE means a replay is a no-op. The display name is NEVER derived
+  // from a rep id, cached user, prior event, or fallback identity.
+  recordLeadStatusEvent(input: {
+    leadId: number; displayActor: string; source: string; outcome: string; newStatus: string;
+    prevStatus: string | null; actorUserId: number | null; actorName: string | null;
+    assignee: number | null; idemKey?: string | null; at?: string;
+  }): { inserted: boolean } {
+    const detail = JSON.stringify({
+      source: input.source, outcome: input.outcome, newStatus: input.newStatus, prevStatus: input.prevStatus,
+      actorUserId: input.actorUserId, actorName: input.actorName, assignee: input.assignee,
+    });
+    const r = rawDb.prepare(
+      `INSERT OR IGNORE INTO lead_events (lead_id, type, actor, detail, at, idem_key) VALUES (?,?,?,?,?,?)`,
+    ).run(input.leadId, "status_change", input.displayActor, detail, input.at ?? new Date().toISOString(), input.idemKey ?? null);
+    return { inserted: r.changes === 1 };
   }
   getLeadEvents(leadId: number, limit = 100): { id: number; leadId: number; type: string; actor: string | null; detail: any; at: string }[] {
     return (rawDb.prepare("SELECT id, lead_id AS leadId, type, actor, detail, at FROM lead_events WHERE lead_id = ? ORDER BY at DESC, id DESC LIMIT ?")

@@ -184,9 +184,16 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
               const meta = h.type === "status_change" && isKnockOutcome(h.status) ? OUTCOME_META[h.status] : null;
               const dot = h.type === "status_change" ? (meta?.color ?? "#64748b")
                 : h.type === "assignment" ? "#3EA394" : "#94a3b8";
+              // A central/system status change carries an EXPLICIT display actor
+              // ("Central Admin") — render it verbatim, never through the rep-name
+              // shortener (which would mangle it to "C. Admin") and never resolved
+              // against a rep id.
+              const isDisplayActor = h.type === "status_change" && !!(h as any).source;
               const who = h.type === "assignment"
                 ? (h.assignedBy ? shortRepName(h.assignedBy) : null)
-                : (h.actor ? shortRepName(h.actor) : null);
+                : isDisplayActor
+                  ? (h.actor ?? null)
+                  : (h.actor ? shortRepName(h.actor) : null);
               const verb = h.type === "status_change" ? `marked ${meta?.label ?? h.status}`
                 : h.type === "assignment" ? `assigned to ${h.assignedTo ? shortRepName(h.assignedTo) : "—"}`
                 : "added a note";

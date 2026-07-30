@@ -1,9 +1,13 @@
-// A central mark must appear in the lead's History.
+// Central Mark history attribution.
 //
-// Reported: the card shows "No changes yet" after a manager marks a door
-// centrally. The write sits in a try/catch that only console.warns, so a
-// failure there is invisible — which is exactly this symptom. This test settles
-// whether the row is never written, or written and lost on the way back.
+// A status changed through Central Mark must read "Central Admin marked
+// [status]" in the lead's History — NEVER a rep's name. If a lead was never
+// assigned to a rep, that rep's name must never appear anywhere in its history.
+// The bug: central-disposition stamped a knock with a DERIVED rep id
+// (acting member → assigned rep → the tenant's first active member), and
+// history rendered that rep's name. These tests pin the corrected attribution:
+// the display actor is "Central Admin", the REAL actor is preserved in the
+// audit log, and the write is idempotent.
 import { createServer, type Server } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,12 +22,15 @@ function person(name: string, role: string, tenantId = 1) {
   const email = `${name.toLowerCase().replace(/\s+/g, ".")}@cm.test`;
   const m = storage.createTeamMember({ name, email, role, active: true, tenantId } as any);
   const u = storage.createUser({ name, email, role, active: true, tenantId, teamMemberId: m.id } as any);
-  return { userId: u.id, memberId: m.id, session: storage.createSession(u.id).id };
+  return { userId: u.id, memberId: m.id, session: storage.createSession(u.id).id, name };
 }
 function req(path: string, session: string, init: RequestInit = {}) {
   return fetch(`${baseUrl}${path}`, { ...init, headers: {
     "content-type": "application/json", "x-session-id": session, "x-csrf-token": session, ...(init.headers ?? {}) } });
 }
+const hist = async (leadId: number, session: string) => (await req(`/api/leads/${leadId}/history`, session)).json();
+const central = (leadId: number, session: string, body: any) =>
+  req(`/api/leads/${leadId}/central-disposition`, session, { method: "POST", body: JSON.stringify(body) });
 
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-cm-"));
@@ -32,7 +39,8 @@ beforeAll(async () => {
   mod.runMigrations(); storage = mod.storage;
   ({ rawDb } = await import("../../server/db"));
   fx.manager = person("Mona Manager", "manager");
-  fx.rep = person("Ann Rivera", "rep");
+  fx.manager2 = person("Ravi Second", "manager");
+  fx.assignedRep = person("Ann Rivera", "rep");
   const { registerRoutes, registerSaasRoutes } = await import("../../server/routes");
   const app = express(); app.use(express.json()); server = createServer(app);
   registerRoutes(server, app); registerSaasRoutes(app);
@@ -41,50 +49,76 @@ beforeAll(async () => {
 });
 afterAll(() => new Promise<void>(r => server.close(() => r())));
 
+let seq = 0;
 const seedLead = (over: any = {}) => storage.createLead({
-  address: "605 Abbie Avenue", city: "High Point", state: "NC", zip: "27263",
+  address: `${++seq} Abbie Avenue`, city: "High Point", state: "NC", zip: "27263",
   lat: 35.95, lng: -80.0, tenantId: 1, leadStatus: "prospect", ...over,
 } as any).id;
 
-describe("central mark lands in History", () => {
-  // The server side was never the bug — this pins it so it stays that way. The
-  // failure was client-side: the card fetched history when it opened and nothing
-  // invalidated that query after a central mark, so it kept rendering the empty
-  // result under a mark the manager had just made.
-  it("writes a knock row the history endpoint returns", async () => {
-    const lead = seedLead();
-    const res = await req(`/api/leads/${lead}/central-disposition`, fx.manager.session, {
-      method: "POST", body: JSON.stringify({ outcome: "sold" }),
-    });
-    console.log("CENTRAL STATUS:", res.status, (await res.clone().text()).slice(0, 200));
+// Any name of a real rep must not appear on a central-mark history row.
+const allNames = () => ["Mona Manager", "Ravi Second", "Ann Rivera"];
+function statusRow(rows: any[]) { return rows.find(r => r.type === "status_change"); }
 
-    const rows = rawDb.prepare(`SELECT * FROM knock_log WHERE lead_id = ?`).all(lead);
-    console.log("KNOCK ROWS:", rows.length, JSON.stringify(rows[0] ?? null).slice(0, 200));
-
-    const hist = await (await req(`/api/leads/${lead}/history`, fx.manager.session)).json();
-    console.log("HISTORY ROWS:", Array.isArray(hist) ? hist.length : JSON.stringify(hist).slice(0, 200));
-
-    expect(res.status).toBe(200);
-    expect(rows.length).toBe(1);
-    // Flagged as central and credited to the acting manager, not a phantom visit.
-    expect(rows[0].notes).toContain("[central]");
-    expect(rows[0].was_home).toBe(0);
-    expect(rows[0].outcome).toBe("sold");
-
-    // And it comes back through the endpoint the CARD reads — the whole point.
-    expect(Array.isArray(hist)).toBe(true);
-    expect(hist).toHaveLength(1);
-    expect(hist[0].type).toBe("status_change");
-    expect(hist[0].status).toBe("sold");
+describe("Central Mark attribution", () => {
+  it("an UNASSIGNED lead shows 'Central Admin', never a rep's name", async () => {
+    const lead = seedLead({ assignedRepId: null });
+    expect((await central(lead, fx.manager.session, { outcome: "not_interested" })).status).toBe(200);
+    const rows = await hist(lead, fx.manager.session);
+    const row = statusRow(rows);
+    expect(row).toBeTruthy();
+    expect(row.status).toBe("not_interested");
+    expect(row.actor).toBe("Central Admin");
+    // No rep/manager name anywhere in the serialized history.
+    const blob = JSON.stringify(rows);
+    for (const n of allNames()) expect(blob).not.toContain(n);
   });
 
-  it("works when the lead has no assigned rep — the fallback path", async () => {
+  it("an ASSIGNED lead central mark still shows 'Central Admin', not the assigned rep", async () => {
+    const lead = seedLead({ assignedRepId: fx.assignedRep.memberId });
+    await central(lead, fx.manager.session, { outcome: "sold" });
+    const rows = await hist(lead, fx.manager.session);
+    const row = statusRow(rows);
+    expect(row.actor).toBe("Central Admin");
+    expect(JSON.stringify(rows)).not.toContain("Ann Rivera");   // the assigned rep never appears
+  });
+
+  it("preserves the REAL actor in the audit log even though history says 'Central Admin'", async () => {
     const lead = seedLead({ assignedRepId: null });
-    await req(`/api/leads/${lead}/central-disposition`, fx.manager.session, {
-      method: "POST", body: JSON.stringify({ outcome: "not_interested" }),
-    });
-    const rows = rawDb.prepare(`SELECT * FROM knock_log WHERE lead_id = ?`).all(lead);
-    console.log("NO-REP KNOCK ROWS:", rows.length);
-    expect(rows.length).toBeGreaterThan(0);
+    await central(lead, fx.manager.session, { outcome: "callback" });
+    const audit = rawDb.prepare(
+      `SELECT * FROM activity_log WHERE entity_type = 'lead' AND entity_id = ? AND action = 'lead.central_disposition'`,
+    ).all(lead) as any[];
+    expect(audit.length).toBeGreaterThan(0);
+    expect(audit[0].user_id).toBe(fx.manager.userId);           // real initiating user, not "Central Admin"
+  });
+
+  it("a FIELD knock still attributes to the real rep (no regression)", async () => {
+    const lead = seedLead({ assignedRepId: fx.assignedRep.memberId });
+    // A genuine knock by the assigned rep.
+    storage.createKnock({ leadId: lead, repId: fx.assignedRep.memberId, outcome: "interested", wasHome: true, knockedAt: new Date().toISOString() } as any);
+    const rows = await hist(lead, fx.assignedRep.session);
+    const row = statusRow(rows);
+    expect(row.actor).toBe("Ann Rivera");                       // real field attribution kept
+  });
+
+  it("is idempotent — a double-tapped mark with the same key writes ONE event", async () => {
+    const lead = seedLead({ assignedRepId: null });
+    const body = { outcome: "sold", idempotencyKey: "cm-dup-1" };
+    await central(lead, fx.manager.session, body);
+    await central(lead, fx.manager.session, body);              // replay
+    const rows = await hist(lead, fx.manager.session);
+    expect(rows.filter((r: any) => r.type === "status_change").length).toBe(1);
+  });
+
+  it("two managers marking are two 'Central Admin' events, never a name collision", async () => {
+    const lead = seedLead({ assignedRepId: null });
+    await central(lead, fx.manager.session, { outcome: "not_home", idempotencyKey: "a" });
+    await central(lead, fx.manager2.session, { outcome: "callback", idempotencyKey: "b" });
+    const rows = await hist(lead, fx.manager.session);
+    const statuses = rows.filter((r: any) => r.type === "status_change");
+    expect(statuses.length).toBe(2);
+    expect(statuses.every((r: any) => r.actor === "Central Admin")).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain("Mona Manager");
+    expect(JSON.stringify(rows)).not.toContain("Ravi Second");
   });
 });

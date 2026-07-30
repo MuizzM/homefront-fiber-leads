@@ -368,25 +368,28 @@ describe("M8 — a corrected sale leaves the leaderboard", () => {
 });
 
 describe("Central mark appears in History", () => {
-  it("central-disposition writes a knock_log row flagged [central]", async () => {
+  it("central-disposition records a 'Central Admin' status event, NOT a rep-credited knock", async () => {
     const lead = makeLead(1, rep1.memberId);
     const res = await request(`/api/leads/${lead.id}/central-disposition`, mgr1.session, {
       method: "POST",
       body: JSON.stringify({ outcome: "not_home" }),
     });
     expect(res.status).toBe(200);
-    const rows = rawDb.prepare(
-      "SELECT outcome, notes, was_home FROM knock_log WHERE lead_id = ? ORDER BY id DESC LIMIT 1",
-    ).all(lead.id) as any[];
-    expect(rows.length).toBe(1);
-    expect(rows[0].outcome).toBe("not_home");
-    expect(rows[0].notes.startsWith("[central]")).toBe(true);
-    expect(rows[0].was_home).toBe(0); // central = no door contact
+    // A central mark must NOT write a knock_log row (that credited a rep and
+    // showed a rep's name in history / counted on the leaderboard). It lands as
+    // an explicit-actor lead_events status change instead.
+    const knocks = rawDb.prepare("SELECT id FROM knock_log WHERE lead_id = ?").all(lead.id) as any[];
+    expect(knocks.length).toBe(0);
+    const evt = rawDb.prepare(
+      "SELECT type, actor, detail FROM lead_events WHERE lead_id = ? AND type = 'status_change' ORDER BY id DESC LIMIT 1",
+    ).get(lead.id) as any;
+    expect(evt.actor).toBe("Central Admin");
+    const detail = JSON.parse(evt.detail);
+    expect(detail.source).toBe("central");
+    expect(detail.outcome).toBe("not_home");
+    expect(detail.actorUserId).toBe(mgr1.userId);   // real actor preserved in the event
     const fresh = storage.getLeadById(lead.id);
-    // Field design: not_home is NOT a terminal status — the pin stays a prospect
-    // with the visit recorded via lastOutcome/visit state.
-    expect(fresh.leadStatus).toBe("prospect");
+    expect(fresh.leadStatus).toBe("prospect");       // not_home is non-terminal
     expect(fresh.lastOutcome).toBe("not_home");
-    // "visited" is not a leads column — the knock row IS the visit record.
   });
 });

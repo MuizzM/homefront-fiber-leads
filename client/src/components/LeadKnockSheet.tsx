@@ -558,7 +558,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       const label = h0.type === "status_change" && isKnockOutcome(h0.status) ? OUTCOME_META[h0.status].label
         : h0.type === "assignment" ? "Assigned"
         : h0.type === "note" ? "Note" : (h0.status ?? "Update");
-      return { label, who: h0.actor ? shortRepName(h0.actor) : null, time: relativeTime(h0.changedAt) };
+      // Central/system status changes carry an explicit display actor — verbatim.
+      const who0 = h0.type === "status_change" && (h0 as any).source
+        ? (h0.actor ?? null)
+        : (h0.actor ? shortRepName(h0.actor) : null);
+      return { label, who: who0, time: relativeTime(h0.changedAt) };
     }
     if (renderedLead.lastOutcome || renderedLead.lastKnockedAt) {
       const label = isKnockOutcome(renderedLead.lastOutcome ?? "")

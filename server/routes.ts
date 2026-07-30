@@ -4668,15 +4668,33 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       repLng: maySeeActorLocation(k.repId) ? (k.repLng ?? null) : null,
       leadLat: lead.lat ?? null, leadLng: lead.lng ?? null,
     }));
-    const eventRows = storage.getLeadEvents(lead.id).map(e => ({
-      id: `e${e.id}`,
-      type: e.type as "assignment" | "note",
-      actor: e.actor,
-      changedAt: e.at,
-      assignedTo: e.detail?.assignedTo ?? undefined,
-      assignedBy: e.detail?.assignedBy ?? undefined,
-      notePreview: e.detail?.preview ?? undefined,
-    }));
+    const eventRows = storage.getLeadEvents(lead.id).map(e => {
+      // status_change events (Central Mark, and system actors like Kinetic Scope)
+      // carry their display actor as an EXPLICIT string — rendered verbatim, never
+      // resolved against a rep id. This is what keeps a rep's name off a central
+      // action and off a lead they never worked.
+      if (e.type === "status_change") {
+        return {
+          id: `e${e.id}`,
+          type: "status_change" as const,
+          actor: e.actor,                                  // e.g. "Central Admin" — explicit, not derived
+          changedAt: e.at,
+          status: e.detail?.outcome ?? e.detail?.newStatus ?? null,
+          source: e.detail?.source ?? "system",
+          verification: null, distanceM: null, gpsAccuracyM: null,
+          repLat: null, repLng: null, leadLat: lead.lat ?? null, leadLng: lead.lng ?? null,
+        };
+      }
+      return {
+        id: `e${e.id}`,
+        type: e.type as "assignment" | "note",
+        actor: e.actor,
+        changedAt: e.at,
+        assignedTo: e.detail?.assignedTo ?? undefined,
+        assignedBy: e.detail?.assignedBy ?? undefined,
+        notePreview: e.detail?.preview ?? undefined,
+      };
+    });
     // Legacy bridge: leads noted before lead_events existed still surface their
     // note in the timeline (the composer UI clears the field after save, so
     // history is the ONLY place a note is read).
@@ -4711,6 +4729,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!isKnockOutcome(req.body?.outcome)) return res.status(400).json({ error: "invalid outcome" });
     const outcome = req.body.outcome as KnockOutcome;
     const newStatus = OUTCOME_TO_STATUS[outcome];
+    const prevStatus = lead.leadStatus ?? null;
     const at = new Date().toISOString();
     const updated = storage.updateLead(lead.id, {
       leadStatus: newStatus,
@@ -4718,31 +4737,25 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       lastOutcomeAt: at,
     } as any, u?.tenantId ?? undefined);
     if (!updated) return res.status(500).json({ error: "Update failed" });
-    // Owner ask: a central mark MUST appear in the lead's History timeline.
-    // Record a knock row flagged as central (no door contact — wasHome false),
-    // credited to the acting manager's member id (or the lead's assigned rep,
-    // or the tenant's first active member as a last resort).
+    // A central mark MUST appear in History as "Central Admin marked [status]" —
+    // NEVER a rep's name. The old code stamped a knock with a DERIVED rep id
+    // (acting member → assigned rep → the tenant's first active member) and
+    // history rendered that rep's name: a rep who never touched the lead was
+    // shown as the actor. Now the row is stored with an EXPLICIT display actor
+    // ("Central Admin"), while the REAL initiating user + the (nullable) assignee
+    // live in the event detail and the audit log below. Idempotent on the
+    // client-supplied key so a double-tap / offline replay is one row, and the
+    // display name is never derived from a rep id, cache, prior event, or fallback.
     try {
-      let centralRepId: number | null = u?.teamMemberId ?? lead.assignedRepId ?? null;
-      if (centralRepId == null) {
-        centralRepId = storage.getTeamMembers(lead.tenantId ?? u?.tenantId ?? undefined).find((m: any) => m.active)?.id ?? null;
-      }
-      if (centralRepId != null) {
-        storage.createKnock({
-          leadId: lead.id,
-          repId: centralRepId,
-          outcome,
-          wasHome: false,
-          notes: `[central] ${u?.name ?? "central"}`,
-          knockedAt: at,
-        } as any);
-      }
+      const idemKey = typeof req.body?.idempotencyKey === "string" && req.body.idempotencyKey.trim()
+        ? String(req.body.idempotencyKey).slice(0, 120) : null;
+      storage.recordLeadStatusEvent({
+        leadId: lead.id, displayActor: "Central Admin", source: "central",
+        outcome, newStatus, prevStatus,
+        actorUserId: u?.id ?? null, actorName: u?.name ?? null,
+        assignee: lead.assignedRepId ?? null, idemKey, at,
+      });
     } catch (e: any) {
-      // Was a silent console.warn: if this write failed, the mark still returned
-      // 200 and History simply stayed empty, with nothing anywhere saying why.
-      // That is precisely the shape of the bug this endpoint was reported for.
-      // Still non-fatal — the disposition itself succeeded and must not be rolled
-      // back over a timeline row — but it is now recorded where operators look.
       structuredLog("central.history_row_failed", {
         leadId: lead.id, actorUserId: u?.id ?? null, reason: String(e?.message ?? e).slice(0, 200),
       }, "warn");
