@@ -265,13 +265,18 @@ describe("chargeback reserve (holdback) read model", () => {
 
   it("splits an earned week into a 10% reserve and 90% net when configured", () => {
     rawDb.prepare("UPDATE tenants SET commission_reserve_percent = 10 WHERE id = ?").run(T5);
-    // 5 × $200 = $1,000 earned. Reserve $100, net $900.
+    // 5 × $200 = $1,000 earned. Reserve $100, net $900 (this week's projection).
     const h = svc.holdbackForStatement(T5, 100000);
     expect(h.reservePercent).toBe(10);
     expect(h.reserveCents).toBe(10000);
     expect(h.netPayableCents).toBe(90000);
+    // AUDIT FIX: an OPEN week is live-recomputed, so it must NOT accrue into the
+    // "held to date" ledger — that made held/paid drift off unpaid money.
+    expect(svc.getReserveLedgerForRep(T5, REP_R).reserveBalanceCents).toBe(0);
+    // Once the week is FINALIZED (frozen), it accrues.
+    svc.batchTransitionWeek(T5, 1, WEEK_REF, "FINALIZE");
     const ledger = svc.getReserveLedgerForRep(T5, REP_R);
-    expect(ledger.reserveBalanceCents).toBe(10000);           // one $1,000 statement
+    expect(ledger.reserveBalanceCents).toBe(10000);           // one settled $1,000 statement
     expect(ledger.reserveBalanceCents + ledger.netPaidCents).toBe(ledger.earnedToDateCents);
   });
 

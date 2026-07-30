@@ -1239,8 +1239,13 @@ export function holdbackForStatement(tenantId: number, finalCommissionCents: num
  *  with the sum of the parts. */
 export function getReserveLedgerForRep(tenantId: number, repId: number): ReserveLedger {
   const pct = loadOrgConfig(tenantId).reservePercent;
+  // ONLY settled weeks accrue the reserve. An OPEN week is live-recomputed on
+  // every knock, so including it made "held to date" and "net paid to date" drift
+  // upward in real time off money that has not been paid. FINALIZED/PAID weeks are
+  // frozen, so their split is stable — that is what has actually been withheld.
   const rows = rawDb.prepare(
-    `SELECT final_commission_cents AS finalCents FROM commission_statements WHERE tenant_id = ? AND rep_id = ?`,
+    `SELECT final_commission_cents AS finalCents FROM commission_statements
+      WHERE tenant_id = ? AND rep_id = ? AND status IN ('FINALIZED','PAID')`,
   ).all(tenantId, repId) as Array<{ finalCents: number }>;
   return rollupReserve(rows.map(r => Number(r.finalCents || 0)), pct);
 }

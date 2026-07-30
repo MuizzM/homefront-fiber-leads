@@ -73,7 +73,13 @@ export function canonicalAddressPart(value: string): string {
     // BEFORE tokenizing so they key identically to "Apt 4"/"Unit 4".
     .replace(/#\s*/g, " UNIT ")
     .replace(/[^A-Z0-9]+/g, " ").trim().split(/\s+/)
-    .filter(Boolean).map(token => addressTokenAliases[token] ?? token).join(" ");
+    .filter(Boolean).map(token => addressTokenAliases[token] ?? token)
+    // Collapse a run of UNIT tokens to one. "Apt #4" folds APT→UNIT AND #→UNIT,
+    // producing "UNIT UNIT 4"; without this it keys differently from "Apt 4"
+    // ("UNIT 4"), so the same premise-unit becomes two leads / two pins / two
+    // paid re-scans. Collapsing the run makes every unit spelling key identically.
+    .filter((token, i, arr) => !(token === "UNIT" && arr[i - 1] === "UNIT"))
+    .join(" ");
 }
 
 /** First 5 digits of a ZIP/ZIP+4, or "" when absent/invalid — display + storage
@@ -161,7 +167,14 @@ export function normalizeKineticAddressKey(address: string, city: string, state:
  * duplicate pin — recoverable — instead of a lost lead — not.
  */
 export function kineticLeadKeyOrNull(address: string, city: string, state: string, zip: string): string | null {
-  if (canonicalAddressPart(address) === "") return null; // no street identity → do not dedup
+  // Guard on STREET identity, not merely a non-empty canonical form. A street-
+  // less input like "#" or "Apt 5" now canonicalizes to "UNIT"/"UNIT 5" (the
+  // #→UNIT and APT→UNIT folds), so the old `=== ""` check let it through and
+  // every such placeholder collapsed to one key (e.g. "UNIT|CHARLOTTE|NC"),
+  // MERGING distinct fresh leads — the exact data loss this function prevents.
+  // streetKeyOf strips the house number + unit tokens; empty ⇒ no street ⇒ do
+  // not dedup (a duplicate pin is recoverable; a merged-away lead is not).
+  if (streetKeyOf(address) === "") return null;
   return normalizeKineticAddressKey(address, city, state, zip);
 }
 

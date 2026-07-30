@@ -101,3 +101,21 @@ describe("addressIdentityIssues (ADDRESS_REVIEW validation)", () => {
     expect(addressIdentityIssues({ ...good, lat: 0, lng: 0 })).toContain("invalid coordinates");
   });
 });
+
+describe("address-key algorithmic fixes (audit)", () => {
+  it("every unit spelling keys identically — 'Apt #4' no longer double-folds to UNIT UNIT", () => {
+    const forms = ["123 Main St #4", "123 Main St Apt 4", "123 Main St Apt #4", "123 Main St Unit #4", "123 Main St Unit 4"];
+    const keys = forms.map(a => kineticLeadKeyOrNull(a, "Charlotte", "NC", "28202"));
+    expect(new Set(keys).size).toBe(1);                    // all one canonical key
+    expect(keys[0]).not.toContain("UNIT UNIT");
+  });
+
+  it("street-less placeholders get NO key (no dedup) — distinct leads can't merge away", () => {
+    // "#", "Apt 5", "Unit 12" have no street identity → null → dedup disabled.
+    expect(kineticLeadKeyOrNull("#", "Charlotte", "NC", "28202")).toBeNull();
+    expect(kineticLeadKeyOrNull("Apt 5", "Charlotte", "NC", "28202")).toBeNull();
+    expect(kineticLeadKeyOrNull("Unit 12", "Charlotte", "NC", "28202")).toBeNull();
+    // A real street still keys.
+    expect(kineticLeadKeyOrNull("123 Main St", "Charlotte", "NC", "28202")).not.toBeNull();
+  });
+});
