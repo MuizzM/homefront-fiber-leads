@@ -342,7 +342,7 @@ export default function SuperAdmin() {
     );
   }
 
-  const { data: tenants = [], isLoading } = useQuery<Tenant[]>({ queryKey: ["/api/sa/tenants"] });
+  const { data: tenants = [], isLoading, isError: tenantsError, refetch: refetchTenants } = useQuery<Tenant[]>({ queryKey: ["/api/sa/tenants"] });
   const { data: revenue } = useQuery<Revenue>({ queryKey: ["/api/sa/revenue"] });
 
   const createMutation = useMutation({
@@ -440,7 +440,20 @@ export default function SuperAdmin() {
       <div>
         <h2 className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide mb-3">Tenants</h2>
         {isLoading ? (
-          <div className="text-center py-12 text-muted-foreground text-sm">Loading...</div>
+          <div className="text-center py-12 text-muted-foreground text-sm">Loading…</div>
+        ) : tenantsError ? (
+          /* A failed fetch is NOT "no tenants yet" — that empty state invites
+             creating a duplicate of a tenant that already exists. */
+          <Card className="bg-card border-border">
+            <CardContent className="py-12 text-center" data-testid="sa-tenants-error">
+              <p className="text-sm font-semibold text-foreground">Couldn't load tenants</p>
+              <p className="text-sm text-muted-foreground mt-1">Your tenants are intact — this is a connection problem, not an empty list.</p>
+              <button onClick={() => refetchTenants()}
+                className="mt-4 inline-flex items-center justify-center h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
+                Retry
+              </button>
+            </CardContent>
+          </Card>
         ) : tenants.length === 0 ? (
           <Card className="bg-card border-border">
             <CardContent className="py-12 text-center">

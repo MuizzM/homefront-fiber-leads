@@ -711,7 +711,8 @@ const nextAction = (lead: Lead) => {
 
 function EnterpriseKpi({ label, value, helper, icon: Icon, tone = "text-primary", warning = false }: {
   label: string;
-  value: number;
+  /** null = the fetch failed — render an honest em-dash, never a fake 0. */
+  value: number | null;
   helper: string;
   icon: React.ElementType;
   tone?: string;
@@ -723,7 +724,7 @@ function EnterpriseKpi({ label, value, helper, icon: Icon, tone = "text-primary"
         <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{label}</span>
         <Icon className={`w-4 h-4 ${tone}`} />
       </div>
-      <div className="text-2xl font-semibold tracking-tight tabular-nums mt-2">{value.toLocaleString()}</div>
+      <div className="text-2xl font-semibold tracking-tight tabular-nums mt-2" aria-label={value == null ? `${label} unavailable` : undefined}>{value == null ? "—" : value.toLocaleString()}</div>
       <div className="text-[11px] text-muted-foreground mt-1">{helper}</div>
     </div>
   );
@@ -796,7 +797,7 @@ export default function Leads() {
   const facets = facetsData?.facets ?? [];
 
   // Pipeline breakdown for the KPI strip (tenant/role-scoped server-side).
-  const { data: leadStats } = useQuery<{
+  const { data: leadStats, isError: statsError } = useQuery<{
     total: number;
     assigned: number;
     unassigned: number;
@@ -920,11 +921,11 @@ export default function Leads() {
         </div>
       )}
       <div className={`${isRep ? "hidden md:flex" : "flex"} gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden`} data-testid="leads-kpi">
-        <EnterpriseKpi label="Total leads" value={leadStats?.total ?? 0} helper="All active records" icon={Users} />
-        <EnterpriseKpi label="Qualified" value={leadStats?.qualified ?? 0} helper="Interested or sold" icon={CheckCircle2} tone="text-success" />
-        <EnterpriseKpi label="Assigned" value={leadStats?.assigned ?? 0} helper="Owned by a field rep" icon={UserCheck} tone="text-violet-600 dark:text-violet-400" />
-        <EnterpriseKpi label="Unassigned" value={leadStats?.unassigned ?? 0} helper="Requires an owner" icon={CircleDot} tone="text-warning" warning={(leadStats?.unassigned ?? 0) > 0} />
-        <EnterpriseKpi label="Stale" value={leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-rose-600 dark:text-rose-400" warning={(leadStats?.stale ?? 0) > 0} />
+        <EnterpriseKpi label="Total leads" value={statsError ? null : leadStats?.total ?? 0} helper="All active records" icon={Users} />
+        <EnterpriseKpi label="Qualified" value={statsError ? null : leadStats?.qualified ?? 0} helper="Interested or sold" icon={CheckCircle2} tone="text-success" />
+        <EnterpriseKpi label="Assigned" value={statsError ? null : leadStats?.assigned ?? 0} helper="Owned by a field rep" icon={UserCheck} tone="text-violet-600 dark:text-violet-400" />
+        <EnterpriseKpi label="Unassigned" value={statsError ? null : leadStats?.unassigned ?? 0} helper="Requires an owner" icon={CircleDot} tone="text-warning" warning={!statsError && (leadStats?.unassigned ?? 0) > 0} />
+        <EnterpriseKpi label="Stale" value={statsError ? null : leadStats?.stale ?? 0} helper="No activity in 14 days" icon={AlertTriangle} tone="text-rose-600 dark:text-rose-400" warning={!statsError && (leadStats?.stale ?? 0) > 0} />
       </div>
 
       <section className="rounded-xl border border-border bg-card overflow-hidden shadow-sm">

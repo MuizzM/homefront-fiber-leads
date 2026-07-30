@@ -53,7 +53,7 @@ function buildScript(lead: QueueLead): string {
   return `Hi ${who}, this is [your name] with Home Front Solutions — we're bringing Kinetic Fiber internet to your neighborhood${where}. I wanted to see if you'd want faster, more reliable service at your address. Do you have a quick minute?`;
 }
 
-const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60";
+import { FOCUS } from "@/lib/a11y";
 
 export default function ReadyToCall() {
   const { toast } = useToast();

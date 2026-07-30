@@ -3,7 +3,7 @@
 // The board defaults to TODAY (the shift a rep is actually running), fetches
 // through ?range=today, and marks the Today segment pressed. Loading renders
 // skeleton rows in the board's real shape — never a bare "Loading..." line.
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
@@ -14,7 +14,7 @@ vi.mock("@/lib/auth", () => ({
 import Leaderboard from "../../client/src/pages/Leaderboard";
 
 const fetched: string[] = [];
-function renderBoard(payload: any[] | "pending") {
+function renderBoard(payload: any[] | "pending" | "error") {
   fetched.length = 0;
   const qc = new QueryClient({
     defaultOptions: {
@@ -22,7 +22,9 @@ function renderBoard(payload: any[] | "pending") {
         retry: false,
         queryFn: ({ queryKey }) => {
           fetched.push(String(queryKey[0]));
-          return payload === "pending" ? new Promise(() => {}) : Promise.resolve(payload);
+          if (payload === "pending") return new Promise(() => {});
+          if (payload === "error") return Promise.reject(new Error("boom"));
+          return Promise.resolve(payload);
         },
       },
     },
@@ -51,6 +53,13 @@ describe("Leaderboard defaults", () => {
     renderBoard("pending");
     expect(screen.getByTestId("leaderboard-loading")).toBeTruthy();
     expect(screen.queryByText(/loading leaderboard/i)).toBeNull();
+  });
+
+  it("a failed fetch shows em-dash tiles, never a fake 0", async () => {
+    renderBoard("error");
+    const sales = await screen.findByTestId("stat-sales");
+    await waitFor(() => expect(sales.textContent).toContain("\u2014")); // — em dash
+    expect(sales.textContent).not.toContain("0");
   });
 
   it("pins the signed-in rep's own rank summary", async () => {

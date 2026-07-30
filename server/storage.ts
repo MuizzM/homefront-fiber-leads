@@ -152,6 +152,10 @@ export interface MapPinRow {
   freshConfidence: string | null;
   carrier?: string | null;
   assignMark?: string | null;
+  /** The lead row's OWN disposition (CAS-ordered; written by knocks AND
+   *  central marks). Preferred over the knock join when at least as new. */
+  leadLastOutcome?: string | null;
+  leadLastOutcomeAt?: string | null;
   knockCount: number | null;
   lastOutcome: string | null;
   lastKnockedAt: string | null;
@@ -2609,7 +2613,12 @@ export class Storage implements IStorage {
           l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
           l.lead_score AS leadScore,
           l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
-          l.assign_mark AS assignMark
+          l.assign_mark AS assignMark,
+          -- The lead's OWN disposition columns. The knock CAS keeps these
+          -- monotonic by last_outcome_at, and central marks write them with NO
+          -- knock row — so the pin's outcome must be able to come from here,
+          -- not only from the knock join below.
+          l.last_outcome AS leadLastOutcome, l.last_outcome_at AS leadLastOutcomeAt
         FROM leads l
         WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
           -- Competitive-eligibility gate: a lead retracted because a fiber
@@ -2633,6 +2642,7 @@ export class Storage implements IStorage {
         s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
         s.leadStatus, s.fiberStatus, s.assignedRepId, s.assignedTerritoryId, s.leadScore,
         s.leadTag, s.freshConfidence, s.carrier, s.assignMark,
+        s.leadLastOutcome, s.leadLastOutcomeAt,
         rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
       FROM scoped s
       LEFT JOIN ranked_visits rv ON rv.leadId = s.id AND rv.rowNumber = 1

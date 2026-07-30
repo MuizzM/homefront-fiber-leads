@@ -122,3 +122,56 @@ describe("Central Mark attribution", () => {
     expect(JSON.stringify(rows)).not.toContain("Ravi Second");
   });
 });
+
+// ── The mark must SURVIVE the map read ────────────────────────────────────────
+// The user-visible defect: Central Admin marks "Already a Customer" and the pin
+// flips to "Not Interested" on the next refetch. "Already a customer" is stored
+// as leadStatus=not_interested + lastOutcome=already_customer; the map query
+// sourced lastOutcome from the knock_log join ONLY, and a central mark writes
+// no knock row — so the disambiguating outcome vanished on every fresh load.
+// The lead row's own last_outcome (kept monotonic by the knock CAS) is the
+// authority; the knock join is a legacy fallback.
+describe("central mark on the map read", () => {
+  const pinOf = async (leadId: number) => {
+    const body = await (await req("/api/leads/map", fx.manager.session)).json();
+    return (body.pins as any[]).find(p => p.id === leadId);
+  };
+
+  it("already-customer on a NEVER-knocked lead survives a fresh map fetch", async () => {
+    const leadId = seedLead();
+    const r = await central(leadId, fx.manager.session, { outcome: "already_customer" });
+    expect(r.status).toBe(200);
+    const pin = await pinOf(leadId);
+    expect(pin).toBeTruthy();
+    expect(pin.leadStatus).toBe("not_interested");
+    expect(pin.lastOutcome).toBe("already_customer");   // the disambiguator
+  });
+
+  it("a central mark NEWER than the last rep knock wins the pin", async () => {
+    const leadId = seedLead();
+    // A real knock yesterday (writes knock_log + the lead columns, as the CAS does).
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+    rawDb.prepare(
+      "INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, notes) VALUES (?, ?, ?, 0, ?, NULL)",
+    ).run(leadId, fx.assignedRep.memberId, "not_home", yesterday);
+    storage.applyKnockOutcomeCas(leadId, "prospect", "not_home", yesterday);
+    // Central mark today.
+    const r = await central(leadId, fx.manager.session, { outcome: "already_customer" });
+    expect(r.status).toBe(200);
+    const pin = await pinOf(leadId);
+    expect(pin.lastOutcome).toBe("already_customer");
+    expect(pin.visited).toBe(true);                     // the knock still counts as a visit
+  });
+
+  it("legacy rows with knocks but no lead-level outcome still read the knock", async () => {
+    const leadId = seedLead();
+    const at = new Date(Date.now() - 3_600_000).toISOString();
+    rawDb.prepare(
+      "INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, notes) VALUES (?, ?, ?, 1, ?, NULL)",
+    ).run(leadId, fx.assignedRep.memberId, "interested", at);
+    // Simulate a pre-CAS legacy row: knock exists, lead columns never written.
+    rawDb.prepare("UPDATE leads SET last_outcome = NULL, last_outcome_at = NULL, lead_status = 'interested' WHERE id = ?").run(leadId);
+    const pin = await pinOf(leadId);
+    expect(pin.lastOutcome).toBe("interested");
+  });
+});

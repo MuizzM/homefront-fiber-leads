@@ -4,6 +4,7 @@
 // /api/leads/map pins, /api/leaderboard (today's doors/sales), /api/clock/status,
 // and the SHARED offline logger (useKnockLogger → knockQueue + GPS evidence).
 import { useState, useMemo, useEffect } from "react";
+import { FOCUS } from "@/lib/a11y";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -22,8 +23,6 @@ import {
   Zap, Flame, Repeat, DollarSign, Trophy, Sun, CalendarClock, SkipForward,
 } from "lucide-react";
 
-// Visible keyboard focus for outdoor + accessibility — one ring, teal, everywhere.
-const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 interface Pin extends RoutablePin {
   address: string; city: string; state?: string | null; zip?: string | null;

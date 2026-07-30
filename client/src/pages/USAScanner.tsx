@@ -240,7 +240,7 @@ export default function USAScanner() {
   const criticalCount = markets.filter(m => m.priority === "critical").length;
 
   return (
-    <div className="p-5 space-y-6 max-w-5xl">
+    <div className="p-5 space-y-6 max-w-5xl mx-auto">
 
       {/* Header */}
       <div className="flex items-start justify-between flex-wrap gap-3">
@@ -259,10 +259,11 @@ export default function USAScanner() {
             </p>
           </div>
         </div>
+        {/* This catalog is fetched ONCE (staleTime: Infinity) — a pulsing
+            "Live feed" chip here was a lie. State what it is: a dated snapshot. */}
         {marketsData && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            Live feed
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-muted-foreground tabular-nums">
+            Snapshot · {marketsData.lastUpdated}
           </span>
         )}
       </div>
