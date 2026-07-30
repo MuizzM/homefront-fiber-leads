@@ -71,8 +71,24 @@ describe("Field Hours day bucketing", () => {
     ]);
     const todayTile = (await screen.findByText("Today")).closest("div")!.parentElement!;
     expect(await within(todayTile).findByText("2h 0m")).toBeTruthy();   // only session 1
-    const weekTile = screen.getByText("This Week").closest("div")!.parentElement!;
+    const weekTile = screen.getByText("This week").closest("div")!.parentElement!;
     expect(within(weekTile).getByText("3h 0m")).toBeTruthy();    // both
+  });
+
+  it("failed sessions fetch shows em-dashes and a retry, never 0m", async () => {
+    apiRequest.mockImplementation((...args: any[]) => {
+      const url = String(args.find(a => typeof a === "string" && a.startsWith("/")) ?? "");
+      if (url.includes("/clock/status")) return Promise.resolve({ json: () => Promise.resolve({ clockedIn: false, session: null }) });
+      // Fail at the json() step, inside the .then chain React Query owns —
+      // the rejection is created pre-handled, so no reporter noise.
+      return Promise.resolve({ json: () => { throw new Error("boom"); } });
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><ClockIn /></QueryClientProvider>);
+    expect(await screen.findByTestId("sessions-error")).toBeTruthy();
+    const todayTile = screen.getByText("Today").closest("div")!.parentElement!;
+    expect(within(todayTile).getByText("\u2014")).toBeTruthy();
+    expect(within(todayTile).queryByText("0m")).toBeNull();
   });
 
   it("offers Clock In when off the clock", async () => {

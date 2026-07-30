@@ -4,6 +4,7 @@
 // opens the door; one more logs the outcome via the SAME shared sheet + offline
 // queue, and the door drops off the list. 100% real data: GET /api/followups.
 import { useMemo, useState } from "react";
+import { FOCUS } from "@/lib/a11y";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
@@ -17,8 +18,6 @@ import {
   Flame, Zap, StickyNote, Clock,
 } from "lucide-react";
 
-// Visible keyboard focus (same ring Today uses) — sunlight + accessibility.
-const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 interface FollowUp {
   leadId: number; address: string; city: string; state?: string | null; zip?: string | null;

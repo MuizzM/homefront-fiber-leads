@@ -1,3 +1,4 @@
+import { FOCUS } from "@/lib/a11y";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { StatStrip, StatTile } from "@/components/ui/page-scaffold";
@@ -25,8 +26,6 @@ type LeaderboardEntry = {
   sales: number;
 };
 
-// Visible keyboard focus — same teal ring the rep screens share.
-const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 const RANK_COLORS = [
   "text-yellow-400",   // 1st
@@ -91,7 +90,7 @@ export default function Leaderboard() {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold tracking-tight flex items-center gap-2 text-foreground">
-            <Trophy className="w-5 h-5 text-muted-foreground" /> Sales Leaderboard
+            <Trophy className="w-5 h-5 text-muted-foreground" /> Sales leaderboard
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
             Ranked by sales · <span className="text-foreground/80 font-medium">{rangeLabel}</span>
@@ -163,12 +162,14 @@ export default function Leaderboard() {
       </div>
 
       {/* Team totals — shared Revolut-grammar strip: eyebrow label above a
-          tabular number, ONE accent tile (the number this screen is for). */}
+          tabular number, ONE accent tile (the number this screen is for).
+          A failed or still-loading fetch must NEVER read as "0 sales" — the
+          tiles show an honest em-dash until real numbers exist. */}
       <StatStrip columns={4}>
-        <StatTile label="Total Knocks" value={totals.knocks} icon={DoorOpen} testId="stat-knocks" />
-        <StatTile label="Contacts Made" value={totals.contacts} icon={PhoneCall} testId="stat-contacts" />
-        <StatTile label="Callbacks" value={totals.callbacks} icon={CalendarCheck} testId="stat-callbacks" />
-        <StatTile label="Total Sales" value={totals.sales} icon={Zap} accent testId="stat-sales" />
+        <StatTile label="Team knocks" value={isLoading || isError ? "—" : totals.knocks} icon={DoorOpen} testId="stat-knocks" />
+        <StatTile label="Contacts" value={isLoading || isError ? "—" : totals.contacts} icon={PhoneCall} testId="stat-contacts" />
+        <StatTile label="Callbacks" value={isLoading || isError ? "—" : totals.callbacks} icon={CalendarCheck} testId="stat-callbacks" />
+        <StatTile label="Team sales" value={isLoading || isError ? "—" : totals.sales} icon={Zap} accent testId="stat-sales" />
       </StatStrip>
 
       {/* Your rank — pinned summary so a rep never scrolls to find themselves */}

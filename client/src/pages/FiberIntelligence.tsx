@@ -151,7 +151,7 @@ const KIND_STYLE: Record<string, { label: string; cls: string }> = {
 
 function FreshNow() {
   const [hours, setHours] = useState<24 | 168>(24);
-  const { data, isLoading } = useQuery<FirstSeenLive>({
+  const { data, isLoading, isError } = useQuery<FirstSeenLive>({
     queryKey: ["/api/scan/first-seen-live", hours],
     queryFn: () => apiRequest("GET", `/api/scan/first-seen-live?hours=${hours}`).then((r) => r.json()),
     refetchInterval: 8000, // near-real-time without an SSE dependency
@@ -195,7 +195,9 @@ function FreshNow() {
         <RankedLeads />
       </Suspense>
       <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-        <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · last {hours === 24 ? "24h" : "7 days"} · refreshes automatically</span>
+        {isError
+          ? <span className="inline-flex items-center gap-1 text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost — showing last loaded data</span>
+          : <span className="inline-flex items-center gap-1"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · last {hours === 24 ? "24h" : "7 days"}</span>}
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-card">
         {isLoading && !data ? (
@@ -373,7 +375,7 @@ function relMs(ms: number): string {
 function NewBuilds({ isManager }: { isManager: boolean }) {
   const [state, setState] = useState<"all" | "NC" | "SC">("all");
   const [stage, setStage] = useState<"all" | "addressed" | "monitored" | "actionable">(isManager ? "all" : "actionable");
-  const { data, isLoading } = useQuery<NewBuildFeed>({
+  const { data, isLoading, isError } = useQuery<NewBuildFeed>({
     queryKey: ["/api/newbuilds/live"],
     queryFn: () => apiRequest("GET", "/api/newbuilds/live?hours=168").then((r) => r.json()),
     refetchInterval: 8000, staleTime: 5000,
@@ -416,7 +418,9 @@ function NewBuilds({ isManager }: { isManager: boolean }) {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 text-[12px]">
-        <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live · streaming into Fiber Intelligence</span>
+        {isError
+          ? <span className="inline-flex items-center gap-1 text-[11px] text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-400" /> Connection lost — showing last loaded data</span>
+          : <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" /> Live</span>}
         <div className="ml-auto flex gap-1">
           {(["all", "NC", "SC"] as const).map((s) => (
             <button key={s} onClick={() => setState(s)} className={`rounded-lg px-2.5 py-1 font-semibold ${state === s ? "bg-primary text-primary-foreground" : "border border-border text-muted-foreground hover:bg-secondary"}`}>{s === "all" ? "All" : s}</button>

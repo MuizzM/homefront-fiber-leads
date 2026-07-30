@@ -61,7 +61,7 @@ export default function ClockIn() {
     refetchInterval: 10000,
   });
 
-  const { data: sessions = [], isLoading: sessionsLoading } = useQuery<ClockSession[]>({
+  const { data: sessions = [], isLoading: sessionsLoading, isError: sessionsError, refetch: refetchSessions } = useQuery<ClockSession[]>({
     queryKey: ["/api/clock/sessions"],
     queryFn: () => apiRequest("GET", "/api/clock/sessions").then(r => r.json()),
     refetchInterval: 30000,
@@ -72,9 +72,9 @@ export default function ClockIn() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/clock/status"] });
       queryClient.invalidateQueries({ queryKey: ["/api/clock/sessions"] });
-      toast({ title: "Clocked in successfully" });
+      toast({ title: "Clocked in — have a great shift", severity: "success" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e?.message ?? "Could not clock in", variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Couldn't clock in", description: e?.message ?? "Check your connection and try again.", variant: "destructive" }),
   });
 
   const clockOutMutation = useMutation({
@@ -84,7 +84,7 @@ export default function ClockIn() {
       queryClient.invalidateQueries({ queryKey: ["/api/clock/sessions"] });
       toast({ title: `Clocked out · ${formatDuration(data?.durationMinutes ?? 0)} in field` });
     },
-    onError: () => toast({ title: "Error clocking out", variant: "destructive" }),
+    onError: () => toast({ title: "Couldn't clock out", description: "Your session is still running — try again.", variant: "destructive" }),
   });
 
   const todaySessions = sessions.filter(s => localDayKey(s.clockedIn) === today);
@@ -101,7 +101,7 @@ export default function ClockIn() {
   return (
     <div className="w-full max-w-4xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-8">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight text-foreground">Field Hours</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-foreground">Field hours</h1>
         <p className="text-sm text-muted-foreground">Clock in/out tracker · {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}</p>
       </div>
 
@@ -130,7 +130,7 @@ export default function ClockIn() {
                   }`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full ${isOnClock ? "bg-primary animate-pulse" : "bg-muted-foreground"}`} />
-                  {isOnClock ? "In the Field" : "Off Duty"}
+                  {isOnClock ? "In the field" : "Off duty"}
                 </span>
                 {isOnClock && clockStatus?.session ? (
                   <div>
@@ -153,7 +153,7 @@ export default function ClockIn() {
                     data-testid="button-clock-in"
                   >
                     <LogIn className="w-5 h-5 mr-2" />
-                    {clockInMutation.isPending ? "Clocking In..." : "Clock In"}
+                    {clockInMutation.isPending ? "Clocking in…" : "Clock in"}
                   </Button>
                 ) : (
                   <Button
@@ -165,7 +165,7 @@ export default function ClockIn() {
                     data-testid="button-clock-out"
                   >
                     <LogOut className="w-5 h-5 mr-2" />
-                    {clockOutMutation.isPending ? "Clocking Out..." : "Clock Out"}
+                    {clockOutMutation.isPending ? "Clocking out…" : "Clock out"}
                   </Button>
                 )}
               </div>
@@ -177,23 +177,29 @@ export default function ClockIn() {
       {/* Metric strip */}
       <Card className="bg-card border-border rounded-xl">
         <div className="grid grid-cols-3 divide-x divide-border">
+          {/* A failed sessions fetch must never read as "0m worked" — the
+              server still has the hours; the em-dash says "unknown", not zero. */}
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <Clock className="w-3.5 h-3.5 text-primary" /> Today
+              <Clock className="w-3.5 h-3.5 text-primary" aria-hidden="true" /> Today
             </div>
-            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{formatDuration(todayMinutes)}</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground" aria-label={sessionsError ? "Today's hours unavailable" : undefined}>
+              {sessionsError ? "—" : formatDuration(todayMinutes)}
+            </p>
           </div>
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <TrendingUp className="w-3.5 h-3.5 text-muted-foreground" /> This Week
+              <TrendingUp className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" /> This week
             </div>
-            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{formatDuration(weekMinutes)}</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground" aria-label={sessionsError ? "This week's hours unavailable" : undefined}>
+              {sessionsError ? "—" : formatDuration(weekMinutes)}
+            </p>
           </div>
           <div className="p-3.5 md:p-5">
             <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <Users className="w-3.5 h-3.5 text-muted-foreground" /> {isManager ? "Active Now" : "My Status"}
+              <Users className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" /> {isManager ? "Active now" : "My status"}
             </div>
-            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{isManager ? activeSessions.length : (isOnClock ? 1 : 0)}</p>
+            <p className="mt-2 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{isManager ? (sessionsError ? "—" : activeSessions.length) : (isOnClock ? 1 : 0)}</p>
           </div>
         </div>
       </Card>
@@ -203,7 +209,7 @@ export default function ClockIn() {
         <Card className="bg-card border-border rounded-xl">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
-              <Timer className="w-4 h-4 text-primary" /> Currently in Field
+              <Timer className="w-4 h-4 text-primary" /> Currently in field
               <Badge className="bg-emerald-500/15 text-emerald-400 border-transparent rounded-full ml-1">{activeSessions.length}</Badge>
             </CardTitle>
           </CardHeader>
@@ -232,12 +238,22 @@ export default function ClockIn() {
       <Card className="bg-card border-border rounded-xl">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold tracking-tight text-foreground flex items-center gap-2">
-            <Calendar className="w-4 h-4 text-primary" /> Session History
+            <Calendar className="w-4 h-4 text-primary" /> Session history
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           {sessionsLoading ? (
             <div className="p-4 space-y-2">{[1,2,3].map(i => <Skeleton key={i} className="h-12 bg-secondary" />)}</div>
+          ) : sessionsError ? (
+            // A fetch failure is NOT "no sessions yet" — say so, offer retry.
+            <div className="p-5 text-center" data-testid="sessions-error">
+              <p className="text-sm font-semibold text-foreground">Couldn't load your sessions</p>
+              <p className="text-sm text-muted-foreground mt-1">Your hours are safe on the server — check your connection.</p>
+              <button onClick={() => refetchSessions()}
+                className="mt-3 inline-flex items-center justify-center h-11 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform">
+                Retry
+              </button>
+            </div>
           ) : sessions.length === 0 ? (
             <p className="text-sm text-muted-foreground p-5">No sessions yet</p>
           ) : (
