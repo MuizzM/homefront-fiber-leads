@@ -4793,7 +4793,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
           if (outcome === "sold") {
             commissionSvc.recordFieldSaleFromKnock({
               tenantId: saleTenant, repId: knockRow.repId, leadId,
-              knockId: knockRow.id, soldAt: knockRow.knockedAt || serverTs, actorId: (req as any).user?.id ?? null,
+              knockId: knockRow.id, soldAt: knockRow.knockedAt || serverTs,
+              // Server receipt time is the authority for which WEEK the sale
+              // pays in; the client knockedAt can only pull it earlier, and only
+              // within the correction window (see recordFieldSaleFromKnock).
+              serverReceivedAt: serverTs, actorId: (req as any).user?.id ?? null,
             });
           } else {
             commissionSvc.reverseFieldSale(saleTenant, leadId, (req as any).user?.id ?? null);

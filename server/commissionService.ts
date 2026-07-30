@@ -822,17 +822,71 @@ const fieldSaleExternalId = (leadId: number) => `lead:${leadId}`;
 
 export function recordFieldSaleFromKnock(input: {
   tenantId: number; repId: number; leadId: number; knockId: number;
-  soldAt: string; actorId: number | null;
+  soldAt: string; serverReceivedAt: string; actorId: number | null;
 }): void {
-  const { tenantId, repId, leadId, soldAt, actorId } = input;
+  const { tenantId, repId, leadId, soldAt, serverReceivedAt, actorId } = input;
+  const externalId = fieldSaleExternalId(leadId);
+  const existing = rawDb.prepare(
+    `SELECT id, rep_id, status FROM commission_sales WHERE tenant_id = ? AND external_id = ?`,
+  ).get(tenantId, externalId) as any;
+
+  // ── ANTI-GAMING GUARD 1: a live sale is FROZEN (owner + pay-week). ──────────
+  // Retroactive weekly pay makes re-crediting and re-timing extremely valuable,
+  // so once a door's sale is QUALIFIED its rep_id and its week are set for good.
+  // A later "sold" knock — from a teammate who shares the territory, or from the
+  // original rep re-knocking in a richer week — is recorded as field history but
+  // is a MONEY no-op here. Closes two confirmed exploits:
+  //   * sale theft: rep B re-marks rep A's sold door and the ON CONFLICT upsert
+  //     flips rep_id (and the whole week's tier contribution) from A to B;
+  //   * week re-timing: a rep drags a prior-week sale into this week's count by
+  //     re-knocking it "now", inflating the retroactive tier.
+  // A genuine correction (wrong rep, wrong week) is a manager reversal, never a
+  // silent client-driven overwrite.
+  if (existing && existing.status === "QUALIFIED") {
+    if (Number(existing.rep_id) !== repId) {
+      storage.logActivity(actorId, "commission_sale.credit_conflict_blocked", "commission_sale", existing.id,
+        { externalId, leadId, existingRepId: existing.rep_id, attemptedRepId: repId }, undefined);
+    }
+    return;
+  }
+
+  // ── ANTI-GAMING GUARD 2: the pay-week is placed by SERVER-RECEIVED time, ────
+  // clamped to the correction window — never by the raw client knock timestamp.
+  // Honest offline flush still lands in its true week (a sale that syncs a few
+  // days late is inside the window); what this stops is backdating weeks/months
+  // to concentrate many sales into one high-tier week. The true field time still
+  // records on the knock row as history — this only bounds the MONEY week.
+  const config = loadOrgConfig(tenantId);
+  const serverMs = Date.parse(serverReceivedAt);
+  const floorMs = serverMs - config.correctionWindowDays * 86_400_000;
+  const rawMs = Date.parse(soldAt);
+  const clampedMs = Math.min(Math.max(Number.isFinite(rawMs) ? rawMs : serverMs, floorMs), serverMs);
+  const effectiveSoldAt = new Date(clampedMs).toISOString();
+
+  // ── ANTI-GAMING GUARD 3: never inject QUALIFIED money into a locked week. ───
+  // If the target week's statement is already FINALIZED or PAID, the sale is
+  // booked PENDING (uncounted) and flagged for manual review instead of silently
+  // re-pricing — or worse, latently sitting inside a paid week to surface on the
+  // next recalculation. A manager qualifies it into an open correction period.
+  const bounds = weekBoundsFor(effectiveSoldAt, config);
+  const lockedStmt = rawDb.prepare(
+    `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+  ).get(tenantId, repId, bounds.weekStartUtc) as any;
+  const weekLocked = lockedStmt && (lockedStmt.status === "FINALIZED" || lockedStmt.status === "PAID");
+
   upsertSale(tenantId, actorId, {
-    repId, externalId: fieldSaleExternalId(leadId), status: "QUALIFIED",
-    soldAt, qualifiedAt: soldAt, leadId,
+    repId, externalId, status: weekLocked ? "PENDING" : "QUALIFIED",
+    soldAt: effectiveSoldAt, qualifiedAt: weekLocked ? null : effectiveSoldAt, leadId,
   });
-  // Keep the rep's live week fresh (best-effort — a locked week or missing plan
-  // must never block the knock).
+  if (weekLocked) {
+    storage.logActivity(actorId, "commission_sale.locked_week_pending", "commission_sale", undefined,
+      { externalId, leadId, weekStartUtc: bounds.weekStartUtc, status: lockedStmt.status }, undefined);
+    return;
+  }
+  // Keep the rep's live week fresh (best-effort — a missing plan must never
+  // block the knock).
   try {
-    calculateOrRecalculateStatement({ tenantId, repId, weekReference: soldAt, actorId, requestId: `field-sale:lead:${leadId}` });
+    calculateOrRecalculateStatement({ tenantId, repId, weekReference: effectiveSoldAt, actorId, requestId: `field-sale:lead:${leadId}` });
   } catch (e) {
     if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
   }
