@@ -34,7 +34,7 @@ export default function LiveMap() {
   });
 
   // Fetch latest pings per rep
-  const { data: pings = [], isLoading } = useQuery<LocationPing[]>({
+  const { data: pings = [], isLoading, isError, refetch } = useQuery<LocationPing[]>({
     queryKey: ["/api/location-pings/latest"],
     queryFn: () => apiRequest("GET", "/api/location-pings/latest").then(r => r.json()),
     enabled: isManager,
@@ -213,13 +213,25 @@ export default function LiveMap() {
                   <div className="p-3 space-y-2">
                     {[1,2,3].map(i => <Skeleton key={i} className="h-10 bg-secondary" />)}
                   </div>
+                ) : isError ? (
+                  /* An outage must not read as "every rep is offline" — that
+                     false-negative would send a manager chasing phantom idle
+                     reps. Distinct error + retry instead of the empty branch. */
+                  <div className="px-3 pb-3 pt-1" role="alert" data-testid="livemap-pings-error">
+                    <p className="text-xs text-amber-400 font-medium">Couldn&apos;t load rep locations</p>
+                    <button type="button" onClick={() => refetch()} data-testid="livemap-pings-retry"
+                      className="mt-2 inline-flex h-8 items-center rounded-lg border border-border bg-secondary px-3 text-xs font-semibold text-foreground active:scale-95 transition-transform">
+                      Retry
+                    </button>
+                  </div>
                 ) : pings.length === 0 ? (
                   <p className="text-xs text-muted-foreground px-3 pb-3">No active reps</p>
                 ) : (
                   <div className="divide-y divide-border">
                     {pings.map(p => (
-                      <div key={p.repId}
-                        className="px-3 py-2.5 flex items-center gap-2 cursor-pointer hover:bg-secondary/50 transition-colors"
+                      <button key={p.repId} type="button"
+                        aria-label={`Fly map to ${p.repName}`}
+                        className="w-full text-left px-3 py-2.5 flex items-center gap-2 cursor-pointer hover:bg-secondary/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
                         onClick={() => mapRef.current?.flyTo({ center: [p.lng, p.lat], zoom: 15 })}
                         data-testid={`rep-ping-${p.repId}`}
                       >
@@ -230,8 +242,8 @@ export default function LiveMap() {
                           <p className="text-xs text-foreground font-medium truncate">{p.repName}</p>
                           <p className="text-xs text-muted-foreground">{timeAgo(p.pingAt)}</p>
                         </div>
-                        <div className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" />
-                      </div>
+                        <div className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0" aria-hidden="true" />
+                      </button>
                     ))}
                   </div>
                 )}

@@ -124,7 +124,7 @@ export default function CommissionConsole() {
           </p>
         </div>
         <div className="flex items-center gap-1.5" data-testid="week-nav">
-          <Button variant="outline" size="sm" className="h-9 w-9 p-0 border-border" onClick={() => setWeekOffset(o => o - 1)} data-testid="week-prev">
+          <Button variant="outline" size="sm" aria-label="Previous week" title="Previous week" className="h-9 w-9 p-0 border-border" onClick={() => setWeekOffset(o => o - 1)} data-testid="week-prev">
             <ChevronLeft className="w-4 h-4" />
           </Button>
           <div className="text-center min-w-[170px]">
@@ -135,7 +135,7 @@ export default function CommissionConsole() {
                 : weekOffset > 0 ? "Future week" : "Past week"}
             </div>
           </div>
-          <Button variant="outline" size="sm" className="h-9 w-9 p-0 border-border" disabled={weekOffset >= 0}
+          <Button variant="outline" size="sm" aria-label="Next week" title="Next week" className="h-9 w-9 p-0 border-border" disabled={weekOffset >= 0}
             onClick={() => setWeekOffset(o => o + 1)} data-testid="week-next">
             <ChevronRight className="w-4 h-4" />
           </Button>

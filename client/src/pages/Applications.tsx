@@ -238,7 +238,22 @@ export default function Applications() {
           </div>
           <div className="max-h-[720px] overflow-y-auto">
             {pipeline.isLoading && <div className="grid h-48 place-items-center text-sm text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin" /></div>}
-            {!pipeline.isLoading && !filtered.length && <div className="p-10 text-center"><Users className="mx-auto mb-3 h-8 w-8 text-muted-foreground/40" /><p className="text-sm font-medium text-foreground">No candidates in this view</p><p className="mt-1 text-xs text-muted-foreground">Send a private invite or change the filters.</p></div>}
+            {/* A fetch failure must NOT masquerade as an empty queue: a manager
+                who sees "no candidates" on a network blip may re-invite people
+                already in flight (a duplicate onboarding invite). Error+retry
+                comes before the empty state, gated so the two never overlap. */}
+            {!pipeline.isLoading && pipeline.isError && (
+              <div className="p-10 text-center" role="alert" data-testid="pipeline-error">
+                <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-amber-400" />
+                <p className="text-sm font-medium text-foreground">Couldn&apos;t load the candidate pipeline</p>
+                <p className="mt-1 text-xs text-muted-foreground">Check your connection — your candidates are safe. Don&apos;t re-invite anyone until this loads.</p>
+                <button type="button" onClick={() => pipeline.refetch()} data-testid="pipeline-retry"
+                  className="mt-4 inline-flex h-9 items-center justify-center rounded-lg border border-border bg-secondary px-4 text-sm font-semibold text-foreground active:scale-95 transition-transform">
+                  Retry
+                </button>
+              </div>
+            )}
+            {!pipeline.isLoading && !pipeline.isError && !filtered.length && <div className="p-10 text-center"><Users className="mx-auto mb-3 h-8 w-8 text-muted-foreground/40" /><p className="text-sm font-medium text-foreground">No candidates in this view</p><p className="mt-1 text-xs text-muted-foreground">Send a private invite or change the filters.</p></div>}
             {filtered.map(record => {
               const selectedRow = record.key === selectedKey;
               const percent = record.progress.total > 0 ? Math.round((record.progress.completed / record.progress.total) * 100) : 0;
