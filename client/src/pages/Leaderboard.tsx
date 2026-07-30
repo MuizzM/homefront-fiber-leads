@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { StatStrip, StatTile } from "@/components/ui/page-scaffold";
 import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap, RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { useAuth } from "@/lib/auth";
 import type { TeamMember } from "@shared/schema";
@@ -24,6 +25,9 @@ type LeaderboardEntry = {
   sales: number;
 };
 
+// Visible keyboard focus — same teal ring the rep screens share.
+const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+
 const RANK_COLORS = [
   "text-yellow-400",   // 1st
   "text-slate-300",    // 2nd
@@ -41,7 +45,9 @@ export default function Leaderboard() {
   // Date-range filter (Steep-style preset segmented control + Vercel/Dropbox custom
   // From–To). Presets go through ?range=, custom through ?since=&until= — the full
   // URL is the query key so switching ranges refetches automatically.
-  const [range, setRange] = useState<RangeKey>("all");
+  // Defaults to TODAY — a rep opening the board wants this shift's race, not
+  // an all-time list frozen by whoever joined first. All-time is one tap away.
+  const [range, setRange] = useState<RangeKey>("today");
   const [since, setSince] = useState("");
   const [until, setUntil] = useState("");
 
@@ -117,7 +123,7 @@ export default function Leaderboard() {
               onClick={() => setRange(p.key)}
               aria-pressed={range === p.key}
               data-testid={`range-${p.key}`}
-              className={`whitespace-nowrap px-2.5 h-8 rounded-md text-xs font-semibold transition-colors ${
+              className={`whitespace-nowrap px-2.5 h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
                 range === p.key ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
               }`}
             >
@@ -129,7 +135,7 @@ export default function Leaderboard() {
             onClick={() => setRange("custom")}
             aria-pressed={range === "custom"}
             data-testid="range-custom"
-            className={`whitespace-nowrap inline-flex items-center gap-1 px-2.5 h-8 rounded-md text-xs font-semibold transition-colors ${
+            className={`whitespace-nowrap inline-flex items-center gap-1 px-2.5 h-8 rounded-md text-xs font-semibold transition-colors ${FOCUS} ${
               range === "custom" ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
             }`}
           >
@@ -184,7 +190,17 @@ export default function Leaderboard() {
 
       {/* Rankings */}
       {isLoading ? (
-        <div className="text-center py-12 text-muted-foreground text-sm">Loading leaderboard...</div>
+        // Skeleton rows in the board's real shape — no layout shift when data lands.
+        <Card className="bg-card border-border overflow-hidden" data-testid="leaderboard-loading">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex min-h-[64px] items-center gap-3 border-b border-border px-4 py-3 last:border-b-0 sm:gap-4">
+              <Skeleton className="w-6 h-5" />
+              <Skeleton className="w-9 h-9 rounded-full" />
+              <div className="flex-1 min-w-0"><Skeleton className="h-4 w-32" /><Skeleton className="h-3 w-16 mt-2" /></div>
+              <Skeleton className="h-7 w-10" />
+            </div>
+          ))}
+        </Card>
       ) : isError ? (
         <Card className="bg-card border-border">
           <CardContent className="py-12 text-center" data-testid="leaderboard-error">
@@ -192,7 +208,7 @@ export default function Leaderboard() {
             <div className="text-sm font-semibold text-foreground">Couldn't load the leaderboard</div>
             <div className="text-sm text-muted-foreground mt-1">Check your connection and try again.</div>
             <button onClick={() => refetch()}
-              className="mt-4 inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground">
+              className={`mt-4 inline-flex items-center gap-2 h-9 px-4 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>
               <RefreshCw className="w-4 h-4" />Retry
             </button>
           </CardContent>

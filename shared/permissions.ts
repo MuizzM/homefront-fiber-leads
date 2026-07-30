@@ -13,7 +13,8 @@ export type Action =
   | "return_leads_to_pool"
   | "archive_territory"
   | "override_territory_sync"
-  | "delete_territory";
+  | "delete_territory"
+  | "reclaim_all_territories";
 
 const RANK: Record<Role, number> = {
   rep: 0,
@@ -45,6 +46,11 @@ const MIN_ROLE: Record<Action, Role> = {
   archive_territory: "manager",
   override_territory_sync: "manager",
   delete_territory: "admin",
+  // Emptying EVERY area in the org in one stroke is not everyday assignment
+  // work — it is a reorganization. Same precedent that split
+  // reset_territory_pass from reclaim_territory: the org-wide sweep gets its
+  // own name and sits at admin, while per-area reclaim stays team-lead.
+  reclaim_all_territories: "admin",
 };
 
 export function can(role: Role | string | undefined, action: Action): boolean {

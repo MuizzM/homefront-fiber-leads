@@ -1,0 +1,62 @@
+// Leaderboard — today's race by default.
+//
+// The board defaults to TODAY (the shift a rep is actually running), fetches
+// through ?range=today, and marks the Today segment pressed. Loading renders
+// skeleton rows in the board's real shape — never a bare "Loading..." line.
+import { render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+vi.mock("@/lib/auth", () => ({
+  useAuth: () => ({ user: { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 } }),
+}));
+
+import Leaderboard from "../../client/src/pages/Leaderboard";
+
+const fetched: string[] = [];
+function renderBoard(payload: any[] | "pending") {
+  fetched.length = 0;
+  const qc = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        queryFn: ({ queryKey }) => {
+          fetched.push(String(queryKey[0]));
+          return payload === "pending" ? new Promise(() => {}) : Promise.resolve(payload);
+        },
+      },
+    },
+  });
+  return render(<QueryClientProvider client={qc}><Leaderboard /></QueryClientProvider>);
+}
+
+const entry = (id: number, name: string, sales: number) => ({
+  rep: { id, name, role: "rep" }, knocks: 40, contacts: 10, callbacks: 2, sales,
+});
+
+beforeEach(() => { fetched.length = 0; });
+
+describe("Leaderboard defaults", () => {
+  it("defaults to today's race and fetches ?range=today", async () => {
+    renderBoard([entry(9, "Rae Rep", 3), entry(2, "Sam Lee", 5)]);
+    expect(await screen.findByTestId("row-rep-9")).toBeTruthy();
+    // The Today segment is the pressed one.
+    expect(screen.getByTestId("range-today").getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByTestId("range-all").getAttribute("aria-pressed")).toBe("false");
+    // And the data actually came from the today range.
+    expect(fetched.some(u => u.includes("range=today"))).toBe(true);
+  });
+
+  it("shows skeleton rows while loading, not a text placeholder", () => {
+    renderBoard("pending");
+    expect(screen.getByTestId("leaderboard-loading")).toBeTruthy();
+    expect(screen.queryByText(/loading leaderboard/i)).toBeNull();
+  });
+
+  it("pins the signed-in rep's own rank summary", async () => {
+    renderBoard([entry(2, "Sam Lee", 5), entry(9, "Rae Rep", 3)]);
+    const me = await screen.findByTestId("leaderboard-me");
+    expect(me.textContent).toContain("Your rank");
+    expect(me.textContent).toContain("#2 of 2");
+  });
+});

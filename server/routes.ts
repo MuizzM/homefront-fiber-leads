@@ -5887,40 +5887,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
-  app.post("/api/territories/:id/reclaim", requireTeamLead, (req, res) => {
-    const user = (req as any).user;
-    const tid = user?.tenantId ?? undefined;
-    if (!can(user?.role, "reclaim_territory")) return res.status(403).json({ error: "not allowed" });
-    const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
-    // Scope, not rank, is what keeps a team lead honest here: they may pull back
-    // an area their OWN reps hold, never one belonging to another team. Managers
-    // and admins have an undefined scope and pass straight through.
-    if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
-
-    const mode = (req.body?.mode ?? "return_to_pool") as ReclaimMode;
-    const newRepId = req.body?.newRepId ?? req.body?.reassignToRepId ?? undefined;
-    if (mode === "reassign" && !newRepId) return res.status(400).json({ error: "newRepId required for reassign mode" });
-    // Handing the area straight to someone else is still handing them an area.
-    if (mode === "reassign") {
-      // The AREA was scoped above; the TARGET was not. Every other rep-taking
-      // route validates the incoming rep's tenant AND the caller's visibility
-      // scope (see /share and /next-pass) — this one only checked the cap, so a
-      // team lead could reclaim an area they legitimately hold and hand it to a
-      // rep on another team, or another tenant entirely. That is a territory
-      // grab and a cross-tenant write wearing a reclaim's clothes.
-      const target = Number(newRepId);
-      if (!Number.isInteger(target) || target <= 0) return res.status(400).json({ error: "invalid newRepId" });
-      if (!repInCallerTenant(user, target) || !repInVisibilityScope(user, target)) {
-        return res.status(404).json({ error: "rep not found" });
-      }
-      const full = repAtAreaCap(target, t.id);
-      if (full) return res.status(409).json({ error: full });
-    }
-
-    const at = new Date().toISOString();
-    // Build the pure TerritoryState from DB rows, run the shared transition,
-    // then diff it back to the DB — the rules live in @shared/territory (tested).
+  // The reclaim transition, from validated inputs to persisted rows. ONE body
+  // shared by the per-area endpoint and the org-wide sweep so the two can never
+  // drift: build the pure TerritoryState, run the shared @shared/territory
+  // transition (tested), then diff it back to the DB.
+  function applyReclaimTransition(
+    t: any, mode: ReclaimMode, newRepId: number | undefined, user: any, tid: number | undefined, at: string,
+  ): { status: TerritoryStatus; leadsAffected: number } {
     const before = storage.getLeadsByTerritory(t.id);
     const prev: TerritoryState = {
       id: t.id,
@@ -5970,8 +5943,94 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
     }
     storage.addTerritoryEvent(t.id, user?.id ?? null, `reclaim:${mode}`, { fromRepId: t.repId, newRepId: newPrimary, leadsAffected });
+    return { status: next.status, leadsAffected };
+  }
 
-    res.json({ ok: true, mode, status: next.status, leadsAffected });
+  app.post("/api/territories/:id/reclaim", requireTeamLead, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    if (!can(user?.role, "reclaim_territory")) return res.status(403).json({ error: "not allowed" });
+    const t = storage.getTerritoryById(Number(req.params.id));
+    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // Scope, not rank, is what keeps a team lead honest here: they may pull back
+    // an area their OWN reps hold, never one belonging to another team. Managers
+    // and admins have an undefined scope and pass straight through.
+    if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
+
+    const mode = (req.body?.mode ?? "return_to_pool") as ReclaimMode;
+    const newRepId = req.body?.newRepId ?? req.body?.reassignToRepId ?? undefined;
+    if (mode === "reassign" && !newRepId) return res.status(400).json({ error: "newRepId required for reassign mode" });
+    // Handing the area straight to someone else is still handing them an area.
+    if (mode === "reassign") {
+      // The AREA was scoped above; the TARGET was not. Every other rep-taking
+      // route validates the incoming rep's tenant AND the caller's visibility
+      // scope (see /share and /next-pass) — this one only checked the cap, so a
+      // team lead could reclaim an area they legitimately hold and hand it to a
+      // rep on another team, or another tenant entirely. That is a territory
+      // grab and a cross-tenant write wearing a reclaim's clothes.
+      const target = Number(newRepId);
+      if (!Number.isInteger(target) || target <= 0) return res.status(400).json({ error: "invalid newRepId" });
+      if (!repInCallerTenant(user, target) || !repInVisibilityScope(user, target)) {
+        return res.status(404).json({ error: "rep not found" });
+      }
+      const full = repAtAreaCap(target, t.id);
+      if (full) return res.status(409).json({ error: full });
+    }
+
+    const at = new Date().toISOString();
+    const result = applyReclaimTransition(t, mode, newRepId, user, tid, at);
+
+    res.json({ ok: true, mode, status: result.status, leadsAffected: result.leadsAffected });
+  });
+
+  // POST /api/territories/reclaim-all { mode } — the org-wide sweep: every
+  // active area that anyone holds goes back to the house in ONE audited action.
+  // Admin-only by design (reclaim_all_territories): per-area reclaim is everyday
+  // team-lead work, but emptying the whole org is a reorganization. Modes:
+  // return_to_pool (leads released too) or keep_leads (reps keep their leads,
+  // areas come back). "reassign" is rejected — there is no single target that
+  // makes sense for every area at once.
+  app.post("/api/territories/reclaim-all", requireAdmin, (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    if (!can(user?.role, "reclaim_all_territories")) return res.status(403).json({ error: "not allowed" });
+    const mode = (req.body?.mode ?? "return_to_pool") as ReclaimMode;
+    if (mode !== "return_to_pool" && mode !== "keep_leads") {
+      return res.status(400).json({ error: "mode must be return_to_pool or keep_leads" });
+    }
+
+    const at = new Date().toISOString();
+    const all = storage.getTerritories(tid);
+    // Only areas someone actually holds are targets; archived areas are records,
+    // not live assignments, and already-empty areas make the action idempotent.
+    const held = (t: any) => (safeJson<number[]>(t.assigneeIds) ?? [t.repId]).filter(Boolean).length > 0;
+    const targets = all.filter((t: any) => t.status !== "archived" && held(t));
+
+    const repsAffected = new Set<number>();
+    const reclaimedIds: number[] = [];
+    let leadsAffected = 0;
+    for (const t of targets) {
+      for (const r of (safeJson<number[]>((t as any).assigneeIds) ?? [t.repId]).filter(Boolean)) repsAffected.add(r as number);
+      const result = applyReclaimTransition(t, mode, undefined, user, tid, at);
+      leadsAffected += result.leadsAffected;
+      reclaimedIds.push(t.id);
+    }
+
+    recordAdminAudit({
+      ...auditContext(req),
+      action: "territory.bulk_reclaimed", targetType: "territory",
+      targetLabel: `${reclaimedIds.length} area${reclaimedIds.length === 1 ? "" : "s"}`,
+      before: { areaCount: targets.length, repCount: repsAffected.size },
+      after: { mode, reclaimedTerritoryIds: reclaimedIds, leadsAffected },
+      tenantId: tid ?? null, outcome: "success",
+    });
+
+    res.json({
+      ok: true, mode,
+      reclaimed: reclaimedIds.length,
+      repsAffected: repsAffected.size,
+      leadsAffected,
+    });
   });
 
   // POST /api/territories/:id/assign { repId } — hand an (unassigned/reclaimed)

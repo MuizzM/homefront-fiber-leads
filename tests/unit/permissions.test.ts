@@ -30,6 +30,9 @@ const MIN_ROLE: Record<Action, Role> = {
   archive_territory: "manager",
   override_territory_sync: "manager",
   delete_territory: "admin",
+  // The org-wide sweep: emptying EVERY area is a reorganization, not everyday
+  // assignment work — admin only, while per-area reclaim stays team_lead.
+  reclaim_all_territories: "admin",
 };
 
 const RANK: Record<Role, number> = {
