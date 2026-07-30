@@ -147,6 +147,7 @@ import { unpackMapPins } from "@shared/mapPinsWire";
 import { LEAD_MARKS, LEAD_MARK_META, type LeadMark } from "@shared/leadMark";
 import { useCan } from "@/lib/capabilities";
 import { can as roleCan } from "@shared/permissions";
+import { resolveCreditedRepId } from "@/features/knocking/savedKnockReconciliation";
 import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
 import { RepPicker } from "@/components/territory/RepPicker";
 import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
@@ -4837,6 +4838,16 @@ export default function MapView() {
       const lead =
         selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
       if (!lead) return false;
+      // A tap with NOBODY to credit — Central Admin (no linked rep profile) on
+      // an unassigned door — IS a central mark, not an error. The rep-credit
+      // knock path exists to pay a rep, and there is no rep here; routing the
+      // tap replaces the "This lead has no rep assigned" dead end from the
+      // field report. Central mark shows its own success/failure toast and
+      // updates the same caches the knock path would.
+      if (canManage && resolveCreditedRepId(user, lead.assignedRepId) == null) {
+        void handleCentralMark(outcome);
+        return true;
+      }
       if (!logKnock(lead, outcome)) return false;
 
       const nextLeadStatus = OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus;
@@ -4876,7 +4887,7 @@ export default function MapView() {
       }
       return true;
     },
-    [leadById, selectedLeadId, logKnock, scheduleClusterSetData],
+    [leadById, selectedLeadId, logKnock, scheduleClusterSetData, canManage, user, handleCentralMark],
   );
 
   // Lead-level notes: the card owns typing; this owns persistence through the
