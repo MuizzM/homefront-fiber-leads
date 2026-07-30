@@ -258,6 +258,7 @@ const FILTER_STATUS_ORDER: PinDisplayState[] = [
   "not_interested",
   "callback",
   "contacted",
+  "already_customer",
 ];
 const FILTERABLE_STATUSES: readonly string[] = FILTER_STATUS_ORDER;
 
@@ -4792,6 +4793,10 @@ export default function MapView() {
         // the map cache and forgot the card it was rendered inside.
         qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}/history`] });
         qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}`] });
+        // Same read models a saved knock refreshes — without these the Leads
+        // list and Follow-ups kept the old state until a hard reload.
+        qc.invalidateQueries({ queryKey: ["/api/leads"] });
+        qc.invalidateQueries({ queryKey: ["/api/followups"] });
         try { navigator.vibrate?.(10); } catch { /* */ }
         toast({ title: "Marked centrally", severity: "success", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
         return true;
