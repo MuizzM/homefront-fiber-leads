@@ -853,12 +853,15 @@ export default function Leads() {
       return res.json();
     },
     onSuccess: () => {
-      toast({ title: "Lead updated" });
+      // Silent success: the list re-queries and the editor closes, so the change
+      // is visible immediately. A banner/toast over the map or form is noise for
+      // a routine save (spec: update immediately and silently). Failures below
+      // stay loud — an error toast persists until dismissed.
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
       setEditLead(null);
     },
-    onError: (e: any) => toast({ title: e?.message ?? "Couldn't update lead", variant: "destructive" }),
+    onError: (e: any) => toast({ title: e?.message ?? "Couldn't update lead", severity: "error" }),
   });
 
   const deleteMutation = useMutation({
