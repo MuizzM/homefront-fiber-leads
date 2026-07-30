@@ -1355,16 +1355,28 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       };
       for (const k in l) {
         if (k === "id" || k === "lat" || k === "lng" || k === "leadStatus" ||
-            k === "knockCount" || k === "lastOutcome" || k === "lastKnockedAt") continue;
+            k === "knockCount" || k === "lastOutcome" || k === "lastKnockedAt" ||
+            k === "leadLastOutcome" || k === "leadLastOutcomeAt") continue;
         const val = (l as any)[k];
         if (val !== null && val !== false && val !== 0 && val !== "") pin[k] = val;
       }
       if (l.knockCount) {
         pin.visited = true;
         pin.knockCount = l.knockCount;
-        if (l.lastOutcome) pin.lastOutcome = l.lastOutcome;
         if (l.lastKnockedAt) pin.lastKnockedAt = l.lastKnockedAt;
       }
+      // The pin's disposition comes from the LEAD ROW when it's at least as
+      // new as the last knock (the knock CAS keeps last_outcome_at monotonic;
+      // central marks write it with NO knock row). Gating the outcome on
+      // knockCount erased "Already a Customer" — stored as not_interested +
+      // lastOutcome=already_customer — back to "Not Interested" on every
+      // refetch of a never-knocked door. The knock join remains ONLY as the
+      // fallback for legacy rows that predate the lead-level columns.
+      const leadOutcome = (l as any).leadLastOutcome as string | null;
+      const leadOutcomeAt = (l as any).leadLastOutcomeAt as string | null;
+      const leadRowWins = leadOutcome && (!l.lastKnockedAt || (leadOutcomeAt != null && leadOutcomeAt >= l.lastKnockedAt));
+      const outcome = leadRowWins ? leadOutcome : l.lastOutcome;
+      if (outcome) pin.lastOutcome = outcome;
       pins.push(pin);
     }
     const entry: MapPinCacheEntry = {
