@@ -58,6 +58,14 @@ export default function Today() {
   const firstName = user?.name?.split(" ")[0] ?? "there";
   const { log, snap } = useKnockLogger();
 
+  // One clock read per render — the date line and the greeting must never
+  // disagree across a midnight/noon boundary (three separate new Date() calls
+  // could straddle one). Recomputes each render, which is all Today needs.
+  const now = new Date();
+  const dateLabel = now.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+  const hour = now.getHours();
+  const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+
   // Location: capture once (never rejects; denied → null → priority order).
   const [myLoc, setMyLoc] = useState<LatLng | null>(null);
   const [locState, setLocState] = useState<"pending" | "on" | "off">("pending");
@@ -145,10 +153,10 @@ export default function Today() {
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               <Sun className="w-3.5 h-3.5 text-amber-500" aria-hidden="true" />
-              {new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" })}
+              {dateLabel}
             </div>
             <h1 className="text-[27px] font-bold tracking-tight text-foreground mt-1 leading-tight" data-testid="today-greeting">
-              {new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 18 ? "Good afternoon" : "Good evening"}, {firstName}
+              {greeting}, {firstName}
             </h1>
           </div>
           {clockQ.data?.clockedIn && (
