@@ -99,12 +99,42 @@ export function getSigningDocument(id: number): PrivateOnboardingDocument | null
   return mapRecord(rawDb.prepare("SELECT * FROM onboarding_signing_documents WHERE id = ?").get(id));
 }
 
+// Strip the private forensic fields (signer IP, user-agent, evidence JSON, and
+// the full agreement snapshot) so nothing anchored to a person's signing
+// session can reach a browser. This is a real projection, NOT a type cast: the
+// old `as OnboardingDocumentRecord[]` narrowed the STATIC type while leaving the
+// private fields on the object at runtime, so JSON.stringify shipped signedIp /
+// signedUserAgent / evidence to every rep and manager who opened the documents
+// panel. Constructing a fresh object from the allowlisted keys is the only
+// projection JSON.stringify cannot leak around.
+const PUBLIC_DOCUMENT_KEYS = [
+  "id", "recordId", "tenantId", "repId", "documentType", "documentVersion",
+  "documentTitle", "contentSha256", "status", "signerName", "signerEmail",
+  "sentBy", "inviteEmailId", "sentAt", "deliveredAt", "completedAt", "declinedAt",
+  "voidedAt", "statusChangedAt", "signatureName", "signatureSha256",
+  "electronicConsentVersion", "electronicConsentAt", "signedUserId",
+  "completedPdfSha256", "completionEmailId", "retentionUntil", "failureReason",
+  "createdAt", "updatedAt",
+] as const satisfies readonly (keyof OnboardingDocumentRecord)[];
+
+export function toPublicRecord(record: PrivateOnboardingDocument): OnboardingDocumentRecord {
+  const out = {} as Record<string, unknown>;
+  for (const key of PUBLIC_DOCUMENT_KEYS) out[key] = record[key];
+  return out as unknown as OnboardingDocumentRecord;
+}
+
+/** Rep/manager-facing history — public projection only. */
 export function listRepDocuments(tenantId: number, repId: number): OnboardingDocumentRecord[] {
+  return listRepDocumentsPrivate(tenantId, repId).map(toPublicRecord);
+}
+
+/** Server-internal history that still carries forensic fields (audit, PDFs). */
+export function listRepDocumentsPrivate(tenantId: number, repId: number): PrivateOnboardingDocument[] {
   return rawDb.prepare(
     `SELECT * FROM onboarding_signing_documents
       WHERE tenant_id = ? AND rep_id = ?
       ORDER BY created_at DESC, id DESC`,
-  ).all(tenantId, repId).map(mapRecord) as OnboardingDocumentRecord[];
+  ).all(tenantId, repId).map(mapRecord) as PrivateOnboardingDocument[];
 }
 
 function appendEvent(input: {

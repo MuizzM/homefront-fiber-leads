@@ -6964,6 +6964,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     let onboardingWarning: string | null = null;
     let welcomeEmailId: string | null = null;
     let welcomeWarning: string | null = null;
+    // P0-1: platform-owner emails are reserved, and the guard MUST run before
+    // any state change and cover BOTH the claim-existing AND create-new paths.
+    // It previously lived inside `if (existing)` only, so approving a public
+    // application whose email matched SUPER_ADMIN_EMAILS with no prior account
+    // fell to the `else` branch and minted a user for that email — which the
+    // boot-time super-admin stamp (storage.ts) then promoted to platform owner
+    // on the next restart. It also fired AFTER markInviteApproved, so the 400
+    // left the invite approved while the application stayed pending. Hoisted
+    // above both the branch and the invite mutation closes both holes at once.
+    if (status === "approved") {
+      const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
+      if (apex.includes(String(application.email ?? "").trim().toLowerCase())) {
+        return res.status(400).json({ error: "That email is reserved for platform ownership", code: "RESERVED_EMAIL" });
+      }
+    }
+
     const recruitingInvite = getRecruitingInviteByApplication(application.id);
     if (recruitingInvite && status === "approved") markInviteApproved(recruitingInvite.id);
 
@@ -6974,11 +6990,6 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         userId = existing.id;
         // Claim only an unassigned pre-membership login; never move an account
         // from another tenant. A stale/foreign rep link is detached, not moved.
-        // P0-1: apex emails are reserved even via public applications.
-        const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
-        if (apex.includes(String(application.email ?? "").trim().toLowerCase())) {
-          return res.status(400).json({ error: "That email is reserved for platform ownership" });
-        }
         // Keep login active so the applicant can sign.
         storage.updateUser(existing.id, {
           active: true,

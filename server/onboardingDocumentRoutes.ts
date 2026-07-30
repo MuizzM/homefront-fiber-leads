@@ -26,6 +26,7 @@ import {
   markDocumentsFailed,
   markDocumentsSent,
   reserveSigningDocument,
+  toPublicRecord,
 } from "./onboardingDocumentStore";
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import { escapeHtml } from "./mail";
@@ -580,7 +581,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       const declined = declineSigning({ id: record.id, actorUserId: uid, ipAddress: ip(req), userAgent: userAgent(req), reason: parsedBody.data.reason });
       storage.logActivity(uid, "onboarding.document.declined", "onboarding_document", record.id,
         { documentType: record.documentType, reason: parsedBody.data.reason, provider: "homefront_sign" }, req.ip);
-      res.json({ declined: true, document: declined });
+      res.json({ declined: true, document: toPublicRecord(declined) });
     } catch (error: any) {
       res.status(409).json({ error: error?.message || "Could not decline document" });
     }

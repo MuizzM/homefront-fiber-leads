@@ -131,6 +131,44 @@ describe("first-party onboarding signing store", () => {
     expect(sameVersion.row.id).toBe(row.id);
   });
 
+  it("never leaks signer IP, user-agent, or evidence to the rep/manager document list", () => {
+    // The public projection is a real allowlist, not a type cast: the old cast
+    // left signedIp / signedUserAgent / evidence on the object at runtime, so
+    // JSON.stringify shipped every signer's forensic session data to browsers.
+    const row = store.reserveSigningDocument(reservation()).row;
+    store.markDocumentsSent([row.id], "resend-email-x", null, "2026-07-13T10:10:00.000Z");
+    store.markDocumentViewed(row.id, 100, "203.0.113.9", "SecretAgent/1.0");
+    const current = store.getSigningDocument(row.id)!;
+    const pdf = Buffer.from("%PDF leak-test");
+    store.completeSigning({
+      id: row.id, expectedContentSha256: current.contentSha256, signatureName: current.signerName,
+      signatureSha256: "d".repeat(64), consentVersion: ELECTRONIC_CONSENT_VERSION,
+      signedAt: "2026-07-13T12:00:00.000Z", signedUserId: 100, ipAddress: "203.0.113.9",
+      userAgent: "SecretAgent/1.0", evidence: { intentToSign: true, secretMarker: "DO-NOT-LEAK" },
+      pdf, pdfSha256: crypto.createHash("sha256").update(pdf).digest("hex"),
+    });
+
+    const publicRows = store.listRepDocuments(1, 10);
+    const serialized = JSON.stringify(publicRows);
+    expect(serialized).not.toContain("203.0.113.9");        // signer IP
+    expect(serialized).not.toContain("SecretAgent");        // signer user-agent
+    expect(serialized).not.toContain("DO-NOT-LEAK");        // evidence json
+    for (const r of publicRows as any[]) {
+      expect(r.signedIp).toBeUndefined();
+      expect(r.signedUserAgent).toBeUndefined();
+      expect(r.evidence).toBeUndefined();
+      expect(r.snapshot).toBeUndefined();
+    }
+    // …but the SERVER-internal view still carries them, for PDFs and audit.
+    const privateRows = store.listRepDocumentsPrivate(1, 10);
+    expect(privateRows[0].signedIp).toBe("203.0.113.9");
+    expect((privateRows[0].evidence as any)?.secretMarker).toBe("DO-NOT-LEAK");
+    // The projection preserves every public field verbatim.
+    expect(store.toPublicRecord(privateRows[0])).toMatchObject({
+      id: row.id, status: "completed", signerEmail: current.signerEmail,
+    });
+  });
+
   it("keeps rep document lists tenant scoped", () => {
     store.reserveSigningDocument(reservation());
     const second = reservation({ tenantId: 2, repId: 20, signerName: "Taylor Rep", signerEmail: "taylor@example.com" });
