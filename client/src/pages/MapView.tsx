@@ -29,6 +29,7 @@ import {
   Plus,
   Crosshair,
   SlidersHorizontal,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1254,7 +1255,7 @@ export default function MapView() {
             setSelectedLeadId(added.id);
             try { navigator.vibrate?.(10); } catch { /* no haptics */ }
             toast({
-              title: existed ? "Already on the map" : "📍 Pin added",
+              title: existed ? "Already on the map" : "Pin added", severity: "success",
               description: resolved.address,
             });
           }
@@ -1381,7 +1382,7 @@ export default function MapView() {
         team.find((m: TeamMember) => m.id === data.territory?.repId)?.name ??
         "rep";
       toast({
-        title: `✓ ${data.assigned} leads assigned to ${repName} · territory saved`,
+        title: `${data.assigned} leads assigned to ${repName} · territory saved`, severity: "success",
       });
       exitLasso();
     },
@@ -1411,7 +1412,7 @@ export default function MapView() {
         team.find((m: TeamMember) => m.id === Number(lassoRepId))?.name ??
         "rep";
       toast({
-        title: `✓ ${data.updated} reassigned to ${repName}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
+        title: `${data.updated} reassigned to ${repName}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
       });
       exitLasso();
     },
@@ -1443,7 +1444,7 @@ export default function MapView() {
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       const label = OUTCOME_META[data.outcome]?.label ?? "status";
       toast({
-        title: `✓ ${data.updated} set to ${label}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
+        title: `${data.updated} set to ${label}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
       });
       exitLasso();
     },
@@ -1462,7 +1463,7 @@ export default function MapView() {
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       const label = data.mark ? LEAD_MARK_META[data.mark].label : "Cleared";
       toast({
-        title: `✓ ${data.updated} ${data.mark ? `marked ${label}` : "cleared"}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
+        title: `${data.updated} ${data.mark ? `marked ${label}` : "cleared"}${data.skipped ? ` · ${data.skipped} skipped (out of scope)` : ""}`,
       });
       exitLasso();
     },
@@ -1565,7 +1566,7 @@ export default function MapView() {
       const repName =
         team.find((m: TeamMember) => m.id === data.repId)?.name ?? "rep";
       toast({
-        title: `✓ Area assigned to ${repName} · ${data.assigned} leads linked`,
+        title: `Area assigned to ${repName} · ${data.assigned} leads linked`, severity: "success",
       });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
@@ -1676,7 +1677,7 @@ export default function MapView() {
           : data.mode === "reassign"
             ? `reassigned (${data.leadsAffected} leads)`
             : "area reclaimed";
-      toast({ title: `✓ Area reclaimed — ${label}` });
+      toast({ title: `Area reclaimed — ${label}`, severity: "success" });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
@@ -4788,7 +4789,7 @@ export default function MapView() {
         qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}/history`] });
         qc.invalidateQueries({ queryKey: [`/api/leads/${lead.id}`] });
         try { navigator.vibrate?.(10); } catch { /* */ }
-        toast({ title: "🏢 Marked centrally", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
+        toast({ title: "Marked centrally", severity: "success", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
         return true;
       } catch (e: any) {
         toast({ title: "Central mark failed", description: String(e?.message ?? e), variant: "destructive" });
@@ -4820,7 +4821,7 @@ export default function MapView() {
           return { ...old, total: Math.max(0, (old.total ?? old.pins.length) - 1), pins: old.pins.filter((p: any) => p.id !== lead.id) };
         });
         setSelectedLeadId(null);
-        toast({ title: "🗑 Lead removed", description: lead.address });
+        toast({ title: "Lead removed", severity: "success", description: lead.address });
       } catch (e: any) {
         toast({ title: "Delete failed", description: String(e?.message ?? e), variant: "destructive" });
       }
@@ -5195,7 +5196,7 @@ export default function MapView() {
                   </div>
                 ))}
                 <div className={`rounded-lg p-2 text-[11px] font-semibold ${ltResult.checked ? (ltResult.wouldSaveLead ? "bg-emerald-500/15 text-emerald-300" : "bg-sky-500/15 text-sky-300") : ltResult.pendingAuth ? "bg-amber-500/15 text-amber-300" : "bg-red-500/15 text-red-300"}`}>
-                  {ltResult.checked ? `Checked ✓ — ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : ltResult.pendingAuth ? "PENDING_AUTH — token/auth flow failed after retry. Address kept for retry, NOT a no-service verdict." : "Not checked — failed at the red stage (infra error, not a no-service verdict)."}
+                  {ltResult.checked ? `Checked — ${ltResult.classification}${ltResult.wouldSaveLead ? " → fresh lead" : ""}` : ltResult.pendingAuth ? "PENDING_AUTH — token/auth flow failed after retry. Address kept for retry, NOT a no-service verdict." : "Not checked — failed at the red stage (infra error, not a no-service verdict)."}
                 </div>
               </div>
             ) : (
@@ -7151,7 +7152,7 @@ export default function MapView() {
                       : "bg-white/10 border-white/20 text-white/70"
                   }`}
                 >
-                  {repColorMode ? "👥 Rep areas: ON" : "👥 Rep areas: OFF"}
+                  <span className="inline-flex items-center gap-1.5"><Users className="w-3.5 h-3.5" aria-hidden="true" />Rep areas: {repColorMode ? "ON" : "OFF"}</span>
                 </button>
               )}
               {canAssign && repColorMode ? (

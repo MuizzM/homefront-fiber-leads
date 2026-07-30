@@ -649,7 +649,7 @@ function WeekView({ data }: { data: WeekResponse }) {
       {isTiered && retro && retro.salesUntilNextTier == null && count > 0 && (
         <div className="rounded-xl bg-card border border-emerald-500/30 p-4 flex items-center gap-3">
           <Trophy className="w-5 h-5 text-emerald-400 flex-shrink-0" />
-          <span className="text-sm text-foreground">You're in the <strong>top tier</strong> this week — every sale pays {usd(rateCents)}. 🔥</span>
+          <span className="text-sm text-foreground">You're in the <strong>top tier</strong> this week — every sale pays {usd(rateCents)}.</span>
         </div>
       )}
 

@@ -71,7 +71,7 @@ export interface LeadKnockSheetProps {
   // for the OUTGOING lead can flush during a card swap; returns the save
   // result so the card can render Saving/Saved and merge 409 conflicts.
   onSaveNote: (leadId: number, note: string, baseUpdatedAt: string | null) => Promise<NoteSaveResult>;
-  onClose: () => void;                    // ✕ button / escape / overdrag (map tap closes upstream)
+  onClose: () => void;                    // close button / escape / overdrag (map tap closes upstream)
   // Docked mode only: shift the card left by this many px so it never covers
   // a right-side rail (the leads panel) — a rail-row tap must keep the list
   // visible beside the card, or list-driven triage dies (review finding).
@@ -759,7 +759,7 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
 
       {/* QUICK + DETAILS content — translated off-screen (and inert) in Peek. */}
       <div ref={mainRef} className="flex-1 min-h-0 flex flex-col">
-        {/* Compact header: status dot + address (with copy glyph) + ✕ close, the
+        {/* Compact header: status dot + address (with copy glyph) + close button, the
             locality sub-line, and the ONE status line (label · relative time) in
             the status color. Draggable. */}
         <div
