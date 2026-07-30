@@ -7070,15 +7070,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         console.error("Onboarding commission assignment failed:", e?.message);
       }
 
-      // Send the first login code through the same Resend HTTP path as the
-      // document invitation and await acceptance before issuing agreements.
+      // Notify the applicant they're approved — a CODE-FREE welcome that links
+      // them to the sign-in screen. Approval must never mint or mail a login
+      // code (spec: a code is only born when the rep enters their email and taps
+      // "Send code" on the portal, via /api/auth/otp/request). This used to call
+      // createOtp here, so a manager's approval generated an authentication
+      // secret the rep never requested. loginSentAt now records that the WELCOME
+      // was sent, not that a code was — the pipeline's "sign-in invite sent"
+      // milestone, decoupled from code issuance.
       if (!(application.loginSentAt || recruitingInvite?.loginSentAt)) {
         try {
-          const otp = storage.createOtp(application.email);
           const welcome = await sendOnboardingWelcome({
             email: application.email,
             name: application.fullName,
-            otp,
             origin: onboardingAppOrigin(req),
           });
           welcomeEmailId = welcome.id;
@@ -7090,7 +7094,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
             emailId: welcome.id,
           }, req.ip);
         } catch (e: any) {
-          welcomeWarning = e?.message || "Account created, but the first sign-in code could not be emailed.";
+          welcomeWarning = e?.message || "Account created, but the approval notice could not be emailed.";
           storage.logActivity(reviewer?.id ?? null, "onboarding.welcome.failed", "rep_application", application.id, {
             candidateEmail: application.email.toLowerCase(),
             emailProvider: "resend",
