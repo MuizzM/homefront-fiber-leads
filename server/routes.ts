@@ -5293,9 +5293,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!user || !user.active) {
       storage.logLoginAttempt(cleanEmail, "request", false, user ? "account_inactive" : "unknown_email", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
       // Neutral response — do NOT reveal whether an email is registered/active
-      // (account enumeration). A real user gets a code; anyone else gets the same
-      // "sent" with no email actually dispatched.
-      return res.json({ sent: true });
+      // (account enumeration). Must be BYTE-IDENTICAL to the happy path: the
+      // success branch returns { sent: true, emailDelivered: true }, so the mere
+      // PRESENCE of emailDelivered here (it used to be absent) was itself an
+      // enumeration oracle. Mirror the happy shape exactly; no email is sent.
+      return res.json({ sent: true, emailDelivered: true });
     }
     const code = storage.createOtp(cleanEmail);
     let delivery: "email" | "console" | "failed" = "failed";
@@ -5546,9 +5548,19 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
   app.get("/api/territories", requireCapability("field.app.use"), (req, res) => {
     const user = (req as any).user;
-    // Admins and managers see all territories in their tenant
-    if (user.role === "admin" || user.role === "manager" || user.role === "team_lead") {
+    // Admins and managers (undefined scope) see every territory in their tenant.
+    // A team_lead must NOT — that raw role check leaked rival teams' polygons,
+    // area names, and rep assignments, contradicting the team-scope model that
+    // /api/territories/progress, /api/leads/map, and every territory WRITE
+    // already enforce. Scope a team_lead to territories their team holds.
+    const scope = leadVisibilityScope(user);
+    if (scope === undefined) {
       return res.json(storage.getTerritories(user.tenantId ?? undefined));
+    }
+    // team_lead: their team's held territories only (matches /territories/progress).
+    // Reps fall through to their own untouched getTerritoriesByRep path below.
+    if (user.role === "team_lead" && Array.isArray(scope)) {
+      return res.json(storage.getTerritories(user.tenantId ?? undefined).filter((t: any) => territoryHeldByAny(t, scope)));
     }
     // Reps only see territories assigned to them — NEVER others' territories
     // If teamMemberId is null (not linked to a team member yet), return empty
@@ -6596,13 +6608,22 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     // Inject the server URL (so the form submits to itself) + the org slug.
     let html = fs.readFileSync(resolved, "utf-8");
-    const serverUrl = `${req.protocol}://${req.get("host")}`;
-    // Slug is [a-z0-9-] only (matches tenant slugs) — strip anything else so it
-    // can't break out of the injected JS string literal.
+    // The origin must NOT come from the attacker-controlled Host header — reflected
+    // raw into a JS string literal it was a host-header XSS (`Host: x";alert()//`
+    // broke out of the quotes). Use the validated APP_ORIGIN, and JSON.stringify
+    // both injected values so they are always well-formed JS literals even if the
+    // template's surrounding quotes change.
+    const serverUrl = onboardingAppOrigin(req);
+    // Slug is [a-z0-9-] only (matches tenant slugs) — strip anything else.
     const safeSlug = String(orgSlug || "").toLowerCase().replace(/[^a-z0-9-]/g, "").slice(0, 64);
+    // serverUrl is APP_ORIGIN (already validated); sanitize to URL-safe chars as
+    // belt-and-braces so it can never carry a quote/angle-bracket regardless of
+    // whether the template quotes the placeholder.
+    const safeServerUrl = serverUrl.replace(/[^a-zA-Z0-9:/._-]/g, "");
     html = html
-      .replace("FIBER_SCOUT_SERVER_PLACEHOLDER", serverUrl)
+      .replace("FIBER_SCOUT_SERVER_PLACEHOLDER", safeServerUrl)
       .replace("FIBER_SCOUT_ORG_PLACEHOLDER", safeSlug);
+    res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/html");
     res.send(html);
   };
@@ -6653,7 +6674,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // lead-photos/ has its OWN tenant-walled route (GET /api/photos/:id/file).
     // Block it here so a tenant admin can't read another tenant's photo through
     // the untenanted static path if a filename ever leaks.
-    if (req.path.startsWith("/lead-photos/")) return res.status(404).json({ error: "File not found" });
+    // headshots/ and licenses/ are applicant PII — a driver's license is a
+    // government ID. This static route is admin-gated but NOT tenant-scoped, so
+    // it would let one tenant's admin read another tenant's applicant IDs by URL.
+    // Block them here too (they are not rendered anywhere in the client, so this
+    // breaks no feature); a future tenant-scoped viewer endpoint can serve them.
+    if (req.path.startsWith("/lead-photos/") || req.path.startsWith("/headshots/") || req.path.startsWith("/licenses/")) {
+      return res.status(404).json({ error: "File not found" });
+    }
     res.setHeader("Content-Disposition", "inline");
     res.setHeader("X-Content-Type-Options", "nosniff");
     next();

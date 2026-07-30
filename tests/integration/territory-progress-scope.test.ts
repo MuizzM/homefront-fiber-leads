@@ -199,3 +199,22 @@ describe("removal takes the numbers away too", () => {
     expect((await progressFor(fx.outsider.session)).map((r) => r.id)).not.toContain(area);
   });
 });
+
+describe("GET /api/territories is scoped like every other territory surface", () => {
+  it("a team_lead sees only their team's areas, never a rival team's", async () => {
+    // A rep who does NOT report to Lee Lead — a different team's ground.
+    const rival = person("Rhea Rival", "rep", 1, { reportsToId: fx.manager.memberId });
+    const rivalArea = seedArea("Rival team patch", [rival.memberId], [-80.01, 35.89]);
+    const ownArea = seedArea("Lee's own patch", [fx.primary.memberId], [-79.91, 35.99]);
+
+    const asManager = await (await req("/api/territories", fx.manager.session)).json() as any[];
+    const asLead = await (await req("/api/territories", fx.lead.session)).json() as any[];
+
+    // Manager (org-wide) sees the rival area…
+    expect(asManager.map(t => t.id)).toContain(rivalArea);
+    // …the team_lead does NOT (the leak this fix closes)…
+    expect(asLead.map(t => t.id)).not.toContain(rivalArea);
+    // …but still sees an area their own team holds.
+    expect(asLead.map(t => t.id)).toContain(ownArea);
+  });
+});

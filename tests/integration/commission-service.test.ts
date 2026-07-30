@@ -583,6 +583,34 @@ describe("week overview + Sunday closeout", () => {
   });
 });
 
+describe("config week-key is frozen once a week is locked (double-pay guard)", () => {
+  const T6 = 9006, REP_Z = 6001;
+  beforeAll(() => {
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T6, "Frozen-Key Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_Z, T6, null);
+    svc.assignStructureToRep(T6, 1, { repId: REP_Z, structure: "FLAT", flatRateCents: 20000, effectiveFrom: "2026-01-01" });
+    svc.upsertSale(T6, 1, { repId: REP_Z, externalId: "fz-1", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs, serverReceivedAt: inWeekTs });
+    svc.calculateOrRecalculateStatement({ tenantId: T6, repId: REP_Z, weekReference: WEEK_REF, actorId: 1 });
+    svc.batchTransitionWeek(T6, 1, WEEK_REF, "FINALIZE");
+  });
+
+  it("refuses a timezone or week-start change while a locked week exists — it would re-key and double-pay", () => {
+    // Changing the week key would orphan the FINALIZED statement under its old
+    // key and let the same QUALIFIED sales be counted+paid again under the new one.
+    expect(() => svc.updateOrgConfig(T6, 1, { commissionTimezone: "America/Chicago" }))
+      .toThrowError(/WEEK_KEY_FROZEN|finalized or paid/i);
+    expect(() => svc.updateOrgConfig(T6, 1, { commissionWeekStartsOn: 0 }))
+      .toThrowError(/WEEK_KEY_FROZEN|finalized or paid/i);
+  });
+
+  it("still allows non-key config (correction window, auto-finalize) while locked", () => {
+    expect(() => svc.updateOrgConfig(T6, 1, { commissionCorrectionWindowDays: 14, commissionAutoFinalizeEnabled: true }))
+      .not.toThrow();
+    expect(svc.loadOrgConfig(T6).correctionWindowDays).toBe(14);
+  });
+});
+
 describe("post-finalize correction workflow (reviewer criticals)", () => {
   const REP_CORR = 1005;
   let stmtId: number;

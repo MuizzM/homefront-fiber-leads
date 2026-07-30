@@ -21,7 +21,7 @@ export type CommissionErrorCode =
   | "UNSUPPORTED_TIER_MODE" | "NO_EFFECTIVE_PLAN_ASSIGNMENT" | "OVERLAPPING_PLAN_ASSIGNMENT"
   | "STATEMENT_LOCKED" | "DUPLICATE_SALE" | "CROSS_TENANT_ACCESS"
   | "UNAUTHORIZED_COMMISSION_ACTION" | "INVALID_WORKWEEK" | "INVALID_ADJUSTMENT"
-  | "CONCURRENT_STATEMENT_UPDATE";
+  | "CONCURRENT_STATEMENT_UPDATE" | "WEEK_KEY_FROZEN";
 
 export class CommissionError extends Error {
   constructor(public code: CommissionErrorCode, message: string, public httpStatus = 400) {
@@ -647,6 +647,24 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
   }
   if (patch.commissionQualificationBasis != null && !BASIS_COLUMN[patch.commissionQualificationBasis]) {
     throw new CommissionError("INVALID_WORKWEEK", `Unsupported qualification basis: ${patch.commissionQualificationBasis}`);
+  }
+  // A statement's identity is (tenant, rep, week_start_utc), and week_start_utc
+  // is DERIVED from timezone + week-start at compute time. Changing either after
+  // a week is locked re-keys that week: the STATEMENT_LOCKED guard looks up the
+  // NEW key, misses the FINALIZED/PAID row sitting under the OLD key, and the
+  // same still-QUALIFIED sales get counted into a fresh statement and paid twice.
+  // So these three keys are frozen once ANY locked statement exists. (Basis,
+  // finalization delay, correction window, auto-finalize don't move the key and
+  // stay editable.)
+  const changesWeekKey = patch.commissionTimezone != null || patch.commissionWeekStartsOn != null || patch.commissionWeekStartLocalTime != null;
+  if (changesWeekKey) {
+    const locked = rawDb.prepare(
+      `SELECT 1 FROM commission_statements WHERE tenant_id = ? AND status IN ('FINALIZED','PAID') LIMIT 1`,
+    ).get(tenantId);
+    if (locked) {
+      throw new CommissionError("WEEK_KEY_FROZEN",
+        "Timezone and week-start can't change once a week has been finalized or paid — it would re-key locked weeks and risk paying their sales twice. Reopen/settle those weeks first.", 409);
+    }
   }
   const sets: string[] = []; const params: any[] = [];
   const map: Record<string, string> = {
