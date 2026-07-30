@@ -111,3 +111,86 @@ describe("the band-drop notice", () => {
     expect(row).toHaveTextContent("7 Maple St");
   });
 });
+
+describe("review-confirmed guards", () => {
+  it("a reversal that never QUALIFIED does not invent a clawback", async () => {
+    // A sale reversed straight from PENDING never counted toward the week, so
+    // no band was lost — showing the panel would claim a clawback from a band
+    // the rep never held.
+    const p = weekPayload();
+    p.sales[6].qualified_at = null;
+    renderPage(p);
+    await screen.findByTestId("week-sales");
+    expect(screen.queryByTestId("band-drop-notice")).toBeNull();
+  });
+
+  it("a locked week shows the frozen statement, never a re-ranked ladder", async () => {
+    // Statements freeze rates but NOT the tier list — ranking history against
+    // today's ladder could re-rank a past week after a plan change.
+    const p = weekPayload({ locked: true, computation: null,
+      statement: { status: "FINALIZED", qualified_sale_count: 6, rate_cents: 17500,
+        gross_commission_cents: 105000, final_commission_cents: 105000 } });
+    renderPage(p);
+    await screen.findByTestId("week-sales");
+    expect(screen.queryByTestId("rank-card")).toBeNull();
+  });
+});
+
+describe("the rank card — Bronze/Silver/Gold/Platinum on the rep's own ladder", () => {
+  it("names the current week's rank and prices the climb retroactively", async () => {
+    // 6 qualified on the 1-6/$175 · 7+/$225 ladder: a Bronze week, 1 sale from
+    // Silver. The gain shown must be the WHOLE-week jump: 7 x $225 - 6 x $175
+    // = $525 — not one sale's $225.
+    renderPage(weekPayload());
+    const card = await screen.findByTestId("rank-card");
+    expect(card).toHaveTextContent("Bronze");
+    const next = screen.getByTestId("rank-next");
+    expect(next).toHaveTextContent("1 sale to");
+    expect(next).toHaveTextContent("Silver");
+    expect(next).toHaveTextContent("+$525 on your whole week");
+    expect(next).toHaveTextContent("$1,575 total");
+  });
+
+  it("shows every rung of the rail with its range and rate", async () => {
+    renderPage(weekPayload());
+    await screen.findByTestId("rank-rail");
+    expect(screen.getByTestId("rank-rung-bronze")).toHaveTextContent("1–6 sales");
+    expect(screen.getByTestId("rank-rung-bronze")).toHaveTextContent("$175");
+    expect(screen.getByTestId("rank-rung-silver")).toHaveTextContent("7+ sales");
+    expect(screen.getByTestId("rank-rung-silver")).toHaveTextContent("$225");
+  });
+
+  it("celebrates the top of the ladder instead of dangling a next rank", async () => {
+    const p = weekPayload();
+    p.computation!.qualifiedSaleCount = 8;
+    p.computation!.rateCents = 22500;
+    p.computation!.grossCommissionCents = 8 * 22500;
+    p.computation!.finalCommissionCents = 8 * 22500;
+    p.computation!.tierLabel = "7+";
+    p.computation!.retro = null;
+    p.sales = p.sales.slice(0, 6);
+    renderPage(p);
+    const card = await screen.findByTestId("rank-card");
+    expect(card).toHaveTextContent("Silver");
+    expect(card).toHaveTextContent("top of the ladder");
+    expect(screen.queryByTestId("rank-next")).toBeNull();
+  });
+
+  it("invites the first sale as the start of Bronze", async () => {
+    const p = weekPayload();
+    p.computation!.qualifiedSaleCount = 0;
+    p.computation!.grossCommissionCents = 0;
+    p.computation!.finalCommissionCents = 0;
+    p.sales = [];
+    renderPage(p);
+    const card = await screen.findByTestId("rank-card");
+    expect(card).toHaveTextContent("Your first sale starts Bronze");
+  });
+
+  it("exposes the climb as a real progressbar for assistive tech", async () => {
+    renderPage(weekPayload());
+    await screen.findByTestId("rank-card");
+    const bar = screen.getByRole("progressbar", { name: /progress to silver/i });
+    expect(bar).toHaveAttribute("aria-valuenow");
+  });
+});
