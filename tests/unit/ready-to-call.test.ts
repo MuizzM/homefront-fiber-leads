@@ -38,7 +38,16 @@ describe("Ready-to-Call outcome vocabulary", () => {
     expect(callOutcomeMeta("do_not_call")?.setsDoNotCall).toBe(true);
     expect(callOutcomeMeta("do_not_call")?.terminal).toBe(true);
     expect(callOutcomeMeta("wrong_number")?.invalidatesPhone).toBe(true);
-    expect(callOutcomeMeta("already_has_service")?.leadStatus).toBe("already_customer");
+    // Canonical PAIR: "already has service" is stored as not_interested +
+    // lastOutcome=already_customer — writing the bare status painted a
+    // phone-confirmed customer as an unworked door on the map.
+    expect(callOutcomeMeta("already_has_service")?.leadStatus).toBe("not_interested");
+    expect(callOutcomeMeta("already_has_service")?.lastOutcome).toBe("already_customer");
+    expect(callOutcomeMeta("callback")?.leadStatus).toBe("follow_up");
+    expect(callOutcomeMeta("callback")?.lastOutcome).toBe("callback");
+    // Attempts and bad numbers never rewrite the door's status.
+    expect(callOutcomeMeta("no_answer")?.leadStatus).toBeUndefined();
+    expect(callOutcomeMeta("wrong_number")?.leadStatus).toBeUndefined();
     expect(callOutcomeMeta("answered")?.terminal).toBe(false);
     expect(isCallOutcome("sold")).toBe(true);
     expect(isCallOutcome("banana")).toBe(false);

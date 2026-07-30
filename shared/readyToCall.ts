@@ -21,12 +21,16 @@ export interface CallOutcomeMeta {
   /** Chip tone bucket — the client maps this to concrete colors in both themes. */
   tone: "neutral" | "positive" | "warn" | "danger" | "info";
   /** lead_status this outcome advances the lead to (null = leave status as-is). */
-  leadStatus: string | null;
+  /** Omitted → the call does NOT rewrite the door's status (attempts, bad numbers). */
+  leadStatus?: string | null;
   /** Terminal outcomes leave the calling queue (handled/closed). */
   terminal: boolean;
   /** Requires a callback date+time before it can be saved. */
   requiresCallback?: true;
   /** Flips the lead's do_not_call flag. */
+  /** Canonical lastOutcome disambiguator written WITH leadStatus (the map and
+   *  every card derive display from the PAIR — see shared/knock pinDisplayState). */
+  lastOutcome?: string;
   setsDoNotCall?: true;
   /** Marks the number unusable (wrong number) so it drops from the queue. */
   invalidatesPhone?: true;
@@ -35,15 +39,15 @@ export interface CallOutcomeMeta {
 // Order here is the display order of the disposition chips.
 export const CALL_OUTCOMES: readonly CallOutcomeMeta[] = [
   { code: "answered",           label: "Answered",          tone: "neutral",  leadStatus: "contacted",       terminal: false },
-  { code: "no_answer",          label: "No Answer",         tone: "neutral",  leadStatus: "attempted",       terminal: false },
-  { code: "voicemail",          label: "Voicemail",         tone: "neutral",  leadStatus: "attempted",       terminal: false },
-  { code: "callback",           label: "Callback",          tone: "info",     leadStatus: "callback",        terminal: false, requiresCallback: true },
+  { code: "no_answer",          label: "No answer",         tone: "neutral",                                 terminal: false },
+  { code: "voicemail",          label: "Voicemail",         tone: "neutral",                                 terminal: false },
+  { code: "callback",           label: "Callback",          tone: "info",     leadStatus: "follow_up",       lastOutcome: "callback", terminal: false, requiresCallback: true },
   { code: "interested",         label: "Interested",        tone: "positive", leadStatus: "interested",      terminal: false },
-  { code: "appointment",        label: "Appointment",       tone: "positive", leadStatus: "appointment",     terminal: false },
+  { code: "appointment",        label: "Appointment",       tone: "positive", leadStatus: "interested",      terminal: false },
   { code: "sold",               label: "Sold",              tone: "positive", leadStatus: "sold",            terminal: true },
-  { code: "already_has_service",label: "Already Has Service",tone: "warn",    leadStatus: "already_customer",terminal: true },
-  { code: "wrong_number",       label: "Wrong Number",      tone: "danger",   leadStatus: "wrong_number",    terminal: true, invalidatesPhone: true },
-  { code: "do_not_call",        label: "Do Not Call",       tone: "danger",   leadStatus: "do_not_call",     terminal: true, setsDoNotCall: true },
+  { code: "already_has_service",label: "Already has service",tone: "warn",    leadStatus: "not_interested",  lastOutcome: "already_customer", terminal: true },
+  { code: "wrong_number",       label: "Wrong number",      tone: "danger",                                 terminal: true, invalidatesPhone: true },
+  { code: "do_not_call",        label: "Do not call",       tone: "danger",                                 terminal: true, setsDoNotCall: true },
 ] as const;
 
 const BY_CODE = new Map(CALL_OUTCOMES.map(o => [o.code, o]));

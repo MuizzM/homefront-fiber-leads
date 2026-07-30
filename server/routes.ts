@@ -1376,7 +1376,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const leadOutcomeAt = (l as any).leadLastOutcomeAt as string | null;
       const leadRowWins = leadOutcome && (!l.lastKnockedAt || (leadOutcomeAt != null && leadOutcomeAt >= l.lastKnockedAt));
       const outcome = leadRowWins ? leadOutcome : l.lastOutcome;
-      if (outcome) pin.lastOutcome = outcome;
+      if (outcome) {
+        pin.lastOutcome = outcome;
+        // A door with ANY disposition is worked — a central mark writes no
+        // knock row, and gating visited on knockCount alone made the pin's
+        // "worked" ring thin back to unworked on the next refetch.
+        pin.visited = true;
+      }
       pins.push(pin);
     }
     const entry: MapPinCacheEntry = {

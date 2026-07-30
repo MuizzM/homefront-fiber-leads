@@ -30,11 +30,19 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
-import { FIELD_OUTCOMES, makeClientId } from "@shared/knock";
+import { FIELD_OUTCOMES, makeClientId, pinDisplayState, STATE_LABELS } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const LEAD_STATUSES = ["prospect", "contacted", "interested", "sold", "not_interested", "follow_up"];
+
+// Display label for a lead row honoring the lastOutcome disambiguator —
+// "already a customer" is STORED as not_interested + lastOutcome=already_customer,
+// and raw STATUS_LABEL[leadStatus] rendered it as "Not Interested" (field report).
+function leadStateLabel(lead: { leadStatus: string; lastOutcome?: string | null }): string {
+  try { return STATE_LABELS[pinDisplayState({ leadStatus: lead.leadStatus, visited: true, lastOutcome: lead.lastOutcome ?? null })]; }
+  catch { return STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus; }
+}
 
 const STATUS_LABEL: Record<string, string> = {
   prospect: "Prospect",
@@ -500,7 +508,7 @@ function IntelligencePanel({ lead, open, onClose, canEdit, team = [], canAssign 
           </button>
           <div className="flex items-center gap-2 pr-8">
             <Badge className={`text-2xs px-2 py-0.5 rounded-full border-0 font-semibold ${STATUS_COLOR[current.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>
-              {STATUS_LABEL[current.leadStatus] ?? current.leadStatus}
+              {leadStateLabel(current)}
             </Badge>
             {(current.leadScore ?? 0) >= 80 && <Badge className="border-0 bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400 text-2xs">High priority</Badge>}
           </div>
@@ -994,7 +1002,7 @@ export default function Leads() {
                     return (
                       <tr key={lead.id} data-testid={`card-lead-${lead.id}`} className="group hover:bg-muted/35 transition-colors">
                         <td className="px-4 py-3"><button onClick={() => setIntelLead(lead)} data-testid={`open-lead-${lead.id}`} className="text-left max-w-full"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold text-foreground truncate">{lead.address}</span>{(lead.leadScore ?? 0) >= 80 && <span className="text-2xs font-bold px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400">HIGH</span>}</div><div className="text-[11px] text-muted-foreground mt-0.5">{lead.contactName || "No contact"} · {leadSource(lead)}</div></button></td>
-                        <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{STATUS_LABEL[lead.leadStatus] ?? lead.leadStatus}</Badge></td>
+                        <td className="px-3 py-3"><Badge className={`border-0 text-2xs font-semibold ${STATUS_COLOR[lead.leadStatus] ?? "bg-secondary text-muted-foreground"}`}>{leadStateLabel(lead)}</Badge></td>
                         <td className="px-3 py-3"><div className="text-xs font-medium">{lead.city}</div><div className="text-2xs text-muted-foreground">{lead.state} {lead.zip}</div></td>
                         <td className="px-3 py-3"><button onClick={() => canAssign && setAssignLead(lead)} className={`text-xs font-medium ${lead.assignedRepId ? "text-foreground" : "text-warning"}`}>{assignmentName(lead)}</button><div className="text-2xs text-muted-foreground mt-0.5">{lead.assignedRepId && onboardingByRep.get(lead.assignedRepId) ? `Onboarding · ${ONBOARDING_STAGE_LABEL[onboardingByRep.get(lead.assignedRepId)!] ?? onboardingByRep.get(lead.assignedRepId)}` : lead.assignedAt ? formatActivity(lead.assignedAt) : lead.assignedRepId ? "Assigned" : "No assignment"}</div></td>
                         <td className="px-3 py-3"><div className="flex items-center gap-1.5 text-xs font-medium"><Wifi className={`w-3.5 h-3.5 ${lead.isNewFiber ? "text-success" : "text-muted-foreground"}`} />{lead.maxDownloadMbps ? `${lead.maxDownloadMbps.toLocaleString()} Mbps` : lead.fiberStatus.replace(/_/g, " ")}</div><div className="text-2xs text-muted-foreground mt-0.5">Score {lead.leadScore ?? 0}/100</div></td>

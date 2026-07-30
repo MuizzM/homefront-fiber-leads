@@ -139,6 +139,15 @@ export function recordCallOutcome(input: {
     const sets = ["last_call_outcome = ?", "last_call_at = ?", "updated_at = ?"];
     const params: any[] = [meta.code, now, now];
     if (meta.leadStatus) { sets.push("lead_status = ?"); params.push(meta.leadStatus); }
+    // Write the disambiguator WITH the status: "already has service" is stored
+    // as not_interested + last_outcome=already_customer, and every display
+    // surface derives from the pair. Writing the status alone painted a
+    // phone-confirmed customer as an unworked green door on the map.
+    if (meta.lastOutcome) { sets.push("last_outcome = ?"); params.push(meta.lastOutcome); }
+    // ANY status rewrite advances the outcome clock, so a stale offline knock
+    // flushed later can't win the CAS and clobber the caller's newer decision
+    // (same guard PATCH /api/leads/:id documents).
+    if (meta.leadStatus) { sets.push("last_outcome_at = ?"); params.push(now); }
     if (meta.setsDoNotCall) sets.push("do_not_call = 1");
     if (meta.invalidatesPhone) sets.push("contact_phone = NULL");
     params.push(input.leadId, input.tenantId);
