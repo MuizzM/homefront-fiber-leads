@@ -424,11 +424,14 @@ describe("first-party onboarding signing store", () => {
     });
   });
 
-  it("sends the initial login code through Resend with the signing destination", async () => {
+  it("sends a CODE-FREE approval notice — never an embedded login code", async () => {
+    // The welcome email must not carry an authentication secret: approval is a
+    // manager action, and a code is only ever born from the rep's own request
+    // on the sign-in screen. This pins that the email links to sign-in and
+    // contains no 6-digit code.
     const sent = await workflow.sendOnboardingWelcome({
       email: "jordan@example.com",
       name: "Jordan Rep",
-      otp: "482913",
       origin: "https://portal.example.com",
     });
     expect(sent.id).toBe("resend-test-email");
@@ -436,8 +439,11 @@ describe("first-party onboarding signing store", () => {
     const request = vi.mocked(fetch).mock.calls[0];
     const body = JSON.parse(String(request[1]?.body));
     expect(body.to).toEqual(["jordan@example.com"]);
-    expect(body.subject).toContain("sign-in code");
-    expect(body.text).toContain("482913");
+    expect(body.subject).toContain("approved");
+    expect(body.subject).not.toContain("code");
     expect(body.text).toContain("https://portal.example.com/#/my-documents");
+    // No 6-digit login code anywhere in the rendered email.
+    expect(body.text).not.toMatch(/\b\d{6}\b/);
+    expect(body.html).not.toMatch(/\b\d{6}\b/);
   });
 });

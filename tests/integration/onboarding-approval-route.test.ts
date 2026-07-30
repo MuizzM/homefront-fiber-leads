@@ -127,6 +127,31 @@ describe("onboarding approval route", () => {
     expect(rawDb.prepare("SELECT COUNT(*) count FROM team_members WHERE email = ?").get(email)).toMatchObject({ count: 1 });
   });
 
+  it("approval sends a code-free welcome and mints NO login code", async () => {
+    // Spec: a login code is only born when the rep enters their email and taps
+    // "Send code" — never on approval. Approval must create zero otp_codes rows
+    // for the applicant and still succeed (account + welcome notice).
+    const email = "no-code-on-approval@approval-flow.example.com";
+    const application = createCareersApplication(email);
+    rawDb.prepare("DELETE FROM otp_codes WHERE email = ?").run(email);
+
+    const response = await review(application.id, adminSession, { status: "approved" });
+    const body = await response.json() as any;
+    expect(response.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).toBe("approved");
+
+    const otpCount = rawDb.prepare("SELECT COUNT(*) c FROM otp_codes WHERE email = ?").get(email) as any;
+    expect(otpCount.c).toBe(0);                              // approval minted no code
+    // The applicant CAN still get one the correct way — by requesting it.
+    const requested = await realFetch(`${baseUrl}/api/auth/otp/request`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    expect(requested.status).toBe(200);
+    const afterRequest = rawDb.prepare("SELECT COUNT(*) c FROM otp_codes WHERE email = ?").get(email) as any;
+    expect(afterRequest.c).toBe(1);                          // born from the rep's own request
+  });
+
   it("refuses to approve an application whose email is reserved for platform ownership", async () => {
     // The confirmed apex-escalation hole: the reserved-email guard used to live
     // inside the claim-existing branch only, so a NEW-user careers application
