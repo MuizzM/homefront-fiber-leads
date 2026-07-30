@@ -7,7 +7,7 @@ import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
   FileSignature, CheckCircle2, Home, FileText, Printer,
-  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown, PiggyBank,
+  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown, PiggyBank, Sparkles, Check,
 } from "lucide-react";
 import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
 import { calculateRetroactiveCommission } from "@shared/commissionTiers";
@@ -367,71 +367,143 @@ function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
   );
   if (!p) return null;  // a broken ladder gets no rank rail, not a wrong one
 
-  return (
-    <div className="rounded-xl bg-card border border-border p-5" data-testid="rank-card">
-      {/* Where the week stands, as a rank (Grab Driver: medal + next tier) */}
-      <div className="flex items-center justify-between gap-2">
-        {p.current ? (
-          <div className="flex items-center gap-2">
-            <RankChip rank={p.current} />
-            <span className="text-sm font-semibold tracking-tight text-foreground">
-              {p.atTop ? "week — top of the ladder" : "week so far"}
-            </span>
+  // Top of the ladder — a calm "you've maxed it" state, not a goal card.
+  if (p.atTop || !p.next) {
+    return (
+      <div className="rounded-2xl bg-card border border-border p-5" data-testid="rank-card">
+        <div className="flex items-center gap-2.5">
+          {p.current && <RankChip rank={p.current} />}
+          <div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm font-semibold tracking-tight text-foreground">Top rank reached</span>
+              <Crown className="w-4 h-4 text-amber-400" aria-hidden="true" />
+            </div>
+            <p className="text-[12px] text-muted-foreground">Every sale this week pays the top rate.</p>
           </div>
-        ) : (
-          <span className="text-sm font-semibold tracking-tight text-foreground">
-            Your first sale starts Bronze
+        </div>
+        <RankRail p={p} className="mt-4" />
+      </div>
+    );
+  }
+
+  // The financial upside is the headline (per the redesign): remaining sales →
+  // the RETROACTIVE gain (the reprice of the whole week, not a marginal rate).
+  const next = p.next;
+  const tint = rankTint(next.name);
+  const currentPayCents = Math.max(0, (p.weekPayAtNextCents ?? 0) - (p.gainAtNextCents ?? 0));
+  const total = next.minimumSales;
+  // Render discrete checkpoints only when the ladder step is small enough to
+  // stay uncluttered; otherwise the bar alone carries the progress.
+  const showCheckpoints = total <= 12;
+  const nodes = Array.from({ length: total }, (_, i) => i);
+
+  return (
+    <div className="rounded-2xl bg-card border border-border overflow-hidden" data-testid="rank-card">
+      {/* Next target header — Silver framed prominently (Grab Driver "Next tier"). */}
+      <div className="flex items-center justify-between gap-2 px-5 pt-4">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Next target</span>
+          <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-bold ${tint.chip}`}>
+            <RankChip rank={next} size="sm" /> {next.name}
           </span>
-        )}
-        {p.atTop && <Crown className="w-4 h-4 text-yellow-400" aria-hidden="true" />}
+        </div>
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-400/90">
+          <Clock className="w-3 h-3" aria-hidden="true" /> Close by Sunday night
+        </span>
       </div>
 
-      {/* The climb (Qantas "Attain Silver"; Airtasker distance-to-tier).
-          The gain is the RETROACTIVE jump — remaining sales plus the reprice
-          of every sale already made — because that is the real number. */}
-      {!p.atTop && p.next && (
-        <div className="mt-3" data-testid="rank-next">
-          <div className="flex items-baseline justify-between gap-2 text-xs">
-            <span className="text-muted-foreground">
-              {p.salesToNext} sale{p.salesToNext === 1 ? "" : "s"} to{" "}
-              <span className={`font-bold ${rankTint(p.next.name).chip.split(" ").slice(1).join(" ")}`}>{p.next.name}</span>
-            </span>
-            <span className="tabular-nums font-semibold text-emerald-400">
-              +{usd(p.gainAtNextCents!)} on your whole week
-            </span>
-          </div>
-          <div className="mt-1.5 h-2 rounded-full bg-secondary overflow-hidden" role="progressbar"
-            aria-valuenow={Math.round((p.progressToNext ?? 0) * 100)} aria-valuemin={0} aria-valuemax={100}
-            aria-label={`Progress to ${p.next.name}`}>
-            <div className={`h-full rounded-full transition-all ${rankTint(p.next.name).bar}`}
-              style={{ width: `${Math.max(4, (p.progressToNext ?? 0) * 100)}%` }} />
-          </div>
-          <p className="mt-2 text-[11px] text-muted-foreground">
-            Hit {p.next.minimumSales} and every sale this week pays {usd(p.next.rateCents)} —{" "}
-            {usd(p.weekPayAtNextCents!)} total.
-          </p>
+      {/* HERO — the upside, not the tier name. */}
+      <div className="px-5 pt-3" data-testid="rank-next">
+        <p className="text-[15px] font-semibold text-foreground leading-tight">
+          {p.salesToNext} more sale{p.salesToNext === 1 ? "" : "s"} unlock{p.salesToNext === 1 ? "s" : ""}
+        </p>
+        <div className="mt-0.5 flex items-baseline gap-2">
+          <span className="text-[34px] font-bold tracking-tight text-emerald-400 tabular-nums leading-none" data-testid="rank-hero-gain">
+            +{usd(p.gainAtNextCents!)}
+          </span>
+          <span className="inline-flex items-center gap-1 text-[12px] font-medium text-emerald-400/80">
+            <Sparkles className="w-3.5 h-3.5" aria-hidden="true" /> more this week
+          </span>
         </div>
-      )}
+        {/* current → next earnings */}
+        <div className="mt-2 flex items-center gap-2 text-[13px] tabular-nums" data-testid="rank-earnings-jump">
+          <span className="font-semibold text-muted-foreground">{usd(currentPayCents)}</span>
+          <ArrowRight className="w-3.5 h-3.5 text-muted-foreground" aria-hidden="true" />
+          <span className={`font-bold ${tint.chip.split(" ").slice(1).join(" ")}`}>{usd(p.weekPayAtNextCents!)}</span>
+          <span className="text-[11px] text-muted-foreground">· all {total} paid at {usd(next.rateCents)}</span>
+        </div>
+      </div>
 
-      {/* The rail — every rung visible (Crypto.com stations / Grab criteria).
-          A rep should see the whole climb, not just the next step. */}
-      <div className="mt-4 grid gap-1.5" data-testid="rank-rail">
+      {/* High-contrast progress + checkpoints (Crypto.com station rail). */}
+      <div className="px-5 pt-4">
+        <div className="flex items-center justify-between text-[11px] font-semibold">
+          <span className="text-foreground tabular-nums">{count}<span className="text-muted-foreground">/{total} sales</span></span>
+          <span className="text-muted-foreground">{p.salesToNext} to go</span>
+        </div>
+        <div className="mt-1.5 h-2.5 rounded-full bg-secondary overflow-hidden" role="progressbar"
+          aria-valuenow={count} aria-valuemin={0} aria-valuemax={total}
+          aria-label={`${count} of ${total} sales toward ${next.name}`}>
+          <div className={`h-full rounded-full transition-all ${tint.bar}`}
+            style={{ width: `${Math.max(5, Math.min(100, (count / total) * 100))}%` }} />
+        </div>
+
+        {showCheckpoints && (
+          <div className="mt-3 flex items-center gap-1.5" data-testid="rank-checkpoints" aria-hidden="true">
+            {nodes.map(i => {
+              const done = i < count;
+              const isUnlock = i === total - 1;   // the final checkpoint unlocks the next rank
+              if (isUnlock) {
+                return (
+                  <div key={i} className="flex flex-1 items-center gap-1.5">
+                    <span className="h-0.5 flex-1 rounded-full bg-border" />
+                    <span className={`grid place-items-center rounded-full ${done ? tint.bar : `border border-dashed ${tint.chip.split(" ")[0]}`} h-7 w-7`}>
+                      <RankChip rank={next} size="sm" />
+                    </span>
+                  </div>
+                );
+              }
+              return (
+                <div key={i} className="flex flex-1 items-center gap-1.5">
+                  <span className={`grid h-5 w-5 place-items-center rounded-full ${done ? tint.bar + " text-white" : "bg-secondary text-muted-foreground/50"}`}>
+                    {done ? <Check className="w-3 h-3" /> : <span className="h-1.5 w-1.5 rounded-full bg-current" />}
+                  </span>
+                  {i < total - 2 && <span className={`h-0.5 flex-1 rounded-full ${i < count - 1 ? tint.bar : "bg-border"}`} />}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* The full ladder stays visible but SECONDARY (Gold and beyond). */}
+      <RankRail p={p} className="mt-4 px-5 pb-5" secondary />
+    </div>
+  );
+}
+
+// The whole climb — every rung visible (Crypto.com stations / Grab criteria).
+function RankRail({ p, className = "", secondary = false }: { p: NonNullable<ReturnType<typeof rankProgress>>; className?: string; secondary?: boolean }) {
+  return (
+    <div className={className}>
+      {secondary && <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">The full ladder</p>}
+      <div className="grid gap-1.5" data-testid="rank-rail">
         {p.ladder.map(r => {
           const isCurrent = p.current?.bandIndex === r.bandIndex;
           const reached = p.current != null && r.bandIndex <= p.current.bandIndex;
+          const isNext = p.next?.bandIndex === r.bandIndex;
           return (
             <div key={r.bandIndex}
               aria-current={isCurrent ? "step" : undefined}
-              className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 ${isCurrent ? "bg-primary/[0.08] border border-primary/25" : "bg-secondary/40"}`}
+              className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 ${isCurrent ? "bg-primary/[0.08] border border-primary/25" : isNext ? "bg-secondary/60" : "bg-secondary/30"}`}
               data-testid={`rank-rung-${r.name.toLowerCase().replace(/\s/g, "-")}`}>
               <div className="flex items-center gap-2 min-w-0">
                 <RankChip rank={r} size="sm" />
-                <span className={`truncate text-[11px] ${reached ? "text-foreground" : "text-muted-foreground"}`}>
+                <span className={`truncate text-[11px] ${reached || isNext ? "text-foreground" : "text-muted-foreground"}`}>
                   {r.minimumSales}{r.maximumSales == null ? "+" : `–${r.maximumSales}`} sales
                   {isCurrent && <span className="sr-only"> — your current rank</span>}
                 </span>
               </div>
-              <span className={`text-xs tabular-nums font-semibold ${reached ? "text-foreground" : "text-muted-foreground"}`}>
+              <span className={`text-xs tabular-nums font-semibold ${reached || isNext ? "text-foreground" : "text-muted-foreground"}`}>
                 {usd(r.rateCents)}<span className="font-normal text-muted-foreground">/sale</span>
               </span>
             </div>

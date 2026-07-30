@@ -144,11 +144,16 @@ describe("the rank card — Bronze/Silver/Gold/Platinum on the rep's own ladder"
     renderPage(weekPayload());
     const card = await screen.findByTestId("rank-card");
     expect(card).toHaveTextContent("Bronze");
-    const next = screen.getByTestId("rank-next");
-    expect(next).toHaveTextContent("1 sale to");
-    expect(next).toHaveTextContent("Silver");
-    expect(next).toHaveTextContent("+$525 on your whole week");
-    expect(next).toHaveTextContent("$1,575 total");
+    // Hero leads with the financial upside, framed as the retroactive jump.
+    expect(card).toHaveTextContent("Next target");
+    expect(card).toHaveTextContent("Silver");
+    expect(screen.getByTestId("rank-hero-gain")).toHaveTextContent("+$525");
+    expect(screen.getByTestId("rank-next")).toHaveTextContent(/1 more sale unlocks/i);
+    // current → next earnings: 6 x $175 = $1,050  →  7 x $225 = $1,575
+    const jump = screen.getByTestId("rank-earnings-jump");
+    expect(jump).toHaveTextContent("$1,050");
+    expect(jump).toHaveTextContent("$1,575");
+    expect(card).toHaveTextContent(/close by sunday night/i);
   });
 
   it("shows every rung of the rail with its range and rate", async () => {
@@ -172,7 +177,7 @@ describe("the rank card — Bronze/Silver/Gold/Platinum on the rep's own ladder"
     renderPage(p);
     const card = await screen.findByTestId("rank-card");
     expect(card).toHaveTextContent("Silver");
-    expect(card).toHaveTextContent("top of the ladder");
+    expect(card).toHaveTextContent(/top rank reached/i);
     expect(screen.queryByTestId("rank-next")).toBeNull();
   });
 
@@ -184,13 +189,45 @@ describe("the rank card — Bronze/Silver/Gold/Platinum on the rep's own ladder"
     p.sales = [];
     renderPage(p);
     const card = await screen.findByTestId("rank-card");
-    expect(card).toHaveTextContent("Your first sale starts Bronze");
+    // First sale is now framed as the upside to the first rank.
+    expect(card).toHaveTextContent("Next target");
+    expect(card).toHaveTextContent("Bronze");
+    expect(screen.getByTestId("rank-next")).toHaveTextContent(/1 more sale unlocks/i);
+  });
+
+  it("leads with the upside for the spec example (3 sales → +$750, $450 → $1,200)", async () => {
+    // Bronze 1-5 @ $150, Silver 6+ @ $200; 3 qualified sales.
+    const p = weekPayload({
+      structure: { structure: "TIERED", flatRateCents: null, planName: "Custom", acceptedAt: "2026-08-01T00:00:00Z",
+        tiers: [
+          { minimumSales: 1, maximumSales: 5, rateCents: 15000, label: "1-5" },
+          { minimumSales: 6, maximumSales: null, rateCents: 20000, label: "6+" },
+        ] },
+    });
+    p.computation.qualifiedSaleCount = 3;
+    p.computation.rateCents = 15000;
+    p.computation.grossCommissionCents = 45000;
+    p.computation.finalCommissionCents = 45000;
+    p.computation.retro = null;
+    p.sales = p.sales.slice(0, 3);
+    renderPage(p);
+    await screen.findByTestId("rank-card");
+    expect(screen.getByTestId("rank-hero-gain")).toHaveTextContent("+$750");
+    expect(screen.getByTestId("rank-next")).toHaveTextContent(/3 more sales unlock/i);
+    const jump = screen.getByTestId("rank-earnings-jump");
+    expect(jump).toHaveTextContent("$450");
+    expect(jump).toHaveTextContent("$1,200");
+    // 3 of 6 progress + a checkpoint per sale to the Silver unlock.
+    const bar = screen.getByRole("progressbar", { name: /toward silver/i });
+    expect(bar).toHaveAttribute("aria-valuenow", "3");
+    expect(bar).toHaveAttribute("aria-valuemax", "6");
+    expect(screen.getByTestId("rank-checkpoints")).toBeInTheDocument();
   });
 
   it("exposes the climb as a real progressbar for assistive tech", async () => {
     renderPage(weekPayload());
     await screen.findByTestId("rank-card");
-    const bar = screen.getByRole("progressbar", { name: /progress to silver/i });
+    const bar = screen.getByRole("progressbar", { name: /toward silver/i });
     expect(bar).toHaveAttribute("aria-valuenow");
   });
 });
