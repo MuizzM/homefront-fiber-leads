@@ -21,6 +21,16 @@ function formatDuration(minutes: number) {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// Local-calendar day key of a timestamp. The server stamps session.date with a
+// UTC label (toISOString), which rolls to "tomorrow" at 5–7pm across the US —
+// bucketing by that label made the Today tile zero out mid-shift every evening.
+// The clockedIn TIMESTAMP is unambiguous, so day/week grouping derives from it
+// in the rep's own timezone and ignores the label entirely.
+export function localDayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function ElapsedTimer({ startTime }: { startTime: string }) {
   const [elapsed, setElapsed] = useState(0);
   useEffect(() => {
@@ -43,7 +53,7 @@ export default function ClockIn() {
   const { user } = useAuth();
   const { toast } = useToast();
   const isManager = user?.role === "admin" || user?.role === "manager";
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDayKey(new Date().toISOString());
 
   const { data: clockStatus, isLoading: statusLoading, isError: statusError, refetch: refetchStatus } = useQuery<{ clockedIn: boolean; session: ClockSession | null }>({
     queryKey: ["/api/clock/status"],
@@ -77,13 +87,13 @@ export default function ClockIn() {
     onError: () => toast({ title: "Error clocking out", variant: "destructive" }),
   });
 
-  const todaySessions = sessions.filter(s => s.date === today);
+  const todaySessions = sessions.filter(s => localDayKey(s.clockedIn) === today);
   const todayMinutes = todaySessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
   const activeSessions = sessions.filter(s => !s.clockedOut);
 
-  // Week total
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const weekSessions = sessions.filter(s => s.date >= weekAgo);
+  // Week total — a rolling 7-day window on the clock-in timestamp.
+  const weekAgoMs = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const weekSessions = sessions.filter(s => new Date(s.clockedIn).getTime() >= weekAgoMs);
   const weekMinutes = weekSessions.reduce((sum, s) => sum + (s.durationMinutes ?? 0), 0);
 
   const isOnClock = !!clockStatus?.clockedIn;
@@ -236,7 +246,9 @@ export default function ClockIn() {
                 <div key={s.id} className="px-5 py-3.5 flex items-center justify-between" data-testid={`session-history-${s.id}`}>
                   <div>
                     {isManager && <p className="text-[11px] uppercase tracking-wide text-primary font-medium">{s.repName ?? `Rep #${s.repId}`}</p>}
-                    <p className="text-sm text-foreground">{new Date(s.date).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
+                    {/* Date from the timestamp, not the label: new Date("YYYY-MM-DD")
+                        parses as UTC midnight and shows YESTERDAY in US timezones. */}
+                    <p className="text-sm text-foreground">{new Date(s.clockedIn).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })}</p>
                     <p className="text-xs text-muted-foreground tabular-nums">
                       {new Date(s.clockedIn).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
                       {" → "}

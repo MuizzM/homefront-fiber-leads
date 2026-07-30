@@ -151,6 +151,7 @@ import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
 import { RepPicker } from "@/components/territory/RepPicker";
 import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
+import { ReclaimAllDialog } from "@/components/territory/ReclaimAllDialog";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
   discoveryApi,
@@ -1182,6 +1183,7 @@ export default function MapView() {
   const canManage = roleCan(user?.role, "assign_territory");
   const canReclaim = roleCan(user?.role, "reclaim_territory");
   const canResetPass = roleCan(user?.role, "reset_territory_pass");
+  const canReclaimAll = roleCan(user?.role, "reclaim_all_territories");
   // Admin, manager, and team lead can carve out areas and assign them to reps.
   const canAssign =
     user?.role === "admin" ||
@@ -1611,6 +1613,7 @@ export default function MapView() {
 
   // Re-open an area for another sweep.
   const [nextPassTerritoryId, setNextPassTerritoryId] = useState<number | null>(null);
+  const [reclaimAllOpen, setReclaimAllOpen] = useState(false);
   const nextPassMutation = useMutation({
     mutationFn: async ({ id, ...body }: { id: number; territoryAction: string; newRepId?: number; keepPendingCallbacks?: boolean; note?: string }) => {
       const res = await apiRequest("POST", `/api/territories/${id}/next-pass`, body);
@@ -6659,6 +6662,30 @@ export default function MapView() {
             />
           )}
 
+          {canReclaimAll && (
+            <ReclaimAllDialog
+              open={reclaimAllOpen}
+              onClose={() => setReclaimAllOpen(false)}
+              areas={(territories as any[]).map((t) => {
+                // Same holder rule as the detail panel: assignee_ids is
+                // authoritative; a pool-status area with a stale repId is EMPTY.
+                let ids: number[] = [];
+                try {
+                  const a = JSON.parse(t.assigneeIds || "[]");
+                  ids = Array.isArray(a) && a.length
+                    ? a
+                    : t.status === "unassigned" || t.status === "reclaimed"
+                      ? []
+                      : [t.repId].filter(Boolean);
+                } catch {
+                  ids = [t.repId].filter(Boolean);
+                }
+                return { id: t.id, repIds: ids, status: t.status ?? "active" };
+              })}
+              teamNames={Object.fromEntries(team.map((m) => [m.id, m.name]))}
+            />
+          )}
+
           {/* ── TOOLS MENU — the ONE floating button every secondary tool lives
                  behind (Lane E2 map-first chrome). At rest the map shows only:
                  this button, the compact status filter, Locate, and ONE
@@ -7153,6 +7180,19 @@ export default function MapView() {
                   }`}
                 >
                   <span className="inline-flex items-center gap-1.5"><Users className="w-3.5 h-3.5" aria-hidden="true" />Rep areas: {repColorMode ? "ON" : "OFF"}</span>
+                </button>
+              )}
+              {/* Org-wide sweep — admin only. Opens the safe bulk flow (impact
+                  summary + mode + typed confirmation); never acts from here. */}
+              {canReclaimAll && (
+                <button
+                  type="button"
+                  onClick={() => { setReclaimAllOpen(true); setLegendOpen(false); }}
+                  data-testid="map-reclaim-all"
+                  title="Take every assigned area back from every rep"
+                  className="mb-2.5 w-full h-11 rounded-lg border border-rose-400/40 bg-rose-500/15 text-rose-200 text-[12px] font-semibold transition-colors hover:bg-rose-500/25"
+                >
+                  Reclaim all areas
                 </button>
               )}
               {canAssign && repColorMode ? (

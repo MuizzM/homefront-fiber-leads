@@ -17,6 +17,9 @@ import {
   Flame, Zap, StickyNote, Clock,
 } from "lucide-react";
 
+// Visible keyboard focus (same ring Today uses) — sunlight + accessibility.
+const FOCUS = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background";
+
 interface FollowUp {
   leadId: number; address: string; city: string; state?: string | null; zip?: string | null;
   lat?: number | null; lng?: number | null;
@@ -79,6 +82,13 @@ export default function FollowUps() {
             <CalendarClock className="w-4 h-4 text-cyan-400" /> Follow-ups
           </div>
           <h1 className="text-[26px] font-bold tracking-tight text-foreground mt-0.5">Callbacks you owe</h1>
+          {/* The one-glance read: how many owed, and whether any slipped. */}
+          {!q.isLoading && !q.isError && groups.total > 0 && (
+            <p className="text-[13px] text-muted-foreground mt-1" data-testid="followups-summary">
+              <span className="font-semibold text-foreground tabular-nums">{groups.total}</span> scheduled
+              {groups.overdue.length > 0 && <> · <span className="font-semibold text-rose-400 tabular-nums">{groups.overdue.length} overdue</span></>}
+            </p>
+          )}
         </header>
 
         {offline && (
@@ -100,8 +110,8 @@ export default function FollowUps() {
           <div className="mt-6 rounded-2xl border border-border bg-card p-6 text-center" data-testid="followups-error">
             <div className="text-[14px] font-semibold text-foreground">Couldn't load your follow-ups</div>
             <div className="text-[13px] text-muted-foreground mt-1">Check your connection and try again.</div>
-            <button onClick={() => q.refetch()} className="mt-4 inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground">
-              <RefreshCw className="w-4 h-4" />Retry
+            <button onClick={() => q.refetch()} className={`mt-4 inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-95 transition-transform hover:bg-secondary/70 ${FOCUS}`}>
+              <RefreshCw className="w-4 h-4" aria-hidden="true" />Retry
             </button>
           </div>
         ) : groups.total === 0 ? (
@@ -172,7 +182,7 @@ function Row({ f, today, overdue, onOpen, onLog }: { f: FollowUp; today: string;
   const newFiber = f.leadStatus === "new_fiber" || (f.leadScore ?? 0) >= 90;
   return (
     <div className="flex items-stretch">
-      <button onClick={onOpen} data-testid={`followup-${f.leadId}`} className="flex-1 min-w-0 flex items-center gap-3 px-4 py-3.5 text-left active:bg-secondary/60 transition-colors">
+      <button onClick={onOpen} data-testid={`followup-${f.leadId}`} className={`flex-1 min-w-0 flex items-center gap-3 px-4 py-3.5 text-left active:bg-secondary/60 transition-colors hover:bg-secondary/40 ${FOCUS}`}>
         <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: STATE_COLORS[st] }} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -191,7 +201,7 @@ function Row({ f, today, overdue, onOpen, onLog }: { f: FollowUp; today: string;
         <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
       </button>
       <button onClick={onLog} aria-label="Log outcome" data-testid={`followup-log-${f.leadId}`}
-        className="shrink-0 px-3 my-2 mr-2 rounded-lg bg-primary/10 text-primary text-[12px] font-semibold border border-primary/20 active:scale-95 transition-transform">
+        className={`shrink-0 px-3 my-2 mr-2 rounded-lg bg-primary/10 text-primary text-[12px] font-semibold border border-primary/20 active:scale-95 transition-transform hover:bg-primary/15 ${FOCUS}`}>
         Log
       </button>
     </div>

@@ -561,6 +561,19 @@ function WeekView({ data }: { data: WeekResponse }) {
           {stateKey === "OPEN" && (
             <div className="mt-1 text-[11px] text-muted-foreground">This is a live projection — it can still change until the week closes Sunday night.</div>
           )}
+          {/* THE number a rep is really asking for: what lands in their pocket
+              after the tenant's chargeback reserve. Stated in the hero — not
+              buried in the reserve card — whenever a holdback is configured.
+              (Gusto/Stripe payout grammar: gross above, take-home called out.) */}
+          {data.holdback?.current && data.holdback.current.reservePercent > 0 && (
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.08] px-3.5 py-2.5" data-testid="hero-net-pay">
+              <span className="text-[13px] font-semibold text-foreground">You'll be paid</span>
+              <span className="text-right">
+                <span className="block text-[18px] font-bold tabular-nums text-emerald-400 leading-tight" data-testid="hero-net-pay-amount">{usd(data.holdback.current.netPayableCents)}</span>
+                <span className="block text-[11px] text-muted-foreground tabular-nums">after {data.holdback.current.reservePercent}% reserve · −{usd(data.holdback.current.reserveCents)} held</span>
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Hairline-divided metric strip */}
