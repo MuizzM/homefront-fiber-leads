@@ -120,7 +120,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   // the rep's current structure by default (closeExisting) — this is the control
   // behind onboarding + the Team page's "change commission" action.
   app.post("/api/commission/assign-structure", requireCapability("commission.structure.manage"), (req, res) => {
-    const { repId, structure, flatRateCents, flatRateDollars, commissionPlanVersionId, effectiveFrom, closeExisting } = req.body || {};
+    const { repId, structure, flatRateCents, flatRateDollars, commissionPlanVersionId, effectiveFrom, closeExisting, tiers } = req.body || {};
     if (!repId || (structure !== "FLAT" && structure !== "TIERED")) {
       return res.status(400).json({ error: "repId and structure (FLAT|TIERED) are required" });
     }
@@ -128,12 +128,34 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     const rate = flatRateCents != null ? Number(flatRateCents)
       : flatRateDollars != null ? Math.round(Number(flatRateDollars) * 100)
       : undefined;
+    // The edited ladder, shape-checked field by field before it can reach the
+    // money engine. Only the four meaningful fields cross the boundary — a body
+    // is not allowed to smuggle extra keys into a plan version — and every
+    // number must already be an integer: rounding client mistakes here would
+    // book a rate the manager never typed. Deep validation (tiling, open final
+    // band, positive rates) happens in the service via the SAME shared
+    // validateTiers module the client editor runs, so the two can never drift.
+    let parsedTiers: any[] | undefined;
+    if (structure === "TIERED" && tiers != null) {
+      if (!Array.isArray(tiers) || tiers.length === 0 || tiers.length > 20) {
+        return res.status(400).json({ error: "tiers must be a non-empty array (max 20)", code: "INVALID_TIER_CONFIGURATION" });
+      }
+      parsedTiers = [];
+      for (const [i, t] of tiers.entries()) {
+        const min = (t as any)?.minimumSales, max = (t as any)?.maximumSales ?? null, rc = (t as any)?.rateCents;
+        if (!Number.isInteger(min) || (max !== null && !Number.isInteger(max)) || !Number.isInteger(rc)) {
+          return res.status(400).json({ error: `Tier ${i + 1}: minimumSales/maximumSales/rateCents must be whole numbers`, code: "INVALID_TIER_CONFIGURATION" });
+        }
+        parsedTiers.push({ position: i, minimumSales: min, maximumSales: max, rateCents: rc, label: typeof (t as any)?.label === "string" ? (t as any).label.slice(0, 40) : "" });
+      }
+    }
     try {
       const out = svc.assignStructureToRep(tid(req), uid(req), {
         repId: Number(repId), structure, flatRateCents: rate,
         commissionPlanVersionId: commissionPlanVersionId ?? null,
         effectiveFrom: effectiveFrom || undefined,
         closeExisting: closeExisting !== false, // default true (re-assign replaces)
+        tiers: parsedTiers,
       });
       res.status(201).json(out);
     } catch (e) { fail(res, e); }

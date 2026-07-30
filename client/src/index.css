@@ -480,6 +480,67 @@
   }
 }
 
+/* ── Liquid app chrome ────────────────────────────────────────────────────
+   The map's glass above is fixed DARK ink because it floats over arbitrary
+   basemap imagery. App chrome floats over OUR OWN surfaces, so these classes
+   are theme-aware instead: hsl(var(--card) / alpha) + blur reads as liquid in
+   both light and dark without a second ink system. Same GPU budget rules as
+   the map — on a standard page the only blurred surfaces are the header and
+   the floating tab bar (2 of the 5 allowed); dialogs add a third while open.
+
+   The bar follows the shipped iOS-26-era pattern (TIDE, Moonly via Mobbin):
+   DETACHED from the screen edges, fully rounded, hairline + specular top
+   edge, the active destination marked by a solid pill INSIDE the glass. */
+@layer components {
+  .liquid-bar {
+    background-color: hsl(var(--card) / 0.72);
+    background-image: var(--glass-specular);
+    -webkit-backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
+    border: 1px solid hsl(var(--border) / 0.75);
+    border-radius: 9999px;
+    box-shadow: var(--glass-edge-soft),
+                0 2px 8px hsl(220 60% 3% / 0.18),
+                0 16px 40px -14px hsl(220 60% 3% / 0.45);
+  }
+  .liquid-header {
+    background-color: hsl(var(--card) / 0.68);
+    background-image: var(--glass-specular);
+    -webkit-backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur-panel)) saturate(var(--glass-saturate));
+    border-bottom: 1px solid hsl(var(--border) / 0.6);
+    box-shadow: var(--glass-edge-soft);
+  }
+  /* Dialogs, popovers, the More sheet: the surface itself goes liquid. Alpha
+     stays high (0.88) because these carry dense text over unknown content. */
+  .liquid-glass {
+    background-color: hsl(var(--card) / 0.88) !important;
+    background-image: var(--glass-specular);
+    -webkit-backdrop-filter: blur(var(--glass-blur-sheet)) saturate(var(--glass-saturate-sheet));
+    backdrop-filter: blur(var(--glass-blur-sheet)) saturate(var(--glass-saturate-sheet));
+    box-shadow: var(--glass-edge-soft), var(--glass-shadow-2);
+  }
+  /* Light mode: the white specular sheen reads as haze on light card fills —
+     drop it and let the blur + hairline carry the material. */
+  .light .liquid-bar, .light .liquid-header, .light .liquid-glass {
+    background-image: none;
+  }
+  /* Same legibility floors as the map glass, same reasons. */
+  @supports not (backdrop-filter: blur(1px)) {
+    .liquid-bar, .liquid-header, .liquid-glass {
+      background-color: hsl(var(--card));
+      background-image: none;
+    }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .liquid-bar, .liquid-header, .liquid-glass {
+      -webkit-backdrop-filter: none; backdrop-filter: none;
+      background-color: hsl(var(--card));
+      background-image: none;
+    }
+  }
+}
+
 /* Lead-card peek-block crossfade — plays on mount, so a keyed remount (lead
    swap) restarts it. Opacity ONLY (no translate/overshoot) so a swap reads as a
    quick content crossfade, never a jump; kept OFF the History block so it

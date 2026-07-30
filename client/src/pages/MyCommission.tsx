@@ -7,9 +7,11 @@ import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
   FileSignature, CheckCircle2, Home, FileText, Printer,
-  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2,
+  Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown,
 } from "lucide-react";
 import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
+import { calculateRetroactiveCommission } from "@shared/commissionTiers";
+import { rankProgress, type Rank } from "@shared/commissionRanks";
 
 // Map the live week / a past-week snapshot into the printable statement shape.
 function currentWeekModel(data: WeekResponse, repName: string): StatementModel {
@@ -276,6 +278,115 @@ export default function MyCommission() {
   );
 }
 
+// ── Rank presentation ─────────────────────────────────────────────────────────
+// Metal tints tuned for the dark card at AA. Presentation ONLY — names and
+// math come from shared/commissionRanks, which projects the same ladder the
+// money engine pays from.
+// Each tint carries BOTH themes: the base classes are tuned for the dark card,
+// and the [.light_&] arbitrary variants re-tune the text for the white card —
+// slate-300 on white is 1.26:1, invisible. Bars darken in light mode too so
+// the fill stays visible against the light track.
+const RANK_TINTS: Record<string, { chip: string; bar: string }> = {
+  Bronze:   { chip: "bg-amber-600/20 text-amber-500 [.light_&]:text-amber-700",   bar: "bg-amber-500 [.light_&]:bg-amber-600" },
+  Silver:   { chip: "bg-slate-400/20 text-slate-300 [.light_&]:text-slate-600",   bar: "bg-slate-300 [.light_&]:bg-slate-500" },
+  Gold:     { chip: "bg-yellow-500/20 text-yellow-400 [.light_&]:text-yellow-700", bar: "bg-yellow-400 [.light_&]:bg-yellow-500" },
+  Platinum: { chip: "bg-cyan-400/20 text-cyan-300 [.light_&]:text-cyan-700",     bar: "bg-cyan-300 [.light_&]:bg-cyan-600" },
+};
+const rankTint = (name: string) =>
+  RANK_TINTS[name] ?? { chip: "bg-violet-400/20 text-violet-300 [.light_&]:text-violet-700", bar: "bg-violet-300 [.light_&]:bg-violet-600" }; // Diamond+
+
+function RankChip({ rank, size = "md" }: { rank: Rank; size?: "sm" | "md" }) {
+  const tint = rankTint(rank.name);
+  return (
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap flex-shrink-0 rounded-full font-bold ${tint.chip} ${size === "md" ? "px-2.5 py-1 text-xs" : "px-2 py-0.5 text-[10px]"}`}>
+      <Medal className={size === "md" ? "w-3.5 h-3.5" : "w-3 h-3"} aria-hidden="true" />
+      {rank.name}
+    </span>
+  );
+}
+
+function RankCard({ tiers, count }: { tiers: Tier[]; count: number }) {
+  const p = rankProgress(
+    tiers.map((t, i) => ({ position: i, minimumSales: t.minimumSales, maximumSales: t.maximumSales, rateCents: t.rateCents, label: t.label ?? "" })),
+    count,
+  );
+  if (!p) return null;  // a broken ladder gets no rank rail, not a wrong one
+
+  return (
+    <div className="rounded-xl bg-card border border-border p-5" data-testid="rank-card">
+      {/* Where the week stands, as a rank (Grab Driver: medal + next tier) */}
+      <div className="flex items-center justify-between gap-2">
+        {p.current ? (
+          <div className="flex items-center gap-2">
+            <RankChip rank={p.current} />
+            <span className="text-sm font-semibold tracking-tight text-foreground">
+              {p.atTop ? "week — top of the ladder" : "week so far"}
+            </span>
+          </div>
+        ) : (
+          <span className="text-sm font-semibold tracking-tight text-foreground">
+            Your first sale starts Bronze
+          </span>
+        )}
+        {p.atTop && <Crown className="w-4 h-4 text-yellow-400" aria-hidden="true" />}
+      </div>
+
+      {/* The climb (Qantas "Attain Silver"; Airtasker distance-to-tier).
+          The gain is the RETROACTIVE jump — remaining sales plus the reprice
+          of every sale already made — because that is the real number. */}
+      {!p.atTop && p.next && (
+        <div className="mt-3" data-testid="rank-next">
+          <div className="flex items-baseline justify-between gap-2 text-xs">
+            <span className="text-muted-foreground">
+              {p.salesToNext} sale{p.salesToNext === 1 ? "" : "s"} to{" "}
+              <span className={`font-bold ${rankTint(p.next.name).chip.split(" ").slice(1).join(" ")}`}>{p.next.name}</span>
+            </span>
+            <span className="tabular-nums font-semibold text-emerald-400">
+              +{usd(p.gainAtNextCents!)} on your whole week
+            </span>
+          </div>
+          <div className="mt-1.5 h-2 rounded-full bg-secondary overflow-hidden" role="progressbar"
+            aria-valuenow={Math.round((p.progressToNext ?? 0) * 100)} aria-valuemin={0} aria-valuemax={100}
+            aria-label={`Progress to ${p.next.name}`}>
+            <div className={`h-full rounded-full transition-all ${rankTint(p.next.name).bar}`}
+              style={{ width: `${Math.max(4, (p.progressToNext ?? 0) * 100)}%` }} />
+          </div>
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Hit {p.next.minimumSales} and every sale this week pays {usd(p.next.rateCents)} —{" "}
+            {usd(p.weekPayAtNextCents!)} total.
+          </p>
+        </div>
+      )}
+
+      {/* The rail — every rung visible (Crypto.com stations / Grab criteria).
+          A rep should see the whole climb, not just the next step. */}
+      <div className="mt-4 grid gap-1.5" data-testid="rank-rail">
+        {p.ladder.map(r => {
+          const isCurrent = p.current?.bandIndex === r.bandIndex;
+          const reached = p.current != null && r.bandIndex <= p.current.bandIndex;
+          return (
+            <div key={r.bandIndex}
+              aria-current={isCurrent ? "step" : undefined}
+              className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 ${isCurrent ? "bg-primary/[0.08] border border-primary/25" : "bg-secondary/40"}`}
+              data-testid={`rank-rung-${r.name.toLowerCase().replace(/\s/g, "-")}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <RankChip rank={r} size="sm" />
+                <span className={`truncate text-[11px] ${reached ? "text-foreground" : "text-muted-foreground"}`}>
+                  {r.minimumSales}{r.maximumSales == null ? "+" : `–${r.maximumSales}`} sales
+                  {isCurrent && <span className="sr-only"> — your current rank</span>}
+                </span>
+              </div>
+              <span className={`text-xs tabular-nums font-semibold ${reached ? "text-foreground" : "text-muted-foreground"}`}>
+                {usd(r.rateCents)}<span className="font-normal text-muted-foreground">/sale</span>
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function WeekView({ data }: { data: WeekResponse }) {
   const comp = data.computation;
   const structure = data.structure;
@@ -352,26 +463,57 @@ function WeekView({ data }: { data: WeekResponse }) {
         )}
       </div>
 
-      {/* Next-tier nudge (tiered only) */}
-      {isTiered && retro && retro.salesUntilNextTier != null && retro.nextTierRateCents != null && retro.nextTierMinimumSales != null && (
-        <div className="rounded-xl bg-card border border-border p-5">
-          <div className="flex items-center gap-2 mb-3">
-            <Target className="w-4 h-4 text-primary" />
-            <span className="text-sm font-semibold tracking-tight text-foreground">
-              Close {retro.salesUntilNextTier} more to re-price your whole week
-            </span>
+      {/* Why the week dropped MORE than one sale — the retroactive rule in
+          reverse, said out loud. When a canceled deal pulls the count below a
+          band boundary, every surviving sale reprices down too: losing the 7th
+          on a 1-6 $175 / 7+ $225 ladder is not −$225, it is −$525. Without
+          this panel that difference is an unexplained hole in the number the
+          rep saw yesterday, and the complaint lands on their manager. Computed
+          with the SAME shared module the server pays from, so the panel can
+          never disagree with the paycheck. (Same transparency rule as the
+          adjustments block: a deduction is never an unexplained number.) */}
+      {(() => {
+        if (!isTiered || tiers.length === 0 || stateKey !== "OPEN") return null;
+        // Only reversals that had QUALIFIED count toward "what the week would
+        // have been" — a sale reversed straight from PENDING (qualified_at is
+        // null) never contributed to the count, and including it would show a
+        // clawback from a band the rep never actually held.
+        const reversedCount = (data.sales ?? []).filter(sale => sale.status === "REVERSED" && sale.qualified_at != null).length;
+        if (reversedCount === 0 || count === 0) return null;
+        const wouldBe = calculateRetroactiveCommission(count + reversedCount, tiers as any);
+        if (wouldBe.rateCents <= rateCents) return null;  // no band was lost
+        const dropCents = wouldBe.grossCommissionCents - grossCents;
+        return (
+          <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-4" data-testid="band-drop-notice">
+            <div className="flex items-center gap-2">
+              <TrendingDown className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="text-sm font-semibold text-foreground">Why this week dropped more than one sale</span>
+            </div>
+            <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+              {reversedCount === 1 ? "A canceled deal" : `${reversedCount} canceled deals`} pulled you out of the{" "}
+              <span className="font-semibold text-foreground">{wouldBe.tierLabel}</span> band — tiers are retroactive,
+              so your {count} remaining sale{count === 1 ? "" : "s"} repriced from {usd(wouldBe.rateCents)} to{" "}
+              {usd(rateCents)} each. That's {usd(dropCents)} in total, not just the lost sale.
+            </p>
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              Win it back: the week is still open — {retro?.salesUntilNextTier != null
+                ? `${retro.salesUntilNextTier} more sale${retro.salesUntilNextTier === 1 ? "" : "s"} puts every door back at the higher rate.`
+                : "another qualified sale can restore the band."}
+            </p>
           </div>
-          <ProgressBar value={count} target={retro.nextTierMinimumSales} />
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <MiniStat label="Next rate" value={`${usd(retro.nextTierRateCents)}/sale`} accent />
-            <MiniStat label="Base pay at that tier" value={usd(retro.nextTierProjectedCommissionCents)} accent />
-          </div>
-          <p className="mt-3 text-xs text-muted-foreground">
-            Tiers are <strong className="text-foreground">retroactive</strong> — hitting {retro.nextTierMinimumSales} sale{retro.nextTierMinimumSales === 1 ? "" : "s"} pays
-            {" "}{usd(retro.nextTierRateCents)} on <em>every</em> sale this week, not just the new ones{(data.adjustments?.length ?? 0) > 0 ? ", before any adjustments" : ""}.
-          </p>
-        </div>
-      )}
+        );
+      })()}
+
+      {/* Rank card — the bands with names on them (tiered + open weeks only).
+          Grammar from the shipped tier systems on Mobbin: Grab Driver (medal +
+          "Next tier:" + progress), Qantas ("Attain Silver" panel), Airtasker
+          ("$880 away from Silver"), Crypto.com (the full rung rail with the
+          next rung highlighted). Ranks are DERIVED from the rep's own ladder
+          via shared/commissionRanks — the badge can never disagree with pay. */}
+      {/* OPEN weeks only: a locked statement froze its rates but NOT the tier
+          list, so ranking history against today's ladder could re-rank a past
+          week after a plan change. The frozen statement is the record. */}
+      {isTiered && tiers.length > 0 && stateKey === "OPEN" && <RankCard tiers={tiers} count={count} />}
 
       {isTiered && retro && retro.salesUntilNextTier == null && count > 0 && (
         <div className="rounded-xl bg-card border border-emerald-500/30 p-4 flex items-center gap-3">
@@ -488,10 +630,15 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
           <span className="text-muted-foreground"> for every qualified sale.</span>
         </div>
       )}
-      {structure.structure === "TIERED" && (
+      {structure.structure === "TIERED" && structure.tiers.length > 1 && (
+        // The example is derived from THIS rep's actual second band — it used
+        // to hardcode "Hit 8" from the standard ladder, which stated wrong
+        // terms for anyone on a custom plan, on the exact card that freezes
+        // terms to their file.
         <p className="text-[11px] text-muted-foreground mb-4">
           Tiers are <strong className="text-foreground">retroactive</strong>: your total weekly sales set one rate for
-          <em> every</em> sale. Hit 8 and all 8 pay {usd(structure.tiers.find(t => t.minimumSales === 8)?.rateCents ?? 20000)} each.
+          <em> every</em> sale. Hit {structure.tiers[1].minimumSales} and all {structure.tiers[1].minimumSales} pay{" "}
+          {usd(structure.tiers[1].rateCents)} each.
         </p>
       )}
       <button
@@ -507,29 +654,7 @@ function AcceptPlanCard({ structure }: { structure: NonNullable<WeekResponse["st
   );
 }
 
-function ProgressBar({ value, target }: { value: number; target: number }) {
-  const pct = Math.max(0, Math.min(100, target > 0 ? (value / target) * 100 : 0));
-  return (
-    <div>
-      <div className="flex justify-between text-xs text-muted-foreground mb-1.5 tabular-nums">
-        <span>{value} sales</span>
-        <span>{target} to next tier</span>
-      </div>
-      <div className="h-2.5 rounded-full bg-muted overflow-hidden">
-        <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
 
-function MiniStat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className="rounded-xl bg-muted/40 border border-border px-3 py-2">
-      <div className="text-[11px] text-muted-foreground uppercase tracking-wide">{label}</div>
-      <div className={`text-sm font-bold tabular-nums ${accent ? "text-primary" : "text-foreground"}`}>{value}</div>
-    </div>
-  );
-}
 
 function StatusPill({ status }: { status: string }) {
   const map: Record<string, string> = {

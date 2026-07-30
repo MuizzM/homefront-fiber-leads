@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useCan } from "@/lib/capabilities";
 import { TierEditor } from "@/components/commission/TierEditor";
-import type { CommissionTier } from "@shared/commissionTiers";
+import { validateTiers, type CommissionTier } from "@shared/commissionTiers";
 import { canActOnMember, HIRABLE_ROLES, isValidSupervisorRole, type MemberRole } from "@shared/teamHierarchy";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1048,16 +1048,40 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
     if (!current) return;
     if (current.structure === "FLAT") {
       setStructure("FLAT");
-      setFlatRate(String(Math.round((current.flatRateCents || 15000) / 100)));
+      // Divide, don't Math.round the cents first — $150.50 was seeding as "151",
+      // and a manager who then hit Apply re-booked the rep at a rate 50 cents
+      // off from what the screen had shown them as "current".
+      setFlatRate(String((current.flatRateCents || 15000) / 100));
     } else if (current.structure === "TIERED") {
       setStructure("TIERED");
+      // Edit the ladder the rep is ACTUALLY on, not the default. Without this
+      // the dialog always opened on 1-6/$150 · 7+/$200 — a manager reviewing a
+      // custom plan saw the wrong numbers, and "Apply" would quietly reset the
+      // rep to the ladder shown rather than the ladder assigned.
+      if (Array.isArray(current.tiers) && current.tiers.length > 0) {
+        setTiers(current.tiers.map((t: any, i: number) => ({
+          position: i, minimumSales: t.minimumSales, maximumSales: t.maximumSales ?? null,
+          rateCents: t.rateCents, label: t.label || "",
+        })));
+      }
     }
   }, [current]);
+
+  // Client-side gate mirroring the server's shared validator, so Apply is
+  // never an armed button for a plan the server will reject — and when it is
+  // blocked, the reason is on screen (the dead-button rule).
+  const tierValidation = useMemo(() => validateTiers(tiers), [tiers]);
+  const flatCents = Math.round((parseFloat(flatRate) || 0) * 100);
+  const blockedReason =
+    structure === "TIERED" && !tierValidation.ok ? tierValidation.errors[0]
+    : structure === "FLAT" && !(flatCents > 0) ? "Enter a per-sale rate above $0"
+    : structure === "FLAT" && flatCents > 100000 ? "Rate above $1,000/sale — check the number"
+    : null;
 
   const assignMutation = useMutation({
     mutationFn: async () => {
       const body: any = { repId: member!.id, structure, closeExisting: true };
-      if (structure === "FLAT") body.flatRateDollars = parseFloat(flatRate) || 0;
+      if (structure === "FLAT") body.flatRateCents = flatCents;
       // Tiers travel as integer cents; the server re-validates before it books
       // anything, so this is a request, not a decision.
       else body.tiers = tiers.map(t => ({
@@ -1143,11 +1167,16 @@ function CommissionDialog({ member, onClose }: { member: TeamMember | null; onCl
 
         <DialogFooter className="mt-2">
           <Button variant="outline" onClick={onClose} className="h-9 border-border">Cancel</Button>
-          <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending}
+          <Button onClick={() => assignMutation.mutate()} disabled={assignMutation.isPending || !!blockedReason}
             className="h-9 bg-primary hover:bg-primary/90 text-primary-foreground" data-testid="btn-save-commission">
             {assignMutation.isPending ? "Saving…" : "Apply structure"}
           </Button>
         </DialogFooter>
+        {blockedReason && (
+          <p className="text-[11px] text-amber-400 text-right -mt-1" data-testid="commission-blocked-reason">
+            {blockedReason}
+          </p>
+        )}
       </DialogContent>
     </Dialog>
   );

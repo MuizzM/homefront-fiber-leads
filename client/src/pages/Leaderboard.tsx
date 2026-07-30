@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { StatStrip, StatTile } from "@/components/ui/page-scaffold";
 import { Trophy, DoorOpen, PhoneCall, CalendarCheck, Zap, RefreshCw } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { EmptyState } from "@/components/EmptyState";
@@ -155,25 +156,14 @@ export default function Leaderboard() {
         )}
       </div>
 
-      {/* Team totals — hairline metric strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-px rounded-xl overflow-hidden border border-border bg-border">
-        {[
-          { label: "Total Knocks", val: totals.knocks, icon: DoorOpen, accent: false },
-          { label: "Contacts Made", val: totals.contacts, icon: PhoneCall, accent: false },
-          { label: "Callbacks", val: totals.callbacks, icon: CalendarCheck, accent: false },
-          { label: "Total Sales", val: totals.sales, icon: Zap, accent: true },
-        ].map(({ label, val, icon: Icon, accent }) => (
-          <div key={label} className="bg-card px-4 py-3">
-            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-muted-foreground">
-              <Icon className="w-3.5 h-3.5" />
-              {label}
-            </div>
-            <div className={`text-2xl font-bold tabular-nums mt-1 ${accent ? "text-emerald-400" : "text-foreground"}`}>
-              {val}
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Team totals — shared Revolut-grammar strip: eyebrow label above a
+          tabular number, ONE accent tile (the number this screen is for). */}
+      <StatStrip columns={4}>
+        <StatTile label="Total Knocks" value={totals.knocks} icon={DoorOpen} testId="stat-knocks" />
+        <StatTile label="Contacts Made" value={totals.contacts} icon={PhoneCall} testId="stat-contacts" />
+        <StatTile label="Callbacks" value={totals.callbacks} icon={CalendarCheck} testId="stat-callbacks" />
+        <StatTile label="Total Sales" value={totals.sales} icon={Zap} accent testId="stat-sales" />
+      </StatStrip>
 
       {/* Your rank — pinned summary so a rep never scrolls to find themselves */}
       {me && !isLoading && !isError && (

@@ -127,6 +127,30 @@ describe("onboarding approval route", () => {
     expect(rawDb.prepare("SELECT COUNT(*) count FROM team_members WHERE email = ?").get(email)).toMatchObject({ count: 1 });
   });
 
+  it("refuses to approve an application whose email is reserved for platform ownership", async () => {
+    // The confirmed apex-escalation hole: the reserved-email guard used to live
+    // inside the claim-existing branch only, so a NEW-user careers application
+    // for a SUPER_ADMIN_EMAILS address slipped through the else branch and
+    // minted an account the boot-time stamp would later promote to platform
+    // owner. The guard now runs before both branches AND before any state
+    // change. Default SUPER_ADMIN_EMAILS is muizzm21@gmail.com (no override set).
+    const email = "muizzm21@gmail.com";
+    const application = createCareersApplication(email);
+    const before = rawDb.prepare("SELECT status FROM rep_applications WHERE id = ?").get(application.id) as any;
+
+    const response = await review(application.id, adminSession, { status: "approved" });
+    const body = await response.json() as any;
+    expect(response.status, JSON.stringify(body)).toBe(400);
+    expect(body.code).toBe("RESERVED_EMAIL");
+
+    // No account was minted for the reserved address…
+    expect(rawDb.prepare("SELECT COUNT(*) count FROM users WHERE email = ?").get(email)).toMatchObject({ count: 0 });
+    // …and the 400 did not leave the application half-approved.
+    const after = rawDb.prepare("SELECT status FROM rep_applications WHERE id = ?").get(application.id) as any;
+    expect(after.status).toBe(before.status);
+    expect(after.status).not.toBe("approved");
+  });
+
   it("repairs a login linked to another tenant without moving that tenant's rep history", async () => {
     const email = "stale-cross-tenant-link@approval-flow.example.com";
     const foreignProfile = storage.createTeamMember({

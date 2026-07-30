@@ -252,6 +252,116 @@ describe("onboarding-facing structure assignment (flat vs tiered)", () => {
   });
 });
 
+describe("custom edited ladders reach the money engine (the placebo-editor bug)", () => {
+  // Own tenant: these tests seed sales into the same reference week, and the
+  // Sunday-closeout suite aggregates a tenant's WHOLE week — sharing T1 would
+  // change its payroll totals from a distance.
+  const T3 = 9003;
+  // THE BUG: the Team dialog has always sent the manager's edited ladder, and
+  // assignStructureToRep silently dropped it — every "custom" assignment landed
+  // on the standard tiers while the toast said otherwise. A manager who set
+  // 1-6 at $175 believed it; the rep was paid $150. Nothing failed, nothing
+  // logged: the worst kind of money bug, invisible until a paycheck argument.
+  const REP_CUSTOM = 3001;
+  const LADDER = [
+    { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17500, label: "1-6" },
+    { position: 1, minimumSales: 7, maximumSales: null, rateCents: 22500, label: "7+" },
+  ];
+  beforeAll(() => {
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T3, "Custom Ladder Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_CUSTOM, T3, null);
+  });
+
+  it("assigning with tiers books THOSE tiers, not the standard ladder", () => {
+    const out = svc.assignStructureToRep(T3, 1, {
+      repId: REP_CUSTOM, structure: "TIERED", tiers: LADDER, effectiveFrom: "2026-01-01",
+    });
+    expect(out.structure).toBe("TIERED");
+    const cur = svc.getCurrentStructureForRep(T3, REP_CUSTOM);
+    expect(cur.tiers).toHaveLength(2);
+    expect(cur.tiers[0]).toMatchObject({ minimumSales: 1, maximumSales: 6, rateCents: 17500 });
+    expect(cur.tiers[1]).toMatchObject({ minimumSales: 7, maximumSales: null, rateCents: 22500 });
+  });
+
+  it("the WEEK'S PAY computes at the custom rate — the end-to-end proof", () => {
+    // 7 sales at the custom 7+ band: retroactive means 7 × $225 = $1,575.
+    // The standard ladder would have paid 7 × $200 = $1,400 — if this asserts
+    // 157500 and gets 140000, the editor is a placebo again.
+    for (let i = 0; i < 7; i++) {
+      svc.upsertSale(T3, 1, { repId: REP_CUSTOM, externalId: `custom-${i}`, status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs });
+    }
+    const res = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CUSTOM, weekReference: WEEK_REF, actorId: 1 });
+    expect(res.computation.qualifiedSaleCount).toBe(7);
+    expect(res.statement.gross_commission_cents).toBe(7 * 22500);
+  });
+
+  it("the same ladder assigned twice reuses one immutable version", () => {
+    const a = svc.getOrCreateCustomTieredVersion(T3, 1, LADDER as any);
+    const b = svc.getOrCreateCustomTieredVersion(T3, 1, LADDER as any);
+    expect(a.versionId).toBe(b.versionId);
+  });
+
+  it("a DIFFERENT ladder gets a different version — rates are never shared by accident", () => {
+    const a = svc.getOrCreateCustomTieredVersion(T3, 1, LADDER as any);
+    const c = svc.getOrCreateCustomTieredVersion(T3, 1, [
+      { position: 0, minimumSales: 1, maximumSales: 6, rateCents: 17500, label: "1-6" },
+      { position: 1, minimumSales: 7, maximumSales: null, rateCents: 30000, label: "7+" },
+    ] as any);
+    expect(c.versionId).not.toBe(a.versionId);
+  });
+
+  it("an invalid ladder is refused with the shared validator's words", () => {
+    let err: any;
+    try {
+      svc.getOrCreateCustomTieredVersion(T3, 1, [
+        { position: 0, minimumSales: 2, maximumSales: null, rateCents: 15000, label: "2+" },
+      ] as any);
+    } catch (e) { err = e; }
+    expect(err?.code).toBe("INVALID_TIER_CONFIGURATION");
+    expect(String(err?.message)).toMatch(/start at 1/);
+  });
+
+  it("a canceled sale that drops the band CLAWS BACK the whole week's difference", () => {
+    // The operator's exact scenario. 7 sales at the 7+ band: 7 x $225 = $1,575.
+    // The 7th deal cancels. The rep does NOT just lose one sale's $225 — the
+    // whole week falls back to the 1-6 band: 6 x $175 = $1,050. The $525 swing
+    // ($225 for the lost sale + $50 x 6 repriced survivors) is the retroactive
+    // rule running in reverse, and it must happen on recalculation with no
+    // manual adjustment.
+    const REP_CLAW = 3003;
+    seedRep(REP_CLAW, T3, null);
+    svc.assignStructureToRep(T3, 1, { repId: REP_CLAW, structure: "TIERED", tiers: LADDER, effectiveFrom: "2026-01-01" });
+    for (let i = 0; i < 7; i++) {
+      svc.upsertSale(T3, 1, { repId: REP_CLAW, externalId: `claw-${i}`, status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs, leadId: 91000 + i });
+    }
+    const before = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CLAW, weekReference: WEEK_REF, actorId: 1 });
+    expect(before.statement.gross_commission_cents).toBe(7 * 22500);  // $1,575
+
+    svc.transitionSale(T3, 1, "claw-6", "REVERSE");
+    const after = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CLAW, weekReference: WEEK_REF, actorId: 1 });
+    expect(after.computation.qualifiedSaleCount).toBe(6);
+    expect(after.statement.gross_commission_cents).toBe(6 * 17500);   // $1,050 — not $1,350
+  });
+
+  it("re-qualifying the canceled deal restores the higher band for the whole week", () => {
+    // The inverse must also hold: cancellations are sometimes mistakes.
+    const REP_CLAW = 3003;
+    svc.upsertSale(T3, 1, { repId: REP_CLAW, externalId: "claw-6", status: "QUALIFIED", soldAt: inWeekTs, qualifiedAt: inWeekTs, leadId: 91006 });
+    const res = svc.calculateOrRecalculateStatement({ tenantId: T3, repId: REP_CLAW, weekReference: WEEK_REF, actorId: 1 });
+    expect(res.statement.gross_commission_cents).toBe(7 * 22500);
+  });
+
+  it("assigning WITHOUT tiers still lands on the standard ladder (onboarding path)", () => {
+    const REP_STD = 3002;
+    seedRep(REP_STD, T3, null);
+    svc.assignStructureToRep(T3, 1, { repId: REP_STD, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    const cur = svc.getCurrentStructureForRep(T3, REP_STD);
+    expect(cur.tiers.length).toBe(DEFAULT_RETRO_TIERS.length);
+    expect(cur.planName).toBe("Standard Weekly Tiers");
+  });
+});
+
 describe("field-sale wiring: door → weekly ledger", () => {
   const REP_FIELD = 1004;
   let leadA: number, leadB: number;
@@ -268,9 +378,9 @@ describe("field-sale wiring: door → weekly ledger", () => {
   });
 
   it("a sold knock creates ONE qualified sale per door and prices the week", () => {
-    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadA, knockId: 900, soldAt: inWeekTs, actorId: 1 });
-    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadA, knockId: 901, soldAt: inWeekTs, actorId: 1 }); // re-tap: idempotent
-    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadB, knockId: 902, soldAt: inWeekTs, actorId: 1 });
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadA, knockId: 900, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadA, knockId: 901, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 }); // re-tap: idempotent
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadB, knockId: 902, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
     const sales = svc.listWeekSalesForRep(T1, REP_FIELD, WEEK_REF);
     expect(sales.filter(s => s.status === "QUALIFIED").length).toBe(2); // two DOORS, not three knocks
     const out = svc.calculateOrRecalculateStatement({ tenantId: T1, repId: REP_FIELD, weekReference: WEEK_REF, actorId: 1 });
@@ -289,7 +399,7 @@ describe("field-sale wiring: door → weekly ledger", () => {
   });
 
   it("re-selling the same door re-qualifies the SAME ledger row", () => {
-    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadB, knockId: 903, soldAt: inWeekTs, actorId: 1 });
+    svc.recordFieldSaleFromKnock({ tenantId: T1, repId: REP_FIELD, leadId: leadB, knockId: 903, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
     const sales = svc.listWeekSalesForRep(T1, REP_FIELD, WEEK_REF);
     expect(sales.length).toBe(2); // still two rows total
     expect(sales.every(s => s.status === "QUALIFIED")).toBe(true);
@@ -309,6 +419,77 @@ describe("field-sale wiring: door → weekly ledger", () => {
     expect(again.created).toBe(0); // second run adopts nothing new
     const sales = svc.listWeekSalesForRep(T1, REP_FIELD, WEEK_REF);
     expect(sales.filter(s => s.status === "QUALIFIED").length).toBe(3);
+  });
+});
+
+describe("commission anti-gaming guards (retroactive pay is worth cheating for)", () => {
+  // Own tenant so these injections never touch the closeout aggregates below.
+  const T4 = 9004, REP_A = 4001, REP_B = 4002;
+  const lead = (n: number) => 40000 + n;
+  const laterWeekTs = () => new Date(Date.parse(inWeekTs) + 7 * 86_400_000).toISOString();
+  const farPastTs = () => new Date(Date.parse(inWeekTs) - 60 * 86_400_000).toISOString(); // beyond 30d window
+
+  beforeAll(() => {
+    rawDb.prepare(`INSERT INTO tenants (id, name, created_at, updated_at) VALUES (?,?,?,?)`)
+      .run(T4, "Anti-Gaming Tenant", new Date().toISOString(), new Date().toISOString());
+    seedRep(REP_A, T4, null);
+    seedRep(REP_B, T4, null);
+    svc.assignStructureToRep(T4, 1, { repId: REP_A, structure: "TIERED", effectiveFrom: "2026-01-01" });
+    svc.assignStructureToRep(T4, 1, { repId: REP_B, structure: "TIERED", effectiveFrom: "2026-01-01" });
+  });
+
+  it("GUARD 1a — a teammate cannot steal a booked sale's credit by re-knocking it", () => {
+    // Rep A sells a shared-territory door. Rep B re-marks it sold. The money
+    // must stay with A — the ON CONFLICT upsert used to flip rep_id to B.
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(1), knockId: 1, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_B, leadId: lead(1), knockId: 2, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
+    const sale = rawDb.prepare(`SELECT rep_id, status FROM commission_sales WHERE tenant_id=? AND external_id=?`).get(T4, "lead:" + lead(1)) as any;
+    expect(sale.rep_id).toBe(REP_A);                              // credit frozen to the original rep
+    expect(svc.calculateOrRecalculateStatement({ tenantId: T4, repId: REP_B, weekReference: WEEK_REF, actorId: 1 }).computation.qualifiedSaleCount).toBe(0);
+  });
+
+  it("GUARD 1b — a rep cannot drag their own prior-week sale into a richer current week", () => {
+    // Book in the target week, then re-knock 'now' a week later. The sale's
+    // pay-week must not move — re-timing used to overwrite qualified_at.
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(2), knockId: 3, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
+    const before = rawDb.prepare(`SELECT qualified_at FROM commission_sales WHERE tenant_id=? AND external_id=?`).get(T4, "lead:" + lead(2)) as any;
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(2), knockId: 4, soldAt: laterWeekTs(), serverReceivedAt: laterWeekTs(), actorId: 1 });
+    const after = rawDb.prepare(`SELECT qualified_at FROM commission_sales WHERE tenant_id=? AND external_id=?`).get(T4, "lead:" + lead(2)) as any;
+    expect(after.qualified_at).toBe(before.qualified_at);        // week frozen at first sale
+  });
+
+  it("GUARD 2 — backdating beyond the correction window is clamped, not honored", () => {
+    // A knock claiming it happened 60 days ago (default window is 30) cannot
+    // drop a sale into an arbitrary old week; it clamps to the window floor.
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(3), knockId: 5, soldAt: farPastTs(), serverReceivedAt: inWeekTs, actorId: 1 });
+    const sale = rawDb.prepare(`SELECT qualified_at FROM commission_sales WHERE tenant_id=? AND external_id=?`).get(T4, "lead:" + lead(3)) as any;
+    const floorMs = Date.parse(inWeekTs) - 30 * 86_400_000;
+    // Clamp pulls the 60-day backdate UP to the ~30-day window floor: within a
+    // day of the floor, and strictly LATER than the dishonest 60-day claim.
+    expect(Math.abs(Date.parse(sale.qualified_at) - floorMs)).toBeLessThan(86_400_000);
+    expect(Date.parse(sale.qualified_at)).toBeGreaterThan(Date.parse(farPastTs()));
+  });
+
+  it("GUARD 3 — a sale targeting a FINALIZED week is booked PENDING, never counted", () => {
+    // Rep books a real week, it finalizes, then a late/backdated sale aims at
+    // the locked week. It must land PENDING (manual review), not silently paid.
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_B, leadId: lead(10), knockId: 6, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
+    svc.batchTransitionWeek(T4, 1, WEEK_REF, "FINALIZE");
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_B, leadId: lead(11), knockId: 7, soldAt: inWeekTs, serverReceivedAt: inWeekTs, actorId: 1 });
+    const injected = rawDb.prepare(`SELECT status FROM commission_sales WHERE tenant_id=? AND external_id=?`).get(T4, "lead:" + lead(11)) as any;
+    expect(injected.status).toBe("PENDING");                     // not QUALIFIED
+    const stmt = rawDb.prepare(`SELECT qualified_sale_count FROM commission_statements WHERE tenant_id=? AND rep_id=? AND week_start_utc=?`).get(T4, REP_B, weekStartUtc) as any;
+    expect(stmt.qualified_sale_count).toBe(1);                    // locked number untouched
+  });
+
+  it("honest offline flush still lands in its true week (guards do not punish real late sync)", () => {
+    // Sold a few days ago, synced now, week still open and inside the window:
+    // the backdated soldAt is honored.
+    const threeDaysAgo = new Date(Date.parse(inWeekTs) - 3 * 86_400_000).toISOString();
+    svc.recordFieldSaleFromKnock({ tenantId: T4, repId: REP_A, leadId: lead(20), knockId: 8, soldAt: threeDaysAgo, serverReceivedAt: inWeekTs, actorId: 1 });
+    const sale = rawDb.prepare(`SELECT qualified_at, status FROM commission_sales WHERE tenant_id=? AND external_id=?`).get(T4, "lead:" + lead(20)) as any;
+    expect(sale.status).toBe("QUALIFIED");
+    expect(sale.qualified_at).toBe(threeDaysAgo);                // honest backdate preserved
   });
 });
 

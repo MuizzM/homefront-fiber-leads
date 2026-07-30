@@ -669,6 +669,7 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
 
 const STANDARD_TIERED_PLAN_NAME = "Standard Weekly Tiers";
 const FLAT_PLAN_NAME = "Flat Per-Sale";
+const CUSTOM_TIERED_PLAN_NAME = "Custom Weekly Tiers";
 const today = () => new Date().toISOString().slice(0, 10);
 
 export type CommissionStructure = "FLAT" | "TIERED";
@@ -698,12 +699,46 @@ export function getOrCreateFlatVersion(tenantId: number, actorId: number | null,
   return { planId: plan.id, versionId: version.id };
 }
 
+// A tenant-edited weekly ladder; each distinct ladder is a distinct immutable
+// version under one "Custom Weekly Tiers" plan — the exact design the flat plan
+// already uses for rates. Matching is by the full economic signature (every
+// band boundary and rate), so two reps put on the same ladder share a version
+// and the version history stays readable instead of growing one row per click.
+export function getOrCreateCustomTieredVersion(
+  tenantId: number, actorId: number | null, tiers: CommissionTier[],
+): { planId: number; versionId: number } {
+  const v = validateTiers(tiers || []);
+  if (!v.ok) throw new CommissionError("INVALID_TIER_CONFIGURATION", v.errors.join(" "));
+  const signature = v.normalized
+    .map(t => `${t.minimumSales}-${t.maximumSales ?? "open"}@${t.rateCents}`).join("|");
+
+  let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'TIERED' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, CUSTOM_TIERED_PLAN_NAME) as any;
+  if (!plan) plan = createPlan(tenantId, actorId, { name: CUSTOM_TIERED_PLAN_NAME, type: "TIERED", tierMode: "RETROACTIVE_WEEKLY", description: "Manager-edited retroactive weekly ladders. One immutable version per distinct ladder." });
+
+  const versions = rawDb.prepare(`SELECT id FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ?`).all(tenantId, plan.id) as any[];
+  for (const row of versions) {
+    const existing = getPlanVersionTiers(tenantId, row.id)
+      .map((t: any) => `${t.minimum_sales}-${t.maximum_sales ?? "open"}@${t.rate_cents}`).join("|");
+    if (existing === signature) {
+      if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
+      return { planId: plan.id, versionId: row.id };
+    }
+  }
+  const version = addPlanVersion(tenantId, actorId, plan.id, {
+    effectiveFrom: today(), qualificationBasis: "QUALIFIED_AT", tiers: v.normalized,
+    changeSummary: `Ladder: ${v.normalized.map(t => `${t.label} ${t.rateCents / 100}`).join(", ")}`,
+  });
+  if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
+  return { planId: plan.id, versionId: version.id };
+}
+
 // Assign a FLAT or TIERED structure to a rep. `closeExisting` ends any current
 // open assignment at effectiveFrom (half-open) so re-assigning a rep's structure
 // never trips the overlap guard — this is how "change a rep's commission" works.
 export function assignStructureToRep(tenantId: number, actorId: number | null, input: {
   repId: number; structure: CommissionStructure; flatRateCents?: number | null;
   commissionPlanVersionId?: number | null; effectiveFrom?: string; closeExisting?: boolean;
+  tiers?: CommissionTier[] | null;
 }): { assignment: any; versionId: number; structure: CommissionStructure } {
   const rep = storage.getTeamMemberById(input.repId);
   if (!rep || rep.tenantId !== tenantId) throw new CommissionError("CROSS_TENANT_ACCESS", "Rep not found in tenant.", 404);
@@ -720,6 +755,12 @@ export function assignStructureToRep(tenantId: number, actorId: number | null, i
     structure = v.plan_type === "FLAT" ? "FLAT" : "TIERED";
   } else if (input.structure === "FLAT") {
     versionId = getOrCreateFlatVersion(tenantId, actorId, input.flatRateCents ?? 0).versionId;
+  } else if (input.tiers && input.tiers.length > 0) {
+    // THE BUG THIS BRANCH FIXES: the Team dialog has always sent the manager's
+    // edited ladder, and this function silently dropped it — every "custom"
+    // assignment landed on the standard tiers while the toast said otherwise.
+    // A manager who set 1-6 at $175 believed it; the rep was paid $150.
+    versionId = getOrCreateCustomTieredVersion(tenantId, actorId, input.tiers).versionId;
   } else {
     versionId = getOrCreateStandardTieredVersion(tenantId, actorId).versionId;
   }
@@ -781,17 +822,71 @@ const fieldSaleExternalId = (leadId: number) => `lead:${leadId}`;
 
 export function recordFieldSaleFromKnock(input: {
   tenantId: number; repId: number; leadId: number; knockId: number;
-  soldAt: string; actorId: number | null;
+  soldAt: string; serverReceivedAt: string; actorId: number | null;
 }): void {
-  const { tenantId, repId, leadId, soldAt, actorId } = input;
+  const { tenantId, repId, leadId, soldAt, serverReceivedAt, actorId } = input;
+  const externalId = fieldSaleExternalId(leadId);
+  const existing = rawDb.prepare(
+    `SELECT id, rep_id, status FROM commission_sales WHERE tenant_id = ? AND external_id = ?`,
+  ).get(tenantId, externalId) as any;
+
+  // ── ANTI-GAMING GUARD 1: a live sale is FROZEN (owner + pay-week). ──────────
+  // Retroactive weekly pay makes re-crediting and re-timing extremely valuable,
+  // so once a door's sale is QUALIFIED its rep_id and its week are set for good.
+  // A later "sold" knock — from a teammate who shares the territory, or from the
+  // original rep re-knocking in a richer week — is recorded as field history but
+  // is a MONEY no-op here. Closes two confirmed exploits:
+  //   * sale theft: rep B re-marks rep A's sold door and the ON CONFLICT upsert
+  //     flips rep_id (and the whole week's tier contribution) from A to B;
+  //   * week re-timing: a rep drags a prior-week sale into this week's count by
+  //     re-knocking it "now", inflating the retroactive tier.
+  // A genuine correction (wrong rep, wrong week) is a manager reversal, never a
+  // silent client-driven overwrite.
+  if (existing && existing.status === "QUALIFIED") {
+    if (Number(existing.rep_id) !== repId) {
+      storage.logActivity(actorId, "commission_sale.credit_conflict_blocked", "commission_sale", existing.id,
+        { externalId, leadId, existingRepId: existing.rep_id, attemptedRepId: repId }, undefined);
+    }
+    return;
+  }
+
+  // ── ANTI-GAMING GUARD 2: the pay-week is placed by SERVER-RECEIVED time, ────
+  // clamped to the correction window — never by the raw client knock timestamp.
+  // Honest offline flush still lands in its true week (a sale that syncs a few
+  // days late is inside the window); what this stops is backdating weeks/months
+  // to concentrate many sales into one high-tier week. The true field time still
+  // records on the knock row as history — this only bounds the MONEY week.
+  const config = loadOrgConfig(tenantId);
+  const serverMs = Date.parse(serverReceivedAt);
+  const floorMs = serverMs - config.correctionWindowDays * 86_400_000;
+  const rawMs = Date.parse(soldAt);
+  const clampedMs = Math.min(Math.max(Number.isFinite(rawMs) ? rawMs : serverMs, floorMs), serverMs);
+  const effectiveSoldAt = new Date(clampedMs).toISOString();
+
+  // ── ANTI-GAMING GUARD 3: never inject QUALIFIED money into a locked week. ───
+  // If the target week's statement is already FINALIZED or PAID, the sale is
+  // booked PENDING (uncounted) and flagged for manual review instead of silently
+  // re-pricing — or worse, latently sitting inside a paid week to surface on the
+  // next recalculation. A manager qualifies it into an open correction period.
+  const bounds = weekBoundsFor(effectiveSoldAt, config);
+  const lockedStmt = rawDb.prepare(
+    `SELECT status FROM commission_statements WHERE tenant_id = ? AND rep_id = ? AND week_start_utc = ?`,
+  ).get(tenantId, repId, bounds.weekStartUtc) as any;
+  const weekLocked = lockedStmt && (lockedStmt.status === "FINALIZED" || lockedStmt.status === "PAID");
+
   upsertSale(tenantId, actorId, {
-    repId, externalId: fieldSaleExternalId(leadId), status: "QUALIFIED",
-    soldAt, qualifiedAt: soldAt, leadId,
+    repId, externalId, status: weekLocked ? "PENDING" : "QUALIFIED",
+    soldAt: effectiveSoldAt, qualifiedAt: weekLocked ? null : effectiveSoldAt, leadId,
   });
-  // Keep the rep's live week fresh (best-effort — a locked week or missing plan
-  // must never block the knock).
+  if (weekLocked) {
+    storage.logActivity(actorId, "commission_sale.locked_week_pending", "commission_sale", undefined,
+      { externalId, leadId, weekStartUtc: bounds.weekStartUtc, status: lockedStmt.status }, undefined);
+    return;
+  }
+  // Keep the rep's live week fresh (best-effort — a missing plan must never
+  // block the knock).
   try {
-    calculateOrRecalculateStatement({ tenantId, repId, weekReference: soldAt, actorId, requestId: `field-sale:lead:${leadId}` });
+    calculateOrRecalculateStatement({ tenantId, repId, weekReference: effectiveSoldAt, actorId, requestId: `field-sale:lead:${leadId}` });
   } catch (e) {
     if (!(e instanceof CommissionError && (e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT" || e.code === "STATEMENT_LOCKED"))) throw e;
   }
