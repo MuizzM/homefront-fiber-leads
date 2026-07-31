@@ -4970,10 +4970,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const repId = parsed.data.repId;
     let prev: { lat: number; lng: number; at: string } | null = null;
     if (typeof repId === "number") {
-      const prior = storage.getKnocksByRep(repId)
-        .filter(k => k.repLat != null && k.repLng != null && (k.deviceTs || k.knockedAt))
-        .sort((a, z) => ((z.deviceTs ?? z.knockedAt) < (a.deviceTs ?? a.knockedAt) ? -1 : 1))[0];
-      if (prior) prev = { lat: prior.repLat as number, lng: prior.repLng as number, at: (prior.deviceTs ?? prior.knockedAt) as string };
+      // One indexed seek (idx_knock_log_rep_located) for the rep's newest
+      // located knock — this runs on EVERY knock write and used to hydrate +
+      // sort the rep's entire knock history to pick a single row.
+      const prior = storage.getLatestLocatedKnockByRep(repId);
+      if (prior) prev = { lat: prior.repLat, lng: prior.repLng, at: prior.deviceTs ?? prior.knockedAt };
     }
     const verdict = classifyKnockLocation({
       repLat: typeof b.repLat === "number" ? b.repLat : null,
@@ -5235,13 +5236,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const rep = storage.getTeamMemberById(repId);
     if (!rep) return res.status(404).json({ error: "Not found" });
-    // Capped, newest-first (getKnocksByRep is unordered — id desc = insertion
-    // order reversed, no date parsing); one pass to join addresses via a Map.
-    const knocks = storage.getKnocksByRep(repId).sort((a, b) => b.id - a.id).slice(0, 50);
-    const leadIds = new Set(knocks.map(k => k.leadId));
+    // Capped, newest-first (id desc = insertion order reversed, no date
+    // parsing), with the LIMIT pushed into SQL; the address join hydrates ONLY
+    // the <=50 leads referenced instead of the whole tenant (was ~265ms/request
+    // at 20k leads).
+    const knocks = storage.getRecentKnocksByRep(repId, 50);
+    const leadIds = [...new Set(knocks.map(k => k.leadId))];
     const addr = new Map(
-      storage.getLeads(user?.tenantId ?? undefined)
-        .filter(l => leadIds.has(l.id))
+      storage.getLeadAddressesByIds(leadIds, user?.tenantId ?? undefined)
         .map(l => [l.id, `${l.address}, ${l.city}`]),
     );
     res.json({
@@ -5258,7 +5260,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Stats
   app.get("/api/stats", requireAuth, (req, res) => {
     const _su = (req as any).user;
-    const all = storage.getLeads(_su?.tenantId ?? undefined, leadVisibilityScope(_su));
+    // Narrow projection (9 columns) — the counting loop below never read the
+    // other ~30 lead fields the full hydration paid for (was ~275ms/request
+    // at 20k leads). Scoping semantics identical to getLeads.
+    const all = storage.getLeadStatsRows(_su?.tenantId ?? undefined, leadVisibilityScope(_su));
     const stats: any = {
       total: all.length,
       assigned: 0,
@@ -6429,13 +6434,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // by the list route (every area the caller may see) and the per-area route —
   // so a rep's single-area card and a manager's overview can never disagree.
   function territoryProgressContext(tid: number | undefined) {
-    const leads = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null);
+    // Narrow projections (id/latlng/status + the knock verification fields) —
+    // the full getLeads/getKnocks hydration was ~520ms of this route's 596ms
+    // at 20k leads + 50k knocks, for columns the math below never read.
+    const leads = storage.getLeadsForTerritoryProgress(tid).filter((l: any) => l.lat != null && l.lng != null);
     const members = storage.getTeamMembers(tid);
     const geoConfig = storage.getGeoConfig(tid ?? null);
     // Group knocks by lead once (O(knocks)) so each territory is O(leads-inside).
     // Tenant-scoped so a shared DB doesn't load every org's knocks to discard them.
     const knocksByLead = new Map<number, any[]>();
-    for (const k of storage.getKnocks(tid)) {
+    for (const k of storage.getKnocksForTerritoryProgress(tid)) {
       const arr = knocksByLead.get(k.leadId); if (arr) arr.push(k); else knocksByLead.set(k.leadId, [k]);
     }
     return { leads, members, geoConfig, knocksByLead };
@@ -6619,12 +6627,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     let poly: [number, number][] = [];
     try { poly = JSON.parse(territory.polygon); } catch { poly = []; }
+    // Narrow projections — this feed reads address/coords off the lead and the
+    // verification fields off the knock; full-row hydration of every tenant
+    // lead + knock was the bulk of the route's latency (same fix as the
+    // progress routes above).
     const within = poly.length >= 3
-      ? storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, poly))
+      ? storage.getLeadsForTerritoryProgress(tid).filter((l: any) => l.lat != null && l.lng != null && polygonCovers(l.lat, l.lng, poly))
       : [];
     const leadById = new Map(within.map((l: any) => [l.id, l]));
     const repNames = new Map(storage.getTeamMembers(tid).map(m => [m.id, m.name]));
-    const activities = storage.getKnocks(tid)
+    const activities = storage.getKnocksForTerritoryActivity(tid, within.map((l: any) => l.id))
       .filter(k => leadById.has(k.leadId))
       .map(k => {
         const l: any = leadById.get(k.leadId);
