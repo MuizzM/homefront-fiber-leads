@@ -5,7 +5,7 @@
 // queue, and the door drops off the list. 100% real data: GET /api/followups.
 import { useMemo, useState } from "react";
 import { FOCUS } from "@/lib/a11y";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest } from "@/lib/queryClient";
 import { useKnockLogger } from "@/lib/useKnockLogger";
@@ -51,6 +51,7 @@ function fmtDay(iso: string, today: string): string {
 export default function FollowUps() {
   const [, navigate] = useLocation();
   const { log, snap } = useKnockLogger();
+  const qc = useQueryClient();
   const [sheet, setSheet] = useState<FollowUp | null>(null);
 
   const q = useQuery<FollowUp[]>({
@@ -150,7 +151,21 @@ export default function FollowUps() {
         onClose={() => setSheet(null)}
         onLog={(outcome, opts) => {
           if (!sheet) return;
-          log({ id: sheet.leadId, leadStatus: sheet.leadStatus, assignedRepId: sheet.assignedRepId }, outcome, opts);
+          const staged = log({ id: sheet.leadId, leadStatus: sheet.leadStatus, assignedRepId: sheet.assignedRepId }, outcome, opts);
+          if (staged) {
+            // The knock is durably queued (works offline), so reflect it here
+            // immediately: a re-scheduled callback moves to its new date, any
+            // other outcome drops the door off the list. Server reconciliation
+            // after the queue flush re-syncs this cache with the truth.
+            qc.setQueryData<FollowUp[]>(["/api/followups"], old => {
+              if (!old) return old;
+              return outcome === "callback" && opts.callbackDate
+                ? old.map(f => f.leadId === sheet.leadId
+                    ? { ...f, callbackDate: opts.callbackDate!, callbackTime: opts.callbackTime ?? null, notes: opts.notes ?? f.notes }
+                    : f)
+                : old.filter(f => f.leadId !== sheet.leadId);
+            });
+          }
           setSheet(null);
         }}
       />

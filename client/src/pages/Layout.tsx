@@ -235,7 +235,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex h-screen bg-background overflow-hidden">
       {/* Sidebar */}
       <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 w-[min(88vw,360px)] md:w-60 bg-card border-r border-border flex flex-col transition-transform duration-300 ease-out motion-reduce:duration-0",
+        "fixed inset-y-0 left-0 z-50 w-[min(88vw,360px)] md:w-60 bg-card border-r border-border flex flex-col transition-transform duration-200 ease-out motion-reduce:duration-0",
         "md:relative md:translate-x-0",
         mobileOpen ? "translate-x-0" : "-translate-x-full"
       )}>
@@ -419,7 +419,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             role="dialog"
             aria-modal="true"
             aria-label="More navigation"
-            className="liquid-glass absolute inset-x-0 bottom-0 max-h-[86dvh] overflow-y-auto rounded-t-[28px] border-t border-border animate-in slide-in-from-bottom duration-300 ease-out motion-reduce:duration-0"
+            className="liquid-glass absolute inset-x-0 bottom-0 max-h-[86dvh] overflow-y-auto rounded-t-[28px] border-t border-border animate-in slide-in-from-bottom duration-200 ease-out motion-reduce:duration-0"
             style={{ paddingBottom: "max(1rem,env(safe-area-inset-bottom))" }}
           >
             <div className="sticky top-0 z-10 bg-card/80 px-4 pb-3 pt-2">
