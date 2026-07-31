@@ -7,6 +7,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { colorForRep } from "../../shared/repColors";
 import { RepPicker } from "../../client/src/components/territory/RepPicker";
 
 const many = Array.from({ length: 20 }, (_, i) => ({
@@ -210,6 +211,30 @@ describe("RepPicker assign-sheet status line", () => {
     const avatar = screen.getByTestId("rep-avatar-1");
     expect(avatar).toHaveTextContent("A");
     expect(avatar).toHaveClass("rounded-full", "border-2");
+  });
+
+  // ── The ring is the rep's OWN colour ───────────────────────────────────────
+  // Colours are assigned at hire and persisted (team_members.color); the ring
+  // must wear that hue — the same one the rep's pins and halos wear — never the
+  // theme primary, which painted every rep identically.
+  it("rings the avatar in the rep's persisted colour", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann Rivera", color: "#DB2777" }]} onChange={vi.fn()} areaCounts={{ 1: 1 }} />);
+    expect(screen.getByTestId("rep-avatar-1")).toHaveStyle({ borderColor: "#DB2777" });
+  });
+
+  it("falls back to the legacy hash hue when no colour is stored", () => {
+    render(<RepPicker reps={[{ id: 7, name: "Bo Chen", color: null }]} onChange={vi.fn()} areaCounts={{}} />);
+    expect(screen.getByTestId("rep-avatar-7")).toHaveStyle({ borderColor: colorForRep(7) });
+  });
+
+  it("never paints two differently-coloured reps with the same ring", () => {
+    render(<RepPicker onChange={vi.fn()} areaCounts={{}} reps={[
+      { id: 1, name: "Ann", color: "#2563EB" },
+      { id: 2, name: "Bo", color: "#F97316" },
+    ]} />);
+    const a = screen.getByTestId("rep-avatar-1").style.borderColor;
+    const b = screen.getByTestId("rep-avatar-2").style.borderColor;
+    expect(a).not.toBe(b);
   });
 
   it("renders no status line or avatar when areaCounts is omitted", () => {

@@ -15,8 +15,12 @@ export type LeadMapStatus =
   | "follow_up"
   | "already_customer";
 
-export type PinShape = "teardrop" | "down_arrow";
-export type PinGlyph = "door" | "star" | "dollar" | "x" | "clock" | "user" | "none";
+// Every live status renders as "circle" (SalesRabbit-style flat disc with a
+// white inner glyph). The legacy members stay in the union so downstream code
+// typed against the old vocabulary keeps compiling — the exported contract is
+// append-only, the DATA below is what changed.
+export type PinShape = "circle" | "teardrop" | "down_arrow";
+export type PinGlyph = "door" | "star" | "dollar" | "x" | "clock" | "user" | "arrow" | "none";
 
 export interface LeadStatusConfig {
   label: string;
@@ -34,26 +38,26 @@ export interface LeadStatusConfig {
 
 export const STATUS_CONFIG: Readonly<Record<LeadMapStatus, Readonly<LeadStatusConfig>>> = {
   not_home: {
-    label: "Not Home", color: "#EAB308", shape: "teardrop", glyph: "door", cardIcon: "DoorClosed",
+    label: "Not Home", color: "#EAB308", shape: "circle", glyph: "door", cardIcon: "DoorClosed",
   },
   interested: {
-    label: "Interested", color: "#8B5CF6", shape: "teardrop", glyph: "star", cardIcon: "Star",
+    label: "Interested", color: "#8B5CF6", shape: "circle", glyph: "star", cardIcon: "Star",
   },
   sold: {
     // Deep dark green — clearly distinct from prospect (#16A34A) on the map.
     // The pin stays deep green (it must stay distinct from prospect on the map);
     // the card uses a lighter emerald so "SOLD" is actually readable — 10:1.
-    label: "Sold", color: "#14532D", shape: "teardrop", glyph: "dollar", cardIcon: "DollarSign",
+    label: "Sold", color: "#14532D", shape: "circle", glyph: "dollar", cardIcon: "DollarSign",
     onDark: "#34D399",
   },
   not_interested: {
-    label: "Not Interested", color: "#EF4444", shape: "teardrop", glyph: "x", cardIcon: "X",
+    label: "Not Interested", color: "#EF4444", shape: "circle", glyph: "x", cardIcon: "X",
   },
   prospect: {
-    label: "Prospect", color: "#16A34A", shape: "down_arrow", glyph: "none", cardIcon: "ArrowDown",
+    label: "Prospect", color: "#16A34A", shape: "circle", glyph: "arrow", cardIcon: "ArrowDown",
   },
   follow_up: {
-    label: "Follow-up", color: "#F97316", shape: "teardrop", glyph: "clock", cardIcon: "Clock",
+    label: "Follow-up", color: "#F97316", shape: "circle", glyph: "clock", cardIcon: "Clock",
   },
   already_customer: {
     // BLUE, deliberately outside the hot/cold axis every other pin sits on. The
@@ -61,7 +65,7 @@ export const STATUS_CONFIG: Readonly<Record<LeadMapStatus, Readonly<LeadStatusCo
     // one reads "competitor's block — or ours already", which is targeting
     // data. blue-600 fill keeps the white glyph legible in sunlight; the card
     // uses blue-400 for the 4.5:1 dark-sheet minimum (same split as sold).
-    label: "Already a Customer", color: "#2563EB", shape: "teardrop", glyph: "user", cardIcon: "UserCheck",
+    label: "Already a Customer", color: "#2563EB", shape: "circle", glyph: "user", cardIcon: "UserCheck",
     onDark: "#60A5FA",
   },
 } as const;

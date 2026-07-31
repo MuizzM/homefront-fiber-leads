@@ -78,78 +78,17 @@ export function iconOpacityExpr(selectedId: number | null): any {
   return ["case", ["==", ["get", "id"], selectedId], 1, DIMMED_PIN_OPACITY];
 }
 
-// ── Secondary-chrome auto-hide ────────────────────────────────────────────────
-// Map-first chrome: secondary controls (tools menu, status filter) fade out the
-// moment the rep starts panning/zooming and fade back ~800ms after the gesture
-// ends. State machine is pure; the component only dispatches events and arms a
-// timer for `reshowAt`. A new gesture inside the wait window re-hides and
-// clears the pending reshow (debounce, not a queue).
-export const CHROME_RESHOW_DELAY_MS = 800;
+// (The secondary-chrome auto-hide machine and the compact status-filter pill
+// machine were removed with the chrome they drove. The auto-hide's
+// `interact-start → {hidden, reshowAt:null}` transition could strand the whole
+// control rail at opacity-0 whenever the matching end event was swallowed —
+// which is how the lasso button "disappeared" for managers. The rail is
+// primary chrome now: always visible, like the SalesRabbit reference.)
 
-export interface ChromeAutoHideState {
-  hidden: boolean;
-  reshowAt: number | null; // epoch ms when chrome should reappear (null = none pending)
-}
-
-export const CHROME_AUTO_HIDE_IDLE: ChromeAutoHideState = {
-  hidden: false,
-  reshowAt: null,
-};
-
-export type ChromeAutoHideEvent =
-  | { type: "interact-start"; now: number }
-  | { type: "interact-end"; now: number }
-  | { type: "idle-timer"; now: number };
-
-export function chromeAutoHideNext(
-  state: ChromeAutoHideState,
-  event: ChromeAutoHideEvent,
-): ChromeAutoHideState {
-  switch (event.type) {
-    case "interact-start":
-      return { hidden: true, reshowAt: null };
-    case "interact-end":
-      return { hidden: true, reshowAt: event.now + CHROME_RESHOW_DELAY_MS };
-    case "idle-timer":
-      return state.reshowAt != null && event.now >= state.reshowAt
-        ? CHROME_AUTO_HIDE_IDLE
-        : state;
-  }
-}
-
-// ── Compact status-filter control ─────────────────────────────────────────────
-// The old permanent chip row collapsed into one pill: closed it reads
-// "All · n"; open it is a scrollable status selector; one tap on All resets.
-// The rep's last selection persists across launches. State machine is pure so
-// collapsed/open/select/reset are unit-testable without the map.
+// ── Persisted status filter ───────────────────────────────────────────────────
+// The rep's last selection persists across launches. The Filters sheet is the
+// one filter surface; an active filter shows as the top-center chip.
 export const FILTER_STATUS_LS_KEY = "hf.mapFilterStatus.v1";
-
-export interface FilterControlState {
-  open: boolean;
-  status: string; // "all" or a PinDisplayState key
-}
-
-export type FilterControlAction =
-  | { type: "toggle" }
-  | { type: "close" }
-  | { type: "select"; status: string }
-  | { type: "reset" };
-
-export function filterControlNext(
-  state: FilterControlState,
-  action: FilterControlAction,
-): FilterControlState {
-  switch (action.type) {
-    case "toggle":
-      return { ...state, open: !state.open };
-    case "close":
-      return state.open ? { ...state, open: false } : state;
-    case "select":
-      return { open: false, status: action.status };
-    case "reset":
-      return { open: false, status: "all" };
-  }
-}
 
 export function readPersistedFilterStatus(validStatuses: readonly string[]): string {
   try {
@@ -367,6 +306,36 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
       },
     }, before);
   } catch { /* a style variant without housenum tiles — skip, never fake it */ }
+}
+
+// Counterpart for the settings toggle: unmount the layer entirely (not just
+// visibility) so an OFF map does zero symbol/collision work for numbers.
+export function removeHousenumLayer(map: any): void {
+  try {
+    if (map?.getLayer?.("hf-housenum")) map.removeLayer("hf-housenum");
+  } catch { /* style mid-swap — the fresh style starts without the layer anyway */ }
+}
+
+// ── House-numbers preference ──────────────────────────────────────────────────
+// OFF by default (owner's minimal-map directive); an explicit opt-in from the
+// Map settings sheet persists across launches, same pattern as the status
+// filter above. Storage-blocked browsers degrade to session-only.
+export const HOUSE_NUMBERS_LS_KEY = "hf.mapHouseNumbers.v1";
+
+export function readPersistedHouseNumbers(): boolean {
+  try {
+    return localStorage.getItem(HOUSE_NUMBERS_LS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function persistHouseNumbers(on: boolean): void {
+  try {
+    localStorage.setItem(HOUSE_NUMBERS_LS_KEY, on ? "1" : "0");
+  } catch {
+    /* storage blocked — preference just won't survive a reload */
+  }
 }
 
 // ── Add-mode tap arbitration ────────────────────────────────────────────────

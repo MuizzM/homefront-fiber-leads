@@ -424,6 +424,105 @@ describe("actions render only when there is something to do", () => {
   });
 });
 
+// ── Buttons audit: every control reaches its handler, no dead-ends ──────────
+describe("every panel action fires the handler it is wired to", () => {
+  const held = { id: 1, name: "Held", status: "active" as const, repIds: [7, 9], leadCount: 10 };
+
+  function renderAll(overrides: Record<string, any> = {}) {
+    const h = {
+      onReclaim: vi.fn(), onReassign: vi.fn(), onComplete: vi.fn(),
+      onViewHistory: vi.fn(), onStartNextPass: vi.fn(), onEditAssignees: vi.fn(),
+      onUnassignRep: vi.fn(),
+    };
+    render(
+      <TerritoryDetailPanel
+        territory={held}
+        currentUser={{ role: "manager" }}
+        teamNames={{ 7: "Rae Rivera", 9: "Sam Okafor" }}
+        currentPass={2}
+        {...h}
+        {...overrides}
+      />,
+    );
+    return h;
+  }
+
+  it("View Activity, edit assignees, Start pass, Reclaim, Reassign and Complete all fire", () => {
+    const h = renderAll();
+    fireEvent.click(screen.getByTestId("view-history-btn"));
+    expect(h.onViewHistory).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("edit-assignees-btn"));
+    expect(h.onEditAssignees).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("next-pass-btn"));
+    expect(h.onStartNextPass).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("reclaim-btn"));
+    expect(h.onReclaim).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("reassign-btn"));
+    expect(h.onReassign).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTestId("complete-btn"));
+    expect(h.onComplete).toHaveBeenCalledOnce();
+  });
+
+  it("labels Start pass with the pass that will open", () => {
+    renderAll();
+    expect(screen.getByTestId("next-pass-btn")).toHaveTextContent("Start pass 3");
+  });
+
+  it("per-rep unassign stays two-step: arm, then confirm fires with the rep id", () => {
+    const h = renderAll();
+    fireEvent.click(screen.getByTestId("unassign-rep-7"));
+    expect(h.onUnassignRep).not.toHaveBeenCalled(); // arming is not removal
+    fireEvent.click(screen.getByTestId("confirm-unassign-7"));
+    expect(h.onUnassignRep).toHaveBeenCalledExactlyOnceWith(7);
+  });
+
+  it("the arm step can be backed out without firing anything", () => {
+    const h = renderAll();
+    fireEvent.click(screen.getByTestId("unassign-rep-7"));
+    fireEvent.click(screen.getByTestId("cancel-unassign-7"));
+    expect(h.onUnassignRep).not.toHaveBeenCalled();
+    expect(screen.getByTestId("unassign-rep-7")).toBeInTheDocument(); // disarmed
+  });
+
+  it("disables only the chip being removed while its request is in flight", () => {
+    renderAll({ unassigningRepId: 7 });
+    expect(screen.getByTestId("unassign-rep-7")).toBeDisabled();
+    expect(screen.getByTestId("unassign-rep-9")).toBeEnabled();
+  });
+
+  it("hides handler-less controls instead of rendering dead buttons", () => {
+    renderAll({
+      onViewHistory: undefined, onEditAssignees: undefined, onStartNextPass: undefined,
+      onReassign: undefined, onComplete: undefined,
+    });
+    expect(screen.queryByTestId("view-history-btn")).toBeNull();
+    expect(screen.queryByTestId("edit-assignees-btn")).toBeNull();
+    expect(screen.queryByTestId("next-pass-btn")).toBeNull();
+    expect(screen.queryByTestId("reassign-btn")).toBeNull();
+    expect(screen.queryByTestId("complete-btn")).toBeNull();
+    expect(screen.getByTestId("reclaim-btn")).toBeInTheDocument(); // still supplied
+  });
+
+  it("meets the 44px bar on the panel's buttons (audit: pencil w-6, rows h-8)", async () => {
+    renderAll({ onRename: vi.fn() });
+    for (const id of ["view-history-btn", "edit-assignees-btn", "next-pass-btn"]) {
+      expect(screen.getByTestId(id).className).toMatch(/min-h-11/);
+    }
+    for (const id of ["reclaim-btn", "reassign-btn", "complete-btn"]) {
+      expect(screen.getByTestId(id).className).toMatch(/\bh-11\b/);
+    }
+    // The rename pencil keeps a compact glyph but carries an expanded hit halo
+    // and the shared focus ring.
+    const pencil = screen.getByTestId("territory-rename-btn");
+    expect(pencil.className).toMatch(/after:-inset/);
+    expect(pencil.className).toMatch(/focus-visible:ring-2/);
+    // Save/cancel in the rename editor as well.
+    await userEvent.click(pencil);
+    expect(screen.getByTestId("territory-name-save").className).toMatch(/after:-inset/);
+    expect(screen.getByTestId("territory-name-cancel").className).toMatch(/after:-inset/);
+  });
+});
+
 describe("no panel control can submit a form", () => {
   // "It's just refresh" is also what an implicit submit looks like. A bare
   // <button> defaults to type="submit"; there is no <form> around this panel

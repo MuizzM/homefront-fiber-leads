@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { colorForRep } from "../../shared/repColors";
+import { colorForRep, repColorOf } from "../../shared/repColors";
 
 let server: Server;
 let baseUrl: string;
@@ -112,11 +112,16 @@ describe("the drawn colour survives the save", () => {
     expect(body.territory.color).toBe("#00FF00");
   });
 
-  it("still defaults to the rep hue when no colour is sent", async () => {
-    // Older clients and direct API callers must keep working.
+  it("still defaults to the rep's own hue when no colour is sent", async () => {
+    // Older clients and direct API callers must keep working. The default is
+    // now the rep's PERSISTED colour (assigned at creation, team_members.color)
+    // resolved through repColorOf — which equals the legacy hash for rows
+    // created before the column existed.
     const { status, body } = await drawArea({});
     expect(status).toBe(201);
-    expect(body.territory.color).toBe(colorForRep(fx.rep.memberId));
+    const member = storage.getTeamMemberById(fx.rep.memberId)!;
+    expect(member.color).toBeTruthy(); // allocated when the fixture was hired
+    expect(body.territory.color).toBe(repColorOf(member));
   });
 
   it("rejects a malformed colour instead of silently falling back", async () => {

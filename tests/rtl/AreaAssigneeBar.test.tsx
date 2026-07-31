@@ -209,3 +209,66 @@ describe("it stays out of the way", () => {
     expect(screen.getByRole("group", { name: "Who works Maple Ridge" })).toBeInTheDocument();
   });
 });
+
+// ── Theme + control polish (owner screenshot: white card, broken pill) ───────
+describe("it belongs to the map's dark glass chrome", () => {
+  it("sits on the glass surface with the ink scope, never a hardcoded white card", () => {
+    setup();
+    const bar = screen.getByTestId("area-assignee-bar");
+    expect(bar.className).toMatch(/glass-surface/);
+    expect(bar.className).toMatch(/glass-opaque/);
+    expect(bar.className).toMatch(/glass-ink-scope/);
+    // The regression: a translucent app-background fill that renders white in
+    // light theme.
+    expect(bar.className).not.toMatch(/bg-background|bg-white/);
+  });
+
+  it("styles the primary badge as a real token chip, not a ghost pill", () => {
+    setup();
+    const chip = within(screen.getByTestId("area-assignee-1")).getByText("1st");
+    expect(chip.className).toMatch(/text-primary/);
+    expect(chip.className).toMatch(/bg-primary\/15/);
+    expect(chip.className).not.toMatch(/bg-foreground\/10/);
+  });
+
+  it("close is a 44px target with the shared focus ring", () => {
+    setup();
+    const close = screen.getByTestId("area-assignee-close");
+    expect(close.className).toMatch(/\bh-11\b/);
+    expect(close.className).toMatch(/\bw-11\b/);
+    expect(close.className).toMatch(/focus-visible:ring-2/);
+    expect(close).toHaveAccessibleName("Close");
+  });
+
+  it("the picker's Cancel is a 44px, properly styled control that collapses without emitting", () => {
+    const { onChange } = setup();
+    fireEvent.click(screen.getByTestId("area-assignee-add"));
+    const cancel = screen.getByTestId("area-assignee-add-cancel");
+    expect(cancel.className).toMatch(/\bh-11\b/);
+    expect(cancel.className).toMatch(/text-foreground/);
+    expect(cancel.className).toMatch(/focus-visible:ring-2/);
+    fireEvent.click(cancel);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("area-assignee-add-cancel")).toBeNull();
+    expect(screen.getByTestId("area-assignee-add")).toBeInTheDocument();
+  });
+
+  it("locks the picker's Cancel too while a save is in flight", () => {
+    setup({ pending: true });
+    fireEvent.click(screen.getByTestId("area-assignee-add")); // disabled — no-op
+    expect(screen.queryByTestId("area-assignee-add-cancel")).toBeNull();
+  });
+
+  it("announces the saving state politely", () => {
+    setup({ pending: true });
+    expect(screen.getByTestId("area-assignee-pending")).toHaveAttribute("role", "status");
+    expect(screen.getByTestId("area-assignee-pending")).toHaveTextContent(/saving/i);
+  });
+
+  it("names every per-rep control after its rep", () => {
+    setup();
+    expect(screen.getByRole("button", { name: "Remove Rae Rivera" })).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("area-assignee-1"));
+    expect(screen.getByRole("button", { name: "Confirm removing Rae Rivera" })).toBeInTheDocument();
+  });
+});

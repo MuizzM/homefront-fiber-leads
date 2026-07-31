@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Lock, RotateCcw, Loader2 } from "lucide-react";
+import { FOCUS } from "@/lib/a11y";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   FREEZE_REASON_LABELS, FREEZE_REASON_HELP,
   type FreezeReason, type TerritoryPassAction,
@@ -12,6 +14,10 @@ import {
 // Two things it must never do:
 //   - imply history is being deleted (it isn't — knocks are kept forever)
 //   - hide that live callback commitments are about to be dropped
+//
+// Surface grammar matches ReclaimAllDialog exactly (scrim, z, card tokens):
+// this dialog opens over the dark glass territory panel, and an off-token
+// bg-background card rendered as a stark white sheet there in light theme.
 
 export interface PassPreview {
   currentPass: number;
@@ -79,11 +85,26 @@ export function StartNextPassDialog({
 
   return (
     <div role="dialog" aria-modal="true" aria-labelledby="next-pass-title"
-         className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-0 sm:p-4">
-      <div className="w-full sm:max-w-lg max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-background border shadow-xl">
-        <div className="p-5 space-y-4">
+         data-testid="next-pass-dialog"
+         className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center">
+      {/* Scrim — same grammar as ReclaimAllDialog: a real button, so a tap
+          outside the card is Cancel, not a dead zone. Locked while committing. */}
+      <button
+        type="button"
+        aria-label="Close"
+        onClick={onCancel}
+        disabled={busy}
+        data-testid="next-pass-scrim"
+        className="absolute inset-0 bg-black/60"
+      />
+
+      <div
+        data-testid="next-pass-card"
+        className="relative w-full sm:max-w-md max-h-[92vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl border border-border bg-card text-foreground p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200"
+      >
+        <div className="space-y-4">
           <header className="space-y-1">
-            <h2 id="next-pass-title" className="text-lg font-semibold flex items-center gap-2">
+            <h2 id="next-pass-title" className="text-lg font-semibold text-foreground flex items-center gap-2">
               <RotateCcw className="h-4 w-4 shrink-0" aria-hidden="true" />
               Start pass {preview?.nextPass ?? "…"}
               {preview?.territoryName ? <span className="font-normal text-muted-foreground">· {preview.territoryName}</span> : null}
@@ -95,26 +116,38 @@ export function StartNextPassDialog({
           </header>
 
           {loading ? (
-            <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground" role="status">
-              <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-              Working out what this will change…
+            // While the dry run loads: proper skeleton tiles in the exact slots
+            // the real counts will occupy — never bare outlined boxes with
+            // nothing in them, which read as a component that failed to render.
+            <div role="status" className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <Skeleton className="h-[76px] rounded-xl" data-testid="pass-preview-skeleton" />
+                <Skeleton className="h-[76px] rounded-xl" data-testid="pass-preview-skeleton" />
+              </div>
+              <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                Working out what this will change…
+              </p>
             </div>
           ) : error ? (
-            <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm">
+            <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-foreground">
               {error}
             </div>
           ) : preview ? (
             <>
-              {/* The two columns are the whole decision, so they lead. */}
+              {/* The two columns are the whole decision, so they lead. Zero is a
+                  real answer and renders as 0 — never an empty tile. */}
               <div className="grid grid-cols-2 gap-3">
-                <div className="rounded-lg border p-3">
-                  <div className="text-2xl font-semibold tabular-nums">{preview.totals.reset}</div>
+                <div className="rounded-xl border border-border bg-secondary/40 p-3" data-testid="pass-reset-tile">
+                  <div data-testid="pass-reset-count" className="text-2xl font-semibold tabular-nums text-foreground">
+                    {preview.totals.reset}
+                  </div>
                   <div className="text-xs text-muted-foreground">
                     {preview.totals.reset === 1 ? "door re-opens" : "doors re-open"}
                   </div>
                 </div>
-                <div className="rounded-lg border p-3">
-                  <div className="text-2xl font-semibold tabular-nums flex items-center gap-1.5">
+                <div className="rounded-xl border border-border bg-secondary/40 p-3" data-testid="pass-frozen-tile">
+                  <div className="text-2xl font-semibold tabular-nums text-foreground flex items-center gap-1.5" data-testid="pass-frozen-count">
                     <Lock className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     {preview.totals.frozen}
                   </div>
@@ -138,18 +171,23 @@ export function StartNextPassDialog({
 
               {/* Never silently drop a promise a rep made to a homeowner. */}
               {preview.callbacksAtRisk > 0 && (
-                <div role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm space-y-2">
+                <div role="alert" data-testid="pass-callbacks-tile"
+                     className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-foreground space-y-1">
                   <div className="flex gap-2">
-                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
+                    <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5 text-amber-400" aria-hidden="true" />
                     <span>
                       {preview.callbacksAtRisk === 1
                         ? "1 door has a callback scheduled that this will clear."
                         : `${preview.callbacksAtRisk} doors have callbacks scheduled that this will clear.`}
                     </span>
                   </div>
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input type="checkbox" checked={keepCallbacks}
-                           onChange={e => setKeepCallbacks(e.target.checked)} />
+                  <label className="flex min-h-11 cursor-pointer items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={keepCallbacks}
+                      onChange={e => setKeepCallbacks(e.target.checked)}
+                      className={`h-4 w-4 accent-[hsl(var(--primary))] ${FOCUS}`}
+                    />
                     <span>Keep scheduled callbacks</span>
                   </label>
                 </div>
@@ -158,11 +196,21 @@ export function StartNextPassDialog({
               <fieldset className="space-y-2">
                 <legend className="text-sm font-medium mb-1">Who knocks it next?</legend>
                 {(Object.keys(ACTION_COPY) as TerritoryPassAction[]).map(a => (
-                  <label key={a} className="flex gap-2.5 items-start rounded-lg border p-2.5 cursor-pointer has-[:checked]:border-primary">
-                    <input type="radio" name="territoryAction" value={a} checked={action === a}
-                           onChange={() => setAction(a)} className="mt-1" />
+                  <label
+                    key={a}
+                    data-testid={`pass-action-row-${a}`}
+                    className={`flex min-h-11 cursor-pointer items-start gap-2.5 rounded-xl border p-3 transition-colors ${
+                      action === a ? "border-primary bg-primary/[0.07]" : "border-border hover:border-primary/25"
+                    }`}
+                  >
+                    <input
+                      type="radio" name="territoryAction" value={a} checked={action === a}
+                      onChange={() => setAction(a)}
+                      data-testid={`pass-action-${a}`}
+                      className={`mt-1 accent-[hsl(var(--primary))] ${FOCUS}`}
+                    />
                     <span className="text-sm">
-                      <span className="font-medium block">{ACTION_COPY[a].label}</span>
+                      <span className="font-medium block text-foreground">{ACTION_COPY[a].label}</span>
                       <span className="text-muted-foreground">{ACTION_COPY[a].help}</span>
                     </span>
                   </label>
@@ -170,7 +218,8 @@ export function StartNextPassDialog({
                 {action === "reassign" && (
                   <select
                     aria-label="Rep to hand the area to"
-                    className="w-full rounded-lg border p-2 text-sm bg-background"
+                    data-testid="pass-reassign-select"
+                    className={`h-11 w-full rounded-lg border border-border bg-secondary px-3 text-sm text-foreground ${FOCUS}`}
                     value={newRepId ?? ""}
                     onChange={e => setNewRepId(e.target.value ? Number(e.target.value) : undefined)}
                   >
@@ -184,7 +233,8 @@ export function StartNextPassDialog({
                 <span className="font-medium">Note <span className="text-muted-foreground font-normal">(optional)</span></span>
                 <input value={note} onChange={e => setNote(e.target.value)} maxLength={500}
                        placeholder="e.g. Spring sweep done, revisit after the build-out"
-                       className="w-full rounded-lg border p-2 bg-background" />
+                       data-testid="pass-note-input"
+                       className={`h-11 w-full rounded-lg border border-border bg-secondary px-3 text-sm text-foreground placeholder:text-muted-foreground ${FOCUS}`} />
               </label>
 
               <p className="text-xs text-muted-foreground">
@@ -193,21 +243,27 @@ export function StartNextPassDialog({
             </>
           ) : null}
 
-          <div className="flex gap-2 justify-end pt-1">
-            <button type="button" onClick={onCancel} disabled={busy}
-                    className="rounded-lg border px-4 py-2 text-sm font-medium disabled:opacity-50">
+          <div className="flex gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={busy}
+              data-testid="next-pass-cancel"
+              className={`h-11 flex-1 rounded-xl border border-border bg-secondary text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70 disabled:opacity-50 ${FOCUS}`}
+            >
               Cancel
             </button>
             <button
               type="button"
               disabled={!canConfirm}
+              data-testid="next-pass-confirm"
               onClick={() => onConfirm({
                 territoryAction: action,
                 newRepId: action === "reassign" ? newRepId : undefined,
                 keepPendingCallbacks: keepCallbacks,
                 note: note.trim() || undefined,
               })}
-              className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50 inline-flex items-center gap-2"
+              className={`h-11 flex-1 rounded-xl bg-primary text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50 inline-flex items-center justify-center gap-2 ${FOCUS}`}
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
               {preview ? `Start pass ${preview.nextPass}` : "Start next pass"}

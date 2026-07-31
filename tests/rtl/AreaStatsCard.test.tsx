@@ -170,6 +170,28 @@ describe("every derived number names its denominator", () => {
   });
 });
 
+describe("the info triggers are real targets", () => {
+  // Audit finding: the ⓘ was a 24px button with no focus treatment. It keeps
+  // its compact glyph but carries a 44px hit halo and the shared focus ring.
+  it("every info button has an expanded hit area and the shared focus ring", () => {
+    render(<AreaStatsCard {...FULL} />);
+    for (const id of ["stat-info-completion", "stat-info-penetration", "stat-info-contact-rate"]) {
+      const btn = screen.getByTestId(id);
+      expect(btn.className).toMatch(/after:-inset-2\.5/);
+      expect(btn.className).toMatch(/focus-visible:ring-2/);
+    }
+  });
+
+  it("still toggles its tooltip when tapped", () => {
+    render(<AreaStatsCard {...FULL} />);
+    const btn = screen.getByTestId("stat-info-completion");
+    fireEvent.click(btn);
+    expect(screen.getByRole("tooltip")).toBeInTheDocument();
+    fireEvent.click(btn);
+    expect(screen.queryByRole("tooltip")).toBeNull();
+  });
+});
+
 describe("optional figures stay out of the way", () => {
   it("hides the contact rate line when there is no contact rate", () => {
     render(<AreaStatsCard {...FULL} contactRate={undefined} />);

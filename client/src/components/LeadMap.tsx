@@ -131,7 +131,9 @@ export function LeadMap({
         filter: ["!", ["has", "point_count"]],
         layout: {
           "icon-image": iconImageConcatExpression(),
-          "icon-anchor": "bottom",
+          // Circle pins sit ON the door (the old teardrops hung their tip on it,
+          // hence "bottom"). Center-anchoring keeps the disc over the rooftop.
+          "icon-anchor": "center",
           "icon-size": ["interpolate", ["linear"], ["zoom"], 12, 0.55, 17, 0.9, 20, 1.1],
           "icon-allow-overlap": true,
           "icon-ignore-placement": true,

@@ -25,8 +25,9 @@
 // their doors back, so a mis-tap costs someone their working queue.
 
 import { useState } from "react";
-import { Check, Plus, Users, X } from "lucide-react";
-import { colorForRep } from "@shared/repColors";
+import { Loader2, Plus, Users, X } from "lucide-react";
+import { FOCUS } from "@/lib/a11y";
+import { repColorOf } from "@shared/repColors";
 import { RepPicker } from "./RepPicker";
 
 export interface AssignableRep {
@@ -36,6 +37,8 @@ export interface AssignableRep {
    *  the mistake this number exists to prevent. */
   areaCount: number;
   atCap: boolean;
+  /** Persisted rep colour (team_members.color); absent → legacy hash hue. */
+  color?: string | null;
 }
 
 export interface AreaAssigneeBarProps {
@@ -96,14 +99,19 @@ export function AreaAssigneeBar({
       role="group"
       aria-label={`Who works ${areaName}`}
       style={{ bottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}
-      className="absolute left-1/2 z-30 w-[min(430px,calc(100vw-20px))] -translate-x-1/2 rounded-2xl border border-border bg-background/95 p-3 shadow-2xl backdrop-blur animate-in fade-in slide-in-from-bottom-2 duration-200"
+      // glass-surface glass-opaque glass-ink-scope: the same liquid-glass family
+      // as the territory panel and the overlap picker floating over this map.
+      // bg-background/95 rendered as a stark white card in light theme, visibly
+      // detached from the dark chrome around it; the ink scope keeps the
+      // semantic tokens (card/secondary/border/foreground) dark in BOTH themes.
+      className="glass-surface glass-opaque glass-ink-scope absolute left-1/2 z-30 w-[min(430px,calc(100vw-20px))] -translate-x-1/2 rounded-2xl p-3 text-foreground animate-in fade-in slide-in-from-bottom-2 duration-200"
     >
       {/* Header: the area, in the area's own colour, so the card is visibly
           about the polygon still showing above it. */}
       <div className="flex items-center gap-2">
         <span
           data-testid="area-color-dot"
-          className="h-3 w-3 flex-shrink-0 rounded-full ring-1 ring-black/20"
+          className="h-3 w-3 flex-shrink-0 rounded-full ring-1 ring-white/20"
           style={{ backgroundColor: color }}
         />
         <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground">{areaName}</span>
@@ -112,9 +120,9 @@ export function AreaAssigneeBar({
           onClick={onClose}
           aria-label="Close"
           data-testid="area-assignee-close"
-          className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          className={`flex h-11 w-11 -my-1 -mr-1 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground ${FOCUS}`}
         >
-          <X className="h-4 w-4" />
+          <X className="h-4 w-4" aria-hidden="true" />
         </button>
       </div>
 
@@ -142,19 +150,21 @@ export function AreaAssigneeBar({
                 arming
                   ? "border-red-500/60 bg-red-500/10 text-red-400"
                   : "border-border bg-secondary/60 text-foreground hover:bg-secondary"
-              }`}
+              } ${FOCUS}`}
             >
               <span
                 className="flex h-9 w-9 items-center justify-center rounded-full text-[11px] font-bold text-white"
-                style={{ backgroundColor: colorForRep(rep.id) }}
+                style={{ backgroundColor: repColorOf(rep) }}
               >
                 {initials(rep.name)}
               </span>
               <span className="max-w-[7.5rem] truncate">{arming ? "Remove?" : rep.name}</span>
               {/* Primary badge: the first holder is what the API treats as
-                  primary, so it should not be a hidden property. */}
+                  primary, so it should not be a hidden property. Token chip —
+                  the old bg-foreground/10 wash was near-invisible on the light
+                  card and read as a malformed empty pill. */}
               {i === 0 && !arming && holders.length > 1 && (
-                <span className="rounded-full bg-foreground/10 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide">
+                <span className="rounded-full border border-primary/30 bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
                   1st
                 </span>
               )}
@@ -172,9 +182,9 @@ export function AreaAssigneeBar({
             disabled={pending}
             data-testid="area-assignee-add"
             onClick={() => setAdding(true)}
-            className="flex h-11 items-center gap-1.5 rounded-full border border-dashed border-border px-3.5 text-[12px] font-semibold text-muted-foreground transition-colors hover:border-solid hover:bg-secondary hover:text-foreground disabled:opacity-60"
+            className={`flex h-11 items-center gap-1.5 rounded-full border border-dashed border-border px-3.5 text-[12px] font-semibold text-muted-foreground transition-colors hover:border-solid hover:bg-secondary hover:text-foreground disabled:opacity-60 ${FOCUS}`}
           >
-            <Plus className="h-4 w-4" />
+            <Plus className="h-4 w-4" aria-hidden="true" />
             Add rep
           </button>
         )}
@@ -197,8 +207,9 @@ export function AreaAssigneeBar({
           <button
             type="button"
             onClick={() => setAdding(false)}
+            disabled={pending}
             data-testid="area-assignee-add-cancel"
-            className="mt-2 h-9 w-full rounded-lg border border-border text-[12px] font-medium text-muted-foreground transition-colors hover:bg-secondary"
+            className={`mt-2 h-11 w-full rounded-lg border border-border bg-secondary/60 text-[12px] font-semibold text-foreground transition-colors hover:bg-secondary disabled:opacity-60 ${FOCUS}`}
           >
             Cancel
           </button>
@@ -206,8 +217,8 @@ export function AreaAssigneeBar({
       )}
 
       {pending && (
-        <div data-testid="area-assignee-pending" className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-          <Check className="h-3 w-3" />
+        <div data-testid="area-assignee-pending" role="status" className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" aria-hidden="true" />
           Saving…
         </div>
       )}

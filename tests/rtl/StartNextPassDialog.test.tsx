@@ -153,6 +153,99 @@ describe("StartNextPassDialog", () => {
     expect(dlg).toHaveAttribute("aria-modal", "true");
     expect(dlg).toHaveAccessibleName(/start pass 2/i);
   });
+
+  // ── Theme + surface (owner screenshot: stark white card over the dark
+  //    glass panel) ─────────────────────────────────────────────────────────
+  it("renders on the house card surface, never a hardcoded white sheet", async () => {
+    setup();
+    const card = await screen.findByTestId("next-pass-card");
+    expect(card.className).toMatch(/\bbg-card\b/);
+    expect(card.className).toMatch(/\bborder-border\b/);
+    expect(card.className).toMatch(/\btext-foreground\b/);
+    expect(card.className).not.toMatch(/bg-white|bg-background/);
+  });
+
+  it("dims the page behind it and a tap on the scrim cancels", async () => {
+    const { onCancel } = setup();
+    await screen.findByText("7");
+    const scrim = screen.getByTestId("next-pass-scrim");
+    expect(scrim.className).toMatch(/bg-black\/60/);
+    await userEvent.setup().click(scrim);
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  // ── Skeletons, then real tiles — never empty ghost boxes ──────────────────
+  it("shows skeleton tiles while the preview loads, then the real counts", async () => {
+    let resolve!: (p: PassPreview) => void;
+    render(
+      <StartNextPassDialog open territoryId={1}
+        fetchPreview={() => new Promise<PassPreview>(r => { resolve = r; })}
+        onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+    // While loading: skeleton tiles in the stat slots, no count tiles at all.
+    expect(screen.getAllByTestId("pass-preview-skeleton")).toHaveLength(2);
+    expect(screen.queryByTestId("pass-reset-tile")).toBeNull();
+    expect(screen.queryByTestId("pass-frozen-tile")).toBeNull();
+
+    resolve({ ...basePreview, totals: { total: 10, reset: 0, frozen: 0 }, frozenByReason: {} });
+    await waitFor(() => expect(screen.queryAllByTestId("pass-preview-skeleton")).toHaveLength(0));
+    // Zero is a real answer: the tiles render 0, tabular, not an empty box.
+    expect(screen.getByTestId("pass-reset-count")).toHaveTextContent("0");
+    expect(screen.getByTestId("pass-frozen-count")).toHaveTextContent("0");
+    expect(screen.getByTestId("pass-reset-count").className).toMatch(/tabular-nums/);
+    expect(screen.getByTestId("pass-frozen-count").className).toMatch(/tabular-nums/);
+  });
+
+  it("re-shows skeletons (not stale or empty tiles) while the toggle re-previews", async () => {
+    const user = userEvent.setup();
+    let resolveSecond: ((p: PassPreview) => void) | null = null;
+    let calls = 0;
+    render(
+      <StartNextPassDialog open territoryId={1}
+        fetchPreview={() => {
+          calls += 1;
+          if (calls === 1) return Promise.resolve({ ...basePreview, callbacksAtRisk: 2 });
+          return new Promise<PassPreview>(r => { resolveSecond = r; });
+        }}
+        onConfirm={vi.fn()} onCancel={vi.fn()} />,
+    );
+    await screen.findByRole("alert");
+    await user.click(screen.getByLabelText(/keep scheduled callbacks/i));
+    await waitFor(() => expect(screen.getAllByTestId("pass-preview-skeleton")).toHaveLength(2));
+    expect(screen.queryByTestId("pass-reset-tile")).toBeNull();
+    resolveSecond!({ ...basePreview, callbacksAtRisk: 0 });
+    await waitFor(() => expect(screen.getByTestId("pass-reset-count")).toHaveTextContent("7"));
+  });
+
+  // ── Pending + targets ──────────────────────────────────────────────────────
+  it("disables both footer buttons while the start is committing", async () => {
+    setup({}, { busy: true });
+    const confirm = await screen.findByTestId("next-pass-confirm");
+    expect(confirm).toBeDisabled();
+    expect(screen.getByTestId("next-pass-cancel")).toBeDisabled();
+    expect(screen.getByTestId("next-pass-scrim")).toBeDisabled();
+  });
+
+  it("footer buttons are 44px targets; radio rows are 44px, fully clickable, and mark selection", async () => {
+    const user = userEvent.setup();
+    setup();
+    await screen.findByText("7");
+    expect(screen.getByTestId("next-pass-confirm").className).toMatch(/\bh-11\b/);
+    expect(screen.getByTestId("next-pass-cancel").className).toMatch(/\bh-11\b/);
+
+    const keepRow = screen.getByTestId("pass-action-row-keep");
+    const poolRow = screen.getByTestId("pass-action-row-return_to_pool");
+    expect(keepRow.className).toMatch(/min-h-11/);
+    // Default selection is visible, not just a radio dot.
+    expect(keepRow.className).toMatch(/border-primary/);
+    expect(keepRow.className).toMatch(/bg-primary\/\[0\.07\]/);
+    expect(poolRow.className).not.toMatch(/bg-primary\/\[0\.07\]/);
+
+    // The whole row is the control: clicking row text selects the option.
+    await user.click(within(poolRow).getByText(/put the area back in the pool/i));
+    expect(screen.getByTestId("pass-action-return_to_pool")).toBeChecked();
+    expect(screen.getByTestId("pass-action-row-return_to_pool").className).toMatch(/bg-primary\/\[0\.07\]/);
+  });
 });
 
 describe("PassHistory", () => {
