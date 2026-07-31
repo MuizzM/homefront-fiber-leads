@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Search, X, Check } from "lucide-react";
+import { FOCUS } from "@/lib/a11y";
 
 // Choosing who gets an area.
 //
@@ -40,6 +41,17 @@ export interface RepPickerProps {
   disabled?: boolean;
   /** Max rows rendered at once; the rest are reachable by searching. */
   maxRows?: number;
+  /** repId -> areas currently held. When provided, rows switch to the
+   *  assign-sheet grammar: ring avatar with the rep's initial, and a status
+   *  line under the name — "Assigned to N areas" or "Unassigned" — so a
+   *  manager can see who is loaded before handing out another area. Omit it
+   *  and rows render exactly as before. */
+  areaCounts?: Record<number, number>;
+}
+
+/** First letter of the name for the ring avatar; "?" for a blank name. */
+function initialOf(name: string): string {
+  return name.trim().charAt(0).toUpperCase() || "?";
 }
 
 /** Match on any word start, so "riv" finds "Ann Rivera" and "ann" does too —
@@ -60,8 +72,10 @@ function matches(name: string, q: string): boolean {
 export function RepPicker({
   reps, value, onChange, label, placeholder = "Search reps…",
   searchThreshold = 8, disabled = false, maxRows = 60,
-  multiple = false, selected = [], onToggle,
+  multiple = false, selected = [], onToggle, areaCounts,
 }: RepPickerProps) {
+  // The richer row grammar only when the caller supplies the holdings map.
+  const showStatus = areaCounts != null;
   const selectedSet = useMemo(() => new Set(selected), [selected]);
   const [q, setQ] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -93,14 +107,14 @@ export function RepPicker({
             placeholder={placeholder}
             aria-label="Search reps"
             disabled={disabled}
-            className="w-full rounded-lg border bg-background py-2 pl-8 pr-8 text-sm disabled:opacity-50"
+            className={`w-full rounded-lg border bg-background py-2 pl-8 pr-8 text-sm disabled:opacity-50 ${FOCUS}`}
           />
           {q && (
             <button
               type="button"
               onClick={() => { setQ(""); inputRef.current?.focus(); }}
               aria-label="Clear search"
-              className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground"
+              className={`absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground ${FOCUS}`}
             >
               <X className="h-3.5 w-3.5" />
             </button>
@@ -116,6 +130,7 @@ export function RepPicker({
         <ul role="listbox" aria-label={label ?? "Reps"} className="max-h-64 overflow-y-auto rounded-lg border divide-y">
           {shown.map(rep => {
             const isOn = multiple ? selectedSet.has(rep.id) : value === rep.id;
+            const held = areaCounts?.[rep.id] ?? 0;
             return (
               <li key={rep.id}>
                 <button
@@ -134,19 +149,47 @@ export function RepPicker({
                   }}
                   data-testid={`rep-option-${rep.id}`}
                   className={[
-                    "w-full flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm transition",
+                    "w-full min-h-11 flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm transition",
                     rep.atCap && !isOn ? "opacity-55 cursor-not-allowed" : "hover:bg-secondary",
                     isOn ? "bg-primary/10" : "",
+                    FOCUS,
                   ].join(" ")}
                 >
                   <span className="flex items-center gap-2 min-w-0">
+                    {showStatus && (
+                      <span
+                        aria-hidden="true"
+                        data-testid={`rep-avatar-${rep.id}`}
+                        className="w-9 h-9 rounded-full border-2 border-primary/50 flex items-center justify-center text-[12px] font-bold text-foreground shrink-0"
+                      >
+                        {initialOf(rep.name)}
+                      </span>
+                    )}
                     {isOn && <Check className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />}
-                    <span className="truncate font-medium">{rep.name}</span>
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">{rep.name}</span>
+                      {showStatus && (
+                        <span
+                          data-testid={`rep-status-${rep.id}`}
+                          className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`h-1.5 w-1.5 rounded-full shrink-0 ${held > 0 ? "bg-emerald-400" : "bg-rose-400"}`}
+                          />
+                          {held > 0 ? (
+                            <>Assigned to <span className="tabular-nums">{held}</span> {held === 1 ? "area" : "areas"}</>
+                          ) : (
+                            "Unassigned"
+                          )}
+                        </span>
+                      )}
+                    </span>
                   </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
+                  <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                     {rep.atCap
                       ? "At area limit"
-                      : rep.areaCount != null
+                      : !showStatus && rep.areaCount != null
                         ? `${rep.areaCount} ${rep.areaCount === 1 ? "area" : "areas"}`
                         : ""}
                   </span>
@@ -160,7 +203,7 @@ export function RepPicker({
       {hidden > 0 && (
         // Never silently truncate: a manager who can't find someone needs to know
         // the list is cut, not conclude the rep doesn't exist.
-        <div className="text-xs text-muted-foreground">
+        <div className="text-xs tabular-nums text-muted-foreground">
           {hidden} more {hidden === 1 ? "rep" : "reps"} — keep typing to narrow the list.
         </div>
       )}

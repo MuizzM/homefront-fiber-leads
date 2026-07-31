@@ -30,6 +30,10 @@ import {
   Crosshair,
   SlidersHorizontal,
   Users,
+  Settings2,
+  Landmark,
+  Tag,
+  Flag,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -150,6 +154,10 @@ import { can as roleCan } from "@shared/permissions";
 import { resolveCreditedRepId } from "@/features/knocking/savedKnockReconciliation";
 import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
 import { RepPicker } from "@/components/territory/RepPicker";
+import { MapFilterSheet } from "@/components/map/MapFilterSheet";
+import { MapSettingsSheet } from "@/components/map/MapSettingsSheet";
+import { FOCUS } from "@/lib/a11y";
+import { chaikinSmooth } from "@shared/strokeSmoothing";
 import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
 import { ReclaimAllDialog } from "@/components/territory/ReclaimAllDialog";
@@ -940,6 +948,10 @@ export default function MapView() {
   }, [filterStatus]);
   // Compact filter control: collapsed pill ⇄ scrollable status selector.
   const [filterOpen, setFilterOpen] = useState(false);
+  // SalesRabbit-style bottom sheets over the SAME filter/settings state the
+  // legacy chrome drives — additive entry points, nothing moved or removed.
+  const [mapFilterOpen, setMapFilterOpen] = useState(false);
+  const [mapSettingsOpen, setMapSettingsOpen] = useState(false);
   // Last non-"all" status the user filtered by — a LONG-PRESS on the filter
   // pill (or the manager legend pill) re-applies it in one tap ("show
   // unworked again" mid-walk).
@@ -3180,6 +3192,15 @@ export default function MapView() {
     }
     return counts;
   }, [territories]);
+  // Same tallies as a plain record — RepPicker's areaCounts prop takes
+  // Record<number, number> and switches its rows to the assign-sheet grammar
+  // (ring avatar + "Assigned to N areas" status line). One conversion, reused
+  // by every RepPicker on this page.
+  const repAreaCounts = useMemo(() => {
+    const rec: Record<number, number> = {};
+    for (const [id, n] of activeAreaCountByRep) rec[id] = n;
+    return rec;
+  }, [activeAreaCountByRep]);
 
   const territoryLabelFor = (t: (typeof territories)[number]): string => {
     const areaName = (t.name ?? "").trim();
@@ -3232,7 +3253,12 @@ export default function MapView() {
         const status = (t as any).status ?? "active";
         const coords = JSON.parse(t.polygon) as [number, number][];
         if (coords.length < 3) return;
-        const closed = [...coords, coords[0]];
+        // SalesHub-grade outlines: render-time Chaikin smoothing. Contraction-
+        // only, so the displayed boundary never exceeds the drawn one — and the
+        // STORED polygon (coverage, hit-tests, boundary rules) is untouched.
+        const smoothRing = chaikinSmooth(coords.map(([x, y]) => ({ x, y })), 2, true)
+          .map(pt => [pt.x, pt.y] as [number, number]);
+        const closed = [...smoothRing, smoothRing[0]];
         // Status-aware styling: reclaimed/unassigned areas go GRAY and lose the
         // rep's name; completed areas keep the rep color but muted.
         const isPool = status === "unassigned" || status === "reclaimed";
@@ -3270,6 +3296,7 @@ export default function MapView() {
             id: srcId + "-outline",
             type: "line",
             source: srcId,
+            layout: { "line-cap": "round", "line-join": "round" },
             paint: {
               "line-color": paint.lineColor,
               "line-width": paint.lineWidth,
@@ -3637,20 +3664,28 @@ export default function MapView() {
       // flat filled sliver — that was the "starts with a flat line" bug). Only on
       // release do we close it into a filled polygon.
       const geojson =
-        closeRing && stroke.length >= 3
-          ? {
-              type: "Feature" as const,
-              geometry: {
-                type: "Polygon" as const,
-                coordinates: [[...stroke, stroke[0]]],
-              },
-              properties: {},
-            }
-          : {
-              type: "Feature" as const,
-              geometry: { type: "LineString" as const, coordinates: stroke },
-              properties: {},
-            };
+        (() => {
+          // Display-only smoothing: the rep's RAW stroke keeps driving the
+          // selection hit-test; only what they SEE is the smoothed curve.
+          const disp = stroke.length >= 3
+            ? chaikinSmooth(stroke.map(([x, y]) => ({ x, y })), 2, closeRing)
+                .map(pt => [pt.x, pt.y] as [number, number])
+            : stroke;
+          return closeRing && disp.length >= 3
+            ? {
+                type: "Feature" as const,
+                geometry: {
+                  type: "Polygon" as const,
+                  coordinates: [[...disp, disp[0]]],
+                },
+                properties: {},
+              }
+            : {
+                type: "Feature" as const,
+                geometry: { type: "LineString" as const, coordinates: disp },
+                properties: {},
+              };
+        })();
       if (!lassoLayerRef.current) {
         try {
           map.addSource("lasso-polygon", { type: "geojson", data: geojson });
@@ -3666,11 +3701,13 @@ export default function MapView() {
             id: "lasso-outline",
             type: "line",
             source: "lasso-polygon",
+            layout: { "line-cap": "round", "line-join": "round" },
             paint: {
               "line-color": lassoColorRef.current,
-              "line-width": 3,
-              "line-cap": "round",
-              "line-join": "round",
+              "line-width": 4.5,
+              // Zero-length dashes + round caps = the evenly-spaced dot
+              // boundary (the SalesHub selection look), in the area's color.
+              "line-dasharray": [0, 2.2],
             },
           });
           lassoLayerRef.current = true;
@@ -4542,6 +4579,30 @@ export default function MapView() {
     }
     return { counts, unassigned };
   }, [territoryClippedLeads]);
+
+  // ── Filter sheet inputs ──────────────────────────────────────────────────
+  // Statuses with pins, in funnel order — same rule statusOptions applies, so
+  // the sheet's chips and the legacy pill can never list different statuses.
+  const filterSheetStatusOrder = useMemo(
+    () => statusOptions.map((o) => o.key),
+    [statusOptions],
+  );
+  // Rep rows for the filter sheet: manager chrome only. Counts come from the
+  // same one-pass tally the legend's rep rows read (repLeadCounts).
+  const filterSheetReps = useMemo(
+    () =>
+      !isRep && canAssign
+        ? team
+            .filter((m) => m.active)
+            .map((m) => ({
+              id: m.id,
+              name: m.name,
+              count: repLeadCounts.counts.get(m.id) ?? 0,
+            }))
+        : undefined,
+    [isRep, canAssign, team, repLeadCounts],
+  );
+  const mapFilterActive = filterStatus !== "all" || filterRep !== "all";
 
   // On-map search — lowercase haystack built ONCE per data load (O(n)), so a
   // keystroke never re-lowercases 50k addresses. A NUL separates the two
@@ -5996,6 +6057,35 @@ export default function MapView() {
                       With no doors in the loop there is nothing to break down and
                       nothing to refine — say so plainly instead of showing "0/0"
                       beside a row of chips that cannot exist. */}
+                  {/* Headline — the refined selection count, plus the panel's
+                      close control (SalesRabbit tile grammar). */}
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="flex-1 min-w-0 text-[15px] font-bold text-white tabular-nums"
+                      aria-live="polite"
+                    >
+                      {lassoActive.length}{" "}
+                      {lassoActive.length === 1 ? "door" : "doors"} selected
+                      {lassoHasLeads &&
+                        lassoActive.length !== lassoSelected.length && (
+                          <span className="text-white/55 font-medium">
+                            {" "}
+                            of {lassoSelected.length}
+                          </span>
+                        )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={exitLasso}
+                      className={`w-11 h-11 -my-1.5 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0 ${FOCUS}`}
+                      aria-label="Exit area selection"
+                      title="Exit"
+                      data-testid="lasso-exit"
+                    >
+                      <X className="w-4 h-4" aria-hidden="true" />
+                    </button>
+                  </div>
+
                   {!lassoHasLeads ? (
                     <span
                       className="text-[12px] text-white/60 leading-tight"
@@ -6007,15 +6097,6 @@ export default function MapView() {
                     </span>
                   ) : (
                   <div className="flex items-center gap-1.5 flex-wrap">
-                    <span
-                      className="text-[14px] font-bold text-white whitespace-nowrap mr-0.5"
-                      aria-live="polite"
-                    >
-                      {lassoActive.length}
-                      <span className="text-white/55 font-medium">
-                        /{lassoSelected.length}
-                      </span>
-                    </span>
                     {lassoSummary.map(({ ds, count }) => {
                       const on = !lassoDisabled.has(ds);
                       return (
@@ -6061,36 +6142,60 @@ export default function MapView() {
                   </div>
                   )}
 
-                  {/* Action switcher */}
-                  <div className="flex items-center gap-1 rounded-full bg-white/10 p-0.5">
+                  {/* Action tiles — SalesRabbit grammar: icon over an 11px
+                      label, outlined, one row of four. Each tile switches the
+                      flow rendered below to its EXISTING controls; the wide
+                      Clear tile exits, same as the headline X. Mark keeps its
+                      tile so no existing bulk action loses its entry point. */}
+                  <div className="grid grid-cols-4 gap-1.5">
                     {(
                       [
-                        ["assign", "Assign"],
-                        ["status", "Status"],
-                        ["mark", "Mark"],
-                        ["area", "Area"],
+                        ["assign", "Assign", Users],
+                        ["status", "Status", Tag],
+                        ["mark", "Mark", Flag],
+                        ["area", "Area", Landmark],
                       ] as const
-                    ).map(([key, label]) => {
+                    ).map(([key, label, Icon]) => {
                       // Only "Area" works on an empty loop; the rest need lead IDs.
                       const disabled = !lassoHasLeads && key !== "area";
+                      const active = lassoEffectiveAction === key;
                       return (
-                      <button
-                        key={key}
-                        type="button"
-                        disabled={disabled}
-                        title={disabled ? "No doors in this loop" : undefined}
-                        onClick={() => setLassoAction(key)}
-                        data-testid={`lasso-action-${key}`}
-                        aria-pressed={lassoEffectiveAction === key}
-                        className={`flex-1 h-11 rounded-full text-[12px] font-semibold transition disabled:opacity-35 disabled:cursor-not-allowed ${lassoEffectiveAction === key ? "bg-teal-500 text-[#04241f]" : "text-white/70 hover:text-white"}`}
-                      >
-                        {label}
-                      </button>
+                        <button
+                          key={key}
+                          type="button"
+                          disabled={disabled}
+                          title={disabled ? "No doors in this loop" : undefined}
+                          onClick={() => setLassoAction(key)}
+                          data-testid={`lasso-action-${key}`}
+                          aria-pressed={active}
+                          className={`h-16 rounded-xl border flex flex-col items-center justify-center gap-1 active:scale-95 transition disabled:opacity-35 disabled:cursor-not-allowed ${
+                            active
+                              ? "border-teal-300/70 bg-teal-500/20 text-teal-100"
+                              : "border-border text-white/80 hover:text-white hover:bg-white/[0.06]"
+                          } ${FOCUS}`}
+                        >
+                          <Icon className="w-5 h-5" aria-hidden="true" />
+                          <span className="text-[11px] font-semibold leading-none">
+                            {label}
+                          </span>
+                        </button>
                       );
                     })}
+                    <button
+                      type="button"
+                      onClick={exitLasso}
+                      aria-label="Clear selection and exit"
+                      data-testid="lasso-clear"
+                      className={`col-span-4 h-16 rounded-xl border border-border flex flex-col items-center justify-center gap-1 text-white/80 hover:text-white hover:bg-white/[0.06] active:scale-95 transition ${FOCUS}`}
+                    >
+                      <X className="w-5 h-5" aria-hidden="true" />
+                      <span className="text-[11px] font-semibold leading-none">
+                        Clear
+                      </span>
+                    </button>
                   </div>
 
-                  {/* Mode control + Apply + Exit */}
+                  {/* Mode control + Apply — the active tile's secondary flow */}
                   <div className="flex items-center gap-2">
                     {lassoEffectiveAction === "assign" && (
                       <>
@@ -6279,15 +6384,6 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    <button
-                      type="button"
-                      onClick={exitLasso}
-                      className="w-11 h-11 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
-                      title="Exit"
-                      data-testid="lasso-exit"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
                   </div>
 
                   {lassoEffectiveAction === "area" && (
@@ -6534,6 +6630,7 @@ export default function MapView() {
                             const held = activeAreaCountByRep.get(m.id) ?? 0;
                             return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
                           })}
+                          areaCounts={repAreaCounts}
                           onChange={(repId) =>
                             assignTerritoryMutation.mutate({ id: t.id, repId })
                           }
@@ -6627,6 +6724,7 @@ export default function MapView() {
                     const held = activeAreaCountByRep.get(m.id) ?? 0;
                     return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
                   })}
+                  areaCounts={repAreaCounts}
                 />
                 <div className="flex justify-end gap-2 pt-1">
                   <button type="button" onClick={() => setShareTerritoryId(null)}
@@ -6702,6 +6800,76 @@ export default function MapView() {
             />
           )}
 
+          {/* ── Filter sheet — bottom sheet over the SAME filterStatus/filterRep
+                 state the compact pill and the manager legend drive. Statuses
+                 shown are exactly the ones with pins (statusOptions rule);
+                 rep rows are manager chrome only. ── */}
+          <MapFilterSheet
+            open={mapFilterOpen}
+            onClose={() => setMapFilterOpen(false)}
+            statusOrder={filterSheetStatusOrder}
+            statusCounts={statusCounts}
+            activeStatus={filterStatus}
+            onStatus={setFilterStatus}
+            reps={filterSheetReps}
+            unassignedCount={repLeadCounts.unassigned}
+            activeRep={filterRep}
+            onRep={setFilterRep}
+            onClearAll={() => {
+              setFilterStatus("all");
+              setFilterRep("all");
+            }}
+            shown={mapTotalLeads.length}
+            total={leads.length}
+          />
+
+          {/* ── Settings sheet — basemap + the REAL existing layer toggles
+                 (leads layer for everyone; territories for team_lead+; rep
+                 color mode for managers). The 3-way layers popover keeps its
+                 Dark option; this sheet covers the two field basemaps. ── */}
+          <MapSettingsSheet
+            open={mapSettingsOpen}
+            onClose={() => setMapSettingsOpen(false)}
+            basemap={{
+              value: mapStyleMode === "streets" ? "streets" : "satellite",
+              onChange: (v) => setMapStyleMode(v),
+            }}
+            toggles={[
+              {
+                key: "leads",
+                label: "Show leads",
+                description: "Lead pins on the map",
+                on: showLeads,
+                onToggle: () => setShowLeads((v) => !v),
+                testId: "map-settings-toggle-leads",
+              },
+              ...(canAssign
+                ? [
+                    {
+                      key: "areas",
+                      label: "Display areas",
+                      description: "Colored territory shapes over the map",
+                      on: showTerritories,
+                      onToggle: () => setShowTerritories((v) => !v),
+                      testId: "map-settings-toggle-areas",
+                    },
+                  ]
+                : []),
+              ...(canManage
+                ? [
+                    {
+                      key: "rep-colors",
+                      label: "Color pins by rep",
+                      description: "Each pin takes its assigned rep's color",
+                      on: repColorMode,
+                      onToggle: () => setRepColorMode((v) => !v),
+                      testId: "map-settings-toggle-rep-colors",
+                    },
+                  ]
+                : []),
+            ]}
+          />
+
           {/* ── TOOLS MENU — the ONE floating button every secondary tool lives
                  behind (Lane E2 map-first chrome). At rest the map shows only:
                  this button, the compact status filter, Locate, and ONE
@@ -6736,6 +6904,52 @@ export default function MapView() {
                 >
                   <SlidersHorizontal
                     className="w-4.5 h-4.5"
+                    style={{ width: 18, height: 18 }}
+                    aria-hidden="true"
+                  />
+                </button>
+
+                {/* Filter sheet trigger — the SalesRabbit-style bottom sheet
+                    over the SAME filterStatus/filterRep state as the pill and
+                    the manager legend. Teal dot = a filter is narrowing pins. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMapFilterOpen(true);
+                    setToolsMenuOpen(false);
+                    setLayersOpen(false);
+                  }}
+                  aria-label="Open filters"
+                  aria-haspopup="dialog"
+                  data-testid="map-filter-open"
+                  className={`glass-capsule glass-opaque relative mt-2 h-10 w-10 flex items-center justify-center text-white/90 active:scale-[0.97] transform-gpu transition ${FOCUS}`}
+                >
+                  <SlidersHorizontal
+                    style={{ width: 18, height: 18 }}
+                    aria-hidden="true"
+                  />
+                  {mapFilterActive && (
+                    <span
+                      className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-teal-400"
+                      aria-hidden="true"
+                    />
+                  )}
+                </button>
+
+                {/* Settings sheet trigger — basemap + layer toggles as a sheet. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMapSettingsOpen(true);
+                    setToolsMenuOpen(false);
+                    setLayersOpen(false);
+                  }}
+                  aria-label="Map settings"
+                  aria-haspopup="dialog"
+                  data-testid="map-settings-open"
+                  className={`glass-capsule glass-opaque mt-2 h-10 w-10 flex items-center justify-center text-white/90 active:scale-[0.97] transform-gpu transition ${FOCUS}`}
+                >
+                  <Settings2
                     style={{ width: 18, height: 18 }}
                     aria-hidden="true"
                   />

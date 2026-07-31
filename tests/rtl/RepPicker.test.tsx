@@ -4,7 +4,7 @@
 // forty. The tests concentrate on the two things that make it worth the swap:
 // you can find a rep by typing, and you can see who is already loaded up before
 // you hand them another area.
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RepPicker } from "../../client/src/components/territory/RepPicker";
@@ -170,5 +170,68 @@ describe("RepPicker in multiple mode", () => {
       reps={[{ id: 7, name: "Ann" }]} />);
     await user.click(screen.getByTestId("rep-option-7"));
     expect(onChange).not.toHaveBeenCalled();
+  });
+});
+
+// ── Assign-sheet row grammar: the areaCounts status line ─────────────────────
+// Opt-in via the areaCounts prop. Rows grow a ring avatar and a per-rep status
+// line so a manager can see who is loaded BEFORE handing out another area.
+// Without the prop, rows must render exactly as they always have.
+describe("RepPicker assign-sheet status line", () => {
+  const norm = (el: HTMLElement) => (el.textContent ?? "").replace(/\s+/g, " ").trim();
+
+  it("shows 'Assigned to N areas' when the rep holds areas", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann Rivera" }]} onChange={vi.fn()} areaCounts={{ 1: 3 }} />);
+    expect(norm(screen.getByTestId("rep-status-1"))).toBe("Assigned to 3 areas");
+  });
+
+  it("uses the singular for one area", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann Rivera" }]} onChange={vi.fn()} areaCounts={{ 1: 1 }} />);
+    expect(norm(screen.getByTestId("rep-status-1"))).toBe("Assigned to 1 area");
+  });
+
+  it("puts tabular-nums on the count", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann Rivera" }]} onChange={vi.fn()} areaCounts={{ 1: 3 }} />);
+    expect(within(screen.getByTestId("rep-status-1")).getByText("3")).toHaveClass("tabular-nums");
+  });
+
+  it("shows Unassigned for a rep holding zero areas", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann Rivera" }]} onChange={vi.fn()} areaCounts={{ 1: 0 }} />);
+    expect(norm(screen.getByTestId("rep-status-1"))).toBe("Unassigned");
+  });
+
+  it("treats a rep missing from the record as unassigned", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann Rivera" }]} onChange={vi.fn()} areaCounts={{ 9: 4 }} />);
+    expect(norm(screen.getByTestId("rep-status-1"))).toBe("Unassigned");
+  });
+
+  it("renders the ring avatar with the rep's initial", () => {
+    render(<RepPicker reps={[{ id: 1, name: "ann rivera" }]} onChange={vi.fn()} areaCounts={{ 1: 2 }} />);
+    const avatar = screen.getByTestId("rep-avatar-1");
+    expect(avatar).toHaveTextContent("A");
+    expect(avatar).toHaveClass("rounded-full", "border-2");
+  });
+
+  it("renders no status line or avatar when areaCounts is omitted", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann Rivera", areaCount: 3 }]} onChange={vi.fn()} />);
+    expect(screen.queryByTestId("rep-status-1")).toBeNull();
+    expect(screen.queryByTestId("rep-avatar-1")).toBeNull();
+    // The classic right-hand load hint still carries the count.
+    expect(screen.getByTestId("rep-option-1")).toHaveTextContent("3 areas");
+  });
+
+  it("keeps the row selectable and reporting the pick with the prop set", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<RepPicker reps={[{ id: 1, name: "Ann" }, { id: 2, name: "Bo" }]} onChange={onChange} areaCounts={{ 1: 1 }} />);
+    await user.click(screen.getByTestId("rep-option-2"));
+    expect(onChange).toHaveBeenCalledWith(2);
+  });
+
+  it("still shows the cap notice for a capped rep", () => {
+    render(<RepPicker reps={[{ id: 1, name: "Ann", areaCount: 5, atCap: true }]} onChange={vi.fn()} areaCounts={{ 1: 5 }} />);
+    const row = screen.getByTestId("rep-option-1");
+    expect(row).toHaveTextContent(/at area limit/i);
+    expect(row).toBeDisabled();
   });
 });
