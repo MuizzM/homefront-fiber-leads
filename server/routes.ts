@@ -1390,6 +1390,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // knock row, and gating visited on knockCount alone made the pin's
         // "worked" ring thin back to unworked on the next refetch.
         pin.visited = true;
+        // The recency clock the outcome above was ORDERED by — the lead row's
+        // CAS clock when it won, the knock join's time for legacy rows that
+        // predate the lead-level columns. The live lead stream stamps every
+        // push with the same clock (LeadEventPin.lastOutcomeAt), so shipping
+        // it here is what lets the client apply the server's exact CAS rule
+        // when a pushed event and a refetched pin disagree: newer wins, older
+        // is ignored. Without it a central mark left the pin with only
+        // lastKnockedAt (or nothing), and a late-arriving older push could
+        // repaint the door backwards.
+        const outcomeAt = leadRowWins ? leadOutcomeAt : l.lastKnockedAt;
+        if (outcomeAt) pin.lastOutcomeAt = outcomeAt;
       }
       pins.push(pin);
     }

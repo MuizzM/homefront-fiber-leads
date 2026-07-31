@@ -145,8 +145,8 @@ import {
   createFetchEventSource,
   type LeadStreamEvent,
   type LeadStreamHandle,
-  type LeadStreamPin,
 } from "@/lib/leadStream";
+import { mergePushedPin, pinFromPushedLead } from "@/lib/leadStreamMerge";
 import { unpackMapPins } from "@shared/mapPinsWire";
 import { LEAD_MARKS, LEAD_MARK_META, type LeadMark } from "@shared/leadMark";
 import { useCan } from "@/lib/capabilities";
@@ -213,6 +213,15 @@ interface MapPin {
   knockCount?: number;
   lastOutcome?: string | null;
   lastKnockedAt?: string | null;
+  // The server outcome CAS clock (leads.last_outcome_at, or the knock time for
+  // legacy rows) — the recency baseline the stream merge orders pushes by.
+  // Distinct from lastKnockedAt: a central mark advances this with NO knock.
+  lastOutcomeAt?: string | null;
+  // Manager triage mark (priority/hold) — shown on the card chip; the stream
+  // merge keeps it live so a mark set on one phone reaches the others.
+  assignMark?: string | null;
+  // Compliance block: the occupant asked us never to return.
+  doNotKnock?: boolean;
   // Set by dedupeLeads when >1 record collapsed onto this house (survivor
   // carries every underlying lead id, itself first) so a popup can surface all.
   mergedLeadIds?: string[];
@@ -498,92 +507,11 @@ function inBBox(lat: number, lng: number, b: BBox) {
 const EMPTY_PINS: MapPin[] = [];
 
 // ── Merging a pushed lead into a map pin ─────────────────────────────────────
-// A stream event is NEVER spread wholesale over a pin. LeadStreamPin is
-// deliberately narrower than MapPin — it has no knockCount / freshConfidence /
-// carrier, because those are JOINED by the map query and the write path does
-// not hold them — so `{...pin, ...event.lead}` would erase them with nulls.
-// Fields are therefore taken one at a time, in two groups:
-//
-//  • Always: geometry, address, and the assignment fields. Nothing local ever
-//    owns these, and assignedTerritoryId in particular has to land or a door
-//    that just changed hands keeps painting the old crew's halo.
-//  • Knock-owned (leadStatus / lastOutcome / lastKnockedAt / visited): only when
-//    the push is at least as recent as what the pin already shows. This mirrors
-//    the server's own outcome-recency CAS on the knock path rather than
-//    inventing a second rule, so client and server can never disagree about who
-//    won a race between two reps on one door.
-//
-// knockCount is deliberately NOT touched: the event does not carry it, and
-// guessing +1 for a knock we cannot attribute would drift a number the rep is
-// paid on. The 60s map poll re-joins the true count.
-//
-// Returns `prev` UNCHANGED when nothing moved, so a no-op push costs zero
-// re-renders and zero re-clusters.
-function mergePushedPin(prev: MapPin, pin: LeadStreamPin): MapPin {
-  let next: MapPin | null = null;
-  const write = (key: keyof MapPin, value: unknown): void => {
-    if ((prev as any)[key] === value) return;
-    next = next ?? { ...prev };
-    (next as any)[key] = value;
-  };
-  // The projection nulls what the writer did not hold, so for these an absent
-  // value means "no news", never "cleared".
-  const take = (key: keyof MapPin, value: string | number | null): void => {
-    if (value !== null) write(key, value);
-  };
-  take("address", pin.address);
-  take("city", pin.city);
-  take("state", pin.state);
-  take("zip", pin.zip);
-  take("lat", pin.lat);
-  take("lng", pin.lng);
-  take("fiberStatus", pin.fiberStatus);
-  take("leadTag", pin.leadTag);
-  take("leadScore", pin.leadScore);
-  // These two are the exception: the server read them to answer
-  // repCanAccessLead before it sent the frame, so it definitely holds them and
-  // null genuinely means unassigned — the state that must clear a halo.
-  write("assignedRepId", pin.assignedRepId);
-  write("assignedTerritoryId", pin.assignedTerritoryId);
-
-  // ISO-8601 compares lexicographically in timestamp order, so no Date parse.
-  // A pin with no local knock has nothing to defend and always takes the push.
-  const localAt = prev.lastKnockedAt ?? null;
-  const pushedAt = pin.lastOutcomeAt ?? null;
-  const outcomeWins = localAt == null || (pushedAt != null && pushedAt >= localAt);
-  if (outcomeWins) {
-    take("leadStatus", pin.leadStatus);
-    take("lastOutcome", pin.lastOutcome);
-    take("lastKnockedAt", pin.lastOutcomeAt);
-    if (pin.lastOutcome) write("visited", true);
-  }
-  return next ?? prev;
-}
-
-// The pin a never-before-seen door starts life as. Reduced-field exactly like
-// the two optimistic add paths (map tap, AddLeadSheet): the joined columns are
-// simply absent until the next map GET fills them, and every consumer already
-// reads the optional fields by truthiness.
-function pinFromPushedLead(pin: LeadStreamPin): MapPin {
-  return {
-    id: pin.id,
-    address: pin.address ?? "",
-    city: pin.city ?? "",
-    state: pin.state ?? "",
-    zip: pin.zip ?? "",
-    lat: pin.lat as number,
-    lng: pin.lng as number,
-    leadStatus: pin.leadStatus ?? "prospect",
-    fiberStatus: pin.fiberStatus ?? "",
-    assignedRepId: pin.assignedRepId,
-    assignedTerritoryId: pin.assignedTerritoryId,
-    leadScore: pin.leadScore ?? 0,
-    leadTag: pin.leadTag,
-    visited: !!pin.lastOutcome,
-    lastOutcome: pin.lastOutcome,
-    lastKnockedAt: pin.lastOutcomeAt,
-  };
-}
+// The merge itself lives in @/lib/leadStreamMerge (pure, unit-tested): it
+// mirrors the server's outcome-recency CAS — pushed lastOutcomeAt vs the pin's
+// own lastOutcomeAt (the same clock applyKnockOutcomeCas orders writes by) —
+// and never spreads the narrower LeadStreamPin wholesale over a MapPin, which
+// would erase the joined knockCount / freshConfidence / carrier columns.
 
 const SEARCH_RESULT_SOURCE = "search-result";
 const SEARCH_RESULT_HALO_LAYER = "search-result-halo";
@@ -4729,12 +4657,15 @@ export default function MapView() {
       // mechanism here on purpose.
       const feature = featureByIdRef.current.get(pushed.id);
       if (!feature) return; // brand-new door — reconcile builds and paints it
-      // EVERY property mergePushedPin can move is rewritten here, not just the
-      // ones this event happened to change. The skip-guard below hands Mapbox
-      // this mutated feature and then suppresses the rebuild's setData, so the
-      // two representations must agree exactly — a prop the merge moved but the
-      // mutation missed (a leadTag flipping to fresh, a geocode correction)
-      // would sit unpainted until something unrelated forced a full setData.
+      // EVERY feature property mergePushedPin can move is rewritten here, not
+      // just the ones this event happened to change. The skip-guard below hands
+      // Mapbox this mutated feature and then suppresses the rebuild's setData,
+      // so the two representations must agree exactly — a prop the merge moved
+      // but the mutation missed (a leadTag flipping to fresh, a geocode
+      // correction) would sit unpainted until something unrelated forced a full
+      // setData. Fields the merge moves that features do NOT carry
+      // (assignMark / doNotKnock / lastOutcomeAt) live only in the cache pin
+      // the card and the next merge read — nothing to paint for them.
       const ds = pinDisplayState(merged);
       const props = feature.properties;
       feature.geometry.coordinates = [merged.lng, merged.lat];
@@ -4863,9 +4794,13 @@ export default function MapView() {
         scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
       }
       const prevPin = (qc.getQueryData<any>(["/api/leads/map"])?.pins ?? []).find((p: any) => p.id === lead.id);
+      // lastOutcomeAt mirrors the server's CAS clock (central-disposition
+      // stamps last_outcome_at with its own now()) so the stream merge's
+      // recency comparison holds the mark against any older push in flight.
+      const optimisticAt = new Date().toISOString();
       qc.setQueryData(["/api/leads/map"], (old: any) => {
         if (!old?.pins) return old;
-        return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome } : p) };
+        return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome, lastOutcomeAt: optimisticAt } : p) };
       });
       try { navigator.vibrate?.(10); } catch { /* */ }
       toast({ title: "Marked centrally", severity: "success", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
