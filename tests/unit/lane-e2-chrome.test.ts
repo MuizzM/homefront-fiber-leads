@@ -4,6 +4,8 @@ import {
   FILTER_STATUS_LS_KEY,
   HOUSE_NUMBERS_LS_KEY,
   PIN_DS_OPACITY,
+  SELECTED_RING_FILTER,
+  SELECTED_RING_SPEC,
   UNCLUSTERED_PAINT,
   formatFilterCount,
   isPinDimmed,
@@ -130,6 +132,28 @@ describe("selected-pin dimming", () => {
     expect(expr[3]).toBe(DIMMED_PIN_OPACITY);
     // Fully lit before, during and after selection — no wash on tap.
     expect(DIMMED_PIN_OPACITY).toBe(1);
+  });
+});
+
+describe("selected-pin ring reads on EVERY basemap", () => {
+  it("white stroke over a dark neutral scrim — never a faint tint that dies on light streets", () => {
+    const paint = SELECTED_RING_SPEC.paint;
+    expect(paint["circle-stroke-color"]).toBe("#ffffff");
+    expect(paint["circle-stroke-width"]).toBe(3);
+    // The scrim is dark (slate-900 family) and translucent: strong enough to
+    // back the white stroke on the light basemap, subtle over satellite.
+    expect(paint["circle-color"]).toBe("rgba(15,23,42,0.28)");
+    // The pulse rAF resets radius/stroke-opacity to exactly these on cleanup.
+    expect(paint["circle-radius"]).toBe(14);
+    expect(paint["circle-stroke-opacity"]).toBe(0.95);
+  });
+
+  it("matches only the selected unclustered pin, and nothing before a selection", () => {
+    expect(SELECTED_RING_SPEC.filter).toEqual(SELECTED_RING_FILTER(null));
+    expect(SELECTED_RING_FILTER(null)).toEqual([
+      "all", ["!", ["has", "point_count"]], ["==", ["get", "id"], -1],
+    ]);
+    expect(SELECTED_RING_FILTER(42)[2]).toEqual(["==", ["get", "id"], 42]);
   });
 });
 

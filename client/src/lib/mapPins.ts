@@ -150,7 +150,11 @@ export const SELECTED_RING_SPEC: any = {
   minzoom: 12,
   paint: {
     "circle-radius": 14, // detached ring: 6px gap around the 8px pin
-    "circle-color": "hsla(172, 60%, 45%, 0.15)", // faint brand-teal halo
+    // Dark neutral scrim (not the old 0.15 teal): the ring's white stroke is
+    // what carries selection, and white-on-light-streets was near-invisible. A
+    // soft dark disc under the stroke gives it an edge on the light basemap
+    // while staying subtle over satellite/dark, where the stroke already reads.
+    "circle-color": "rgba(15,23,42,0.28)",
     "circle-stroke-width": 3,
     "circle-stroke-color": "#ffffff",
     "circle-stroke-opacity": 0.95,

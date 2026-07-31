@@ -34,6 +34,7 @@ import {
   Landmark,
   Tag,
   Flag,
+  Palette,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -155,6 +156,7 @@ import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
 import { RepPicker } from "@/components/territory/RepPicker";
 import { MapFilterSheet } from "@/components/map/MapFilterSheet";
 import { MapSettingsSheet } from "@/components/map/MapSettingsSheet";
+import { MapLegend } from "@/components/map/MapLegend";
 import { FOCUS } from "@/lib/a11y";
 
 // ── Control-rail button grammar — ONE uniform rounded-square style for every
@@ -906,6 +908,8 @@ export default function MapView() {
   // camera when the sheet's real content height lands (varies per lead).
   const [sheetPeekPx, setSheetPeekPx] = useState<number | null>(null);
   const [legendOpen, setLegendOpen] = useState(false); // manager legend: collapsed dot-strip by default
+  // Rep pin-colors key — dismissible, opt-in from the More menu (never at rest).
+  const [pinKeyOpen, setPinKeyOpen] = useState(false);
   const [geocoding, setGeocoding] = useState(false); // street "go to" lookup in flight
   const [sidebarSearch, setSidebarSearch] = useState("");
 
@@ -4530,6 +4534,25 @@ export default function MapView() {
     () => statusOptions.find((o) => o.key === filterStatus) ?? null,
     [statusOptions, filterStatus],
   );
+  // ── Rep pin-colors key rows ─────────────────────────────────────────────────
+  // The SIX core field dispositions always (a new hire learns the palette even
+  // on an all-unworked street), plus any extra display state that currently has
+  // pins (callback / contacted / already_customer). Colors, labels, and glyphs
+  // are the same canonical sources the pins themselves paint from.
+  const pinKeyItems = useMemo(() => {
+    const core: ReadonlySet<PinDisplayState> = new Set([
+      "unworked", "not_home", "interested", "follow_up", "sold", "not_interested",
+    ]);
+    return FILTER_STATUS_ORDER.filter(
+      (k) => core.has(k) || (statusCounts[k] ?? 0) > 0,
+    ).map((k) => ({
+      key: k as string,
+      label: STATE_LABELS[k],
+      color: STATE_COLORS[k],
+      count: statusCounts[k] ?? 0,
+      glyph: legendGlyphs[k],
+    }));
+  }, [statusCounts, legendGlyphs]);
   // Active-filter chip presentation — honest even when the persisted filter
   // currently matches zero pins (option absent): label/color fall back to the
   // canonical display-state maps, never a misleading "All".
@@ -5651,25 +5674,61 @@ export default function MapView() {
             />
           </button>
 
-          {/* First-use empty state — a brand-new org with no leads gets guidance,
-              not a blank map over a random town. */}
-          {mapReady && !isRep && leads.length === 0 && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6">
+          {/* First-use empty state — EVERY role. A brand-new org (or a rep with
+              nothing assigned yet) gets one line of guidance, not a blank map
+              over a random town. */}
+          {mapReady && leads.length === 0 && (
+            <div
+              className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6"
+              data-testid="map-empty-state"
+            >
               <div className="glass-surface pointer-events-none max-w-xs text-center p-6">
                 <div className="w-12 h-12 rounded-2xl bg-primary/15 border border-primary/25 flex items-center justify-center mx-auto mb-3">
                   <MapIcon className="w-6 h-6 text-primary" />
                 </div>
                 <p className="text-sm font-semibold text-white">
-                  No leads on the map yet
+                  {isRep ? "No doors assigned yet" : "No leads on the map yet"}
                 </p>
                 <p className="text-xs text-white/60 mt-1.5 leading-relaxed">
                   {isAdmin
                     ? "Draw a box with the scan tool to find new-fiber homes, or import a list — they'll appear here as assignable pins."
-                    : "Once your team is assigned leads or territories, they'll show up here."}
+                    : isRep
+                      ? "Doors assigned to you will appear here — check with your team lead."
+                      : "Once your team is assigned leads or territories, they'll show up here."}
                 </p>
               </div>
             </div>
           )}
+
+          {/* All-filtered-out state — the filters currently hide EVERY door. A
+              blank map with an active filter reads as "no leads"; say what
+              happened in one line with the fix one tap away. */}
+          {mapReady &&
+            mapFilterActive &&
+            territoryClippedLeads.length > 0 &&
+            mapTotalLeads.length === 0 && (
+              <div
+                className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6"
+                data-testid="map-all-filtered"
+              >
+                <div className="glass-capsule glass-opaque pointer-events-auto flex items-stretch overflow-hidden">
+                  <span className="flex items-center pl-4 pr-3 py-2 min-h-11 text-[13px] font-medium text-white tabular-nums whitespace-nowrap">
+                    {formatFilterCount(territoryClippedLeads.length)} doors hidden by filters
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFilterStatus("all");
+                      setFilterRep("all");
+                    }}
+                    data-testid="map-all-filtered-clear"
+                    className={`min-h-11 px-3.5 text-[13px] font-semibold text-teal-300 hover:text-teal-200 hover:bg-white/[0.06] border-l border-white/10 transition ${FOCUS}`}
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            )}
 
           {/* ── Active-filter chip — the ONE piece of filter chrome on the map.
                  Renders only while a filter is narrowing pins ("{label} · {n}"
@@ -6985,7 +7044,22 @@ export default function MapView() {
                                 },
                               },
                             ]
-                          : []),
+                          : [
+                              // Rep counterpart of the manager legend: a compact
+                              // pin-colors key (STATE_COLORS/STATE_LABELS), so a
+                              // new hire never has to guess what a color means.
+                              {
+                                key: "pin-key",
+                                testid: "ctl-pin-key",
+                                icon: <Palette className="w-4 h-4" />,
+                                label: "Pin colors",
+                                active: pinKeyOpen,
+                                onClick: () => {
+                                  setPinKeyOpen((o) => !o);
+                                  setToolsMenuOpen(false);
+                                },
+                              },
+                            ]),
                         ...(canSubmitScan
                           ? [
                               {
@@ -7179,6 +7253,19 @@ export default function MapView() {
             </button>
           )}
 
+          {/* Rep pin-colors key — bottom left, above the Next-door FAB, opened
+                 from the More menu's "Pin colors" entry and dismissible. Hidden
+                 while the knock sheet is up so it never covers the outcomes. */}
+          {mapReady && isRep && pinKeyOpen && bottomSlot !== "knock" && (
+            <MapLegend
+              open
+              onClose={() => setPinKeyOpen(false)}
+              items={pinKeyItems}
+              className="absolute left-3 z-10"
+              style={{ bottom: "calc(env(safe-area-inset-bottom) + 6.5rem)" }}
+            />
+          )}
+
           {/* Pin legend + admin filter panel — bottom left, MANAGER chrome
                  (team_lead+). The floating dot-strip trigger is gone (minimal
                  map): this panel now opens from the More menu's
@@ -7293,9 +7380,9 @@ export default function MapView() {
                     onClick={() => setLegendOpen(false)}
                     data-testid="legend-collapse"
                     aria-label="Collapse legend"
-                    className="relative w-8 h-8 -my-1.5 inline-flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/10 text-sm leading-none after:absolute after:-inset-1.5"
+                    className="relative w-8 h-8 -my-1.5 inline-flex items-center justify-center rounded-lg text-white/70 hover:text-white hover:bg-white/10 after:absolute after:-inset-1.5"
                   >
-                    ×
+                    <X className="w-4 h-4" aria-hidden="true" />
                   </button>
                 </span>
               </div>
@@ -7419,7 +7506,7 @@ export default function MapView() {
                               className="relative opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-teal-400 w-9 h-9 inline-flex items-center justify-center rounded hover:bg-white/10 after:absolute after:-inset-1.5"
                               data-testid={`assign-${t.id}`}
                             >
-                              ＋
+                              <Plus className="w-4 h-4" aria-hidden="true" />
                             </button>
                           )}
                           {canManage && !isUnassigned && (
@@ -7460,7 +7547,11 @@ export default function MapView() {
                                   : "relative opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-red-400/80 hover:text-red-400 w-9 h-9 inline-flex items-center justify-center rounded hover:bg-white/10 after:absolute after:-inset-1.5"
                               }
                             >
-                              {confirmDeleteId === t.id ? "Sure?" : "×"}
+                              {confirmDeleteId === t.id ? (
+                                "Sure?"
+                              ) : (
+                                <X className="w-4 h-4" aria-hidden="true" />
+                              )}
                             </button>
                           )}
                         </div>
