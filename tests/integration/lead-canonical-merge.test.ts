@@ -75,6 +75,67 @@ describe("lead canonical merge migration", () => {
     expect((rawDb.prepare(`SELECT COUNT(*) c FROM leads WHERE canonical_key IS NULL`).get() as any).c).toBe(0);
   });
 
+  it("survivor keeps already_customer over a richer prospect duplicate", async () => {
+    const now = new Date().toISOString();
+    const markedAt = "2026-07-20T15:30:00.000Z";
+    // The worked copy: centrally marked "Already a Customer" (stored as
+    // not_interested + last_outcome=already_customer — a terminal, worked door).
+    const worked = insertRawLead({
+      address: "31 Custer Avenue", city: "Terrace", state: "NC", zip: "28110",
+      lead_status: "not_interested", last_outcome: "already_customer", last_outcome_at: markedAt,
+      tenant_id: TENANT, created_at: "2026-07-01T00:00:00.000Z", updated_at: now, canonical_key: null,
+    });
+    // A RICHER prospect duplicate — under the old ranking (no not_interested /
+    // already_customer entries → rank 0) this row won and the door re-opened.
+    insertRawLead({
+      address: "31 CUSTER AVE", city: "Terrace", state: "NC", zip: "28110",
+      lead_status: "prospect", contact_name: "Riche Prospect", contact_phone: "704-555-0199",
+      notes: "bulk scan copy", tenant_id: TENANT,
+      created_at: "2026-07-10T00:00:00.000Z", updated_at: now, canonical_key: null,
+    });
+
+    const s = await import("../../server/storage");
+    s.runMigrations();
+
+    const merged = rawDb.prepare(`SELECT * FROM leads WHERE address LIKE '31 %'`).all() as any[];
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe(worked);
+    expect(merged[0].lead_status).toBe("not_interested");
+    expect(merged[0].last_outcome).toBe("already_customer");
+    expect(merged[0].last_outcome_at).toBe(markedAt);
+    // Loser's useful contact data still coalesced onto the survivor.
+    expect(merged[0].contact_name).toBe("Riche Prospect");
+  });
+
+  it("a projector survivor inherits lead_status AND last_outcome from an already_customer loser", async () => {
+    const now = new Date().toISOString();
+    const markedAt = "2026-07-21T09:00:00.000Z";
+    // Projector row (source_scan_target_id) always survives — but it is a bare prospect.
+    const proj = insertRawLead({
+      address: "77 Keeper Road", city: "Terrace", state: "NC", zip: "28110",
+      lead_status: "prospect", source_scan_target_id: 777, tenant_id: TENANT,
+      created_at: "2026-07-05T00:00:00.000Z", updated_at: now, canonical_key: null,
+    });
+    // The worked duplicate: already a customer. Its disposition must transfer —
+    // lead_status alone is ambiguous (not_interested vs already_customer is
+    // disambiguated by last_outcome on every surface).
+    insertRawLead({
+      address: "77 KEEPER RD", city: "Terrace", state: "NC", zip: "28110",
+      lead_status: "not_interested", last_outcome: "already_customer", last_outcome_at: markedAt,
+      tenant_id: TENANT, created_at: "2026-07-12T00:00:00.000Z", updated_at: now, canonical_key: null,
+    });
+
+    const s = await import("../../server/storage");
+    s.runMigrations();
+
+    const merged = rawDb.prepare(`SELECT * FROM leads WHERE address LIKE '77 %'`).all() as any[];
+    expect(merged).toHaveLength(1);
+    expect(merged[0].id).toBe(proj);                       // projector row still the survivor
+    expect(merged[0].lead_status).toBe("not_interested");  // promoted from the worked loser
+    expect(merged[0].last_outcome).toBe("already_customer");
+    expect(merged[0].last_outcome_at).toBe(markedAt);
+  });
+
   it("createLead attaches to an existing canonical match instead of duplicating", () => {
     const a = storage.createLead({ address: "12 Once Ln", city: "Terrace", state: "NC", zip: "28110", tenantId: TENANT } as any);
     // Suffix/case variant → same canonical key → returns the SAME lead, no new row.
