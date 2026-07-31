@@ -320,13 +320,16 @@ export function removeHousenumLayer(map: any): void {
 // OFF by default (owner's minimal-map directive); an explicit opt-in from the
 // Map settings sheet persists across launches, same pattern as the status
 // filter above. Storage-blocked browsers degrade to session-only.
-export const HOUSE_NUMBERS_LS_KEY = "hf.mapHouseNumbers.v1";
+// v2: the owner wants numbers ON by default (v1 shipped default-off for a few
+// hours and may have persisted "0" without the user ever touching the toggle —
+// the key bump re-defaults everyone to ON while still honoring future choices).
+export const HOUSE_NUMBERS_LS_KEY = "hf.mapHouseNumbers.v2";
 
 export function readPersistedHouseNumbers(): boolean {
   try {
-    return localStorage.getItem(HOUSE_NUMBERS_LS_KEY) === "1";
+    return localStorage.getItem(HOUSE_NUMBERS_LS_KEY) !== "0"; // default ON
   } catch {
-    return false;
+    return true;
   }
 }
 

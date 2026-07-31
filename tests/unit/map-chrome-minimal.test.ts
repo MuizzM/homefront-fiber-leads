@@ -62,7 +62,7 @@ describe("removed / relocated chrome", () => {
 
   it("no add-lead FAB — it is a More-menu entry behind canAssign", () => {
     expect(src).not.toContain('data-testid="fab-add-lead"');
-    expect(src).toContain('testid: "ctl-add-lead"');
+    expect(src).toContain('data-testid="ctl-add-lead"'); // rail button (owner ask), not a menu entry
   });
 
   it("no always-on status pill or legend dot-strip", () => {

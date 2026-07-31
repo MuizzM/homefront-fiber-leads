@@ -6761,6 +6761,21 @@ export default function MapView() {
                   </button>
                 )}
 
+                {/* Add lead — direct rail button for admin/manager/team lead
+                    (owner ask: one tap, not buried in the More menu). */}
+                {canAssign && (
+                  <button
+                    type="button"
+                    onClick={() => setAddMode((v) => !v)}
+                    aria-label={addMode ? "Cancel add-lead mode" : "Add a lead by tapping the map"}
+                    aria-pressed={addMode}
+                    data-testid="ctl-add-lead"
+                    className={`${RAIL_BTN} ${addMode ? RAIL_BTN_ACTIVE : RAIL_BTN_IDLE}`}
+                  >
+                    <Plus className="w-5 h-5" aria-hidden="true" />
+                  </button>
+                )}
+
                 {/* Filter sheet trigger — the SalesRabbit-style bottom sheet
                     over the SAME filterStatus/filterRep state as the pill and
                     the manager legend. Dot = a filter is narrowing pins. */}
@@ -6852,23 +6867,7 @@ export default function MapView() {
                         // lasso button own them now. Add-lead, Scan map, and
                         // the legend moved IN here off the map surface
                         // (owner's minimal directive), same handlers + gates.
-                        ...(canAssign
-                          ? [
-                              {
-                                key: "add-lead",
-                                testid: "ctl-add-lead",
-                                icon: <Plus className="w-4 h-4" />,
-                                label: addMode
-                                  ? "Cancel add-lead mode"
-                                  : "Add lead",
-                                active: addMode,
-                                onClick: () => {
-                                  setAddMode((v) => !v);
-                                  setToolsMenuOpen(false);
-                                },
-                              },
-                            ]
-                          : []),
+
                         ...(canSubmitScan
                           ? [
                               {
