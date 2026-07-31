@@ -49,12 +49,25 @@ function lead(id: number, over: Record<string, any> = {}) {
   };
 }
 
-// The DELETE round-trip is deferred so tests can assert the optimistic state
-// while the server has not answered yet, then settle it either way.
+// The DELETE/POST round-trips are deferred so tests can assert the optimistic
+// state while the server has not answered yet, then settle either way.
 let settleDelete: { resolve: () => void; reject: (e: Error) => void };
+let settleAdd: { resolve: () => void; reject: (e: Error) => void };
 
 function renderLeads(leadsDb: any[]) {
-  apiRequest.mockImplementation((method: string, url: string) => {
+  apiRequest.mockImplementation((method: string, url: string, body?: any) => {
+    if (method === "POST" && url === "/api/leads") {
+      return new Promise<any>((resolve, reject) => {
+        settleAdd = {
+          resolve: () => {
+            const created = { ...lead(42), ...body, id: 42 };
+            leadsDb.push(created);
+            resolve({ json: () => Promise.resolve(created) });
+          },
+          reject,
+        };
+      });
+    }
     if (method === "DELETE" && url.startsWith("/api/leads/")) {
       const id = Number(url.split("/").pop());
       return new Promise<any>((resolve, reject) => {
@@ -85,6 +98,14 @@ function renderLeads(leadsDb: any[]) {
     },
   });
   return { qc, ...render(<QueryClientProvider client={qc}><Leads /></QueryClientProvider>) };
+}
+
+async function submitNewLead(address: string) {
+  fireEvent.click(await screen.findByTestId("btn-add-lead-manual"));
+  fireEvent.change(await screen.findByTestId("form-address"), { target: { value: address } });
+  fireEvent.change(screen.getByTestId("form-city"), { target: { value: "Testburg" } });
+  fireEvent.change(screen.getByTestId("form-zip"), { target: { value: "70001" } });
+  fireEvent.click(screen.getByTestId("btn-save-lead-form"));
 }
 
 async function confirmDeleteOf(id: number) {
@@ -130,5 +151,42 @@ describe("Leads delete is optimistic", () => {
     );
     // Both rows intact after rollback + reconciling refetch.
     expect(screen.getByTestId("card-lead-2")).toBeTruthy();
+  });
+});
+
+describe("Leads add is optimistic", () => {
+  it("closes the dialog and shows the new row BEFORE the POST resolves", async () => {
+    renderLeads([lead(1)]);
+    await screen.findByTestId("card-lead-1");
+    await submitNewLead("99 Pine St");
+
+    // Server has NOT answered (settleAdd is still pending) — yet the dialog is
+    // closed, the optimistic row is visible, and the success toast fired.
+    await waitFor(() => expect(screen.getAllByText("99 Pine St").length).toBeGreaterThan(0));
+    expect(screen.queryByTestId("btn-save-lead-form")).toBeNull();
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ title: "Lead added" }));
+
+    // Settle: the server row (real id 42) replaces the temp row on refetch.
+    settleAdd.resolve();
+    await waitFor(() => expect(screen.getByTestId("card-lead-42")).toBeTruthy());
+    expect(screen.getAllByText("99 Pine St").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("card-lead-1")).toBeTruthy();
+  });
+
+  it("removes the temp row and fires a destructive toast when the POST fails", async () => {
+    renderLeads([lead(1)]);
+    await screen.findByTestId("card-lead-1");
+    await submitNewLead("99 Pine St");
+    await waitFor(() => expect(screen.getAllByText("99 Pine St").length).toBeGreaterThan(0));
+
+    // Reject only now — the mutation already awaits this promise, so the
+    // rejection lands inside React Query's handled chain (no unhandled reject).
+    settleAdd.reject(new Error("boom"));
+    await waitFor(() => expect(screen.queryByText("99 Pine St")).toBeNull());
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Couldn't add lead — boom", variant: "destructive" }),
+    );
+    // The pre-existing row survives the rollback.
+    expect(screen.getByTestId("card-lead-1")).toBeTruthy();
   });
 });

@@ -851,20 +851,6 @@ export default function Leads() {
     if (record.account?.repId != null) onboardingByRep.set(record.account.repId, record.stage);
   }
 
-  const createMutation = useMutation({
-    mutationFn: async (data: Partial<InsertLead>) => {
-      const res = await apiRequest("POST", "/api/leads", data);
-      return res.json();
-    },
-    onSuccess: () => {
-      toast({ title: "Lead added" });
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      qc.invalidateQueries({ queryKey: ["/api/stats"] });
-      setAddOpen(false);
-    },
-    onError: (e: any) => toast({ title: e?.message ?? "Couldn't add lead", variant: "destructive" }),
-  });
-
   // Optimistic-write helper for the paged list cache. The ["/api/leads", ...]
   // prefix also matches per-lead subqueries (["/api/leads", id, "knocks"] etc.),
   // so only entries shaped like the list payload ({ leads, total }) are touched.
@@ -882,6 +868,34 @@ export default function Leads() {
   const restoreLeadLists = (snapshots: Array<[readonly unknown[], unknown]> | undefined) => {
     for (const [key, data] of snapshots ?? []) qc.setQueryData(key, data);
   };
+
+  const createMutation = useMutation({
+    mutationFn: async (data: Partial<InsertLead>) => {
+      const res = await apiRequest("POST", "/api/leads", data);
+      return res.json();
+    },
+    onMutate: async (data: Partial<InsertLead>) => {
+      await qc.cancelQueries({ queryKey: ["/api/leads"] });
+      // Negative temp id keys the optimistic row and can never collide with a
+      // real (positive) server id. Only form-provided fields are shown — the
+      // onSettled refetch swaps in the server row with its real id and defaults.
+      const snapshots = patchLeadLists(cached => ({
+        leads: [{ id: -Date.now(), ...data } as Lead, ...cached.leads],
+        total: cached.total + 1,
+      }));
+      setAddOpen(false);
+      toast({ title: "Lead added" });
+      return { snapshots };
+    },
+    onError: (e: any, _vars, ctx) => {
+      restoreLeadLists(ctx?.snapshots);
+      toast({ title: `Couldn't add lead — ${String(e?.message ?? "request failed")}`, variant: "destructive" });
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      qc.invalidateQueries({ queryKey: ["/api/stats"] });
+    },
+  });
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: number; data: Partial<InsertLead> }) => {
