@@ -1356,10 +1356,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       for (const k in l) {
         if (k === "id" || k === "lat" || k === "lng" || k === "leadStatus" ||
             k === "knockCount" || k === "lastOutcome" || k === "lastKnockedAt" ||
-            k === "leadLastOutcome" || k === "leadLastOutcomeAt") continue;
+            k === "leadLastOutcome" || k === "leadLastOutcomeAt" || k === "doNotKnock") continue;
         const val = (l as any)[k];
         if (val !== null && val !== false && val !== 0 && val !== "") pin[k] = val;
       }
+      // SQLite stores the compliance block as 0/1 — normalize to boolean `true`
+      // on the wire (compact pins omit falsy fields entirely).
+      if (l.doNotKnock) pin.doNotKnock = true;
       if (l.knockCount) {
         pin.visited = true;
         pin.knockCount = l.knockCount;
@@ -4415,7 +4418,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // Silently skip cross-tenant or out-of-scope leads (don't leak, don't act) —
         // count them so the UI can be honest about what changed.
         if (!lead || (tid != null && lead.tenantId !== tid) || !repCanAccessLead(user, lead)) { skipped++; continue; }
-        if (storage.updateLead(id, { leadStatus: newStatus, lastOutcome: newStatus, lastOutcomeAt: new Date().toISOString() } as any, tid)) { updated++; changed.push(id); }
+        // lastOutcome records the OUTCOME as requested (not the derived status)
+        // — the pair only coincides for today's BULK_STATUS_OUTCOMES, and every
+        // other surface disambiguates via last_outcome (e.g. already_customer).
+        if (storage.updateLead(id, { leadStatus: newStatus, lastOutcome: outcome, lastOutcomeAt: new Date().toISOString() } as any, tid)) { updated++; changed.push(id); }
       }
       return { updated, skipped, changed };
     });
@@ -5189,15 +5195,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Follow-ups — open scheduled callbacks the caller owns ────────────────────
   // Closes the loop the OutcomeSheet opens: every "callback" a rep schedules
   // surfaces here (grouped Overdue/Today/Upcoming client-side) until the door is
-  // re-worked. Tenant-scoped in SQL; then rep-scoped so a rep sees only callbacks
-  // they set or on leads assigned to them, and a team_lead only their team's.
+  // re-worked. Tenant-scoped in SQL; then rep-scoped by the door's CURRENT
+  // owner (assignedRepId) — NOT the knocker: a reassigned door's follow-up
+  // belongs to whoever holds it now, and a team_lead sees only their team's.
   app.get("/api/followups", requireAuth, (req, res) => {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined; // super_admin (null) = all tenants
     const rows = storage.getOpenCallbacks(tid);
     const scope = leadVisibilityScope(user); // undefined = org-wide (admin/manager)
     const scoped = Array.isArray(scope)
-      ? rows.filter(r => scope.includes(r.repId) || (r.assignedRepId != null && scope.includes(r.assignedRepId)))
+      ? rows.filter(r => r.assignedRepId != null && scope.includes(r.assignedRepId))
       : rows;
     res.json(scoped);
   });
@@ -5828,8 +5835,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         // The reset clears lead_status/last_outcome/assign_mark through raw SQL
         // inside territoryPass.ts, so this is the only place the changed ids
         // exist. Fires for every action including "keep", which re-opens doors
-        // without touching the territory at all.
-        onLeadsReset: (ids) => emitLeadChangesBulk("status", ids, user, tid),
+        // without touching the territory at all — so the map push cache must be
+        // busted HERE (bustMapCache also emits the tenant-wide map-changed
+        // ping), not only on the hand-off path that "keep" never takes.
+        onLeadsReset: (ids) => {
+          bustMapCache(tid);
+          emitLeadChangesBulk("status", ids, user, tid);
+        },
         // Runs inside the same transaction as the lead reset: the area's
         // assignment and its doors can never disagree about which pass they're in.
         applyTerritoryAction: () => {

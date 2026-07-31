@@ -79,9 +79,10 @@ export const SESSION_ABSOLUTE_MAX_MS = Math.max(
 // knocks costs one write per hour rather than one per request.
 const SESSION_RENEW_SLACK_MS = 60 * 60 * 1000;
 
-// An open follow-up: a lead whose latest knock is a scheduled callback (see
+// An open follow-up: a lead whose latest knock is a scheduled callback, OR a
+// lead centrally/bulk-marked follow_up with no newer knock (see
 // getOpenCallbacks). Display fields come from the lead; the schedule + note from
-// the knock. No provider-internal ids are ever included.
+// the knock when one exists. No provider-internal ids are ever included.
 export interface OpenCallback {
   leadId: number;
   address: string; city: string; state: string | null; zip: string | null;
@@ -89,11 +90,13 @@ export interface OpenCallback {
   leadStatus: string; leadTag: string | null; leadScore: number | null;
   contactName: string | null;
   assignedRepId: number | null;
-  repId: number;                 // the rep who scheduled the callback
-  callbackDate: string;          // "YYYY-MM-DD"
+  // The rep who scheduled the callback; for a lead-level follow-up (no knock)
+  // this is the door's current owner, which may be null (unassigned).
+  repId: number | null;
+  callbackDate: string;          // "YYYY-MM-DD" (derived from last_outcome_at for lead-level rows)
   callbackTime: string | null;   // "HH:MM"
   notes: string | null;
-  setAt: string;                 // when the callback was logged
+  setAt: string;                 // when the callback/mark was logged
 }
 
 export interface LegacyCommissionMutationCommand {
@@ -152,6 +155,9 @@ export interface MapPinRow {
   freshConfidence: string | null;
   carrier?: string | null;
   assignMark?: string | null;
+  /** Compliance block: the occupant asked us never to return. Raw SQLite
+   *  0/1 — the pin builder normalizes truthy → `true` and omits otherwise. */
+  doNotKnock?: number | boolean | null;
   /** The lead row's OWN disposition (CAS-ordered; written by knocks AND
    *  central marks). Preferred over the knock join when at least as new. */
   leadLastOutcome?: string | null;
@@ -2336,7 +2342,14 @@ function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void 
 
   if (groups.length) {
     // lead_status seniority: a more-worked/sold row must win over a fresh prospect.
-    const statusRank: Record<string, number> = { sold: 6, now_active: 5, callback: 4, follow_up: 4, interested: 4, contacted: 3, prospect: 2, unworked: 1 };
+    // not_interested is a WORKED terminal state — without an entry it ranked 0 and
+    // lost to a bare prospect copy, silently re-opening a closed door on merge.
+    const statusRank: Record<string, number> = { sold: 6, now_active: 5, callback: 4, follow_up: 4, interested: 4, contacted: 3, not_interested: 3, prospect: 2, unworked: 1 };
+    // "Already a Customer" is stored as lead_status=not_interested +
+    // last_outcome=already_customer (see shared/knock.ts) — the door is served,
+    // terminal, and must outrank every unworked/prospect copy.
+    const rankOf = (r: any): number =>
+      r?.last_outcome === "already_customer" ? 5 : (statusRank[r?.lead_status] ?? 0);
     // Child tables that reference leads.id — repoint loser→survivor to keep history.
     const childFks: Array<[string, string]> = [
       ["knock_log", "lead_id"], ["commissions", "lead_id"], ["lead_events", "lead_id"],
@@ -2355,7 +2368,7 @@ function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void 
       // lead_status rank > more complete > lowest id.
       rows.sort((a, b) =>
         (b.source_scan_target_id != null ? 1 : 0) - (a.source_scan_target_id != null ? 1 : 0) ||
-        (statusRank[b.lead_status] ?? 0) - (statusRank[a.lead_status] ?? 0) ||
+        rankOf(b) - rankOf(a) ||
         completeness(b) - completeness(a) ||
         a.id - b.id);
       const survivor = rows[0];
@@ -2373,9 +2386,21 @@ function migrateLeadsCanonicalKey(raw: import("better-sqlite3").Database): void 
             try { raw.prepare(`UPDATE leads SET ${c}=? WHERE id=?`).run(loser[c], survivor.id); survivor[c] = loser[c]; } catch { /* ignore */ }
           }
         }
-        // Promote survivor status if the loser was more advanced.
-        if ((statusRank[loser.lead_status] ?? 0) > (statusRank[survivor.lead_status] ?? 0)) {
-          raw.prepare(`UPDATE leads SET lead_status=? WHERE id=?`).run(loser.lead_status, survivor.id);
+        // Promote survivor status if the loser was more advanced — and carry the
+        // DISPOSITION with it: lead_status alone is ambiguous (already_customer
+        // vs not_interested, callback vs follow_up are told apart by
+        // last_outcome on every surface), and the outcome CAS keys off
+        // last_outcome_at, so a promoted status with stale/empty outcome columns
+        // would both mislabel the pin and lose CAS ordering.
+        if (rankOf(loser) > rankOf(survivor)) {
+          if (cols.has("last_outcome") && cols.has("last_outcome_at")) {
+            raw.prepare(`UPDATE leads SET lead_status=?, last_outcome=?, last_outcome_at=? WHERE id=?`)
+              .run(loser.lead_status, loser.last_outcome ?? null, loser.last_outcome_at ?? null, survivor.id);
+            survivor.last_outcome = loser.last_outcome;
+            survivor.last_outcome_at = loser.last_outcome_at;
+          } else {
+            raw.prepare(`UPDATE leads SET lead_status=? WHERE id=?`).run(loser.lead_status, survivor.id);
+          }
           survivor.lead_status = loser.lead_status;
         }
         // Keep the fresh_fiber_confirmed tag if any copy had it.
@@ -2613,7 +2638,7 @@ export class Storage implements IStorage {
           l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
           l.lead_score AS leadScore,
           l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
-          l.assign_mark AS assignMark,
+          l.assign_mark AS assignMark, l.do_not_knock AS doNotKnock,
           -- The lead's OWN disposition columns. The knock CAS keeps these
           -- monotonic by last_outcome_at, and central marks write them with NO
           -- knock row — so the pin's outcome must be able to come from here,
@@ -2641,7 +2666,7 @@ export class Storage implements IStorage {
       SELECT
         s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
         s.leadStatus, s.fiberStatus, s.assignedRepId, s.assignedTerritoryId, s.leadScore,
-        s.leadTag, s.freshConfidence, s.carrier, s.assignMark,
+        s.leadTag, s.freshConfidence, s.carrier, s.assignMark, s.doNotKnock,
         s.leadLastOutcome, s.leadLastOutcomeAt,
         rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
       FROM scoped s
@@ -3007,34 +3032,85 @@ export class Storage implements IStorage {
   getKnocksByRep(repId: number): Knock[] {
     return db.select().from(knockLog).where(eq(knockLog.repId, repId)).all();
   }
-  // Open follow-ups: leads whose MOST-RECENT knock is a scheduled callback (the
-  // rep asked to come back and hasn't re-worked the door since). Joins the lead
-  // for display + tenant scope. The outer driver seeks scheduled-callback rows via
-  // the partial idx_knock_log_open_callback; the correlated "latest knock" subquery
-  // rides idx_knock_log_lead_time_desc (lead_id, knocked_at DESC, id DESC).
-  // Rep-scoping is applied by the route.
+  // Open follow-ups — TWO arms, because dispositions land in two places:
+  //
+  //  (1) Knock-scheduled callbacks: leads whose MOST-RECENT knock is a scheduled
+  //      callback (the rep asked to come back and hasn't re-worked the door
+  //      since). BUT central-disposition / bulk-status / PATCH write ONLY the
+  //      leads row (no knock), so a knock callback is closed by a NEWER
+  //      lead-level disposition (last_outcome_at > knocked_at) — unless that
+  //      newer outcome is itself callback/follow_up, which re-affirms the debt
+  //      and keeps the originally scheduled date.
+  //  (2) Lead-level follow-ups: doors marked INTO follow_up centrally/bulk —
+  //      lead_status='follow_up' with the lead columns newer than every knock
+  //      (or no knocks at all). No schedule exists, so callbackDate derives
+  //      from last_outcome_at's LOCAL date (falls in Today/Overdue, never
+  //      vanishing from the date-grouped client); NULL-safe at every step.
+  //
+  // Arm 1's driver seeks scheduled-callback rows via the partial
+  // idx_knock_log_open_callback; the correlated "latest knock" subquery rides
+  // idx_knock_log_lead_time_desc (lead_id, knocked_at DESC, id DESC).
+  // Rep-scoping is applied by the route (by the door's CURRENT owner).
   getOpenCallbacks(tenantId?: number): OpenCallback[] {
+    const tenantAnd = tenantId != null ? "AND l.tenant_id = ?" : "";
+    const params = tenantId != null ? [tenantId, tenantId] : [];
     const rows = rawDb.prepare(`
+      WITH open_knock_callbacks AS (
+        SELECT
+          k.lead_id AS leadId, k.rep_id AS repId, k.callback_date AS callbackDate,
+          k.callback_time AS callbackTime, k.notes AS notes, k.knocked_at AS setAt
+        FROM knock_log k
+        JOIN leads l ON l.id = k.lead_id
+        WHERE k.id = (
+          SELECT k2.id FROM knock_log k2
+          WHERE k2.lead_id = k.lead_id
+          ORDER BY k2.knocked_at DESC, k2.id DESC
+          LIMIT 1
+        )
+        AND k.outcome = 'callback'
+        AND k.callback_date IS NOT NULL
+        AND (
+          l.last_outcome_at IS NULL
+          OR l.last_outcome_at <= k.knocked_at
+          OR l.last_outcome IN ('callback', 'follow_up')
+        )
+        ${tenantAnd}
+      )
       SELECT
         l.id AS leadId, l.address AS address, l.city AS city, l.state AS state, l.zip AS zip,
         l.lat AS lat, l.lng AS lng, l.lead_status AS leadStatus, l.lead_tag AS leadTag,
         l.lead_score AS leadScore, l.contact_name AS contactName,
         l.assigned_rep_id AS assignedRepId,
-        k.rep_id AS repId, k.callback_date AS callbackDate, k.callback_time AS callbackTime,
-        k.notes AS notes, k.knocked_at AS setAt
-      FROM knock_log k
-      JOIN leads l ON l.id = k.lead_id
-      WHERE k.id = (
-        SELECT k2.id FROM knock_log k2
-        WHERE k2.lead_id = k.lead_id
-        ORDER BY k2.knocked_at DESC, k2.id DESC
-        LIMIT 1
-      )
-      AND k.outcome = 'callback'
-      AND k.callback_date IS NOT NULL
-      ${tenantId != null ? "AND l.tenant_id = ?" : ""}
-      ORDER BY k.callback_date ASC, COALESCE(k.callback_time, '99:99') ASC
-    `).all(...(tenantId != null ? [tenantId] : [])) as OpenCallback[];
+        c.repId, c.callbackDate, c.callbackTime, c.notes, c.setAt
+      FROM open_knock_callbacks c
+      JOIN leads l ON l.id = c.leadId
+      UNION ALL
+      SELECT
+        l.id AS leadId, l.address AS address, l.city AS city, l.state AS state, l.zip AS zip,
+        l.lat AS lat, l.lng AS lng, l.lead_status AS leadStatus, l.lead_tag AS leadTag,
+        l.lead_score AS leadScore, l.contact_name AS contactName,
+        l.assigned_rep_id AS assignedRepId,
+        l.assigned_rep_id AS repId,
+        COALESCE(date(l.last_outcome_at, 'localtime'), date('now', 'localtime')) AS callbackDate,
+        NULL AS callbackTime,
+        NULL AS notes,
+        COALESCE(l.last_outcome_at, l.updated_at, l.created_at, datetime('now')) AS setAt
+      FROM leads l
+      WHERE l.lead_status = 'follow_up'
+        ${tenantAnd}
+        -- Lead columns are the LATEST word on this door: no knock at all, or
+        -- every knock is older than the lead-level disposition.
+        AND NOT EXISTS (
+          SELECT 1 FROM knock_log k WHERE k.lead_id = l.id
+            AND (l.last_outcome_at IS NULL OR k.knocked_at >= l.last_outcome_at)
+        )
+        -- Already surfaced with its real schedule by arm 1 — never duplicate.
+        AND l.id NOT IN (SELECT leadId FROM open_knock_callbacks)
+    `).all(...params) as OpenCallback[];
+    // Compound-SELECT ORDER BY can't use the COALESCE expression portably, and
+    // the client sorts the same way — date asc, then time with nulls last.
+    rows.sort((a, b) =>
+      (a.callbackDate + (a.callbackTime ?? "99:99")).localeCompare(b.callbackDate + (b.callbackTime ?? "99:99")));
     return rows;
   }
   // ── Lead photos ─────────────────────────────────────────────────────────────

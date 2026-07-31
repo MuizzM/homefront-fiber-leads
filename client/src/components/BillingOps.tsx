@@ -9,6 +9,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { FOCUS } from "@/lib/a11y";
 import { CreditCard, Zap, Plus } from "lucide-react";
 
 type PlanKey = "starter" | "growth" | "professional" | "enterprise";
@@ -29,6 +30,11 @@ const STATE_CLS: Record<BillingState, string> = {
 const BAR: Record<Row["level"], string> = { ok: "bg-primary", warn: "bg-amber-500", critical: "bg-red-500", exhausted: "bg-red-500" };
 const STATES: BillingState[] = ["trial", "active", "past_due", "suspended", "canceled"];
 
+// A staged (not yet applied) selector change. Selection alone never POSTs —
+// the change waits in local state behind an inline confirm strip (audit
+// finding: plan/state selects used to fire the mutation directly onChange).
+type StagedChange = { kind: "plan"; value: PlanKey } | { kind: "state"; value: BillingState };
+
 export function BillingOps() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -36,6 +42,7 @@ export function BillingOps() {
   const [busy, setBusy] = useState<number | null>(null);
   const [grant, setGrant] = useState<Record<number, string>>({});
   const [provisionPlan, setProvisionPlan] = useState<Record<number, PlanKey>>({});
+  const [staged, setStaged] = useState<Record<number, StagedChange | undefined>>({});
 
   const plans = data?.plans ?? [];
   const rows = data?.tenants ?? [];
@@ -86,6 +93,7 @@ export function BillingOps() {
                     <span className="inline-flex items-center h-5 px-2 rounded-full bg-muted text-[11px] font-medium text-muted-foreground">Not set up</span>
                     <select
                       value={provisionPlan[t.tenantId] ?? "starter"}
+                      aria-label={`Provision plan for ${t.companyName}`}
                       onChange={e => setProvisionPlan(p => ({ ...p, [t.tenantId]: e.target.value as PlanKey }))}
                       className="h-8 rounded-lg bg-secondary border border-border px-2 text-[12px] text-foreground focus:outline-none focus:border-primary/60"
                       data-testid={`provision-plan-${t.tenantId}`}>
@@ -101,25 +109,70 @@ export function BillingOps() {
                   </div>
                 ) : (
                   <>
-                    {/* Plan + state selectors */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <select
-                        value={t.planKey ?? "starter"}
-                        disabled={busy === t.tenantId}
-                        onChange={e => post(t.tenantId, "/api/billing/plan", { planKey: e.target.value }, "Plan changed")}
-                        className="h-8 rounded-lg bg-secondary border border-border px-2 text-[12px] text-foreground focus:outline-none focus:border-primary/60"
-                        data-testid={`plan-sel-${t.tenantId}`}>
-                        {plans.map(p => <option key={p.key} value={p.key}>{p.name}</option>)}
-                      </select>
-                      <select
-                        value={t.state ?? "trial"}
-                        disabled={busy === t.tenantId}
-                        onChange={e => post(t.tenantId, "/api/billing/state", { state: e.target.value }, "State updated")}
-                        className={`h-8 rounded-lg border border-border px-2 text-[12px] font-medium focus:outline-none focus:border-primary/60 ${t.state ? STATE_CLS[t.state] : "bg-secondary text-foreground"}`}
-                        data-testid={`state-sel-${t.tenantId}`}>
-                        {STATES.map(s => <option key={s} value={s} className="bg-card text-foreground">{s.replace("_", " ")}</option>)}
-                      </select>
-                    </div>
+                    {/* Plan + state selectors — selection only STAGES the change;
+                        the POST fires from the inline confirm strip below. */}
+                    {(() => {
+                      const sc = staged[t.tenantId];
+                      const stagedPlan = sc?.kind === "plan" ? sc.value : null;
+                      const stagedState = sc?.kind === "state" ? sc.value : null;
+                      const danger = stagedState === "suspended" || stagedState === "canceled";
+                      const stagedLabel = sc == null
+                        ? null
+                        : sc.kind === "plan"
+                          ? (plans.find(p => p.key === sc.value)?.name ?? sc.value)
+                          : sc.value.replace("_", " ");
+                      const applyStaged = async () => {
+                        if (!sc) return;
+                        if (sc.kind === "plan") await post(t.tenantId, "/api/billing/plan", { planKey: sc.value }, "Plan changed");
+                        else await post(t.tenantId, "/api/billing/state", { state: sc.value }, "State updated");
+                        setStaged(s => ({ ...s, [t.tenantId]: undefined }));
+                      };
+                      const cancelStaged = () => setStaged(s => ({ ...s, [t.tenantId]: undefined }));
+                      return (
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <select
+                            value={stagedPlan ?? t.planKey ?? "starter"}
+                            disabled={busy === t.tenantId}
+                            onChange={e => setStaged(s => ({ ...s, [t.tenantId]: { kind: "plan", value: e.target.value as PlanKey } }))}
+                            aria-label={`Change plan for ${t.companyName}`}
+                            className="h-8 rounded-lg bg-secondary border border-border px-2 text-[12px] text-foreground focus:outline-none focus:border-primary/60"
+                            data-testid={`plan-sel-${t.tenantId}`}>
+                            {plans.map(p => <option key={p.key} value={p.key}>{p.name}</option>)}
+                          </select>
+                          <select
+                            value={stagedState ?? t.state ?? "trial"}
+                            disabled={busy === t.tenantId}
+                            onChange={e => setStaged(s => ({ ...s, [t.tenantId]: { kind: "state", value: e.target.value as BillingState } }))}
+                            aria-label={`Change billing state for ${t.companyName}`}
+                            className={`h-8 rounded-lg border border-border px-2 text-[12px] font-medium focus:outline-none focus:border-primary/60 ${t.state ? STATE_CLS[t.state] : "bg-secondary text-foreground"}`}
+                            data-testid={`state-sel-${t.tenantId}`}>
+                            {STATES.map(s => <option key={s} value={s} className="bg-card text-foreground">{s.replace("_", " ")}</option>)}
+                          </select>
+                          {sc && (
+                            <div
+                              role="alert"
+                              data-testid={`confirm-strip-${t.tenantId}`}
+                              className={`flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] ${danger ? "border-rose-500/40 bg-rose-500/10 text-rose-300" : "border-border bg-secondary/60 text-foreground"}`}>
+                              <span>Change {t.companyName} to {stagedLabel}?</span>
+                              <button
+                                disabled={busy === t.tenantId}
+                                onClick={applyStaged}
+                                data-testid={`confirm-apply-${t.tenantId}`}
+                                className={`h-8 px-2.5 rounded-lg text-[12px] font-semibold disabled:opacity-50 ${danger ? "bg-rose-600 text-white hover:bg-rose-600/90" : "bg-primary text-primary-foreground hover:bg-primary/90"} ${FOCUS}`}>
+                                {busy === t.tenantId ? "Applying…" : "Confirm"}
+                              </button>
+                              <button
+                                disabled={busy === t.tenantId}
+                                onClick={cancelStaged}
+                                data-testid={`confirm-cancel-${t.tenantId}`}
+                                className={`h-8 px-2.5 rounded-lg border border-border text-[12px] font-medium text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}>
+                                Cancel
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {/* Credit meter */}
                     <div className="flex-1 min-w-[140px]">
@@ -142,6 +195,7 @@ export function BillingOps() {
                     <div className="flex items-center gap-1.5 shrink-0">
                       <input
                         type="number" min={1} placeholder="+ credits"
+                        aria-label={`Credits to grant to ${t.companyName}`}
                         value={grant[t.tenantId] ?? ""}
                         onChange={e => setGrant(g => ({ ...g, [t.tenantId]: e.target.value }))}
                         className="h-8 w-24 rounded-lg bg-secondary border border-border px-2 text-[12px] text-foreground tabular-nums focus:outline-none focus:border-primary/60"

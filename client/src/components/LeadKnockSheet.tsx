@@ -28,6 +28,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Copy, Check, Plus, X,
   DoorClosed, Star, DollarSign, Clock, ArrowDown, HelpCircle, Phone, UserCheck,
+  ShieldOff,
   type LucideIcon,
 } from "lucide-react";
 import { SHEET_PEEK_BASE_PX, setMeasuredPeekPx, setSheetDragActive } from "@/lib/mapPins";
@@ -60,6 +61,10 @@ export interface SheetLead {
   // Field Map pins payload carries NO phone for ordinary reps, so Call stays
   // hidden for them; the separate Calling workspace remains the gated path.
   phone?: string | null;
+  // Do-not-knock flag. The server is adding this to map pins in parallel —
+  // code defensively: undefined/null/0 all mean "no flag", any truthy value
+  // renders the prominent banner.
+  doNotKnock?: boolean | number | null;
 }
 
 export interface LeadKnockSheetProps {
@@ -851,6 +856,19 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
               crossfades (opacity only) when the card swaps to another door. Also
               the measured body of the quick level. */}
           <div key={renderedLead.id} ref={quickBodyRef} className="card-swap-in">
+            {/* Do-not-knock: the resident asked us not to return. Rendered at
+                the top of the body (inside the measured quick block, so the
+                quick snap height includes it) and announced as an alert. */}
+            {Boolean(renderedLead.doNotKnock) && (
+              <div
+                role="alert"
+                data-testid="dnk-banner"
+                className="mb-3 flex items-center gap-2 rounded-xl border border-rose-500/40 bg-rose-500/15 px-3 py-2.5 text-[13px] font-semibold leading-snug text-rose-300"
+              >
+                <ShieldOff className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>Do not knock — resident asked us not to return</span>
+              </div>
+            )}
             <QuickBody
               directionsHref={directionsHref}
               phone={renderedLead.phone}

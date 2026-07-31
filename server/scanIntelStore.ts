@@ -633,7 +633,10 @@ export function computeTerritoryOutcome(territoryId: number, createdAt: string |
 // their rep assignment — the old hard-delete orphaned 2,855 leads pointing at
 // nonexistent territories. Returns the count cleared.
 export function clearTerritoryFromLeads(territoryId: number): number {
-  return rawDb.prepare(`UPDATE leads SET assigned_territory_id = NULL WHERE assigned_territory_id = ?`).run(territoryId).changes;
+  // updated_at moves with the write — the map's data-version/ETag is derived
+  // from MAX(updated_at), so a silent clear must never serve a stale 304.
+  return rawDb.prepare(`UPDATE leads SET assigned_territory_id = NULL, updated_at = ? WHERE assigned_territory_id = ?`)
+    .run(new Date().toISOString(), territoryId).changes;
 }
 
 function key(city: string, state: string): string { return `${(city || "").toLowerCase()}|${(state || "").toLowerCase()}`; }
