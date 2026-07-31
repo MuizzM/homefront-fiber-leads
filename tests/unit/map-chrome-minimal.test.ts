@@ -95,6 +95,56 @@ describe("removed / relocated chrome", () => {
   });
 });
 
+describe("rep pin-colors key is opt-in, dismissible, and never at rest", () => {
+  it("reps get a Pin colors entry in the More menu (managers keep Legend & rep areas)", () => {
+    // The rep entry lives in the ELSE branch of the manager-legend gate — the
+    // two roles each get exactly one legend surface, never both.
+    const managerEntry = src.indexOf('testid: "ctl-legend"');
+    const repEntry = src.indexOf('testid: "ctl-pin-key"');
+    expect(managerEntry).toBeGreaterThan(-1);
+    expect(repEntry).toBeGreaterThan(managerEntry);
+    expect(src).toContain('label: "Pin colors"');
+  });
+
+  it("the key renders only while opted-in, and hides under the knock sheet", () => {
+    expect(src).toContain(
+      '{mapReady && isRep && pinKeyOpen && bottomSlot !== "knock" && (',
+    );
+    // Collapsed by default — nothing new sits on the map at rest.
+    expect(src).toMatch(/const \[pinKeyOpen, setPinKeyOpen\] = useState\(false\)/);
+  });
+
+  it("rows come from the canonical palette: STATE_LABELS/STATE_COLORS + live counts + real glyphs", () => {
+    const items = src.slice(src.indexOf("const pinKeyItems"), src.indexOf("}, [statusCounts, legendGlyphs]);"));
+    expect(items).toContain("STATE_LABELS[k]");
+    expect(items).toContain("STATE_COLORS[k]");
+    expect(items).toContain("statusCounts[k] ?? 0");
+    expect(items).toContain("legendGlyphs[k]");
+  });
+});
+
+describe("empty and edge states", () => {
+  it("the first-use empty state covers EVERY role, with rep-specific copy", () => {
+    expect(src).toContain("{mapReady && leads.length === 0 && (");
+    expect(src).not.toContain("{mapReady && !isRep && leads.length === 0 && (");
+    expect(src).toContain("No doors assigned yet");
+    expect(src).toContain('data-testid="map-empty-state"');
+  });
+
+  it("filters that hide every door say so, with a one-tap Clear", () => {
+    expect(src).toContain('data-testid="map-all-filtered"');
+    expect(src).toContain('data-testid="map-all-filtered-clear"');
+    // Gated on: a filter is active AND the lens still has doors AND none paint.
+    const block = src.slice(
+      src.indexOf('data-testid="map-all-filtered"') - 600,
+      src.indexOf('data-testid="map-all-filtered"'),
+    );
+    expect(block).toContain("mapFilterActive");
+    expect(block).toContain("territoryClippedLeads.length > 0");
+    expect(block).toContain("mapTotalLeads.length === 0");
+  });
+});
+
 describe("house numbers are opt-in from the settings sheet", () => {
   it("MapView wires a persisted House numbers toggle row", () => {
     expect(src).toContain('testId: "map-settings-toggle-house-numbers"');
