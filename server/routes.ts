@@ -5986,6 +5986,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // an area their OWN reps hold, never one belonging to another team. Managers
     // and admins have an undefined scope and pass straight through.
     if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
+    // An archived area is a record, not a live assignment — the same rule the
+    // org-wide sweep and /unassign already apply. Without this, "reclaiming"
+    // one silently resurrected it into the pool as "unassigned". Every LIVE
+    // status stays reclaimable — including "completed", which is exactly the
+    // "reps are done, pull the area" case.
+    if (((t as any).status ?? "active") === "archived") {
+      return res.status(409).json({ error: "cannot reclaim an archived area", code: "ARCHIVED" });
+    }
 
     const mode = (req.body?.mode ?? "return_to_pool") as ReclaimMode;
     const newRepId = req.body?.newRepId ?? req.body?.reassignToRepId ?? undefined;
@@ -6408,55 +6416,44 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ success: true, detached });
   });
 
-  // GET /api/territories/progress — canvassing progress per assigned area.
-  // For each territory polygon: how many leads fall inside, and how many have
-  // been knocked (≥1 door knock logged) → "X/Y doors done". No scanning.
-  app.get("/api/territories/progress", requireCapability("field.app.use"), (req, res) => {
-    const user = (req as any).user;
-    const tid = user?.tenantId ?? undefined;
-    // Reps only see their own territory's progress; managers/admins see all.
-    const scope = leadVisibilityScope(user);
-    if (Array.isArray(scope) && !scope.length) return res.json([]);
-    // Areas are many-to-many, so this cannot key on repId. Matching that column
-    // showed the card only to the PRIMARY holder — the second and third rep on a
-    // shared area got no numbers for ground they were actively working — and
-    // because repId still names the last holder after a reclaim, it kept showing
-    // the card to whoever the area had been taken FROM. One rule fixes both.
-    const territories = Array.isArray(scope)
-      ? storage.getTerritories(tid).filter((territory) => territoryHeldByAny(territory, scope))
-      : storage.getTerritories(tid);
-    if (territories.length === 0) return res.json([]);
-
+  // ── Territory progress computation ──────────────────────────────────────────
+  // ONE context (tenant-scoped rows, loaded once) + ONE row computation, shared
+  // by the list route (every area the caller may see) and the per-area route —
+  // so a rep's single-area card and a manager's overview can never disagree.
+  function territoryProgressContext(tid: number | undefined) {
     const leads = storage.getLeads(tid).filter((l: any) => l.lat != null && l.lng != null);
     const members = storage.getTeamMembers(tid);
     const geoConfig = storage.getGeoConfig(tid ?? null);
-
     // Group knocks by lead once (O(knocks)) so each territory is O(leads-inside).
     // Tenant-scoped so a shared DB doesn't load every org's knocks to discard them.
     const knocksByLead = new Map<number, any[]>();
     for (const k of storage.getKnocks(tid)) {
       const arr = knocksByLead.get(k.leadId); if (arr) arr.push(k); else knocksByLead.set(k.leadId, [k]);
     }
-    // Is this a WORKED outcome (door done for the pass)? Mirrors OUTCOME_META.
-    const isWorkedOutcome = (o: string) => !!OUTCOME_META[o as KnockOutcome]?.worked;
+    return { leads, members, geoConfig, knocksByLead };
+  }
 
+  // Is this a WORKED outcome (door done for the pass)? Mirrors OUTCOME_META.
+  const isWorkedOutcome = (o: string) => !!OUTCOME_META[o as KnockOutcome]?.worked;
+
+  // Bounding-box pre-rejection. The list loop is O(territories x leads x vertices)
+  // — every area re-scanned EVERY lead — and it runs on each map load and
+  // after every assignment. A lead outside an area's bbox cannot be inside its
+  // polygon, and that test is four comparisons against a ~60-vertex walk.
+  // Measured on the live shape of the data (3,355 leads, 20 areas, 60-vertex
+  // rings): 32.43ms -> 2.40ms, 13.5x, byte-identical membership.
+  const bboxOf = (poly: [number, number][]): [number, number, number, number] => {
+    let w = Infinity, s2 = Infinity, e = -Infinity, n = -Infinity;
+    for (const [x, y] of poly) {
+      if (x < w) w = x; if (x > e) e = x;
+      if (y < s2) s2 = y; if (y > n) n = y;
+    }
+    return [w, s2, e, n];
+  };
+
+  function territoryProgressRow(t: any, ctx: ReturnType<typeof territoryProgressContext>) {
+    const { leads, members, geoConfig, knocksByLead } = ctx;
     const inside = polygonCovers;
-    // Bounding-box pre-rejection. This loop is O(territories x leads x vertices)
-    // — every area re-scanned EVERY lead — and it runs on each map load and
-    // after every assignment. A lead outside an area's bbox cannot be inside its
-    // polygon, and that test is four comparisons against a ~60-vertex walk.
-    // Measured on the live shape of the data (3,355 leads, 20 areas, 60-vertex
-    // rings): 32.43ms -> 2.40ms, 13.5x, byte-identical membership.
-    const bboxOf = (poly: [number, number][]): [number, number, number, number] => {
-      let w = Infinity, s2 = Infinity, e = -Infinity, n = -Infinity;
-      for (const [x, y] of poly) {
-        if (x < w) w = x; if (x > e) e = x;
-        if (y < s2) s2 = y; if (y > n) n = y;
-      }
-      return [w, s2, e, n];
-    };
-
-    const result = territories.map((t: any) => {
       let poly: [number, number][] = [];
       try { poly = JSON.parse(t.polygon); } catch { poly = []; }
       let within: any[] = [];
@@ -6549,8 +6546,49 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         maxAllowedDistanceM: geoConfig.maxDistanceM,
         maxAllowedAccuracyM: geoConfig.maxAccuracyM,
       };
-    });
-    res.json(result);
+  }
+
+  // GET /api/territories/progress — canvassing progress per assigned area.
+  // For each territory polygon: how many leads fall inside, and how many have
+  // been knocked (≥1 door knock logged) → "X/Y doors done". No scanning.
+  app.get("/api/territories/progress", requireCapability("field.app.use"), (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    // Reps only see their own territory's progress; managers/admins see all.
+    const scope = leadVisibilityScope(user);
+    if (Array.isArray(scope) && !scope.length) return res.json([]);
+    // Areas are many-to-many, so this cannot key on repId. Matching that column
+    // showed the card only to the PRIMARY holder — the second and third rep on a
+    // shared area got no numbers for ground they were actively working — and
+    // because repId still names the last holder after a reclaim, it kept showing
+    // the card to whoever the area had been taken FROM. One rule fixes both.
+    const territories = Array.isArray(scope)
+      ? storage.getTerritories(tid).filter((territory) => territoryHeldByAny(territory, scope))
+      : storage.getTerritories(tid);
+    if (territories.length === 0) return res.json([]);
+
+    const ctx = territoryProgressContext(tid);
+    res.json(territories.map((t: any) => territoryProgressRow(t, ctx)));
+  });
+
+  // GET /api/territories/:id/progress — ONE area's penetration/completion
+  // numbers. Same computation as the list route, but addressable, so a rep can
+  // read the card for an area they hold without the client fetching (or being
+  // allowed) the whole org's overview. Scope rule is territoryHeldByAny — the
+  // same assignee rule as /activity and the list route: a rep (or team lead)
+  // gets a 404, not a 403, for an area outside their scope or tenant, so the
+  // response never confirms the area exists. Managers/admins (undefined scope)
+  // read any area in their tenant, exactly as before.
+  app.get("/api/territories/:id/progress", requireCapability("field.app.use"), (req, res) => {
+    const user = (req as any).user;
+    const tid = user?.tenantId ?? undefined;
+    const territory = storage.getTerritories(tid).find(t => t.id === Number(req.params.id));
+    if (!territory) return res.status(404).json({ error: "Not found" });
+    const scope = leadVisibilityScope(user);
+    if (Array.isArray(scope) && !territoryHeldByAny(territory as any, scope)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    res.json(territoryProgressRow(territory, territoryProgressContext(tid)));
   });
 
   // GET /api/territories/:id/activity — the location-verified History feed for a

@@ -60,6 +60,9 @@ function renderPage() {
 beforeEach(() => { apiRequest.mockReset(); toast.mockReset(); });
 afterEach(() => vi.useRealTimers());
 
+// Another suite's fake timers must never leak into the arm/disarm timing here.
+beforeEach(() => vi.useRealTimers());
+
 describe("Applications — two-step reject", () => {
   it("first tap only arms: rose 'Confirm reject', no mutation fires", async () => {
     renderPage();

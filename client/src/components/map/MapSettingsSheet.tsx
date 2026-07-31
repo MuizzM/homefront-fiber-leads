@@ -6,7 +6,7 @@
 import { X } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 
-export type BasemapValue = "streets" | "satellite";
+export type BasemapValue = "streets" | "satellite" | "dark";
 
 export interface MapSettingsToggle {
   key: string;
@@ -27,6 +27,7 @@ export interface MapSettingsSheetProps {
 const BASEMAPS: ReadonlyArray<{ value: BasemapValue; label: string }> = [
   { value: "streets", label: "Streets" },
   { value: "satellite", label: "Satellite" },
+  { value: "dark", label: "Dark" },
 ];
 
 export function MapSettingsSheet({ open, onClose, basemap, toggles }: MapSettingsSheetProps) {
@@ -77,7 +78,7 @@ export function MapSettingsSheet({ open, onClose, basemap, toggles }: MapSetting
             <div
               role="group"
               aria-labelledby="map-settings-basemap-label"
-              className="mt-2 grid grid-cols-2 gap-1 rounded-xl border border-border bg-secondary/40 p-1"
+              className="mt-2 grid grid-cols-3 gap-1 rounded-xl border border-border bg-secondary/40 p-1"
             >
               {BASEMAPS.map(o => {
                 const selected = basemap.value === o.value;
