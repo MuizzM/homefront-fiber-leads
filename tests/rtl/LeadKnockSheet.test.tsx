@@ -550,6 +550,25 @@ describe("<LeadKnockSheet /> — notes and history (unchanged model)", () => {
   });
 });
 
+describe("<LeadKnockSheet /> — do-not-knock banner", () => {
+  it("renders a prominent alert at the top of the body when the lead is flagged", () => {
+    renderSheet({ lead: baseLead({ doNotKnock: 1 }) }); // server sends 0/1
+    const banner = screen.getByTestId("dnk-banner");
+    expect(banner).toHaveAttribute("role", "alert");
+    expect(banner).toHaveTextContent("Do not knock — resident asked us not to return");
+    // Rose treatment — this must read as a hard stop, not a status chip.
+    expect(banner.className).toMatch(/rose/);
+  });
+
+  it("no banner when the flag is absent, falsy, or null (server rollout in flight)", () => {
+    for (const doNotKnock of [undefined, false, 0, null]) {
+      const view = renderSheet({ lead: baseLead({ doNotKnock }) });
+      expect(screen.queryByTestId("dnk-banner")).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+});
+
 describe("<LeadKnockSheet /> — chrome and lifecycle", () => {
   it("the assign row is capability-gated OFF for reps (fail-closed without lead.assign)", async () => {
     renderSheet(); // test auth context has no user → useCan fails closed

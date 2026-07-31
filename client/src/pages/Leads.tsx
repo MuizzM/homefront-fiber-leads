@@ -30,7 +30,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDebounce } from "@/hooks/use-debounce";
 import type { Lead, InsertLead, TeamMember, Knock } from "@shared/schema";
-import { FIELD_OUTCOMES, makeClientId, pinDisplayState, STATE_LABELS } from "@shared/knock";
+import { FIELD_OUTCOMES, makeClientId, OUTCOME_META, pinDisplayState, STATE_LABELS } from "@shared/knock";
 import { useCan } from "@/lib/capabilities";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -69,11 +69,14 @@ const STATUS_COLOR: Record<string, string> = {
 };
 
 const OUTCOME_ICONS: Record<string, React.ElementType> = {
-  not_home:      PhoneOff,
-  not_interested: UserCheck,
-  interested:    Zap,
-  callback:      CalendarClock,
-  sold:          Zap,
+  not_home:       PhoneOff,
+  // Audit fix: these two were inverted/generic — a hard "no" reads as an X,
+  // while "already a customer" is the one that gets the person-check glyph.
+  not_interested: X,
+  already_customer: UserCheck,
+  interested:     Zap,
+  callback:       CalendarClock,
+  sold:           Zap,
 };
 
 const OUTCOME_COLORS: Record<string, string> = {
@@ -299,7 +302,7 @@ function KnockLogger({ lead, team }: {
                   <div key={k.id} className="flex items-start gap-2 text-xs bg-secondary rounded px-2.5 py-1.5">
                     <Icon className={`w-3.5 h-3.5 mt-0.5 flex-shrink-0 ${color}`} />
                     <div className="flex-1 min-w-0">
-                      <span className={`font-medium ${color}`}>{k.outcome.replace("_", " ")}</span>
+                      <span className={`font-medium ${color}`}>{OUTCOME_META[k.outcome as keyof typeof OUTCOME_META]?.label ?? k.outcome.replace(/_/g, " ")}</span>
                       <span className="text-muted-foreground ml-1">· {repName}</span>
                       {k.callbackDate && <span className="text-amber-600 dark:text-amber-400 ml-1">Callback {k.callbackDate}</span>}
                       {k.notes && <div className="text-muted-foreground italic truncate">{k.notes}</div>}
@@ -714,6 +717,12 @@ const nextAction = (lead: Lead) => {
   if (lead.leadStatus === "follow_up") return { label: "Follow up", tone: "text-orange-600 dark:text-orange-400" };
   if (lead.leadStatus === "interested") return { label: "Close sale", tone: "text-success" };
   if (lead.leadStatus === "sold") return { label: "Complete", tone: "text-muted-foreground" };
+  // Closed doors ("not interested" and its "already a customer" disambiguation)
+  // are non-actionable — labelling them "Review" invited pointless rework.
+  try {
+    const ds = pinDisplayState({ leadStatus: lead.leadStatus, visited: true, lastOutcome: lead.lastOutcome ?? null });
+    if (ds === "already_customer" || ds === "not_interested") return { label: "Closed", tone: "text-muted-foreground" };
+  } catch { /* unknown status — fall through to Review */ }
   return { label: "Review", tone: "text-muted-foreground" };
 };
 

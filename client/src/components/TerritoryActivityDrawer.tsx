@@ -11,6 +11,7 @@ import { X, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
+import { FOCUS } from "@/lib/a11y";
 import { VerificationBadge, DistanceDiagram, formatDistance, type VStatus } from "@/components/verification";
 
 interface Activity {
@@ -40,6 +41,10 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
   const [sort, setSort] = useState<SortKey>("newest");
   const [repFilter, setRepFilter] = useState<string>("all");
   const [expanded, setExpanded] = useState<number | null>(null);
+  // Two-step admin override (audit finding: was a window.prompt): tapping the
+  // override action expands an inline confirm row with a required reason input.
+  const [overrideFor, setOverrideFor] = useState<number | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
 
   const key = `/api/territories/${territoryId}/activity`;
   const { data, isLoading, isError } = useQuery<ActivityResponse>({
@@ -53,6 +58,8 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: [key] });
       qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+      setOverrideFor(null);
+      setOverrideReason("");
       toast({ title: "Verification overridden — logged to the audit trail" });
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
@@ -80,13 +87,6 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
       }
     });
   }, [data, status, repFilter, sort]);
-
-  function doOverride(a: Activity) {
-    const target = a.verification === "verified" ? "invalid" : "verified";
-    const reason = window.prompt(`Override this activity to "${target}". Enter a reason (required):`, "");
-    if (reason && reason.trim().length >= 3) override.mutate({ knockId: a.knockId, newStatus: target, reason: reason.trim() });
-    else if (reason != null) toast({ title: "A reason of at least 3 characters is required", variant: "destructive" });
-  }
 
   function exportCsv() {
     const header = ["lead", "address", "rep", "outcome", "markedAt", "serverReceivedAt", "verification", "distanceM", "gpsAccuracyM", "reason"];
@@ -162,7 +162,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
               const isOpen = expanded === a.knockId;
               return (
                 <li key={a.knockId} className="px-4 py-2.5" data-testid="activity-row">
-                  <button className="flex w-full items-start gap-2 text-left" onClick={() => setExpanded(isOpen ? null : a.knockId)} aria-expanded={isOpen}>
+                  <button className="flex w-full items-start gap-2 text-left" onClick={() => { setExpanded(isOpen ? null : a.knockId); setOverrideFor(null); setOverrideReason(""); }} aria-expanded={isOpen}>
                     {isOpen ? <ChevronDown className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" /> : <ChevronRight className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -195,16 +195,55 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
                         <div><dt className="text-muted-foreground">Network</dt><dd className="text-foreground/90">{a.netState ?? "—"}</dd></div>
                         <div><dt className="text-muted-foreground">Activity ID</dt><dd className="text-foreground/90 tabular-nums">#{a.knockId}</dd></div>
                       </dl>
-                      {isAdmin && (
-                        <button
-                          onClick={() => doOverride(a)}
-                          disabled={override.isPending}
-                          data-testid="override-btn"
-                          className="w-full rounded-lg border border-border bg-secondary/60 px-2 py-1.5 text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50"
-                        >
-                          Override verification…
-                        </button>
-                      )}
+                      {isAdmin && (() => {
+                        const target = a.verification === "verified" ? "invalid" : "verified";
+                        if (overrideFor !== a.knockId) {
+                          return (
+                            <button
+                              onClick={() => { setOverrideFor(a.knockId); setOverrideReason(""); }}
+                              disabled={override.isPending}
+                              data-testid="override-btn"
+                              className={`w-full rounded-lg border border-border bg-secondary/60 px-2 py-1.5 text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
+                            >
+                              Override verification…
+                            </button>
+                          );
+                        }
+                        return (
+                          <div className="space-y-1.5 rounded-lg border border-border bg-secondary/40 p-2" data-testid="override-confirm-row">
+                            <p className="text-[11px] text-muted-foreground">
+                              Override this activity to <span className="font-semibold text-foreground">{target}</span>. The reason is logged to the audit trail.
+                            </p>
+                            <input
+                              type="text"
+                              value={overrideReason}
+                              onChange={e => setOverrideReason(e.target.value)}
+                              placeholder="Reason for override"
+                              aria-label={`Reason for overriding activity ${a.knockId} to ${target}`}
+                              data-testid="override-reason-input"
+                              className={`h-11 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground ${FOCUS}`}
+                            />
+                            <div className="flex gap-1.5">
+                              <button
+                                onClick={() => override.mutate({ knockId: a.knockId, newStatus: target, reason: overrideReason.trim() })}
+                                disabled={!overrideReason.trim() || override.isPending}
+                                data-testid="override-confirm"
+                                className={`h-11 flex-1 rounded-lg bg-primary px-3 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-50 ${FOCUS}`}
+                              >
+                                {override.isPending ? "Overriding…" : "Confirm override"}
+                              </button>
+                              <button
+                                onClick={() => { setOverrideFor(null); setOverrideReason(""); }}
+                                disabled={override.isPending}
+                                data-testid="override-cancel"
+                                className={`h-11 rounded-lg border border-border px-3 text-[12px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </li>
