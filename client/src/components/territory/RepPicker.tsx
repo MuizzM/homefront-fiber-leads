@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { Search, X, Check } from "lucide-react";
+import { repColorOf } from "@shared/repColors";
 import { FOCUS } from "@/lib/a11y";
 
 // Choosing who gets an area.
@@ -20,6 +21,9 @@ export interface RepOption {
   areaCount?: number;
   /** True when they cannot take another area; the row is shown but not choosable. */
   atCap?: boolean;
+  /** The rep's persisted colour (team_members.color via /api/team). Omitted or
+   *  null → repColorOf falls back to the legacy repId-hash hue. */
+  color?: string | null;
 }
 
 export interface RepPickerProps {
@@ -157,10 +161,14 @@ export function RepPicker({
                 >
                   <span className="flex items-center gap-2 min-w-0">
                     {showStatus && (
+                      // Ring in the rep's OWN colour — the same hue their pins,
+                      // halos, and default area fill wear — so the picker teaches
+                      // the mapping instead of painting every rep theme-primary.
                       <span
                         aria-hidden="true"
                         data-testid={`rep-avatar-${rep.id}`}
-                        className="w-9 h-9 rounded-full border-2 border-primary/50 flex items-center justify-center text-[12px] font-bold text-foreground shrink-0"
+                        style={{ borderColor: repColorOf(rep) }}
+                        className="w-9 h-9 rounded-full border-2 flex items-center justify-center text-[12px] font-bold text-foreground shrink-0"
                       >
                         {initialOf(rep.name)}
                       </span>

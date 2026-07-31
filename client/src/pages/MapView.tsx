@@ -65,7 +65,7 @@ import {
   type RoutablePin,
   type PinDisplayState,
 } from "@shared/knock";
-import { STATUS_CONFIG, toLeadMapStatus } from "@shared/statusConfig";
+import { toLeadMapStatus } from "@shared/statusConfig";
 import {
   saveLeadNote,
   flushPendingNotes,
@@ -84,19 +84,18 @@ import {
   readCachedFix,
   writeCachedFix,
   ensureHousenumLayer,
+  removeHousenumLayer,
+  readPersistedHouseNumbers,
+  persistHouseNumbers,
   isSheetDragActive,
   FRESH_HALO_PAINT,
   decideAddModeTap,
   createRafCoalescedFlush,
-  CHROME_AUTO_HIDE_IDLE,
-  chromeAutoHideNext,
-  filterControlNext,
   formatFilterCount,
   persistFilterStatus,
   readPersistedFilterStatus,
   unclusteredOpacityExpr,
   iconOpacityExpr,
-  type ChromeAutoHideState,
 } from "@/lib/mapPins";
 import {
   createFollowState,
@@ -222,43 +221,10 @@ interface MapPin {
 
 const ROCKWELL_CENTER: [number, number] = [-80.41, 35.545];
 
-// Manager legend/search dots read the same canonical config as map pins/cards.
-const PIN_COLORS: Record<
-  string,
-  { bg: string; border: string; label: string }
-> = {
-  prospect: {
-    bg: STATUS_CONFIG.prospect.color,
-    border: "#86efac",
-    label: STATUS_CONFIG.prospect.label,
-  },
-  contacted: { bg: "#64748b", border: "#cbd5e1", label: "Contacted" }, // slate
-  interested: {
-    bg: STATUS_CONFIG.interested.color,
-    border: "#c4b5fd",
-    label: STATUS_CONFIG.interested.label,
-  },
-  follow_up: {
-    bg: STATUS_CONFIG.follow_up.color,
-    border: "#fdba74",
-    label: STATUS_CONFIG.follow_up.label,
-  },
-  sold: {
-    bg: STATUS_CONFIG.sold.color,
-    border: "#86efac",
-    label: STATUS_CONFIG.sold.label,
-  },
-  not_interested: {
-    bg: STATUS_CONFIG.not_interested.color,
-    border: "#fca5a5",
-    label: STATUS_CONFIG.not_interested.label,
-  },
-};
-
-// Search rows and the leads panel label pins by the TRUE display state
-// (pinDisplayState → STATE_COLORS/STATE_LABELS from @shared/knock) — the
-// PIN_COLORS map above keys on raw leadStatus (6 states) and can't represent
-// callback/follow-up aliases and the last-knock-only Not Home state.
+// (The PIN_COLORS legend-dot map left with the floating dot-strip: search rows,
+// the leads panel, and the legend's status rows all label pins by the TRUE
+// display state — pinDisplayState → STATE_COLORS/STATE_LABELS from
+// @shared/knock — which raw leadStatus keys couldn't represent anyway.)
 
 // The status filter is keyed on the pin DISPLAY state — the rep filters what
 // they SEE (a yellow Not Home pin) — which leadStatus alone can't express.
@@ -860,46 +826,25 @@ export default function MapView() {
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const toolsMenuBtnRef = useRef<HTMLButtonElement | null>(null);
 
-  // ── Secondary-chrome auto-hide (map-first): pan/zoom fades the tools menu +
-  //    status filter out; they fade back ~800ms after the gesture ends. The
-  //    reducer is pure (mapPins); this just dispatches events and arms the
-  //    reshow timer. Never hides while a panel the rep opened is up. ──
-  const [chromeHidden, setChromeHidden] = useState(false);
-  const chromeAutoHideRef = useRef<ChromeAutoHideState>(CHROME_AUTO_HIDE_IDLE);
-  const chromeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dispatchChromeAutoHide = useCallback(
-    (ev: Parameters<typeof chromeAutoHideNext>[1]) => {
-      const prev = chromeAutoHideRef.current;
-      const next = chromeAutoHideNext(prev, ev);
-      if (next === prev) return; // stale timer tick — keep the pending reshow
-      chromeAutoHideRef.current = next;
-      setChromeHidden(next.hidden);
-      if (chromeTimerRef.current) {
-        clearTimeout(chromeTimerRef.current);
-        chromeTimerRef.current = null;
-      }
-      if (next.hidden && next.reshowAt != null) {
-        const wait = Math.max(0, next.reshowAt - Date.now());
-        chromeTimerRef.current = setTimeout(() => {
-          chromeTimerRef.current = null;
-          dispatchChromeAutoHide({ type: "idle-timer", now: Date.now() });
-        }, wait);
-      }
-    },
-    [],
-  );
-  useEffect(
-    () => () => {
-      if (chromeTimerRef.current) clearTimeout(chromeTimerRef.current);
-    },
-    [],
-  );
+  // (The pan/zoom auto-hide for the control rail was removed: its
+  // interact-start transition hid the rail with NO pending reshow, so any
+  // swallowed end event — e.g. a camera animation finished by a
+  // geolocateSource-tagged follow move — left the rail, lasso included, stuck
+  // at opacity-0. The rail is primary chrome and stays visible.)
 
   // Map style toggle
   const [mapStyleMode, setMapStyleMode] = useState<
     "dark" | "satellite" | "streets"
   >("satellite");
   const [showLeads, setShowLeads] = useState(true); // control-rail layer toggle
+  // House numbers — OFF by default (owner's minimal-map directive); opt-in from
+  // the Map settings sheet, persisted like the status filter. The ref lets the
+  // once-bound init/style.load handlers read the live preference.
+  const [showHouseNums, setShowHouseNums] = useState<boolean>(() =>
+    readPersistedHouseNumbers(),
+  );
+  const showHouseNumsRef = useRef(showHouseNums);
+  showHouseNumsRef.current = showHouseNums;
   // The style the map was actually created with. Prevents a redundant setStyle()
   // on first load (which would reload the whole style and blank the map).
   const appliedStyleRef = useRef<"dark" | "satellite" | "streets">("satellite");
@@ -950,23 +895,10 @@ export default function MapView() {
   useEffect(() => {
     persistFilterStatus(filterStatus);
   }, [filterStatus]);
-  // Compact filter control: collapsed pill ⇄ scrollable status selector.
-  const [filterOpen, setFilterOpen] = useState(false);
-  // SalesRabbit-style bottom sheets over the SAME filter/settings state the
-  // legacy chrome drives — additive entry points, nothing moved or removed.
+  // SalesRabbit-style bottom sheets — the Filters sheet is THE filter surface
+  // (the old always-on pill/chip row is gone); Settings owns basemap + layers.
   const [mapFilterOpen, setMapFilterOpen] = useState(false);
   const [mapSettingsOpen, setMapSettingsOpen] = useState(false);
-  // Last non-"all" status the user filtered by — a LONG-PRESS on the filter
-  // pill (or the manager legend pill) re-applies it in one tap ("show
-  // unworked again" mid-walk).
-  const lastFilterStatusRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (filterStatus !== "all") lastFilterStatusRef.current = filterStatus;
-  }, [filterStatus]);
-  const legendLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const legendLongPressFired = useRef(false);
-  const filterLongPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const filterLongPressFired = useRef(false);
 
   // Selected lead (highlighted after a search fly-to)
   const [selectedLeadId, setSelectedLeadId] = useState<number | null>(null);
@@ -2022,10 +1954,10 @@ export default function MapView() {
     setTimeout(() => map.resize(), 100);
     setTimeout(() => map.resize(), 400);
 
-    map.addControl(
-      new (window as any).mapboxgl.NavigationControl(),
-      "top-right",
-    );
+    // No NavigationControl: the minimal map (SalesRabbit reference) carries no
+    // zoom/compass chrome — pinch, scroll-wheel, and double-click zoom stay
+    // enabled (mapbox defaults; the draw tools disable/re-enable only their own
+    // gestures while armed).
     // ── "Locate me" + shake-free follow camera ───────────────────────────────
     // The GeolocateControl keeps its BRAIN (permission, watchPosition, and the
     // ACTIVE_LOCK↔BACKGROUND state machine) but we take over BOTH the camera and the
@@ -2223,18 +2155,15 @@ export default function MapView() {
       if (ev?.geolocateSource) return;
       didAutoFitRef.current = true;
       suspendFollow();
-      dispatchChromeAutoHide({ type: "interact-start", now: Date.now() });
     };
     const onGestureStart = (ev: any) => {
       if (ev?.geolocateSource) return;
       didAutoFitRef.current = true;
       suspendFollow();
-      dispatchChromeAutoHide({ type: "interact-start", now: Date.now() });
     };
     const onGestureEnd = (ev: any) => {
       if (ev?.geolocateSource) return;
       interacting = false;
-      dispatchChromeAutoHide({ type: "interact-end", now: Date.now() });
     };
     map.on("dragstart", onDragStart);
     const gestureStarts = ["zoomstart", "rotatestart", "pitchstart"];
@@ -2474,7 +2403,8 @@ export default function MapView() {
       map.addLayer(SELECTED_RING_SPEC);
 
       // Provider-native house numbers — fade in at z≥17.2, below our layers.
-      ensureHousenumLayer(map, mapStyleMode);
+      // OPT-IN (settings sheet): the layer only mounts when the pref is on.
+      if (showHouseNumsRef.current) ensureHousenumLayer(map, mapStyleMode);
 
       // Optional glyph-pin layer — opt-in via NEW_FIELD_MAP=1; default dots.
       await addStatusIconLayer(map);
@@ -3594,8 +3524,9 @@ export default function MapView() {
       );
       lassoLayerRef.current = false;
       // House numbers are style layers too — re-enable on the fresh style with
-      // the palette that suits it (white-on-imagery vs ink-on-streets).
-      ensureHousenumLayer(map, mapStyleMode);
+      // the palette that suits it (white-on-imagery vs ink-on-streets), but
+      // only when the settings-sheet preference has them on.
+      if (showHouseNumsRef.current) ensureHousenumLayer(map, mapStyleMode);
       // NEW_FIELD_MAP status-icon layer — re-add on the fresh style (setStyle
       // wiped its images + layer). Flag-gated + idempotent, so this stays in sync
       // with the init block and is a no-op when the flag is off.
@@ -3606,6 +3537,17 @@ export default function MapView() {
     });
     map.setStyle(STYLE);
   }, [mapStyleMode, mapReady]);
+
+  // House-numbers toggle — mounts/unmounts the provider-native layer live and
+  // persists the choice. styleEpoch keeps it correct across basemap swaps
+  // (setStyle wipes layers; the style.load re-add above also checks the ref).
+  useEffect(() => {
+    persistHouseNumbers(showHouseNums);
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    if (showHouseNums) ensureHousenumLayer(map, mapStyleMode);
+    else removeHousenumLayer(map);
+  }, [showHouseNums, mapReady, mapStyleMode, styleEpoch]);
 
   // ── Assign-Area (freehand) — SalesRabbit-style draw → assign → colored region ─
   // Press and DRAG to draw a loop around leads; release to select. Map panning
@@ -4541,15 +4483,11 @@ export default function MapView() {
       })),
     [statusCounts],
   );
-  const totalLeadCount = useMemo(
-    () => repFilteredLeads.length,
-    [repFilteredLeads],
-  );
   const activeStatusOption = useMemo(
     () => statusOptions.find((o) => o.key === filterStatus) ?? null,
     [statusOptions, filterStatus],
   );
-  // Collapsed-pill presentation — honest even when the persisted filter
+  // Active-filter chip presentation — honest even when the persisted filter
   // currently matches zero pins (option absent): label/color fall back to the
   // canonical display-state maps, never a misleading "All".
   const filterPillLabel =
@@ -4558,10 +4496,6 @@ export default function MapView() {
       : (activeStatusOption?.label ??
         STATE_LABELS[filterStatus as PinDisplayState] ??
         filterStatus);
-  const filterPillCount =
-    filterStatus === "all"
-      ? totalLeadCount
-      : (statusCounts[filterStatus] ?? 0);
   const filterPillBg =
     activeStatusOption?.bg ??
     (filterStatus !== "all"
@@ -4606,6 +4540,18 @@ export default function MapView() {
     [isRep, canAssign, team, repLeadCounts],
   );
   const mapFilterActive = filterStatus !== "all" || filterRep !== "all";
+  // Chip text: status label, rep name, or both — "{label} · {n}" renders in the
+  // top-center chip whenever mapFilterActive (state is never invisible).
+  const activeFilterChipLabel = [
+    filterStatus !== "all" ? filterPillLabel : null,
+    filterRep !== "all"
+      ? filterRep === "unassigned"
+        ? "Unassigned"
+        : (repNameById.get(Number(filterRep)) ?? "Rep filter")
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   // On-map search — lowercase haystack built ONCE per data load (O(n)), so a
   // keystroke never re-lowercases 50k addresses. A NUL separates the two
@@ -5167,7 +5113,8 @@ export default function MapView() {
   // exclusion flags, and pairs could still collide (scan sheet under an open
   // knock sheet; lasso bar over a running scan's sheet). One derived priority
   // decides who owns the bottom-center: knock sheet > lasso bar > scan sheet >
-  // armed hints > Live Test > the resting Scan FAB pair.
+  // armed hints > Live Test > nothing ("fabs" = the resting, empty state — the
+  // Scan Map button moved into the More menu).
   const bottomSlot: "knock" | "lasso" | "scan" | "hint" | "livetest" | "fabs" =
     selectedLeadId != null
       ? "knock"
@@ -5181,19 +5128,8 @@ export default function MapView() {
               ? "livetest"
               : "fabs";
 
-  // Secondary chrome fades out while the rep is panning/zooming — but never
-  // out from under a panel they deliberately opened (menu, filter selector,
-  // layers, search, leads rail, manager legend).
-  const secondaryHidden =
-    chromeHidden &&
-    !toolsMenuOpen &&
-    !filterOpen &&
-    !searchOpen &&
-    !leadsOpen &&
-    !legendOpen;
-  const secondaryCls = `transition-opacity duration-200 ${
-    secondaryHidden ? "opacity-0 pointer-events-none" : "opacity-100"
-  }`;
+  // (No secondary-chrome fade: the control rail is primary chrome and stays
+  // visible through every pan/zoom — the auto-hide machinery is gone.)
 
   return (
     <div
@@ -5221,32 +5157,9 @@ export default function MapView() {
             : ""}
       </div>
 
-      {/* ── Scan Map — the scanner's contextual PRIMARY action (Lane E2: the
-             one primary button at rest beside Locate; Live Test moved into the
-             tools menu). Tap to arm, then drag a box over the houses to scan
-             exactly inside it. Hidden while a scan/summary sheet is up and
-             during Assign Area, so nothing collides. ── */}
-      {canSubmitScan && bottomSlot === "fabs" && (
-        <div
-          style={{ bottom: "calc(env(safe-area-inset-bottom) + 1.25rem)" }}
-          className="absolute left-1/2 z-30 flex -translate-x-1/2 items-center gap-2"
-        >
-          <button
-            type="button"
-            onClick={() => {
-              exitLasso();
-              setAddMode(false); // draw tools and add-mode are mutually exclusive
-              setScanDrawMode(true);
-            }}
-            data-testid="scan-map-btn"
-            aria-label="Scan an area of the map for new fiber"
-            className="flex items-center gap-2 rounded-full border border-emerald-300/50 bg-emerald-500 px-6 py-3.5 text-[15px] font-bold text-[#04241f] shadow-xl shadow-emerald-950/40 backdrop-blur-xl transition hover:bg-emerald-400 active:scale-95"
-          >
-            <Radar className="h-[18px] w-[18px]" />
-            Scan Map
-          </button>
-        </div>
-      )}
+      {/* Scan Map moved off the map surface into the More (tools) popover —
+          "Scan map" entry, same handler, same canSubmitScan gate. The armed
+          hint, progress sheet, and summary below are unchanged. */}
 
       {/* Live Test panel — trace one address, right on the field scanner. */}
       {liveTestOpen && canSubmitScan && bottomSlot === "livetest" && (
@@ -5495,181 +5408,10 @@ export default function MapView() {
           </div>
         )}
 
-      {/* ── Compact status filter — ONE pill replaces the old permanent chip
-             row. Collapsed it reads "[dot] All · n" (or the active status);
-             one tap opens a horizontally scrollable selector; All resets in
-             one tap. The selection persists (localStorage) and a LONG-PRESS on
-             the collapsed pill re-applies the last filter without opening it.
-             Counts are compacted ≥10k so a tally never dominates the map.
-             Auto-hides with the rest of the secondary chrome while panning. ── */}
-      {mapReady && leads.length > 0 && !lassoMode && (
-        <div
-          style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
-          // Right of the 44px nav-menu button on phones and clear of the
-          // control rail's top-left column on desktop.
-          className={`absolute left-[64px] z-30 ${secondaryCls}`}
-          data-testid="status-filter-control"
-        >
-          {!filterOpen ? (
-            <button
-              type="button"
-              onClick={() => {
-                if (filterLongPressFired.current) {
-                  filterLongPressFired.current = false;
-                  return; // long-press already acted — swallow the click
-                }
-                setFilterOpen(
-                  filterControlNext(
-                    { open: filterOpen, status: filterStatus },
-                    { type: "toggle" },
-                  ).open,
-                );
-              }}
-              onPointerDown={() => {
-                filterLongPressFired.current = false;
-                if (filterLongPressTimer.current)
-                  clearTimeout(filterLongPressTimer.current);
-                filterLongPressTimer.current = setTimeout(() => {
-                  const last = lastFilterStatusRef.current;
-                  if (!last) return;
-                  filterLongPressFired.current = true;
-                  setFilterStatus((cur) => (cur === last ? "all" : last));
-                  try {
-                    navigator.vibrate?.(10);
-                  } catch {
-                    /* no haptics */
-                  }
-                }, 500);
-              }}
-              onPointerUp={() => {
-                if (filterLongPressTimer.current)
-                  clearTimeout(filterLongPressTimer.current);
-              }}
-              onPointerLeave={() => {
-                if (filterLongPressTimer.current)
-                  clearTimeout(filterLongPressTimer.current);
-              }}
-              data-testid="status-filter-pill"
-              aria-haspopup="dialog"
-              aria-expanded={false}
-              aria-label={`Filter leads by status — showing ${filterPillLabel}`}
-              className="glass-capsule glass-opaque flex h-10 items-center gap-2 pl-3 pr-3.5 text-white active:scale-[0.97] transform-gpu transition"
-            >
-              <span
-                className="w-2.5 h-2.5 rounded-full shrink-0"
-                style={{
-                  background: filterPillBg,
-                  boxShadow:
-                    filterStatus !== "all"
-                      ? `0 0 5px ${filterPillBg}99`
-                      : "none",
-                }}
-              />
-              <span className="text-[12.5px] font-semibold whitespace-nowrap">
-                {filterPillLabel}
-                <span className="text-white/55 font-medium">
-                  {" "}
-                  · {formatFilterCount(filterPillCount)}
-                </span>
-              </span>
-              <span className="text-[10px] uppercase tracking-wider text-white/45 font-semibold">
-                Filter
-              </span>
-            </button>
-          ) : (
-            <div
-              className="glass-surface glass-opaque flex h-11 max-w-[calc(100vw-140px)] items-center gap-1.5 overflow-x-auto no-scrollbar pointer-events-auto px-1.5"
-              role="tablist"
-              aria-label="Filter leads by status"
-              data-testid="status-filter-bar"
-            >
-              <button
-                type="button"
-                role="tab"
-                aria-selected={filterStatus === "all"}
-                onClick={() => {
-                  const next = filterControlNext(
-                    { open: filterOpen, status: filterStatus },
-                    { type: "reset" },
-                  );
-                  setFilterStatus(next.status);
-                  setFilterOpen(next.open);
-                }}
-                data-testid="status-chip-all"
-                className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-3 pr-2.5 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition active:scale-[0.97] ${
-                  filterStatus === "all"
-                    ? "bg-white text-slate-900 shadow"
-                    : "text-white/85 hover:text-white"
-                }`}
-              >
-                All
-                <span
-                  className={`tabular-nums text-[11px] rounded-full px-1.5 py-0.5 ${filterStatus === "all" ? "bg-slate-900/10 text-slate-900" : "bg-white/10 text-white/70"}`}
-                >
-                  {formatFilterCount(totalLeadCount)}
-                </span>
-              </button>
-              {statusOptions.map((c) => {
-                const active = filterStatus === c.key;
-                return (
-                  <button
-                    key={c.key}
-                    type="button"
-                    role="tab"
-                    aria-selected={active}
-                    onClick={() => {
-                      const next = filterControlNext(
-                        { open: filterOpen, status: filterStatus },
-                        active ? { type: "reset" } : { type: "select", status: c.key },
-                      );
-                      setFilterStatus(next.status);
-                      setFilterOpen(next.open);
-                    }}
-                    data-testid={`status-chip-${c.key}`}
-                    title={`${c.label} · ${c.count}`}
-                    className={`shrink-0 inline-flex items-center gap-1.5 h-9 pl-2.5 pr-2 rounded-full text-[12.5px] font-semibold whitespace-nowrap transition active:scale-[0.97] ${active ? "ring-2" : "text-white/85 hover:text-white"}`}
-                    style={
-                      active
-                        ? {
-                            boxShadow: `inset 0 0 0 1px ${c.bg}`,
-                            background: `${c.bg}26`,
-                            color: "#fff",
-                            ["--tw-ring-color" as any]: `${c.bg}80`,
-                          }
-                        : undefined
-                    }
-                  >
-                    <span
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ background: c.bg, boxShadow: `0 0 5px ${c.bg}99` }}
-                    />
-                    {c.label}
-                    <span className="tabular-nums text-[11px] rounded-full bg-white/12 px-1.5 py-0.5 text-white/80">
-                      {formatFilterCount(c.count)}
-                    </span>
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                onClick={() =>
-                  setFilterOpen(
-                    filterControlNext(
-                      { open: filterOpen, status: filterStatus },
-                      { type: "close" },
-                    ).open,
-                  )
-                }
-                aria-label="Close status filter"
-                data-testid="status-filter-close"
-                className="shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-white/60 hover:text-white hover:bg-white/10 transition"
-              >
-                <X className="w-4 h-4" aria-hidden="true" />
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      {/* The always-on status pill / chip row is gone (owner's minimal-map
+          directive): the Filters sheet (rail button) is the one filter surface.
+          An ACTIVE filter is never invisible — the rail button carries a dot and
+          a dismissible top-center chip renders inside the map below. */}
 
       {/* On mobile: left-3 → right-[68px] so the banner clears the icon cluster
           in the top-right corner. On desktop: centered. */}
@@ -5752,14 +5494,13 @@ export default function MapView() {
         {/* MAP */}
         <div className="relative flex-1 min-w-0">
           <div style={{ position: "absolute", inset: 0 }}>
-            {/* rep-clean-map hides the native Mapbox zoom/compass/geolocate stack.
-                On mobile it's hidden for EVERY role — the native stack lives in
-                the same top-right corner as our icon cluster and would collide;
-                pinch-zoom + the locate FAB cover its function. Desktop keeps the
-                native zoom/compass (no cluster collision, useful for mouse). */}
+            {/* rep-clean-map hides the native Mapbox top-right control stack on
+                EVERY screen (owner's minimal directive): zoom is pinch/scroll/
+                double-click, locate is our FAB — the GeolocateControl stays
+                mounted for its state machine but never shows its own button. */}
             <div
               ref={mapContainer}
-              className={isMobile ? "rep-clean-map" : undefined}
+              className="rep-clean-map"
               style={{ width: "100%", height: "100%" }}
             />
           </div>
@@ -5827,32 +5568,41 @@ export default function MapView() {
             </div>
           )}
 
-          {/* The lead-count chip was removed — the map speaks for itself; a raw
-              "3355 pins" tally added noise without operational value. An active
-              status filter still needs a visible, clearable indication. The
-              disposition bar above carries that whenever it's on screen, so
-              this minimal pill now shows ONLY while the bar is hidden (lasso
-              mode) — before, both rendered stacked in the same top strip. */}
-          {mapReady && !isRep && leads.length > 0 && filterStatus !== "all" && lassoMode && (
+          {/* ── Active-filter chip — the ONE piece of filter chrome on the map.
+                 Renders only while a filter is narrowing pins ("{label} · {n}"
+                 with an X that clears everything), top-center so filter state is
+                 never invisible even though the pill/legend strips are gone. */}
+          {mapReady && mapFilterActive && (
             <div
               style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
-              className="glass-capsule glass-opaque absolute left-[64px] md:top-3 z-10 flex items-center gap-2 pl-3 pr-1.5 min-h-[36px]"
+              className="glass-capsule glass-opaque absolute left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pl-3 pr-1 h-9 max-w-[70vw]"
+              data-testid="map-active-filter-chip"
             >
               <span
-                className="w-1.5 h-1.5 rounded-full"
+                className="w-2 h-2 rounded-full shrink-0"
+                aria-hidden="true"
                 style={{
                   background: filterPillBg === "#ffffff" ? "#0d9488" : filterPillBg,
                 }}
               />
-              <span className="text-[11px] font-medium text-white/80">
-                {filterPillCount} {filterPillLabel}
+              <span className="text-[12px] font-semibold text-white truncate whitespace-nowrap">
+                {activeFilterChipLabel}
+                <span className="text-white/60 font-medium">
+                  {" "}
+                  · {formatFilterCount(mapTotalLeads.length)}
+                </span>
               </span>
               <button
-                onClick={() => setFilterStatus("all")}
-                aria-label="Clear filter"
-                className="relative w-7 h-7 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition after:absolute after:-inset-2"
+                type="button"
+                onClick={() => {
+                  setFilterStatus("all");
+                  setFilterRep("all");
+                }}
+                aria-label="Clear map filters"
+                data-testid="map-active-filter-clear"
+                className="relative w-7 h-7 shrink-0 rounded-full flex items-center justify-center text-white/70 hover:text-white hover:bg-white/10 transition after:absolute after:-inset-2"
               >
-                <X className="w-3 h-3" aria-hidden="true" />
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
               </button>
             </div>
           )}
@@ -6011,9 +5761,9 @@ export default function MapView() {
           {useSheet && queueSnap.pendingCount > 0 && (
             <div
               data-testid="knock-pending-badge"
-              // Safe-area aware (top-3 sat under the notch). Rep phones: drops
-              // BELOW the status-chip row so the two never overlap; other
-              // mobile roles: top strip, clear of the ~72px control cluster.
+              // Safe-area aware (top-3 sat under the notch). Kept clear of the
+              // top-center active-filter chip on every screen; the top-right
+              // corner itself is otherwise chrome-free now.
               style={{
                 top:
                   isRep && isMobile
@@ -6907,6 +6657,14 @@ export default function MapView() {
                 onToggle: () => setShowLeads((v) => !v),
                 testId: "map-settings-toggle-leads",
               },
+              {
+                key: "house-numbers",
+                label: "House numbers",
+                description: "Street numbers beside rooftops when zoomed in",
+                on: showHouseNums,
+                onToggle: () => setShowHouseNums((v) => !v),
+                testId: "map-settings-toggle-house-numbers",
+              },
               ...(canAssign
                 ? [
                     {
@@ -6939,8 +6697,10 @@ export default function MapView() {
                  (managers), Filters, Settings, then the overflow tools menu.
                  Layers/basemap live in the settings sheet and the lasso has its
                  own rail button, so the popover keeps only entries with no
-                 dedicated control. Fades out while panning/zooming. On phones
-                 the rail starts below the 44px nav-menu button. ── */}
+                 dedicated control. ALWAYS visible — primary chrome is never
+                 auto-hidden (the pan/zoom fade could strand it at opacity-0,
+                 which is how the lasso "disappeared"). On phones the rail
+                 starts below the 44px nav-menu button. ── */}
           {mapReady && (
             <>
               {toolsMenuOpen && (
@@ -6950,7 +6710,7 @@ export default function MapView() {
                 />
               )}
               <div
-                className={`absolute left-3 top-[calc(env(safe-area-inset-top)+4rem)] md:top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 flex flex-col items-start gap-2 ${secondaryCls}`}
+                className="absolute left-3 top-[calc(env(safe-area-inset-top)+4rem)] md:top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 flex flex-col items-start gap-2"
                 data-testid="map-tools"
               >
                 {/* Search — opens the search panel directly (was popover-only). */}
@@ -7089,7 +6849,58 @@ export default function MapView() {
                         },
                         // "Map layers & style" and "Select an area (lasso)"
                         // left this menu — the settings sheet and the rail's
-                        // lasso button own them now.
+                        // lasso button own them now. Add-lead, Scan map, and
+                        // the legend moved IN here off the map surface
+                        // (owner's minimal directive), same handlers + gates.
+                        ...(canAssign
+                          ? [
+                              {
+                                key: "add-lead",
+                                testid: "ctl-add-lead",
+                                icon: <Plus className="w-4 h-4" />,
+                                label: addMode
+                                  ? "Cancel add-lead mode"
+                                  : "Add lead",
+                                active: addMode,
+                                onClick: () => {
+                                  setAddMode((v) => !v);
+                                  setToolsMenuOpen(false);
+                                },
+                              },
+                            ]
+                          : []),
+                        ...(canSubmitScan
+                          ? [
+                              {
+                                key: "scan-map",
+                                testid: "scan-map-btn",
+                                icon: <Radar className="w-4 h-4" />,
+                                label: "Scan map",
+                                active: scanDrawMode,
+                                onClick: () => {
+                                  exitLasso();
+                                  setAddMode(false); // draw tools and add-mode are mutually exclusive
+                                  setScanDrawMode(true);
+                                  setToolsMenuOpen(false);
+                                },
+                              },
+                            ]
+                          : []),
+                        ...(!isRep
+                          ? [
+                              {
+                                key: "legend",
+                                testid: "ctl-legend",
+                                icon: <Users className="w-4 h-4" />,
+                                label: "Legend & rep areas",
+                                active: legendOpen,
+                                onClick: () => {
+                                  setLegendOpen((o) => !o);
+                                  setToolsMenuOpen(false);
+                                },
+                              },
+                            ]
+                          : []),
                         ...(canSubmitScan
                           ? [
                               {
@@ -7209,47 +7020,10 @@ export default function MapView() {
             </button>
           )}
 
-          {/* ADD A LEAD — a permanent button, stacked directly above Locate.
-              It lived in the tools popover, which cost two taps and a hunt for
-              the single thing a rep does most often while standing in front of a
-              house that isn't on the map yet. It rides the same sheet-aware
-              bottom offset as Locate so the pair move together and neither ends
-              up behind the knock sheet.
-              Armed state is unmistakable: the button turns amber and swaps to
-              the radar glyph, matching the tap-hint bar below it. Hidden during
-              Assign Area (mutually exclusive with the lasso panel anyway). */}
-          {mapReady && canAssign && !lassoMode && (
-            <button
-              type="button"
-              onClick={() => { setAddMode((v) => !v); setToolsMenuOpen(false); }}
-              aria-label={addMode ? "Cancel add-lead mode" : "Add a lead — tap a house"}
-              aria-pressed={addMode}
-              data-testid="fab-add-lead"
-              style={{
-                height: 52,
-                width: 52,
-                // 52px button + 12px gutter above Locate's own offset.
-                bottom:
-                  bottomSlot === "knock" && sheetPeekPx
-                    ? `calc(env(safe-area-inset-bottom) + ${sheetPeekPx + 12 + 64}px)`
-                    : "calc(env(safe-area-inset-bottom) + 2rem + 64px)",
-                boxShadow: "var(--glass-shadow-1)",
-              }}
-              className={`absolute right-3 z-20 rounded-full ring-1 ring-inset ring-white/[0.18] flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform ${
-                addMode
-                  ? "bg-amber-500 text-white hover:bg-amber-500/90"
-                  : "glass-capsule glass-opaque text-white/90 hover:text-white"
-              }`}
-            >
-              {tapResolving ? (
-                <Loader2 className="w-6 h-6 animate-spin motion-reduce:animate-none" />
-              ) : addMode ? (
-                <Radar className="w-6 h-6" />
-              ) : (
-                <Plus className="w-6 h-6" />
-              )}
-            </button>
-          )}
+          {/* Add-lead moved off the map surface into the More (tools) popover
+              ("Add lead", same handler + canAssign gate) per the owner's
+              minimal directive. The armed state stays visible via the amber
+              tap-hint bar below, which also carries the resolving spinner. */}
 
           {/* Scan-a-house hint — shown while scan mode is ARMED (sticky: it stays
               armed across scans so a rep can walk a street door after door).
@@ -7261,9 +7035,16 @@ export default function MapView() {
               data-testid="tap-hint"
             >
               <div className="flex items-center gap-2 pl-3.5 pr-2 py-2 min-h-11">
-                <Radar className="w-4 h-4 text-orange-400 shrink-0" />
+                {tapResolving ? (
+                  <Loader2
+                    className="w-4 h-4 text-orange-400 shrink-0 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <Radar className="w-4 h-4 text-orange-400 shrink-0" aria-hidden="true" />
+                )}
                 <span className="font-medium whitespace-nowrap">
-                  Tap a house to add a lead
+                  {tapResolving ? "Finding that address…" : "Tap a house to add a lead"}
                 </span>
               </div>
               {canAssign && (
@@ -7314,66 +7095,17 @@ export default function MapView() {
           )}
 
           {/* Pin legend + admin filter panel — bottom left, MANAGER chrome
-                 (team_lead+). The rep's status filter is the compact top pill
-                 now; this panel is the admin surface: rep-areas color mode,
-                 rep filter, status rows, assigned areas. Collapsed to a quiet
-                 dot-strip by default; one tap expands. LONG-PRESS re-applies
-                 the last status filter without opening the panel. Fades out
-                 with the secondary chrome while the map moves. */}
-          {mapReady && !isRep && leads.length > 0 && !legendOpen && bottomSlot !== "knock" && (
-            <button
-              onClick={() => {
-                if (legendLongPressFired.current) {
-                  legendLongPressFired.current = false;
-                  return; // long-press already acted — swallow the click
-                }
-                setLegendOpen(true);
-              }}
-              onPointerDown={() => {
-                legendLongPressFired.current = false;
-                if (legendLongPressTimer.current) clearTimeout(legendLongPressTimer.current);
-                legendLongPressTimer.current = setTimeout(() => {
-                  const last = lastFilterStatusRef.current;
-                  if (!last) return;
-                  legendLongPressFired.current = true;
-                  setFilterStatus((cur) => (cur === last ? "all" : last));
-                  try { navigator.vibrate?.(10); } catch { /* no haptics */ }
-                }, 500);
-              }}
-              onPointerUp={() => {
-                if (legendLongPressTimer.current) clearTimeout(legendLongPressTimer.current);
-              }}
-              onPointerLeave={() => {
-                if (legendLongPressTimer.current) clearTimeout(legendLongPressTimer.current);
-              }}
-              data-testid="legend-collapsed"
-              aria-label="Open legend and status filter"
-              style={{
-                bottom: "calc(env(safe-area-inset-bottom) + 2rem)",
-              }}
-              className={`glass-capsule absolute left-3 z-10 flex items-center gap-1.5 h-11 px-3 active:scale-[0.97] transform-gpu ${secondaryCls}`}
-            >
-              {Object.values(PIN_COLORS).map((pin, i) => (
-                <span
-                  key={i}
-                  className="w-2 h-2 rounded-full"
-                  style={{ background: pin.bg }}
-                />
-              ))}
-              {(filterStatus !== "all" || filterRep !== "all") && (
-                <span className="ml-1 text-[10px] font-semibold text-teal-200">
-                  filtered
-                </span>
-              )}
-            </button>
-          )}
+                 (team_lead+). The floating dot-strip trigger is gone (minimal
+                 map): this panel now opens from the More menu's
+                 "Legend & rep areas" entry. Contents unchanged: rep-areas color
+                 mode, rep filter, status rows, assigned areas. */}
           {mapReady && !isRep && legendOpen && bottomSlot !== "knock" && (
             <div
               style={{
                 bottom: "calc(env(safe-area-inset-bottom) + 2rem)",
                 maxHeight: "min(60vh, 460px)",
               }}
-              className={`glass-surface absolute left-3 p-3 z-10 min-w-[170px] max-w-[240px] overflow-y-auto ${secondaryCls}`}
+              className="glass-surface absolute left-3 p-3 z-10 min-w-[170px] max-w-[240px] overflow-y-auto"
             >
               {/* Rep filter — moved here from the (removed) top bar */}
               {canManage && (

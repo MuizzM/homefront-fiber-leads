@@ -57,7 +57,7 @@ try {
   console.log("[startup] SQLite WAL + indexes applied");
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
-import { colorForRep } from "@shared/repColors";
+import { colorForRep, repColorOf } from "@shared/repColors";
 import { computeTerritoryMetrics } from "@shared/territoryMetrics";
 import { cachedScopeLookup } from "./territoryScopeCache";
 import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
@@ -418,7 +418,12 @@ function repInVisibilityScope(user: any, repId: number | null | undefined): bool
  */
 function retainedAreaColor(territory: unknown, fallbackRepId: number | null | undefined): string {
   const stored = normalizeTerritoryColor((territory as any)?.color);
-  return stored ?? colorForRep(fallbackRepId ?? null);
+  if (stored) return stored;
+  // Fallback follows the rep's PERSISTED colour (team_members.color) when the
+  // member row exists; repColorOf degrades to the legacy hash for NULL columns,
+  // and a dangling rep id keeps the old hash behaviour verbatim.
+  const member = fallbackRepId != null ? storage.getTeamMemberById(fallbackRepId) : undefined;
+  return member ? repColorOf(member) : colorForRep(fallbackRepId ?? null);
 }
 
 function territoryIdsForScope(scope: number[], tenantId?: number | null): Set<number> {
@@ -3541,7 +3546,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       const territory = storage.createTerritory({
         tenantId: t ?? null,
         name: reps.length > 1 ? `${rp.name}'s area` : ((name && String(name).trim()) || `${rp.name}'s area`),
-        repId: rid, polygon: JSON.stringify(parcelRing.length >= 3 ? parcelRing : polygon), color: colorForRep(rid),
+        repId: rid, polygon: JSON.stringify(parcelRing.length >= 3 ? parcelRing : polygon), color: repColorOf(rp),
         status: "active", assigneeIds: JSON.stringify([rid]),
         briefing: JSON.stringify(briefing), sourceRunId: sourceRunId ? String(sourceRunId) : null, updatedAt: at,
       } as any);
@@ -3762,7 +3767,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Reps need names to resolve "assigned to …" and rankings, but NOT the
     // roster's phones/emails/org structure — project those away for reps.
     if (user?.role === "rep") {
-      return res.json(members.map((m: any) => ({ id: m.id, name: m.name, role: m.role, active: m.active, tenantId: m.tenantId ?? null })));
+      // `color` ships to every role: it's presentation (pin/ring hue), not PII —
+      // rankings and halos need each rep's hue exactly like they need the name.
+      return res.json(members.map((m: any) => ({ id: m.id, name: m.name, role: m.role, active: m.active, tenantId: m.tenantId ?? null, color: m.color ?? null })));
     }
     // A team_lead's roster is their own team (self + direct reports) — this also
     // scopes the map's rep-filter + lasso-assign dropdowns to their reps only.
@@ -5717,9 +5724,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
 
     const at = new Date().toISOString();
-    // Chosen colour wins; the rep's palette hue is only the default for a caller
-    // that never picked one (older clients, and the API used directly).
-    const color = normalizeTerritoryColor(requestedColor) ?? colorForRep(repId);
+    // Chosen colour wins; the rep's own colour (persisted at hire, hash for
+    // legacy rows) is only the default for a caller that never picked one
+    // (older clients, and the API used directly).
+    const color = normalizeTerritoryColor(requestedColor) ?? repColorOf(rep);
     const territory = storage.createTerritory({
       tenantId: tid ?? null, name: (name && name.trim()) || `${rep.name}'s area`,
       repId, polygon: JSON.stringify(polygon), color,

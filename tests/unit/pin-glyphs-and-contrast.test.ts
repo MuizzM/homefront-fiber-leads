@@ -13,7 +13,9 @@
 // The second is arithmetic: sold's pin colour used as TEXT on the dark card
 // gives 2.1:1, well under the 4.5:1 readable minimum.
 import { describe, expect, it } from "vitest";
-import { PIN_SVGS, PIN_DATA_URLS } from "../../client/src/lib/statusIcons";
+import {
+  KNOCK_BADGE_BUCKETS, PIN_SVGS, PIN_DATA_URLS, pinCountSvg,
+} from "../../client/src/lib/statusIcons";
 import { STATUS_CONFIG, LEAD_MAP_STATUSES } from "../../shared/statusConfig";
 
 /** WCAG relative luminance. */
@@ -35,24 +37,33 @@ const MIN_TEXT_CONTRAST = 4.5;
 describe("pin glyphs are vectors, never text", () => {
   it("no pin SVG depends on a font being installed", () => {
     // The whole point: a device without Arial must still show a $ on a sold pin.
+    // The knock-count badge digits are held to the same rule — they are the
+    // most tempting place to sneak a <text> back in.
     for (const status of LEAD_MAP_STATUSES) {
       expect(PIN_SVGS[status], `${status} pin uses <text>`).not.toMatch(/<text[\s>]/);
       expect(PIN_SVGS[status], `${status} pin references a font`).not.toMatch(/font-family/);
+      for (const bucket of KNOCK_BADGE_BUCKETS) {
+        const badged = pinCountSvg(status, bucket);
+        expect(badged, `${status} k${bucket} uses <text>`).not.toMatch(/<text[\s>]/);
+        expect(badged, `${status} k${bucket} references a font`).not.toMatch(/font-family/);
+      }
     }
   });
 
   it("the sold pin still draws a dollar — vector strokes, not a glyph name", () => {
     const sold = PIN_SVGS.sold;
-    // A vertical bar plus the S-curve: two stroked paths over the teardrop.
+    // A vertical bar plus the S-curve: two stroked paths over the circle.
     const strokedPaths = sold.match(/<path[^>]*stroke="#fff"/g) ?? [];
     expect(strokedPaths.length).toBeGreaterThanOrEqual(2);
-    expect(sold).toContain(STATUS_CONFIG.sold.color); // teardrop keeps its fill
+    expect(sold).toContain(STATUS_CONFIG.sold.color); // the disc keeps its fill
   });
 
-  it("the prospect pin keeps its down arrow", () => {
-    // The arrow IS the prospect pin's identity — it's the only non-teardrop shape.
-    expect(PIN_SVGS.prospect).toMatch(/M20 10v12m-5-5 5 5 5-5/);
-    expect(STATUS_CONFIG.prospect.shape).toBe("down_arrow");
+  it("the prospect pin keeps its down arrow — now as the glyph inside the circle", () => {
+    // The silhouette went flat-circle for every status (SalesRabbit reference);
+    // the arrow survived as prospect's inner glyph so the learned vocabulary holds.
+    expect(PIN_SVGS.prospect).toMatch(/M20 12\.5v13m-5\.5-5\.5 5\.5 5\.5 5\.5-5\.5/);
+    expect(STATUS_CONFIG.prospect.shape).toBe("circle");
+    expect(STATUS_CONFIG.prospect.glyph).toBe("arrow");
   });
 
   it("every status still produces a loadable data URL", () => {

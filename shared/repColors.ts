@@ -59,3 +59,42 @@ export function colorForRep(repId: number | null | undefined): string {
   const n = REP_PALETTE.length;
   return REP_PALETTE[((repId % n) + n) % n];
 }
+
+// ── Persisted rep colour (team_members.color) ────────────────────────────────
+// The hash above is the LEGACY allocation: repId % 24 collides as soon as ids
+// wrap, and a rep's hue changed meaning nothing about the rep. Colours are now
+// ASSIGNED AT CREATION (server/storage.ts createTeamMember picks the first
+// palette hue no ACTIVE member of the tenant is wearing) and stored on the row.
+// Every reader resolves through repColorOf so a legacy row (NULL column) or an
+// exhausted palette (also NULL) falls back to the exact hue it always had.
+
+/** The minimal member shape the resolver needs — matches team_members rows and
+ *  the /api/team payload. */
+export interface RepColorSource {
+  id: number | null | undefined;
+  color?: string | null;
+}
+
+/** Persisted colour ?? legacy hash. The ONE read path for a rep's hue. */
+export function repColorOf(member: RepColorSource | null | undefined): string {
+  if (!member) return colorForRep(null);
+  return member.color ?? colorForRep(member.id);
+}
+
+/**
+ * First palette hue not present in `usedColors` (the EFFECTIVE colours of the
+ * tenant's active members — persisted or hash, via repColorOf, so a legacy
+ * member's hash hue is respected as taken). Returns null when all 24 are worn:
+ * the caller stores NULL and repColorOf degrades to the hash, which is the
+ * pre-column behaviour for exactly this crowd size.
+ */
+export function allocateRepColor(usedColors: Iterable<string | null | undefined>): string | null {
+  const used = new Set<string>();
+  for (const color of usedColors) {
+    if (typeof color === "string" && color) used.add(color.toUpperCase());
+  }
+  for (const color of REP_PALETTE) {
+    if (!used.has(color.toUpperCase())) return color;
+  }
+  return null;
+}

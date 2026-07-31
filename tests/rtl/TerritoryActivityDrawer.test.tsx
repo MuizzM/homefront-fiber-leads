@@ -30,17 +30,18 @@ const RESPONSE = {
   ],
 };
 
-function renderDrawer() {
+function renderDrawer(onClose = vi.fn()) {
   apiRequest.mockImplementation((method: string) => {
     if (method === "GET") return Promise.resolve({ json: () => Promise.resolve(RESPONSE) });
     return Promise.resolve({ json: () => Promise.resolve({ ok: true }) });
   });
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const utils = render(
     <QueryClientProvider client={qc}>
-      <TerritoryActivityDrawer territoryId={5} onClose={vi.fn()} />
+      <TerritoryActivityDrawer territoryId={5} onClose={onClose} />
     </QueryClientProvider>,
   );
+  return { ...utils, onClose };
 }
 
 async function openOverrideRow() {
@@ -113,5 +114,72 @@ describe("territory activity — admin override inline confirm", () => {
     expect(screen.queryByTestId("override-confirm-row")).toBeNull();
     expect(screen.getByTestId("override-btn")).toBeInTheDocument();
     expect(apiRequest).not.toHaveBeenCalledWith("POST", expect.anything(), expect.anything());
+  });
+});
+
+// ── Drawer chrome: every control wired, none sub-44px ────────────────────────
+describe("territory activity — drawer chrome", () => {
+  it("the close button is wired to onClose", async () => {
+    const { onClose } = renderDrawer();
+    await screen.findByTestId("activity-row");
+    fireEvent.click(screen.getByTestId("close-activity"));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("export builds a CSV from the visible rows", async () => {
+    // jsdom has no object-URL support; provide it just for this test.
+    const createObjectURL = vi.fn(() => "blob:activity");
+    const revokeObjectURL = vi.fn();
+    (URL as any).createObjectURL = createObjectURL;
+    (URL as any).revokeObjectURL = revokeObjectURL;
+    const anchorClick = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    try {
+      renderDrawer();
+      await screen.findByTestId("activity-row");
+      fireEvent.click(screen.getByTestId("export-activity"));
+      expect(createObjectURL).toHaveBeenCalledOnce();
+      const blob = createObjectURL.mock.calls[0][0] as Blob;
+      expect(blob.type).toBe("text/csv");
+      expect(blob.size).toBeGreaterThan(0); // header row + the visible activity
+      expect(anchorClick).toHaveBeenCalledOnce();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:activity");
+    } finally {
+      anchorClick.mockRestore();
+      delete (URL as any).createObjectURL;
+      delete (URL as any).revokeObjectURL;
+    }
+  });
+
+  it("status filters narrow the list and All restores it", async () => {
+    renderDrawer();
+    await screen.findByTestId("activity-row");
+    fireEvent.click(screen.getByTestId("filter-verified"));
+    expect(screen.queryByTestId("activity-row")).toBeNull();
+    expect(screen.getByText(/no activity matching/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("filter-needs_review"));
+    expect(screen.getByTestId("activity-row")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("filter-all"));
+    expect(screen.getByTestId("activity-row")).toBeInTheDocument();
+  });
+
+  it("the active filter is announced, not colour-coded alone", async () => {
+    renderDrawer();
+    await screen.findByTestId("activity-row");
+    expect(screen.getByTestId("filter-all")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByTestId("filter-invalid"));
+    expect(screen.getByTestId("filter-invalid")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("filter-all")).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it("header, filter and sort controls meet the 44px bar (audit: h-7/h-8 flagged)", async () => {
+    renderDrawer();
+    await screen.findByTestId("activity-row");
+    expect(screen.getByTestId("export-activity").className).toMatch(/\bh-11\b/);
+    expect(screen.getByTestId("export-activity")).toHaveAccessibleName(/export/i);
+    expect(screen.getByTestId("close-activity").className).toMatch(/\bh-11\b/);
+    expect(screen.getByTestId("filter-all").className).toMatch(/min-h-11/);
+    expect(screen.getByRole("combobox", { name: "Sort activities" }).className).toMatch(/\bh-11\b/);
   });
 });

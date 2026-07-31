@@ -45,6 +45,7 @@ import { eq, ne, desc, or, and, gt, lt, isNull, isNotNull, inArray, sql } from "
  *  enough, because those are the states in which an unpaid entitlement for this
  *  door is still outstanding. */
 export const LIVE_COMMISSION_STATUSES = ["pending", "approved"] as const;
+import { allocateRepColor, repColorOf } from "@shared/repColors";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
 import { syncAssignments } from "./territoryAssignments";
@@ -506,6 +507,10 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_rep_applications_tenant_status_source ON rep_applications(tenant_id, status, application_source, created_at DESC)`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
+    // Persisted rep hue, allocated at creation (first free REP_PALETTE slot per
+    // tenant — see createTeamMember). NULL = legacy row / palette exhausted →
+    // repColorOf() falls back to the old repId-hash, so old rows keep their hue.
+    `ALTER TABLE team_members ADD COLUMN color TEXT`,
     // Persistent address pool — harvest once, re-scan for fiber-status changes.
     // NOTE: no column-level UNIQUE(address). A global unique-by-address made a
     // real "104 Oak St, Broadway" collide with an existing "104 Oak St, Sanford"
@@ -3005,7 +3010,20 @@ export class Storage implements IStorage {
     return db.select().from(teamMembers).where(condition).get();
   }
   createTeamMember(member: InsertTeamMember): TeamMember {
-    return db.insert(teamMembers).values({ ...member, createdAt: new Date().toISOString() }).returning().get();
+    // Rep colour is decided ONCE, here at creation, and persisted — RepPicker,
+    // the map's rep tints, and a new area's default fill all read the stored
+    // value through repColorOf(). Allocation: first REP_PALETTE hue not worn by
+    // another ACTIVE member of the same tenant, where "worn" means the member's
+    // EFFECTIVE colour (persisted ?? legacy hash) so pre-column rows keep their
+    // hue reserved. Palette exhausted → NULL, and repColorOf degrades to the
+    // hash exactly as it did before the column existed.
+    const color = member.color != null ? member.color : this.allocateMemberColor(member.tenantId ?? null);
+    return db.insert(teamMembers).values({ ...member, color, createdAt: new Date().toISOString() }).returning().get();
+  }
+  private allocateMemberColor(tenantId: number | null): string | null {
+    const actives = db.select().from(teamMembers).where(eq(teamMembers.active, true)).all()
+      .filter((m) => (m.tenantId ?? null) === tenantId);
+    return allocateRepColor(actives.map((m) => repColorOf(m)));
   }
   updateTeamMember(id: number, updates: Partial<InsertTeamMember>, tenantId?: number): TeamMember | undefined {
     const condition = tenantId != null

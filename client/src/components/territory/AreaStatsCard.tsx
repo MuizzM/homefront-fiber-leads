@@ -23,6 +23,7 @@
 // on screen, because a number nobody can reproduce is a number nobody trusts.
 
 import { useId, useState } from "react";
+import { FOCUS } from "@/lib/a11y";
 
 export interface AreaStatsCardProps {
   /** Doors inside the boundary, before any exclusions. */
@@ -70,7 +71,9 @@ function Info({ label, formula }: { label: string; formula: string }) {
         onClick={() => setOpen((o) => !o)}
         onBlur={() => setOpen(false)}
         data-testid={`stat-info-${label.toLowerCase().replace(/\s+/g, "-")}`}
-        className="ml-1 flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+        // 24px visual dot, 44px effective target via the ::after halo — a
+        // full-size h-11 button would dwarf the 9px figures it annotates.
+        className={`relative ml-1 flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground after:absolute after:-inset-2.5 after:content-[''] ${FOCUS}`}
       >
         ⓘ
       </button>

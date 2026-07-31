@@ -1,6 +1,7 @@
 import { pinDisplayState } from "@shared/knock";
 import { toLeadMapStatus } from "@shared/statusConfig";
-import { haloFeatureProps, type HaloFeatureProps } from "./leadHalos";
+import { haloFeatureProps, type HaloFeatureProps, type RepColorFn } from "./leadHalos";
+import { knockBadgeBucket } from "./statusIcons";
 
 export interface GeoJsonLead {
   id: number;
@@ -10,6 +11,8 @@ export interface GeoJsonLead {
   leadStatus: string;
   visited?: boolean | number | null;
   lastOutcome?: string | null;
+  /** Times the door has been knocked — drives the pin's count badge (>1). */
+  knockCount?: number | null;
   leadTag?: string | null;
   freshConfidence?: string | null;
   carrier?: string | null;
@@ -42,6 +45,10 @@ export interface LeadPointFeature {
     carrier: string;
     assignedRepId: number;
     repColor: string;
+    /** Bucketed knock count for the badge: 0 = none, 2..9 exact, 10 = "9+".
+     *  Bucketed HERE (not raw) so an 11th knock on a 10-knock door doesn't
+     *  invalidate a feature whose icon cannot change. */
+    knocks: number;
   } & HaloFeatureProps;
 }
 
@@ -52,7 +59,11 @@ export interface CachedLeadFeature {
 
 export type LeadFeatureCache = Map<number, CachedLeadFeature>;
 
-export function leadFeatureSignature(lead: GeoJsonLead, halo: HaloFeatureProps = NO_HALO): string {
+export function leadFeatureSignature(
+  lead: GeoJsonLead,
+  halo: HaloFeatureProps = NO_HALO,
+  repColor: string = colorForRep(lead.assignedRepId),
+): string {
   const ds = pinDisplayState(lead);
   const fresh = lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0;
   // Halo props are passed IN, never recomputed here: reconcileLeadFeatures
@@ -63,7 +74,7 @@ export function leadFeatureSignature(lead: GeoJsonLead, halo: HaloFeatureProps =
   // the outermost ring goes neutral slate, so a 4-rep and a 5-rep door carry an
   // IDENTICAL colour list — the count is the only thing still telling them
   // apart, and a prop left stale on a feature is a trap for whatever reads it next.
-  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic", lead.assignedRepId ?? 0, halo.haloCount, halo.halo0 ?? "", halo.halo1 ?? "", halo.halo2 ?? ""].join("\u001f");
+  return [lead.lng, lead.lat, lead.address, lead.leadStatus, lead.visited ? 1 : 0, lead.lastOutcome ?? "", ds, fresh, lead.carrier ?? "kinetic", lead.assignedRepId ?? 0, repColor, knockBadgeBucket(lead.knockCount), halo.haloCount, halo.halo0 ?? "", halo.halo1 ?? "", halo.halo2 ?? ""].join("\u001f");
 }
 
 import { colorForRep } from "@shared/repColors";
@@ -77,6 +88,11 @@ export function reconcileLeadFeatures(
   leads: readonly GeoJsonLead[],
   cache: LeadFeatureCache,
   repIdsFor?: LeadRepIdsFn,
+  // Persisted-colour resolver (repColorOf over the team payload). Defaults to
+  // the legacy hash so every existing caller behaves exactly as before; the
+  // caller that HAS team data injects one fn and the pins, halos, and rep-color
+  // mode all follow the same stored hue.
+  colorFor: RepColorFn = colorForRep,
 ): {
   data: { type: "FeatureCollection"; features: LeadPointFeature[] };
   byId: Map<number, LeadPointFeature>;
@@ -102,8 +118,9 @@ export function reconcileLeadFeatures(
     // resolver is supplied (tests, any caller without territory data) every door
     // reports haloCount 0 and carries no slot keys, so the halo layers filter to
     // nothing and the map behaves exactly as it did before halos existed.
-    const halo = repIdsFor ? haloFeatureProps(repIdsFor(lead)) : NO_HALO;
-    const signature = leadFeatureSignature(lead, halo);
+    const halo = repIdsFor ? haloFeatureProps(repIdsFor(lead), colorFor) : NO_HALO;
+    const repColor = colorFor(lead.assignedRepId);
+    const signature = leadFeatureSignature(lead, halo, repColor);
     let cached = cache.get(lead.id);
     if (!cached || cached.signature !== signature) {
       const ds = pinDisplayState(lead);
@@ -122,7 +139,8 @@ export function reconcileLeadFeatures(
             fresh: lead.leadTag === "fresh_fiber_confirmed" ? 1 : 0,
             carrier: lead.carrier ?? "kinetic",
             assignedRepId: lead.assignedRepId ?? 0,
-            repColor: colorForRep(lead.assignedRepId),
+            repColor,
+            knocks: knockBadgeBucket(lead.knockCount),
             ...halo,
           },
         },

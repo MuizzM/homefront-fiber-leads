@@ -554,10 +554,11 @@
   animation: card-swap-in 0.12s ease-out both;
 }
 
-/* Rep field mode: hide the Mapbox control stack (zoom/compass/geolocate buttons)
-   on mobile rep screens — pinch-zoom + the locate FAB cover both, and the porch
-   test says every leftover control is clutter. Applied by MapView on the map
-   container when role=rep && mobile. */
+/* Minimal field map: hide the native Mapbox top-right control stack
+   (zoom/compass/geolocate buttons) on EVERY screen — pinch/scroll/double-click
+   zoom + the locate FAB cover their function, and the porch test says every
+   leftover control is clutter. Applied by MapView on the map container
+   unconditionally. */
 .rep-clean-map .mapboxgl-ctrl-top-right {
   display: none;
 }

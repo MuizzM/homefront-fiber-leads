@@ -292,6 +292,11 @@ export const teamMembers = sqliteTable("team_members", {
   // Supervisor in the org chart — another team_member (a team_lead or manager).
   // null = top-level (reports directly to Admin).
   reportsToId: integer("reports_to_id"),
+  // Persisted rep hue, assigned ONCE at creation (first REP_PALETTE colour not
+  // worn by another active member of the tenant — see storage.createTeamMember).
+  // NULL = legacy row or palette exhausted; both resolve through
+  // repColorOf()'s repId-hash fallback, so nothing ever renders colourless.
+  color: text("color"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });

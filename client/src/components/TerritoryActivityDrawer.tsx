@@ -116,8 +116,8 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
             <p className="text-[11px] text-muted-foreground">Location-verified activity · distance when marked</p>
           </div>
           <div className="flex items-center gap-1">
-            <button onClick={exportCsv} title="Export what you can see" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground" data-testid="export-activity"><Download className="h-4 w-4" /></button>
-            <button onClick={onClose} title="Close" className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground"><X className="h-4 w-4" /></button>
+            <button type="button" onClick={exportCsv} title="Export what you can see" aria-label="Export visible activity as CSV" className={`flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground ${FOCUS}`} data-testid="export-activity"><Download className="h-4 w-4" aria-hidden="true" /></button>
+            <button type="button" onClick={onClose} title="Close" aria-label="Close activity history" className={`flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary hover:text-foreground ${FOCUS}`} data-testid="close-activity"><X className="h-4 w-4" aria-hidden="true" /></button>
           </div>
         </div>
 
@@ -126,8 +126,10 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
           {(["all", "verified", "needs_review", "invalid"] as StatusFilter[]).map(s => (
             <button
               key={s}
+              type="button"
               onClick={() => setStatus(s)}
-              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold transition-colors ${status === s ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"}`}
+              aria-pressed={status === s}
+              className={`min-h-11 rounded-full px-3 text-[11px] font-semibold transition-colors ${status === s ? "bg-primary text-primary-foreground" : "bg-secondary text-muted-foreground hover:text-foreground"} ${FOCUS}`}
               data-testid={`filter-${s}`}
             >
               {s === "all" ? "All" : s === "needs_review" ? "Needs Review" : s[0].toUpperCase() + s.slice(1)}
@@ -135,12 +137,12 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
           ))}
           <div className="ml-auto flex items-center gap-1.5">
             {reps.length > 1 && (
-              <select value={repFilter} onChange={e => setRepFilter(e.target.value)} className="h-7 rounded-md border border-border bg-secondary px-1.5 text-[11px] text-foreground" aria-label="Filter by rep">
+              <select value={repFilter} onChange={e => setRepFilter(e.target.value)} className={`h-11 rounded-md border border-border bg-secondary px-1.5 text-[11px] text-foreground ${FOCUS}`} aria-label="Filter by rep">
                 <option value="all">All reps</option>
                 {reps.map(r => <option key={r} value={r}>{r}</option>)}
               </select>
             )}
-            <select value={sort} onChange={e => setSort(e.target.value as SortKey)} className="h-7 rounded-md border border-border bg-secondary px-1.5 text-[11px] text-foreground" aria-label="Sort activities">
+            <select value={sort} onChange={e => setSort(e.target.value as SortKey)} className={`h-11 rounded-md border border-border bg-secondary px-1.5 text-[11px] text-foreground ${FOCUS}`} aria-label="Sort activities">
               <option value="newest">Newest</option>
               <option value="oldest">Oldest</option>
               <option value="closest">Closest</option>
@@ -162,7 +164,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
               const isOpen = expanded === a.knockId;
               return (
                 <li key={a.knockId} className="px-4 py-2.5" data-testid="activity-row">
-                  <button className="flex w-full items-start gap-2 text-left" onClick={() => { setExpanded(isOpen ? null : a.knockId); setOverrideFor(null); setOverrideReason(""); }} aria-expanded={isOpen}>
+                  <button type="button" className={`flex min-h-11 w-full items-start gap-2 rounded-md text-left ${FOCUS}`} onClick={() => { setExpanded(isOpen ? null : a.knockId); setOverrideFor(null); setOverrideReason(""); }} aria-expanded={isOpen}>
                     {isOpen ? <ChevronDown className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" /> : <ChevronRight className="mt-0.5 h-4 w-4 flex-shrink-0 text-muted-foreground" />}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
@@ -200,10 +202,11 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
                         if (overrideFor !== a.knockId) {
                           return (
                             <button
+                              type="button"
                               onClick={() => { setOverrideFor(a.knockId); setOverrideReason(""); }}
                               disabled={override.isPending}
                               data-testid="override-btn"
-                              className={`w-full rounded-lg border border-border bg-secondary/60 px-2 py-1.5 text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
+                              className={`min-h-11 w-full rounded-lg border border-border bg-secondary/60 px-2 text-[11px] font-semibold text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
                             >
                               Override verification…
                             </button>
@@ -225,6 +228,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
                             />
                             <div className="flex gap-1.5">
                               <button
+                                type="button"
                                 onClick={() => override.mutate({ knockId: a.knockId, newStatus: target, reason: overrideReason.trim() })}
                                 disabled={!overrideReason.trim() || override.isPending}
                                 data-testid="override-confirm"
@@ -233,6 +237,7 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
                                 {override.isPending ? "Overriding…" : "Confirm override"}
                               </button>
                               <button
+                                type="button"
                                 onClick={() => { setOverrideFor(null); setOverrideReason(""); }}
                                 disabled={override.isPending}
                                 data-testid="override-cancel"

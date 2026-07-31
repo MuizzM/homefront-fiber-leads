@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Check, Pencil, X, ShieldCheck, AlertTriangle, Ban, History, Ruler, UserMinus, RotateCcw, Users } from "lucide-react";
+import { FOCUS } from "@/lib/a11y";
 import { can, type Role } from "@shared/permissions";
-import { colorForRep } from "@shared/repColors";
+import { repColorOf } from "@shared/repColors";
 import { territoryColor } from "@/lib/territoryStyle";
 import { TerritoryColorPicker } from "@/components/territory/TerritoryColorPicker";
 import { AreaStatsCard } from "@/components/territory/AreaStatsCard";
@@ -45,6 +46,10 @@ export interface TerritoryDetailPanelProps {
   };
   currentUser: { role: Role | string };
   teamNames?: Record<number, string>; // repId → display name (optional)
+  /** repId → persisted rep colour (team_members.color from /api/team). Absent
+   *  entries (or the whole map) fall back to the legacy repId-hash hue, so
+   *  callers that don't have the roster loaded render exactly as before. */
+  teamColors?: Record<number, string | null | undefined>;
   progress?: TerritoryProgress;       // location-verified worked %
   onReclaim?: () => void;
   onComplete?: () => void;
@@ -86,9 +91,12 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, progress, onReclaim, onComplete, onReassign, onRename, onRecolor, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamColors, progress, onReclaim, onComplete, onReassign, onRename, onRecolor, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
+  // A person's hue: persisted team_members.color when the caller supplied the
+  // roster colours, the legacy hash otherwise — repColorOf in both cases.
+  const repHue = (id: number | null) => repColorOf(id == null ? null : { id, color: teamColors?.[id] });
   // The SAME rule the map paints the polygon with: the area's own stored colour,
   // falling back to the primary rep's hue only for rows written before the
   // colour was captured. An earlier revision computed this from colorForRep
@@ -96,11 +104,11 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
   // prefers the stored value, so this swatch would have shown one colour while
   // the region on screen showed another. One rule, one source.
   //
-  // The rep chips below stay on colorForRep deliberately: those dots identify a
-  // PERSON, and a person's hue is not a property of the ground.
+  // The rep chips below stay on the rep's own hue deliberately: those dots
+  // identify a PERSON, and a person's hue is not a property of the ground.
   const swatch = territoryColor(
     { color: territory.color, status: territory.status },
-    colorForRep(isUnassigned ? null : territory.repIds[0]),
+    repHue(isUnassigned ? null : territory.repIds[0]),
   );
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(territory.name);
@@ -130,7 +138,10 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
         {onRecolor ? (
           // Editable: the swatch IS the control, so changing an area's colour is
           // where you already look for its colour rather than behind a menu.
-          <div className="mt-0.5 flex-shrink-0 scale-[0.42] origin-top-left -mr-6 -mb-4" data-testid="territory-color-edit">
+          // Rendered at the picker's native h-11 size: the old scale-[0.42]
+          // wrapper shrank the hit target to ~18px along with the visual, which
+          // failed the 44px bar — a mis-tap magnet on a field phone.
+          <div className="flex-shrink-0" data-testid="territory-color-edit">
             <TerritoryColorPicker value={swatch} onChange={onRecolor} label="Area colour" />
           </div>
         ) : (
@@ -151,16 +162,19 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                 onKeyDown={e => { if (e.key === "Enter") saveName(); if (e.key === "Escape") setEditingName(false); }}
                 maxLength={60}
                 data-testid="territory-name-input"
-                className="h-7 min-w-0 flex-1 rounded-md bg-secondary text-foreground text-sm font-semibold px-2 border border-border focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                className="h-9 min-w-0 flex-1 rounded-md bg-secondary text-foreground text-sm font-semibold px-2 border border-border focus:outline-none focus:ring-2 focus:ring-teal-400/60"
                 placeholder="Area name"
               />
+              {/* 36px visual, 44px effective target via the ::after halo. */}
               <button type="button" data-testid="territory-name-save" onClick={saveName} title="Save name"
-                className="w-7 h-7 rounded-md flex items-center justify-center text-emerald-400 hover:bg-emerald-500/15 transition-colors flex-shrink-0">
-                <Check className="w-4 h-4" />
+                aria-label="Save name"
+                className={`relative w-9 h-9 rounded-md flex items-center justify-center text-emerald-400 hover:bg-emerald-500/15 transition-colors flex-shrink-0 after:absolute after:-inset-1 after:content-[''] ${FOCUS}`}>
+                <Check className="w-4 h-4" aria-hidden="true" />
               </button>
-              <button onClick={() => setEditingName(false)} title="Cancel"
-                className="w-7 h-7 rounded-md flex items-center justify-center text-muted-foreground hover:bg-secondary transition-colors flex-shrink-0">
-                <X className="w-4 h-4" />
+              <button type="button" data-testid="territory-name-cancel" onClick={() => setEditingName(false)} title="Cancel"
+                aria-label="Cancel rename"
+                className={`relative w-9 h-9 rounded-md flex items-center justify-center text-muted-foreground hover:bg-secondary transition-colors flex-shrink-0 after:absolute after:-inset-1 after:content-[''] ${FOCUS}`}>
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
           ) : (
@@ -172,9 +186,10 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                   data-testid="territory-rename-btn"
                   onClick={() => { setDraftName(territory.name); setEditingName(true); }}
                   title="Rename area"
-                  className="w-6 h-6 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
+                  aria-label="Rename area"
+                  className={`relative w-9 h-9 -my-1.5 rounded-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0 after:absolute after:-inset-1 after:content-[''] ${FOCUS}`}
                 >
-                  <Pencil className="w-3 h-3" />
+                  <Pencil className="w-3.5 h-3.5" aria-hidden="true" />
                 </button>
               )}
             </div>
@@ -209,7 +224,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                     confirming ? "bg-rose-500/15 text-rose-300 ring-1 ring-rose-500/40" : "bg-secondary text-foreground"
                   } ${busy ? "opacity-60" : ""}`}
                 >
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: colorForRep(id) }} />
+                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: repHue(id) }} />
                   {confirming ? `Remove ${name}?` : name}
                   {canUnassign && (confirming ? (
                     <span className="inline-flex items-center gap-0.5">
@@ -219,7 +234,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                         data-testid={`confirm-unassign-${id}`}
                         disabled={busy}
                         onClick={() => { setConfirmRemoveId(null); onUnassignRep?.(id); }}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-rose-500/25 text-rose-200 hover:bg-rose-500/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50"
+                        className="relative inline-flex h-6 w-6 items-center justify-center rounded-full bg-rose-500/25 text-rose-200 hover:bg-rose-500/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
                       >
                         <Check className="w-3 h-3" aria-hidden="true" />
                       </button>
@@ -228,7 +243,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                         aria-label={`Keep ${name} assigned`}
                         data-testid={`cancel-unassign-${id}`}
                         onClick={() => setConfirmRemoveId(null)}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded-full hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+                        className="relative inline-flex h-6 w-6 items-center justify-center rounded-full hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
                       >
                         <X className="w-3 h-3" aria-hidden="true" />
                       </button>
@@ -241,7 +256,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
                       data-testid={`unassign-rep-${id}`}
                       disabled={busy}
                       onClick={() => setConfirmRemoveId(id)}
-                      className="inline-flex h-5 w-5 items-center justify-center rounded-full text-muted-foreground hover:bg-rose-500/20 hover:text-rose-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50"
+                      className="relative inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground hover:bg-rose-500/20 hover:text-rose-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/60 disabled:opacity-50 after:absolute after:-inset-y-2.5 after:-inset-x-0.5 after:content-['']"
                     >
                       <UserMinus className="w-3 h-3" aria-hidden="true" />
                     </button>
@@ -366,9 +381,9 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           type="button"
           data-testid="view-history-btn"
           onClick={onViewHistory}
-          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+          className={`mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary ${FOCUS}`}
         >
-          <History className="h-3.5 w-3.5" /> View Activity
+          <History className="h-3.5 w-3.5" aria-hidden="true" /> View Activity
         </button>
       )}
 
@@ -380,9 +395,9 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           type="button"
           data-testid="edit-assignees-btn"
           onClick={onEditAssignees}
-          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+          className={`mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary ${FOCUS}`}
         >
-          <Users className="h-3.5 w-3.5" />
+          <Users className="h-3.5 w-3.5" aria-hidden="true" />
           {territory.repIds.length > 1
             ? `${territory.repIds.length} reps on this area`
             : "Who works this area"}
@@ -410,9 +425,9 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
           type="button"
           data-testid="next-pass-btn"
           onClick={onStartNextPass}
-          className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 py-2 text-xs font-semibold text-foreground transition-colors hover:bg-secondary"
+          className={`mt-3 flex min-h-11 w-full items-center justify-center gap-1.5 rounded-lg border border-border bg-secondary/60 px-3 text-xs font-semibold text-foreground transition-colors hover:bg-secondary ${FOCUS}`}
         >
-          <RotateCcw className="h-3.5 w-3.5" />
+          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
           Start pass {(currentPass ?? 1) + 1}
         </button>
       )}
@@ -433,7 +448,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
             type="button"
             data-testid="reclaim-btn"
             onClick={onReclaim}
-            className="flex-1 h-8 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors"
+            className={`flex-1 h-11 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors ${FOCUS}`}
           >
             Reclaim
           </button>
@@ -443,7 +458,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
               type="button"
               data-testid="reassign-btn"
               onClick={onReassign}
-              className="flex-1 h-8 rounded-lg text-xs font-semibold bg-secondary text-foreground hover:bg-secondary/70 transition-colors"
+              className={`flex-1 h-11 rounded-lg text-xs font-semibold bg-secondary text-foreground hover:bg-secondary/70 transition-colors ${FOCUS}`}
             >
               Reassign
             </button>
@@ -453,7 +468,7 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, progre
               type="button"
               data-testid="complete-btn"
               onClick={onComplete}
-              className="flex-1 h-8 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+              className={`flex-1 h-11 rounded-lg text-xs font-semibold bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors ${FOCUS}`}
             >
               Complete
             </button>
