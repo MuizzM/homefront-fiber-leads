@@ -4781,21 +4781,45 @@ export default function MapView() {
     async (outcome: KnockOutcome): Promise<boolean> => {
       const lead = selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
       if (!lead || !canManage) return false;
+      // Recolor BEFORE the network — a central mark must feel as instant as a
+      // rep knock. The expected state comes from the same outcome→status table
+      // the server applies; the response reconciles below if it disagrees.
+      const nextLeadStatus = OUTCOME_TO_STATUS[outcome] ?? lead.leadStatus;
+      const optimisticDs = pinDisplayState({ leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome });
+      const feature = featureByIdRef.current.get(lead.id);
+      const prevProps = feature
+        ? { status: feature.properties.status, ds: feature.properties.ds, visited: feature.properties.visited }
+        : null;
+      if (feature) {
+        feature.properties.status = toLeadMapStatus(optimisticDs);
+        feature.properties.ds = optimisticDs;
+        feature.properties.visited = 1;
+        scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
+      }
+      const prevPin = (qc.getQueryData<any>(["/api/leads/map"])?.pins ?? []).find((p: any) => p.id === lead.id);
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        if (!old?.pins) return old;
+        return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: nextLeadStatus, visited: true, lastOutcome: outcome } : p) };
+      });
+      try { navigator.vibrate?.(10); } catch { /* */ }
+      toast({ title: "Marked centrally", severity: "success", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
       try {
         const res = await apiRequest("POST", `/api/leads/${lead.id}/central-disposition`, { outcome });
         const updated = await res.json();
-        const nextDisplayState = pinDisplayState({ leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome });
-        const feature = featureByIdRef.current.get(lead.id);
-        if (feature) {
-          feature.properties.status = toLeadMapStatus(nextDisplayState);
-          feature.properties.ds = nextDisplayState;
-          feature.properties.visited = 1;
-          scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
+        // Reconcile: the server is authoritative on leadStatus (CAS ordering
+        // can pick a different winner than the local table).
+        const serverDs = pinDisplayState({ leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome });
+        if (feature && serverDs !== optimisticDs) {
+          feature.properties.status = toLeadMapStatus(serverDs);
+          feature.properties.ds = serverDs;
+          scheduleClusterSetData();
         }
-        qc.setQueryData(["/api/leads/map"], (old: any) => {
-          if (!old?.pins) return old;
-          return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: updated.leadStatus, visited: true, lastOutcome: outcome } : p) };
-        });
+        if (updated.leadStatus !== nextLeadStatus) {
+          qc.setQueryData(["/api/leads/map"], (old: any) => {
+            if (!old?.pins) return old;
+            return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: updated.leadStatus } : p) };
+          });
+        }
         // The server writes a [central]-flagged knock row, so History HAS a new
         // entry — but the card fetched that query when it opened and nothing
         // told it to look again. Result: "No changes yet" under a mark you just
@@ -4807,11 +4831,22 @@ export default function MapView() {
         // list and Follow-ups kept the old state until a hard reload.
         qc.invalidateQueries({ queryKey: ["/api/leads"] });
         qc.invalidateQueries({ queryKey: ["/api/followups"] });
-        try { navigator.vibrate?.(10); } catch { /* */ }
-        toast({ title: "Marked centrally", severity: "success", description: `${lead.address} → ${OUTCOME_META[outcome]?.label ?? outcome}` });
         return true;
       } catch (e: any) {
-        toast({ title: "Central mark failed", description: String(e?.message ?? e), variant: "destructive" });
+        // Roll the door back to exactly what the rep saw before the tap.
+        if (feature && prevProps) {
+          feature.properties.status = prevProps.status;
+          feature.properties.ds = prevProps.ds;
+          feature.properties.visited = prevProps.visited;
+          scheduleClusterSetData();
+        }
+        if (prevPin) {
+          qc.setQueryData(["/api/leads/map"], (old: any) => {
+            if (!old?.pins) return old;
+            return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? prevPin : p) };
+          });
+        }
+        toast({ title: "Central mark failed — reverted", description: String(e?.message ?? e), variant: "destructive" });
         return false;
       }
     },
@@ -4825,24 +4860,49 @@ export default function MapView() {
     async () => {
       const lead = selectedLeadId != null ? leadById.get(selectedLeadId) : undefined;
       if (!lead || !canManage) return;
+      // Vanish BEFORE the network — the round-trip is the whole reason delete
+      // felt slow. Snapshot enough to re-add the pin (not a wholesale GeoJSON
+      // snapshot: other doors may legitimately change while this is in flight).
+      const prevFeature = featureByIdRef.current.get(lead.id);
+      const prevPin = (qc.getQueryData<any>(["/api/leads/map"])?.pins ?? []).find((p: any) => p.id === lead.id);
+      featureByIdRef.current.delete(lead.id);
+      if (geoJsonDataRef.current?.features) {
+        geoJsonDataRef.current = {
+          ...geoJsonDataRef.current,
+          features: geoJsonDataRef.current.features.filter((f: any) => f.id !== lead.id && f?.properties?.id !== lead.id),
+        };
+        scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
+      }
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        if (!old?.pins) return old;
+        return { ...old, total: Math.max(0, (old.total ?? old.pins.length) - 1), pins: old.pins.filter((p: any) => p.id !== lead.id) };
+      });
+      setSelectedLeadId(null);
+      toast({ title: "Lead removed", severity: "success", description: lead.address });
       try {
         await apiRequest("DELETE", `/api/leads/${lead.id}`);
-        featureByIdRef.current.delete(lead.id);
-        if (geoJsonDataRef.current?.features) {
-          geoJsonDataRef.current = {
-            ...geoJsonDataRef.current,
-            features: geoJsonDataRef.current.features.filter((f: any) => f.id !== lead.id && f?.properties?.id !== lead.id),
-          };
-          scheduleClusterSetData(); // coalesced: ≤1 worker re-cluster per frame
-        }
-        qc.setQueryData(["/api/leads/map"], (old: any) => {
-          if (!old?.pins) return old;
-          return { ...old, total: Math.max(0, (old.total ?? old.pins.length) - 1), pins: old.pins.filter((p: any) => p.id !== lead.id) };
-        });
-        setSelectedLeadId(null);
-        toast({ title: "Lead removed", severity: "success", description: lead.address });
+        // Background reconcile so the Leads list and dashboards drop the row too.
+        qc.invalidateQueries({ queryKey: ["/api/leads"] });
+        qc.invalidateQueries({ queryKey: ["/api/stats"] });
       } catch (e: any) {
-        toast({ title: "Delete failed", description: String(e?.message ?? e), variant: "destructive" });
+        // Put the door back exactly where it was.
+        if (prevFeature) {
+          featureByIdRef.current.set(lead.id, prevFeature);
+          if (geoJsonDataRef.current?.features) {
+            geoJsonDataRef.current = {
+              ...geoJsonDataRef.current,
+              features: [...geoJsonDataRef.current.features, prevFeature],
+            };
+            scheduleClusterSetData();
+          }
+        }
+        if (prevPin) {
+          qc.setQueryData(["/api/leads/map"], (old: any) => {
+            if (!old?.pins || old.pins.some((p: any) => p.id === lead.id)) return old;
+            return { ...old, total: (old.total ?? old.pins.length) + 1, pins: [...old.pins, prevPin] };
+          });
+        }
+        toast({ title: "Delete failed — lead restored", description: String(e?.message ?? e), variant: "destructive" });
       }
     },
     [selectedLeadId, leadById, canManage, qc, toast, setSelectedLeadId, scheduleClusterSetData],
