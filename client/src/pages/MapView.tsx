@@ -3139,6 +3139,36 @@ export default function MapView() {
     return rec;
   }, [activeAreaCountByRep]);
 
+  // ReclaimAllDialog props, memoized: these were built INLINE in the JSX, so
+  // every MapView render while an admin had the page open (the map re-renders
+  // ~every 400ms during a scan) re-JSON.parsed assigneeIds for EVERY territory
+  // (hundreds of parses/render) and rebuilt the id→name record — with the
+  // dialog closed. Now they re-derive only when territories/team change.
+  const reclaimAllAreas = useMemo(
+    () =>
+      (territories as any[]).map((t) => {
+        // Same holder rule as the detail panel: assignee_ids is
+        // authoritative; a pool-status area with a stale repId is EMPTY.
+        let ids: number[] = [];
+        try {
+          const a = JSON.parse(t.assigneeIds || "[]");
+          ids = Array.isArray(a) && a.length
+            ? a
+            : t.status === "unassigned" || t.status === "reclaimed"
+              ? []
+              : [t.repId].filter(Boolean);
+        } catch {
+          ids = [t.repId].filter(Boolean);
+        }
+        return { id: t.id, repIds: ids, status: t.status ?? "active" };
+      }),
+    [territories],
+  );
+  const teamNameRecord = useMemo(
+    () => Object.fromEntries(team.map((m) => [m.id, m.name])),
+    [team],
+  );
+
   const territoryLabelFor = (t: (typeof territories)[number]): string => {
     const areaName = (t.name ?? "").trim();
     if (!canAssign) return areaName;
@@ -3682,6 +3712,19 @@ export default function MapView() {
       clearPreview();
     };
 
+    // Mid-draw repaints are rAF-coalesced: render(false) runs chaikinSmooth
+    // over the WHOLE stroke (up to 800 pts, 2 iterations ≈ 3,200 point
+    // allocations plus the map→object→map conversions) and it fired once per
+    // accepted pointer sample — up to 120Hz on high-rate pointers — while the
+    // canvas can only present one frame. One smooth + setData per frame; the
+    // flush reads the live `stroke` at fire time so it always paints the
+    // latest samples. finish()/cancelStroke run synchronously and flip
+    // `drawing`, so a trailing scheduled flush no-ops instead of repainting
+    // the open line over the closed ring.
+    const scheduleStrokeRender = createRafCoalescedFlush(() => {
+      if (drawing) render(false);
+    });
+
     const move = (lngLat: any, point: any) => {
       if (!drawing || stroke.length >= MAX_POINTS || !lastPx) return;
       const dx = point.x - lastPx.x,
@@ -3689,7 +3732,7 @@ export default function MapView() {
       if (dx * dx + dy * dy < MIN_PX_DIST * MIN_PX_DIST) return;
       lastPx = { x: point.x, y: point.y };
       stroke.push([lngLat.lng, lngLat.lat]);
-      render(false);
+      scheduleStrokeRender();
     };
 
     const finish = () => {
@@ -6383,9 +6426,7 @@ export default function MapView() {
                   return [t.repId];
                 }
               })();
-              const teamNames = Object.fromEntries(
-                team.map((m) => [m.id, m.name]),
-              );
+              const teamNames = teamNameRecord;
               const isPool = status === "unassigned" || status === "reclaimed";
               return (
                 <div className="absolute top-16 left-[64px] z-30 animate-in fade-in slide-in-from-left-2 duration-200 max-h-[calc(100dvh-9rem)] overflow-y-auto overscroll-contain rounded-2xl">
@@ -6654,23 +6695,8 @@ export default function MapView() {
             <ReclaimAllDialog
               open={reclaimAllOpen}
               onClose={() => setReclaimAllOpen(false)}
-              areas={(territories as any[]).map((t) => {
-                // Same holder rule as the detail panel: assignee_ids is
-                // authoritative; a pool-status area with a stale repId is EMPTY.
-                let ids: number[] = [];
-                try {
-                  const a = JSON.parse(t.assigneeIds || "[]");
-                  ids = Array.isArray(a) && a.length
-                    ? a
-                    : t.status === "unassigned" || t.status === "reclaimed"
-                      ? []
-                      : [t.repId].filter(Boolean);
-                } catch {
-                  ids = [t.repId].filter(Boolean);
-                }
-                return { id: t.id, repIds: ids, status: t.status ?? "active" };
-              })}
-              teamNames={Object.fromEntries(team.map((m) => [m.id, m.name]))}
+              areas={reclaimAllAreas}
+              teamNames={teamNameRecord}
             />
           )}
 

@@ -168,6 +168,62 @@ export interface MapPinRow {
   lastKnockedAt: string | null;
 }
 
+/** Narrow lead row for the territory progress/activity math — just the fields
+ * territoryProgressRow and the area activity feed actually read. SQLite booleans
+ * arrive as 0/1 (callers already test both forms). */
+export interface TerritoryProgressLead {
+  id: number;
+  address: string;
+  city: string;
+  state: string;
+  zip: string;
+  lat: number | null;
+  lng: number | null;
+  leadStatus: string;
+  doNotKnock: number | boolean | null;
+}
+
+/** Narrow knock row for the territory progress metrics (order-independent math). */
+export interface TerritoryProgressKnock {
+  leadId: number;
+  outcome: string;
+  wasHome: number | boolean | null;
+  knockedAt: string;
+  verificationStatus: string | null;
+  distanceM: number | null;
+}
+
+/** Knock row for the per-area verified-location activity feed. */
+export interface TerritoryActivityKnock {
+  id: number;
+  leadId: number;
+  repId: number | null;
+  outcome: string;
+  knockedAt: string;
+  deviceTs: string | null;
+  serverTs: string | null;
+  verificationStatus: string | null;
+  distanceM: number | null;
+  gpsAccuracy: number | null;
+  reviewReason: string | null;
+  netState: string | null;
+  repLat: number | null;
+  repLng: number | null;
+}
+
+/** Narrow lead row for the /api/stats aggregation loop. */
+export interface LeadStatsRow {
+  leadStatus: string;
+  fiberStatus: string;
+  isNewFiber: number | boolean | null;
+  isTenured: number | boolean | null;
+  assignedRepId: number | null;
+  city: string | null;
+  state: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
@@ -211,7 +267,25 @@ export interface IStorage {
   getKnocks(tenantId?: number): Knock[];
   getKnocksByLead(leadId: number): Knock[];
   getKnocksByRep(repId: number): Knock[];
+  /** Newest-first (id DESC) slice of a rep's knocks, LIMIT pushed into SQL —
+   * the rep-activity card needs 50 rows, not the rep's full hydrated history. */
+  getRecentKnocksByRep(repId: number, limit: number): Knock[];
+  /** The rep's most recent GPS-located knock (impossible-travel reference),
+   * picked by one indexed seek instead of hydrating + sorting every knock the
+   * rep has ever logged on the hot knock-write path. */
+  getLatestLocatedKnockByRep(repId: number): { repLat: number; repLng: number; deviceTs: string | null; knockedAt: string } | undefined;
   getOpenCallbacks(tenantId?: number): OpenCallback[];
+  /** Narrow tenant-scoped projections for the territory progress/activity
+   * computations — same rows getLeads/getKnocks return, minus the wide-column
+   * hydration those O(all-rows) reads paid on every request. */
+  getLeadsForTerritoryProgress(tenantId?: number): TerritoryProgressLead[];
+  getKnocksForTerritoryProgress(tenantId?: number): TerritoryProgressKnock[];
+  /** Per-area activity feed rows, filtered in SQL to the given lead ids. */
+  getKnocksForTerritoryActivity(tenantId: number | undefined, leadIds: number[]): TerritoryActivityKnock[];
+  /** id → "address, city" pairs for a bounded id set (activity feed join). */
+  getLeadAddressesByIds(ids: number[], tenantId?: number): Array<{ id: number; address: string; city: string }>;
+  /** Narrow projection feeding /api/stats aggregation (same scoping as getLeads). */
+  getLeadStatsRows(tenantId?: number, assignedRep?: number | number[]): LeadStatsRow[];
   // ── Lead photos ─────────────────────────────────────────────────────────────
   createLeadPhoto(p: { leadId: number; userId?: number | null; repId?: number | null; path: string }): LeadPhoto;
   getLeadPhotos(leadId: number): LeadPhoto[];
@@ -646,6 +720,11 @@ export function runMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_location_pings_rep ON location_pings(rep_id, ping_at)`,
     `CREATE INDEX IF NOT EXISTS idx_commissions_rep ON commissions(rep_id)`,
     `CREATE INDEX IF NOT EXISTS idx_knock_log_knocked_at ON knock_log(knocked_at)`,
+    // Partial expression index for the impossible-travel reference lookup on the
+    // hot knock write (getLatestLocatedKnockByRep): seek the rep's newest
+    // LOCATED knock by effective timestamp without touching unlocated rows.
+    // Expression matches the query's COALESCE(device_ts, knocked_at) exactly.
+    `CREATE INDEX IF NOT EXISTS idx_knock_log_rep_located ON knock_log(rep_id, COALESCE(device_ts, knocked_at) DESC) WHERE rep_lat IS NOT NULL AND rep_lng IS NOT NULL`,
 
     // ══ WEEKLY COMMISSION (Phase 2) — additive; isolated from the old commission system ══
     // Org workweek config on tenants (safe backfill via NOT NULL DEFAULT).
@@ -2635,48 +2714,63 @@ export class Storage implements IStorage {
       params.push(assignedRep);
     }
     const where = clauses.length ? clauses.join(" AND ") : "1 = 1";
-    return rawDb.prepare(`
-      WITH scoped AS MATERIALIZED (
-        SELECT
-          l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
-          l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
-          l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
-          l.lead_score AS leadScore,
-          l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
-          l.assign_mark AS assignMark, l.do_not_knock AS doNotKnock,
-          -- The lead's OWN disposition columns. The knock CAS keeps these
-          -- monotonic by last_outcome_at, and central marks write them with NO
-          -- knock row — so the pin's outcome must be able to come from here,
-          -- not only from the knock join below.
-          l.last_outcome AS leadLastOutcome, l.last_outcome_at AS leadLastOutcomeAt
-        FROM leads l
-        WHERE ${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
-          -- Competitive-eligibility gate: a lead retracted because a fiber
-          -- competitor (or an unresolved competitor) was found is off the rep map.
-          -- Scope gate (Kinetic-only NC/SC): frontier-carrier and out-of-state
-          -- leads are suppressed (status flip, audit-logged), never deleted.
-          AND l.lead_status NOT IN ('competitor_suppressed','scope_suppressed','address_review')
-      ), ranked_visits AS (
-        SELECT
-          k.lead_id AS leadId,
-          k.outcome AS lastOutcome,
-          k.knocked_at AS lastKnockedAt,
-          COUNT(*) OVER (PARTITION BY k.lead_id) AS knockCount,
-          ROW_NUMBER() OVER (
-            PARTITION BY k.lead_id ORDER BY k.knocked_at DESC, k.id DESC
-          ) AS rowNumber
-        FROM knock_log k
-        INNER JOIN scoped s ON s.id = k.lead_id
-      )
+    // Scope predicate shared by both statements below. The lead_status gate:
+    //   - Competitive-eligibility: a lead retracted because a fiber competitor
+    //     (or an unresolved competitor) was found is off the rep map.
+    //   - Scope gate (Kinetic-only NC/SC): frontier-carrier and out-of-state
+    //     leads are suppressed (status flip, audit-logged), never deleted.
+    const scopePred = `${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
+          AND l.lead_status NOT IN ('competitor_suppressed','scope_suppressed','address_review')`;
+    // TWO statements merged via a JS Map, replacing the single CTE query whose
+    // window pass sorted every scoped knock AND whose wide MATERIALIZED CTE was
+    // re-scanned through an automatic index for the final join (measured
+    // 283ms -> 172ms at 20k leads / 50k knocks; the window alone was ~125ms).
+    //
+    // Statement 1 — the wide pin projection, one index walk over leads.
+    // The lead's OWN disposition columns ride along: the knock CAS keeps them
+    // monotonic by last_outcome_at, and central marks write them with NO knock
+    // row — so the pin's outcome must be able to come from here, not only from
+    // the knock aggregate.
+    const rows = rawDb.prepare(`
       SELECT
-        s.id, s.address, s.city, s.state, s.zip, s.lat, s.lng,
-        s.leadStatus, s.fiberStatus, s.assignedRepId, s.assignedTerritoryId, s.leadScore,
-        s.leadTag, s.freshConfidence, s.carrier, s.assignMark, s.doNotKnock,
-        s.leadLastOutcome, s.leadLastOutcomeAt,
-        rv.knockCount, rv.lastOutcome, rv.lastKnockedAt
-      FROM scoped s
-      LEFT JOIN ranked_visits rv ON rv.leadId = s.id AND rv.rowNumber = 1
+        l.id, l.address, l.city, l.state, l.zip, l.lat, l.lng,
+        l.lead_status AS leadStatus, l.fiber_status AS fiberStatus,
+        l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
+        l.lead_score AS leadScore,
+        l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
+        l.assign_mark AS assignMark, l.do_not_knock AS doNotKnock,
+        l.last_outcome AS leadLastOutcome, l.last_outcome_at AS leadLastOutcomeAt
+      FROM leads l
+      WHERE ${scopePred}
     `).all(...params) as MapPinRow[];
+    if (!rows.length) return rows;
+    // Statement 2 — per-lead visit aggregate over EXACTLY the leads statement 1
+    // returned (their ids ride in via json_each, so a rep-scoped call does
+    // O(K_scope) work and never re-evaluates the scope predicate). The
+    // correlated pick reads the latest knock's outcome with one indexed seek
+    // per knocked lead (idx_knock_log_lead_time_desc), keeping the exact
+    // deterministic tie-break the old window ORDER BY used
+    // (knocked_at DESC, id DESC).
+    const agg = rawDb.prepare(`
+      SELECT k.lead_id AS leadId,
+             COUNT(*) AS knockCount,
+             MAX(k.knocked_at) AS lastKnockedAt,
+             (SELECT k2.outcome FROM knock_log k2
+               WHERE k2.lead_id = k.lead_id
+               ORDER BY k2.knocked_at DESC, k2.id DESC
+               LIMIT 1) AS lastOutcome
+      FROM knock_log k
+      WHERE k.lead_id IN (SELECT value FROM json_each(?))
+      GROUP BY k.lead_id
+    `).all(JSON.stringify(rows.map(r => r.id))) as Array<{ leadId: number; knockCount: number; lastKnockedAt: string; lastOutcome: string | null }>;
+    const byLead = new Map(agg.map(a => [a.leadId, a]));
+    for (const r of rows) {
+      const a = byLead.get(r.id);
+      r.knockCount = a?.knockCount ?? null;
+      r.lastOutcome = a?.lastOutcome ?? null;
+      r.lastKnockedAt = a?.lastKnockedAt ?? null;
+    }
+    return rows;
   }
 
   // Recently-discovered leads for the "fresh leads" feed: created within the last
@@ -3050,6 +3144,106 @@ export class Storage implements IStorage {
   getKnocksByRep(repId: number): Knock[] {
     return db.select().from(knockLog).where(eq(knockLog.repId, repId)).all();
   }
+  // LIMIT pushed into SQL: idx_knock_log_rep serves (rep_id = ?) and a reverse
+  // scan of its rowid tail yields id DESC — the activity card reads 50 rows
+  // instead of hydrating a season's worth of knocks per request.
+  getRecentKnocksByRep(repId: number, limit: number): Knock[] {
+    return db.select().from(knockLog).where(eq(knockLog.repId, repId))
+      .orderBy(desc(knockLog.id)).limit(limit).all();
+  }
+  // The impossible-travel reference point for classifyKnockLocation: the rep's
+  // newest located knock by effective timestamp (device_ts when present, else
+  // knocked_at — matching the old JS `deviceTs ?? knockedAt` sort). Served by
+  // the partial expression index idx_knock_log_rep_located, so the hot knock
+  // write no longer hydrates + sorts the rep's entire history. Ties (identical
+  // effective ts) break by id DESC; the old JS sort left tie order unspecified.
+  getLatestLocatedKnockByRep(repId: number): { repLat: number; repLng: number; deviceTs: string | null; knockedAt: string } | undefined {
+    return rawDb.prepare(
+      `SELECT rep_lat AS repLat, rep_lng AS repLng, device_ts AS deviceTs, knocked_at AS knockedAt
+         FROM knock_log
+        WHERE rep_id = ? AND rep_lat IS NOT NULL AND rep_lng IS NOT NULL
+        ORDER BY COALESCE(device_ts, knocked_at) DESC, id DESC
+        LIMIT 1`
+    ).get(repId) as { repLat: number; repLng: number; deviceTs: string | null; knockedAt: string } | undefined;
+  }
+  // Narrow projections for the territory progress/activity computations. Same
+  // row sets as getLeads(tid)/getKnocks(tid) — the tenant wall is identical —
+  // but selecting only the fields the math reads: the wide Drizzle hydration
+  // was ~85% of the old /api/territories/progress latency (measured 596ms at
+  // 20k leads + 50k knocks; these two reads were ~520ms of it).
+  getLeadsForTerritoryProgress(tenantId?: number): TerritoryProgressLead[] {
+    const where = tenantId != null ? "WHERE tenant_id = ?" : "";
+    return rawDb.prepare(
+      `SELECT id, address, city, state, zip, lat, lng,
+              lead_status AS leadStatus, do_not_knock AS doNotKnock
+         FROM leads ${where}`
+    ).all(...(tenantId != null ? [tenantId] : [])) as TerritoryProgressLead[];
+  }
+  getKnocksForTerritoryProgress(tenantId?: number): TerritoryProgressKnock[] {
+    const where = tenantId != null ? "WHERE tenant_id = ?" : "";
+    // Six columns, no ORDER BY: the progress math is entirely order-independent
+    // (counts, any-of flags, MAX timestamps) — the old full hydration paid a
+    // sort plus ~25 extra columns per knock for nothing.
+    return rawDb.prepare(
+      `SELECT lead_id AS leadId, outcome, was_home AS wasHome,
+              knocked_at AS knockedAt, verification_status AS verificationStatus,
+              distance_m AS distanceM
+         FROM knock_log ${where}`
+    ).all(...(tenantId != null ? [tenantId] : [])) as TerritoryProgressKnock[];
+  }
+  // The per-area activity feed's knock rows — filtered IN SQL to the doors
+  // inside the territory polygon (json_each carries the id set, so a 20k-lead
+  // tenant doesn't hydrate 50k knocks to keep the ~1/territory-share it needs).
+  // knocked_at DESC matches getKnocks' old ordering — the route's JS sort is
+  // stable, so equal-timestamp rows keep the same relative order as before.
+  getKnocksForTerritoryActivity(tenantId: number | undefined, leadIds: number[]): TerritoryActivityKnock[] {
+    if (!leadIds.length) return [];
+    const tenantAnd = tenantId != null ? "AND tenant_id = ?" : "";
+    return rawDb.prepare(
+      `SELECT id, lead_id AS leadId, rep_id AS repId, outcome,
+              knocked_at AS knockedAt, device_ts AS deviceTs, server_ts AS serverTs,
+              verification_status AS verificationStatus, distance_m AS distanceM,
+              gps_accuracy AS gpsAccuracy, review_reason AS reviewReason,
+              net_state AS netState, rep_lat AS repLat, rep_lng AS repLng
+         FROM knock_log
+        WHERE lead_id IN (SELECT value FROM json_each(?)) ${tenantAnd}
+        ORDER BY knocked_at DESC`
+    ).all(JSON.stringify(leadIds), ...(tenantId != null ? [tenantId] : [])) as TerritoryActivityKnock[];
+  }
+  // Address labels for a bounded id set (the 50-row activity card) — replaces
+  // hydrating every lead in the tenant to read two columns off 50 of them.
+  getLeadAddressesByIds(ids: number[], tenantId?: number): Array<{ id: number; address: string; city: string }> {
+    if (!ids.length) return [];
+    const ph = ids.map(() => "?").join(",");
+    const tenantAnd = tenantId != null ? "AND tenant_id = ?" : "";
+    return rawDb.prepare(
+      `SELECT id, address, city FROM leads WHERE id IN (${ph}) ${tenantAnd}`
+    ).all(...ids, ...(tenantId != null ? [tenantId] : [])) as Array<{ id: number; address: string; city: string }>;
+  }
+  // Narrow projection for /api/stats — identical scoping to getLeads (tenant
+  // wall; array scope empty = match nothing, fail-closed), minus the full-row
+  // hydration and the ORDER BY the aggregation loop never needed.
+  getLeadStatsRows(tenantId?: number, assignedRep?: number | number[]): LeadStatsRow[] {
+    const conds: string[] = [];
+    const params: number[] = [];
+    if (tenantId != null) { conds.push("tenant_id = ?"); params.push(tenantId); }
+    if (Array.isArray(assignedRep)) {
+      if (!assignedRep.length) return [];
+      conds.push(`assigned_rep_id IN (${assignedRep.map(() => "?").join(",")})`);
+      params.push(...assignedRep);
+    } else if (assignedRep != null) {
+      conds.push("assigned_rep_id = ?");
+      params.push(assignedRep);
+    }
+    const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+    return rawDb.prepare(
+      `SELECT lead_status AS leadStatus, fiber_status AS fiberStatus,
+              is_new_fiber AS isNewFiber, is_tenured AS isTenured,
+              assigned_rep_id AS assignedRepId, city, state,
+              created_at AS createdAt, updated_at AS updatedAt
+         FROM leads ${where}`
+    ).all(...params) as LeadStatsRow[];
+  }
   // Open follow-ups — TWO arms, because dispositions land in two places:
   //
   //  (1) Knock-scheduled callbacks: leads whose MOST-RECENT knock is a scheduled
@@ -3242,14 +3436,23 @@ export class Storage implements IStorage {
     const tenantJoin = tenantId != null
       ? `JOIN leads ON leads.id = knock_log.lead_id AND leads.tenant_id = ?`
       : "";
+    // Grouped aggregate + one indexed latest-row seek per lead, replacing the
+    // window pass that sorted every knock (same rewrite as getLeadsForMap).
+    // The correlated pick keeps the window's exact ordering — applied
+    // (superseded = 0) rows first, then knocked_at DESC, id DESC.
     const rows = rawDb.prepare(
-      `SELECT leadId, count, lastAt, outcome AS lastOutcome FROM (
-         SELECT knock_log.lead_id AS leadId, knock_log.outcome,
-                SUM(CASE WHEN knock_log.superseded = 0 THEN 1 ELSE 0 END) OVER (PARTITION BY knock_log.lead_id) AS count,
-                MAX(knocked_at) OVER (PARTITION BY knock_log.lead_id) AS lastAt,
-                ROW_NUMBER()    OVER (PARTITION BY knock_log.lead_id ORDER BY (knock_log.superseded = 0) DESC, knocked_at DESC, knock_log.id DESC) AS rn
-         FROM knock_log ${tenantJoin}
-       ) WHERE rn = 1`
+      `SELECT g.leadId, g.count, g.lastAt,
+              (SELECT k2.outcome FROM knock_log k2
+                WHERE k2.lead_id = g.leadId
+                ORDER BY (k2.superseded = 0) DESC, k2.knocked_at DESC, k2.id DESC
+                LIMIT 1) AS lastOutcome
+         FROM (
+           SELECT knock_log.lead_id AS leadId,
+                  SUM(CASE WHEN knock_log.superseded = 0 THEN 1 ELSE 0 END) AS count,
+                  MAX(knocked_at) AS lastAt
+           FROM knock_log ${tenantJoin}
+           GROUP BY knock_log.lead_id
+         ) g`
     ).all(...(tenantId != null ? [tenantId] : [])) as any[];
     const m = new Map<number, { count: number; lastOutcome: string; lastAt: string }>();
     for (const r of rows) m.set(r.leadId, { count: r.count, lastOutcome: r.lastOutcome, lastAt: r.lastAt });
@@ -3279,8 +3482,21 @@ export class Storage implements IStorage {
     //                               would miss it).
     // Knocks/contacts/callbacks intentionally still count every applied knock —
     // those are effort history, not live claims about the door's state.
+    //
+    // "Latest applied knock" (the old rn = 1) is now a NOT EXISTS probe instead
+    // of a ROW_NUMBER window: the window sorted EVERY applied knock in the table
+    // on every poll (~95ms of the call at 50k knocks) to compute a rank that
+    // only 'sold' rows ever read. The probe asks the equivalent question — no
+    // newer applied knock exists for this lead, ties broken by id exactly as
+    // the window's ORDER BY did — and runs only for the rows whose CASE reaches
+    // it, riding idx_knock_log_lead_time_desc (lead_id, knocked_at DESC, id DESC).
     const sold = (extra = "") =>
-      `k.outcome = 'sold' AND k.rn = 1 AND l.lead_status = 'sold'${extra}`;
+      `k.outcome = 'sold' AND l.lead_status = 'sold' AND NOT EXISTS (
+         SELECT 1 FROM knock_log kn
+          WHERE kn.lead_id = k.lead_id AND kn.superseded = 0
+            AND (kn.knocked_at > k.knocked_at
+                 OR (kn.knocked_at = k.knocked_at AND kn.id > k.id))
+       )${extra}`;
     const rows = rawDb.prepare(
       `SELECT k.rep_id AS repId,
          SUM(CASE WHEN ${w()} THEN 1 ELSE 0 END) AS knocks,
@@ -3289,12 +3505,11 @@ export class Storage implements IStorage {
          SUM(CASE WHEN ${w(` AND ${sold()}`)} THEN 1 ELSE 0 END) AS sales,
          SUM(CASE WHEN k.knocked_at >= @midnight THEN 1 ELSE 0 END) AS knocksToday,
          SUM(CASE WHEN k.knocked_at >= @midnight AND ${sold()} THEN 1 ELSE 0 END) AS salesToday
-       FROM (SELECT kk.*, ROW_NUMBER() OVER (
-               PARTITION BY kk.lead_id ORDER BY kk.knocked_at DESC, kk.id DESC) AS rn
-             FROM knock_log kk WHERE kk.superseded = 0) k
+       FROM knock_log k
        JOIN team_members t ON t.id = k.rep_id
        LEFT JOIN leads l ON l.id = k.lead_id
-       WHERE (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1
+       WHERE k.superseded = 0
+         AND (@tenantId IS NULL OR t.tenant_id = @tenantId) AND t.active = 1
        GROUP BY k.rep_id`
     ).all({ since: window?.since ?? null, until: window?.until ?? null, midnight: midnight.toISOString(), tenantId: tenantId ?? null }) as any[];
     const byRep = new Map(rows.map(r => [r.repId, r]));
@@ -3561,18 +3776,29 @@ export class Storage implements IStorage {
     // location_pings has no tenant_id column — scope through the rep's tenant by
     // restricting to team members in that tenant, so one org never sees another
     // org's live rep locations.
-    const allowed = tenantId != null
-      ? new Set(this.getTeamMembers(tenantId).map(m => m.id))
-      : null;
-    // Get all pings, group by repId keeping most recent
-    const all = db.select().from(locationPings).orderBy(desc(locationPings.pingAt)).all();
-    const seen = new Set<number>();
-    return all.filter(p => {
-      if (allowed && !allowed.has(p.repId)) return false;
-      if (seen.has(p.repId)) return false;
-      seen.add(p.repId);
-      return true;
-    });
+    //
+    // One indexed pick per rep (idx_location_pings_rep rides (rep_id, ping_at))
+    // instead of hydrating and sorting the ENTIRE ping table on every poll —
+    // pings accrete forever (~1/min/rep while clocked in), so the old full-scan
+    // grew without bound (measured 125ms at 60k pings, and climbing). The
+    // grouped MAX picks each rep's newest ping (id DESC breaks exact-timestamp
+    // ties deterministically; the old sort left tie order unspecified), and the
+    // outer ORDER BY preserves the previous newest-first output order.
+    const tenantWhere = tenantId != null
+      ? "WHERE g.rep_id IN (SELECT id FROM team_members WHERE tenant_id = ?)"
+      : "";
+    return rawDb.prepare(
+      `SELECT p.id, p.rep_id AS repId, p.user_id AS userId, p.lat, p.lng,
+              p.accuracy, p.ping_at AS pingAt
+         FROM (SELECT rep_id FROM location_pings GROUP BY rep_id) g
+         JOIN location_pings p ON p.id = (
+           SELECT p2.id FROM location_pings p2
+            WHERE p2.rep_id = g.rep_id
+            ORDER BY p2.ping_at DESC, p2.id DESC
+            LIMIT 1)
+         ${tenantWhere}
+        ORDER BY p.ping_at DESC`
+    ).all(...(tenantId != null ? [tenantId] : [])) as LocationPing[];
   }
   getPingsByRep(repId: number, limit = 50): LocationPing[] {
     return db.select().from(locationPings).where(eq(locationPings.repId, repId))
