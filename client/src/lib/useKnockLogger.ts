@@ -82,9 +82,13 @@ export function useKnockLogger() {
     }
     const at = new Date().toISOString();
     // Optimistic recolor on the SHARED map cache — the pin updates everywhere at once.
+    // lastOutcomeAt mirrors the server's CAS clock (the knock's knockedAt IS
+    // what applyKnockOutcomeCas writes to last_outcome_at), so a teammate's
+    // OLDER push arriving after this tap loses the stream merge's recency
+    // comparison exactly like it loses the server CAS.
     qc.setQueryData(["/api/leads/map"], (old: any) => old?.pins
       ? { ...old, pins: old.pins.map((p: any) => p.id === lead.id
-          ? { ...p, leadStatus: OUTCOME_TO_STATUS[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: at }
+          ? { ...p, leadStatus: OUTCOME_TO_STATUS[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: at, lastOutcomeAt: at }
           : p) }
       : old);
     const staged = queue.stage({

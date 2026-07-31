@@ -38,6 +38,17 @@ describe("packed map-pin wire format", () => {
     expect(out[1].carrier).toBe("kinetic");
   });
 
+  it("carries lastOutcomeAt (v7) so the client can re-run the server's outcome CAS", () => {
+    // A centrally marked, never-knocked door: outcome + clock, NO knock time.
+    // This is the pin whose stream merges were unorderable before v7.
+    const pins = [
+      { id: 1, lat: 35.8, lng: -80.2, leadStatus: "follow_up", address: "1 A St", city: "X", state: "NC", zip: "27292", visited: true, lastOutcome: "follow_up", lastOutcomeAt: "2026-07-30T10:05:00.000Z" },
+    ];
+    const { pins: out } = unpackMapPins<typeof pins[number]>(packMapPins(pins));
+    expect(out[0].lastOutcomeAt).toBe("2026-07-30T10:05:00.000Z");
+    expect((out[0] as any).lastKnockedAt).toBeUndefined();
+  });
+
   it("rejects unknown versions and malformed rows", () => {
     expect(() => unpackMapPins({ v: 99, total: 0, rows: [] })).toThrow(/Unsupported/);
     expect(() => unpackMapPins({ v: MAP_PINS_WIRE_VERSION, total: 1, rows: [[1]] })).toThrow(/Invalid map row 0/);

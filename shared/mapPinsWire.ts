@@ -7,7 +7,13 @@
  */
 // Bumped 2 → 3 when `carrier` was added; 3 → 4 when `assignMark` was added;
 // 4 → 5 when `assignedTerritoryId` was added; 5 → 6 when `doNotKnock` was
-// added (the compliance "never return" block must show on the pin).
+// added (the compliance "never return" block must show on the pin); 6 → 7 when
+// `lastOutcomeAt` was added — the recency clock the server's outcome CAS
+// orders writes by (leads.last_outcome_at; the knock join's time for legacy
+// rows). The live lead stream carries the same clock on every push, so without
+// it on the pin the client cannot re-run the server's ordering rule when a
+// push and a refetch race — it was falling back to lastKnockedAt, which a
+// central mark (no knock row) never advances.
 // unpackMapPins hard-fails on a row-length mismatch, so a version skew returns
 // empty pins — server + client MUST ship together. `carrier` lets a Frontier
 // confirmed-fresh lead paint red instead of Kinetic-green; `assignMark` lets a
@@ -20,13 +26,13 @@
 // already holds the territory list, so shipping the 4-byte area id lets it
 // resolve the full rep set in O(1) per pin instead of a second request or a
 // per-lead point-in-polygon scan.
-export const MAP_PINS_WIRE_VERSION = 6 as const;
+export const MAP_PINS_WIRE_VERSION = 7 as const;
 
 export const MAP_PIN_WIRE_FIELDS = [
   "id", "lat", "lng", "leadStatus", "address", "city", "state", "zip",
   "fiberStatus", "assignedRepId", "leadScore", "visited", "knockCount",
   "lastOutcome", "lastKnockedAt", "leadTag", "freshConfidence", "carrier",
-  "assignMark", "assignedTerritoryId", "doNotKnock",
+  "assignMark", "assignedTerritoryId", "doNotKnock", "lastOutcomeAt",
 ] as const;
 
 export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];
