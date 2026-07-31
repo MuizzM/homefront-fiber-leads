@@ -239,7 +239,11 @@ export function LeadCard({ property, onClose, onAddLead, onOpen, canAdd = true }
     <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent
         side="bottom"
-        className="max-h-[88vh] overflow-y-auto rounded-t-3xl border-border p-0"
+        // transition-none overrides the sheet base's bare `transition`
+        // (= transition-all on a full-width surface — a paint/layout trap);
+        // enter/exit stay on the base's GPU keyframes (slide+fade, 200ms in /
+        // 150ms out). will-change keeps the slide on the compositor.
+        className="max-h-[88vh] overflow-y-auto rounded-t-3xl border-border p-0 transition-none will-change-transform"
         data-testid="lead-card"
         data-variant={variant}
       >

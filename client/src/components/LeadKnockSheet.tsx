@@ -68,7 +68,7 @@ export interface SheetLead {
 }
 
 export interface LeadKnockSheetProps {
-  lead: SheetLead | null;                 // null → animate out then unmount after 300ms
+  lead: SheetLead | null;                 // null → animate out then unmount after 200ms
   // Explicit false means the command was rejected before it could be queued.
   // Void remains accepted for backward-compatible non-map consumers.
   onKnock: (outcome: KnockOutcome) => boolean | void;
@@ -160,11 +160,13 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const { lead, onKnock, onSaveNote, onClose, dockOffsetPx = 0, onPeekHeight } = props;
 
   // Keep the last lead rendered while `lead: null` animates the sheet out.
+  // 200ms matches the exit transition — the map is interactive the whole time
+  // (pointer-events are dropped the instant close starts, below).
   const [renderedLead, setRenderedLead] = useState<SheetLead | null>(lead);
   const closing = lead === null;
   useEffect(() => {
     if (lead) { setRenderedLead(lead); return; }
-    const t = setTimeout(() => setRenderedLead(null), 300);
+    const t = setTimeout(() => setRenderedLead(null), 200);
     return () => clearTimeout(t);
   }, [lead]);
 
@@ -196,6 +198,20 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   const [quickPx, setQuickPx] = useState<number | null>(null); // handle + header + quick body
   const lastPublished = useRef<{ snap: SheetSnap; px: number } | null>(null);
   const mounted = renderedLead != null;
+
+  // Entrance: the FULL shell (header + grid + notes, from the pin payload the
+  // caller already holds) mounts and paints on the open frame; only the slide
+  // is animated — a one-frame flip from the off-screen transform to the snap
+  // transform, riding the 200ms GPU transform transition below. Nothing waits
+  // on a fetch. Reduced-motion users get it instant via the global CSS block.
+  const [entered, setEntered] = useState(false);
+  useEffect(() => {
+    if (!mounted) { setEntered(false); return; }
+    if (entered) return;
+    const raf = requestAnimationFrame(() => setEntered(true));
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted]);
   useLayoutEffect(() => {
     if (!mounted) {
       setMeasuredPeekPx(null);          // no sheet → camera padding falls back
@@ -406,6 +422,19 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
     queryKey: [`/api/leads/${leadId}`],
     enabled: !!lead && leadId > 0,
     staleTime: 60_000,
+    // First open of a door: seed from the pin payload the caller already holds
+    // so locality/status/tag render on the open frame instead of after the
+    // fetch. Deliberately NO updatedAt/notes here — the note-conflict base must
+    // only ever come from a real server response (the effect below re-runs when
+    // the fetch replaces this placeholder). Never the previous lead's data: the
+    // id guard keeps a card swap from wearing the outgoing door's facts.
+    placeholderData: () => (renderedLead && renderedLead.id === leadId
+      ? {
+          id: renderedLead.id,
+          city: renderedLead.city, state: renderedLead.state, zip: renderedLead.zip,
+          leadStatus: renderedLead.leadStatus, leadTag: renderedLead.leadTag,
+        }
+      : undefined),
   });
   useEffect(() => {
     // Composer starts empty — committed notes are read from History. The
@@ -613,9 +642,10 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
       ? { text: "Fresh fiber", className: "border-emerald-400/35 bg-emerald-400/10 text-emerald-300" }
       : null;
 
+  const offscreen = closing || !entered;
   const transform = docked
-    ? (closing ? "translateX(110%)" : "translateX(0)")
-    : closing
+    ? (offscreen ? "translateX(110%)" : "translateX(0)")
+    : offscreen
       ? "translateY(100%)"
       : dragging
         ? `translateY(${dragYRef.current}px)`
@@ -699,7 +729,12 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
         docked
           ? "inset-y-0 right-0 w-[380px] rounded-l-[24px] border-l border-white/10"
           : "inset-x-0 bottom-0 h-[min(85dvh,640px)] rounded-t-[24px] border-t border-white/10",
-        dragging ? "" : "transition-transform duration-300",
+        // 200ms transform-only (GPU) — never transition-all, never >=300ms.
+        dragging ? "" : "transition-transform duration-200",
+        // Close is instant for the MAP: the moment `lead` clears, the exit
+        // animation keeps running but the sheet stops eating pointer events,
+        // so the pin/map underneath responds on the very next tap.
+        closing ? "pointer-events-none" : "",
       ].join(" ")}
       style={{
         transform,
