@@ -95,7 +95,7 @@ export function MapFilterSheet({
         {/* Status — the pin palette, tappable */}
         <div className="mt-4">
           <div className={EYEBROW}>Status</div>
-          <div className="mt-2 grid grid-cols-4 gap-2">
+          <div className="mt-2 grid grid-cols-4 gap-3">
             {statusOrder.map((s) => {
               const selected = activeStatus === s;
               const color = colors[s] ?? "#64748b";
@@ -108,12 +108,15 @@ export function MapFilterSheet({
                   data-testid={`map-filter-status-${s}`}
                   className={`min-h-11 flex flex-col items-center gap-1 rounded-xl px-1 py-2 active:scale-95 transition ${selected ? "bg-secondary/60" : "hover:bg-secondary/40"} ${FOCUS}`}
                 >
+                  {/* Ring at FULL state color + a /15 tint keeps the chip
+                      legible in light theme; selected = solid disc with a
+                      white glyph-dot and an offset ring. */}
                   <span
-                    className={`w-9 h-9 rounded-full ring-2 flex items-center justify-center ${selected ? "ring-offset-2 ring-offset-card" : ""}`}
-                    style={{ "--tw-ring-color": color, backgroundColor: selected ? color : "transparent" } as React.CSSProperties}
+                    className={`w-10 h-10 rounded-full ring-2 flex items-center justify-center ${selected ? "ring-offset-2 ring-offset-card" : ""}`}
+                    style={{ "--tw-ring-color": color, backgroundColor: selected ? color : `${color}26` } as React.CSSProperties}
                     aria-hidden="true"
                   >
-                    <span className={`w-3 h-3 rounded-full ${selected ? "bg-card" : ""}`} style={selected ? undefined : { backgroundColor: color }} />
+                    <span className={`w-3 h-3 rounded-full ${selected ? "bg-white" : ""}`} style={selected ? undefined : { backgroundColor: color }} />
                   </span>
                   <span className="max-w-full truncate text-[11px] leading-tight text-foreground">{labels[s] ?? s}</span>
                   <span className="text-[11px] leading-none tabular-nums text-muted-foreground">{statusCounts[s] ?? 0}</span>

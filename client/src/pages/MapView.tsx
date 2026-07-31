@@ -18,10 +18,10 @@ import {
   Search,
   LocateFixed,
   Menu,
-  Lasso,
+  LassoSelect,
   Radar,
   Loader2,
-  Layers,
+  Ellipsis,
   CheckCircle2,
   AlertCircle,
   List,
@@ -139,7 +139,7 @@ import { territoryPaint, territoryBeforeId, pickUnusedTerritoryColor } from "@/l
 import { lockGesturesForDrawing, lockDocumentPullToRefresh, mapGestureTarget } from "@/lib/lassoGestureLock";
 import { AreaAssigneeBar } from "@/components/territory/AreaAssigneeBar";
 import { resolveTerritoryTap } from "@/lib/territoryPick";
-import { TerritoryColorPicker, TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
+import { TERRITORY_SWATCHES } from "@/components/territory/TerritoryColorPicker";
 import {
   subscribeLeadStream,
   createFetchEventSource,
@@ -157,6 +157,12 @@ import { RepPicker } from "@/components/territory/RepPicker";
 import { MapFilterSheet } from "@/components/map/MapFilterSheet";
 import { MapSettingsSheet } from "@/components/map/MapSettingsSheet";
 import { FOCUS } from "@/lib/a11y";
+
+// ── Control-rail button grammar — ONE uniform rounded-square style for every
+//    top-left map control (SalesRabbit rail). Active = solid primary.
+const RAIL_BTN = `relative w-11 h-11 rounded-xl border shadow-sm flex items-center justify-center active:scale-95 transform-gpu transition ${FOCUS}`;
+const RAIL_BTN_IDLE = "bg-card/95 border-border text-foreground hover:bg-card";
+const RAIL_BTN_ACTIVE = "bg-primary border-primary text-primary-foreground";
 import { chaikinSmooth } from "@shared/strokeSmoothing";
 import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
@@ -837,7 +843,6 @@ export default function MapView() {
 
   // ── Icon-cluster panels ──
   const [searchOpen, setSearchOpen] = useState(false);
-  const [layersOpen, setLayersOpen] = useState(false);
   const searchBtnRef = useRef<HTMLButtonElement | null>(null); // focus returns here on close
   // Leads-in-view panel (right drawer/rail) — viewport bounds captured on a
   // debounced moveend; ref-guarded so a CLOSED panel costs zero React renders
@@ -851,7 +856,6 @@ export default function MapView() {
   }, [leadsOpen]);
   const bboxTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const layersBtnRef = useRef<HTMLButtonElement | null>(null); // focus returns here on layers close
   // Tools menu — the ONE floating button every secondary tool lives behind.
   const [toolsMenuOpen, setToolsMenuOpen] = useState(false);
   const toolsMenuBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -1200,6 +1204,7 @@ export default function MapView() {
   const canReclaimAll = roleCan(user?.role, "reclaim_all_territories");
   // Admin, manager, and team lead can carve out areas and assign them to reps.
   const canAssign =
+    user?.role === "super_admin" ||
     user?.role === "admin" ||
     user?.role === "manager" ||
     user?.role === "team_lead";
@@ -1894,7 +1899,9 @@ export default function MapView() {
     queryKey: ["/api/territories/progress"],
     queryFn: async () =>
       (await apiRequest("GET", "/api/territories/progress")).json(),
-    enabled: !!user && canAssign,
+    // EVERY role: the server scopes the list (reps get only areas they hold),
+    // and reps deserve the same penetration/completion read the office has.
+    enabled: !!user,
     refetchInterval: 30000,
   });
   // Expose globally so popup onclick handlers can access current data.
@@ -4300,9 +4307,6 @@ export default function MapView() {
         setSearchOpen(false);
         setSidebarSearch("");
         searchBtnRef.current?.focus();
-      } else if (layersOpen) {
-        setLayersOpen(false);
-        layersBtnRef.current?.focus();
       } else if (leadsOpen) {
         setLeadsOpen(false);
         leadsBtnRef.current?.focus();
@@ -4317,7 +4321,6 @@ export default function MapView() {
     return () => window.removeEventListener("keydown", onKey);
   }, [
     searchOpen,
-    layersOpen,
     leadsOpen,
     lassoMode,
     scanDrawMode,
@@ -5185,7 +5188,6 @@ export default function MapView() {
     chromeHidden &&
     !toolsMenuOpen &&
     !filterOpen &&
-    !layersOpen &&
     !searchOpen &&
     !leadsOpen &&
     !legendOpen;
@@ -5503,8 +5505,9 @@ export default function MapView() {
       {mapReady && leads.length > 0 && !lassoMode && (
         <div
           style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
-          // Right of the 44px nav-menu button on phones; ≥768px it's hidden → left-3.
-          className={`absolute left-[60px] md:left-3 z-30 ${secondaryCls}`}
+          // Right of the 44px nav-menu button on phones and clear of the
+          // control rail's top-left column on desktop.
+          className={`absolute left-[64px] z-30 ${secondaryCls}`}
           data-testid="status-filter-control"
         >
           {!filterOpen ? (
@@ -5833,7 +5836,7 @@ export default function MapView() {
           {mapReady && !isRep && leads.length > 0 && filterStatus !== "all" && lassoMode && (
             <div
               style={{ top: "calc(env(safe-area-inset-top) + 0.75rem)" }}
-              className="glass-capsule glass-opaque absolute left-[64px] md:left-3 md:top-3 z-10 flex items-center gap-2 pl-3 pr-1.5 min-h-[36px]"
+              className="glass-capsule glass-opaque absolute left-[64px] md:top-3 z-10 flex items-center gap-2 pl-3 pr-1.5 min-h-[36px]"
             >
               <span
                 className="w-1.5 h-1.5 rounded-full"
@@ -6052,7 +6055,7 @@ export default function MapView() {
                 /* Drawn → Sales Rabbit-style: status breakdown (tap chips to
                    refine), then an action on the refined set — Assign owner, Set
                    status, or Save as area. */
-                <div className="glass-surface flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))]">
+                <div className="glass-surface flex flex-col gap-2.5 border-teal-300/40 px-3 py-2.5 animate-in fade-in slide-in-from-bottom-2 duration-200 w-[min(468px,calc(100vw-24px))] max-h-[calc(100dvh-7rem)] overflow-y-auto">
                   {/* Count + per-status breakdown; tap a chip to include/exclude it.
                       With no doors in the loop there is nothing to break down and
                       nothing to refine — say so plainly instead of showing "0/0"
@@ -6195,7 +6198,9 @@ export default function MapView() {
                     </button>
                   </div>
 
-                  {/* Mode control + Apply — the active tile's secondary flow */}
+                  {/* Mode control + Apply — the active tile's secondary flow.
+                      The Area flow gets its own labeled section below. */}
+                  {lassoEffectiveAction !== "area" && (
                   <div className="flex items-center gap-2">
                     {lassoEffectiveAction === "assign" && (
                       <>
@@ -6325,14 +6330,26 @@ export default function MapView() {
                         </Button>
                       </>
                     )}
-                    {lassoEffectiveAction === "area" && (
-                      <>
-                        <TerritoryColorPicker
-                          value={lassoColor}
-                          onChange={setLassoColor}
-                          disabled={assignAreaMutation.isPending}
-                        />
+                  </div>
+                  )}
+
+                  {/* Area flow — a bordered section with labeled rows: name,
+                      color as ONE wrapped swatch row (never a stacked pile),
+                      rep, then Save as the full-width primary. */}
+                  {lassoEffectiveAction === "area" && (
+                    <div
+                      className="rounded-xl border border-border p-3 flex flex-col gap-3"
+                      data-testid="lasso-area-section"
+                    >
+                      <div className="flex flex-col gap-1.5">
+                        <label
+                          htmlFor="lasso-area-name-input"
+                          className="text-[11px] font-semibold uppercase tracking-wide text-white/60"
+                        >
+                          Area name
+                        </label>
                         <input
+                          id="lasso-area-name-input"
                           type="text"
                           value={lassoName}
                           onChange={(e) => setLassoName(e.target.value)}
@@ -6343,13 +6360,61 @@ export default function MapView() {
                               ? `"${team.find((m) => m.id === Number(lassoRepId))?.name ?? "Rep"}'s area"`
                               : "Area name…"
                           }
-                          className="h-11 w-[116px] rounded-full bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/55 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                          className="h-11 w-full rounded-lg bg-white/10 text-white text-[13px] px-3 border-0 placeholder:text-white/55 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
                         />
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <span
+                          id="lasso-area-color-label"
+                          className="text-[11px] font-semibold uppercase tracking-wide text-white/60"
+                        >
+                          Area color
+                        </span>
+                        <div
+                          role="radiogroup"
+                          aria-labelledby="lasso-area-color-label"
+                          data-testid="lasso-color-swatches"
+                          className="flex flex-wrap gap-2"
+                        >
+                          {TERRITORY_SWATCHES.map((color) => {
+                            const isOn =
+                              color.toLowerCase() === lassoColor.toLowerCase();
+                            return (
+                              <button
+                                key={color}
+                                type="button"
+                                role="radio"
+                                aria-checked={isOn}
+                                aria-label={`Area color ${color}`}
+                                disabled={assignAreaMutation.isPending}
+                                onClick={() => setLassoColor(color)}
+                                data-testid={`lasso-color-${color.replace("#", "").toLowerCase()}`}
+                                className={`w-8 h-8 rounded-full border border-white/20 transition active:scale-95 disabled:opacity-40 ${
+                                  isOn
+                                    ? "ring-2 ring-white ring-offset-2 ring-offset-transparent"
+                                    : ""
+                                } ${FOCUS}`}
+                                style={{ backgroundColor: color }}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <label
+                          htmlFor="lasso-area-rep-input"
+                          className="text-[11px] font-semibold uppercase tracking-wide text-white/60"
+                        >
+                          Assign to rep
+                        </label>
                         <select
+                          id="lasso-area-rep-input"
                           value={lassoRepId}
                           onChange={(e) => setLassoRepId(e.target.value)}
                           data-testid="lasso-area-rep-select"
-                          className="h-11 flex-1 min-w-0 rounded-full bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
+                          className="h-11 w-full rounded-lg bg-white/10 text-white text-[13px] px-3 border-0 focus:outline-none focus:ring-2 focus:ring-teal-400/60"
                         >
                           <option value="" className="text-slate-900">
                             Rep…
@@ -6366,34 +6431,33 @@ export default function MapView() {
                               </option>
                             ))}
                         </select>
-                        <Button
-                          disabled={!lassoRepId || assignAreaMutation.isPending}
-                          onClick={() =>
-                            assignAreaMutation.mutate({
-                              polygon: lassoPoints,
-                              repId: Number(lassoRepId),
-                              name: lassoName,
-                              color: lassoColor,
-                            })
-                          }
-                          type="button"
-                          data-testid="lasso-assign"
-                          className="h-11 rounded-full bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] px-4 disabled:opacity-40"
-                        >
-                          {assignAreaMutation.isPending ? "…" : "Save"}
-                        </Button>
-                      </>
-                    )}
-                  </div>
+                      </div>
 
-                  {lassoEffectiveAction === "area" && (
-                    <span className="text-[10.5px] text-white/45 leading-tight">
-                      Area assigns every house in the loop + saves a colored
-                      territory.
-                      {lassoHasLeads
-                        ? " The refine chips apply to Assign & Status."
-                        : " Doors added inside it later belong to the area too."}
-                    </span>
+                      <Button
+                        disabled={!lassoRepId || assignAreaMutation.isPending}
+                        onClick={() =>
+                          assignAreaMutation.mutate({
+                            polygon: lassoPoints,
+                            repId: Number(lassoRepId),
+                            name: lassoName,
+                            color: lassoColor,
+                          })
+                        }
+                        type="button"
+                        data-testid="lasso-assign"
+                        className="h-11 w-full rounded-lg bg-teal-500 hover:bg-teal-600 text-[#04241f] font-bold text-[13px] disabled:opacity-40"
+                      >
+                        {assignAreaMutation.isPending ? "…" : "Save area"}
+                      </Button>
+
+                      <span className="text-[11px] text-white/55 leading-tight">
+                        Area assigns every house in the loop + saves a colored
+                        territory.
+                        {lassoHasLeads
+                          ? " The refine chips apply to Assign & Status."
+                          : " Doors added inside it later belong to the area too."}
+                      </span>
+                    </div>
                   )}
                 </div>
               )}
@@ -6514,7 +6578,7 @@ export default function MapView() {
               );
               const isPool = status === "unassigned" || status === "reclaimed";
               return (
-                <div className="absolute top-16 left-3 z-30 animate-in fade-in slide-in-from-left-2 duration-200">
+                <div className="absolute top-16 left-[64px] z-30 animate-in fade-in slide-in-from-left-2 duration-200 max-h-[calc(100dvh-9rem)] overflow-y-auto overscroll-contain rounded-2xl">
                   <div className="relative">
                     <button
                       onClick={() => setSelectedTerritoryId(null)}
@@ -6825,13 +6889,13 @@ export default function MapView() {
 
           {/* ── Settings sheet — basemap + the REAL existing layer toggles
                  (leads layer for everyone; territories for team_lead+; rep
-                 color mode for managers). The 3-way layers popover keeps its
-                 Dark option; this sheet covers the two field basemaps. ── */}
+                 color mode for managers). The old layers popover is gone, so
+                 this sheet owns all three basemaps, Dark included. ── */}
           <MapSettingsSheet
             open={mapSettingsOpen}
             onClose={() => setMapSettingsOpen(false)}
             basemap={{
-              value: mapStyleMode === "streets" ? "streets" : "satellite",
+              value: mapStyleMode,
               onChange: (v) => setMapStyleMode(v),
             }}
             toggles={[
@@ -6870,13 +6934,13 @@ export default function MapView() {
             ]}
           />
 
-          {/* ── TOOLS MENU — the ONE floating button every secondary tool lives
-                 behind (Lane E2 map-first chrome). At rest the map shows only:
-                 this button, the compact status filter, Locate, and ONE
-                 contextual primary action (Next door for reps / Scan Map for
-                 scanners). Search, leads-in-view, layers/basemap, lasso,
-                 add-lead, and Live Test are all ≤2 taps away in this popover —
-                 nothing was removed. Fades out while panning/zooming. ── */}
+          {/* ── CONTROL RAIL — ONE vertical stack of uniform rounded-square
+                 buttons, top-left (SalesRabbit grammar): Search, Lasso
+                 (managers), Filters, Settings, then the overflow tools menu.
+                 Layers/basemap live in the settings sheet and the lasso has its
+                 own rail button, so the popover keeps only entries with no
+                 dedicated control. Fades out while panning/zooming. On phones
+                 the rail starts below the 44px nav-menu button. ── */}
           {mapReady && (
             <>
               {toolsMenuOpen && (
@@ -6886,51 +6950,75 @@ export default function MapView() {
                 />
               )}
               <div
-                className={`absolute top-3 right-3 z-40 flex flex-col items-end ${secondaryCls}`}
-                style={{ paddingTop: "env(safe-area-inset-top)" }}
+                className={`absolute left-3 top-[calc(env(safe-area-inset-top)+4rem)] md:top-[calc(env(safe-area-inset-top)+0.75rem)] z-40 flex flex-col items-start gap-2 ${secondaryCls}`}
                 data-testid="map-tools"
               >
+                {/* Search — opens the search panel directly (was popover-only). */}
                 <button
-                  ref={toolsMenuBtnRef}
+                  ref={searchBtnRef}
                   type="button"
                   onClick={() => {
-                    setToolsMenuOpen((o) => !o);
-                    setLayersOpen(false);
+                    setSearchOpen((o) => !o);
+                    setToolsMenuOpen(false);
+                    setLeadsOpen(false);
                   }}
-                  aria-label="Map tools"
-                  aria-expanded={toolsMenuOpen}
-                  data-testid="map-tools-menu"
-                  className={`glass-capsule glass-opaque h-10 w-10 flex items-center justify-center active:scale-[0.97] transform-gpu transition ${toolsMenuOpen ? "text-teal-200" : "text-white/90"}`}
+                  aria-label="Search leads and places"
+                  aria-pressed={searchOpen}
+                  data-testid="map-search-open"
+                  className={`${RAIL_BTN} ${searchOpen ? RAIL_BTN_ACTIVE : RAIL_BTN_IDLE}`}
                 >
-                  <SlidersHorizontal
-                    className="w-4.5 h-4.5"
-                    style={{ width: 18, height: 18 }}
-                    aria-hidden="true"
-                  />
+                  <Search className="w-5 h-5" aria-hidden="true" />
                 </button>
+
+                {/* Lasso — the draw-an-area mode toggle, managers only. */}
+                {canAssign && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setToolsMenuOpen(false);
+                      if (lassoMode) {
+                        exitLasso();
+                      } else {
+                        exitLasso();
+                        setAddMode(false); // draw tools and add-mode are mutually exclusive
+                        // Start on a colour nothing else is using, so two areas never
+                        // read as one region split by a road. The picker overrides it.
+                        setLassoColor(pickFreeColor());
+                        setLassoMode(true);
+                        setSearchOpen(false);
+                      }
+                    }}
+                    aria-label={
+                      lassoMode
+                        ? "Cancel area selection"
+                        : "Select an area (lasso)"
+                    }
+                    aria-pressed={lassoMode}
+                    data-testid="ctl-lasso"
+                    className={`${RAIL_BTN} ${lassoMode ? RAIL_BTN_ACTIVE : RAIL_BTN_IDLE}`}
+                  >
+                    <LassoSelect className="w-5 h-5" aria-hidden="true" />
+                  </button>
+                )}
 
                 {/* Filter sheet trigger — the SalesRabbit-style bottom sheet
                     over the SAME filterStatus/filterRep state as the pill and
-                    the manager legend. Teal dot = a filter is narrowing pins. */}
+                    the manager legend. Dot = a filter is narrowing pins. */}
                 <button
                   type="button"
                   onClick={() => {
                     setMapFilterOpen(true);
                     setToolsMenuOpen(false);
-                    setLayersOpen(false);
                   }}
                   aria-label="Open filters"
                   aria-haspopup="dialog"
                   data-testid="map-filter-open"
-                  className={`glass-capsule glass-opaque relative mt-2 h-10 w-10 flex items-center justify-center text-white/90 active:scale-[0.97] transform-gpu transition ${FOCUS}`}
+                  className={`${RAIL_BTN} ${RAIL_BTN_IDLE}`}
                 >
-                  <SlidersHorizontal
-                    style={{ width: 18, height: 18 }}
-                    aria-hidden="true"
-                  />
+                  <SlidersHorizontal className="w-5 h-5" aria-hidden="true" />
                   {mapFilterActive && (
                     <span
-                      className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-teal-400"
+                      className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-primary ring-2 ring-card"
                       aria-hidden="true"
                     />
                   )}
@@ -6942,22 +7030,32 @@ export default function MapView() {
                   onClick={() => {
                     setMapSettingsOpen(true);
                     setToolsMenuOpen(false);
-                    setLayersOpen(false);
                   }}
                   aria-label="Map settings"
                   aria-haspopup="dialog"
                   data-testid="map-settings-open"
-                  className={`glass-capsule glass-opaque mt-2 h-10 w-10 flex items-center justify-center text-white/90 active:scale-[0.97] transform-gpu transition ${FOCUS}`}
+                  className={`${RAIL_BTN} ${RAIL_BTN_IDLE}`}
                 >
-                  <Settings2
-                    style={{ width: 18, height: 18 }}
-                    aria-hidden="true"
-                  />
+                  <Settings2 className="w-5 h-5" aria-hidden="true" />
+                </button>
+
+                {/* Overflow tools — ONLY entries without a rail button of their
+                    own (leads-in-view, Live Test) plus search by label. */}
+                <button
+                  ref={toolsMenuBtnRef}
+                  type="button"
+                  onClick={() => setToolsMenuOpen((o) => !o)}
+                  aria-label="More map tools"
+                  aria-expanded={toolsMenuOpen}
+                  data-testid="map-tools-menu"
+                  className={`${RAIL_BTN} ${toolsMenuOpen ? RAIL_BTN_ACTIVE : RAIL_BTN_IDLE}`}
+                >
+                  <Ellipsis className="w-5 h-5" aria-hidden="true" />
                 </button>
 
                 {toolsMenuOpen && (
                   <div
-                    className="glass-surface mt-2 w-[212px] p-1.5 text-white animate-in fade-in slide-in-from-top-1 duration-150"
+                    className="w-[220px] rounded-xl bg-card/95 border border-border shadow-sm p-1.5 text-foreground animate-in fade-in slide-in-from-top-1 duration-150"
                     role="group"
                     aria-label="Map tools"
                     data-testid="map-tools-popover"
@@ -6970,11 +7068,9 @@ export default function MapView() {
                           icon: <Search className="w-4 h-4" />,
                           label: "Search leads & places",
                           active: searchOpen,
-                          btnRef: searchBtnRef,
                           onClick: () => {
                             setSearchOpen((o) => !o);
                             setToolsMenuOpen(false);
-                            setLayersOpen(false);
                             setLeadsOpen(false);
                           },
                         },
@@ -6989,51 +7085,11 @@ export default function MapView() {
                             setLeadsOpen((o) => !o);
                             setToolsMenuOpen(false);
                             setSearchOpen(false);
-                            setLayersOpen(false);
                           },
                         },
-                        {
-                          key: "layers",
-                          testid: "ctl-layers",
-                          icon: <Layers className="w-4 h-4" />,
-                          label: "Map layers & style",
-                          active: layersOpen,
-                          btnRef: layersBtnRef,
-                          onClick: () => {
-                            setLayersOpen((o) => !o);
-                            setToolsMenuOpen(false);
-                            setSearchOpen(false);
-                          },
-                        },
-                        // Manager tools — team_lead+ only, never in rep chrome.
-                        ...(canAssign
-                          ? [
-                              {
-                                key: "lasso",
-                                testid: "ctl-lasso",
-                                icon: <Lasso className="w-4 h-4" />,
-                                label: lassoMode
-                                  ? "Cancel area selection"
-                                  : "Select an area (lasso)",
-                                active: lassoMode,
-                                onClick: () => {
-                                  setToolsMenuOpen(false);
-                                  if (lassoMode) {
-                                    exitLasso();
-                                  } else {
-                                    exitLasso();
-                                    setAddMode(false); // draw tools and add-mode are mutually exclusive
-                                    // Start on a colour nothing else is using, so two areas never
-                                    // read as one region split by a road. The picker overrides it.
-                                    setLassoColor(pickFreeColor());
-                                    setLassoMode(true);
-                                    setSearchOpen(false);
-                                    setLayersOpen(false);
-                                  }
-                                },
-                              },
-                            ]
-                          : []),
+                        // "Map layers & style" and "Select an area (lasso)"
+                        // left this menu — the settings sheet and the rail's
+                        // lasso button own them now.
                         ...(canSubmitScan
                           ? [
                               {
@@ -7062,12 +7118,12 @@ export default function MapView() {
                         data-testid={item.testid}
                         className={`w-full flex items-center gap-2.5 min-h-[44px] px-2.5 rounded-lg text-[13px] text-left transition ${
                           item.active
-                            ? "bg-primary/25 text-white font-semibold"
-                            : "text-white/85 hover:text-white hover:bg-white/[0.08]"
-                        }`}
+                            ? "bg-primary text-primary-foreground font-semibold"
+                            : "text-foreground hover:bg-secondary/60"
+                        } ${FOCUS}`}
                       >
                         <span
-                          className={`shrink-0 ${item.active ? "text-teal-300" : "text-white/60"}`}
+                          className={`shrink-0 ${item.active ? "text-primary-foreground" : "text-muted-foreground"}`}
                           aria-hidden="true"
                         >
                           {item.icon}
@@ -7078,93 +7134,15 @@ export default function MapView() {
                   </div>
                 )}
 
-                {/* Layers popover — a group of switches + basemap radios (NOT a
-                    role=menu, which would promise a keyboard menu model we don't
-                    implement). Each control is a real button operable by Tab.
-                    Opens from the tools menu for EVERY role now (the rep's old
-                    legend basemap switch moved here). */}
-                {layersOpen && (
-                  <div
-                    className="glass-surface mt-2 w-[172px] p-2.5 text-white"
-                    role="group"
-                    aria-label="Map layers and style"
-                    data-testid="layers-popover"
-                  >
-                  <div className="text-[10px] uppercase tracking-wider text-white/40 font-semibold mb-1.5">
-                    Layers
-                  </div>
-                  {[
-                    {
-                      key: "leads",
-                      label: "Leads",
-                      on: showLeads,
-                      toggle: () => setShowLeads((v) => !v),
-                    },
-                    ...(canAssign
-                      ? [
-                          {
-                            key: "terr",
-                            label: "Territories",
-                            on: showTerritories,
-                            toggle: () => setShowTerritories((v) => !v),
-                          },
-                        ]
-                      : []),
-                  ].map((l) => (
-                    <button
-                      key={l.key}
-                      onClick={l.toggle}
-                      data-testid={`layer-${l.key}`}
-                      role="switch"
-                      aria-checked={l.on}
-                      aria-label={`${l.label} layer`}
-                      className="w-full flex items-center justify-between min-h-[44px] py-1.5 text-[12.5px] text-white/90 hover:text-white"
-                    >
-                      <span>{l.label}</span>
-                      <span
-                        className={`w-8 h-4 rounded-full transition-colors relative ${l.on ? "bg-primary" : "bg-white/25"}`}
-                      >
-                        <span
-                          className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${l.on ? "left-4" : "left-0.5"}`}
-                        />
-                      </span>
-                    </button>
-                  ))}
-                  <div className="text-[10px] uppercase tracking-wider text-white/40 font-semibold mt-2 mb-1.5 pt-2 border-t border-white/10">
-                    Basemap
-                  </div>
-                  <div className="grid grid-cols-3 gap-1">
-                    {(
-                      [
-                        ["satellite", "Satellite"],
-                        ["streets", "Street"],
-                        ["dark", "Dark"],
-                      ] as const
-                    ).map(([mode, label]) => (
-                      <button
-                        key={mode}
-                        onClick={() => setMapStyleMode(mode)}
-                        data-testid={`mapmode-${mode}`}
-                        disabled={!mapReady}
-                        aria-pressed={mapStyleMode === mode}
-                        aria-label={`${label} basemap`}
-                        title={label}
-                        className={`text-[10px] min-h-[44px] rounded-lg transition-colors ${mapStyleMode === mode ? "bg-primary text-white font-semibold" : "bg-white/10 text-white/80 hover:bg-white/20"}`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  </div>
-                )}
               </div>
             </>
           )}
 
           {/* Locate-me FAB — EVERY role. Now that the map opens on your location
               with the blue dot (Apple/Google-Maps behavior), everyone gets the
-              one-tap "recenter on me" thumb target too. Bottom-right. */}
-          {mapReady && (
+              one-tap "recenter on me" thumb target too. Bottom-right. Hidden
+              during Assign Area so it can never overlap the lasso panel. */}
+          {mapReady && !lassoMode && (
             <button
               onClick={() => {
                 // This explicit user action starts a new camera intent. Any
@@ -7238,8 +7216,9 @@ export default function MapView() {
               bottom offset as Locate so the pair move together and neither ends
               up behind the knock sheet.
               Armed state is unmistakable: the button turns amber and swaps to
-              the radar glyph, matching the tap-hint bar below it. */}
-          {mapReady && canAssign && (
+              the radar glyph, matching the tap-hint bar below it. Hidden during
+              Assign Area (mutually exclusive with the lasso panel anyway). */}
+          {mapReady && canAssign && !lassoMode && (
             <button
               type="button"
               onClick={() => { setAddMode((v) => !v); setToolsMenuOpen(false); }}
