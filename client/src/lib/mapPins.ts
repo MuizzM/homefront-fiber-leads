@@ -285,7 +285,7 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
         "text-field": ["get", "house_num"],
         "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
         // Legible on a phone at arm's length: floor 11px, scales up close in.
-        "text-size": ["interpolate", ["linear"], ["zoom"], 16.8, 11, 18.5, 13.5, 20, 16],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 16.6, 11.5, 18.5, 14.5, 20, 17.5],
         // Sit the number BESIDE its house, not on top of it. Variable anchor lets
         // Mapbox place each label in whatever open space is nearest (preferring
         // below), and the collision engine keeps numbers off each other and off
@@ -299,7 +299,7 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
       paint: {
         "text-color": colors.text,
         "text-halo-color": colors.halo,
-        "text-halo-width": 1.4,
+        "text-halo-width": 1.8, // heavier halo: readable over rooftops in sun
         "text-halo-blur": 0.4,
         // Fade in across a third of a zoom level — appears, never pops/flickers.
         "text-opacity": ["interpolate", ["linear"], ["zoom"], 16.8, 0, 17.15, 1],
