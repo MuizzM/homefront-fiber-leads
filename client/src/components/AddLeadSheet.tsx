@@ -7,6 +7,8 @@
 // per field; NC/SC segmented state toggle; "Use my location" fills the address
 // from a live GPS fix. A duplicate address returns the existing lead
 // (existed:true) — the map flies to it instead of ghosting a second pin.
+// Submit is perceived-instant: the sheet closes on the tap and the POST runs
+// in the background (success/duplicate/failure all land as toasts).
 import { useState, useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
@@ -41,6 +43,7 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
     setState((initial.state ?? "NC").toUpperCase() === "SC" ? "SC" : "NC");
     setZip(initial.zip ?? "");
     setOwnerName("");
+    setSaving(false); // a background save from the LAST open must not lock this one
     geoRef.current = { lat: initial.lat ?? null, lng: initial.lng ?? null };
   }, [initial]);
 
@@ -78,63 +81,84 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
     }
   }
 
-  async function submit() {
+  function submit() {
     if (!canSave) return;
+    // One-frame double-submit guard: the button disables on this render while
+    // the sheet is already closing from the same tap.
     setSaving(true);
-    try {
-      // Deliberately NO fiber/provenance fields: the server hard-rejects any
-      // client-supplied fresh-fiber claim (the cross-verified scan pipeline is
-      // the only author). Carrying them here is what 400'd the scan-dot path.
-      const body: Record<string, unknown> = {
-        address: address.trim(), city: city.trim(), state, zip: zip.trim(),
-        leadStatus: "prospect",
-        lat: geoRef.current.lat, lng: geoRef.current.lng,
-      };
-      if (ownerName.trim()) body.ownerName = ownerName.trim();
-      const res = await apiRequest("POST", "/api/leads", body);
-      const lead = await res.json();
-      const existed = lead?.existed === true;
-      // Paint the pin NOW (knock pattern): insert into the map query cache and
-      // let the follow-up invalidate reconcile against the durable source.
-      if (!existed && lead?.id != null && lead?.lat != null && lead?.lng != null) {
-        qc.setQueryData(["/api/leads/map"], (old: any) => {
-          if (!old?.pins || old.pins.some((p: any) => p.id === lead.id)) return old;
-          return {
-            ...old,
-            total: (old.total ?? old.pins.length) + 1,
-            pins: [
-              ...old.pins,
-              {
-                id: lead.id, address: lead.address, city: lead.city, state: lead.state,
-                zip: lead.zip, lat: lead.lat, lng: lead.lng,
-                leadStatus: lead.leadStatus ?? "prospect", visited: false,
-                assignedRepId: lead.assignedRepId ?? null,
-              },
-            ],
-          };
+    // Deliberately NO fiber/provenance fields: the server hard-rejects any
+    // client-supplied fresh-fiber claim (the cross-verified scan pipeline is
+    // the only author). Carrying them here is what 400'd the scan-dot path.
+    const submittedAddress = address.trim();
+    const body: Record<string, unknown> = {
+      address: submittedAddress, city: city.trim(), state, zip: zip.trim(),
+      leadStatus: "prospect",
+      lat: geoRef.current.lat, lng: geoRef.current.lng,
+    };
+    if (ownerName.trim()) body.ownerName = ownerName.trim();
+    // Perceived-instant add (owner ask 2026-07-31): the sheet closes on the
+    // SAME tap — no "Adding…" phase — and the POST runs in the background.
+    // Everything the continuation touches (toast store, query cache, parent
+    // callbacks) is safe to call after this component unmounts.
+    onClose();
+    void (async () => {
+      try {
+        const res = await apiRequest("POST", "/api/leads", body);
+        const lead = await res.json();
+        const existed = lead?.existed === true;
+        // Paint the pin NOW (knock pattern): insert into the map query cache and
+        // let the follow-up invalidate reconcile against the durable source.
+        if (!existed && lead?.id != null && lead?.lat != null && lead?.lng != null) {
+          qc.setQueryData(["/api/leads/map"], (old: any) => {
+            if (!old?.pins || old.pins.some((p: any) => p.id === lead.id)) return old;
+            return {
+              ...old,
+              total: (old.total ?? old.pins.length) + 1,
+              pins: [
+                ...old.pins,
+                {
+                  id: lead.id, address: lead.address, city: lead.city, state: lead.state,
+                  zip: lead.zip, lat: lead.lat, lng: lead.lng,
+                  leadStatus: lead.leadStatus ?? "prospect", visited: false,
+                  assignedRepId: lead.assignedRepId ?? null,
+                },
+              ],
+            };
+          });
+        }
+        try { navigator.vibrate?.(10); } catch { /* no haptics */ }
+        toast(existed
+          ? { title: "Already in the system — opening it", description: submittedAddress }
+          : { title: "Lead added", description: submittedAddress });
+        qc.invalidateQueries({ queryKey: ["/api/leads"] });
+        qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+        // The map's camera fly to the real pin is a follow-on flourish — it
+        // rides the server response, never the open sheet.
+        if (lead?.id != null) onCreated?.(lead.id, { existed });
+      } catch (e: any) {
+        // The sheet is long closed — a loud toast is the only honest signal
+        // that this door did NOT save.
+        const msg = String(e?.message ?? "").replace(/^\s*\d{3}:\s*/, "");
+        toast({
+          title: "Couldn't add lead",
+          description: `${submittedAddress} didn't save${msg ? ` — ${msg}` : ". Try again."}`,
+          variant: "destructive",
         });
+      } finally {
+        setSaving(false); // no-op after unmount; unlocks a still-mounted sheet
       }
-      try { navigator.vibrate?.(10); } catch { /* no haptics */ }
-      toast(existed
-        ? { title: "Already in the system — opening it", description: address.trim() }
-        : { title: "Lead added", description: address.trim() });
-      qc.invalidateQueries({ queryKey: ["/api/leads"] });
-      qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-      if (lead?.id != null) onCreated?.(lead.id, { existed });
-      onClose();
-    } catch (e: any) {
-      const msg = String(e?.message ?? "").replace(/^\s*\d{3}:\s*/, "");
-      toast({ title: "Couldn't add lead", description: msg || "Try again.", variant: "destructive" });
-    } finally {
-      setSaving(false);
-    }
+    })();
   }
 
   return (
     <Sheet open={open} onOpenChange={(o) => { if (!o) onClose(); }}>
       <SheetContent
         side="bottom"
-        className="glass-sheet glass-ink-scope rounded-t-3xl p-0 border-white/10 max-h-[92dvh] overflow-y-auto"
+        // transition-none kills the sheet base's transition-all on this large
+        // surface; open/close run on the base's 200ms/150ms GPU slide+fade
+        // keyframes. The form renders complete on the open frame — no fetch
+        // gates mounting.
+        className="glass-sheet glass-ink-scope rounded-t-3xl p-0 border-white/10 max-h-[92dvh] overflow-y-auto transition-none will-change-transform"
         data-testid="add-lead-sheet"
       >
         {/* Real form: the mobile keyboard's Go/Enter submits the happy path. */}
@@ -212,9 +236,12 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
                 Add {missing.join(" and ")}
               </p>
             )}
+            {/* No loading phase: the tap closes the sheet and the save runs in
+                the background. `disabled` still flips for the one frame before
+                close so a double tap can't post twice. */}
             <button type="submit" disabled={!canSave} data-testid="add-lead-submit"
               className="w-full h-12 rounded-2xl bg-primary text-primary-foreground text-[15px] font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50 active:scale-[0.99] transition">
-              {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Adding…</> : <>Add lead</>}
+              Add lead
             </button>
           </div>
         </form>

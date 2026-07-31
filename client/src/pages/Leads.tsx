@@ -851,18 +851,50 @@ export default function Leads() {
     if (record.account?.repId != null) onboardingByRep.set(record.account.repId, record.stage);
   }
 
+  // Optimistic-write helper for the paged list cache. The ["/api/leads", ...]
+  // prefix also matches per-lead subqueries (["/api/leads", id, "knocks"] etc.),
+  // so only entries shaped like the list payload ({ leads, total }) are touched.
+  const patchLeadLists = (
+    write: (cached: { leads: Lead[]; total: number }) => { leads: Lead[]; total: number },
+  ) => {
+    const snapshots = qc.getQueriesData({ queryKey: ["/api/leads"] });
+    for (const [key, data] of snapshots) {
+      const cached = data as { leads?: Lead[]; total?: number } | undefined;
+      if (!cached || !Array.isArray(cached.leads)) continue;
+      qc.setQueryData(key, { ...cached, ...write({ leads: cached.leads, total: cached.total ?? cached.leads.length }) });
+    }
+    return snapshots;
+  };
+  const restoreLeadLists = (snapshots: Array<[readonly unknown[], unknown]> | undefined) => {
+    for (const [key, data] of snapshots ?? []) qc.setQueryData(key, data);
+  };
+
   const createMutation = useMutation({
     mutationFn: async (data: Partial<InsertLead>) => {
       const res = await apiRequest("POST", "/api/leads", data);
       return res.json();
     },
-    onSuccess: () => {
+    onMutate: async (data: Partial<InsertLead>) => {
+      await qc.cancelQueries({ queryKey: ["/api/leads"] });
+      // Negative temp id keys the optimistic row and can never collide with a
+      // real (positive) server id. Only form-provided fields are shown — the
+      // onSettled refetch swaps in the server row with its real id and defaults.
+      const snapshots = patchLeadLists(cached => ({
+        leads: [{ id: -Date.now(), ...data } as Lead, ...cached.leads],
+        total: cached.total + 1,
+      }));
+      setAddOpen(false);
       toast({ title: "Lead added" });
+      return { snapshots };
+    },
+    onError: (e: any, _vars, ctx) => {
+      restoreLeadLists(ctx?.snapshots);
+      toast({ title: `Couldn't add lead — ${String(e?.message ?? "request failed")}`, variant: "destructive" });
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
-      setAddOpen(false);
     },
-    onError: (e: any) => toast({ title: e?.message ?? "Couldn't add lead", variant: "destructive" }),
   });
 
   const updateMutation = useMutation({
@@ -870,27 +902,48 @@ export default function Leads() {
       const res = await apiRequest("PATCH", `/api/leads/${id}`, data);
       return res.json();
     },
-    onSuccess: () => {
-      // Silent success: the list re-queries and the editor closes, so the change
-      // is visible immediately. A banner/toast over the map or form is noise for
-      // a routine save (spec: update immediately and silently). Failures below
-      // stay loud — an error toast persists until dismissed.
+    onMutate: async ({ id, data }: { id: number; data: Partial<InsertLead> }) => {
+      // Silent optimistic success: the row updates and the editor closes
+      // immediately (spec: update immediately and silently). Failures below
+      // stay loud — the snapshot restores and an error toast persists.
+      await qc.cancelQueries({ queryKey: ["/api/leads"] });
+      const snapshots = patchLeadLists(cached => ({
+        ...cached,
+        leads: cached.leads.map(l => (l.id === id ? { ...l, ...data } as Lead : l)),
+      }));
+      setEditLead(null);
+      return { snapshots };
+    },
+    onError: (e: any, _vars, ctx) => {
+      restoreLeadLists(ctx?.snapshots);
+      toast({ title: e?.message ?? "Couldn't update lead", severity: "error" });
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
-      setEditLead(null);
     },
-    onError: (e: any) => toast({ title: e?.message ?? "Couldn't update lead", severity: "error" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (id: number) => { await apiRequest("DELETE", `/api/leads/${id}`); },
-    onSuccess: () => {
+    onMutate: async (id: number) => {
+      await qc.cancelQueries({ queryKey: ["/api/leads"] });
+      const snapshots = patchLeadLists(cached => ({
+        leads: cached.leads.filter(l => l.id !== id),
+        total: cached.leads.some(l => l.id === id) ? Math.max(0, cached.total - 1) : cached.total,
+      }));
+      setDeleteId(null);
       toast({ title: "Lead deleted" });
+      return { snapshots };
+    },
+    onError: (_e: any, _id, ctx) => {
+      restoreLeadLists(ctx?.snapshots);
+      toast({ title: "Couldn't delete lead — restored", variant: "destructive" });
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
       qc.invalidateQueries({ queryKey: ["/api/stats"] });
-      setDeleteId(null);
     },
-    onError: (e: any) => toast({ title: e?.message ?? "Couldn't delete lead", variant: "destructive" }),
   });
 
   // Filtering is now server-side; leads array is already filtered

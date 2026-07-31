@@ -550,6 +550,111 @@ describe("<LeadKnockSheet /> — notes and history (unchanged model)", () => {
   });
 });
 
+describe("<LeadKnockSheet /> — perceived latency: instant open, instant close", () => {
+  // Deferred query client: detail + history promises stay PENDING until flush()
+  // — proving the shell never waits on the network.
+  function deferredRender(overrides: Record<string, any> = {}) {
+    let resolvers: Array<() => void> = [];
+    const qc = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+          queryFn: ({ queryKey }) =>
+            new Promise((resolve) => {
+              resolvers.push(() => {
+                const key = String(queryKey[0] ?? "");
+                resolve(key.endsWith("/history")
+                  ? HISTORY
+                  : { id: 7, notes: "", updatedAt: "2026-07-08T19:00:00.000Z" });
+              });
+            }),
+        },
+      },
+    });
+    const props = {
+      lead: baseLead(),
+      onKnock: vi.fn(),
+      onSaveNote: vi.fn().mockResolvedValue({ status: "saved", updatedAt: "2026-07-08T19:20:00.000Z" }),
+      onClose: vi.fn(),
+      ...overrides,
+    };
+    const view = render(
+      <QueryClientProvider client={qc}>
+        <LeadKnockSheet {...(props as any)} />
+      </QueryClientProvider>,
+    );
+    const rerenderSheet = (newProps: Record<string, any>) =>
+      view.rerender(
+        <QueryClientProvider client={qc}>
+          <LeadKnockSheet {...({ ...props, ...newProps } as any)} />
+        </QueryClientProvider>,
+      );
+    return { ...view, props, rerenderSheet, flush: () => { resolvers.forEach(r => r()); resolvers = []; } };
+  }
+
+  it("renders the FULL shell synchronously while detail + history are still pending", () => {
+    deferredRender();
+    // No awaits before any of these: the working surface exists on the open
+    // frame, built from the pin payload alone.
+    const sheet = screen.getByTestId("knock-sheet");
+    expect(sheet).toHaveAttribute("data-snap", "quick");
+    expect(sheet).toHaveTextContent("148 Maple St");
+    expect(screen.getByTestId("knock-address-locality")).toHaveTextContent("Rockwell, NC 28138");
+    expect(screen.getByTestId("knock-status-line")).toHaveTextContent("Prospect");
+    expect(screen.getByTestId("knock-action-row")).toBeInTheDocument();
+    expect(screen.getByTestId("knock-status-grid")).toBeInTheDocument();
+    expect(screen.getByTestId("note-add-chip")).toBeInTheDocument();
+  });
+
+  it("never shows a sheet-wide spinner — pending history gets a per-section skeleton in Details", async () => {
+    const { flush } = deferredRender();
+    // Nothing spins anywhere while both queries are pending.
+    expect(document.querySelector(".animate-spin")).toBeNull();
+    await openDetails();
+    expect(document.querySelector(".animate-spin")).toBeNull();
+    // The History SECTION shows quiet pulse placeholders inside its own list…
+    const list = screen.getByTestId("knock-history-list");
+    expect(list.querySelectorAll(".animate-pulse").length).toBeGreaterThan(0);
+    // …and the rest of the sheet stays fully interactive around it.
+    expect(screen.getByTestId("knock-status-grid")).toBeInTheDocument();
+    // Data streams in behind the skeleton once the fetch lands.
+    flush();
+    const rows = await screen.findAllByTestId(/knock-history-item-/);
+    expect(rows).toHaveLength(4);
+    expect(list.querySelectorAll(".animate-pulse")).toHaveLength(0);
+  });
+
+  it("a status tap works IMMEDIATELY — before any fetch has resolved", async () => {
+    const { props } = deferredRender();
+    await userEvent.click(screen.getByTestId("knock-outcome-not_home"));
+    expect(props.onKnock).toHaveBeenCalledWith("not_home");
+    expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "peek");
+  });
+
+  it("entry/exit chrome: 200ms GPU transform only — no transition-all, nothing >=300ms", () => {
+    deferredRender();
+    const cls = screen.getByTestId("knock-sheet").className;
+    expect(cls).toMatch(/\btransition-transform\b/);
+    expect(cls).toMatch(/\bduration-200\b/);
+    expect(cls).toMatch(/\bwill-change-transform\b/);
+    expect(cls).not.toMatch(/\btransition-all\b/);
+    expect(cls).not.toMatch(/\bduration-3\d\d\b|\bduration-[5-9]\d\d\b/);
+  });
+
+  it("close is instant: pointer events drop the moment lead clears, then the sheet unmounts", async () => {
+    const { rerenderSheet } = deferredRender();
+    rerenderSheet({ lead: null });
+    // Same tick as the close: the exit animation may still run, but the map
+    // underneath must already receive every tap.
+    const sheet = screen.getByTestId("knock-sheet");
+    expect(sheet.className).toMatch(/\bpointer-events-none\b/);
+    // The shell keeps its content while sliding out (no blank flash)…
+    expect(sheet).toHaveTextContent("148 Maple St");
+    // …and fully unmounts after the 200ms exit window.
+    await waitFor(() => expect(screen.queryByTestId("knock-sheet")).not.toBeInTheDocument());
+  });
+});
+
 describe("<LeadKnockSheet /> — do-not-knock banner", () => {
   it("renders a prominent alert at the top of the body when the lead is flagged", () => {
     renderSheet({ lead: baseLead({ doNotKnock: 1 }) }); // server sends 0/1

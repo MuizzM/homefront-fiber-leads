@@ -350,14 +350,25 @@ export default function Team() {
     mutationFn: async (id: number) => {
       await apiRequest("DELETE", `/api/team/${id}`);
     },
+    // Optimistic: the dialog closes and the row leaves the roster on tap.
+    // Failure rolls the roster back and raises a persistent error toast.
+    onMutate: async (id: number) => {
+      setDeleteId(null);
+      await qc.cancelQueries({ queryKey: ["/api/team"] });
+      const previous = qc.getQueryData<TeamMember[]>(["/api/team"]);
+      qc.setQueryData<TeamMember[]>(["/api/team"], old => (old ?? []).filter(m => m.id !== id));
+      return { previous };
+    },
     onSuccess: () => {
       toast({ title: "Member removed" });
+    },
+    onError: (err: any, _id, ctx) => {
+      if (ctx?.previous) qc.setQueryData(["/api/team"], ctx.previous);
+      toast({ title: err.message || "Failed to remove", variant: "destructive" });
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["/api/team"] });
       qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
-      setDeleteId(null);
-    },
-    onError: (err: any) => {
-      toast({ title: err.message || "Failed to remove", variant: "destructive" });
     },
   });
 
@@ -365,6 +376,17 @@ export default function Team() {
     mutationFn: async (id: number) => {
       const res = await apiRequest("POST", `/api/team/${id}/offboard`);
       return res.json() as Promise<{ reassignedReports: number; sessionsRevoked: number; loginDisabled: boolean }>;
+    },
+    // Optimistic: the member drops to Former Members and the dialog closes on
+    // tap; the server truth (sessions revoked, reports re-homed) arrives in
+    // the success toast. Failure restores the roster.
+    onMutate: async (id: number) => {
+      setOffboardMember(null);
+      await qc.cancelQueries({ queryKey: ["/api/team"] });
+      const previous = qc.getQueryData<TeamMember[]>(["/api/team"]);
+      qc.setQueryData<TeamMember[]>(["/api/team"], old =>
+        (old ?? []).map(m => (m.id === id ? { ...m, active: false } : m)));
+      return { previous };
     },
     onSuccess: (result, id) => {
       const who = team.find(m => m.id === id)?.name ?? "Member";
@@ -374,12 +396,14 @@ export default function Team() {
         result.reassignedReports > 0 ? `${result.reassignedReports} report${result.reassignedReports === 1 ? "" : "s"} re-homed` : null,
       ].filter(Boolean).join(" · ");
       toast({ title: `${who} offboarded`, description: bits || "Access removed." });
+    },
+    onError: (err: any, _id, ctx) => {
+      if (ctx?.previous) qc.setQueryData(["/api/team"], ctx.previous);
+      toast({ title: err.message || "Failed to offboard", variant: "destructive" });
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["/api/team"] });
       qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
-      setOffboardMember(null);
-    },
-    onError: (err: any) => {
-      toast({ title: err.message || "Failed to offboard", variant: "destructive" });
     },
   });
 
@@ -388,14 +412,25 @@ export default function Team() {
       const res = await apiRequest("POST", `/api/team/${id}/reactivate`);
       return res.json();
     },
+    // Optimistic: the member rejoins the active roster on tap; failure rolls back.
+    onMutate: async (id: number) => {
+      await qc.cancelQueries({ queryKey: ["/api/team"] });
+      const previous = qc.getQueryData<TeamMember[]>(["/api/team"]);
+      qc.setQueryData<TeamMember[]>(["/api/team"], old =>
+        (old ?? []).map(m => (m.id === id ? { ...m, active: true } : m)));
+      return { previous };
+    },
     onSuccess: (_r, id) => {
       const who = team.find(m => m.id === id)?.name ?? "Member";
       toast({ title: `${who} reactivated`, description: "Their login works again." });
+    },
+    onError: (err: any, _id, ctx) => {
+      if (ctx?.previous) qc.setQueryData(["/api/team"], ctx.previous);
+      toast({ title: err.message || "Failed to reactivate", variant: "destructive" });
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["/api/team"] });
       qc.invalidateQueries({ queryKey: ["/api/leaderboard"] });
-    },
-    onError: (err: any) => {
-      toast({ title: err.message || "Failed to reactivate", variant: "destructive" });
     },
   });
 
