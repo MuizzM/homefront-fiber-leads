@@ -2,6 +2,11 @@ node_modules/
 dist/
 .vite/
 
+# Operator/runtime data dropped on the production host (not release content).
+# The deploy's dirty-checkout guard ignores gitignored paths, so this keeps an
+# on-host data folder from blocking releases while still catching real tampering.
+ops-data/
+
 # SQLite database files — never commit; exposes demo data at rest
 data/
 data.db
