@@ -285,7 +285,7 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
         "text-field": ["get", "house_num"],
         "text-font": ["DIN Pro Medium", "Arial Unicode MS Regular"],
         // Legible on a phone at arm's length: floor 11px, scales up close in.
-        "text-size": ["interpolate", ["linear"], ["zoom"], 16.8, 11, 18.5, 13.5, 20, 16],
+        "text-size": ["interpolate", ["linear"], ["zoom"], 16.6, 11.5, 18.5, 14.5, 20, 17.5],
         // Sit the number BESIDE its house, not on top of it. Variable anchor lets
         // Mapbox place each label in whatever open space is nearest (preferring
         // below), and the collision engine keeps numbers off each other and off
@@ -299,7 +299,7 @@ export function ensureHousenumLayer(map: any, styleMode: "satellite" | "streets"
       paint: {
         "text-color": colors.text,
         "text-halo-color": colors.halo,
-        "text-halo-width": 1.4,
+        "text-halo-width": 1.8, // heavier halo: readable over rooftops in sun
         "text-halo-blur": 0.4,
         // Fade in across a third of a zoom level — appears, never pops/flickers.
         "text-opacity": ["interpolate", ["linear"], ["zoom"], 16.8, 0, 17.15, 1],
@@ -320,13 +320,16 @@ export function removeHousenumLayer(map: any): void {
 // OFF by default (owner's minimal-map directive); an explicit opt-in from the
 // Map settings sheet persists across launches, same pattern as the status
 // filter above. Storage-blocked browsers degrade to session-only.
-export const HOUSE_NUMBERS_LS_KEY = "hf.mapHouseNumbers.v1";
+// v2: the owner wants numbers ON by default (v1 shipped default-off for a few
+// hours and may have persisted "0" without the user ever touching the toggle —
+// the key bump re-defaults everyone to ON while still honoring future choices).
+export const HOUSE_NUMBERS_LS_KEY = "hf.mapHouseNumbers.v2";
 
 export function readPersistedHouseNumbers(): boolean {
   try {
-    return localStorage.getItem(HOUSE_NUMBERS_LS_KEY) === "1";
+    return localStorage.getItem(HOUSE_NUMBERS_LS_KEY) !== "0"; // default ON
   } catch {
-    return false;
+    return true;
   }
 }
 

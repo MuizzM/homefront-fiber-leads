@@ -44,7 +44,7 @@ describe("filter persistence (localStorage)", () => {
     expect(readPersistedFilterStatus(VALID)).toBe("all");
   });
 
-  it("survives storage being blocked (throws) without crashing", () => {
+  it("survives blocked storage without crashing (defaults ON)", () => {
     const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("denied");
     });
@@ -61,8 +61,8 @@ describe("filter persistence (localStorage)", () => {
 describe("house-numbers preference (localStorage)", () => {
   beforeEach(() => localStorage.clear());
 
-  it("is OFF by default (owner's minimal-map directive)", () => {
-    expect(readPersistedHouseNumbers()).toBe(false);
+  it("is ON by default (owner expects house numbers)", () => {
+    expect(readPersistedHouseNumbers()).toBe(true); // default ON — owner expects numbers
   });
 
   it("round-trips an opt-in and an opt-out", () => {
@@ -73,16 +73,16 @@ describe("house-numbers preference (localStorage)", () => {
     expect(readPersistedHouseNumbers()).toBe(false);
   });
 
-  it("treats junk storage values as OFF", () => {
+  it("treats junk storage values as the default (ON)", () => {
     localStorage.setItem(HOUSE_NUMBERS_LS_KEY, "yes");
-    expect(readPersistedHouseNumbers()).toBe(false);
+    expect(readPersistedHouseNumbers()).toBe(true);
   });
 
-  it("survives storage being blocked (throws) without crashing", () => {
+  it("survives blocked storage without crashing (defaults ON)", () => {
     const get = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("denied");
     });
-    expect(readPersistedHouseNumbers()).toBe(false);
+    expect(readPersistedHouseNumbers()).toBe(true);
     get.mockRestore();
     const set = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
       throw new Error("denied");
