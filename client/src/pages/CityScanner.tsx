@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 
@@ -61,6 +61,10 @@ const VERDICT_CONFIG: Record<FreshFiberVerdict, { answer: string; label: string;
 };
 
 type FilterKey = "all" | FreshFiberVerdict;
+
+// Stable empty array so the no-job renders don't hand every memo a fresh []
+// identity (same convention as MapView's EMPTY_PINS).
+const EMPTY_RESULTS: ScanRow[] = [];
 
 function verdictOf(row: ScanRow): FreshFiberVerdict {
   // Eligibility is server-authored. Older/malformed rows fail closed instead of
@@ -174,6 +178,18 @@ export default function CityScanner() {
       let buf = "";
       let eventType = "";
 
+      // Result events are BATCHED per network chunk: a fast scan streams many
+      // `result` lines in one read(), and appending them one-per-setState was
+      // O(n) array copy × n events = O(n²) work across a run (plus a render per
+      // address). One concat per chunk keeps the copy cost linear and the
+      // render count at ~one per chunk.
+      const resultBatch: ScanRow[] = [];
+      const flushResults = () => {
+        if (resultBatch.length === 0) return;
+        const rows = resultBatch.splice(0);
+        setJobStatus(prev => prev ? { ...prev, results: prev.results.concat(rows) } : null);
+      };
+
       while (true) {
         const { done: streamDone, value } = await reader.read();
         if (streamDone) break;
@@ -186,14 +202,16 @@ export default function CityScanner() {
             try {
               const payload = JSON.parse(line.slice(5).trim());
               if (eventType === "result") {
-                setJobStatus(prev => prev ? { ...prev, results: [...prev.results, payload] } : null);
+                resultBatch.push(payload);
               } else if (eventType === "progress") {
+                flushResults(); // keep results/summary ordering intact
                 setJobStatus(prev => prev ? {
                   ...prev,
                   status: payload.status, done: payload.done, total: payload.total,
                   summary: payload.summary ?? prev.summary,
                 } : null);
               } else if (eventType === "done") {
+                flushResults(); // final GET below may fail — never drop streamed rows
                 setScanning(false); setDone(true);
                 qc.invalidateQueries({ queryKey: ["/api/leads"] });
                 qc.invalidateQueries({ queryKey: ["/api/stats"] });
@@ -210,6 +228,7 @@ export default function CityScanner() {
             eventType = "";
           }
         }
+        flushResults(); // one append (and ~one render) per network chunk
       }
     } catch (e: any) {
       if (e.name !== "AbortError") console.warn("SSE error:", e.message);
@@ -302,12 +321,32 @@ export default function CityScanner() {
     }
   }, [stopAll, connectSseStream, toast]);
 
-  const results = jobStatus?.results ?? [];
+  const results = jobStatus?.results ?? EMPTY_RESULTS;
   const summary = jobStatus?.summary;
   const total = jobStatus?.total ?? 0;
   const checkedCount = jobStatus?.done ?? 0;
   const pct = total ? Math.round((checkedCount / total) * 100) : 0;
   const currentAddr = results[checkedCount - 1]?.address ?? "";
+
+  // Memoized: this used to be a bare filter().sort() in the render body, so
+  // EVERY render — each SSE result batch, the 3s scanner-state poll, the 8s
+  // pool-stats poll, any keystroke — re-sorted the whole result set (O(n log n)
+  // localeCompare calls over up to tens of thousands of pool-re-scan rows).
+  // Now it recomputes only when the results or the filter actually change.
+  const filteredResults = useMemo(() => {
+    const rank: Record<FreshFiberVerdict, number> = { fresh: 0, unverified: 1, not_fresh: 2 };
+    return results
+      .filter(r => filter === "all" || verdictOf(r) === filter)
+      .sort((a, b) => rank[verdictOf(a)] - rank[verdictOf(b)] || a.address.localeCompare(b.address));
+  }, [results, filter]);
+
+  // One counting pass for the filter chips — they ran results.filter().length
+  // per verdict per render (3 extra full passes each time anything re-rendered).
+  const verdictCounts = useMemo(() => {
+    const counts: Record<FreshFiberVerdict, number> = { fresh: 0, not_fresh: 0, unverified: 0 };
+    for (const r of results) counts[verdictOf(r)]++;
+    return counts;
+  }, [results]);
 
   const exportCSV = useCallback(() => {
     const cell = (value: unknown) => {
@@ -329,16 +368,7 @@ export default function CityScanner() {
     a.download = `homefront_fiber_${cityInput.trim().toLowerCase()}_scan.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [results, filter, cityInput]);
-
-  const filteredResults = results.filter(r => {
-    if (filter === "all") return true;
-    return verdictOf(r) === filter;
-  }).sort((a, b) => {
-    const rank: Record<FreshFiberVerdict, number> = { fresh: 0, unverified: 1, not_fresh: 2 };
-    return rank[verdictOf(a)] - rank[verdictOf(b)] || a.address.localeCompare(b.address);
-  });
+  }, [filteredResults, cityInput]);
 
   return (
     <div className="w-full max-w-5xl mx-auto p-4 pt-5 pb-24 space-y-5 md:p-6 md:space-y-6">
@@ -605,7 +635,7 @@ export default function CityScanner() {
         <div className="flex gap-2 flex-wrap">
           {(["all", "fresh", "not_fresh", "unverified"] as FilterKey[]).map(f => {
             const cfg = f === "all" ? null : VERDICT_CONFIG[f];
-            const count = f === "all" ? results.length : results.filter(r => verdictOf(r) === f).length;
+            const count = f === "all" ? results.length : verdictCounts[f];
             return (
               <button
                 data-testid={`filter-${f}`}
@@ -636,7 +666,7 @@ export default function CityScanner() {
                 key={`${r.address}-${i}`}
                 data-testid={`result-row-${i}`}
                 data-verdict={verdict}
-                className={`rounded-2xl border bg-card px-4 py-3.5 ${verdict === "fresh" ? "border-emerald-500/30" : verdict === "unverified" ? "border-amber-500/25" : "border-border"}`}
+                className={`render-lazy rounded-2xl border bg-card px-4 py-3.5 ${verdict === "fresh" ? "border-emerald-500/30" : verdict === "unverified" ? "border-amber-500/25" : "border-border"}`}
               >
                 <div className="flex items-center gap-3">
                   <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-2xl ring-1 ${cfg.pill}`}>

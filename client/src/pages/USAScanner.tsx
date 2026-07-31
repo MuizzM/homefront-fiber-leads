@@ -4,7 +4,7 @@
  * or expanding. Address-level checks remain the only availability truth.
  * Click any market to scan it immediately. Leads auto-saved to map.
  */
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useMemo, useRef } from "react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -67,6 +67,10 @@ const STATUS_DOT = {
   planned: "bg-amber-400",
   complete: "bg-muted-foreground",
 };
+
+// Stable empty catalog so pre-load renders don't hand the memos a fresh []
+// identity every time (same convention as MapView's EMPTY_PINS).
+const EMPTY_MARKETS: KineticMarket[] = [];
 
 const STATE_NAMES: Record<string, string> = {
   AL:"Alabama", AR:"Arkansas", FL:"Florida", GA:"Georgia", IA:"Iowa",
@@ -214,30 +218,49 @@ export default function USAScanner() {
     setActiveScan(prev => prev ? { ...prev, status: "done" } : null);
   }, [stopAll, activeScan]);
 
-  const markets = marketsData?.markets ?? [];
+  const markets = marketsData?.markets ?? EMPTY_MARKETS;
   const isScanning = activeScan?.status === "scanning" || activeScan?.status === "pulling";
   const pct = activeScan?.total ? Math.round(activeScan.done / activeScan.total * 100) : 0;
 
-  // Group by state, apply filters
-  const filtered = markets.filter(m => {
-    if (filterPriority !== "all" && m.priority !== filterPriority) return false;
-    if (filterState !== "all" && m.state !== filterState) return false;
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      return m.city.toLowerCase().includes(q) || m.state.toLowerCase().includes(q) ||
-             STATE_NAMES[m.state]?.toLowerCase().includes(q) || m.zip.includes(q);
+  // Group by state, apply filters — memoized. These full-catalog passes
+  // (filter + group + THREE separate sorts) used to run in the render body, so
+  // every 3s scanner-state poll, every SSE progress event and every search
+  // keystroke re-walked the whole market catalog. Now they re-run only when
+  // the catalog (staleTime: Infinity — effectively once) or a filter changes.
+  const { filtered, byState, states } = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = markets.filter(m => {
+      if (filterPriority !== "all" && m.priority !== filterPriority) return false;
+      if (filterState !== "all" && m.state !== filterState) return false;
+      if (q) {
+        return m.city.toLowerCase().includes(q) || m.state.toLowerCase().includes(q) ||
+               STATE_NAMES[m.state]?.toLowerCase().includes(q) || m.zip.includes(q);
+      }
+      return true;
+    });
+    const byState = filtered.reduce<Record<string, KineticMarket[]>>((acc, m) => {
+      (acc[m.state] = acc[m.state] ?? []).push(m);
+      return acc;
+    }, {});
+    // Sort each state's city list ONCE here — it used to be sorted inline in
+    // the render map, re-sorting every open group on every render.
+    for (const list of Object.values(byState)) list.sort((a, b) => b.addressCount - a.addressCount);
+    return { filtered, byState, states: Object.keys(byState).sort() };
+  }, [markets, filterPriority, filterState, search]);
+
+  const allStates = useMemo(() => [...new Set(markets.map(m => m.state))].sort(), [markets]);
+  // Metric-strip tallies in ONE catalog pass (was three: a filter().length here
+  // plus a filter().length and a reduce() inline in the JSX, per render).
+  const marketStats = useMemo(() => {
+    let critical = 0, activeBuilds = 0, addresses = 0;
+    for (const m of markets) {
+      if (m.priority === "critical") critical++;
+      if (m.buildStatus === "active") activeBuilds++;
+      addresses += m.addressCount;
     }
-    return true;
-  });
-
-  const byState = filtered.reduce<Record<string, KineticMarket[]>>((acc, m) => {
-    (acc[m.state] = acc[m.state] ?? []).push(m);
-    return acc;
-  }, {});
-
-  const states = Object.keys(byState).sort();
-  const allStates = [...new Set(markets.map(m => m.state))].sort();
-  const criticalCount = markets.filter(m => m.priority === "critical").length;
+    return { critical, activeBuilds, addresses };
+  }, [markets]);
+  const criticalCount = marketStats.critical;
 
   return (
     <div className="p-5 space-y-6 max-w-5xl mx-auto">
@@ -281,11 +304,11 @@ export default function USAScanner() {
           </div>
           <div className="px-4 py-3">
             <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Active Builds</div>
-            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{markets.filter(m=>m.buildStatus==="active").length.toLocaleString()}</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{marketStats.activeBuilds.toLocaleString()}</div>
           </div>
           <div className="px-4 py-3">
             <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Addresses inventoried</div>
-            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{markets.reduce((sum,m)=>sum+m.addressCount,0).toLocaleString()}</div>
+            <div className="mt-1 text-2xl font-semibold tracking-tight tabular-nums text-foreground">{marketStats.addresses.toLocaleString()}</div>
           </div>
         </div>
       )}
@@ -434,7 +457,8 @@ export default function USAScanner() {
             const cityList = byState[abbr];
             const isOpen = expandedState === abbr || !!search.trim() || filterPriority !== "all";
             const trackedAddresses = cityList.reduce((s, m) => s + m.addressCount, 0);
-            const hasCritical = cityList.some(m => m.priority === "critical");
+            const criticalInState = cityList.reduce((n, m) => n + (m.priority === "critical" ? 1 : 0), 0);
+            const hasCritical = criticalInState > 0;
 
             return (
               <Card key={abbr} className="bg-card border-border overflow-hidden">
@@ -459,10 +483,10 @@ export default function USAScanner() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {cityList.filter(m=>m.priority==="critical").length > 0 && (
+                    {criticalInState > 0 && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-xs font-medium text-rose-400 tabular-nums">
                         <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
-                        {cityList.filter(m=>m.priority==="critical").length} critical
+                        {criticalInState} critical
                       </span>
                     )}
                     {isOpen ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
@@ -471,7 +495,8 @@ export default function USAScanner() {
 
                 {isOpen && (
                   <div className="border-t border-border divide-y divide-border/50">
-                    {cityList.sort((a, b) => b.addressCount - a.addressCount).map(market => {
+                    {/* Pre-sorted by addressCount in the byState memo — no per-render sort. */}
+                    {cityList.map(market => {
                       const key = `${market.city},${market.state}`;
                       const isActive = activeScan?.city === market.city && activeScan?.state === market.state;
                       const isDone = completedScans.has(key);
