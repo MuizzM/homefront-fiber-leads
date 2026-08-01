@@ -142,7 +142,13 @@ describe("the grid loader has pin-fetch parity", () => {
   );
 
   it("clamps the fetch window to the server's 15° grid guard (never a 400)", () => {
-    expect(body).toContain("clampToGridGuard(bounds.window)");
+    expect(body).toContain("clampToGridGuard(bounds.window");
+    // …anchored on the CAMERA center (view-mid fallback) so world-clamped
+    // windows keep the density under the user's territory instead of
+    // drifting to Greenwich-ocean.
+    expect(body).toContain("mapRef.current?.getCenter?.()");
+    expect(body).toContain("bounds.view.minLng + bounds.view.maxLng");
+    expect(body).toContain("bounds.view.minLat + bounds.view.maxLat");
   });
 
   it("caches 60s keyed by bbox+cell+tag", () => {

@@ -1874,7 +1874,23 @@ export default function MapView() {
     if (!viewportModeRef.current) return;
     const bounds = currentFetchWindow(mapRef.current);
     if (!bounds) return;
-    const window = clampToGridGuard(bounds.window);
+    // Clamp about the CAMERA center, not the window's own midpoint: at world
+    // zooms the margin-expanded window has been clamped to ±180/±90 (and the
+    // mercator view itself is lat-clamped), so its midpoint drifts toward
+    // 0°,0° — clamping about that fetched Greenwich-ocean density while the
+    // user looked at their territory (an empty map with no explanation). The
+    // camera is where they are looking at every zoom; the raw view midpoint
+    // is the fallback if the camera read ever fails mid-teardown.
+    const cam = (() => {
+      try {
+        const c = mapRef.current?.getCenter?.();
+        return c && Number.isFinite(c.lng) && Number.isFinite(c.lat) ? { lng: c.lng, lat: c.lat } : null;
+      } catch { return null; }
+    })();
+    const window = clampToGridGuard(bounds.window, undefined, cam ?? {
+      lng: (bounds.view.minLng + bounds.view.maxLng) / 2,
+      lat: (bounds.view.minLat + bounds.view.maxLat) / 2,
+    });
     const span = Math.max(window.maxLng - window.minLng, window.maxLat - window.minLat);
     const cell = gridCellForSpan(span); // the server's ?cell=auto formula — keyed, not sent
     const tag = sourceFilterToGridTag(filterSourceRef.current);
