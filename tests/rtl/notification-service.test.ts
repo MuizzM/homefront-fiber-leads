@@ -1,33 +1,38 @@
-// The centralized notification service: dedupe, one-at-a-time queue,
-// severity-driven timing (routine auto-dismiss, important persist), the
+// The centralized notification service: dedupe, capped visible stack with
+// instant replace, severity-driven timing (EVERYTHING auto-dismisses — routine
+// ~2.5s, important ~6s; explicit duration:null is the only persist), the
 // variant→severity bridge, and the durable error center.
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   toast, reducer, resolveDuration, dedupeSignature,
   getErrorNotifications, __resetToastsForTest,
+  SUCCESS_DISMISS_MS, ERROR_DISMISS_MS,
 } from "@/hooks/use-toast";
 
-// Read module state through a fresh reducer-independent probe: the `toast()`
-// side effects mutate the singleton, and useToast() exposes it — but we assert
-// via the reducer + exported helpers to keep it React-free.
+// The `toast()` side effects mutate the module singleton; we assert via the
+// reducer + exported helpers to keep the suite React-free.
 beforeEach(() => { __resetToastsForTest(); vi.useFakeTimers(); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); __resetToastsForTest(); });
 
-// A tiny visible-count probe using the exported helpers isn't enough; drive the
-// singleton and observe via a subscription through useToast is heavy, so we
-// assert timing/dedupe through the pure surface plus the error center.
-
-describe("timing by severity", () => {
-  it("routine severities auto-dismiss (~2.6s); important ones persist", () => {
-    expect(resolveDuration({ severity: "success" })).toBe(2600);
-    expect(resolveDuration({ severity: "info" })).toBe(2600);
-    expect(resolveDuration({ severity: "error" })).toBeNull();
-    expect(resolveDuration({ severity: "warning" })).toBeNull();
-    expect(resolveDuration({ severity: "offline" })).toBeNull();
-    expect(resolveDuration({ severity: "payment" })).toBeNull();
-    // explicit duration overrides severity
+describe("timing by severity — everything auto-dismisses", () => {
+  it("routine ~2.5s; important ~6s (longer beat, still temporary)", () => {
+    expect(resolveDuration({ severity: "success" })).toBe(SUCCESS_DISMISS_MS);
+    expect(resolveDuration({ severity: "info" })).toBe(SUCCESS_DISMISS_MS);
+    expect(SUCCESS_DISMISS_MS).toBe(2500);
+    expect(resolveDuration({ severity: "error" })).toBe(ERROR_DISMISS_MS);
+    expect(resolveDuration({ severity: "warning" })).toBe(ERROR_DISMISS_MS);
+    expect(resolveDuration({ severity: "offline" })).toBe(ERROR_DISMISS_MS);
+    expect(resolveDuration({ severity: "payment" })).toBe(ERROR_DISMISS_MS);
+    expect(ERROR_DISMISS_MS).toBe(6000);
+  });
+  it("explicit duration overrides severity; null is the only persist", () => {
     expect(resolveDuration({ severity: "error", duration: 1000 })).toBe(1000);
     expect(resolveDuration({ severity: "success", duration: null })).toBeNull();
+    expect(resolveDuration({ severity: "error", duration: null })).toBeNull();
+    // loading is lifecycle-bound (caller updates/dismisses it), not timed
+    expect(resolveDuration({ severity: "loading" })).toBeNull();
+    // no severity at all defaults to the routine window
+    expect(resolveDuration({})).toBe(SUCCESS_DISMISS_MS);
   });
 });
 
@@ -42,25 +47,32 @@ describe("dedupe signature", () => {
   });
 });
 
-describe("reducer — one visible at a time + queue", () => {
+describe("reducer — instant replace, max two visible", () => {
   const mk = (id: string, over: any = {}) => ({ id, title: id, open: true, ...over });
-  it("second toast queues while the first is visible", () => {
-    let s = { toasts: [], queue: [] } as any;
+  it("a second toast shows IMMEDIATELY alongside the first (no queueing)", () => {
+    let s = { toasts: [] } as any;
     s = reducer(s, { type: "ADD_TOAST", toast: mk("a") } as any);
     s = reducer(s, { type: "ADD_TOAST", toast: mk("b") } as any);
-    expect(s.toasts.map((t: any) => t.id)).toEqual(["a"]);
-    expect(s.queue.map((t: any) => t.id)).toEqual(["b"]);
+    expect(s.toasts.map((t: any) => t.id)).toEqual(["b", "a"]); // newest first
+    expect(s.toasts.every((t: any) => t.open)).toBe(true);       // both visible
   });
-  it("removing the visible toast promotes the queued one", () => {
-    let s = { toasts: [mk("a")], queue: [mk("b")] } as any;
-    s = reducer(s, { type: "REMOVE_TOAST", toastId: "a" } as any);
-    expect(s.toasts.map((t: any) => t.id)).toEqual(["b"]);
-    expect(s.queue).toEqual([]);
+  it("a third toast pushes the oldest into its exit — never three open", () => {
+    let s = { toasts: [] } as any;
+    s = reducer(s, { type: "ADD_TOAST", toast: mk("a") } as any);
+    s = reducer(s, { type: "ADD_TOAST", toast: mk("b") } as any);
+    s = reducer(s, { type: "ADD_TOAST", toast: mk("c") } as any);
+    // the new toast is open instantly; the evicted oldest is closing
+    const open = s.toasts.filter((t: any) => t.open !== false).map((t: any) => t.id);
+    expect(open).toEqual(["c", "b"]);
+    expect(s.toasts.find((t: any) => t.id === "a")?.open).toBe(false);
+    // ...and the evicted toast unmounts after its short exit window
+    vi.runOnlyPendingTimers();
   });
-  it("a queued toast dismissed before showing is dropped, not promoted", () => {
-    let s = { toasts: [mk("a")], queue: [mk("b")] } as any;
+  it("dismiss closes (open:false) and removal later drops it from state", () => {
+    let s = { toasts: [mk("a"), mk("b")] } as any;
     s = reducer(s, { type: "DISMISS_TOAST", toastId: "b" } as any);
-    expect(s.queue).toEqual([]);
+    expect(s.toasts.find((t: any) => t.id === "b")?.open).toBe(false);
+    s = reducer(s, { type: "REMOVE_TOAST", toastId: "b" } as any);
     expect(s.toasts.map((t: any) => t.id)).toEqual(["a"]);
   });
 });
@@ -75,23 +87,40 @@ describe("live behavior through toast()", () => {
     expect(getErrorNotifications().filter(n => n.title === "Save failed").length).toBe(1);
   });
 
-  it("routine success auto-dismisses; error persists past the routine window", () => {
+  it("success leaves at ~2.5s; error stays for its longer ~6s beat, then leaves too", () => {
     const s = toast({ title: "Saved", severity: "success" });
     const e = toast({ title: "Save failed", severity: "error" });
-    vi.advanceTimersByTime(3000);
-    // success should have scheduled a dismiss; error never does. We assert the
-    // error is retained in the error center (durable) and success is not.
+    // After the routine window the success dismiss has fired but the error's
+    // has not (its window is longer)...
+    vi.advanceTimersByTime(SUCCESS_DISMISS_MS + 500);
+    expect(vi.getTimerCount()).toBeGreaterThan(0); // error dismiss still pending
+    // ...and after the long beat NOTHING is pending — the error left as well.
+    vi.advanceTimersByTime(ERROR_DISMISS_MS);
+    vi.runOnlyPendingTimers(); // flush exit-animation removals
+    expect(vi.getTimerCount()).toBe(0);
+    // The failure is still recoverable from the durable error center.
     const log = getErrorNotifications();
     expect(log.some(n => n.title === "Save failed")).toBe(true);
     expect(log.some(n => n.title === "Saved")).toBe(false);
     e.dismiss(); s.dismiss();
   });
 
-  it("legacy variant:'destructive' is treated as an error (persists + logged)", () => {
+  it("explicit duration:null is the opt-out — that toast never auto-dismisses", () => {
+    toast({ title: "Stay put", severity: "error", duration: null });
+    vi.advanceTimersByTime(ERROR_DISMISS_MS * 10);
+    expect(vi.getTimerCount()).toBe(0); // no dismiss was ever scheduled
+  });
+
+  it("legacy variant:'destructive' is treated as an error (logged + long beat)", () => {
     toast({ title: "Boom", variant: "destructive" });
     const log = getErrorNotifications();
     expect(log[0].title).toBe("Boom");
     expect(log[0].severity).toBe("error");
+    // it auto-dismisses on the error window like any other error
+    expect(vi.getTimerCount()).toBeGreaterThan(0);
+    vi.advanceTimersByTime(ERROR_DISMISS_MS + 1);
+    vi.runOnlyPendingTimers();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("the error center keeps only errors/warnings/offline/payment, newest first", () => {

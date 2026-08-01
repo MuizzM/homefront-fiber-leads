@@ -351,7 +351,8 @@ export default function Team() {
       await apiRequest("DELETE", `/api/team/${id}`);
     },
     // Optimistic: the dialog closes and the row leaves the roster on tap.
-    // Failure rolls the roster back and raises a persistent error toast.
+    // Failure rolls the roster back and raises an error toast (auto-dismisses
+    // after its long beat; the failure stays in the error center).
     onMutate: async (id: number) => {
       setDeleteId(null);
       await qc.cancelQueries({ queryKey: ["/api/team"] });
