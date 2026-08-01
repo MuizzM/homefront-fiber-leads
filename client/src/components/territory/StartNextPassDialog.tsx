@@ -77,6 +77,15 @@ export function StartNextPassDialog({
     return () => { cancelled = true; };
   }, [open, territoryId, keepCallbacks, fetchPreview]);
 
+  // Escape cancels, matching the scrim and the Cancel button — and stays locked
+  // while the reset is committing, for the same reason they do.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape" && !busy) onCancel(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, busy, onCancel]);
+
   if (!open) return null;
 
   const frozenEntries = Object.entries(preview?.frozenByReason ?? {})

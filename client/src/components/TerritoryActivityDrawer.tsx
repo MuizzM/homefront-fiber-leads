@@ -5,7 +5,7 @@
 // for admins — a reason-gated override. Filter by verdict/rep, sort by time or
 // distance, and export what you can see.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { X, ChevronDown, ChevronRight, Download } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
@@ -64,6 +64,14 @@ export function TerritoryActivityDrawer({ territoryId, onClose }: { territoryId:
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
+
+  // Escape closes the drawer, matching the scrim tap and the X — keyboard users
+  // and hardware-keyboard tablets get the same exit everyone else has.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const reps = useMemo(() => {
     const s = new Set<string>();

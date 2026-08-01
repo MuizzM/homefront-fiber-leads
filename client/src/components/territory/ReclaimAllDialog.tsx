@@ -4,7 +4,7 @@
 // project transfer): state the exact blast radius up front, make the operator
 // choose what happens to the leads, and require a typed confirmation before
 // the destructive button arms. One POST, one audit row, one toast.
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -53,12 +53,31 @@ export function ReclaimAllDialog({
     onError: (e: any) => toast({ title: "Couldn't reclaim areas", description: String(e?.message ?? e), variant: "destructive" }),
   });
 
+  // Every close path funnels through here so no armed state survives a reopen:
+  // the component stays MOUNTED with open=false, so without this a typed
+  // "RECLAIM" persisted and the next open showed the destructive button already
+  // live — a confirm ritual that only has to be performed once isn't one.
+  const close = () => {
+    if (sweep.isPending) return; // a commit in flight is not interruptible
+    setConfirmText("");
+    onClose();
+  };
+
+  // Escape closes, like the scrim and Cancel — a modal all three of whose
+  // siblings honour Escape must not be the odd one out.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  });
+
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="reclaim-all-title" data-testid="reclaim-all-dialog">
       {/* Scrim */}
-      <button aria-label="Close" onClick={onClose} className="absolute inset-0 bg-black/60" data-testid="reclaim-all-scrim" />
+      <button type="button" aria-label="Close" onClick={close} disabled={sweep.isPending} className="absolute inset-0 bg-black/60" data-testid="reclaim-all-scrim" />
 
       <div className="relative w-full sm:max-w-md rounded-t-2xl sm:rounded-2xl border border-border bg-card p-5 shadow-xl animate-in fade-in slide-in-from-bottom-4 sm:slide-in-from-bottom-0 duration-200">
         <div className="flex items-start gap-3">
@@ -130,11 +149,12 @@ export function ReclaimAllDialog({
         )}
 
         <div className="mt-5 flex gap-2.5">
-          <button onClick={onClose} data-testid="reclaim-all-cancel"
-            className="flex-1 h-11 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-[.98] transition-transform hover:bg-secondary/70">
+          <button type="button" onClick={close} disabled={sweep.isPending} data-testid="reclaim-all-cancel"
+            className="flex-1 h-11 rounded-xl bg-secondary border border-border text-[14px] font-semibold text-foreground active:scale-[.98] transition-transform hover:bg-secondary/70 disabled:opacity-50">
             Cancel
           </button>
           <button
+            type="button"
             onClick={() => sweep.mutate()}
             disabled={impact.areaCount === 0 || !armed || sweep.isPending}
             data-testid="reclaim-all-submit"

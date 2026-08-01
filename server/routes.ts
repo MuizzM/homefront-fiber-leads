@@ -66,7 +66,7 @@ import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
 import { sameTenant } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
-import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, normalizeTerritoryColor, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
+import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
 import { classifyKnockLocation, countsAsWorked, type VerificationStatus } from "@shared/geoVerify";
 import {
@@ -5783,10 +5783,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (scope === undefined) {
       return res.json(storage.getTerritories(user.tenantId ?? undefined));
     }
-    // team_lead: their team's held territories only (matches /territories/progress).
-    // Reps fall through to their own untouched getTerritoriesByRep path below.
+    // team_lead: their team's held territories PLUS the unassigned pool.
+    // Held-by-rivals stays hidden (the original leak fix). The pool must be
+    // visible: a team_lead can ASSIGN areas, and a reclaimed area has to read
+    // as "returned to pool" — without this it vanished from their map and
+    // list entirely, making reclaim visually indistinguishable from delete
+    // (owner defect report). Reps fall through to getTerritoriesByRep below.
     if (user.role === "team_lead" && Array.isArray(scope)) {
-      return res.json(storage.getTerritories(user.tenantId ?? undefined).filter((t: any) => territoryHeldByAny(t, scope)));
+      return res.json(
+        storage.getTerritories(user.tenantId ?? undefined)
+          .filter((t: any) => territoryHeldByAny(t, scope) || territoryUnassigned(t)),
+      );
     }
     // Reps only see territories assigned to them — NEVER others' territories
     // If teamMemberId is null (not linked to a team member yet), return empty

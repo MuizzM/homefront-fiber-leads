@@ -35,6 +35,7 @@ import {
   Tag,
   Flag,
   Palette,
+  Undo2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -1404,6 +1405,13 @@ export default function MapView() {
 
   // Reclaim / pull-back an area with one of the 3 modes.
   const [reclaimMenuId, setReclaimMenuId] = useState<number | null>(null);
+  // The chooser dies with the panel that opened it. It used to survive: close
+  // the panel with the chooser armed, reopen the same area, and the destructive
+  // mode menu was already sitting open — stale armed state wearing the clothes
+  // of a fresh panel. Selecting a different area (or none) disarms it.
+  useEffect(() => {
+    setReclaimMenuId(null);
+  }, [selectedTerritoryId]);
   // Drives area-label detail (see detailForZoom). Starts at the full level so a
   // first paint before zoomend fires shows the complete label rather than a bare
   // name that then pops into detail.
@@ -1437,6 +1445,13 @@ export default function MapView() {
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
     },
+    // A failed removal used to end in silence: the chip un-dimmed and nothing
+    // said why the rep was still there. Every sibling mutation here reports.
+    onError: (e: any) => toast({
+      title: "Couldn't remove the rep from this area",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
   });
 
   // Re-open an area for another sweep.
@@ -1447,13 +1462,28 @@ export default function MapView() {
       const res = await apiRequest("POST", `/api/territories/${id}/next-pass`, body);
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data: any) => {
       setNextPassTerritoryId(null);
       qc.invalidateQueries({ queryKey: ["/api/territories"] });
       qc.invalidateQueries({ queryKey: ["/api/territories/progress"] });
       qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      // Server replies { ok, nextPass, leadsReset, leadsFrozen, ... }.
+      toast({
+        title: data?.nextPass != null ? `Pass ${data.nextPass} started` : "Next pass started",
+        description: data?.leadsReset != null
+          ? `${data.leadsReset} door${data.leadsReset === 1 ? "" : "s"} re-opened for the next sweep`
+          : "Worked doors re-opened for the next sweep",
+        severity: "success",
+      });
     },
+    // Without this a failed reset left the dialog open, the spinner gone, and
+    // no explanation — indistinguishable from a button that does nothing.
+    onError: (e: any) => toast({
+      title: "Couldn't start the next pass",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
   });
 
   // Multiple reps on one area. /share takes the COMPLETE holder set, so the UI
@@ -1479,6 +1509,17 @@ export default function MapView() {
       variant: "destructive",
     }),
   });
+  // Escape closes the share dialog like every other modal on this page. Cancel
+  // was the ONLY way out before — no scrim tap, no Escape — which on a phone
+  // reads as "the dialog is stuck". Locked while the save is committing.
+  useEffect(() => {
+    if (shareTerritoryId == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !shareMutation.isPending) setShareTerritoryId(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [shareTerritoryId, shareMutation.isPending]);
 
   const reclaimMutation = useMutation({
     mutationFn: async ({
@@ -1512,6 +1553,12 @@ export default function MapView() {
     },
     onError: (e: any) => toast({ title: e.message, variant: "destructive" }),
   });
+  // Which reclaim mode is in flight, for per-control pending states: the row
+  // the manager tapped shows the spinner; its siblings merely disable. (Also
+  // the guard that stops a double-tap firing the reclaim POST twice.)
+  const reclaimPendingMode = reclaimMutation.isPending
+    ? (reclaimMutation.variables?.mode ?? null)
+    : null;
 
   // Single exit path for the lasso — clears mode, selection, and map layers.
   // Every button/mutation that leaves lasso mode goes through this so no shape
@@ -6834,17 +6881,29 @@ export default function MapView() {
               })();
               const teamNames = teamNameRecord;
               const isPool = status === "unassigned" || status === "reclaimed";
+              // The assignee bar (bottom-center, same selected area) mounts
+              // under this exact condition — mirror it so the panel leaves the
+              // bar's strip free instead of scrolling underneath it.
+              const assigneeBarShown = canManage && !lassoMode && repIds.length > 0;
               return (
-                <div className="absolute top-16 left-[64px] z-30 animate-in fade-in slide-in-from-left-2 duration-200 max-h-[calc(100dvh-9rem)] overflow-y-auto overscroll-contain rounded-2xl">
-                  <div className="relative">
-                    <button
-                      onClick={() => setSelectedTerritoryId(null)}
-                      className="glass-capsule glass-opaque absolute -top-2 -right-2 z-10 w-9 h-9 text-white/70 hover:text-white flex items-center justify-center"
-                      title="Close"
-                      aria-label="Close territory panel"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
+                <div className="absolute top-16 left-[64px] z-30 animate-in fade-in slide-in-from-left-2 duration-200">
+                  {/* The close X is a SIBLING of the scroll container, not a
+                      child: inside it, its -top/-right offsets sat in clipped
+                      overflow (half the button cut away) and it scrolled out of
+                      reach the moment the panel was scrolled to the reclaim
+                      chooser — an open panel whose close control had left the
+                      screen. Pinned here it survives any scroll position. */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTerritoryId(null)}
+                    className="glass-capsule glass-opaque absolute -top-2 -right-2 z-10 w-9 h-9 text-white/70 hover:text-white flex items-center justify-center"
+                    title="Close"
+                    aria-label="Close territory panel"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                  <div className={`${assigneeBarShown ? "max-h-[calc(100dvh-20rem)]" : "max-h-[calc(100dvh-9rem)]"} overflow-y-auto overscroll-contain rounded-2xl`}>
+                    <div className="relative">
                     <TerritoryDetailPanel
                       territory={{
                         id: t.id,
@@ -6899,6 +6958,7 @@ export default function MapView() {
                               )
                           : undefined
                       }
+                      reclaimOpen={reclaimMenuId === t.id}
                       onRename={
                         canManage
                           ? (name) => renameTerritoryMutation.mutate({ id: t.id, name })
@@ -6952,49 +7012,78 @@ export default function MapView() {
                             return { id: m.id, name: m.name, areaCount: held, atCap: held >= MAX_ACTIVE_AREAS_PER_REP };
                           })}
                           areaCounts={repAreaCounts}
+                          disabled={assignTerritoryMutation.isPending}
                           onChange={(repId) =>
                             assignTerritoryMutation.mutate({ id: t.id, repId })
                           }
                         />
                       </div>
                     )}
-                    {/* Inline reclaim 3-mode chooser (reuses the same mutation) */}
+                    {/* Inline reclaim 3-mode chooser (reuses the same mutation).
+                        Rows disable together while one mode is committing —
+                        the tapped row wears the spinner, so a double-tap can't
+                        fire the POST twice and the wait is visibly owned by
+                        the thing that was pressed, not the whole panel. */}
                     {reclaimMenuId === t.id && !isPool && (
                       <div
                         className="mt-2 w-72 rounded-xl border border-border bg-card p-2 flex flex-col gap-1"
                         data-testid={`panel-reclaim-menu-${t.id}`}
+                        role="group"
+                        aria-label={`Reclaim options for ${t.name}`}
                       >
                         <button
+                          type="button"
                           data-testid="reclaim-mode-return_to_pool"
+                          disabled={reclaimMutation.isPending}
                           onClick={() =>
                             reclaimMutation.mutate({
                               id: t.id,
                               mode: "return_to_pool",
                             })
                           }
-                          className="text-left text-xs text-foreground hover:bg-secondary rounded px-2 py-1.5"
+                          className={`flex min-h-11 items-center gap-2 rounded-lg px-2 text-left text-xs text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
                         >
-                          ↩ Return leads to pool{" "}
-                          <span className="text-muted-foreground">
-                            (default)
+                          {reclaimPendingMode === "return_to_pool" ? (
+                            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                          ) : (
+                            <Undo2 className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+                          )}
+                          <span>
+                            {reclaimPendingMode === "return_to_pool" ? "Reclaiming…" : "Return leads to pool"}{" "}
+                            <span className="text-muted-foreground">
+                              (default)
+                            </span>
                           </span>
                         </button>
                         <button
+                          type="button"
+                          data-testid="reclaim-mode-keep_leads"
+                          disabled={reclaimMutation.isPending}
                           onClick={() =>
                             reclaimMutation.mutate({
                               id: t.id,
                               mode: "keep_leads",
                             })
                           }
-                          className="text-left text-xs text-foreground hover:bg-secondary rounded px-2 py-1.5"
+                          className={`flex min-h-11 items-center gap-2 rounded-lg px-2 text-left text-xs text-foreground hover:bg-secondary disabled:opacity-50 ${FOCUS}`}
                         >
-                          Reclaim area only{" "}
-                          <span className="text-muted-foreground">
-                            (keep leads)
+                          {reclaimPendingMode === "keep_leads" ? (
+                            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                          ) : (
+                            <Undo2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                          )}
+                          <span>
+                            {reclaimPendingMode === "keep_leads" ? "Reclaiming…" : "Reclaim area only"}{" "}
+                            <span className="text-muted-foreground">
+                              (keep leads)
+                            </span>
                           </span>
                         </button>
                         <select
                           defaultValue=""
+                          aria-label="Reassign this area to another rep"
+                          data-testid="panel-reassign-select"
+                          disabled={reclaimMutation.isPending}
                           onChange={(e) => {
                             if (e.target.value)
                               reclaimMutation.mutate({
@@ -7003,9 +7092,11 @@ export default function MapView() {
                                 newRepId: Number(e.target.value),
                               });
                           }}
-                          className="bg-secondary border border-border rounded px-2 py-1.5 text-xs text-foreground"
+                          className={`min-h-11 bg-secondary border border-border rounded-lg px-2 text-xs text-foreground disabled:opacity-50 ${FOCUS}`}
                         >
-                          <option value="">Reassign to rep…</option>
+                          <option value="">
+                            {reclaimPendingMode === "reassign" ? "Reassigning…" : "Reassign to rep…"}
+                          </option>
                           {team
                             .filter((m) => m.active && m.id !== t.repId)
                             .map((m) => (
@@ -7016,6 +7107,7 @@ export default function MapView() {
                         </select>
                       </div>
                     )}
+                    </div>
                   </div>
                 </div>
               );
@@ -7028,8 +7120,19 @@ export default function MapView() {
               shared — the set you leave here IS the set that ends up on it. */}
           {shareTerritoryId != null && (
             <div role="dialog" aria-modal="true" aria-label="Who works this area"
-                 className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50">
-              <div className="w-full sm:max-w-md max-h-[85vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-background border p-4 space-y-3">
+                 className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
+              {/* Scrim is a real close control, same grammar as ReclaimAllDialog
+                  and StartNextPassDialog — a tap outside the card is Cancel,
+                  not a dead zone. Locked while the save commits. */}
+              <button
+                type="button"
+                aria-label="Close"
+                data-testid="share-dialog-scrim"
+                disabled={shareMutation.isPending}
+                onClick={() => setShareTerritoryId(null)}
+                className="absolute inset-0 bg-black/50"
+              />
+              <div className="relative w-full sm:max-w-md max-h-[85vh] overflow-y-auto rounded-t-2xl sm:rounded-2xl bg-background border p-4 space-y-3">
                 <h2 className="text-base font-semibold">Who works this area</h2>
                 <p className="text-xs text-muted-foreground">
                   Tap to add or remove. Everyone selected shares the area; the first is the
@@ -7049,13 +7152,15 @@ export default function MapView() {
                 />
                 <div className="flex justify-end gap-2 pt-1">
                   <button type="button" onClick={() => setShareTerritoryId(null)}
-                          className="rounded-lg border px-4 py-2 text-sm font-medium">Cancel</button>
+                          disabled={shareMutation.isPending}
+                          className={`min-h-11 rounded-lg border px-4 py-2 text-sm font-medium disabled:opacity-50 ${FOCUS}`}>Cancel</button>
                   <button
                     type="button"
                     disabled={shareRepIds.length === 0 || shareMutation.isPending}
                     onClick={() => shareMutation.mutate({ id: shareTerritoryId, repIds: shareRepIds })}
-                    className="rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50"
+                    className={`min-h-11 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50 inline-flex items-center gap-2 ${FOCUS}`}
                   >
+                    {shareMutation.isPending && <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
                     {shareMutation.isPending ? "Saving…" : "Save"}
                   </button>
                 </div>
@@ -7885,7 +7990,7 @@ export default function MapView() {
                               className="relative opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-amber-400 w-9 h-9 inline-flex items-center justify-center rounded hover:bg-white/10 after:absolute after:-inset-1.5"
                               data-testid={`reclaim-${t.id}`}
                             >
-                              ↩
+                              <Undo2 className="w-4 h-4" aria-hidden="true" />
                             </button>
                           )}
                           {canManage && (
@@ -7975,26 +8080,40 @@ export default function MapView() {
                             data-testid={`reclaim-menu-${t.id}`}
                           >
                             <button
+                              type="button"
+                              disabled={reclaimMutation.isPending}
                               onClick={() =>
                                 reclaimMutation.mutate({
                                   id: t.id,
                                   mode: "return_to_pool",
                                 })
                               }
-                              className="text-left text-[12px] text-white/80 hover:text-white px-2 min-h-11 inline-flex items-center rounded hover:bg-white/10"
+                              className="text-left text-[12px] text-white/80 hover:text-white px-2 min-h-11 inline-flex items-center gap-1.5 rounded hover:bg-white/10 disabled:opacity-50"
                             >
-                              ↩ Return leads to pool{" "}
-                              <span className="text-white/40">(default)</span>
+                              {reclaimPendingMode === "return_to_pool" ? (
+                                <Loader2 className="w-3.5 h-3.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                              ) : (
+                                <Undo2 className="w-3.5 h-3.5 shrink-0 text-amber-400" aria-hidden="true" />
+                              )}
+                              <span>
+                                Return leads to pool{" "}
+                                <span className="text-white/40">(default)</span>
+                              </span>
                             </button>
                             <button
+                              type="button"
+                              disabled={reclaimMutation.isPending}
                               onClick={() =>
                                 reclaimMutation.mutate({
                                   id: t.id,
                                   mode: "keep_leads",
                                 })
                               }
-                              className="text-left text-[12px] text-white/80 hover:text-white px-2 min-h-11 inline-flex items-center rounded hover:bg-white/10"
+                              className="text-left text-[12px] text-white/80 hover:text-white px-2 min-h-11 inline-flex items-center rounded hover:bg-white/10 disabled:opacity-50"
                             >
+                              {reclaimPendingMode === "keep_leads" && (
+                                <Loader2 className="w-3.5 h-3.5 mr-1.5 shrink-0 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                              )}
                               Reclaim area only{" "}
                               <span className="text-white/40">
                                 (keep leads)
@@ -8004,6 +8123,7 @@ export default function MapView() {
                               <select
                                 data-testid={`reassign-select-${t.id}`}
                                 defaultValue=""
+                                disabled={reclaimMutation.isPending}
                                 onChange={(e) => {
                                   if (e.target.value)
                                     reclaimMutation.mutate({
@@ -8012,7 +8132,7 @@ export default function MapView() {
                                       newRepId: Number(e.target.value),
                                     });
                                 }}
-                                className="flex-1 bg-white/10 text-white text-[12px] rounded-lg px-2 min-h-11 border border-white/20"
+                                className="flex-1 bg-white/10 text-white text-[12px] rounded-lg px-2 min-h-11 border border-white/20 disabled:opacity-50"
                               >
                                 <option value="" className="text-slate-900">
                                   Reassign to rep…

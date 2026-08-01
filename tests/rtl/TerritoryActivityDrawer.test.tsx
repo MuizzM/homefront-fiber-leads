@@ -182,4 +182,12 @@ describe("territory activity — drawer chrome", () => {
     expect(screen.getByTestId("filter-all").className).toMatch(/min-h-11/);
     expect(screen.getByRole("combobox", { name: "Sort activities" }).className).toMatch(/\bh-11\b/);
   });
+
+  // ── Territory-UI audit: every exit works ──────────────────────────────────
+  it("Escape closes the drawer, matching the scrim tap and the X", async () => {
+    const { onClose } = renderDrawer();
+    await screen.findByTestId("activity-row");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
 });

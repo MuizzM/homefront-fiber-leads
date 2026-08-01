@@ -27,6 +27,12 @@ export interface TerritoryColorPickerProps {
   colors?: readonly string[];
   disabled?: boolean;
   label?: string;
+  /** Which way the grid opens. "up" suits the lasso bottom bar this was built
+   *  for. The territory detail panel sits at the TOP of the viewport inside an
+   *  overflow-y-auto container, where an upward popover lands in the container's
+   *  negative overflow — clipped, unreachable, invisible — so that surface
+   *  passes "down" and the grid overlays content that actually exists. */
+  direction?: "up" | "down";
 }
 
 export function TerritoryColorPicker({
@@ -35,6 +41,7 @@ export function TerritoryColorPicker({
   colors = TERRITORY_SWATCHES,
   disabled = false,
   label = "Area colour",
+  direction = "up",
 }: TerritoryColorPickerProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -79,7 +86,7 @@ export function TerritoryColorPicker({
           role="listbox"
           aria-label={label}
           data-testid="territory-color-grid"
-          className="absolute bottom-[calc(100%+8px)] left-0 z-50 grid grid-cols-6 gap-1.5 rounded-2xl bg-[#0b1f1c]/95 p-2 shadow-xl ring-1 ring-white/15 backdrop-blur"
+          className={`absolute ${direction === "up" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]"} left-0 z-50 grid grid-cols-6 gap-1.5 rounded-2xl bg-[#0b1f1c]/95 p-2 shadow-xl ring-1 ring-white/15 backdrop-blur`}
         >
           {colors.map((color) => {
             const isOn = color.toLowerCase() === current.toLowerCase();

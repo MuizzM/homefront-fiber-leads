@@ -89,6 +89,17 @@ export function territoryHeldByAny(
   return territory.repId != null && repIds.includes(territory.repId);
 }
 
+// Nobody holds this area — it sits in the pool. The team_lead territory list
+// includes these: a lead who can ASSIGN areas must be able to SEE the pool,
+// and a reclaimed area must read as "returned to pool", never as deleted.
+export function territoryUnassigned(
+  territory: { repId?: number | null; assigneeIds?: unknown },
+): boolean {
+  const assignees = parseAssigneeIds(territory.assigneeIds);
+  if (assignees) return assignees.length === 0;
+  return territory.repId == null;
+}
+
 // Company rule: recommended 3–5 active areas per rep. Callers pass the count of
 // the rep's territories already in an active-like status (active/shared).
 export const MAX_ACTIVE_AREAS_PER_REP = 5;

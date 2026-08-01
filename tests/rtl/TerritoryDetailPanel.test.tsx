@@ -422,6 +422,21 @@ describe("actions render only when there is something to do", () => {
     fireEvent.click(screen.getByTestId("reclaim-btn"));
     expect(onReclaim).toHaveBeenCalledTimes(1);
   });
+
+  it("announces whether the mode chooser it toggles is open", () => {
+    // The button toggles an external chooser. Without aria-expanded the second
+    // tap (close) is indistinguishable from a button that did nothing — which
+    // is exactly how "reclaim is broken" gets reported.
+    const held = { ...poolArea, status: "active" as const, repIds: [7] };
+    const { rerender } = render(
+      <TerritoryDetailPanel territory={held} currentUser={{ role: "manager" }} onReclaim={() => {}} />,
+    );
+    expect(screen.getByTestId("reclaim-btn")).toHaveAttribute("aria-expanded", "false");
+    rerender(
+      <TerritoryDetailPanel territory={held} currentUser={{ role: "manager" }} onReclaim={() => {}} reclaimOpen />,
+    );
+    expect(screen.getByTestId("reclaim-btn")).toHaveAttribute("aria-expanded", "true");
+  });
 });
 
 // ── Buttons audit: every control reaches its handler, no dead-ends ──────────

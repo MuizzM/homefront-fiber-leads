@@ -104,7 +104,11 @@ export function AreaAssigneeBar({
       // bg-background/95 rendered as a stark white card in light theme, visibly
       // detached from the dark chrome around it; the ink scope keeps the
       // semantic tokens (card/secondary/border/foreground) dark in BOTH themes.
-      className="glass-surface glass-opaque glass-ink-scope absolute left-1/2 z-30 w-[min(430px,calc(100vw-20px))] -translate-x-1/2 rounded-2xl p-3 text-foreground animate-in fade-in slide-in-from-bottom-2 duration-200"
+      // z-40, one step ABOVE the territory detail panel (z-30): both mount for
+      // the same selected area, and on narrow screens the tall panel used to
+      // paint over this bar — the add-a-rep picker expanded upward underneath
+      // it, visible but untappable. The active bottom control wins the stack.
+      className="glass-surface glass-opaque glass-ink-scope absolute left-1/2 z-40 w-[min(430px,calc(100vw-20px))] -translate-x-1/2 rounded-2xl p-3 text-foreground animate-in fade-in slide-in-from-bottom-2 duration-200"
     >
       {/* Header: the area, in the area's own colour, so the card is visibly
           about the polygon still showing above it. */}
