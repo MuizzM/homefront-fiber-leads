@@ -541,6 +541,59 @@
   }
 }
 
+/* ── Liquid bar MOTION (iOS Liquid Glass; Mobbin refs: Tide Guide tinted
+   active pill, ElevenLabs elevated segment, Tubi active pod) ─────────────
+   Three pieces, all compositor-only (transform/opacity, no layout):
+
+   1. .liquid-active-pill — the ONE in-glass active pill. BottomTabs measures
+      the active tab's icon capsule (refs + ResizeObserver) and moves the pill
+      with translate3d; this class supplies the spring: 380ms with a
+      cubic-bezier back-out that overshoots ~6% then settles — the iOS "pop".
+      Snaps (inline transition-duration: 0s) on first paint and on resize.
+   2. tab-icon-pop — the tapped destination's icon scales 1 → 1.15 → 1 over
+      250ms on the same spring curve. Class is re-keyed per tab change.
+   3. liquid-bar-rise — the bar's one-time entrance: rise 12px + fade, 250ms
+      ease-out. Run-once is enforced in the component (module flag), so route
+      changes within tabs never replay it.
+
+   The pill is a child of the glass, so the opaque fallbacks above change
+   nothing here — it still slides on an opaque bar. The global
+   prefers-reduced-motion block collapses every duration to 0.01ms; the
+   explicit guard below also zeroes them outright for these classes. */
+@layer components {
+  .liquid-active-pill {
+    position: absolute;
+    top: 0; left: 0;
+    width: 44px; height: 28px;
+    border-radius: 9999px;
+    background-color: hsl(var(--primary) / 0.16);
+    opacity: 0;                       /* hidden until positioned / no active tab */
+    pointer-events: none;
+    will-change: transform;
+    transition: transform 380ms cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 200ms ease;
+  }
+  .tab-icon-pop {
+    animation: tab-icon-pop 250ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+  .liquid-bar-enter {
+    animation: liquid-bar-rise 250ms ease-out;
+  }
+}
+@keyframes tab-icon-pop {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.15); }
+  100% { transform: scale(1); }
+}
+@keyframes liquid-bar-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .liquid-active-pill { transition: none; }
+  .tab-icon-pop, .liquid-bar-enter { animation: none; }
+}
+
 /* Lead-card peek-block crossfade — plays on mount, so a keyed remount (lead
    swap) restarts it. Opacity ONLY (no translate/overshoot) so a swap reads as a
    quick content crossfade, never a jump; kept OFF the History block so it
