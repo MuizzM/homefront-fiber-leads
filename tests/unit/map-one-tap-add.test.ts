@@ -137,13 +137,31 @@ describe("no loading / syncing chrome during background map work", () => {
       src.indexOf("const fetchViewportPinsRef"),
     );
     expect(body.length).toBeGreaterThan(100);
-    // Allowed writes: the cache itself, and the span-guard truth flag that
-    // drives the honest "Zoom in to load pins" notice (data-completeness
-    // truth, same category as the offline knock badge — NOT loading chrome).
-    // Everything else — spinners, loading states, toasts — stays banned.
-    expect(body).not.toMatch(/\bset(?!QueryData\b|ViewportSpanTooWide\b)[A-Z]\w*\(/);
+    // Allowed writes: the query cache itself (setQueryData) and plain refs —
+    // tier state is owned by refreshViewportPins, chip visibility DERIVES
+    // from mapPinData.truncated + effects. Everything else — spinners,
+    // loading states, toasts — stays banned.
+    expect(body).not.toMatch(/\bset(?!QueryData\b)[A-Z]\w*\(/);
     expect(body).not.toContain("toast(");
     expect(body).not.toContain("Loader");
+  });
+
+  it("density grid fetches obey the same purity contract as pin fetches", () => {
+    const body = src.slice(
+      src.indexOf("const fetchViewportGrid = useCallback"),
+      src.indexOf("const fetchViewportGridRef"),
+    );
+    expect(body.length).toBeGreaterThan(100);
+    // Same rule as the pin window: setQueryData + refs only. The tier handoff
+    // must never hitch a pan on a React render.
+    expect(body).not.toMatch(/\bset(?!QueryData\b)[A-Z]\w*\(/);
+    expect(body).not.toContain("toast(");
+    expect(body).not.toContain("Loader");
+    // …and the grid tier replaces the old dead state entirely: no span-guard
+    // skip, no "zoom in" chip path anywhere in the page.
+    expect(src).not.toContain("Zoom in to load pins");
+    expect(src).not.toContain("viewportSpanTooWide");
+    expect(src).not.toContain("spanNoticeDismissed");
   });
 
   it('the offline knock badge ("N to sync") STAYS — but only for a SUSTAINED backlog', () => {

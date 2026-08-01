@@ -28,19 +28,120 @@ export const VIEWPORT_KEEP_MULTIPLE = 3;
  *  Only used to surface truncation; the server is the authority. */
 export const MAP_BBOX_ROW_CAP = 25_000;
 
-/** Server-side span ceiling (mirrors MAP_BBOX_MAX_SPAN_DEG in routes.ts).
- *  Under it EVERY window is answerable — the server evenly samples over-dense
- *  windows instead of rejecting them, so region/state zoom shows clustered
- *  pins, never a blank map. Only a wider-than-40° window (continental zoom —
- *  effectively a malformed request for the field map) is a 400, so the client
- *  checks BEFORE fetching and asks the user to zoom in instead of burning a
- *  failing request per pan. */
+/** Server-side pin-window span ceiling (mirrors MAP_BBOX_MAX_SPAN_DEG in
+ *  routes.ts). Under it EVERY pin window is answerable — the server evenly
+ *  samples over-dense windows instead of rejecting them, so nothing is a 400
+ *  until a wider-than-40° (continental — effectively malformed) request. */
 export const MAP_BBOX_MAX_SPAN_DEG = 40;
+
+/** Pin-tier comfort boundary: at/under it a bbox window returns real pins
+ *  (a ≤3° window over even the densest territory stays near the 25k row
+ *  cap). Past it the server would answer with a heavily-thinned SAMPLE —
+ *  the wrong thing to render as "pins" — so the client switches to the
+ *  density-grid tier instead. This is a CLIENT tier boundary, not a server
+ *  guard: the pin path accepts up to MAP_BBOX_MAX_SPAN_DEG. */
+export const MAP_PIN_TIER_MAX_SPAN_DEG = 3;
+
+/** Server-side span guard for the density grid (mirrors
+ *  MAP_GRID_MAX_SPAN_DEG in routes.ts). Past it even an aggregate stops
+ *  being meaningful territory, so the client CLAMPS its fetch window to the
+ *  guard (centered) rather than ever letting a grid request 400. */
+export const MAP_GRID_MAX_SPAN_DEG = 15;
+
+/** Hard cap on grid cells per response (mirrors MAP_GRID_CELL_CAP). */
+export const MAP_GRID_CELL_CAP = 5_000;
+
+/** Grid response cache TTL: a cell-count view of the world may lag lead
+ *  writes by a minute — the same freshness budget the full feed's poll has
+ *  always had. Keyed by bbox+cell+tag (see gridCacheKey). */
+export const MAP_GRID_CACHE_TTL_MS = 60_000;
 
 /** True when the (already margin-expanded) fetch window is wider than the
  *  server's span guard on either axis. */
 export function bboxExceedsSpanGuard(b: ViewportBBox, guard: number = MAP_BBOX_MAX_SPAN_DEG): boolean {
   return b.maxLng - b.minLng > guard || b.maxLat - b.minLat > guard;
+}
+
+/** Which loading tier a viewport window uses: "pins" (bbox pin windows +
+ *  mapbox clusters) at/under the 3° pin-tier boundary, "grid" (aggregated
+ *  density bubbles) past it — where a pin window would come back a heavily
+ *  thinned sample. The tier is a pure function of the window so the fetch
+ *  path, the layer-visibility sync, and the tests all agree. NOTE: the
+ *  boundary is MAP_PIN_TIER_MAX_SPAN_DEG, NOT the 40° server ceiling. */
+export function viewportTierForWindow(w: ViewportBBox): "pins" | "grid" {
+  return bboxExceedsSpanGuard(w, MAP_PIN_TIER_MAX_SPAN_DEG) ? "grid" : "pins";
+}
+
+/** The cell pitch the server picks for ?cell=auto (mirrors gridCellForSpan
+ *  in routes.ts): span/12 snapped to 0.05° steps, clamped to [0.05°, 5°] —
+ *  ~12 cells across the view, so a bubble is always a tap target and the
+ *  payload stays ~150 cells. The client computes the same value to key its
+ *  response cache (never to override the server's choice). */
+export function gridCellForSpan(spanDeg: number): number {
+  const snapped = Math.round(spanDeg / 12 / 0.05) * 0.05;
+  return Math.min(5, Math.max(0.05, Number(snapped.toFixed(2))));
+}
+
+/** Shrink a window symmetric about its center until both axes fit the grid
+ *  guard. Zoomed out past 15° the fetch covers the CENTRAL 15° of the view —
+ *  density where the user is looking, never a 400. */
+export function clampToGridGuard(b: ViewportBBox, guard: number = MAP_GRID_MAX_SPAN_DEG): ViewportBBox {
+  const clampAxis = (min: number, max: number): [number, number] => {
+    const span = max - min;
+    if (span <= guard) return [min, max];
+    const mid = (min + max) / 2;
+    return [mid - guard / 2, mid + guard / 2];
+  };
+  const [minLng, maxLng] = clampAxis(b.minLng, b.maxLng);
+  const [minLat, maxLat] = clampAxis(b.minLat, b.maxLat);
+  return { minLng, minLat, maxLng, maxLat };
+}
+
+/** One aggregated density cell from /api/leads/map/grid: lat/lng are the
+ *  cell CENTER, n the scoped lead count inside it. */
+export interface MapGridCell {
+  lat: number;
+  lng: number;
+  n: number;
+}
+
+export interface MapGridResponse {
+  cells: MapGridCell[];
+  /** The grid pitch in degrees (server-chosen — auto or snapped explicit). */
+  cell: number;
+  truncated: boolean;
+}
+
+/** Identity of one grid fetch — the 60s cache key. Rounded like bboxParam
+ *  (5dp ≈ 1m) so jittered pans of the same territory hit the same entry. */
+export function gridCacheKey(b: ViewportBBox, cell: number, tag?: string): string {
+  return `${bboxParam(b)}|${cell}|${tag ?? ""}`;
+}
+
+/** The FCC source lens as a server-side tag prefix (the only source
+ *  predicate /grid supports). "fcc_fresh"/"fcc_fiber" map to their tag
+ *  families; "field_verified" is pin-level provenance (freshConfirmedAt) with
+ *  no tag equivalent, so it returns undefined — the grid shows the unfiltered
+ *  density and the filter sheet says the lens applies when zoomed in. */
+export function sourceFilterToGridTag(source: string): string | undefined {
+  if (source === "fcc_fresh") return "fcc_fresh";
+  if (source === "fcc_fiber") return "fcc_fiber";
+  return undefined;
+}
+
+/** Grid cells → GeoJSON points for the density layers. `n` and `cell` ride
+ *  as feature properties: n drives the graduated radius/color and the exact
+ *  count label, cell lets the tap handler zoom to exactly the tapped cell's
+ *  bounds. */
+export function gridCellsToGeoJson(cells: readonly MapGridCell[], cell: number): any {
+  return {
+    type: "FeatureCollection",
+    features: cells.map((c) => ({
+      type: "Feature",
+      properties: { n: c.n, cell },
+      geometry: { type: "Point", coordinates: [c.lng, c.lat] },
+    })),
+  };
 }
 
 /** The bbox the viewport loader would fetch right now (`window` = current
@@ -68,21 +169,18 @@ export function currentFetchWindow(
   return { view, window: expandBBox(view, margin) };
 }
 
-/** Which amber viewport notice (if any) the map should show. The zoom-in
- *  notice wins when both apply — an over-wide view is the blocker (no fetch
- *  happens at all), a truncated sample is only a warning. Dismissal is per
- *  condition and resets when the condition clears (owned by the caller). */
+/** Which amber viewport notice (if any) the map should show. There is no
+ *  "zoom in to load pins" notice anymore: past the pin span guard the map
+ *  renders the density-grid tier, so territory is visible at EVERY zoom. The
+ *  one remaining notice is the truncated-sample warning — a 25k+ pin window
+ *  shows a sample, and the user must know. Dismissal resets when the
+ *  condition clears (owned by the caller). */
 export function viewportNotice(opts: {
   viewportMode: boolean;
-  spanTooWide: boolean;
   truncated: boolean;
-  spanDismissed: boolean;
   sampleDismissed: boolean;
-}): { kind: "zoom" | "sample"; message: string } | null {
+}): { kind: "sample"; message: string } | null {
   if (!opts.viewportMode) return null;
-  if (opts.spanTooWide) {
-    return opts.spanDismissed ? null : { kind: "zoom", message: "Zoom in to load pins" };
-  }
   if (opts.truncated && !opts.sampleDismissed) {
     return { kind: "sample", message: "Showing a sample — zoom in for all pins" };
   }

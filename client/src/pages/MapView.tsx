@@ -97,19 +97,33 @@ import {
   formatFilterCount,
   persistFilterStatus,
   readPersistedFilterStatus,
+  persistMapCamera,
+  readPersistedMapCamera,
+  ensureDensityLayers,
+  DENSITY_SOURCE,
+  DENSITY_CIRCLES_LAYER,
+  DENSITY_LAYER_IDS,
+  GRID_TIER_HIDDEN_LAYER_IDS,
   unclusteredOpacityExpr,
   iconOpacityExpr,
 } from "@/lib/mapPins";
 import {
   MAP_VIEWPORT_MODE_THRESHOLD,
+  MAP_GRID_CACHE_TTL_MS,
   currentFetchWindow,
   keepRegion,
   bboxParam,
-  bboxExceedsSpanGuard,
   fullFeedEnabled,
   firstUseEmptyStateEnabled,
   viewportNotice,
   mergeViewportPins,
+  viewportTierForWindow,
+  clampToGridGuard,
+  gridCacheKey,
+  gridCellForSpan,
+  gridCellsToGeoJson,
+  sourceFilterToGridTag,
+  type MapGridResponse,
 } from "@/lib/mapViewport";
 import {
   readMapPinsSnapshot,
@@ -1711,7 +1725,9 @@ export default function MapView() {
   // refetches nothing and an optimistic write that needs pulling back to
   // server truth (e.g. the recolor of a knock that was dropped as
   // undeliverable) would sit wrong until the next pan. Translate the
-  // invalidate into a window refetch instead.
+  // invalidate into a window refetch instead. The 60s grid cache is busted
+  // too — an invalidate is a KNOWN write, so the density tier must not serve
+  // its freshness window over it (same rule as the SSE/visibility paths).
   useEffect(() => {
     const cache = qc.getQueryCache();
     return cache.subscribe((event: any) => {
@@ -1719,6 +1735,7 @@ export default function MapView() {
       if (event?.type !== "updated" || event?.action?.type !== "invalidate") return;
       const key = event.query?.queryKey;
       if (!Array.isArray(key) || key.length !== 1 || key[0] !== "/api/leads/map") return;
+      gridCacheRef.current.clear();
       refreshViewportPinsRef.current();
     });
   }, [qc]);
@@ -1733,26 +1750,68 @@ export default function MapView() {
   // dataset anyway.
   const viewportAbortRef = useRef<AbortController | null>(null);
   const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Zoomed out past the server's absolute span ceiling (continental view) →
-  // no window is fetchable; the notice chip asks for a zoom instead of a 400
-  // per moveend. Under the ceiling every window fetches — over-dense ones come
-  // back as an even server-side sample (truncated:true → the sample chip).
-  const [viewportSpanTooWide, setViewportSpanTooWide] = useState(false);
+  // ── Two loading tiers, one map ────────────────────────────────────────────
+  // The tier is a pure function of the fetch window (viewportTierForWindow):
+  // at/under the 3° pin-tier boundary the pin window below runs (over-dense
+  // windows come back as an even server-side sample — truncated:true → the
+  // sample chip); past it the density grid (fetchViewportGrid) renders
+  // aggregated count bubbles. There is no "zoom in to load pins" dead state:
+  // territory is visible at EVERY zoom. React state here is owned by
+  // refreshViewportPins (the ONE entry point); both fetch callbacks stay
+  // React-state-free by contract (#87) — their only writes are setQueryData +
+  // plain refs.
+  const [viewportTier, setViewportTier] = useState<"pins" | "grid">("pins");
+  const viewportTierRef = useRef<"pins" | "grid">("pins");
+  // Handoff guards, one per crossing direction, so NEITHER crossover is ever
+  // an empty gap. Set false when the tier flips INTO that tier, true when the
+  // tier's first window resolves (inside the fetch callbacks — ref writes,
+  // not React state):
+  //   grid→pins: pinWindowLandedRef — density bubbles linger until the first
+  //     pin window lands.
+  //   pins→grid: gridWindowLandedRef — the stale pin clusters stay VISIBLE
+  //     until the first grid window lands (and stay on if that fetch FAILS —
+  //     a failed first grid fetch must never blank the map).
+  const pinWindowLandedRef = useRef(true);
+  const gridWindowLandedRef = useRef(true);
+  // The FCC source lens as the server-side tag the grid supports (pins apply
+  // the full predicate client-side). Read via ref inside the fetch callback.
+  const filterSourceRef = useRef(filterSource);
+  filterSourceRef.current = filterSource;
+
+  // Layer visibility for the current tier — imperative map-thread work (same
+  // category as scheduleClusterSetData), never React state, so the fetch
+  // callbacks may call it the moment their data lands:
+  //   pins tier: pin clusters visible; density lingers ONLY until the first
+  //   pin window lands (pinWindowLandedRef).
+  //   grid tier: density shows once its first window has landed
+  //   (gridWindowLandedRef); until then the stale pin clusters stay UP — the
+  //   crossing paints the old pins, never a blank round-trip, and a failed
+  //   first grid fetch leaves those pins on screen instead of nothing.
+  const syncViewportTierLayers = useCallback((map: any) => {
+    if (!map) return;
+    const gridActive = viewportModeRef.current && viewportTierRef.current === "grid";
+    const showDensity = viewportModeRef.current && (gridActive ? gridWindowLandedRef.current : !pinWindowLandedRef.current);
+    const showPins = !gridActive || !gridWindowLandedRef.current;
+    for (const id of DENSITY_LAYER_IDS) {
+      try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", showDensity ? "visible" : "none"); } catch {}
+    }
+    for (const id of GRID_TIER_HIDDEN_LAYER_IDS) {
+      try { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", showPins ? "visible" : "none"); } catch {}
+    }
+  }, []);
+
   // INVISIBLE by contract (#87): this function never flips React state — the
-  // only write is the setQueryData cache merge. The zoom-out notice state is
-  // owned by refreshViewportPins below; chip visibility DERIVES from
+  // only writes are the setQueryData cache merge and plain refs. The tier
+  // state is owned by refreshViewportPins below; chip visibility DERIVES from
   // mapPinData.truncated + effects.
   const fetchViewportPins = useCallback(() => {
     if (!viewportModeRef.current) return;
     const bounds = currentFetchWindow(mapRef.current);
     if (!bounds) return;
     const { view, window } = bounds;
-    // Zoomed out past the server's absolute span ceiling: the fetch would 400
-    // on every moveend and the map would sit silently stale. Skip it — the
-    // notice chip (set by refreshViewportPins) asks the user to zoom in. Any
-    // span UNDER the ceiling is fetched: the server answers wide windows with
-    // an even sample instead of rejecting them.
-    if (bboxExceedsSpanGuard(window)) return;
+    // Tier dispatch happens in refreshViewportPins — this callback only ever
+    // runs in the pins tier, so the window is always inside the pin-tier
+    // boundary (over-dense windows return the server's even sample).
     viewportAbortRef.current?.abort();
     const controller = new AbortController();
     viewportAbortRef.current = controller;
@@ -1768,6 +1827,10 @@ export default function MapView() {
       .then(({ pins: fetched, truncated }) => {
         if (controller.signal.aborted) return;
         const keep = keepRegion(view);
+        // The pin window landed: any lingering density bubbles from the grid
+        // tier hand off NOW (imperative layer sync — not React state).
+        pinWindowLandedRef.current = true;
+        syncViewportTierLayers(mapRef.current);
         qc.setQueryData(["/api/leads/map"], (old: any) => {
           const prev: MapPin[] = old?.pins ?? [];
           const merged = mergeViewportPins(prev, fetched, keep);
@@ -1797,18 +1860,121 @@ export default function MapView() {
   const fetchViewportPinsRef = useRef(fetchViewportPins);
   fetchViewportPinsRef.current = fetchViewportPins;
 
+  // ── Density grid loader (wide-zoom tier) ──────────────────────────────────
+  // Same shape as the pin window loader: debounce/abort parity via the shared
+  // moveend timer, in-flight aborted per new pan, failures never empty the
+  // map. Responses cache 60s keyed by bbox+cell+tag so re-entering a recently
+  // viewed region is free. The window is CLAMPED to the server's 15° grid
+  // guard (centered) — zoomed out to a continent the fetch covers the central
+  // 15° instead of 400ing. Writes: setQueryData + refs only (the #87 purity
+  // contract, enforced by tests/unit/map-one-tap-add.test.ts).
+  const gridAbortRef = useRef<AbortController | null>(null);
+  const gridCacheRef = useRef(new Map<string, { ts: number; data: MapGridResponse }>());
+  const fetchViewportGrid = useCallback(() => {
+    if (!viewportModeRef.current) return;
+    const bounds = currentFetchWindow(mapRef.current);
+    if (!bounds) return;
+    const window = clampToGridGuard(bounds.window);
+    const span = Math.max(window.maxLng - window.minLng, window.maxLat - window.minLat);
+    const cell = gridCellForSpan(span); // the server's ?cell=auto formula — keyed, not sent
+    const tag = sourceFilterToGridTag(filterSourceRef.current);
+    const key = gridCacheKey(window, cell, tag);
+    const hit = gridCacheRef.current.get(key);
+    if (hit && Date.now() - hit.ts < MAP_GRID_CACHE_TTL_MS) {
+      // A cached window IS a landed window — release the pins→grid handoff
+      // guard immediately (otherwise the stale pins would linger 60s).
+      gridWindowLandedRef.current = true;
+      syncViewportTierLayers(mapRef.current);
+      qc.setQueryData(["/api/leads/map/grid"], hit.data);
+      return;
+    }
+    gridAbortRef.current?.abort();
+    const controller = new AbortController();
+    gridAbortRef.current = controller;
+    const sessionId = getStoredSessionId();
+    fetch(`/api/leads/map/grid?bbox=${bboxParam(window)}&cell=${cell}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`, {
+      headers: sessionId ? { "x-session-id": sessionId } : {},
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`bbox grid ${res.status}`);
+        return (await res.json()) as MapGridResponse;
+      })
+      .then((data) => {
+        if (controller.signal.aborted) return;
+        // The grid window landed: the stale pin clusters that covered the
+        // pins→grid crossing hand off NOW (imperative layer sync — not React
+        // state). Success only — a failure must keep the pins showing.
+        gridWindowLandedRef.current = true;
+        syncViewportTierLayers(mapRef.current);
+        if (gridCacheRef.current.size > 200) gridCacheRef.current.clear(); // bound pan churn
+        gridCacheRef.current.set(key, { ts: Date.now(), data });
+        qc.setQueryData(["/api/leads/map/grid"], data);
+      })
+      .catch((err: any) => {
+        if (err?.name === "AbortError") return; // superseded by a newer pan
+        // A failed grid fetch must never empty the map — keep what's there:
+        // gridWindowLandedRef stays false on a FIRST-window failure, so the
+        // pin clusters stay visible; re-sync defensively (a style swap could
+        // have reset visibility mid-flight).
+        syncViewportTierLayers(mapRef.current);
+      });
+  }, [qc]);
+  const fetchViewportGridRef = useRef(fetchViewportGrid);
+  fetchViewportGridRef.current = fetchViewportGrid;
+
   // The ONE entry point for "the map moved / data changed, refresh the
-  // window": owns the zoom-out notice state (change-only, so a steady pan
-  // flips nothing) and delegates the fetch — which stays React-state-free.
+  // window": owns the tier state (change-only, so a steady pan flips nothing)
+  // and delegates the fetch — which stays React-state-free.
   const refreshViewportPins = useCallback(() => {
     if (!viewportModeRef.current) return;
     const bounds = currentFetchWindow(mapRef.current);
-    const tooWide = bounds != null && bboxExceedsSpanGuard(bounds.window);
-    setViewportSpanTooWide((prev) => (prev === tooWide ? prev : tooWide));
-    fetchViewportPinsRef.current();
+    const tier = bounds ? viewportTierForWindow(bounds.window) : viewportTierRef.current;
+    if (tier === "pins" && viewportTierRef.current !== "pins") {
+      // grid→pins crossing: density stays visible until the pin window lands.
+      pinWindowLandedRef.current = false;
+    }
+    if (tier === "grid" && viewportTierRef.current !== "grid") {
+      // pins→grid crossing: the stale pin clusters stay visible until the
+      // FIRST grid window lands (and stay on if that fetch fails).
+      gridWindowLandedRef.current = false;
+    }
+    viewportTierRef.current = tier;
+    setViewportTier((prev) => (prev === tier ? prev : tier));
+    if (tier === "grid") fetchViewportGridRef.current();
+    else fetchViewportPinsRef.current();
   }, []);
   const refreshViewportPinsRef = useRef(refreshViewportPins);
   refreshViewportPinsRef.current = refreshViewportPins;
+
+  // Grid cells → the density source (imperative setData, coalesced by React's
+  // own batching; ≤5k points is a trivial worker payload). Tier visibility is
+  // synced separately so a style swap can't strand the wrong tier on screen.
+  const { data: gridData } = useQuery<MapGridResponse>({
+    queryKey: ["/api/leads/map/grid"],
+    enabled: false, // cache subscription only — fetchViewportGrid writes here
+  });
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    const src = map.getSource(DENSITY_SOURCE) as any;
+    if (!src) return;
+    src.setData(gridData ? gridCellsToGeoJson(gridData.cells, gridData.cell) : emptyFeatureCollection());
+  }, [gridData, mapReady, styleEpoch]);
+
+  // Tier/visibility sync on every tier flip + style reload (setStyle wipes
+  // layout properties, so the epoch dependency re-applies them).
+  useEffect(() => {
+    if (!mapReady) return;
+    syncViewportTierLayers(mapRef.current);
+  }, [viewportTier, mapReady, styleEpoch, syncViewportTierLayers]);
+
+  // The FCC lens is server-side for the grid tier: switching sources re-keys
+  // the grid fetch (the pins tier filters client-side and needs no refetch).
+  useEffect(() => {
+    if (!viewportModeRef.current || viewportTierRef.current !== "grid") return;
+    refreshViewportPinsRef.current();
+  }, [filterSource]);
 
   // moveend → debounced 300ms window refetch. Bound per map instance; inactive
   // in full-feed mode (the ref guard makes every pan free there).
@@ -1827,14 +1993,39 @@ export default function MapView() {
     };
   }, [mapReady, styleEpoch, viewportMode]);
 
-  // Amber viewport notices (truncated sample / zoom-in-needed). Dismissible
-  // per condition; dismissal resets the moment the condition clears so the
-  // NEXT dense window or zoom-out warns again.
+  // Persist the camera on every settled move (both modes, debounced) so the
+  // next launch opens on the same territory and the first pins/grid fetch is
+  // immediate — see readPersistedMapCamera at map init.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onMove = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        try {
+          const c = map.getCenter();
+          persistMapCamera([c.lng, c.lat], map.getZoom());
+        } catch {}
+      }, 500);
+    };
+    map.on("moveend", onMove);
+    return () => {
+      if (timer) clearTimeout(timer);
+      try { map.off("moveend", onMove); } catch {}
+    };
+  }, [mapReady, styleEpoch]);
+
+  // Amber viewport notice (truncated sample). Dismissible; dismissal resets
+  // the moment the condition clears so the NEXT dense window warns again.
+  // (There is no zoom-in-needed notice: the density grid covers wide zooms.)
+  // sampledPins is ALSO the lasso panel's bulk-action honesty flag (#92) —
+  // there it must reflect the raw truncated window regardless of tier, so the
+  // tier gate lives only at the notice-chip call site below.
   const sampledPins = viewportMode && !!mapPinData?.truncated;
   const [sampleNoticeDismissed, setSampleNoticeDismissed] = useState(false);
-  const [spanNoticeDismissed, setSpanNoticeDismissed] = useState(false);
   useEffect(() => { if (!sampledPins) setSampleNoticeDismissed(false); }, [sampledPins]);
-  useEffect(() => { if (!viewportSpanTooWide) setSpanNoticeDismissed(false); }, [viewportSpanTooWide]);
 
   // Reps have refetchOnWindowFocus OFF (they flip to the dialer/camera
   // constantly — a full refetch on every focus is wasteful). But if the
@@ -1847,6 +2038,8 @@ export default function MapView() {
     if (!isRep) return;
     const onVisible = () => {
       if (document.visibilityState === "visible") {
+        // Missed pings while hidden: bust the 60s grid cache too.
+        gridCacheRef.current.clear();
         if (viewportModeRef.current) refreshViewportPinsRef.current();
         else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       }
@@ -1906,6 +2099,8 @@ export default function MapView() {
                 refreshTimer = null;
                 // Viewport mode: the full feed is never fetched, so the
                 // invalidation would be a no-op — refetch the current window.
+                // The 60s grid cache must NOT absorb a known lead write.
+                gridCacheRef.current.clear();
                 if (viewportModeRef.current) refreshViewportPinsRef.current();
                 else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
               }, ownedJobIdRef.current != null ? 5_000 : 1_000);
@@ -2102,11 +2297,15 @@ export default function MapView() {
     // at mount — leaving the map stuck before its first styled frame.)
     const el = mapContainer.current;
 
+    // Reopen where the rep LEFT the map: the first viewport fetch (pins or
+    // density grid) then targets real territory the moment the count probe
+    // answers, instead of a default-city flash the geolocate has to correct.
+    const savedCamera = readPersistedMapCamera();
     const map = new (window as any).mapboxgl.Map({
       container: el,
       style: "mapbox://styles/mapbox/satellite-streets-v12",
-      center: ROCKWELL_CENTER,
-      zoom: 13,
+      center: savedCamera?.center ?? ROCKWELL_CENTER,
+      zoom: savedCamera?.zoom ?? 13,
       // No wordmark, no attribution bar on the map (owner ask). The license
       // text stays reachable behind the compact "i" control added below —
       // Mapbox's terms require attribution to exist, not to sprawl.
@@ -2421,6 +2620,12 @@ export default function MapView() {
       // pipeline. No per-address DOM markers are created.
       ensureTransientMapLayers(map);
 
+      // ── Density grid source (GeoJSON) — the wide-zoom aggregate tier ──────
+      // Count bubbles from /api/leads/map/grid, visible only past the pin
+      // path's span guard. Installed BEFORE the cluster source so during the
+      // one-fetch tier handoff (both visible) the pins read on top.
+      ensureDensityLayers(map);
+
       // ── Lead cluster source (GeoJSON) — shows count bubbles when zoomed out ──
       map.addSource("leads-cluster", {
         type: "geojson",
@@ -2563,6 +2768,28 @@ export default function MapView() {
       map.on("mouseleave", "lead-clusters", () => hoverCursor(""));
       map.on("mouseenter", "lead-clusters-glow", () => hoverCursor("pointer"));
       map.on("mouseleave", "lead-clusters-glow", () => hoverCursor(""));
+
+      // Tap a density bubble → zoom to exactly that cell (the cell pitch
+      // rides on every feature). fitBounds lands well inside the pin tier, so
+      // one tap takes a state view to working territory.
+      map.on("click", DENSITY_CIRCLES_LAYER, (e: any) => {
+        if (drawToolActive()) return;
+        suspendFollow();
+        const f = e.features?.[0];
+        const coords = f?.geometry?.coordinates;
+        if (!coords) return;
+        const cell = Number(f?.properties?.cell) > 0 ? Number(f.properties.cell) : 0.25;
+        const half = cell / 2;
+        map.fitBounds(
+          [
+            [coords[0] - half, coords[1] - half],
+            [coords[0] + half, coords[1] + half],
+          ],
+          { padding: 120, duration: 500, maxZoom: 14 },
+        );
+      });
+      map.on("mouseenter", DENSITY_CIRCLES_LAYER, () => hoverCursor("pointer"));
+      map.on("mouseleave", DENSITY_CIRCLES_LAYER, () => hoverCursor(""));
 
       // ── Individual lead pins (GPU circle layer) — shown when zoomed in past clusterMaxZoom ──
       // Painted by displayState (`ds` prop): shared consts in @/lib/mapPins keep
@@ -3787,6 +4014,9 @@ export default function MapView() {
           : "mapbox://styles/mapbox/dark-v11"; // dark
     // setStyle wipes all layers — re-add cluster source + layers after style loads
     map.once("style.load", async () => {
+      // Density tier first (sits UNDER the pin clusters) — same idempotent
+      // installer the init block uses, so the two can never drift.
+      ensureDensityLayers(map);
       // Re-add cluster source + layers after style swap
       if (!map.getSource("leads-cluster")) {
         map.addSource("leads-cluster", {
@@ -5013,6 +5243,15 @@ export default function MapView() {
     [isRep, canAssign, team, repLeadCounts],
   );
   const mapFilterActive = filterStatus !== "all" || filterRep !== "all" || filterSource !== "all";
+  // Lenses the density grid CANNOT express (never silently under-filter):
+  // status and rep are pin-level predicates the aggregate doesn't take, and
+  // field-verified is provenance (freshConfirmedAt), not a tag. While the
+  // grid tier is active the filter sheet names exactly what's deferred.
+  const gridHiddenLenses = [
+    filterStatus !== "all" ? "Status" : null,
+    filterRep !== "all" ? "Rep" : null,
+    filterSource === "field_verified" ? "Field-verified" : null,
+  ].filter(Boolean) as string[];
   // Chip text: status label, rep name, source, or any combination —
   // "{label} · {n}" renders in the top-center chip whenever mapFilterActive
   // (state is never invisible).
@@ -6211,26 +6450,20 @@ export default function MapView() {
           )}
 
           {/* ── Viewport-mode notice — the map is under-showing pins and the
-                 user must know: either the window hit the server's row cap
-                 (sample) or the view is wider than the fetchable span. The
-                 zoom-in notice wins when both apply (it is the blocker). ── */}
+                 user must know. The one remaining case is the server's 25k
+                 row cap (sample): wide zooms render the density grid, so no
+                 "zoom in to load pins" dead state exists anymore. ── */}
           {mapReady && (() => {
             const notice = viewportNotice({
               viewportMode,
-              spanTooWide: viewportSpanTooWide,
-              truncated: !!mapPinData?.truncated,
-              spanDismissed: spanNoticeDismissed,
+              truncated: viewportTier === "pins" && !!mapPinData?.truncated,
               sampleDismissed: sampleNoticeDismissed,
             });
             if (!notice) return null;
             return (
               <MapViewportNotice
                 message={notice.message}
-                onDismiss={() =>
-                  notice.kind === "zoom"
-                    ? setSpanNoticeDismissed(true)
-                    : setSampleNoticeDismissed(true)
-                }
+                onDismiss={() => setSampleNoticeDismissed(true)}
                 testId={`map-viewport-${notice.kind}-notice`}
               />
             );
@@ -7327,6 +7560,15 @@ export default function MapView() {
               setFilterRep("all");
               setFilterSource("all");
             }}
+            // Honest lens note for the density tier: zoomed out, the bubbles
+            // are tag-scoped counts — the server-side part of the FCC lens
+            // applies, but status and field-verified are pin-level predicates
+            // and only bite once the map is in the pins tier.
+            zoomedOutNote={
+              viewportMode && viewportTier === "grid" && gridHiddenLenses.length > 0
+                ? `${gridHiddenLenses.join(", ")} ${gridHiddenLenses.length === 1 ? "filter applies" : "filters apply"} when zoomed in`
+                : null
+            }
             shown={mapTotalLeads.length}
             total={leads.length}
           />

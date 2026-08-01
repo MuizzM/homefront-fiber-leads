@@ -250,12 +250,34 @@ export interface MapPinWindow {
   sampleStep?: number;
 }
 
+/** Density window for the aggregate tier of the field map (span wider than
+ *  the pin path's 3° guard). `cell` is the grid pitch in degrees; rows are
+ *  GROUP BY integer floor buckets of lat/lng over the SAME scoped set the pin
+ *  window reads, so a zoom-in crossing never changes which doors exist — only
+ *  how they're rendered. */
+export interface MapGridWindow extends MapPinWindow {
+  cell: number;
+}
+
+/** One aggregated density cell: `lat`/`lng` are the cell CENTER, `n` the
+ *  number of scoped, pin-eligible leads inside the cell. */
+export interface MapGridCell {
+  lat: number;
+  lng: number;
+  n: number;
+}
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }>;
   getLeadsDataVersion(tenantId?: number): string;
   getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[];
+  // SQL-side density aggregation over the exact map scope (tenant + rep
+  // visibility + pin eligibility) — powers the wide-zoom tier where shipping
+  // individual pins is impossible. Fetches limit+1 so the caller can flag
+  // truncation, mirroring the pin window's contract.
+  getLeadsMapGrid(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapGridWindow): MapGridCell[];
   // Cheap COUNT over the exact map scope (tenant + rep visibility + pin
   // eligibility) — powers the client's full-feed-vs-viewport-mode decision
   // without downloading a single pin.
@@ -2782,9 +2804,10 @@ export class Storage implements IStorage {
   // BETWEEN keeps the idx_leads_lat_lng range scan usable; the tag predicate
   // is an exact match OR an underscore-prefix match ("fcc" → fcc_fresh_block,
   // fcc_fiber_d25) so a family of tags filters with one param. The ONE place
-  // the window predicate is built — getLeadsForMap and getLeadsMapWindowCount
-  // compose from it, so the sampler's count can never drift from the rows the
-  // sampled query would return.
+  // the window predicate is built — getLeadsForMap, getLeadsMapWindowCount,
+  // and getLeadsMapGrid (the density tier) all compose from it, so the
+  // sampler's count and the aggregate's buckets can never drift from the rows
+  // the sampled query would return.
   private mapWindowPred(scopePred: string, params: any[], window: MapPinWindow): string {
     scopePred += " AND l.lat BETWEEN ? AND ? AND l.lng BETWEEN ? AND ?";
     params.push(window.minLat, window.maxLat, window.minLng, window.maxLng);
@@ -2820,6 +2843,35 @@ export class Storage implements IStorage {
     const pred = this.mapWindowPred(where, params, window);
     const row = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads l WHERE ${pred}`).get(...params) as { c: number };
     return row.c;
+  }
+
+  getLeadsMapGrid(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapGridWindow): MapGridCell[] {
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const scopePred = this.mapWindowPred(where, params, window);
+    // Integer FLOOR buckets: lat/lng divided by the cell pitch, floored, then
+    // grouped. FLOOR is exact on the float division (no ROUND-half drift), the
+    // BETWEEN window keeps the idx_leads_lat_lng range scan doing the row
+    // selection, and the aggregate is one pass over those rows — O(K_window),
+    // never a sort of the pin projection. The bucket id round-trips to the
+    // cell CENTER in JS ((bucket + 0.5) * cell) so the client never has to
+    // reconstruct the grid pitch from coordinates. (sampleStep is a PIN-path
+    // concept — the grid already IS the bounded wide-zoom answer — so it is
+    // never set on a MapGridWindow.)
+    const rows = rawDb.prepare(`
+      SELECT FLOOR(l.lat / ?) AS latBucket, FLOOR(l.lng / ?) AS lngBucket,
+             COUNT(*) AS n
+      FROM leads l
+      WHERE ${scopePred}
+      GROUP BY latBucket, lngBucket
+      ORDER BY n DESC, latBucket ASC, lngBucket ASC
+      LIMIT ?
+    `).all(window.cell, window.cell, ...params, Math.max(1, Math.floor(window.limit ?? 5_000))) as Array<{ latBucket: number; lngBucket: number; n: number }>;
+    const r6 = (n: number) => Math.round(n * 1e6) / 1e6;
+    return rows.map((r) => ({
+      lat: r6((r.latBucket + 0.5) * window.cell),
+      lng: r6((r.lngBucket + 0.5) * window.cell),
+      n: r.n,
+    }));
   }
 
   getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[] {

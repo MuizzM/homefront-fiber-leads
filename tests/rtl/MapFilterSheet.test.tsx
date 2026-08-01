@@ -193,3 +193,22 @@ describe("fiber (FCC) source pills", () => {
     expect(screen.queryByTestId("map-filter-sources")).toBeNull();
   });
 });
+
+describe("density-tier zoom hint", () => {
+  it("renders the zoomedOutNote only while it applies (no dead UI)", () => {
+    const { unmount } = renderSheet({ zoomedOutNote: "Status and field-verified filters apply when zoomed in" });
+    const hint = screen.getByTestId("map-filter-zoom-hint");
+    expect(hint.textContent).toContain("apply when zoomed in");
+    unmount();
+    renderSheet(); // default: no note → no hint element at all
+    expect(screen.queryByTestId("map-filter-zoom-hint")).toBeNull();
+  });
+
+  it("shows the rep-filter wording (a manager's rep lens is named, never silently dropped)", () => {
+    // MapView composes "Rep filter applies when zoomed in" when a rep filter
+    // is active in the grid tier (the composition is pinned source-level in
+    // tests/unit/map-zoom-tiers.test.ts).
+    renderSheet({ zoomedOutNote: "Rep filter applies when zoomed in" });
+    expect(screen.getByTestId("map-filter-zoom-hint").textContent).toContain("Rep filter applies when zoomed in");
+  });
+});

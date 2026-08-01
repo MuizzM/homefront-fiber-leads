@@ -1,12 +1,11 @@
 // ── Viewport-mode notice chip ────────────────────────────────────────────────
-// ONE amber affordance for the two ways a bbox window can under-show pins:
-//   - the window hit the server's 25k row cap ("Showing a sample — zoom in
-//     for all pins"), or
-//   - the view is zoomed out past the server's 3° span guard, so no window
-//     was fetched at all ("Zoom in to load pins").
-// Dismissible per condition — dismissal resets when the condition clears, so
-// the next dense window (or the next zoom-out) warns again. Pure presentation:
-// the map page owns the conditions and the dismiss state.
+// ONE amber affordance for the one way a bbox window can still under-show
+// pins: the window hit the server's 25k row cap ("Showing a sample — zoom in
+// for all pins"). (The old over-wide-span "zoom in" condition is gone — the
+// density grid renders territory at every zoom, so no dead state exists.)
+// Dismissible — dismissal resets when the condition clears, so the next dense
+// window warns again. Pure presentation: the map page owns the condition and
+// the dismiss state.
 import { X, AlertTriangle } from "lucide-react";
 import { FOCUS } from "@/lib/a11y";
 

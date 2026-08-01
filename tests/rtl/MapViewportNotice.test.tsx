@@ -1,7 +1,11 @@
 // The amber viewport notice chip: renders its message, announces politely,
-// and dismisses. Driven by MapView for the truncated-sample ("Showing a
-// sample — zoom in for all pins") and over-wide-span ("Zoom in to load pins")
-// conditions — the unit tests for viewportNotice pin the wiring.
+// and dismisses. Driven by MapView for the one remaining condition — the
+// truncated sample ("Showing a sample — zoom in for all pins"). (The old
+// over-wide-span "Zoom in to load pins" condition is gone: the density grid
+// renders territory at every zoom.) The unit tests for viewportNotice pin
+// the wiring.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { MapViewportNotice } from "@/components/map/MapViewportNotice";
@@ -14,9 +18,15 @@ describe("MapViewportNotice", () => {
     expect(chip.textContent).toContain("Showing a sample — zoom in for all pins");
   });
 
-  it("renders the over-wide-span message", () => {
-    render(<MapViewportNotice message="Zoom in to load pins" onDismiss={vi.fn()} testId="map-viewport-zoom-notice" />);
-    expect(screen.getByTestId("map-viewport-zoom-notice").textContent).toContain("Zoom in to load pins");
+  it("has no over-wide-span usage anymore — wide zooms render the density grid", () => {
+    // The component is a generic chip, but the CALLER no longer has a zoom
+    // condition (viewportNotice's unit tests pin that). Guard the page source
+    // so the dead state can't creep back.
+    const src = readFileSync(
+      join(__dirname, "..", "..", "client/src/pages/MapView.tsx"), "utf8",
+    );
+    expect(src).not.toContain("Zoom in to load pins");
+    expect(src).not.toContain("map-viewport-zoom-notice");
   });
 
   it("the X dismisses via onDismiss and carries an accessible name", () => {

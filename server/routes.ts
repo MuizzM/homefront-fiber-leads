@@ -1455,7 +1455,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // Hard row cap per window. The query fetches cap+1 so the response can SAY
   // it truncated (the client shows "sample", never silently drops pins).
   const MAP_BBOX_ROW_CAP = 25_000;
-  function parseMapBBox(raw: unknown): MapPinWindow | { error: string } | null {
+  function parseMapBBox(raw: unknown, maxSpanDeg: number = MAP_BBOX_MAX_SPAN_DEG): MapPinWindow | { error: string } | null {
     if (raw == null || raw === "") return null;
     if (typeof raw !== "string") return { error: "bbox must be minLng,minLat,maxLng,maxLat" };
     const parts = raw.split(",").map((p) => Number(p.trim()));
@@ -1471,8 +1471,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     maxLat = Math.max(-90, Math.min(90, maxLat));
     if (minLng > maxLng) [minLng, maxLng] = [maxLng, minLng];
     if (minLat > maxLat) [minLat, maxLat] = [maxLat, minLat];
-    if (maxLng - minLng > MAP_BBOX_MAX_SPAN_DEG || maxLat - minLat > MAP_BBOX_MAX_SPAN_DEG) {
-      return { error: `bbox span too large (max ${MAP_BBOX_MAX_SPAN_DEG}° per axis)` };
+    if (maxLng - minLng > maxSpanDeg || maxLat - minLat > maxSpanDeg) {
+      return { error: `bbox span too large (max ${maxSpanDeg}° per axis)` };
     }
     return { minLng, minLat, maxLng, maxLat };
   }
@@ -1483,6 +1483,73 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     return raw;
   }
+
+  // ── Density grid — the wide-zoom aggregate tier ───────────────────────────
+  // When the viewport is wider than the pin path's 3° span guard, shipping
+  // pins is impossible (a state view at 174k leads would be the full table),
+  // so this endpoint ships COUNTS bucketed into grid cells instead: the SAME
+  // mapScopeWhere scoping + tag filter, GROUPed BY integer floor buckets of
+  // lat/lng, one indexed range scan, no pin projection. Registered BEFORE
+  // /api/leads/map for the same reason /count is.
+  //
+  // The grid's own span guard is 15°/axis — past that even an aggregate stops
+  // being meaningful territory (continent views), and the client never asks
+  // (it clamps its fetch window to the guard). Cell pitch:
+  //   auto (default): span/12 snapped to 0.05° steps, clamped to [0.05°, 5°]
+  //     — ~12 cells across the shorter screen axis, so a bubble is always a
+  //     comfortable tap target and the payload stays ~150 cells (~5KB).
+  //   explicit ?cell=<deg>: snapped to the same 0.05° lattice so every
+  //     requester agrees on cell identity (client cache keys depend on it).
+  // Hard-capped at 5k cells (fetched cap+1) with a truncated flag — the
+  // mirror of the pin window's 25k row cap contract.
+  const MAP_GRID_MAX_SPAN_DEG = 15;
+  const MAP_GRID_CELL_CAP = 5_000;
+  const MAP_GRID_CELL_STEP = 0.05;
+  function gridCellForSpan(spanDeg: number): number {
+    const snapped = Math.round(spanDeg / 12 / MAP_GRID_CELL_STEP) * MAP_GRID_CELL_STEP;
+    return Math.min(5, Math.max(MAP_GRID_CELL_STEP, Number(snapped.toFixed(2))));
+  }
+  function parseGridCell(raw: unknown, spanDeg: number): number | { error: string } {
+    if (raw == null || raw === "" || raw === "auto") return gridCellForSpan(spanDeg);
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0 || n > 5) {
+      return { error: "cell must be 'auto' or a size in degrees (0.05–5)" };
+    }
+    // Snap to the 0.05° lattice (same rule as auto) so cell identity — and
+    // therefore the client's 60s response cache keys — is requester-independent.
+    return Math.min(5, Math.max(MAP_GRID_CELL_STEP, Number((Math.round(n / MAP_GRID_CELL_STEP) * MAP_GRID_CELL_STEP).toFixed(2))));
+  }
+
+  app.get("/api/leads/map/grid", requireAuth, (req: any, res: any) => {
+    const user = req.user;
+    const tid = user?.tenantId ?? undefined;
+    const repFilter = leadVisibilityScope(user); // identical scoping to the pin path
+    const bbox = parseMapBBox(req.query.bbox, MAP_GRID_MAX_SPAN_DEG);
+    if (!bbox) return res.status(400).json({ error: "grid requires bbox=minLng,minLat,maxLng,maxLat" });
+    if ("error" in bbox) return res.status(400).json({ error: bbox.error });
+    const tag = parseMapTag(req.query.tag);
+    if (tag && typeof tag === "object") return res.status(400).json({ error: (tag as { error: string }).error });
+    const span = Math.max(bbox.maxLng - bbox.minLng, bbox.maxLat - bbox.minLat);
+    const cell = parseGridCell(req.query.cell, span);
+    if (typeof cell !== "number") return res.status(400).json({ error: cell.error });
+    const started = performance.now();
+    const rows = storage.getLeadsMapGrid(tid, repFilter, {
+      ...bbox, cell, tag: tag as string | undefined, limit: MAP_GRID_CELL_CAP + 1,
+    });
+    const truncated = rows.length > MAP_GRID_CELL_CAP;
+    if (truncated) rows.length = MAP_GRID_CELL_CAP;
+    res.set("Cache-Control", "no-store");
+    structuredLog("perf.leads_map", {
+      requestId: String(req.id ?? "").slice(0, 8),
+      tenantId: tid ?? 0,
+      scope: repFilter == null ? "all" : "scoped",
+      format: "grid", cache: "bbox",
+      rows: rows.length, truncated,
+      dbMs: Number((performance.now() - started).toFixed(2)),
+      complexity: "O(K_window)",
+    });
+    res.json({ cells: rows, cell, truncated });
+  });
 
   app.get("/api/leads/map", requireAuth, (req: any, res: any) => {
     const parsedQuery = z.object({ format: z.enum(["object", "packed"]).default("object") })

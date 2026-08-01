@@ -108,6 +108,129 @@ export function persistFilterStatus(status: string): void {
   }
 }
 
+// ── Persisted map camera ────────────────────────────────────────────────────
+// The map reopens where the rep LEFT it, so the first viewport fetch (pins or
+// density grid) targets real territory the moment the count probe answers —
+// no default-city flash, no zoomed-out dead frame while geolocate spins up.
+export const MAP_CAMERA_LS_KEY = "hf.mapCamera.v1";
+
+export interface PersistedMapCamera {
+  center: [number, number]; // [lng, lat]
+  zoom: number;
+}
+
+export function readPersistedMapCamera(): PersistedMapCamera | null {
+  try {
+    const raw = localStorage.getItem(MAP_CAMERA_LS_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    const lng = Number(v?.center?.[0]);
+    const lat = Number(v?.center?.[1]);
+    const zoom = Number(v?.zoom);
+    if (!Number.isFinite(lng) || !Number.isFinite(lat) || !Number.isFinite(zoom)) return null;
+    if (Math.abs(lat) > 85 || Math.abs(lng) > 180 || zoom < 2 || zoom > 20) return null;
+    return { center: [lng, lat], zoom };
+  } catch {
+    return null; // storage blocked (private mode) — session-only camera
+  }
+}
+
+export function persistMapCamera(center: [number, number], zoom: number): void {
+  try {
+    localStorage.setItem(MAP_CAMERA_LS_KEY, JSON.stringify({ center, zoom }));
+  } catch {
+    /* storage blocked — the camera just won't survive a reload */
+  }
+}
+
+// ── Density grid (wide-zoom aggregate tier) ────────────────────────────────
+// Past the pin path's 3° span guard the map renders /api/leads/map/grid cells
+// as count-scaled bubbles — the same visual family as the pin clusters
+// (neutral teal density ramp, count label, white ring), so zooming across the
+// tier boundary reads as "the bubbles got honest", never as a different map.
+// ONE spec factory shared by the map-init block AND the style.load re-add
+// block (the drift that reverted the Frontier halo colour is why these can
+// never be hand-copied twice).
+export const DENSITY_SOURCE = "lead-density";
+export const DENSITY_CIRCLES_LAYER = "lead-density-circles";
+export const DENSITY_COUNT_LAYER = "lead-density-count";
+export const DENSITY_LAYER_IDS = [DENSITY_CIRCLES_LAYER, DENSITY_COUNT_LAYER] as const;
+
+/** Pin-cluster layers hidden while the density tier is active (the stale
+ *  cached pins from the last close-zoom window must not double-render over
+ *  the bubbles). Unclustered pin layers are NOT listed: their minzoom 12
+ *  keeps them off at grid-tier zooms anyway. */
+export const GRID_TIER_HIDDEN_LAYER_IDS = [
+  "lead-clusters-glow",
+  "lead-fresh-cluster-ring",
+  "lead-clusters",
+  "lead-cluster-count",
+] as const;
+
+export function densityLayerSpecs(): any[] {
+  return [
+    {
+      id: DENSITY_CIRCLES_LAYER,
+      type: "circle",
+      source: DENSITY_SOURCE,
+      paint: {
+        // sqrt-ish growth: a 100x count difference stays readable without the
+        // big cells swallowing the small ones. Same teal family as clusters —
+        // density means "how many", never a status.
+        "circle-radius": [
+          "interpolate", ["exponential", 0.5], ["get", "n"],
+          1, 12,
+          50, 20,
+          500, 30,
+          5000, 42,
+          50000, 54,
+        ],
+        "circle-color": [
+          "step", ["get", "n"],
+          "#0d9488",
+          25, "#0f766e",
+          250, "#115e59",
+          2500, "#134e4a",
+        ],
+        "circle-opacity": 0.88,
+        "circle-stroke-width": 2.5,
+        "circle-stroke-color": "rgba(255,255,255,0.9)",
+      },
+    },
+    {
+      id: DENSITY_COUNT_LAYER,
+      type: "symbol",
+      source: DENSITY_SOURCE,
+      layout: {
+        // The EXACT cell count — a density bubble that abbreviates ("1.2k")
+        // reads as an estimate; the grid's whole job is honest territory.
+        "text-field": ["to-string", ["get", "n"]],
+        "text-font": ["DIN Offc Pro Medium", "Arial Unicode MS Bold"],
+        "text-size": ["step", ["get", "n"], 13, 25, 14, 250, 16],
+        "text-allow-overlap": true,
+      },
+      paint: {
+        "text-color": "#ffffff",
+        "text-halo-color": "rgba(0,0,0,0.3)",
+        "text-halo-width": 0.5,
+      },
+    },
+  ];
+}
+
+/** Idempotent density source+layer install — called by the map-init block and
+ *  the style.load re-add block (setStyle wipes custom sources). Density sits
+ *  UNDER the pin clusters, so during the tier handoff (both visible for one
+ *  fetch round-trip) the pins read on top. */
+export function ensureDensityLayers(map: any): void {
+  if (!map.getSource(DENSITY_SOURCE)) {
+    map.addSource(DENSITY_SOURCE, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+  }
+  for (const spec of densityLayerSpecs()) {
+    if (!map.getLayer(spec.id)) map.addLayer(spec);
+  }
+}
+
 // Counts are glanceable context, never the headline: raw under 10k, compact
 // above so a 5-6 digit tally can't dominate the pill ("12.3k", "235k").
 export function formatFilterCount(n: number): string {

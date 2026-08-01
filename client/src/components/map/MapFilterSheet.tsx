@@ -27,6 +27,10 @@ export interface MapFilterSheetProps {
   sourceCounts?: Partial<Record<Exclude<LeadSourceFilter, "all">, number>>;
   activeSource?: LeadSourceFilter;
   onSource?: (s: LeadSourceFilter) => void;
+  /** Honest lens note for the density tier (zoomed out past the pin span
+   *  guard): status/field-verified are pin-level predicates the aggregate
+   *  can't express, so the sheet says so instead of silently under-filtering. */
+  zoomedOutNote?: string | null;
   onClearAll: () => void;
   shown: number;
   total: number;
@@ -45,6 +49,7 @@ export function MapFilterSheet({
   open, onClose, statusOrder, statusCounts, activeStatus, onStatus,
   reps, unassignedCount, activeRep, onRep,
   sources, sourceCounts, activeSource = "all", onSource,
+  zoomedOutNote = null,
   onClearAll, shown, total,
 }: MapFilterSheetProps) {
   if (!open) return null;
@@ -190,6 +195,14 @@ export function MapFilterSheet({
               )}
             </div>
           </div>
+        )}
+
+        {/* Density-tier honesty: which lenses are NOT reflected in the
+            zoomed-out count bubbles. Only rendered while it applies. */}
+        {zoomedOutNote && (
+          <p className="mt-4 text-center text-[12px] leading-snug text-amber-600 dark:text-amber-300" data-testid="map-filter-zoom-hint">
+            {zoomedOutNote}
+          </p>
         )}
 
         {/* Footer — what the filters currently leave on the map */}

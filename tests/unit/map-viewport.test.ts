@@ -144,8 +144,8 @@ describe("fullFeedEnabled (F2 first-load race)", () => {
   });
 });
 
-describe("viewportNotice (F1/F4 chip wiring)", () => {
-  const base = { viewportMode: true, spanTooWide: false, truncated: false, spanDismissed: false, sampleDismissed: false };
+describe("viewportNotice (F1 chip wiring)", () => {
+  const base = { viewportMode: true, truncated: false, sampleDismissed: false };
   it("truncated window → the sample notice", () => {
     expect(viewportNotice({ ...base, truncated: true })).toEqual({
       kind: "sample", message: "Showing a sample — zoom in for all pins",
@@ -154,15 +154,16 @@ describe("viewportNotice (F1/F4 chip wiring)", () => {
   it("non-truncated window → no notice", () => {
     expect(viewportNotice(base)).toBeNull();
   });
-  it("over-wide span → the zoom notice, and it beats a stale sample flag", () => {
-    expect(viewportNotice({ ...base, spanTooWide: true, truncated: true })).toEqual({
-      kind: "zoom", message: "Zoom in to load pins",
-    });
+  it("there is NO zoom-in notice anymore — wide zooms render the density grid", () => {
+    // The old spanTooWide/"Zoom in to load pins" dead state is gone: past the
+    // pin span guard the grid tier renders, so the notice function has no
+    // zoom branch at all.
+    expect(viewportNotice(base)).toBeNull();
+    expect("spanTooWide" in base).toBe(false);
   });
-  it("dismissal hides only its own condition; full-feed mode never notices", () => {
+  it("dismissal hides the chip; full-feed mode never notices", () => {
     expect(viewportNotice({ ...base, truncated: true, sampleDismissed: true })).toBeNull();
-    expect(viewportNotice({ ...base, spanTooWide: true, spanDismissed: true })).toBeNull();
-    expect(viewportNotice({ ...base, viewportMode: false, truncated: true, spanTooWide: true })).toBeNull();
+    expect(viewportNotice({ ...base, viewportMode: false, truncated: true })).toBeNull();
   });
 });
 
@@ -187,8 +188,8 @@ describe("truncated latest-fetch wins (F1)", () => {
     const notice = (viewportMode: boolean, truncated: boolean) => {
       if (!truncated) dismissed = false; // the reset effect
       return viewportNotice({
-        viewportMode, spanTooWide: false, truncated,
-        spanDismissed: false, sampleDismissed: dismissed,
+        viewportMode, truncated,
+        sampleDismissed: dismissed,
       });
     };
     // Dense window: chip shows; user dismisses it.
