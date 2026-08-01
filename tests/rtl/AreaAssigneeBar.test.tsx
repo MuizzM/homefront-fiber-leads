@@ -271,4 +271,12 @@ describe("it belongs to the map's dark glass chrome", () => {
     fireEvent.click(screen.getByTestId("area-assignee-1"));
     expect(screen.getByRole("button", { name: "Confirm removing Rae Rivera" })).toBeInTheDocument();
   });
+
+  it("stacks ABOVE the territory detail panel (z-40 over the panel's z-30)", () => {
+    // Both surfaces mount for the same selected area. At equal z the panel —
+    // later in the DOM — painted over this bar on narrow screens, and the
+    // add-a-rep picker expanded upward underneath it: visible, untappable.
+    setup();
+    expect(screen.getByTestId("area-assignee-bar").className).toMatch(/\bz-40\b/);
+  });
 });

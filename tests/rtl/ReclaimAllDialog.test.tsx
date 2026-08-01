@@ -81,3 +81,55 @@ describe("reclaim-all safety contract", () => {
     expect(screen.queryByTestId("reclaim-all-dialog")).toBeNull();
   });
 });
+
+// ── Territory-UI audit: close paths and stale armed state ────────────────────
+// The component stays MOUNTED with open=false, so its state used to survive a
+// cancel: type RECLAIM, close, reopen — and the destructive button was already
+// live. And Escape, honoured by every sibling modal, did nothing here.
+describe("reclaim-all close hygiene", () => {
+  it("Escape closes the dialog, like the scrim and Cancel", () => {
+    const { onClose } = renderDialog();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("no armed confirmation survives a cancel — reopening starts disarmed", () => {
+    apiRequest.mockResolvedValue({ json: () => Promise.resolve({ ok: true, reclaimed: 2, repsAffected: 2, leadsAffected: 5 }) });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onClose = vi.fn();
+    const ui = (open: boolean) => (
+      <QueryClientProvider client={qc}>
+        <ReclaimAllDialog open={open} onClose={onClose} areas={AREAS} teamNames={NAMES} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui(true));
+
+    fireEvent.change(screen.getByTestId("reclaim-all-confirm-input"), { target: { value: "RECLAIM" } });
+    expect((screen.getByTestId("reclaim-all-submit") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId("reclaim-all-cancel"));
+    expect(onClose).toHaveBeenCalledOnce();
+
+    rerender(ui(false));
+    rerender(ui(true));
+    expect(screen.getByTestId("reclaim-all-confirm-input")).toHaveValue("");
+    expect((screen.getByTestId("reclaim-all-submit") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("locks every close path while the sweep is committing", async () => {
+    apiRequest.mockReturnValue(new Promise(() => {})); // sweep never settles
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const onClose = vi.fn();
+    render(
+      <QueryClientProvider client={qc}>
+        <ReclaimAllDialog open onClose={onClose} areas={AREAS} teamNames={NAMES} />
+      </QueryClientProvider>,
+    );
+    fireEvent.change(screen.getByTestId("reclaim-all-confirm-input"), { target: { value: "RECLAIM" } });
+    fireEvent.click(screen.getByTestId("reclaim-all-submit"));
+    await waitFor(() =>
+      expect((screen.getByTestId("reclaim-all-cancel") as HTMLButtonElement).disabled).toBe(true));
+    expect((screen.getByTestId("reclaim-all-scrim") as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});

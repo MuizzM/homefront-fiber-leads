@@ -293,3 +293,34 @@ describe("share replaces the holders, it does not accumulate them", () => {
     expect(assignees(area)).toEqual([fx.repA1.memberId]); // untouched
   });
 });
+
+// ── What a team lead SEES in the territory list ──────────────────────────────
+// Reclaim must never read as delete: an area returned to the pool has to stay
+// visible to the team_lead who manages assignment from that pool (they hold
+// assign permission). Rival-held areas stay hidden — the original leak fix.
+describe("team_lead territory list: own team + the unassigned pool, never rivals", () => {
+  it("a reclaimed (pooled) area STAYS in the team lead's list", async () => {
+    const areaId = seedArea([fx.repA1.memberId]);
+    seedLead(areaId, fx.repA1.memberId);
+    const rec = await req(`/api/territories/${areaId}/reclaim`, fx.leadA.session, {
+      method: "POST", body: JSON.stringify({ mode: "return_to_pool" }),
+    });
+    expect(rec.status).toBe(200);
+    const list = await (await req("/api/territories", fx.leadA.session)).json();
+    const returned = list.find((t: any) => t.id === areaId);
+    expect(returned, "pooled area must not vanish from the reclaiming lead's list").toBeTruthy();
+    expect(assignees(areaId)).toEqual([]);
+  });
+
+  it("the pool is visible even when the last owner was another team's rep", async () => {
+    const areaId = pooledArea(fx.repB1.memberId);
+    const list = await (await req("/api/territories", fx.leadA.session)).json();
+    expect(list.some((t: any) => t.id === areaId)).toBe(true);
+  });
+
+  it("an area HELD by a rival team stays hidden", async () => {
+    const areaId = seedArea([fx.repB1.memberId]);
+    const list = await (await req("/api/territories", fx.leadA.session)).json();
+    expect(list.some((t: any) => t.id === areaId)).toBe(false);
+  });
+});

@@ -107,4 +107,23 @@ describe("<TerritoryColorPicker />", () => {
     await userEvent.click(screen.getByTestId("territory-color-trigger"));
     expect(screen.getByRole("listbox", { name: "Area colour" })).toBeInTheDocument();
   });
+
+  // ── Territory-UI audit: which way the grid opens ──────────────────────────
+  // The default upward popover suits the lasso bottom bar. The territory detail
+  // panel sits at the TOP of the viewport inside an overflow-y-auto container,
+  // where an upward grid lands in clipped negative overflow — on screen it was
+  // simply invisible. That surface must be able to ask for downward.
+  it("opens upward by default — the lasso bar's geometry", async () => {
+    render(<Harness />);
+    await userEvent.click(screen.getByTestId("territory-color-trigger"));
+    expect(screen.getByTestId("territory-color-grid").className).toContain("bottom-[calc(100%+8px)]");
+  });
+
+  it("opens downward when the surface sits at the top of a scroll container", async () => {
+    render(<TerritoryColorPicker value={BLUE} onChange={vi.fn()} direction="down" />);
+    await userEvent.click(screen.getByTestId("territory-color-trigger"));
+    const grid = screen.getByTestId("territory-color-grid");
+    expect(grid.className).toContain("top-[calc(100%+8px)]");
+    expect(grid.className).not.toContain("bottom-[calc(100%+8px)]");
+  });
 });

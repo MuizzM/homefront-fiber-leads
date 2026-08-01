@@ -4,7 +4,7 @@
 // concentrate on the honesty of what's shown: the counts match the preview, the
 // callback warning appears when promises are about to be dropped, the toggle
 // actually re-previews, and nothing on screen suggests history is being erased.
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { StartNextPassDialog, type PassPreview } from "../../client/src/components/territory/StartNextPassDialog";
@@ -245,6 +245,21 @@ describe("StartNextPassDialog", () => {
     await user.click(within(poolRow).getByText(/put the area back in the pool/i));
     expect(screen.getByTestId("pass-action-return_to_pool")).toBeChecked();
     expect(screen.getByTestId("pass-action-row-return_to_pool").className).toMatch(/bg-primary\/\[0\.07\]/);
+  });
+
+  // ── Territory-UI audit: every exit works ──────────────────────────────────
+  it("Escape cancels, like the scrim and the Cancel button", async () => {
+    const { onCancel } = setup();
+    await screen.findByText("7"); // preview settled — dialog fully on screen
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("Escape stays locked while the reset is committing, like every other exit", async () => {
+    const { onCancel } = setup({}, { busy: true });
+    await screen.findByText("7");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onCancel).not.toHaveBeenCalled();
   });
 });
 

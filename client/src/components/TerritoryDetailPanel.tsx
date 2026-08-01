@@ -52,6 +52,10 @@ export interface TerritoryDetailPanelProps {
   teamColors?: Record<number, string | null | undefined>;
   progress?: TerritoryProgress;       // location-verified worked %
   onReclaim?: () => void;
+  /** True while the reclaim mode chooser this button toggles is on screen —
+   *  drives aria-expanded and the button's pressed look, so toggling it open
+   *  and closed is legible instead of a button that "does nothing" twice. */
+  reclaimOpen?: boolean;
   onComplete?: () => void;
   onReassign?: () => void;
   onRename?: (name: string) => void;  // provided for manager+ — shows the pencil
@@ -91,7 +95,7 @@ const STATUS_STYLE: Record<string, string> = {
  * Area info panel — the SalesRabbit-style popout for a territory. Shows who owns
  * it (multi-rep chips), status, lead count, and role-gated lifecycle actions.
  */
-export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamColors, progress, onReclaim, onComplete, onReassign, onRename, onRecolor, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
+export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamColors, progress, onReclaim, reclaimOpen = false, onComplete, onReassign, onRename, onRecolor, onViewHistory, onUnassignRep, unassigningRepId, onStartNextPass, currentPass, assignedAt, onEditAssignees }: TerritoryDetailPanelProps) {
   const role = currentUser.role as Role;
   const isUnassigned = territory.status === "unassigned" || territory.repIds.length === 0;
   // A person's hue: persisted team_members.color when the caller supplied the
@@ -142,7 +146,10 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
           // wrapper shrank the hit target to ~18px along with the visual, which
           // failed the 44px bar — a mis-tap magnet on a field phone.
           <div className="flex-shrink-0" data-testid="territory-color-edit">
-            <TerritoryColorPicker value={swatch} onChange={onRecolor} label="Area colour" />
+            {/* direction="down": this panel sits at the top of the viewport
+                inside an overflow-y-auto wrapper, where the default upward grid
+                opens into clipped negative overflow and is simply invisible. */}
+            <TerritoryColorPicker value={swatch} onChange={onRecolor} label="Area colour" direction="down" />
           </div>
         ) : (
           <span
@@ -448,7 +455,13 @@ export function TerritoryDetailPanel({ territory, currentUser, teamNames, teamCo
             type="button"
             data-testid="reclaim-btn"
             onClick={onReclaim}
-            className={`flex-1 h-11 rounded-lg text-xs font-semibold bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors ${FOCUS}`}
+            aria-expanded={reclaimOpen}
+            aria-haspopup="menu"
+            className={`flex-1 h-11 rounded-lg text-xs font-semibold transition-colors ${
+              reclaimOpen
+                ? "bg-amber-500/30 text-amber-300 ring-1 ring-amber-400/50"
+                : "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
+            } ${FOCUS}`}
           >
             Reclaim
           </button>

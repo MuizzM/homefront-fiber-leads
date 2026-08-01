@@ -67,6 +67,64 @@ describe("UI gates follow the permission table, not hard-coded role lists", () =
   });
 });
 
+// ── Territory-UI audit (owner report: overlap / doesn't close / stale) ───────
+// These pin MapView-side fixes that RTL cannot reach without mounting the whole
+// 8k-line page: chooser lifecycle, close-control placement, and per-mode
+// pending guards around the reclaim mutation.
+describe("reclaim flow hygiene in MapView", () => {
+  it("disarms the reclaim mode chooser whenever the selected territory changes", () => {
+    // Without this, closing the panel with the chooser open and reopening the
+    // same area showed the destructive mode menu already armed.
+    expect(mapView).toMatch(
+      /useEffect\(\(\)\s*=>\s*\{\s*setReclaimMenuId\(null\);\s*\},\s*\[selectedTerritoryId\]\)/,
+    );
+  });
+
+  it("locks every reclaim mode control while one mode is committing", () => {
+    // A double-tap on "Return leads to pool" used to fire the POST twice.
+    // Two buttons + a select in the panel chooser, and the same trio in the
+    // sidebar chooser, all disable on reclaimMutation.isPending.
+    const guards = mapView.match(/disabled=\{reclaimMutation\.isPending\}/g) ?? [];
+    expect(guards.length).toBeGreaterThanOrEqual(6);
+    // And the tapped mode owns the wait visibly (per-control pending state).
+    expect(mapView).toMatch(/reclaimPendingMode/);
+  });
+
+  it("keeps the panel's close control OUTSIDE the scroll container", () => {
+    // Inside it, the X's negative offsets sat in clipped overflow and the
+    // button scrolled off-screen the moment the panel was scrolled down to the
+    // reclaim chooser — an open panel with no visible way to close it.
+    const closeIdx = mapView.indexOf('aria-label="Close territory panel"');
+    expect(closeIdx).toBeGreaterThan(-1);
+    // The scrollable wrapper starts AFTER the close button in the tree.
+    const scrollIdx = mapView.indexOf("overflow-y-auto overscroll-contain rounded-2xl", closeIdx);
+    expect(scrollIdx).toBeGreaterThan(closeIdx);
+  });
+
+  it("the share dialog closes from the scrim, not only from Cancel", () => {
+    expect(mapView).toContain('data-testid="share-dialog-scrim"');
+  });
+
+  it("reports next-pass and unassign failures instead of silence", () => {
+    // Both mutations lacked onError: a failed reset left the dialog open with
+    // no spinner and no explanation.
+    expect(mapView).toMatch(/Couldn't start the next pass/);
+    expect(mapView).toMatch(/Couldn't remove the rep from this area/);
+  });
+
+  it("uses lucide icons, never raw arrow glyphs, on reclaim controls", () => {
+    expect(mapView).not.toContain("↩"); // "↩" — the old text-glyph buttons
+    expect(mapView).toMatch(/Undo2/);
+  });
+
+  it("reserves the assignee bar's strip when both surfaces are mounted", () => {
+    // Panel and bottom bar mount for the same selected area; the panel's
+    // max-height backs off when the bar is on screen instead of scrolling
+    // underneath it.
+    expect(mapView).toMatch(/assigneeBarShown/);
+  });
+});
+
 describe("currentPass reaches the client", () => {
   it("is declared on the territories schema, not only as a raw ALTER", () => {
     // A column added by migration but absent from the Drizzle table is never
