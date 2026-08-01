@@ -146,8 +146,12 @@ describe("no loading / syncing chrome during background map work", () => {
     expect(body).not.toContain("Loader");
   });
 
-  it('the offline knock badge ("N to sync") STAYS, gated on a genuinely non-empty queue', () => {
+  it('the offline knock badge ("N to sync") STAYS — but only for a SUSTAINED backlog', () => {
     expect(src).toContain("{queueSnap.pendingCount} to sync");
-    expect(src).toContain("{useSheet && queueSnap.pendingCount > 0 && (");
+    // The sub-second pending blip of a normal online save must never flash
+    // the badge (owner report: "why do I still see syncing") — the gate
+    // requires the backlog to have held for the sustained window.
+    expect(src).toContain("{useSheet && queueBacklog && queueSnap.pendingCount > 0 && (");
+    expect(src).toContain("useSustained(queueSnap.pendingCount > 0");
   });
 });

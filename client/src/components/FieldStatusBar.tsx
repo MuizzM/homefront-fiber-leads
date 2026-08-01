@@ -1,13 +1,19 @@
 import { RefreshCw, TriangleAlert, WifiOff } from "lucide-react";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { useNetworkStatus } from "@/hooks/use-network-status";
+import { useSustained } from "@/hooks/use-sustained";
 
 export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
   const online = useNetworkStatus();
   const { queue, snap } = useKnockLogger();
   const failed = snap.deadCount;
   const pending = snap.pendingCount;
-  if (online && pending === 0 && failed === 0) return null;
+  // A normal online save keeps items pending for a sub-second blip — flashing
+  // "Syncing" over the map on every mark is noise (owner report). The syncing
+  // state surfaces only when deliveries have been waiting long enough to mean
+  // a real problem; offline and needs-attention remain immediate truth.
+  const stuck = useSustained(online && pending > 0, 3000);
+  if (online && failed === 0 && !stuck) return null;
 
   const retry = () => {
     queue?.retryDead();

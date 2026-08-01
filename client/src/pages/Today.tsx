@@ -18,6 +18,7 @@ import {
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
 } from "@shared/knock";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useSustained } from "@/hooks/use-sustained";
 import {
   Navigation, Clock, WifiOff, RefreshCw, ChevronRight, MapPin as MapPinIcon,
   Zap, Flame, Repeat, DollarSign, Trophy, Sun, CalendarClock, SkipForward,
@@ -131,6 +132,10 @@ export default function Today() {
   // after first paint (it would shift "Log outcome" as the rep taps).
   const loading = pinsQ.isLoading || boardQ.isLoading || followupsQ.isLoading;
   const offline = snap.online === false;
+  // Online saves settle in a sub-second blip — flashing "Syncing" on every
+  // logged knock is noise (owner directive: no syncing shown). The strip
+  // surfaces only offline truth, failures, or a genuinely stuck backlog.
+  const backlog = useSustained(!offline && snap.pendingCount > 0, 3000);
 
   // Callbacks due today or earlier (still owed) — the top of the follow-up loop.
   // LOCAL date (via shared todayISO) so this badge can't disagree with the
@@ -175,7 +180,7 @@ export default function Today() {
           )}
         </header>
 
-        {(offline || snap.pendingCount > 0 || snap.deadCount > 0) && (
+        {(offline || backlog || snap.deadCount > 0) && (
           <div className={`mt-3 flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-[13px] ${offline ? "bg-muted border-border text-muted-foreground" : "bg-primary/10 border-primary/20 text-foreground"}`} data-testid="today-sync">
             {offline ? <WifiOff className="w-4 h-4 shrink-0" aria-hidden="true" /> : <RefreshCw className="w-4 h-4 shrink-0 text-primary animate-spin" aria-hidden="true" />}
             <span className="flex-1">

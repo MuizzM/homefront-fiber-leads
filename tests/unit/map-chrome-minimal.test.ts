@@ -125,7 +125,9 @@ describe("rep pin-colors key is opt-in, dismissible, and never at rest", () => {
 
 describe("empty and edge states", () => {
   it("the first-use empty state covers EVERY role, with rep-specific copy", () => {
-    expect(src).toContain("{mapReady && leads.length === 0 && (");
+    // Gated on the pins payload having ARRIVED — the map must not claim
+    // "no leads" during the first seconds of the initial fetch (owner report).
+    expect(src).toContain("{mapReady && mapPinData != null && leads.length === 0 && (");
     expect(src).not.toContain("{mapReady && !isRep && leads.length === 0 && (");
     expect(src).toContain("No doors assigned yet");
     expect(src).toContain('data-testid="map-empty-state"');
