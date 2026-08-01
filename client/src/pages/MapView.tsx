@@ -40,6 +40,7 @@ import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { useSustained } from "@/hooks/use-sustained";
 import { LeadCard, type CardProperty } from "@/components/LeadCard";
 import { AddLeadSheet } from "@/components/AddLeadSheet";
 import { reverseGeocode } from "@/lib/reverseGeocode";
@@ -4972,6 +4973,10 @@ export default function MapView() {
   // MapView consumes the same authenticated-owner singleton instead of
   // registering another saved callback whose behavior depends on mount order.
   const { log: logKnock, snap: queueSnap } = useKnockLogger();
+  // Sub-second online saves must not flash the "to sync" badge (owner report:
+  // "why do I still see syncing"); it appears only when knocks have genuinely
+  // been waiting — offline, or a delivery that isn't going through.
+  const queueBacklog = useSustained(queueSnap.pendingCount > 0, 3000);
 
   // ── Live lead pushes ────────────────────────────────────────────────────────
   // GET /api/leads/stream carries server-authored, access-checked per-lead
@@ -5988,8 +5993,10 @@ export default function MapView() {
 
           {/* First-use empty state — EVERY role. A brand-new org (or a rep with
               nothing assigned yet) gets one line of guidance, not a blank map
-              over a random town. */}
-          {mapReady && leads.length === 0 && (
+              over a random town. Gated on the pins payload having ARRIVED
+              (snapshot or fetch): while the first load is still in flight the
+              map must not claim "no leads" for a few seconds (owner report). */}
+          {mapReady && mapPinData != null && leads.length === 0 && (
             <div
               className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6"
               data-testid="map-empty-state"
@@ -6257,9 +6264,10 @@ export default function MapView() {
           {/* Rep mode has NO persistent map chrome — no HUD, no filter lenses,
               no counters. The map is pins only; every pin state reads by color. */}
 
-          {/* Offline-queue badge — knocks waiting to sync. Hugs the edge on mobile
+          {/* Offline-queue badge — knocks GENUINELY waiting (sustained 3s+,
+              never the blip of a normal online save). Hugs the edge on mobile
               rep screens where the Mapbox control stack is hidden. */}
-          {useSheet && queueSnap.pendingCount > 0 && (
+          {useSheet && queueBacklog && queueSnap.pendingCount > 0 && (
             <div
               data-testid="knock-pending-badge"
               // Safe-area aware (top-3 sat under the notch). Kept clear of the
