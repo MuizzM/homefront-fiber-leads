@@ -108,6 +108,11 @@ import {
   type ViewportBBox,
 } from "@/lib/mapViewport";
 import {
+  readMapPinsSnapshot,
+  writeMapPinsSnapshot,
+  MAP_PINS_SNAPSHOT_DEBOUNCE_MS,
+} from "@/lib/mapPinsSnapshot";
+import {
   LEAD_SOURCE_OPTIONS,
   countLeadsBySource,
   leadMatchesSource,
@@ -887,7 +892,8 @@ export default function MapView() {
   const [cardProperty, setCardProperty] = useState<CardProperty | null>(null);
   const [addLeadInitial, setAddLeadInitial] =
     useState<Partial<CardProperty> | null>(null);
-  const [tapResolving, setTapResolving] = useState(false);
+  // (No tap-resolving state: one-tap add is optimistic — the pin IS the
+  // feedback, so add mode never shows a spinner or "finding…" phase.)
   const [lassoPoints, setLassoPoints] = useState<[number, number][]>([]);
   const [lassoSelected, setLassoSelected] = useState<MapPin[]>([]);
   const [lassoRepId, setLassoRepId] = useState("");
@@ -1106,107 +1112,10 @@ export default function MapView() {
     user?.role === "manager" ||
     user?.role === "team_lead";
 
-  // Tap-a-house wiring: the shared map click handler (set up once at init) reads
-  // these window globals — the same pattern lasso/draw use — so toggling the mode
-  // never re-registers the map listener.
-  useEffect(() => {
-    (window as any).__tapAddressMode = addMode;
-    (window as any).__onTapAddress = async (lat: number, lng: number) => {
-      setTapResolving(true);
-      // In-flight feedback AT the tapped rooftop (not just the FAB spinner):
-      // light the search-result halo on the exact point while we resolve.
-      const map = mapRef.current;
-      try {
-        (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData({
-          type: "FeatureCollection",
-          features: [{ type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: {} }],
-        });
-      } catch { /* transient layer state */ }
-      let resolved: { address: string; city: string; state: string; zip: string; lat: number; lng: number } | null = null;
-      try {
-        const a = await reverseGeocode(lat, lng);
-        resolved = { address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng };
-      } catch {
-        // Failure keeps the mode armed — the rep just aims again.
-        toast({
-          title: "No address there",
-          description: "Tap directly on a rooftop and try again.",
-          variant: "destructive",
-        });
-        setTapResolving(false);
-        try { (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(emptyFeatureCollection()); } catch { /* noop */ }
-        return;
-      }
-
-      // ONE-TAP ADD (owner directive 2026-07-24): pin + card land INSTANTLY.
-      // The old flow made the rep wait 3–9s on the fiber scan before anything
-      // appeared — during throttle windows it felt broken. Now the prospect
-      // pin drops the moment the address resolves, and the fiber check runs
-      // behind it, upgrading the pin to GREEN when it's a fresh-fiber lead.
-      let pinnedLeadId: number | null = null;
-      if (canAssign) {
-        try {
-          const addRes = await apiRequest("POST", "/api/leads", {
-            address: resolved.address, city: resolved.city, state: resolved.state,
-            zip: resolved.zip, leadStatus: "prospect", lat: resolved.lat, lng: resolved.lng,
-          });
-          const added = await addRes.json();
-          if (added?.id != null) {
-            pinnedLeadId = added.id;
-            const existed = added?.existed === true;
-            if (!existed && added.lat != null && added.lng != null) {
-              qc.setQueryData(["/api/leads/map"], (old: any) => {
-                if (!old?.pins || old.pins.some((p: any) => p.id === added.id)) return old;
-                return {
-                  ...old,
-                  total: (old.total ?? old.pins.length) + 1,
-                  pins: [...old.pins, {
-                    id: added.id, address: added.address, city: added.city, state: added.state,
-                    zip: added.zip, lat: added.lat, lng: added.lng,
-                    leadStatus: added.leadStatus ?? "prospect", visited: false,
-                    assignedRepId: added.assignedRepId ?? null,
-                  }],
-                };
-              });
-            }
-            qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
-            setSelectedLeadId(added.id);
-            try { navigator.vibrate?.(10); } catch { /* no haptics */ }
-            toast({
-              title: existed ? "Already on the map" : "Pin added", severity: "success",
-              description: resolved.address,
-            });
-          }
-        } catch {
-          toast({
-            title: "Couldn't add the lead",
-            description: "No pin was created — tap the house again to retry.",
-            variant: "destructive",
-          });
-        }
-      }
-
-      // NO AUTO-SCAN (owner directive 2026-07-24): the tap ONLY drops the
-      // pin + card — fiber verification is done manually, never automatically
-      // on tap. Reps without add rights just get a confirmation toast.
-      if (pinnedLeadId == null && !canAssign) {
-        toast({ title: "Address found", description: resolved.address });
-      }
-      setTapResolving(false);
-      try {
-        (map?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(emptyFeatureCollection());
-      } catch { /* transient layer state */ }
-    };
-    const map = mapRef.current;
-    if (map) {
-      try {
-        map.getCanvas().style.cursor = addMode ? "crosshair" : "";
-      } catch {}
-    }
-    return () => {
-      (window as any).__tapAddressMode = false;
-    };
-  }, [addMode, toast, canAssign, qc]);
+  // Tap-a-house wiring (__tapAddressMode / __onTapAddress) lives BELOW the
+  // GeoJSON refs + scheduleClusterSetData it reconciles against — dep arrays
+  // are read during render, so referencing them from up here would be a TDZ
+  // crash. Search "ONE-TAP OPTIMISTIC ADD".
 
   // ── Rep knocking workflow (bottom sheet + offline queue + next door) ────────
   // Reps always get the sheet; admins/managers get it on mobile (desktop keeps
@@ -1649,6 +1558,14 @@ export default function MapView() {
       const res = await apiRequest("GET", "/api/leads/map?format=packed");
       return unpackMapPins<MapPin>(await res.json());
     },
+    // Cold-open first frame: seed the cache from the last session's snapshot
+    // (version-keyed + identity-scoped — see lib/mapPinsSnapshot) so pins
+    // paint the moment the map can draw, with no fetch in the way…
+    initialData: () =>
+      readMapPinsSnapshot<MapPin>({ tenantId: user?.tenantId, userId: user?.id }) ?? undefined,
+    // …and mark that seed ALREADY STALE so the normal fetch/ETag flow fires
+    // immediately and replaces it — the snapshot is a paint hint, never truth.
+    initialDataUpdatedAt: 0,
     // Viewport mode never downloads the full feed: the same cache entry is
     // written by the bbox-window merger below, and the optimistic-update
     // paths (knock / assignment / live push) target it unchanged.
@@ -1667,6 +1584,42 @@ export default function MapView() {
     // Managers keep focus-refetch for near-real-time monitoring.
     refetchOnWindowFocus: !isRep,
   });
+
+  // Late-hydration seed: if this hook mounted before auth resolved, the
+  // initialData closure above saw no identity and returned nothing. The moment
+  // the user lands, seed the still-empty cache from their snapshot and
+  // immediately invalidate so the real fetch replaces it — identical contract
+  // to the initialData path, one render later.
+  useEffect(() => {
+    if (!user || viewportMode) return;
+    if (qc.getQueryData(["/api/leads/map"]) != null) return; // fetch/seed already won
+    const snap = readMapPinsSnapshot<MapPin>({ tenantId: user.tenantId, userId: user.id });
+    if (!snap) return;
+    qc.setQueryData(["/api/leads/map"], snap);
+    void qc.invalidateQueries({ queryKey: ["/api/leads/map"] }); // snapshot is stale by definition
+  }, [user?.id, user?.tenantId, viewportMode, qc]);
+
+  // Snapshot writer — debounced after the full feed settles, so the NEXT cold
+  // open paints these pins on its first frame. Skipped entirely in viewportMode:
+  // a bbox window is a partial slice of the map, and persisting it would paint
+  // a misleading sliver somewhere else next launch. writeMapPinsSnapshot itself
+  // drops temp negative-id pins and scopes the key by wire version + tenant +
+  // user, so a stale version or another account can never replay.
+  const snapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!user || viewportMode) return;
+    const pins = mapPinData?.pins;
+    if (!pins?.length) return;
+    const scope = { tenantId: user.tenantId, userId: user.id };
+    if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+    snapshotTimerRef.current = setTimeout(() => {
+      snapshotTimerRef.current = null;
+      writeMapPinsSnapshot(scope, pins);
+    }, MAP_PINS_SNAPSHOT_DEBOUNCE_MS);
+    return () => {
+      if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
+    };
+  }, [mapPinData, user, viewportMode]);
 
   // ── Viewport (bbox) window loader ─────────────────────────────────────────
   // Active only past MAP_VIEWPORT_MODE_THRESHOLD scoped pins. Fetches the
@@ -1951,7 +1904,14 @@ export default function MapView() {
   // call time, so sheet-vs-popup routing follows role/viewport without rebinds.
   useEffect(() => {
     if (!useSheet) return;
-    (window as any).__openLeadSheet = (id: number) => setSelectedLeadId(id);
+    (window as any).__openLeadSheet = (id: number) => {
+      // Temp optimistic pins (negative id — a one-tap add still reconciling)
+      // must never open the knock sheet: every action inside it would target
+      // an id the server has never heard of. Selection follows the reconcile
+      // instead (the background add selects the REAL id when it lands).
+      if (!(id > 0)) return;
+      setSelectedLeadId(id);
+    };
     return () => {
       delete (window as any).__openLeadSheet;
     };
@@ -2004,7 +1964,7 @@ export default function MapView() {
     // laid out yet (0px), and the ResizeObserver + resize() calls below redraw
     // once real dimensions arrive. (Previously this bailed until height>=50px and
     // retried on a timer, which could loop forever if the container measured 0
-    // at mount — leaving the map stuck on "Loading map…".)
+    // at mount — leaving the map stuck before its first styled frame.)
     const el = mapContainer.current;
 
     const map = new (window as any).mapboxgl.Map({
@@ -2723,8 +2683,9 @@ export default function MapView() {
 
     // Run layer setup as soon as the STYLE is parsed — not on the full "load"
     // event (which waits for a complete tile render and can stall in some
-    // environments, leaving the map stuck on "Loading map…"). Adding sources/
-    // layers only requires the style, so this is both correct and more robust.
+    // environments, leaving the map stuck pre-ready with no pins). Adding
+    // sources/layers only requires the style, so this is both correct and more
+    // robust.
     if (map.isStyleLoaded()) void setupMapLayers();
     else
       map.once("style.load", () => {
@@ -2869,6 +2830,189 @@ export default function MapView() {
       }),
     [],
   );
+
+  // ── Tap-a-house wiring — ONE-TAP OPTIMISTIC ADD ───────────────────────────
+  // The shared map click handler (bound once at init) reads these window
+  // globals — the same pattern lasso/draw use — so toggling the mode never
+  // re-registers the map listener.
+  //
+  // Owner directive: no loading, no syncing shown. The pin lands AT THE TAPPED
+  // ROOFTOP on the very tap (temp negative id, unworked state, the same
+  // optimistic cache-insert AddLeadSheet's submit uses); the halo flash is
+  // pure confirmation on a short timer; the reverse-geocode + POST run
+  // entirely in the background and reconcile the temp id to the real one in
+  // BOTH the query cache and the live GeoJSON feature maps. Failure removes
+  // the temp pin with ONE destructive toast naming the street.
+  const tempPinIdRef = useRef(-1); // monotonic negatives — never collide with a server id
+  useEffect(() => {
+    (window as any).__tapAddressMode = addMode;
+    (window as any).__onTapAddress = (lat: number, lng: number) => {
+      // Confirmation halo AT the tapped rooftop — it lights instantly and
+      // clears on its own timer. It is NOT a loading indicator: nothing here
+      // waits on it, and the background work never extends it.
+      try {
+        (mapRef.current?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData({
+          type: "FeatureCollection",
+          features: [{ type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: {} }],
+        });
+      } catch { /* transient layer state */ }
+      window.setTimeout(() => {
+        try { (mapRef.current?.getSource(SEARCH_RESULT_SOURCE) as any)?.setData(emptyFeatureCollection()); } catch { /* noop */ }
+      }, 1400);
+
+      if (!canAssign) {
+        // No add rights: resolve in the background and report the address —
+        // still no spinner, the mode stays armed either way.
+        void reverseGeocode(lat, lng)
+          .then((a) => toast({ title: "Address found", description: a.address }))
+          .catch(() => toast({
+            title: "No address there",
+            description: "Tap directly on a rooftop and try again.",
+            variant: "destructive",
+          }));
+        return;
+      }
+
+      // INSTANT: temp pin into the map cache BEFORE any network await. The
+      // cluster reconcile effect paints it at the tapped rooftop this frame.
+      const tempId = tempPinIdRef.current--;
+      const tempPin: MapPin = {
+        id: tempId, address: "", city: "", state: "", zip: "",
+        lat, lng, leadStatus: "prospect", fiberStatus: "unknown",
+        assignedRepId: null, leadScore: 0, visited: false,
+      };
+      qc.setQueryData(["/api/leads/map"], (old: any) => {
+        const pins = old?.pins ?? [];
+        return {
+          ...(old ?? {}),
+          total: (old?.total ?? pins.length) + 1,
+          pins: [...pins, tempPin],
+        };
+      });
+      try { navigator.vibrate?.(10); } catch { /* no haptics */ }
+
+      // Shared failure/duplicate arm: pull the temp pin back out of the cache
+      // AND the live GeoJSON maps (mirrors handleDeleteLead's removal).
+      const removeTempPin = () => {
+        featureByIdRef.current.delete(tempId);
+        if (geoJsonDataRef.current?.features) {
+          geoJsonDataRef.current = {
+            ...geoJsonDataRef.current,
+            features: geoJsonDataRef.current.features.filter(
+              (f: any) => f.id !== tempId && f?.properties?.id !== tempId,
+            ),
+          };
+          scheduleClusterSetData();
+        }
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          if (!old?.pins) return old;
+          return {
+            ...old,
+            total: Math.max(0, (old.total ?? old.pins.length) - 1),
+            pins: old.pins.filter((p: any) => p.id !== tempId),
+          };
+        });
+      };
+
+      // Everything below is BACKGROUND — the rep already has their pin.
+      void (async () => {
+        let resolved: { address: string; city: string; state: string; zip: string; lat: number; lng: number };
+        try {
+          const a = await reverseGeocode(lat, lng);
+          resolved = { address: a.address, city: a.city, state: a.state, zip: a.zip, lat: a.lat, lng: a.lng };
+        } catch {
+          // ONE destructive toast; the mode stays armed — the rep aims again.
+          removeTempPin();
+          toast({
+            title: "No address there",
+            description: "Tap directly on a rooftop and try again.",
+            variant: "destructive",
+          });
+          return;
+        }
+        try {
+          const addRes = await apiRequest("POST", "/api/leads", {
+            address: resolved.address, city: resolved.city, state: resolved.state,
+            zip: resolved.zip, leadStatus: "prospect", lat: resolved.lat, lng: resolved.lng,
+          });
+          const added = await addRes.json();
+          if (added?.id == null) throw new Error("lead create returned no id");
+          const finalAddress = added.address ?? resolved.address;
+          if (added.existed === true) {
+            // Duplicate path: the house is already on the map under the
+            // EXISTING lead's id — drop the temp pin, flash + select the real
+            // one so the rep sees exactly which door they meant.
+            removeTempPin();
+            setSelectedLeadId(added.id);
+            try {
+              ringFlashRef.current = { at: performance.now(), color: STATE_COLORS.unworked };
+            } catch { /* flash is best-effort */ }
+            toast({ title: "Already on the map", severity: "success", description: finalAddress });
+          } else {
+            // Reconcile temp id → real id in the query cache…
+            qc.setQueryData(["/api/leads/map"], (old: any) => {
+              if (!old?.pins) return old;
+              return {
+                ...old,
+                pins: old.pins.map((p: any) =>
+                  p.id === tempId
+                    ? {
+                        ...p,
+                        id: added.id,
+                        address: finalAddress,
+                        city: added.city ?? resolved.city,
+                        state: added.state ?? resolved.state,
+                        zip: added.zip ?? resolved.zip,
+                        lat: added.lat ?? p.lat,
+                        lng: added.lng ?? p.lng,
+                        leadStatus: added.leadStatus ?? "prospect",
+                        assignedRepId: added.assignedRepId ?? null,
+                      }
+                    : p,
+                ),
+              };
+            });
+            // …and in the live GeoJSON feature maps, so the painted pin and
+            // every id-keyed path (knock, delete, ring) agree immediately —
+            // the reconcile effect then settles the definitive feature.
+            const tempFeature = featureByIdRef.current.get(tempId);
+            if (tempFeature) {
+              featureByIdRef.current.delete(tempId);
+              tempFeature.id = added.id;
+              tempFeature.properties.id = added.id;
+              tempFeature.properties.address = finalAddress;
+              if (added.lat != null && added.lng != null) {
+                tempFeature.geometry.coordinates = [added.lng, added.lat];
+              }
+              featureByIdRef.current.set(added.id, tempFeature);
+              scheduleClusterSetData();
+            }
+            setSelectedLeadId(added.id);
+            toast({ title: "Pin added", severity: "success", description: finalAddress });
+          }
+          // Durable reconcile for every other consumer (list, stats, map poll).
+          qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+          qc.invalidateQueries({ queryKey: ["/api/leads"] });
+        } catch {
+          removeTempPin();
+          toast({
+            title: "Couldn't add the lead",
+            description: `${resolved.address} didn't save — tap the house again to retry.`,
+            variant: "destructive",
+          });
+        }
+      })();
+    };
+    const map = mapRef.current;
+    if (map) {
+      try {
+        map.getCanvas().style.cursor = addMode ? "crosshair" : "";
+      } catch {}
+    }
+    return () => {
+      (window as any).__tapAddressMode = false;
+    };
+  }, [addMode, toast, canAssign, qc, scheduleClusterSetData]);
 
   // ── Leads panel: viewport bounds lifecycle ────────────────────────────────
   // Attach once per map instance ([mapReady, styleEpoch] — handlers survive
@@ -4532,6 +4676,7 @@ export default function MapView() {
   const flyToLead = useCallback((lead: MapPin) => {
     const map = mapRef.current;
     if (!map || !lead.lat || !lead.lng) return;
+    if (!(lead.id > 0)) return; // temp optimistic pin — selection waits for the reconcile
     const target: [number, number] = [lead.lng, lead.lat];
     suspendFollowCameraRef.current();
     didAutoFitRef.current = true;
@@ -5764,16 +5909,10 @@ export default function MapView() {
             />
           </div>
 
-          {!mapReady && !noToken && (
-            <div className="absolute inset-0 flex items-center justify-center bg-card/80 z-10">
-              <div className="text-center">
-                <MapIcon className="w-8 h-8 text-muted-foreground mx-auto mb-2 animate-pulse" />
-                <div className="text-sm text-muted-foreground">
-                  Loading map…
-                </div>
-              </div>
-            </div>
-          )}
+          {/* No blocking "loading" overlay while the GL map spins up: the map
+              canvas itself is the initial state, and the snapshot-seeded pins
+              paint on its first styled frame. The only full-cover state left
+              is the unrecoverable missing-token config error below. */}
           {noToken && (
             <div className="absolute inset-0 flex items-center justify-center bg-card/95 z-10">
               <div className="text-center max-w-xs">
@@ -7338,7 +7477,7 @@ export default function MapView() {
           {/* Add-lead moved off the map surface into the More (tools) popover
               ("Add lead", same handler + canAssign gate) per the owner's
               minimal directive. The armed state stays visible via the amber
-              tap-hint bar below, which also carries the resolving spinner. */}
+              tap-hint bar below — hint only, never a loading state. */}
 
           {/* Scan-a-house hint — shown while scan mode is ARMED (sticky: it stays
               armed across scans so a rep can walk a street door after door).
@@ -7350,16 +7489,11 @@ export default function MapView() {
               data-testid="tap-hint"
             >
               <div className="flex items-center gap-2 pl-3.5 pr-2 py-2 min-h-11">
-                {tapResolving ? (
-                  <Loader2
-                    className="w-4 h-4 text-orange-400 shrink-0 animate-spin motion-reduce:animate-none"
-                    aria-hidden="true"
-                  />
-                ) : (
-                  <Radar className="w-4 h-4 text-orange-400 shrink-0" aria-hidden="true" />
-                )}
+                {/* No resolving spinner — the tap drops its pin instantly and
+                    the geocode reconciles in the background. */}
+                <Radar className="w-4 h-4 text-orange-400 shrink-0" aria-hidden="true" />
                 <span className="font-medium whitespace-nowrap">
-                  {tapResolving ? "Finding that address…" : "Tap a house to add a lead"}
+                  Tap a house to add a lead
                 </span>
               </div>
               {canAssign && (

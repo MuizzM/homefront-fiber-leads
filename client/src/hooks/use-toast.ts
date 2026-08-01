@@ -1,13 +1,16 @@
 // ── Centralized notification service ─────────────────────────────────────────
 // One hub for every toast in the app. Backward-compatible with the existing
 // `toast({ title, description, variant, action })` calls, but now with:
-//   • SEVERITY-driven timing — routine messages (success/info) auto-dismiss in
-//     ~2.5s; important ones (warning/error/offline/payment/loading) PERSIST
-//     until resolved or dismissed. `duration` overrides; `null` = never auto.
-//   • DEDUPE — an identical message that's already showing/queued is dropped
-//     (its timer is refreshed) instead of stacking.
-//   • QUEUE — only ONE toast is visible at a time; rapid actions queue and show
-//     in turn so nothing is silently lost.
+//   • EVERYTHING AUTO-DISMISSES — routine messages (success/info) leave in
+//     ~2.5s; important ones (warning/error/offline/payment) stay a longer beat
+//     (~6s) so they can be read, then leave too. Nothing lingers. `duration`
+//     overrides per-call; `null` is the explicit opt-out for the rare toast
+//     that must persist (loading defaults to null — its lifetime is bound to
+//     the operation, the caller updates/dismisses it).
+//   • DEDUPE — an identical message that's already showing is dropped (its
+//     timer is refreshed) instead of stacking.
+//   • CAP — at most TWO toasts are visible; a new one appears INSTANTLY (no
+//     waiting for the old one's exit) and the oldest is pushed out.
 //   • ERROR CENTER — error/warning notifications are also appended to a durable
 //     log so an auto-dismissed or missed failure is never gone for good.
 // Placement, aria-live, and reduced-motion live in the Toaster component.
@@ -18,19 +21,27 @@ import type { ToastActionElement, ToastProps } from "@/components/ui/toast"
 export type NotificationSeverity =
   | "success" | "info" | "warning" | "error" | "offline" | "payment" | "loading"
 
-// Routine severities auto-dismiss; everything else persists until resolved.
-const AUTO_DISMISS_MS = 2600
+// Routine severities leave quickly; important ones get a longer read window —
+// but every user-facing severity auto-dismisses. Only `loading` defaults to
+// persistent because its lifetime is the operation's, not a timer's.
+export const SUCCESS_DISMISS_MS = 2500
+export const ERROR_DISMISS_MS = 6000
 const DURATION_BY_SEVERITY: Record<NotificationSeverity, number | null> = {
-  success: AUTO_DISMISS_MS,
-  info: AUTO_DISMISS_MS,
-  warning: null,
-  error: null,
-  offline: null,
-  payment: null,
+  success: SUCCESS_DISMISS_MS,
+  info: SUCCESS_DISMISS_MS,
+  warning: ERROR_DISMISS_MS,
+  error: ERROR_DISMISS_MS,
+  offline: ERROR_DISMISS_MS,
+  payment: ERROR_DISMISS_MS,
   loading: null,
 }
 
-const REMOVE_ANIMATION_MS = 220
+// How long an exiting toast stays mounted so its exit animation (~150ms of
+// GPU-composited transform/fade in toast.tsx) can finish before unmount.
+const REMOVE_ANIMATION_MS = 160
+
+// The interface stays clean: at most two toasts on screen at once.
+const MAX_VISIBLE_TOASTS = 2
 
 type ToasterToast = ToastProps & {
   id: string
@@ -66,22 +77,23 @@ type Action =
   | { type: ActionType["REMOVE_TOAST"]; toastId?: ToasterToast["id"] }
 
 interface State {
-  toasts: ToasterToast[]      // visible — at most one
-  queue: ToasterToast[]       // pending, shown in turn
+  toasts: ToasterToast[]      // visible, newest first — at most MAX_VISIBLE_TOASTS open
 }
 
 // ── timing helpers ───────────────────────────────────────────────────────────
 export function resolveDuration(t: Pick<ToasterToast, "severity" | "duration">): number | null {
   if (t.duration !== undefined) return t.duration
   if (t.severity) return DURATION_BY_SEVERITY[t.severity]
-  return AUTO_DISMISS_MS
+  return SUCCESS_DISMISS_MS
 }
 export function dedupeSignature(t: ToasterToast): string {
   return t.dedupeKey ?? `${t.severity ?? "info"}|${String(t.title ?? "")}|${String(t.description ?? "")}`
 }
-function isDuplicate(state: State, t: ToasterToast): boolean {
+function findLiveDuplicate(state: State, t: ToasterToast): ToasterToast | undefined {
   const sig = dedupeSignature(t)
-  return [...state.toasts, ...state.queue].some(x => dedupeSignature(x) === sig)
+  // A toast mid-exit (open:false) is not a dup candidate — the message should
+  // be allowed to reappear.
+  return state.toasts.find(x => x.open !== false && dedupeSignature(x) === sig)
 }
 
 const dismissTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -94,7 +106,7 @@ function clearTimers(id: string) {
 function scheduleAutoDismiss(t: ToasterToast) {
   clearTimers(t.id)
   const ms = resolveDuration(t)
-  if (ms == null) return // persistent — never auto-dismiss
+  if (ms == null) return // explicit opt-out — caller owns this toast's lifetime
   dismissTimers.set(t.id, setTimeout(() => dispatch({ type: "DISMISS_TOAST", toastId: t.id }), ms))
 }
 function scheduleRemoval(id: string) {
@@ -123,42 +135,38 @@ export function clearErrorNotifications() { errorLog = []; errorListeners.forEac
 export const reducer = (state: State, action: Action): State => {
   switch (action.type) {
     case "ADD_TOAST": {
-      // Only one visible at a time — extras queue.
-      if (state.toasts.length >= 1) return { ...state, queue: [...state.queue, action.toast] }
-      return { ...state, toasts: [action.toast] }
+      // The new toast shows INSTANTLY (newest first). Anything past the cap is
+      // pushed into its exit animation — no waiting for the old one to leave.
+      const toasts = [action.toast, ...state.toasts]
+      const evicted = toasts.slice(MAX_VISIBLE_TOASTS).filter(t => t.open !== false)
+      evicted.forEach(t => { clearTimers(t.id); scheduleRemoval(t.id) })
+      return {
+        toasts: toasts.map((t, i) =>
+          i >= MAX_VISIBLE_TOASTS && t.open !== false ? { ...t, open: false } : t
+        ),
+      }
     }
     case "UPDATE_TOAST":
       return {
-        ...state,
         toasts: state.toasts.map(t => (t.id === action.toast.id ? { ...t, ...action.toast } : t)),
-        queue: state.queue.map(t => (t.id === action.toast.id ? { ...t, ...action.toast } : t)),
       }
     case "DISMISS_TOAST": {
       const { toastId } = action
       const ids = toastId ? [toastId] : state.toasts.map(t => t.id)
       ids.forEach(id => { clearTimers(id); scheduleRemoval(id) })
       return {
-        ...state,
         toasts: state.toasts.map(t => (toastId === undefined || t.id === toastId ? { ...t, open: false } : t)),
-        // A queued toast dismissed before it ever showed is simply dropped.
-        queue: toastId ? state.queue.filter(t => t.id !== toastId) : state.queue,
       }
     }
     case "REMOVE_TOAST": {
-      const remaining = action.toastId === undefined ? [] : state.toasts.filter(t => t.id !== action.toastId)
-      // Promote the next queued toast into the now-free visible slot.
-      if (remaining.length === 0 && state.queue.length > 0) {
-        const [next, ...rest] = state.queue
-        queueMicrotask(() => scheduleAutoDismiss(next))
-        return { toasts: [next], queue: rest }
-      }
-      return { ...state, toasts: remaining }
+      if (action.toastId === undefined) return { toasts: [] }
+      return { toasts: state.toasts.filter(t => t.id !== action.toastId) }
     }
   }
 }
 
 const listeners: Array<(state: State) => void> = []
-let memoryState: State = { toasts: [], queue: [] }
+let memoryState: State = { toasts: [] }
 function dispatch(action: Action) {
   memoryState = reducer(memoryState, action)
   listeners.forEach(l => l(memoryState))
@@ -169,23 +177,25 @@ type Toast = Omit<ToasterToast, "id" | "createdAt">
 function toast(props: Toast) {
   const id = genId()
   const createdAt = Date.now()
-  // variant → severity bridge so legacy `variant: "destructive"` persists.
+  // variant → severity bridge so legacy `variant: "destructive"` maps to error.
   const severity: NotificationSeverity | undefined = props.severity ?? (props.variant === "destructive" ? "error" : undefined)
   const full: ToasterToast = { ...props, severity, id, createdAt, open: true }
 
-  // Dedupe: an identical live/queued message refreshes rather than stacks.
-  if (isDuplicate(memoryState, full)) {
-    const sig = dedupeSignature(full)
-    const existing = [...memoryState.toasts, ...memoryState.queue].find(x => dedupeSignature(x) === sig)
-    if (existing && memoryState.toasts.some(t => t.id === existing.id)) scheduleAutoDismiss(existing)
-    return { id: existing?.id ?? id, dismiss: () => dispatch({ type: "DISMISS_TOAST", toastId: existing?.id }), update: () => {} }
+  // Dedupe: an identical live message refreshes its timer rather than stacks.
+  const existing = findLiveDuplicate(memoryState, full)
+  if (existing) {
+    scheduleAutoDismiss(existing)
+    return {
+      id: existing.id,
+      dismiss: () => dispatch({ type: "DISMISS_TOAST", toastId: existing.id }),
+      update: (p: Partial<ToasterToast>) => dispatch({ type: "UPDATE_TOAST", toast: { ...p, id: existing.id } }),
+    }
   }
 
   full.onOpenChange = (open) => { if (!open) dispatch({ type: "DISMISS_TOAST", toastId: id }) }
   recordToErrorCenter(full)
   dispatch({ type: "ADD_TOAST", toast: full })
-  // Timer only starts once VISIBLE (queued toasts start when promoted).
-  if (memoryState.toasts.some(t => t.id === id)) scheduleAutoDismiss(full)
+  scheduleAutoDismiss(full)
 
   return {
     id,
@@ -194,15 +204,23 @@ function toast(props: Toast) {
   }
 }
 
+// Subscribes LAZILY: a component that only calls `toast()`/`dismiss()` (most
+// pages) never re-renders on toast traffic — only components that actually
+// read `.toasts` (the Toaster) subscribe to state changes. This keeps a toast
+// dispatch from re-rendering every page that grabbed `toast` via the hook.
 function useToast() {
   const [state, setState] = React.useState<State>(memoryState)
+  const readsState = React.useRef(false)
   React.useEffect(() => {
-    listeners.push(setState)
-    return () => { const i = listeners.indexOf(setState); if (i > -1) listeners.splice(i, 1) }
+    const listener = (s: State) => { if (readsState.current) setState(s) }
+    listeners.push(listener)
+    // Catch up on anything dispatched between render and subscription.
+    if (readsState.current && memoryState !== state) setState(memoryState)
+    return () => { const i = listeners.indexOf(listener); if (i > -1) listeners.splice(i, 1) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   return {
-    toasts: state.toasts,
-    queue: state.queue,
+    get toasts() { readsState.current = true; return state.toasts },
     toast,
     dismiss: (toastId?: string) => dispatch({ type: "DISMISS_TOAST", toastId }),
   }
@@ -220,7 +238,7 @@ function useErrorCenter() {
 
 // Test-only reset so the module-level singleton doesn't leak across cases.
 export function __resetToastsForTest() {
-  memoryState = { toasts: [], queue: [] }
+  memoryState = { toasts: [] }
   errorLog = []
   dismissTimers.forEach(clearTimeout); dismissTimers.clear()
   removeTimers.forEach(clearTimeout); removeTimers.clear()

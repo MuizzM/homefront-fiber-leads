@@ -905,7 +905,8 @@ export default function Leads() {
     onMutate: async ({ id, data }: { id: number; data: Partial<InsertLead> }) => {
       // Silent optimistic success: the row updates and the editor closes
       // immediately (spec: update immediately and silently). Failures below
-      // stay loud — the snapshot restores and an error toast persists.
+      // stay loud — the snapshot restores and an error toast shows (a long
+      // ~6s beat, then auto-dismisses; the error center keeps the record).
       await qc.cancelQueries({ queryKey: ["/api/leads"] });
       const snapshots = patchLeadLists(cached => ({
         ...cached,
