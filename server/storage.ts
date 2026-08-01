@@ -240,12 +240,22 @@ export interface LeadStatsRow {
  *  the sample across insertion order (which correlates with geography
  *  per-scan), unlike ORDER BY id LIMIT whose prefix is the first-scanned
  *  town only. */
+/** Map content views — a LENS over the same scoped pin set, never a deletion.
+ *  "latest" hides the established-footprint FCC import (fcc_fiber_d25) so the
+ *  map renders the newly-lit + field-verified + organic + manual-add pins
+ *  (NULL tags included); the footprint stays one tap away via the unfiltered
+ *  view. */
+export type MapView = "latest";
+/** The one tag the "latest" view excludes. */
+export const MAP_LATEST_VIEW_EXCLUDED_TAG = "fcc_fiber_d25";
+
 export interface MapPinWindow {
   minLat: number;
   minLng: number;
   maxLat: number;
   maxLng: number;
   tag?: string;
+  view?: MapView;
   limit?: number;
   sampleStep?: number;
 }
@@ -272,7 +282,7 @@ export interface IStorage {
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }>;
   getLeadsDataVersion(tenantId?: number): string;
-  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[];
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow, view?: MapView): MapPinRow[];
   // SQL-side density aggregation over the exact map scope (tenant + rep
   // visibility + pin eligibility) — powers the wide-zoom tier where shipping
   // individual pins is impossible. Fetches limit+1 so the caller can flag
@@ -281,7 +291,7 @@ export interface IStorage {
   // Cheap COUNT over the exact map scope (tenant + rep visibility + pin
   // eligibility) — powers the client's full-feed-vs-viewport-mode decision
   // without downloading a single pin.
-  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[]): number;
+  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[], view?: MapView): number;
   // COUNT over the SAME scoped + windowed predicate getLeadsForMap uses —
   // the wide-zoom sampler's step calculation (only runs when a window
   // overflows the row cap, so the extra indexed count stays rare).
@@ -2774,12 +2784,25 @@ export class Storage implements IStorage {
   // (full feed AND bbox windows) and getLeadsMapCount all compose from this so
   // a scoped read can never drift between the count, the full feed, and a
   // viewport window.
-  private mapScopeWhere(tenantId?: number, assignedRep?: number | number[]): { where: string; params: any[] } {
+  //
+  // The `view` lens composes HERE — at the scope layer mapWindowPred itself
+  // extends — so the full feed, bbox windows, the count probe, and the
+  // density grid all apply the identical "latest" predicate (no forked
+  // builder). Absent view = the byte-stable unfiltered predicate.
+  private mapScopeWhere(tenantId?: number, assignedRep?: number | number[], view?: MapView): { where: string; params: any[] } {
     const clauses: string[] = [];
     const params: any[] = [];
     if (tenantId != null) {
       clauses.push("l.tenant_id = ?");
       params.push(tenantId);
+    }
+    if (view === "latest") {
+      // "Latest fiber": everything EXCEPT the established-footprint import —
+      // NULL tags (organic/manual adds), fcc_fresh_block, fresh-verified, and
+      // any other tag all stay. NULL-safe: `<> 'fcc_fiber_d25'` alone would
+      // silently drop every untagged lead (three-valued logic).
+      clauses.push("(l.lead_tag IS NULL OR l.lead_tag <> ?)");
+      params.push(MAP_LATEST_VIEW_EXCLUDED_TAG);
     }
     if (Array.isArray(assignedRep)) {
       // Fail-closed: an empty team scope sees ZERO pins. The old early-return
@@ -2823,10 +2846,10 @@ export class Storage implements IStorage {
     return { where: scopePred, params };
   }
 
-  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[]): number {
+  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[], view?: MapView): number {
     // Empty team scope → empty map (same fail-closed rule as getLeadsForMap).
     if (Array.isArray(assignedRep) && !assignedRep.length) return 0;
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, view);
     const row = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads l WHERE ${where}`).get(...params) as { c: number };
     return row.c;
   }
@@ -2870,14 +2893,14 @@ export class Storage implements IStorage {
   getLeadsMapWindowCount(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapPinWindow): number {
     // Empty team scope → empty map (same fail-closed rule as getLeadsForMap).
     if (Array.isArray(assignedRep) && !assignedRep.length) return 0;
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, window.view);
     const pred = this.mapWindowPred(where, params, window);
     const row = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads l WHERE ${pred}`).get(...params) as { c: number };
     return row.c;
   }
 
   getLeadsMapGrid(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapGridWindow): MapGridCell[] {
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, window.view);
     const scopePred = this.mapWindowPred(where, params, window);
     // Integer FLOOR buckets: lat/lng divided by the cell pitch, floored, then
     // grouped. FLOOR is exact on the float division (no ROUND-half drift), the
@@ -2905,8 +2928,11 @@ export class Storage implements IStorage {
     }));
   }
 
-  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[] {
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow, view?: MapView): MapPinRow[] {
+    // The view lens rides the window for bbox/grid callers and the explicit
+    // arg for the windowless full feed — both land in the SAME mapScopeWhere
+    // clause, so the feed can never drift from a window over the same view.
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, view ?? window?.view);
     let scopePred = where;
     if (window) scopePred = this.mapWindowPred(scopePred, params, window);
     const sampled = window != null && (window.sampleStep ?? 1) > 1;

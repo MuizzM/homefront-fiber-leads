@@ -134,9 +134,11 @@ export interface MapGridResponse {
 }
 
 /** Identity of one grid fetch — the 60s cache key. Rounded like bboxParam
- *  (5dp ≈ 1m) so jittered pans of the same territory hit the same entry. */
-export function gridCacheKey(b: ViewportBBox, cell: number, tag?: string): string {
-  return `${bboxParam(b)}|${cell}|${tag ?? ""}`;
+ *  (5dp ≈ 1m) so jittered pans of the same territory hit the same entry. The
+ *  view segment is appended ONLY when present, so an unfiltered key stays
+ *  byte-identical to before (and a "latest" lens can never read it). */
+export function gridCacheKey(b: ViewportBBox, cell: number, tag?: string, view?: string): string {
+  return `${bboxParam(b)}|${cell}|${tag ?? ""}${view ? `|${view}` : ""}`;
 }
 
 /** The FCC source lens as a server-side tag prefix (the only source
@@ -148,6 +150,15 @@ export function sourceFilterToGridTag(source: string): string | undefined {
   if (source === "fcc_fresh") return "fcc_fresh";
   if (source === "fcc_fiber") return "fcc_fiber";
   return undefined;
+}
+
+/** The source lens as the server-side ?view= param (the content lens every
+ *  map endpoint composes into the shared scope predicate). Only "latest" has
+ *  a server view: the count probe, full feed, bbox windows, and the density
+ *  grid all drop the established-footprint import; every other lens stays a
+ *  client-side pin predicate and returns undefined (byte-stable URLs). */
+export function sourceFilterToMapView(source: string): "latest" | undefined {
+  return source === "latest" ? "latest" : undefined;
 }
 
 /** Grid cells → GeoJSON points for the density layers. `n` and `cell` ride

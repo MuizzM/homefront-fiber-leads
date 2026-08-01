@@ -4,10 +4,21 @@
 // can work "FCC fiber doors I haven't knocked yet" without the two filters
 // ever fighting. Pure predicates + persistence helpers, shared by MapView and
 // the filter sheet, unit-tested without a map.
+//
+// DEFAULT: "latest" — the map WITHOUT the established-footprint import
+// (fcc_fiber_d25), so a newly-lit-heavy org renders ~51k pins instead of
+// ~174k. It is a speed/relevance LENS, never a deletion: the footprint is one
+// tap away ("FCC fiber" chip, or "All"). Server-side it maps to ?view=latest
+// (count probe, full feed, bbox windows, density grid); the pin predicate
+// below keeps the already-loaded set honest between refetches.
 
-export type LeadSourceFilter = "all" | "fcc_fresh" | "fcc_fiber" | "field_verified";
+export type LeadSourceFilter = "latest" | "all" | "fcc_fresh" | "fcc_fiber" | "field_verified";
 
-export const FILTER_SOURCE_LS_KEY = "hf.mapFilterSource.v1";
+// v2: the key bump is what makes "latest" the default ONCE for everyone —
+// a persisted v1 choice is left behind (and cleaned up on the next write),
+// while every v2 choice the user makes afterwards still wins.
+export const FILTER_SOURCE_LS_KEY = "hf.mapFilterSource.v2";
+const FILTER_SOURCE_LS_KEY_V1 = "hf.mapFilterSource.v1";
 
 /** Pin fields the source filter reads. Structural — MapPin and GeoJsonLead
  *  both satisfy it. */
@@ -22,7 +33,19 @@ export interface LeadSourceOption {
   matches: (lead: SourceFilterableLead) => boolean;
 }
 
+/** The one tag the "latest" lens hides (mirrors MAP_LATEST_VIEW_EXCLUDED_TAG
+ *  server-side — both names pin the same string so the two can't drift). */
+export const LATEST_VIEW_EXCLUDED_TAG = "fcc_fiber_d25";
+
 export const LEAD_SOURCE_OPTIONS: readonly LeadSourceOption[] = [
+  {
+    // FIRST position: the default view. Matches everything except the
+    // footprint import — NULL tags (organic/manual adds), fcc_fresh_block,
+    // field-verified, and any other tag all stay.
+    key: "latest",
+    label: "Latest fiber",
+    matches: (l) => l.leadTag !== LATEST_VIEW_EXCLUDED_TAG,
+  },
   {
     key: "fcc_fresh",
     label: "FCC fresh (H2-25)",
@@ -72,16 +95,17 @@ export function countLeadsBySource(
 export function readPersistedFilterSource(): LeadSourceFilter {
   try {
     const v = localStorage.getItem(FILTER_SOURCE_LS_KEY);
-    if (v === "fcc_fresh" || v === "fcc_fiber" || v === "field_verified") return v;
-    return "all";
+    if (v === "latest" || v === "all" || v === "fcc_fresh" || v === "fcc_fiber" || v === "field_verified") return v;
+    return "latest"; // no v2 choice yet (a v1 choice is deliberately left behind)
   } catch {
-    return "all"; // storage blocked (private mode) — session-only filter
+    return "latest"; // storage blocked (private mode) — session-only filter
   }
 }
 
 export function persistFilterSource(source: LeadSourceFilter): void {
   try {
     localStorage.setItem(FILTER_SOURCE_LS_KEY, source);
+    localStorage.removeItem(FILTER_SOURCE_LS_KEY_V1); // superseded — one key owns the lens
   } catch {
     /* storage blocked — filter just won't survive a reload */
   }
