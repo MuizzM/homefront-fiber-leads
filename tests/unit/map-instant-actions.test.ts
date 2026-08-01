@@ -49,6 +49,19 @@ describe("central mark is optimistic — recolor before the round-trip", () => {
     expect(after).toContain("prevProps");
     expect(after).toContain("reverted");
   });
+
+  it("adopts the SERVER's CAS clock on success — the optimistic client timestamp must not outlive the response", () => {
+    // The optimistic write stamps lastOutcomeAt with the CLIENT clock (the
+    // only clock available pre-response). If the device runs ahead of the
+    // server, a pin left holding that future timestamp beats every genuinely
+    // newer stream push in the merge's recency comparison (mergePushedPin)
+    // until a full refetch — which viewport mode only gets on a pan. The
+    // success arm must therefore re-anchor the pin to the response row's
+    // last_outcome_at.
+    const successArm = body.slice(firstAwait, body.indexOf("catch (e"));
+    expect(successArm).toContain("lastOutcomeAt: updated.lastOutcomeAt");
+    expect(successArm).toContain("lastOutcome: updated.lastOutcome");
+  });
 });
 
 describe("delete lead is optimistic — pin vanishes before the round-trip", () => {

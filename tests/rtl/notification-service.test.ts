@@ -111,6 +111,26 @@ describe("live behavior through toast()", () => {
     expect(vi.getTimerCount()).toBe(0); // no dismiss was ever scheduled
   });
 
+  it("updating a loading toast to a terminal severity re-arms auto-dismiss", () => {
+    // The loading→done pattern: the handle's update() changes the severity,
+    // and the toast must then leave on the NEW severity's window instead of
+    // keeping loading's persist-forever schedule from creation time.
+    const h = toast({ title: "Saving…", severity: "loading" })
+    vi.advanceTimersByTime(ERROR_DISMISS_MS * 2)
+    expect(vi.getTimerCount()).toBe(0) // loading persists — nothing scheduled
+    h.update({ title: "Saved", severity: "success" })
+    expect(vi.getTimerCount()).toBeGreaterThan(0) // dismiss now armed
+    vi.advanceTimersByTime(SUCCESS_DISMISS_MS + 1)
+    vi.runOnlyPendingTimers() // flush the exit-animation removal
+    expect(vi.getTimerCount()).toBe(0) // gone for good
+  })
+
+  it("an update that does not touch timing leaves the existing schedule alone", () => {
+    toast({ title: "Stay", severity: "error", duration: null }).update({ title: "Still here" })
+    vi.advanceTimersByTime(ERROR_DISMISS_MS * 10)
+    expect(vi.getTimerCount()).toBe(0) // duration:null opt-out survives the update
+  })
+
   it("legacy variant:'destructive' is treated as an error (logged + long beat)", () => {
     toast({ title: "Boom", variant: "destructive" });
     const log = getErrorNotifications();

@@ -174,6 +174,19 @@ function dispatch(action: Action) {
 
 type Toast = Omit<ToasterToast, "id" | "createdAt">
 
+// Shared by both handles toast() can return (fresh id and dedupe-refreshed).
+// An update that changes TIMING — the loading→success/error pattern, or an
+// explicit duration — must re-arm auto-dismiss: the schedule ran at creation
+// against the OLD severity/duration (loading = persist), so without this a
+// toast updated from loading to "Done" would linger forever.
+function updateToast(id: string, p: Partial<ToasterToast>) {
+  dispatch({ type: "UPDATE_TOAST", toast: { ...p, id } })
+  if (p.severity !== undefined || p.duration !== undefined) {
+    const merged = memoryState.toasts.find(t => t.id === id)
+    if (merged && merged.open !== false) scheduleAutoDismiss(merged)
+  }
+}
+
 function toast(props: Toast) {
   const id = genId()
   const createdAt = Date.now()
@@ -188,7 +201,7 @@ function toast(props: Toast) {
     return {
       id: existing.id,
       dismiss: () => dispatch({ type: "DISMISS_TOAST", toastId: existing.id }),
-      update: (p: Partial<ToasterToast>) => dispatch({ type: "UPDATE_TOAST", toast: { ...p, id: existing.id } }),
+      update: (p: Partial<ToasterToast>) => updateToast(existing.id, p),
     }
   }
 
@@ -200,7 +213,7 @@ function toast(props: Toast) {
   return {
     id,
     dismiss: () => dispatch({ type: "DISMISS_TOAST", toastId: id }),
-    update: (p: Partial<ToasterToast>) => dispatch({ type: "UPDATE_TOAST", toast: { ...p, id } }),
+    update: (p: Partial<ToasterToast>) => updateToast(id, p),
   }
 }
 
