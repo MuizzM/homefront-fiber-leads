@@ -39,6 +39,31 @@ export function bboxExceedsSpanGuard(b: ViewportBBox, guard: number = MAP_BBOX_M
   return b.maxLng - b.minLng > guard || b.maxLat - b.minLat > guard;
 }
 
+/** The bbox the viewport loader would fetch right now (`window` = current
+ *  map bounds + fetch margin; `view` = the raw bounds, which the keep-region
+ *  prune expands from), or null when the map is missing / mid-teardown /
+ *  degenerate (pre-init bounds would trip the span guard). Shared by the
+ *  fetch itself and the notice-state refresher so the two can never
+ *  disagree. */
+export function currentFetchWindow(
+  map: any,
+  margin: number = VIEWPORT_FETCH_MARGIN,
+): { view: ViewportBBox; window: ViewportBBox } | null {
+  if (!map) return null;
+  let view: ViewportBBox;
+  try {
+    const b = map.getBounds();
+    view = {
+      minLng: b.getWest(), minLat: b.getSouth(),
+      maxLng: b.getEast(), maxLat: b.getNorth(),
+    };
+  } catch {
+    return null; // map mid-teardown
+  }
+  if (!(view.maxLng > view.minLng) || !(view.maxLat > view.minLat)) return null;
+  return { view, window: expandBBox(view, margin) };
+}
+
 /** Which amber viewport notice (if any) the map should show. The zoom-in
  *  notice wins when both apply — an over-wide view is the blocker (no fetch
  *  happens at all), a truncated sample is only a warning. Dismissal is per

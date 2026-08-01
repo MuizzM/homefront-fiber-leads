@@ -100,15 +100,13 @@ import {
 } from "@/lib/mapPins";
 import {
   MAP_VIEWPORT_MODE_THRESHOLD,
-  VIEWPORT_FETCH_MARGIN,
-  expandBBox,
+  currentFetchWindow,
   keepRegion,
   bboxParam,
   bboxExceedsSpanGuard,
   fullFeedEnabled,
   viewportNotice,
   mergeViewportPins,
-  type ViewportBBox,
 } from "@/lib/mapViewport";
 import {
   readMapPinsSnapshot,
@@ -1647,31 +1645,19 @@ export default function MapView() {
   // Zoomed out past the server's 3° span guard → no window is fetchable; the
   // notice chip asks for a zoom instead of a 400 per moveend.
   const [viewportSpanTooWide, setViewportSpanTooWide] = useState(false);
+  // INVISIBLE by contract (#87): this function never flips React state — the
+  // only write is the setQueryData cache merge. The zoom-out notice state is
+  // owned by refreshViewportPins below; chip visibility DERIVES from
+  // mapPinData.truncated + effects.
   const fetchViewportPins = useCallback(() => {
     if (!viewportModeRef.current) return;
-    const map = mapRef.current;
-    if (!map) return;
-    let view: ViewportBBox;
-    try {
-      const b = map.getBounds();
-      view = {
-        minLng: b.getWest(), minLat: b.getSouth(),
-        maxLng: b.getEast(), maxLat: b.getNorth(),
-      };
-    } catch {
-      return; // map mid-teardown
-    }
-    // Degenerate (pre-init) bounds would trip the server's span guard.
-    if (!(view.maxLng > view.minLng) || !(view.maxLat > view.minLat)) return;
-    const window = expandBBox(view, VIEWPORT_FETCH_MARGIN);
+    const bounds = currentFetchWindow(mapRef.current);
+    if (!bounds) return;
+    const { view, window } = bounds;
     // Zoomed out past the server's span guard: the fetch would 400 on every
-    // moveend and the map would sit silently stale. Skip it and ask the user
-    // to zoom in — the same amber affordance as the truncated-sample notice.
-    if (bboxExceedsSpanGuard(window)) {
-      setViewportSpanTooWide(true);
-      return;
-    }
-    setViewportSpanTooWide(false);
+    // moveend and the map would sit silently stale. Skip it — the notice chip
+    // (set by refreshViewportPins) asks the user to zoom in.
+    if (bboxExceedsSpanGuard(window)) return;
     viewportAbortRef.current?.abort();
     const controller = new AbortController();
     viewportAbortRef.current = controller;
@@ -1716,6 +1702,19 @@ export default function MapView() {
   const fetchViewportPinsRef = useRef(fetchViewportPins);
   fetchViewportPinsRef.current = fetchViewportPins;
 
+  // The ONE entry point for "the map moved / data changed, refresh the
+  // window": owns the zoom-out notice state (change-only, so a steady pan
+  // flips nothing) and delegates the fetch — which stays React-state-free.
+  const refreshViewportPins = useCallback(() => {
+    if (!viewportModeRef.current) return;
+    const bounds = currentFetchWindow(mapRef.current);
+    const tooWide = bounds != null && bboxExceedsSpanGuard(bounds.window);
+    setViewportSpanTooWide((prev) => (prev === tooWide ? prev : tooWide));
+    fetchViewportPinsRef.current();
+  }, []);
+  const refreshViewportPinsRef = useRef(refreshViewportPins);
+  refreshViewportPinsRef.current = refreshViewportPins;
+
   // moveend → debounced 300ms window refetch. Bound per map instance; inactive
   // in full-feed mode (the ref guard makes every pan free there).
   useEffect(() => {
@@ -1723,7 +1722,7 @@ export default function MapView() {
     if (!map || !mapReady || !viewportMode) return;
     const onMoveEnd = () => {
       if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
-      viewportTimerRef.current = setTimeout(() => fetchViewportPinsRef.current(), 300);
+      viewportTimerRef.current = setTimeout(() => refreshViewportPinsRef.current(), 300);
     };
     map.on("moveend", onMoveEnd);
     onMoveEnd(); // the mode may have flipped while the map sat still
@@ -1753,7 +1752,7 @@ export default function MapView() {
     if (!isRep) return;
     const onVisible = () => {
       if (document.visibilityState === "visible") {
-        if (viewportModeRef.current) fetchViewportPinsRef.current();
+        if (viewportModeRef.current) refreshViewportPinsRef.current();
         else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       }
     };
@@ -1812,7 +1811,7 @@ export default function MapView() {
                 refreshTimer = null;
                 // Viewport mode: the full feed is never fetched, so the
                 // invalidation would be a no-op — refetch the current window.
-                if (viewportModeRef.current) fetchViewportPinsRef.current();
+                if (viewportModeRef.current) refreshViewportPinsRef.current();
                 else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
               }, ownedJobIdRef.current != null ? 5_000 : 1_000);
             }
@@ -5096,7 +5095,7 @@ export default function MapView() {
       // process that has since restarted). Patching from here would leave holes
       // nothing downstream can detect, so the whole scope is refetched.
       onResync: () => {
-        if (viewportModeRef.current) fetchViewportPinsRef.current();
+        if (viewportModeRef.current) refreshViewportPinsRef.current();
         else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       },
       // Fallback = the pre-existing refetch behaviour is the only truth again.
@@ -5105,7 +5104,7 @@ export default function MapView() {
       // to 60s stale on the way down, and recovering pulls once to close the
       // window between the last poll and the first live frame.
       onFallback: () => {
-        if (viewportModeRef.current) fetchViewportPinsRef.current();
+        if (viewportModeRef.current) refreshViewportPinsRef.current();
         else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       },
     });

@@ -196,3 +196,32 @@ describe("truncated latest-fetch wins (F1)", () => {
     expect(notice(true, true)?.kind).toBe("sample");
   });
 });
+
+// ── currentFetchWindow (fetch/refresher share ONE bounds read) ───────────────
+import { currentFetchWindow } from "@/lib/mapViewport";
+
+describe("currentFetchWindow", () => {
+  const mapAt = (w: number, s: number, e: number, n: number) => ({
+    getBounds: () => ({ getWest: () => w, getSouth: () => s, getEast: () => e, getNorth: () => n }),
+  });
+
+  it("returns raw view + margin-expanded window", () => {
+    const r = currentFetchWindow(mapAt(-80.6, 35.4, -80.2, 35.6))!;
+    expect(r.view).toEqual({ minLng: -80.6, minLat: 35.4, maxLng: -80.2, maxLat: 35.6 });
+    expect(r.window.minLng).toBeCloseTo(-80.68, 6);
+    expect(r.window.maxLat).toBeCloseTo(35.64, 6);
+  });
+
+  it("is null for a missing map, a throwing map, and degenerate bounds", () => {
+    expect(currentFetchWindow(null)).toBeNull();
+    expect(currentFetchWindow({ getBounds: () => { throw new Error("teardown"); } })).toBeNull();
+    expect(currentFetchWindow(mapAt(0, 0, 0, 0))).toBeNull();
+  });
+
+  it("a street-zoom window passes the span guard; a regional one trips it", () => {
+    const street = currentFetchWindow(mapAt(-80.42, 35.53, -80.39, 35.55))!;
+    expect(bboxExceedsSpanGuard(street.window)).toBe(false);
+    const region = currentFetchWindow(mapAt(-82, 34, -79, 36))!;
+    expect(bboxExceedsSpanGuard(region.window)).toBe(true);
+  });
+});
