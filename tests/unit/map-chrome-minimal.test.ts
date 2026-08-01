@@ -125,9 +125,15 @@ describe("rep pin-colors key is opt-in, dismissible, and never at rest", () => {
 
 describe("empty and edge states", () => {
   it("the first-use empty state covers EVERY role, with rep-specific copy", () => {
-    // Gated on the pins payload having ARRIVED — the map must not claim
-    // "no leads" during the first seconds of the initial fetch (owner report).
-    expect(src).toContain("{mapReady && mapPinData != null && leads.length === 0 && (");
+    // Gated through firstUseEmptyStateEnabled: the pins payload must have
+    // ARRIVED (no "no leads" flash during the first fetch — owner report),
+    // and in viewport mode it never renders at all — an empty merged window
+    // over an org with >60k leads is a skipped/sampled window, not "no leads"
+    // (second owner report: blank "no leads" map at region zoom).
+    expect(src).toContain(
+      "{mapReady && firstUseEmptyStateEnabled({ viewportMode, pinsArrived: mapPinData != null, leadCount: leads.length }) && (",
+    );
+    expect(src).not.toContain("{mapReady && mapPinData != null && leads.length === 0 && (");
     expect(src).not.toContain("{mapReady && !isRep && leads.length === 0 && (");
     expect(src).toContain("No doors assigned yet");
     expect(src).toContain('data-testid="map-empty-state"');
@@ -162,5 +168,15 @@ describe("house numbers are opt-in from the settings sheet", () => {
     expect(src).toContain("else removeHousenumLayer(map);");
     // No unconditional mount survives.
     expect(src).not.toMatch(/^\s*ensureHousenumLayer\(/m);
+  });
+});
+
+describe("no map vendor chrome at rest", () => {
+  it("the wordmark is hidden and attribution collapses to the compact control", () => {
+    expect(src).toContain("attributionControl: false");
+    expect(src).toContain("AttributionControl({ compact: true })");
+    const css = readFileSync(join(ROOT, "client/src/index.css"), "utf8");
+    expect(css).toContain(".mapboxgl-ctrl-logo");
+    expect(css.slice(css.indexOf(".mapboxgl-ctrl-logo"))).toContain("display: none !important");
   });
 });

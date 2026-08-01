@@ -563,6 +563,23 @@
   display: none;
 }
 
+/* No Mapbox wordmark on any map (owner ask) — the compact attribution "i"
+   (added per-map with AttributionControl{compact:true}) remains the single,
+   tiny, legally-required license affordance. Force-collapse it everywhere so
+   it can never expand into a text bar at rest. */
+.mapboxgl-ctrl-logo {
+  display: none !important;
+}
+.mapboxgl-ctrl-attrib:not(.mapboxgl-compact-show) .mapboxgl-ctrl-attrib-inner {
+  display: none;
+}
+.mapboxgl-ctrl-attrib {
+  background: transparent;
+}
+.mapboxgl-ctrl-attrib-button {
+  opacity: 0.45;
+}
+
 /* Horizontal-scroll fade at the right edge hints "more this way" without a
    scrollbar — the fade sits on the container so items slide under it. NOTE: the
    lead card's status pills no longer scroll (they flex-wrap), so this is now

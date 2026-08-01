@@ -1445,10 +1445,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
 
   // bbox window: minLng,minLat,maxLng,maxLat — clamped to world bounds, span-
-  // guarded so a "give me everything anyway" request is a 400, not a slow
-  // full-table scan. Beyond the guard the viewport client fetches windows of
-  // well under a degree; 3° leaves generous headroom for a zoomed-out city.
-  const MAP_BBOX_MAX_SPAN_DEG = 3;
+  // guarded only against MALFORMED requests: 40° per axis covers any zoom the
+  // field map can meaningfully ask for (all of NC+SC is under 10°); wider is a
+  // bug or a probe, and a 400 beats a full-table scan. Under the ceiling an
+  // over-dense window is answered with a bounded even SAMPLE (below), never
+  // rejected — the old 3° rejection left the owner a blank "no leads" map at
+  // region zoom over territory with thousands of doors.
+  const MAP_BBOX_MAX_SPAN_DEG = 40;
   // Hard row cap per window. The query fetches cap+1 so the response can SAY
   // it truncated (the client shows "sample", never silently drops pins).
   const MAP_BBOX_ROW_CAP = 25_000;
@@ -1492,7 +1495,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
 
     // ── Bbox window mode (viewport loading for 100k+ pins) ──────────────────
     // Same role scoping as the full feed, narrowed spatially, ordered by id,
-    // hard-capped. UNCACHED and NOT ETag'd on purpose: windows are nearly
+    // hard-capped (over-cap windows get an even deterministic sample — see
+    // below). UNCACHED and NOT ETag'd on purpose: windows are nearly
     // unique per pan, so the pin cache/ETag machinery would only churn — the
     // full-feed path below is untouched for existing clients: same ETag/304
     // semantics (the wire SCHEMA evolved v7→v8, and the ETag busts on redeploy,
@@ -1503,11 +1507,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (tag && typeof tag === "object") return res.status(400).json({ error: (tag as { error: string }).error });
     if (bbox) {
       const started = performance.now();
-      const rows = storage.getLeadsForMap(tid, repFilter, {
-        ...bbox, tag: tag as string | undefined, limit: MAP_BBOX_ROW_CAP + 1,
-      });
+      const win = { ...bbox, tag: tag as string | undefined };
+      let rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP + 1 });
       const truncated = rows.length > MAP_BBOX_ROW_CAP;
-      if (truncated) rows.length = MAP_BBOX_ROW_CAP;
+      let sampleStep = 1;
+      if (truncated) {
+        // Over-cap window (wide zoom). ORDER BY id LIMIT would keep the LOWEST
+        // ids — the first-scanned city — so at state zoom the "sample" would
+        // all be one town and everywhere else would look empty. Instead: one
+        // indexed COUNT over the same predicate (rare — only over-cap windows
+        // pay it), then thin deterministically and evenly with id % step. The
+        // sample is stable across pans and spread across insertion order,
+        // which correlates with geography per scan batch; see
+        // Storage.mapWindowPred for the bias tradeoff. truncated stays true so
+        // the client's "Showing a sample" chip tells the truth.
+        const windowCount = storage.getLeadsMapWindowCount(tid, repFilter, win);
+        sampleStep = Math.max(2, Math.ceil(windowCount / MAP_BBOX_ROW_CAP));
+        rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP, sampleStep });
+      }
       const pins = buildMapPins(rows);
       res.set("Cache-Control", "no-store");
       const payload = format === "packed"
@@ -1518,7 +1535,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         tenantId: tid ?? 0,
         scope: repFilter == null ? "all" : "scoped",
         format, cache: "bbox",
-        rows: pins.length, truncated,
+        rows: pins.length, truncated, sampleStep,
         dbMs: Number((performance.now() - started).toFixed(2)),
         complexity: "O(window + K_window)",
       });

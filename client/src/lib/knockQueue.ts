@@ -14,12 +14,23 @@ import {
   type KnockOutcome,
   type QueuedKnock,
 } from "@shared/knock";
+import {
+  classifyKnockFailure,
+  isKnockableLeadId,
+  summarizeDeadKnock,
+  terminalKnockReason,
+  triageRehydratedKnock,
+  type DeadKnockSummary,
+} from "@/features/knocking/knockFailurePolicy";
 
 export type LeadSaveState = "idle" | "saving" | "saved" | "queued" | "error" | "superseded";
 
 export interface QueueSnapshot {
   pendingCount: number;
   deadCount: number;
+  // Dead-lane detail in queue order (oldest first) — the FieldStatusBar shows
+  // the oldest item's door + reason, with Retry only when it can plausibly work.
+  deadItems: DeadKnockSummary[];
   byLead: Record<number, LeadSaveState>; // no entry = "idle"
   online: boolean;
 }
@@ -38,6 +49,10 @@ export interface KnockQueueOpts {
   now?: () => number;
   isOnline?: () => boolean;
   onSaved?: (leadId: number, outcome?: string, superseded?: boolean) => void; // parent hook invalidates react-query here
+  // A knock the server can NEVER accept was auto-resolved (dropped from the
+  // queue) — the parent hook toasts the door + reason once and re-syncs the
+  // optimistic map state back to server truth. Fired at most once per item.
+  onResolved?: (item: QueuedKnock, reason: string) => void;
 }
 
 export interface EnqueueInput {
@@ -87,11 +102,12 @@ export interface KnockQueue {
   destroy(): void;
 }
 
-// 4xx that a retry can never fix — dead-letter immediately so poison items
-// don't block the FIFO behind them. NOTE: 401 is handled separately (session
-// expired = valid knock waiting for re-auth, never poison); 403 falls through to
-// bounded retry (a CSRF-token 403 resolves once the session refreshes).
-const DEAD_STATUSES = new Set([400, 404]);
+// Failure routing lives in @/features/knocking/knockFailurePolicy (pure,
+// test-pinned). In short: 401 pauses the line for re-auth; network/5xx/timeout
+// stay PENDING with capped backoff forever (never a permanent dead-letter);
+// 403 gets bounded retries then parks in the dead lane (retry works after
+// re-auth); every other 4xx is terminal and AUTO-RESOLVES — dropped with a
+// one-time explanation instead of nagging forever.
 const SAVED_FLASH_MS = 2000;
 const INTERVAL_MS = 30_000;
 const RECENT_SAVES_CAP = 50;
@@ -147,15 +163,33 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   const pendingKey = `hf.knockQueue.v1.${opts.repId}`;
   const deadKey = `hf.knockDead.v1.${opts.repId}`;
 
-  const pending: QueuedKnock[] = loadItems(storage, pendingKey);
-  const dead: QueuedKnock[] = loadItems(storage, deadKey);
+  // Rehydration triage: persisted items are migrated/repaired, undeliverable
+  // ones (temp lead ids, outcomes the server no longer accepts, dead items
+  // whose last failure was terminal) are DROPPED with a reason, and dead items
+  // the OLD policy parked for transient failures go back into delivery.
+  const pending: QueuedKnock[] = [];
+  const dead: QueuedKnock[] = [];
+  const droppedOnLoad: Array<{ item: QueuedKnock; reason: string }> = [];
+  for (const raw of loadItems(storage, pendingKey)) {
+    const t = triageRehydratedKnock(raw, "pending");
+    if (!t) continue;
+    if (t.action === "drop") droppedOnLoad.push({ item: t.item, reason: t.reason });
+    else pending.push(t.item);
+  }
+  for (const raw of loadItems(storage, deadKey)) {
+    const t = triageRehydratedKnock(raw, "dead");
+    if (!t) continue;
+    if (t.action === "drop") droppedOnLoad.push({ item: t.item, reason: t.reason });
+    else if (t.action === "dead") dead.push(t.item);
+    else pending.push(t.item);
+  }
   const byLead: Record<number, LeadSaveState> = {};
   // leadId → last successful save, so a note edited after the save can still
   // PATCH the created row without a cache lookup. Capped FIFO — a shift is ~50 doors/hour.
   const recentSaves = new Map<number, { clientId: string; knockId: number }>();
   const listeners = new Set<() => void>();
 
-  let snapshot: QueueSnapshot = { pendingCount: 0, deadCount: 0, byLead: {}, online: true };
+  let snapshot: QueueSnapshot = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true };
   let inflight = false;
   let interval: ReturnType<typeof setInterval> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -175,6 +209,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     snapshot = {
       pendingCount: pending.length,
       deadCount: dead.length,
+      deadItems: dead.map(summarizeDeadKnock),
       byLead: { ...byLead },
       online: isOnline(),
     };
@@ -231,6 +266,8 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     retryTimer = setTimeout(() => { retryTimer = null; void flush(); }, Math.max(0, earliest - now()));
   };
 
+  // Park a knock for a HUMAN (403 after bounded retries — retry plausibly
+  // works once the rep re-authenticates). Never used for terminal failures.
   const deadLetter = (idx: number, item: QueuedKnock): void => {
     pending.splice(idx, 1);
     dead.push(item);
@@ -238,6 +275,22 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     persistDead();
     setLeadState(item.leadId, "error");
     markChanged();
+  };
+
+  // AUTO-RESOLVE a knock the server can never accept: drop it, log it for
+  // support, and let the parent hook explain it to the rep ONCE. The
+  // alternative — a dead-letter the rep can "Retry" into the same rejection
+  // forever — is a permanent nag that helps nobody (owner report).
+  const resolveTerminal = (idx: number, item: QueuedKnock, reason: string): void => {
+    pending.splice(idx, 1);
+    persistPending();
+    setLeadState(item.leadId, "idle");
+    console.error(
+      `[knockQueue] dropped undeliverable knock ${item.clientId} (lead ${item.leadId}, ${item.outcome}): ${reason}`,
+      item.lastError ?? "",
+    );
+    markChanged();
+    opts.onResolved?.(item, reason);
   };
 
   async function flush(): Promise<void> {
@@ -283,9 +336,9 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
           opts.onSaved?.(item.leadId, item.outcome, resp?.superseded === true);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          const status = parseInt(message, 10); // apiRequest throws Error("<status>: <text>")
-          item.lastError = message;
-          if (status === 401) {
+          item.lastError = message; // apiRequest throws Error("<status>: <text>")
+          const kind = classifyKnockFailure(message);
+          if (kind === "auth") {
             // Session expired — the knock is VALID, it just needs the rep to sign
             // back in. Pause the line WITHOUT consuming an attempt so it survives
             // until re-auth (the global 401 handler routes them to Login); the
@@ -296,17 +349,25 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
             markChanged();
             break; // everything behind this item needs auth too
           }
-          if (DEAD_STATUSES.has(status)) {
-            deadLetter(idx, item); // poison — park it and keep the line moving
+          if (kind === "terminal") {
+            // The server will never accept this one — resolve it honestly and
+            // keep the line moving.
+            resolveTerminal(idx, item, terminalKnockReason(item));
             continue;
           }
           item.attempts += 1;
-          if (item.attempts >= KNOCK_QUEUE_MAX_ATTEMPTS) {
+          if (kind === "forbidden" && item.attempts >= KNOCK_QUEUE_MAX_ATTEMPTS) {
+            // 403 is ambiguous: a stale CSRF token heals on re-login (retry
+            // works), a real authz rejection never will. After the bounded
+            // retries, park it where the rep can SEE it, with Retry offered.
             deadLetter(idx, item);
             continue;
           }
-          // Network/5xx/429: back off and stop — the connection is likely down
-          // for everything behind this item too.
+          // Transient (network/5xx/timeout/429 — and 403 still within bounds):
+          // stay pending and back off (capped at 60s). NEVER dead-letter a
+          // transient failure permanently — the heartbeat, the online listener,
+          // and re-auth all redeliver it without the rep doing anything. Stop
+          // the pass: the connection is likely down for the items behind too.
           item.nextAttemptAt = now() + retryDelayMs(item.attempts);
           persistPending();
           setLeadState(item.leadId, "queued");
@@ -325,6 +386,12 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
   if (typeof window !== "undefined") window.addEventListener("online", onOnline);
 
   const stage = (k: EnqueueInput): { clientId: string } => {
+    // A temp optimistic pin (negative id) or garbage id must NEVER enter the
+    // queue — it can only ever 404 and rot. Callers (useKnockLogger) block
+    // this with a friendly toast first; throwing here is the last line.
+    if (!isKnockableLeadId(k.leadId)) {
+      throw new Error(`knockQueue: refusing to enqueue knock for non-positive leadId ${k.leadId}`);
+    }
     const item: QueuedKnock = {
       clientId: makeClientId(),
       leadId: k.leadId,
@@ -450,10 +517,29 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
 
   // Reload recovery: persisted items resurface as queued/error chips, and the
   // first flush fires as soon as the caller has the queue object in hand.
+  // Triage may have moved/dropped items — persist BOTH lanes so a dropped
+  // poison item can never resurrect on the next reload.
+  persistPending();
+  persistDead();
   for (const it of pending) setLeadState(it.leadId, "queued");
   for (const it of dead) if (byLead[it.leadId] == null) setLeadState(it.leadId, "error");
   syncInterval();
   markChanged();
+  // Undeliverable items found at load resolve exactly like an in-flight
+  // terminal failure: support log + one explanation to the rep. Deferred a
+  // microtask so the caller holds the queue (and its toast plumbing) first.
+  if (droppedOnLoad.length) {
+    queueMicrotask(() => {
+      if (destroyed) return;
+      for (const d of droppedOnLoad) {
+        console.error(
+          `[knockQueue] dropped undeliverable knock ${d.item.clientId} (lead ${d.item.leadId}, ${d.item.outcome}): ${d.reason}`,
+          d.item.lastError ?? "",
+        );
+        opts.onResolved?.(d.item, d.reason);
+      }
+    });
+  }
   queueMicrotask(() => { void flush(); });
 
   return queue;

@@ -28,10 +28,14 @@ export const VIEWPORT_KEEP_MULTIPLE = 3;
  *  Only used to surface truncation; the server is the authority. */
 export const MAP_BBOX_ROW_CAP = 25_000;
 
-/** Server-side span guard (mirrors MAP_BBOX_MAX_SPAN_DEG in routes.ts). A
- *  window wider than this is a 400, so the client checks BEFORE fetching and
- *  asks the user to zoom in instead of burning a failing request per pan. */
-export const MAP_BBOX_MAX_SPAN_DEG = 3;
+/** Server-side span ceiling (mirrors MAP_BBOX_MAX_SPAN_DEG in routes.ts).
+ *  Under it EVERY window is answerable — the server evenly samples over-dense
+ *  windows instead of rejecting them, so region/state zoom shows clustered
+ *  pins, never a blank map. Only a wider-than-40° window (continental zoom —
+ *  effectively a malformed request for the field map) is a 400, so the client
+ *  checks BEFORE fetching and asks the user to zoom in instead of burning a
+ *  failing request per pan. */
+export const MAP_BBOX_MAX_SPAN_DEG = 40;
 
 /** True when the (already margin-expanded) fetch window is wider than the
  *  server's span guard on either axis. */
@@ -101,6 +105,23 @@ export function fullFeedEnabled(opts: {
   return opts.countTotal <= (opts.threshold ?? MAP_VIEWPORT_MODE_THRESHOLD);
 }
 
+/** Gate for the first-use "No leads on the map yet" overlay. In viewport mode
+ *  the merged cache is a WINDOW of the org's pins — empty because nothing was
+ *  fetched yet, because the view sits over water, or because a wide window
+ *  came back as a thin sample. None of those mean "no leads": viewport mode
+ *  only activates when the count probe answered > threshold, i.e. the org
+ *  provably HAS leads — so the empty state never renders there (the zoom /
+ *  sample chips carry the truth instead). In full-feed mode the old rule
+ *  stands: the payload arrived and it is genuinely empty. */
+export function firstUseEmptyStateEnabled(opts: {
+  viewportMode: boolean;
+  pinsArrived: boolean;
+  leadCount: number;
+}): boolean {
+  if (opts.viewportMode) return false;
+  return opts.pinsArrived && opts.leadCount === 0;
+}
+
 export interface ViewportBBox {
   minLng: number;
   minLat: number;
@@ -140,7 +161,13 @@ export function bboxParam(b: ViewportBBox): string {
 /** Merge a freshly fetched window into the accumulated pin set: new/updated
  *  pins win by id, survivors outside the keep region are pruned. Returns the
  *  SAME array reference when nothing changed so React Query's structural
- *  sharing can bail out of a no-op moveend refetch. */
+ *  sharing can bail out of a no-op moveend refetch.
+ *
+ *  Sampled (wide-zoom) windows ride the same rule on purpose: a thinned fetch
+ *  omits most in-window ids by design, so absence from `fetched` must NOT
+ *  evict a previously fetched pin — zooming out keeps the dense detail the
+ *  user already loaded (it clusters), and the keep-region prune still bounds
+ *  memory because the wide view's keep region covers everything retained. */
 export function mergeViewportPins<T extends { id: number; lat?: number | null; lng?: number | null }>(
   prev: readonly T[],
   fetched: readonly T[],

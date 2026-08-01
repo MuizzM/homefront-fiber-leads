@@ -107,11 +107,17 @@ import {
 } from "@/lib/mapViewport";
 
 describe("bboxExceedsSpanGuard (F4)", () => {
-  it("mirrors the server's 3° guard on either axis", () => {
-    expect(MAP_BBOX_MAX_SPAN_DEG).toBe(3);
-    expect(bboxExceedsSpanGuard({ minLng: -81, minLat: 35, maxLng: -78, maxLat: 35.5 })).toBe(false); // exactly 3° ok
-    expect(bboxExceedsSpanGuard({ minLng: -81, minLat: 35, maxLng: -77.9, maxLat: 35.5 })).toBe(true); // lng span
-    expect(bboxExceedsSpanGuard({ minLng: -80.5, minLat: 35, maxLng: -80.2, maxLat: 38.2 })).toBe(true); // lat span
+  it("mirrors the server's 40° absolute ceiling on either axis", () => {
+    expect(MAP_BBOX_MAX_SPAN_DEG).toBe(40);
+    expect(bboxExceedsSpanGuard({ minLng: -100, minLat: 20, maxLng: -60, maxLat: 30 })).toBe(false); // exactly 40° ok
+    expect(bboxExceedsSpanGuard({ minLng: -110, minLat: 20, maxLng: -60, maxLat: 30 })).toBe(true); // lng span 50°
+    expect(bboxExceedsSpanGuard({ minLng: -80.5, minLat: 5, maxLng: -80.2, maxLat: 50 })).toBe(true); // lat span 45°
+  });
+
+  it("region/state zoom (over the OLD 3° guard) now fetches — the server samples it", () => {
+    // The owner's blank-map report: a whole-state view must fetch, not skip.
+    const state = { minLng: -84.5, minLat: 33.7, maxLng: -75.4, maxLat: 36.6 }; // all of NC ~9°
+    expect(bboxExceedsSpanGuard(expandBBox(state, VIEWPORT_FETCH_MARGIN))).toBe(false);
   });
 
   it("a street-zoom view + 20% margin stays far under the guard", () => {
@@ -197,6 +203,42 @@ describe("truncated latest-fetch wins (F1)", () => {
   });
 });
 
+// ── First-use empty state gate (owner report: "no leads" over a full state) ──
+import { firstUseEmptyStateEnabled } from "@/lib/mapViewport";
+
+describe("firstUseEmptyStateEnabled", () => {
+  it("NEVER shows in viewport mode — the mode itself proves the org has leads", () => {
+    // Empty merged cache in viewport mode means unfetched/over-water/sampled,
+    // not "no leads" — the count probe answered > threshold to get here.
+    expect(firstUseEmptyStateEnabled({ viewportMode: true, pinsArrived: true, leadCount: 0 })).toBe(false);
+    expect(firstUseEmptyStateEnabled({ viewportMode: true, pinsArrived: false, leadCount: 0 })).toBe(false);
+  });
+
+  it("full-feed mode keeps the old rule: payload arrived AND genuinely empty", () => {
+    expect(firstUseEmptyStateEnabled({ viewportMode: false, pinsArrived: true, leadCount: 0 })).toBe(true);
+    expect(firstUseEmptyStateEnabled({ viewportMode: false, pinsArrived: false, leadCount: 0 })).toBe(false); // fetch in flight
+    expect(firstUseEmptyStateEnabled({ viewportMode: false, pinsArrived: true, leadCount: 12 })).toBe(false);
+  });
+});
+
+// ── Sampled wide-window merges ───────────────────────────────────────────────
+describe("mergeViewportPins with a sampled (thinned) wide window", () => {
+  const pin = (id: number, lat: number, lng: number) => ({ id, lat, lng });
+
+  it("a thinned fetch never evicts previously loaded in-window pins", () => {
+    // The user loaded a dense street (ids 1..4), then zoomed out to a wide
+    // window whose sample only returns every other id. The missing ids are
+    // thinned, NOT deleted — they must survive the merge (and cluster).
+    const wideView = { minLng: -84, minLat: 34, maxLng: -76, maxLat: 37 };
+    const dense = [pin(1, 35.5, -80.4), pin(2, 35.5, -80.41), pin(3, 35.5, -80.42), pin(4, 35.5, -80.43)];
+    const sample = [pin(2, 35.5, -80.41), pin(4, 35.5, -80.43), pin(9000, 34.2, -77.9)];
+    const { pins, added, pruned } = mergeViewportPins(dense, sample, keepRegion(wideView));
+    expect(pruned).toBe(0);
+    expect(added).toBe(1); // only the genuinely-new far pin
+    expect(pins.map((p) => p.id).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 9000]);
+  });
+});
+
 // ── currentFetchWindow (fetch/refresher share ONE bounds read) ───────────────
 import { currentFetchWindow } from "@/lib/mapViewport";
 
@@ -218,10 +260,14 @@ describe("currentFetchWindow", () => {
     expect(currentFetchWindow(mapAt(0, 0, 0, 0))).toBeNull();
   });
 
-  it("a street-zoom window passes the span guard; a regional one trips it", () => {
+  it("street and regional windows pass the ceiling; a continental one trips it", () => {
     const street = currentFetchWindow(mapAt(-80.42, 35.53, -80.39, 35.55))!;
     expect(bboxExceedsSpanGuard(street.window)).toBe(false);
+    // Regional zoom used to trip the old 3° guard and blank the map — now it
+    // fetches (the server samples the window).
     const region = currentFetchWindow(mapAt(-82, 34, -79, 36))!;
-    expect(bboxExceedsSpanGuard(region.window)).toBe(true);
+    expect(bboxExceedsSpanGuard(region.window)).toBe(false);
+    const continent = currentFetchWindow(mapAt(-125, 25, -66, 49))!;
+    expect(bboxExceedsSpanGuard(continent.window)).toBe(true);
   });
 });

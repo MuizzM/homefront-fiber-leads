@@ -64,17 +64,24 @@ describe("bbox validation", () => {
     }
   });
 
-  it("rejects a window spanning more than 3° on either axis", async () => {
-    const res = await req("/api/leads/map?bbox=-81,35,-77.9,35.5", fx.manager.session); // 3.1° lng
+  it("rejects only an absurd window (>40° per axis) — a malformed request, not a zoom level", async () => {
+    const res = await req("/api/leads/map?bbox=-125,20,-66,30", fx.manager.session); // 59° lng
     expect(res.status).toBe(400);
-    const res2 = await req("/api/leads/map?bbox=-81,35,-80.5,38.2", fx.manager.session); // 3.2° lat
+    const res2 = await req("/api/leads/map?bbox=-81,5,-80.5,50", fx.manager.session); // 45° lat
     expect(res2.status).toBe(400);
   });
 
-  it("accepts a window whose span is exactly 3° and clamps out-of-world coords", async () => {
-    const res = await req("/api/leads/map?bbox=-81,35,-78,38", fx.manager.session);
+  it("accepts region/state windows the OLD 3° guard rejected (owner blank-map report)", async () => {
+    const res = await req("/api/leads/map?bbox=-81,35,-77.9,35.5", fx.manager.session); // 3.1° lng
     expect(res.status).toBe(200);
-    // Clamped to world bounds instead of rejected (lat 95 → 90, span still ≤3°)
+    const res2 = await req("/api/leads/map?bbox=-84.5,33.7,-75.4,36.6", fx.manager.session); // all of NC ~9°
+    expect(res2.status).toBe(200);
+  });
+
+  it("accepts a window whose span is exactly 40° and clamps out-of-world coords", async () => {
+    const res = await req("/api/leads/map?bbox=-100,10,-60,20", fx.manager.session);
+    expect(res.status).toBe(200);
+    // Clamped to world bounds instead of rejected (lat 95 → 90, span still ≤40°)
     const res2 = await req("/api/leads/map?bbox=-80.6,88,-79.9,95", fx.manager.session);
     expect(res2.status).toBe(200);
   });
@@ -145,6 +152,17 @@ describe("bbox window rows", () => {
     expect(ids).not.toContain(lookalike);
   });
 
+  it("a wide (region-zoom) window under the cap returns EVERY town, truncated:false", async () => {
+    // Two towns ~7° of longitude apart in ONE window — the case the old 3°
+    // rejection turned into a blank map. Under the row cap nothing is thinned.
+    const west = lead(1, null, 35.05, -82.95);
+    const east = lead(1, null, 35.95, -76.05);
+    const body = await (await req("/api/leads/map?bbox=-83.5,34.5,-75.5,36.5", fx.manager.session)).json();
+    const ids = body.pins.map((p: any) => p.id);
+    expect(ids).toEqual(expect.arrayContaining([west, east]));
+    expect(body.truncated).toBe(false);
+  });
+
   it("cross-tenant bbox returns EMPTY — the tenant wall holds in window mode", async () => {
     // The window covers tenant 1's pins, but the caller belongs to tenant 2.
     const body = await (await req("/api/leads/map?bbox=-80.6,35.4,-80.1,35.6", fx.foreign.session)).json();
@@ -186,16 +204,18 @@ describe("bbox window rows", () => {
   });
 });
 
-describe("the 25k row cap", () => {
-  it("caps a denser-than-cap window at 25k rows and flags truncated", async () => {
+describe("the 25k row cap → even deterministic sampling", () => {
+  it("an over-cap window returns an evenly-thinned sample with truncated:true", async () => {
     // Bulk-load 25,005 pins straight into a far-away window (raw SQL in one
     // transaction — 25k createLead calls would dominate the test's runtime).
+    // lng advances with insertion order (one 0.00024° row per 500 pins), so
+    // insertion order correlates with geography — exactly the shape that made
+    // the old ORDER BY id LIMIT prefix a one-town sample.
     const insert = rawDb.prepare(`INSERT INTO leads
       (address, city, state, zip, lat, lng, tenant_id, lead_status, lead_tag, created_at, updated_at)
       VALUES (?, 'Capville', 'NC', '28100', ?, ?, 1, 'prospect', 'fcc_fiber_d25', datetime('now'), datetime('now'))`);
     const load = rawDb.transaction((count: number) => {
       for (let i = 0; i < count; i++) {
-        // ~0.12° x 0.12° window — well under the 3° span guard.
         insert.run(`Cap ${i}`, 10.0 + (i % 500) * 0.00024, 20.0 + Math.floor(i / 500) * 0.00024);
       }
     });
@@ -204,13 +224,30 @@ describe("the 25k row cap", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.truncated).toBe(true);
-    expect(body.pins).toHaveLength(25_000);
-    // Ordered by id: the cap keeps the LOWEST ids, deterministically.
-    const ids = body.pins.map((p: any) => p.id);
-    expect([...ids].sort((a: number, b: number) => a - b)).toEqual(ids);
-    // …and a tag-narrowed window over the same box is also capped.
+    // count=25,005 → step=ceil(25005/25000)=2 → every even id, ~half the rows.
+    const ids: number[] = body.pins.map((p: any) => p.id);
+    expect(ids.length).toBeGreaterThan(12_000);
+    expect(ids.length).toBeLessThanOrEqual(12_503);
+    expect(ids.every((id) => id % 2 === 0)).toBe(true);
+    // Ordered by id, still deterministic.
+    expect([...ids].sort((a, b) => a - b)).toEqual(ids);
+    // EVEN across insertion order — the sample spans the whole 25k id block,
+    // not the old lowest-25k prefix…
+    expect(Math.max(...ids) - Math.min(...ids)).toBeGreaterThan(24_000);
+    // …which here means the whole GEOGRAPHIC extent: every ~0.00024° lng
+    // column of the grid is represented, first through last.
+    const lngs: number[] = body.pins.map((p: any) => p.lng);
+    expect(Math.min(...lngs)).toBeCloseTo(20.0, 3);
+    expect(Math.max(...lngs)).toBeCloseTo(20.012, 3);
+    expect(new Set(lngs).size).toBeGreaterThanOrEqual(50);
+    // Stable across pans: the identical window returns the identical sample.
+    const again = await (await req("/api/leads/map?bbox=19.9,9.9,20.2,10.2", fx.manager.session)).json();
+    expect(again.pins.map((p: any) => p.id)).toEqual(ids);
+    // …and a tag-narrowed over-cap window over the same box samples too.
     const tagged = await (await req("/api/leads/map?bbox=19.9,9.9,20.2,10.2&tag=fcc", fx.manager.session)).json();
     expect(tagged.truncated).toBe(true);
-    expect(tagged.pins).toHaveLength(25_000);
+    expect(tagged.pins.length).toBeGreaterThan(12_000);
+    expect(tagged.pins.length).toBeLessThanOrEqual(12_503);
+    expect(tagged.pins.every((p: any) => p.id % 2 === 0)).toBe(true);
   }, 60_000);
 });
