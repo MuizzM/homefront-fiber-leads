@@ -2065,7 +2065,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   app.delete("/api/leads/:id", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
-    if (!storage.deleteLead(Number(req.params.id), tid)) return res.status(404).json({ error: "Not found" });
+    const result = storage.deleteLead(Number(req.params.id), tid);
+    if (!result.deleted && result.reason === "not_found") return res.status(404).json({ error: "Not found" });
+    if (!result.deleted) {
+      // History-bearing lead: the delete was refused, not attempted (and a
+      // residual FK constraint error lands here too — never a raw 500). Tell
+      // the manager exactly what blocks it and what to do instead.
+      const parts = [
+        `${result.knocks} knock${result.knocks === 1 ? "" : "s"}`,
+        `${result.commissions} commission${result.commissions === 1 ? "" : "s"}`,
+      ];
+      if (result.photos > 0) parts.push(`${result.photos} photo${result.photos === 1 ? "" : "s"}`);
+      return res.status(409).json({
+        error: `This lead has field history (${parts.join(", ")}) and can't be deleted. Ask a manager to mark it not-interested / suppressed instead.`,
+        code: "LEAD_HAS_HISTORY",
+        knocks: result.knocks, commissions: result.commissions, photos: result.photos,
+      });
+    }
     // No projection: after the row is gone there is nothing left to authorize
     // against, and shipping the PRE-delete pin would hand every subscriber a
     // patch that re-draws the door it is telling them to forget. Managers (whose

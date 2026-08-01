@@ -277,6 +277,17 @@ export interface MapGridCell {
   n: number;
 }
 
+// Result of a guarded lead delete. A lead with field history (knock_log /
+// commissions / lead_photos rows) is REFUSED, not deleted — the probe runs in
+// the same IMMEDIATE transaction as the delete, and even a residual FK
+// constraint error is converted into the same refusal instead of a raw 500.
+// "not_found" keeps the route's 404 semantics (absent row, or another
+// tenant's row under the tenant predicate).
+export type LeadDeleteResult =
+  | { deleted: true }
+  | { deleted: false; reason: "not_found" }
+  | { deleted: false; reason: "has_history"; knocks: number; commissions: number; photos: number };
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
@@ -311,7 +322,7 @@ export interface IStorage {
   // is NEWER than the recorded one. Returns the updated lead, or undefined when
   // a newer outcome already exists (caller must skip ALL money side effects).
   applyKnockOutcomeCas(leadId: number, status: string, outcome: string, knockedAt: string): Lead | undefined;
-  deleteLead(id: number, tenantId?: number): boolean;
+  deleteLead(id: number, tenantId?: number): LeadDeleteResult;
   // ── FCC-import purge (admin bulk removal) ──────────────────────────────────
   // Preview counts + the delete itself share ONE SQL predicate (fccPurgeWhere)
   // so the numbers an admin confirmed are exactly the rows removed. Removable =
@@ -3261,13 +3272,47 @@ export class Storage implements IStorage {
     if (row) bustPinCaches(row.tenantId);
     return row;
   }
-  deleteLead(id: number, tenantId?: number): boolean {
-    const condition = tenantId != null
-      ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
-      : eq(leads.id, id);
-    const deleted = db.delete(leads).where(condition).run().changes > 0;
-    if (deleted) bustPinCaches(tenantId); // undefined tenant → global bust
-    return deleted;
+  deleteLead(id: number, tenantId?: number): LeadDeleteResult {
+    // Dependent-row probe. knock_log / commissions / lead_photos hold the
+    // field history (and money) for a door; deleting the lead underneath them
+    // trips SQLITE_CONSTRAINT and used to surface as a raw 500. Counts are
+    // returned so the route can tell the manager exactly what blocks it.
+    const countDeps = () => ({
+      knocks: (rawDb.prepare("SELECT COUNT(*) c FROM knock_log WHERE lead_id = ?").get(id) as { c: number }).c,
+      commissions: (rawDb.prepare("SELECT COUNT(*) c FROM commissions WHERE lead_id = ?").get(id) as { c: number }).c,
+      photos: (rawDb.prepare("SELECT COUNT(*) c FROM lead_photos WHERE lead_id = ?").get(id) as { c: number }).c,
+    });
+    // Probe + delete in ONE IMMEDIATE transaction: the write lock is taken up
+    // front, so no knock/commission/photo can land between the check and the
+    // delete and turn the guard itself into a FK 500.
+    const tx = rawDb.transaction((): LeadDeleteResult => {
+      const condition = tenantId != null
+        ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
+        : eq(leads.id, id);
+      const exists = db.select({ id: leads.id }).from(leads).where(condition).get();
+      if (!exists) return { deleted: false, reason: "not_found" };
+      const deps = countDeps();
+      if (deps.knocks > 0 || deps.commissions > 0 || deps.photos > 0) {
+        return { deleted: false, reason: "has_history", ...deps };
+      }
+      return db.delete(leads).where(condition).run().changes > 0
+        ? { deleted: true }
+        : { deleted: false, reason: "not_found" };
+    });
+    let result: LeadDeleteResult;
+    try {
+      result = tx.immediate();
+    } catch (e: any) {
+      // Safety net: even with the probe, a dependent row family we don't count
+      // (or a stricter FK in a migrated DB) can still trip the constraint.
+      // Refuse with fresh counts — never let the manager see a raw 500.
+      if (String(e?.code ?? "").startsWith("SQLITE_CONSTRAINT")) {
+        return { deleted: false, reason: "has_history", ...countDeps() };
+      }
+      throw e;
+    }
+    if (result.deleted) bustPinCaches(tenantId); // undefined tenant → global bust
+    return result;
   }
 
   // ── FCC-import purge ─────────────────────────────────────────────────────────
