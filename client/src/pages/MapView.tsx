@@ -36,6 +36,7 @@ import {
   Flag,
   Palette,
   Undo2,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -113,6 +114,8 @@ import {
   currentFetchWindow,
   keepRegion,
   bboxParam,
+  bboxIntersects,
+  cameraViewBBox,
   fullFeedEnabled,
   firstUseEmptyStateEnabled,
   viewportNotice,
@@ -124,12 +127,18 @@ import {
   gridCellsToGeoJson,
   sourceFilterToGridTag,
   type MapGridResponse,
+  type ViewportBBox,
 } from "@/lib/mapViewport";
 import {
   readMapPinsSnapshot,
   writeMapPinsSnapshot,
   pruneMapPinsSnapshots,
   MAP_PINS_SNAPSHOT_DEBOUNCE_MS,
+  readPersistedViewportMode,
+  writePersistedViewportMode,
+  readMapWindowSnapshot,
+  writeMapWindowSnapshot,
+  pruneMapWindowSnapshots,
 } from "@/lib/mapPinsSnapshot";
 import {
   LEAD_SOURCE_OPTIONS,
@@ -210,6 +219,7 @@ import { chaikinSmooth } from "@shared/strokeSmoothing";
 import { MAX_ACTIVE_AREAS_PER_REP } from "@shared/territory";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
 import { ReclaimAllDialog } from "@/components/territory/ReclaimAllDialog";
+import { FccPurgeDialog } from "@/components/map/FccPurgeDialog";
 import { useDiscoveryJobs } from "@/hooks/use-discovery-jobs";
 import {
   discoveryApi,
@@ -1473,6 +1483,9 @@ export default function MapView() {
   // Re-open an area for another sweep.
   const [nextPassTerritoryId, setNextPassTerritoryId] = useState<number | null>(null);
   const [reclaimAllOpen, setReclaimAllOpen] = useState(false);
+  // Bulk-remove unworked FCC-imported doors (owner ask) — admin-only dialog,
+  // opened from the More menu behind the same gate as reclaim-all.
+  const [fccPurgeOpen, setFccPurgeOpen] = useState(false);
   const nextPassMutation = useMutation({
     mutationFn: async ({ id, ...body }: { id: number; territoryAction: string; newRepId?: number; keepPendingCallbacks?: boolean; note?: string }) => {
       const res = await apiRequest("POST", `/api/territories/${id}/next-pass`, body);
@@ -1613,9 +1626,32 @@ export default function MapView() {
     retry: 1,
   });
   const mapPinCount = countQuery.data;
-  const viewportMode = (mapPinCount?.total ?? 0) > MAP_VIEWPORT_MODE_THRESHOLD;
+  // No-waterfall boot: the last probe-CONFIRMED mode, persisted per identity
+  // (versioned key, cross-user swept — see lib/mapPinsSnapshot). While the
+  // probe is still in flight a returning big-map user runs in viewport mode
+  // from this hint, so the first window fetch fires on map ready instead of
+  // serializing behind the probe RTT. The probe remains the authority the
+  // moment it answers (and on probe FAILURE the hint stands down — the full
+  // feed is the never-an-empty-map fallback, exactly as before).
+  const persistedViewportModeHint = useMemo(
+    () => (user ? readPersistedViewportMode({ tenantId: user.tenantId, userId: user.id }) : null),
+    [user?.id, user?.tenantId],
+  );
+  const viewportMode = mapPinCount != null
+    ? mapPinCount.total > MAP_VIEWPORT_MODE_THRESHOLD
+    : !countQuery.isError && (persistedViewportModeHint ?? false);
   const viewportModeRef = useRef(viewportMode);
   viewportModeRef.current = viewportMode;
+
+  // Teach the NEXT cold open: persist only the probe's real answer (never the
+  // hint), and when the answer is full-feed, drop any window snapshot — the
+  // window family is meaningless (and would go permanently stale) there.
+  useEffect(() => {
+    if (!user || mapPinCount == null) return;
+    const confirmed = mapPinCount.total > MAP_VIEWPORT_MODE_THRESHOLD;
+    writePersistedViewportMode({ tenantId: user.tenantId, userId: user.id }, confirmed);
+    if (!confirmed) pruneMapWindowSnapshots();
+  }, [mapPinCount?.total, user?.id, user?.tenantId]);
 
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
   // Fetch ALL map pins from dedicated lean endpoint — only runs after auth is ready
@@ -1717,6 +1753,36 @@ export default function MapView() {
     }
   }, [viewportMode, qc]);
 
+  // WINDOW-snapshot seed — instant first paint for viewport-mode cold opens.
+  // The full-feed snapshot is banned in viewport mode (and pruned above), which
+  // used to leave big-map orgs waiting a network round-trip before ANY pin
+  // painted. If the last session persisted a complete fetched window AND the
+  // persisted camera (the view the map is about to restore) intersects it,
+  // seed the cache with those pins now — born stale by contract: the boot
+  // window fetch fires immediately (no debounce — see the moveend effect) and
+  // replaces them, evicting any seeded row the complete window disowned
+  // (windowSeedRef → mergeViewportPins' evictWindow). A miss on any check just
+  // means the old behavior: first paint waits for the fetch.
+  const windowSeedRef = useRef<ViewportBBox | null>(null);
+  useEffect(() => {
+    if (!user || !viewportMode) return;
+    const cached = qc.getQueryData(["/api/leads/map"]) as { pins?: MapPin[] } | undefined;
+    if (cached?.pins?.length) return; // a fetch (or an earlier seed) already won
+    const snap = readMapWindowSnapshot<MapPin>({ tenantId: user.tenantId, userId: user.id });
+    if (!snap || !snap.pins.length) return;
+    const cam = readPersistedMapCamera();
+    if (!cam) return; // no persisted camera → no idea where the map opens
+    const view = cameraViewBBox(
+      cam.center,
+      cam.zoom,
+      typeof window !== "undefined" ? window.innerWidth || 390 : 390,
+      typeof window !== "undefined" ? window.innerHeight || 844 : 844,
+    );
+    if (!bboxIntersects(view, snap.window)) return; // last window is elsewhere
+    windowSeedRef.current = snap.window;
+    qc.setQueryData(["/api/leads/map"], { pins: snap.pins, total: snap.pins.length });
+  }, [user?.id, user?.tenantId, viewportMode, qc]);
+
   // Invalidation bridge: every shared mutation path (saved-knock
   // reconciliation, the dead-knock auto-resolve in useKnockLogger, bulk lasso
   // actions, one-tap add) says "map cache is stale" via
@@ -1800,6 +1866,27 @@ export default function MapView() {
     }
   }, []);
 
+  // Identity for the window-snapshot writer below — a ref so fetchViewportPins
+  // (deps: [qc] only) always writes under the CURRENT login, never a closure's.
+  const snapshotScopeRef = useRef<{ tenantId: number | null | undefined; userId: number | null | undefined } | null>(null);
+  snapshotScopeRef.current = user ? { tenantId: user.tenantId, userId: user.id } : null;
+  const windowSnapshotTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Debounced WINDOW-snapshot write — the NEXT cold open's instant first
+  // paint. COMPLETE windows only (callers gate on !truncated — a replayed
+  // sample would paint a misleading thinned view); the debounce settles a pan
+  // burst to ~one storage write. Storage + ref timer only — no React state —
+  // and kept OUT of fetchViewportPins' body so the #87 purity scan
+  // (map-one-tap-add.test.ts) keeps proving that fetch path chrome-free.
+  const scheduleWindowSnapshotWrite = useCallback((pins: MapPin[], win: ViewportBBox) => {
+    const scope = snapshotScopeRef.current;
+    if (!scope || !pins.length) return;
+    if (windowSnapshotTimerRef.current) clearTimeout(windowSnapshotTimerRef.current);
+    windowSnapshotTimerRef.current = setTimeout(() => {
+      windowSnapshotTimerRef.current = null;
+      writeMapWindowSnapshot(scope, pins, win);
+    }, MAP_PINS_SNAPSHOT_DEBOUNCE_MS);
+  }, []);
+
   // INVISIBLE by contract (#87): this function never flips React state — the
   // only writes are the setQueryData cache merge and plain refs. The tier
   // state is owned by refreshViewportPins below; chip visibility DERIVES from
@@ -1831,9 +1918,14 @@ export default function MapView() {
         // tier hand off NOW (imperative layer sync — not React state).
         pinWindowLandedRef.current = true;
         syncViewportTierLayers(mapRef.current);
+        // A COMPLETE window replacing a cold-open snapshot seed may evict
+        // seeded rows the server disowned; a truncated (sampled) window must
+        // never evict (mergeViewportPins' standing rule).
+        const evictWindow = !truncated && windowSeedRef.current ? window : null;
+        if (!truncated) windowSeedRef.current = null; // seed fully reconciled
         qc.setQueryData(["/api/leads/map"], (old: any) => {
           const prev: MapPin[] = old?.pins ?? [];
-          const merged = mergeViewportPins(prev, fetched, keep);
+          const merged = mergeViewportPins(prev, fetched, keep, evictWindow);
           // Nothing new and nothing pruned → keep the old reference so
           // structural sharing turns this into a no-op (no re-cluster) —
           // UNLESS the truncation flag moved, which the notice chip reads.
@@ -1851,12 +1943,15 @@ export default function MapView() {
             truncated,
           };
         });
+        // Persist this COMPLETE window (debounced, identity-scoped) so the
+        // next cold open paints it instantly — see scheduleWindowSnapshotWrite.
+        if (!truncated) scheduleWindowSnapshotWrite(fetched, window);
       })
       .catch((err: any) => {
         if (err?.name === "AbortError") return; // superseded by a newer pan
         // A failed window fetch must never empty the map — keep what's there.
       });
-  }, [qc]);
+  }, [qc, scheduleWindowSnapshotWrite]);
   const fetchViewportPinsRef = useRef(fetchViewportPins);
   fetchViewportPinsRef.current = fetchViewportPins;
 
@@ -1994,6 +2089,12 @@ export default function MapView() {
 
   // moveend → debounced 300ms window refetch. Bound per map instance; inactive
   // in full-feed mode (the ref guard makes every pan free there).
+  // The debounce exists to coalesce PAN BURSTS — the FIRST fetch of a session
+  // has no burst to coalesce, and on a cold open those 300ms sat directly on
+  // the blank-map critical path (probe → mode → bind → debounce → fetch). So
+  // the first bind fires the window fetch SYNCHRONOUSLY; every later bind
+  // (style swap, mode re-flip) and every real moveend keeps the debounce.
+  const firstViewportFetchRef = useRef(true);
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady || !viewportMode) return;
@@ -2002,7 +2103,12 @@ export default function MapView() {
       viewportTimerRef.current = setTimeout(() => refreshViewportPinsRef.current(), 300);
     };
     map.on("moveend", onMoveEnd);
-    onMoveEnd(); // the mode may have flipped while the map sat still
+    if (firstViewportFetchRef.current) {
+      firstViewportFetchRef.current = false;
+      refreshViewportPinsRef.current(); // boot: no debounce on the first fetch
+    } else {
+      onMoveEnd(); // the mode may have flipped while the map sat still
+    }
     return () => {
       if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
       try { map.off("moveend", onMoveEnd); } catch {}
@@ -7552,6 +7658,14 @@ export default function MapView() {
             />
           )}
 
+          {/* Bulk-remove unworked FCC imports — same gate as reclaim-all. */}
+          {canReclaimAll && (
+            <FccPurgeDialog
+              open={fccPurgeOpen}
+              onClose={() => setFccPurgeOpen(false)}
+            />
+          )}
+
           {/* ── Filter sheet — bottom sheet over the SAME filterStatus/filterRep
                  state the compact pill and the manager legend drive. Statuses
                  shown are exactly the ones with pins (statusOptions rule);
@@ -7882,6 +7996,26 @@ export default function MapView() {
                                 },
                               },
                             ]),
+                        // Bulk-remove unworked FCC-imported doors — admin
+                        // chrome behind the SAME permission gate as the
+                        // reclaim-all sweep (never wider than the server's
+                        // requireAdmin). Opens the staged destructive dialog;
+                        // nothing is removed from this menu tap itself.
+                        ...(canReclaimAll
+                          ? [
+                              {
+                                key: "fcc-purge",
+                                testid: "ctl-fcc-purge",
+                                icon: <Trash2 className="w-4 h-4" />,
+                                label: "Remove FCC imports",
+                                active: fccPurgeOpen,
+                                onClick: () => {
+                                  setFccPurgeOpen(true);
+                                  setToolsMenuOpen(false);
+                                },
+                              },
+                            ]
+                          : []),
                         ...(canSubmitScan
                           ? [
                               {

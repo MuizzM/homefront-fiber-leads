@@ -58,6 +58,7 @@ try {
 } catch (e: any) { console.warn("[startup] DB pragma warning:", e.message); }
 import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerritorySchema } from "@shared/schema";
 import { colorForRep, repColorOf } from "@shared/repColors";
+import { isTrainingLessonId, TOTAL_TRAINING_LESSONS } from "@shared/trainingContent";
 import { computeTerritoryMetrics } from "@shared/territoryMetrics";
 import { cachedScopeLookup } from "./territoryScopeCache";
 import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
@@ -2049,6 +2050,49 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       actorId: (req as any).user?.id ?? null, actorName: (req as any).user?.name ?? null, lead: null,
     });
     res.json({ success: true });
+  });
+
+  // ── FCC-import purge — bulk-remove UNWORKED FCC-imported doors ──────────────
+  // Owner ask: "the option to remove the FCC added leads." Admin-only behind the
+  // SAME gate as the org-wide territory sweep (requireAdmin + the
+  // reclaim_all_territories permission): deleting an entire import class is a
+  // reorganization, not everyday lead management. The removal rule lives in ONE
+  // place (storage.fccPurgeWhere) and is conservative: fcc-family tag ("fcc" or
+  // "fcc_<suffix>", underscore LIKE-escaped) AND zero knock history AND no
+  // recorded outcome AND status still 'prospect' AND no commission/sale/photo
+  // rows AND not do-not-knock. A worked, sold, or in-any-way-touched door is
+  // PROTECTED and stays.
+  app.get("/api/leads/fcc-purge/preview", requireAdmin, (req, res) => {
+    const user = (req as any).user;
+    if (!can(user?.role, "reclaim_all_territories")) return res.status(403).json({ error: "not allowed" });
+    const tid = user?.tenantId ?? undefined;
+    // { total, removable, protected } — the dialog's blast radius, computed by
+    // the exact predicate the POST below deletes with.
+    res.json(storage.countFccPurge(tid));
+  });
+
+  app.post("/api/leads/fcc-purge", requireAdmin, (req, res) => {
+    const user = (req as any).user;
+    if (!can(user?.role, "reclaim_all_territories")) return res.status(403).json({ error: "not allowed" });
+    const tid = user?.tenantId ?? undefined;
+    const before = storage.countFccPurge(tid);
+    // purgeFccLeads busts the pin caches + ETag data version and fires the
+    // data-free map-changed ping through the deleteLead choke point — no
+    // per-lead projection is emitted (same reasoning as DELETE /api/leads/:id:
+    // there is nothing left to authorize a projection against).
+    const removed = storage.purgeFccLeads(tid);
+
+    // ONE audit row for the whole purge, like territory.bulk_reclaimed.
+    recordAdminAudit({
+      ...auditContext(req),
+      action: "lead.fcc_purged", targetType: "lead",
+      targetLabel: `${removed} FCC lead${removed === 1 ? "" : "s"}`,
+      before: { total: before.total, removable: before.removable, protected: before.protected },
+      after: { removed },
+      tenantId: tid ?? null, outcome: "success",
+    });
+
+    res.json({ removed });
   });
 
   // ══ BILLING — SaaS lead-credit "banking" (see shared/billing.ts + billingStore.ts) ══
@@ -7622,6 +7666,50 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       welcomeWarning,
     });
   });
+
+  // ── Training (D2D psychology & pitch curriculum) ─────────────────────────────
+  // Content lives in shared/trainingContent.ts (client renders it directly);
+  // the server only stores per-user progress. All reads/writes are OWN-scope —
+  // the user and tenant come from the session, never from the request body, so
+  // one rep can never write another rep's progress and tenant walls hold.
+  app.get("/api/training/progress", requireAuth, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    res.json({
+      totalLessons: TOTAL_TRAINING_LESSONS,
+      completed: storage.getTrainingProgress(user.id, user.tenantId),
+    });
+  });
+
+  app.post("/api/training/lessons/:lessonId/complete", requireAuth, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const lessonId = String(req.params.lessonId ?? "");
+    // Only ids authored in the shared curriculum are storable — anything else
+    // is a 400, keeping the table free of junk rows a client bug could write.
+    if (!isTrainingLessonId(lessonId)) {
+      return res.status(400).json({ error: "Unknown lesson id" });
+    }
+    let quizScore: number | null = null;
+    const rawScore = (req.body ?? {}).quizScore;
+    if (rawScore !== undefined && rawScore !== null) {
+      const n = Number(rawScore);
+      if (!Number.isFinite(n) || n < 0 || n > 100) {
+        return res.status(400).json({ error: "quizScore must be a number between 0 and 100" });
+      }
+      quizScore = Math.round(n);
+    }
+    res.json(storage.upsertLessonComplete(user.id, user.tenantId, lessonId, quizScore));
+  });
+
+  // Manager+ rollup (same gate as the other team-wide views): per-rep completed
+  // counts for the caller's tenant only.
+  app.get("/api/training/summary", requireManager, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    res.json({
+      totalLessons: TOTAL_TRAINING_LESSONS,
+      reps: storage.getTrainingSummary(user.tenantId),
+    });
+  });
+
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

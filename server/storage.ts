@@ -302,6 +302,12 @@ export interface IStorage {
   // a newer outcome already exists (caller must skip ALL money side effects).
   applyKnockOutcomeCas(leadId: number, status: string, outcome: string, knockedAt: string): Lead | undefined;
   deleteLead(id: number, tenantId?: number): boolean;
+  // ── FCC-import purge (admin bulk removal) ──────────────────────────────────
+  // Preview counts + the delete itself share ONE SQL predicate (fccPurgeWhere)
+  // so the numbers an admin confirmed are exactly the rows removed. Removable =
+  // fcc-family tag AND completely unworked; everything else is protected.
+  countFccPurge(tenantId?: number): { total: number; removable: number; protected: number };
+  purgeFccLeads(tenantId?: number): number;
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[];
   searchLeadsPage(
     query: string,
@@ -566,6 +572,16 @@ export function runMigrations() {
     // lat BETWEEN range scan must not degenerate into a full table scan per
     // moveend. Pure index add — additive, idempotent, no table rebuild.
     `CREATE INDEX IF NOT EXISTS idx_leads_lat_lng ON leads(lat, lng)`,
+    // The MAP WINDOW index — tenant equality first (every windowed request is
+    // tenant-scoped), then the lat range, then lng + the pin-eligibility
+    // columns so the whole window PREDICATE evaluates in-index (only matched
+    // rows pay a table lookup, and the density grid — which projects nothing
+    // beyond lat/lng — runs as a COVERING scan). Measured on a 180k-lead
+    // tenant: a street window (z17) 46ms → 0.3ms, neighborhood (z13) 66ms →
+    // 11ms, grid 194ms → 133ms; wide windows are bounded by the 25k cap either
+    // way. Without the tenant prefix SQLite chose idx_leads_tenant and walked
+    // ALL of the tenant's rows per pan.
+    `CREATE INDEX IF NOT EXISTS idx_leads_map_window ON leads(tenant_id, lat, lng, lead_status, lead_tag)`,
     `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
     `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
     `ALTER TABLE tenants ADD COLUMN brand_logo TEXT`,
@@ -2096,6 +2112,21 @@ export function runMigrations() {
        version INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (tenant_id, lead_id))`,
     `CREATE INDEX IF NOT EXISTS idx_calling_locks_exp ON calling_lead_locks(expires_at)`,
 
+    // ── Training progress — D2D psychology & pitch curriculum ─────────────────
+    // One row per (tenant, user, lesson). Lesson ids are authored in
+    // shared/trainingContent.ts and validated by the route before any write.
+    // tenant_id is normalized to 0 for legacy users with no tenant, so the
+    // UNIQUE constraint (NULLs are distinct in SQLite) can never double-count.
+    `CREATE TABLE IF NOT EXISTS training_progress (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL DEFAULT 0,
+       user_id INTEGER NOT NULL,
+       lesson_id TEXT NOT NULL,
+       completed_at TEXT NOT NULL DEFAULT (datetime('now')),
+       quiz_score INTEGER,
+       UNIQUE(tenant_id, user_id, lesson_id))`,
+    `CREATE INDEX IF NOT EXISTS idx_training_progress_user ON training_progress(tenant_id, user_id)`,
+
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
@@ -2878,6 +2909,15 @@ export class Storage implements IStorage {
     const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
     let scopePred = where;
     if (window) scopePred = this.mapWindowPred(scopePred, params, window);
+    const sampled = window != null && (window.sampleStep ?? 1) > 1;
+    // The SAMPLED re-query keeps ORDER BY l.id (pinned contract — see below),
+    // and on idx_leads_map_window that costs a full materialize + sort. Pin it
+    // to idx_leads_tenant instead: a tenant-equality scan of that index yields
+    // rows in rowid (= id) order, so the sort is free and LIMIT terminates
+    // early — measured 461ms → 237ms at the 3° ceiling on a 180k-lead tenant.
+    // Tenant-scoped only (without the equality the index is just a full walk);
+    // the index is created unconditionally in migrations above.
+    const fromHint = sampled && tenantId != null ? "INDEXED BY idx_leads_tenant" : "";
     // TWO statements merged via a JS Map, replacing the single CTE query whose
     // window pass sorted every scoped knock AND whose wide MATERIALIZED CTE was
     // re-scanned through an automatic index for the final join (measured
@@ -2898,10 +2938,19 @@ export class Storage implements IStorage {
         l.fresh_sources AS freshSources, l.fresh_confirmed_at AS freshConfirmedAt,
         l.assign_mark AS assignMark, l.do_not_knock AS doNotKnock,
         l.last_outcome AS leadLastOutcome, l.last_outcome_at AS leadLastOutcomeAt
-      FROM leads l
+      FROM leads l ${fromHint}
       WHERE ${scopePred}
-      ${window ? "ORDER BY l.id LIMIT ?" : ""}
+      ${window ? `${sampled ? "ORDER BY l.id " : ""}LIMIT ?` : ""}
     `).all(...(window ? [...params, Math.max(1, Math.floor(window.limit ?? 25_000))] : params)) as MapPinRow[];
+    // ORDER BY rationale: only the SAMPLED re-query (sampleStep > 1) orders by
+    // id — its id-ordered result is a pinned contract (deterministic, stable
+    // across pans; see the 25k-cap sampling test). The plain windowed query
+    // deliberately does NOT: its rows are either a COMPLETE window (order
+    // irrelevant — the client merges by id) or an over-cap probe whose rows are
+    // DISCARDED and re-fetched sampled, and dropping the sort lets the
+    // idx_leads_map_window scan terminate at LIMIT instead of materializing +
+    // sorting every row in a wide window (measured 395ms → 269ms at the 3°
+    // pin-tier ceiling on a 180k-lead tenant).
     if (!rows.length) return rows;
     // Statement 2 — per-lead visit aggregate over EXACTLY the leads statement 1
     // returned (their ids ride in via json_each, so a rep-scoped call does
@@ -3193,6 +3242,69 @@ export class Storage implements IStorage {
     const deleted = db.delete(leads).where(condition).run().changes > 0;
     if (deleted) bustPinCaches(tenantId); // undefined tenant → global bust
     return deleted;
+  }
+
+  // ── FCC-import purge ─────────────────────────────────────────────────────────
+  // Bulk removal of FCC-imported doors (lead_tag family "fcc": exact "fcc" or
+  // "fcc_<suffix>"). The underscore is a LIKE metachar, so it is escaped and
+  // declared via ESCAPE exactly like mapWindowPred — "fccx" or "fcc-ish" tags can
+  // never ride the wildcard in. The removal rule is CONSERVATIVE by design: a
+  // door is removable only when NOTHING has ever happened at it —
+  //   - lead_status still 'prospect' (the import-time initial status; a sold /
+  //     follow-up / interested / not_interested / contacted door never matches),
+  //   - no recorded outcome (last_outcome IS NULL),
+  //   - zero knock_log rows (no field history, superseded or not),
+  //   - no commission or commission-sale rows referencing it (money history),
+  //   - no photos (field evidence = someone stood at that door),
+  //   - not marked do-not-knock (a compliance record that must survive; deleting
+  //     the row would let a future re-import resurrect the door).
+  // When in doubt, a lead is PROTECTED. One WHERE, shared by the preview count
+  // and the delete, so the numbers the admin confirmed are the rows removed.
+  private fccPurgeWhere(tenantId?: number): { scope: string; fcc: string; removable: string; params: any[] } {
+    const params: any[] = [];
+    let scope = "1=1";
+    if (tenantId != null) { scope = "l.tenant_id = ?"; params.push(tenantId); }
+    const fcc = "(l.lead_tag = 'fcc' OR l.lead_tag LIKE 'fcc\\_%' ESCAPE '\\')";
+    const removable = `
+      l.lead_status = 'prospect'
+      AND l.last_outcome IS NULL
+      AND COALESCE(l.do_not_knock, 0) = 0
+      AND NOT EXISTS (SELECT 1 FROM knock_log k WHERE k.lead_id = l.id)
+      AND NOT EXISTS (SELECT 1 FROM commissions c WHERE c.lead_id = l.id)
+      AND NOT EXISTS (SELECT 1 FROM commission_sales cs WHERE cs.lead_id = l.id)
+      AND NOT EXISTS (SELECT 1 FROM lead_photos p WHERE p.lead_id = l.id)`;
+    return { scope, fcc, removable, params };
+  }
+
+  countFccPurge(tenantId?: number): { total: number; removable: number; protected: number } {
+    const { scope, fcc, removable, params } = this.fccPurgeWhere(tenantId);
+    // One pass: total fcc-tagged doors in scope, with the removable subset
+    // counted via the SAME correlated predicate the delete uses.
+    const row = rawDb.prepare(`
+      SELECT COUNT(*) AS total,
+             COALESCE(SUM(CASE WHEN ${removable} THEN 1 ELSE 0 END), 0) AS removable
+      FROM leads l
+      WHERE ${scope} AND ${fcc}
+    `).get(...params) as { total: number; removable: number };
+    return { total: row.total, removable: row.removable, protected: row.total - row.removable };
+  }
+
+  purgeFccLeads(tenantId?: number): number {
+    const { scope, fcc, removable, params } = this.fccPurgeWhere(tenantId);
+    // One transaction, one set-based DELETE over the exact preview predicate.
+    const removed = rawDb.transaction(() =>
+      rawDb.prepare(`
+        DELETE FROM leads
+        WHERE id IN (
+          SELECT l.id FROM leads l
+          WHERE ${scope} AND ${fcc} AND ${removable}
+        )
+      `).run(...params).changes,
+    )();
+    // Pins changed → cache + ETag data version move, and the data-free
+    // map-changed ping fires (same choke point deleteLead uses).
+    if (removed > 0) bustPinCaches(tenantId);
+    return removed;
   }
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[] {
     return this.searchLeadsPage(query, tenantId, assignedRep, { limit: 500, offset: 0 }).rows;
@@ -4561,6 +4673,53 @@ export class Storage implements IStorage {
     const sold = allLeads.filter(l => l.leadStatus === 'sold').length;
     const terrs = db.select().from(territories).where(eq(territories.tenantId, tenantId)).all().length;
     return { reps, leads: allLeads.length, sold, territories: terrs };
+  }
+
+  // ── Training progress (D2D curriculum) ──────────────────────────────────────
+  // Own-scope reads/writes keyed by (tenant, user). tenantId is normalized to 0
+  // for legacy users so the UNIQUE(tenant_id, user_id, lesson_id) upsert always
+  // has a concrete conflict target (SQLite treats NULLs as distinct).
+
+  getTrainingProgress(userId: number, tenantId?: number | null): Array<{ lessonId: string; completedAt: string; quizScore: number | null }> {
+    return rawDb.prepare(
+      `SELECT lesson_id AS lessonId, completed_at AS completedAt, quiz_score AS quizScore
+         FROM training_progress WHERE tenant_id = ? AND user_id = ? ORDER BY completed_at ASC, id ASC`,
+    ).all(tenantId ?? 0, userId) as Array<{ lessonId: string; completedAt: string; quizScore: number | null }>;
+  }
+
+  upsertLessonComplete(userId: number, tenantId: number | null | undefined, lessonId: string, quizScore?: number | null): { lessonId: string; completedAt: string; quizScore: number | null } {
+    const tid = tenantId ?? 0;
+    // Re-completing a lesson refreshes the timestamp; a new quiz score replaces
+    // the old one, but a score-less re-complete never erases an earned score.
+    rawDb.prepare(
+      `INSERT INTO training_progress (tenant_id, user_id, lesson_id, completed_at, quiz_score)
+       VALUES (?, ?, ?, datetime('now'), ?)
+       ON CONFLICT(tenant_id, user_id, lesson_id) DO UPDATE SET
+         completed_at = excluded.completed_at,
+         quiz_score = COALESCE(excluded.quiz_score, training_progress.quiz_score)`,
+    ).run(tid, userId, lessonId, quizScore ?? null);
+    return rawDb.prepare(
+      `SELECT lesson_id AS lessonId, completed_at AS completedAt, quiz_score AS quizScore
+         FROM training_progress WHERE tenant_id = ? AND user_id = ? AND lesson_id = ?`,
+    ).get(tid, userId, lessonId) as { lessonId: string; completedAt: string; quizScore: number | null };
+  }
+
+  // Per-team rollup for the manager view: every active login in the tenant with
+  // how many lessons they have completed, their average quiz score, and their
+  // last activity. LEFT JOIN so reps who have not started still appear at zero.
+  getTrainingSummary(tenantId?: number | null): Array<{ userId: number; name: string; role: string; completedCount: number; avgQuizScore: number | null; lastCompletedAt: string | null }> {
+    return rawDb.prepare(
+      `SELECT u.id AS userId, u.name AS name, u.role AS role,
+              COUNT(tp.lesson_id) AS completedCount,
+              CAST(ROUND(AVG(tp.quiz_score)) AS INTEGER) AS avgQuizScore,
+              MAX(tp.completed_at) AS lastCompletedAt
+         FROM users u
+         LEFT JOIN training_progress tp
+           ON tp.user_id = u.id AND tp.tenant_id = ?
+        WHERE COALESCE(u.tenant_id, 0) = ? AND u.active = 1
+        GROUP BY u.id
+        ORDER BY completedCount DESC, u.name ASC`,
+    ).all(tenantId ?? 0, tenantId ?? 0) as Array<{ userId: number; name: string; role: string; completedCount: number; avgQuizScore: number | null; lastCompletedAt: string | null }>;
   }
 }
 

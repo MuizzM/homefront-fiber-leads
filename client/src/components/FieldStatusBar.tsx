@@ -14,9 +14,11 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
   // A normal online save keeps items pending for a sub-second blip — flashing
   // "Syncing" over the map on every mark is noise (owner report). The syncing
   // state surfaces only when deliveries have been waiting long enough to mean
-  // a real problem; offline and needs-attention remain immediate truth.
+  // a real problem — and NEVER on the map overlay at all (owner directive:
+  // "remove syncing from field map"). The map shows only offline truth and
+  // needs-attention failures; delivery quietly retries in the background.
   const stuck = useSustained(online && pending > 0, 3000);
-  if (online && failed === 0 && !stuck) return null;
+  if (online && failed === 0 && (overlay || !stuck)) return null;
 
   // "Needs attention" tells the rep WHICH door and WHY (oldest dead item);
   // Retry appears only when a retry can plausibly work (e.g. a 403 that heals

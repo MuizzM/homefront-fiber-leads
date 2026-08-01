@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { LeadKnockSheet } from "@/components/LeadKnockSheet";
@@ -449,6 +449,47 @@ describe("<LeadKnockSheet /> — manager actions (Details only, permission-gated
     expect(del).toHaveTextContent("Confirm delete?");
     await userEvent.click(del); // confirms
     expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Discoverable per-pin delete (owner report: "each pin usually has delete
+  // — I need that"). Delete existed but was a small pill nobody found; it is
+  // now a full-width destructive row at the bottom of Details. Same canManage
+  // gate, same onDelete handler, same two-step grammar — only discoverability
+  // changed. ──
+  it("the Delete lead row never renders for a rep, even with a handler wired", async () => {
+    renderSheet({ onDelete: vi.fn() }); // canManage defaults to false
+    await openDetails();
+    expect(screen.queryByTestId("knock-delete")).not.toBeInTheDocument();
+  });
+
+  it("reads 'Delete lead' at rest and works on ANY lead — an FCC-imported door included", async () => {
+    const onDelete = vi.fn();
+    renderSheet({ canManage: true, onDelete, lead: baseLead({ leadTag: "fcc_fresh_block" }) });
+    await openDetails();
+    const del = screen.getByTestId("knock-delete");
+    expect(del).toHaveTextContent("Delete lead");
+    await userEvent.click(del);
+    await userEvent.click(del);
+    expect(onDelete).toHaveBeenCalledTimes(1);
+  });
+
+  it("an armed delete auto-disarms after 4s — a stale confirm can never fire", () => {
+    vi.useFakeTimers();
+    try {
+      const onDelete = vi.fn();
+      renderSheet({ canManage: true, onDelete });
+      fireEvent.click(screen.getByTestId("knock-sheet-handle")); // quick → details
+      expect(screen.getByTestId("knock-sheet")).toHaveAttribute("data-snap", "details");
+      const del = screen.getByTestId("knock-delete");
+      fireEvent.click(del); // arms
+      expect(del).toHaveTextContent("Confirm delete?");
+      act(() => { vi.advanceTimersByTime(4100); });
+      expect(del).toHaveTextContent("Delete lead"); // disarmed
+      fireEvent.click(del); // only re-arms — never fires from a cold tap
+      expect(onDelete).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("no decorative emojis anywhere in the card copy", async () => {
