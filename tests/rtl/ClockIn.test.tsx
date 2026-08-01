@@ -7,7 +7,7 @@
 // by handing the screen a session whose label disagrees with its timestamp.
 import { render, screen, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   useAuth: () => ({ user: { id: 1, name: "Rae Rep", role: "rep", teamMemberId: 9 } }),
@@ -46,7 +46,16 @@ function renderClockIn(sessions: any[], opts: { clockedIn?: boolean } = {}) {
   return render(<QueryClientProvider client={qc}><ClockIn /></QueryClientProvider>);
 }
 
-beforeEach(() => apiRequest.mockReset());
+beforeEach(() => {
+  apiRequest.mockReset();
+  // Pin the clock mid-afternoon on a mid-week day. The fixtures build
+  // "3 hours ago" / "two days ago" relative to now — under the real clock a
+  // run between midnight and 3am rolls the default session onto yesterday
+  // (Today shows 0m) and a Monday run pushes "two days ago" out of This
+  // Week. shouldAdvanceTime keeps RTL's async findBy* working.
+  vi.useFakeTimers({ now: new Date(2026, 2, 5, 15, 0, 0), shouldAdvanceTime: true });
+});
+afterEach(() => vi.useRealTimers());
 
 describe("Field Hours day bucketing", () => {
   it("localDayKey uses the local calendar, zero-padded", () => {
