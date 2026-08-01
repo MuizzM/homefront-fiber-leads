@@ -710,3 +710,36 @@ describe("<LeadKnockSheet /> — chrome and lifecycle", () => {
     expect(screen.queryByTestId("knock-sheet")).not.toBeInTheDocument();
   });
 });
+
+// ── FCC-reported fiber chip ──────────────────────────────────────────────────
+// Any lead whose tag is in the `fcc` family (fcc_fresh_block, fcc_fiber_d25)
+// carries the carrier's filing, not a door verification — the card warns the
+// rep inline, one amber chip under the status line, no new section.
+describe("FCC-reported fiber chip", () => {
+  it("renders the amber verify-at-door chip for fcc_fresh_block", () => {
+    renderSheet({ lead: baseLead({ leadTag: "fcc_fresh_block" }) });
+    const chip = screen.getByTestId("fcc-fiber-chip");
+    expect(chip.textContent).toBe("FCC-reported fiber — verify at door");
+  });
+
+  it("renders the chip for fcc_fiber_d25 (same fcc family)", () => {
+    renderSheet({ lead: baseLead({ leadTag: "fcc_fiber_d25" }) });
+    expect(screen.getByTestId("fcc-fiber-chip")).toBeInTheDocument();
+  });
+
+  it("does NOT render for non-FCC or untagged leads", () => {
+    const view = renderSheet({ lead: baseLead({ leadTag: "fresh_fiber_confirmed" }) });
+    expect(screen.queryByTestId("fcc-fiber-chip")).toBeNull();
+    view.unmount();
+    renderSheet({ lead: baseLead({ leadTag: null }) });
+    expect(screen.queryByTestId("fcc-fiber-chip")).toBeNull();
+  });
+
+  it("coexists with the single status badge (chip is not a status badge)", () => {
+    // fresh_fiber_confirmed would take the badge slot; an FCC tag takes the
+    // chip — one inline element each, no stacked badge row.
+    renderSheet({ lead: baseLead({ leadTag: "fcc_fresh_block", leadStatus: "address_review" }) });
+    expect(screen.getByTestId("knock-status-badge").textContent).toBe("Needs review");
+    expect(screen.getByTestId("fcc-fiber-chip")).toBeInTheDocument();
+  });
+});

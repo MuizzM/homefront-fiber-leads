@@ -154,6 +154,11 @@ export interface MapPinRow {
   leadScore: number | null;
   leadTag: string | null;
   freshConfidence: string | null;
+  /** Independent-evidence provenance (JSON list) + the field-verification
+   *  stamp. Carried on the pin so the FCC source filter / "Field-verified"
+   *  pill is a client-side computation, not a per-lead detail fetch. */
+  freshSources?: string | null;
+  freshConfirmedAt?: string | null;
   carrier?: string | null;
   assignMark?: string | null;
   /** Compliance block: the occupant asked us never to return. Raw SQLite
@@ -224,12 +229,29 @@ export interface LeadStatsRow {
   updatedAt: string | null;
 }
 
+/** Spatial/tag window for the bbox mode of /api/leads/map. When present the
+ *  map query adds a lat/lng BETWEEN predicate (and an optional lead_tag
+ *  exact-or-prefix match), orders by id, and hard-caps at `limit` rows. The
+ *  tenant/rep scoping is UNCHANGED — the window narrows the same scoped set. */
+export interface MapPinWindow {
+  minLat: number;
+  minLng: number;
+  maxLat: number;
+  maxLng: number;
+  tag?: string;
+  limit?: number;
+}
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }>;
   getLeadsDataVersion(tenantId?: number): string;
-  getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[];
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[];
+  // Cheap COUNT over the exact map scope (tenant + rep visibility + pin
+  // eligibility) — powers the client's full-feed-vs-viewport-mode decision
+  // without downloading a single pin.
+  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[]): number;
   getFreshLeads(tenantId: number | undefined, assignedRep: number | number[] | undefined, opts: { city?: string; state?: string; days: number }): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }>;
   getLeadsPage(
     tenantId: number | undefined,
@@ -506,6 +528,10 @@ export function runMigrations() {
     // Case/whitespace-insensitive address lookup — powers the green→lead link
     // backfill (find an existing lead for a scan_target by normalized address).
     `CREATE INDEX IF NOT EXISTS idx_leads_addr_ci ON leads(lower(trim(address)), lower(trim(city)))`,
+    // Bbox windows on /api/leads/map (viewport mode for 100k+ pins): the
+    // lat BETWEEN range scan must not degenerate into a full table scan per
+    // moveend. Pure index add — additive, idempotent, no table rebuild.
+    `CREATE INDEX IF NOT EXISTS idx_leads_lat_lng ON leads(lat, lng)`,
     `ALTER TABLE tenants ADD COLUMN owner_phone TEXT`,
     `ALTER TABLE tenants ADD COLUMN brand_color TEXT DEFAULT '#3EA394'`,
     `ALTER TABLE tenants ADD COLUMN brand_logo TEXT`,
@@ -2678,15 +2704,23 @@ export class Storage implements IStorage {
   // One scoped query returns map fields plus the latest visit/count. The
   // materialized scoped CTE limits the window to visible leads, making the
   // work O(L + K_scope), where L is visible leads and K_scope their knocks.
-  getLeadsForMap(tenantId?: number, assignedRep?: number | number[]): MapPinRow[] {
+  // The ONE place the map's visibility predicate is built: tenant wall +
+  // rep/area scope + pin eligibility (geocoded, not suppressed). getLeadsForMap
+  // (full feed AND bbox windows) and getLeadsMapCount all compose from this so
+  // a scoped read can never drift between the count, the full feed, and a
+  // viewport window.
+  private mapScopeWhere(tenantId?: number, assignedRep?: number | number[]): { where: string; params: any[] } {
     const clauses: string[] = [];
-    const params: number[] = [];
+    const params: any[] = [];
     if (tenantId != null) {
       clauses.push("l.tenant_id = ?");
       params.push(tenantId);
     }
     if (Array.isArray(assignedRep)) {
-      if (!assignedRep.length) return [];
+      // Fail-closed: an empty team scope sees ZERO pins. The old early-return
+      // became an impossible predicate when the builder was extracted so the
+      // count endpoint inherits the exact same rule.
+      if (!assignedRep.length) return { where: "1 = 0", params: [] };
       // An area can be worked by several reps, and assigned_rep_id names only
       // ONE of them — so filtering on that column alone hid every shared door
       // from everybody except the primary. A lead is visible when the caller
@@ -2721,6 +2755,32 @@ export class Storage implements IStorage {
     //     leads are suppressed (status flip, audit-logged), never deleted.
     const scopePred = `${where} AND l.lat IS NOT NULL AND l.lng IS NOT NULL
           AND l.lead_status NOT IN ('competitor_suppressed','scope_suppressed','address_review')`;
+    return { where: scopePred, params };
+  }
+
+  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[]): number {
+    // Empty team scope → empty map (same fail-closed rule as getLeadsForMap).
+    if (Array.isArray(assignedRep) && !assignedRep.length) return 0;
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const row = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads l WHERE ${where}`).get(...params) as { c: number };
+    return row.c;
+  }
+
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[] {
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    // Bbox/tag window: the SAME scoped set, narrowed spatially. BETWEEN keeps
+    // the idx_leads_lat_lng range scan usable; the tag predicate is an exact
+    // match OR an underscore-prefix match ("fcc" → fcc_fresh_block,
+    // fcc_fiber_d25) so a family of tags filters with one param.
+    let scopePred = where;
+    if (window) {
+      scopePred += " AND l.lat BETWEEN ? AND ? AND l.lng BETWEEN ? AND ?";
+      params.push(window.minLat, window.maxLat, window.minLng, window.maxLng);
+      if (window.tag) {
+        scopePred += " AND (l.lead_tag = ? OR l.lead_tag LIKE (? || '_%'))";
+        params.push(window.tag, window.tag);
+      }
+    }
     // TWO statements merged via a JS Map, replacing the single CTE query whose
     // window pass sorted every scoped knock AND whose wide MATERIALIZED CTE was
     // re-scanned through an automatic index for the final join (measured
@@ -2738,11 +2798,13 @@ export class Storage implements IStorage {
         l.assigned_rep_id AS assignedRepId, l.assigned_territory_id AS assignedTerritoryId,
         l.lead_score AS leadScore,
         l.lead_tag AS leadTag, l.fresh_confidence AS freshConfidence, l.carrier AS carrier,
+        l.fresh_sources AS freshSources, l.fresh_confirmed_at AS freshConfirmedAt,
         l.assign_mark AS assignMark, l.do_not_knock AS doNotKnock,
         l.last_outcome AS leadLastOutcome, l.last_outcome_at AS leadLastOutcomeAt
       FROM leads l
       WHERE ${scopePred}
-    `).all(...params) as MapPinRow[];
+      ${window ? "ORDER BY l.id LIMIT ?" : ""}
+    `).all(...(window ? [...params, Math.max(1, Math.floor(window.limit ?? 25_000))] : params)) as MapPinRow[];
     if (!rows.length) return rows;
     // Statement 2 — per-lead visit aggregate over EXACTLY the leads statement 1
     // returned (their ids ride in via json_each, so a rep-scoped call does

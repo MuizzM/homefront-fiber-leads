@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { sendMailResilient, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { storage, getDefaultTenantId } from "./storage";
+import { storage, getDefaultTenantId, type MapPinRow, type MapPinWindow } from "./storage";
 import { billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
 import { stripeConfigured, webhookConfigured, verifyStripeSignature, createCheckoutSession, createPortalSession, processWebhookEvent } from "./stripeAdapter";
@@ -1344,12 +1344,26 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const all = storage.getLeadsForMap(tenantId, repFilter);
     const dbMs = performance.now() - dbStarted;
     const buildStarted = performance.now();
+    const pins = buildMapPins(all);
+    const entry: MapPinCacheEntry = {
+      ts: Date.now(), pins, ver: dataVer, dbMs,
+      buildMs: performance.now() - buildStarted,
+    };
+    if (_mapPinCache.size > 500) _mapPinCache.clear(); // soft cap — bound stale-scope accumulation
+    _mapPinCache.set(cacheKey, entry);
+    return { entry, cacheHit: false, scopeKey };
+  }
+
+  // Rows → compact wire pins. Shared by the cached full feed (getMapPins) and
+  // the uncached bbox-window path so both formats of BOTH modes carry the
+  // identical projection.
+  // COMPACT pins: omit empty (null/false/0/"") fields and round lat/lng to 6dp
+  // (~0.1m). Measured 35% smaller raw JSON (2.04MB → 1.33MB at 5.5k leads) → the
+  // client parses far less on load. Safe: the map + card read every optional field
+  // by truthiness, so an absent key behaves exactly like the old null/false/0.
+  // id/lat/lng/leadStatus are always kept (geometry + dot color depend on them).
+  function buildMapPins(all: MapPinRow[]): any[] {
     const pins: any[] = [];
-    // COMPACT pins: omit empty (null/false/0/"") fields and round lat/lng to 6dp
-    // (~0.1m). Measured 35% smaller raw JSON (2.04MB → 1.33MB at 5.5k leads) → the
-    // client parses far less on load. Safe: the map + card read every optional field
-    // by truthiness, so an absent key behaves exactly like the old null/false/0.
-    // id/lat/lng/leadStatus are always kept (geometry + dot color depend on them).
     for (const l of all) {
       if (!l.lat || !l.lng) continue;
       const pin: any = {
@@ -1404,13 +1418,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
       pins.push(pin);
     }
-    const entry: MapPinCacheEntry = {
-      ts: Date.now(), pins, ver: dataVer, dbMs,
-      buildMs: performance.now() - buildStarted,
-    };
-    if (_mapPinCache.size > 500) _mapPinCache.clear(); // soft cap — bound stale-scope accumulation
-    _mapPinCache.set(cacheKey, entry);
-    return { entry, cacheHit: false, scopeKey };
+    return pins;
   }
 
   // Distinct city/state pairs for the Leads filter dropdowns — a two-column
@@ -1424,6 +1432,55 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({ facets: storage.getLeadFacets(tid, repScope) });
   });
 
+  // ── Cheap scoped pin count — the client's full-feed-vs-viewport switch ─────
+  // One indexed COUNT(*) over the exact map scope (tenant + rep visibility +
+  // pin eligibility). Registered BEFORE /api/leads/map so it can never be
+  // shadowed; deliberately NOT ETag'd — the response is three digits.
+  app.get("/api/leads/map/count", requireAuth, (req: any, res: any) => {
+    const user = req.user;
+    const tid = user?.tenantId ?? undefined;
+    const repFilter = leadVisibilityScope(user);
+    res.set("Cache-Control", "no-store");
+    res.json({ total: storage.getLeadsMapCount(tid, repFilter) });
+  });
+
+  // bbox window: minLng,minLat,maxLng,maxLat — clamped to world bounds, span-
+  // guarded so a "give me everything anyway" request is a 400, not a slow
+  // full-table scan. Beyond the guard the viewport client fetches windows of
+  // well under a degree; 3° leaves generous headroom for a zoomed-out city.
+  const MAP_BBOX_MAX_SPAN_DEG = 3;
+  // Hard row cap per window. The query fetches cap+1 so the response can SAY
+  // it truncated (the client shows "sample", never silently drops pins).
+  const MAP_BBOX_ROW_CAP = 25_000;
+  function parseMapBBox(raw: unknown): MapPinWindow | { error: string } | null {
+    if (raw == null || raw === "") return null;
+    if (typeof raw !== "string") return { error: "bbox must be minLng,minLat,maxLng,maxLat" };
+    const parts = raw.split(",").map((p) => Number(p.trim()));
+    if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) {
+      return { error: "bbox must be four finite numbers: minLng,minLat,maxLng,maxLat" };
+    }
+    // World-bounds clamp (Web Mercator never paints past ±85° lat, but the
+    // guard is the span, not the pole) then min/max normalization.
+    let [minLng, minLat, maxLng, maxLat] = parts;
+    minLng = Math.max(-180, Math.min(180, minLng));
+    maxLng = Math.max(-180, Math.min(180, maxLng));
+    minLat = Math.max(-90, Math.min(90, minLat));
+    maxLat = Math.max(-90, Math.min(90, maxLat));
+    if (minLng > maxLng) [minLng, maxLng] = [maxLng, minLng];
+    if (minLat > maxLat) [minLat, maxLat] = [maxLat, minLat];
+    if (maxLng - minLng > MAP_BBOX_MAX_SPAN_DEG || maxLat - minLat > MAP_BBOX_MAX_SPAN_DEG) {
+      return { error: `bbox span too large (max ${MAP_BBOX_MAX_SPAN_DEG}° per axis)` };
+    }
+    return { minLng, minLat, maxLng, maxLat };
+  }
+  function parseMapTag(raw: unknown): string | undefined | { error: string } {
+    if (raw == null || raw === "") return undefined;
+    if (typeof raw !== "string" || raw.length > 64 || !/^[a-z0-9_\-]+$/i.test(raw)) {
+      return { error: "tag must be a lead_tag value or prefix (letters, digits, _, -)" };
+    }
+    return raw;
+  }
+
   app.get("/api/leads/map", requireAuth, (req: any, res: any) => {
     const parsedQuery = z.object({ format: z.enum(["object", "packed"]).default("object") })
       .safeParse(req.query);
@@ -1432,6 +1489,40 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = req.user;
     const tid = user?.tenantId ?? undefined;
     const repFilter = leadVisibilityScope(user); // team_lead → their team; rep → self
+
+    // ── Bbox window mode (viewport loading for 100k+ pins) ──────────────────
+    // Same role scoping as the full feed, narrowed spatially, ordered by id,
+    // hard-capped. UNCACHED and NOT ETag'd on purpose: windows are nearly
+    // unique per pan, so the pin cache/ETag machinery would only churn — the
+    // full-feed path below is byte-identical to before for existing clients.
+    const bbox = parseMapBBox(req.query.bbox);
+    if (bbox && "error" in bbox) return res.status(400).json({ error: bbox.error });
+    const tag = parseMapTag(req.query.tag);
+    if (tag && typeof tag === "object") return res.status(400).json({ error: (tag as { error: string }).error });
+    if (bbox) {
+      const started = performance.now();
+      const rows = storage.getLeadsForMap(tid, repFilter, {
+        ...bbox, tag: tag as string | undefined, limit: MAP_BBOX_ROW_CAP + 1,
+      });
+      const truncated = rows.length > MAP_BBOX_ROW_CAP;
+      if (truncated) rows.length = MAP_BBOX_ROW_CAP;
+      const pins = buildMapPins(rows);
+      res.set("Cache-Control", "no-store");
+      const payload = format === "packed"
+        ? packMapPins(pins, { truncated })
+        : { pins, total: pins.length, truncated };
+      structuredLog("perf.leads_map", {
+        requestId: String(req.id ?? "").slice(0, 8),
+        tenantId: tid ?? 0,
+        scope: repFilter == null ? "all" : "scoped",
+        format, cache: "bbox",
+        rows: pins.length, truncated,
+        dbMs: Number((performance.now() - started).toFixed(2)),
+        complexity: "O(window + K_window)",
+      });
+      return res.json(payload);
+    }
+
     // Data-version ETag, checked BEFORE any DB work: an unchanged poll returns
     // 304 for the cost of a string compare. The scope key keeps role scoping
     // airtight — a rep's 304 token can never validate a manager's payload.

@@ -26,13 +26,21 @@
 // already holds the territory list, so shipping the 4-byte area id lets it
 // resolve the full rep set in O(1) per pin instead of a second request or a
 // per-lead point-in-polygon scan.
-export const MAP_PINS_WIRE_VERSION = 7 as const;
+//
+// 7 → 8: `freshSources` (the independent-evidence provenance list) and
+// `freshConfirmedAt` (the field-verification stamp) joined the projection so
+// the FCC source filter and the "Field-verified" pill can be computed on the
+// client without a per-lead detail fetch. Both ride along for the bbox-window
+// responses as well — the packed schema is the SAME for the full feed and a
+// bbox window, only the row set differs.
+export const MAP_PINS_WIRE_VERSION = 8 as const;
 
 export const MAP_PIN_WIRE_FIELDS = [
   "id", "lat", "lng", "leadStatus", "address", "city", "state", "zip",
   "fiberStatus", "assignedRepId", "leadScore", "visited", "knockCount",
   "lastOutcome", "lastKnockedAt", "leadTag", "freshConfidence", "carrier",
   "assignMark", "assignedTerritoryId", "doNotKnock", "lastOutcomeAt",
+  "freshSources", "freshConfirmedAt",
 ] as const;
 
 export type MapPinWireField = typeof MAP_PIN_WIRE_FIELDS[number];
@@ -42,17 +50,22 @@ export interface PackedMapPins {
   v: typeof MAP_PINS_WIRE_VERSION;
   total: number;
   rows: unknown[][];
+  // Set ONLY on bbox-window responses that hit the server-side row cap: the
+  // window holds more pins than were shipped, so the client knows the viewport
+  // is a sample, not the whole window. Absent (undefined) on the full feed.
+  truncated?: boolean;
 }
 
-export function packMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(pins: readonly T[]): PackedMapPins {
+export function packMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(pins: readonly T[], opts?: { truncated?: boolean; total?: number }): PackedMapPins {
   return {
     v: MAP_PINS_WIRE_VERSION,
-    total: pins.length,
+    total: opts?.total ?? pins.length,
     rows: pins.map((pin) => MAP_PIN_WIRE_FIELDS.map((field) => pin[field] ?? null)),
+    ...(opts?.truncated ? { truncated: true } : {}),
   };
 }
 
-export function unpackMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(payload: unknown): { pins: T[]; total: number } {
+export function unpackMapPins<T extends Partial<Record<MapPinWireField, unknown>>>(payload: unknown): { pins: T[]; total: number; truncated: boolean } {
   if (!payload || typeof payload !== "object") throw new Error("Invalid packed map payload");
   const packed = payload as Partial<PackedMapPins>;
   if (packed.v !== MAP_PINS_WIRE_VERSION || !Array.isArray(packed.rows)) {
@@ -69,5 +82,9 @@ export function unpackMapPins<T extends Partial<Record<MapPinWireField, unknown>
     }
     return pin as T;
   });
-  return { pins, total: typeof packed.total === "number" ? packed.total : pins.length };
+  return {
+    pins,
+    total: typeof packed.total === "number" ? packed.total : pins.length,
+    truncated: packed.truncated === true,
+  };
 }

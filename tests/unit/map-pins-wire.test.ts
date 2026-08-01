@@ -15,7 +15,7 @@ describe("packed map-pin wire format", () => {
     const packed = packMapPins(pins);
     expect(packed.v).toBe(MAP_PINS_WIRE_VERSION);
     expect(packed.rows.every((row) => row.length === MAP_PIN_WIRE_FIELDS.length)).toBe(true);
-    expect(unpackMapPins<typeof pins[number]>(packed)).toEqual({ pins, total: 2 });
+    expect(unpackMapPins<typeof pins[number]>(packed)).toEqual({ pins, total: 2, truncated: false });
   });
 
   it("carries assignMark through pack/unpack so a pre-assignment mark shows on the pin", () => {
@@ -76,9 +76,16 @@ describe("packed map-pin wire format", () => {
       knockCount: i % 3 === 0 ? 1 : undefined,
       lastOutcome: i % 6 === 0 ? "sold" : undefined,
       assignMark: i % 4 === 0 ? "priority" : undefined,
+      // v8 added freshSources/freshConfirmedAt — positional columns the packed
+      // format pays for on EVERY row (2 nulls ≈ 10 bytes) even when empty,
+      // which moved the break-even ratio up. The fixture carries them on the
+      // subset a real post-import payload would (field-verified doors), the
+      // same honesty rule as assignedTerritoryId above.
+      freshConfirmedAt: i % 5 === 0 ? "2026-07-01T00:00:00.000Z" : undefined,
+      freshSources: i % 10 === 0 ? "[\"kfs\",\"pole\"]" : undefined,
     }));
     const objectBytes = Buffer.byteLength(JSON.stringify({ pins, total: pins.length }));
     const packedBytes = Buffer.byteLength(JSON.stringify(packMapPins(pins)));
-    expect(packedBytes).toBeLessThan(objectBytes * 0.62);
+    expect(packedBytes).toBeLessThan(objectBytes * 0.65);
   });
 });
