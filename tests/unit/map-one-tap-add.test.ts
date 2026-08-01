@@ -131,14 +131,17 @@ describe("no loading / syncing chrome during background map work", () => {
     expect(src).toContain("{noToken && (");
   });
 
-  it("viewport window fetches are invisible: no React state flips, no toasts, no spinner", () => {
+  it("viewport window fetches are invisible: no loading chrome, no toasts, no spinner", () => {
     const body = src.slice(
       src.indexOf("const fetchViewportPins = useCallback"),
       src.indexOf("const fetchViewportPinsRef"),
     );
     expect(body.length).toBeGreaterThan(100);
-    // The only `set*` call is the cache write — never a setState/spinner/toast.
-    expect(body).not.toMatch(/\bset(?!QueryData\b)[A-Z]\w*\(/);
+    // Allowed writes: the cache itself, and the span-guard truth flag that
+    // drives the honest "Zoom in to load pins" notice (data-completeness
+    // truth, same category as the offline knock badge — NOT loading chrome).
+    // Everything else — spinners, loading states, toasts — stays banned.
+    expect(body).not.toMatch(/\bset(?!QueryData\b|ViewportSpanTooWide\b)[A-Z]\w*\(/);
     expect(body).not.toContain("toast(");
     expect(body).not.toContain("Loader");
   });
