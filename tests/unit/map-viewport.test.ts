@@ -3,6 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAP_VIEWPORT_MODE_THRESHOLD,
+  VIEWPORT_FETCH_MARGIN,
   expandBBox,
   keepRegion,
   inBBox,
@@ -94,5 +95,104 @@ describe("mergeViewportPins", () => {
 describe("mode threshold", () => {
   it("is the 60k the server-side windowing was designed for", () => {
     expect(MAP_VIEWPORT_MODE_THRESHOLD).toBe(60_000);
+  });
+});
+
+// ── Gate-fix coverage (F1/F2/F4) ─────────────────────────────────────────────
+import {
+  bboxExceedsSpanGuard,
+  fullFeedEnabled,
+  viewportNotice,
+  MAP_BBOX_MAX_SPAN_DEG,
+} from "@/lib/mapViewport";
+
+describe("bboxExceedsSpanGuard (F4)", () => {
+  it("mirrors the server's 3° guard on either axis", () => {
+    expect(MAP_BBOX_MAX_SPAN_DEG).toBe(3);
+    expect(bboxExceedsSpanGuard({ minLng: -81, minLat: 35, maxLng: -78, maxLat: 35.5 })).toBe(false); // exactly 3° ok
+    expect(bboxExceedsSpanGuard({ minLng: -81, minLat: 35, maxLng: -77.9, maxLat: 35.5 })).toBe(true); // lng span
+    expect(bboxExceedsSpanGuard({ minLng: -80.5, minLat: 35, maxLng: -80.2, maxLat: 38.2 })).toBe(true); // lat span
+  });
+
+  it("a street-zoom view + 20% margin stays far under the guard", () => {
+    const view = { minLng: -80.42, minLat: 35.53, maxLng: -80.39, maxLat: 35.55 };
+    expect(bboxExceedsSpanGuard(expandBBox(view, VIEWPORT_FETCH_MARGIN))).toBe(false);
+  });
+});
+
+describe("fullFeedEnabled (F2 first-load race)", () => {
+  const T = 60_000;
+  it("parks the full feed while the count probe is in flight", () => {
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: undefined, threshold: T })).toBe(false);
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: null, threshold: T })).toBe(false);
+  });
+  it("allows the full feed only when the probe answered at/below threshold", () => {
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 36_000, threshold: T })).toBe(true);
+    expect(fullFeedEnabled({ signedIn: true, countIsError: false, countTotal: 92_718, threshold: T })).toBe(false);
+  });
+  it("falls back to the full feed when the probe FAILED (never an empty map)", () => {
+    expect(fullFeedEnabled({ signedIn: true, countIsError: true, countTotal: undefined, threshold: T })).toBe(true);
+  });
+  it("signed-out never fetches", () => {
+    expect(fullFeedEnabled({ signedIn: false, countIsError: true, countTotal: 1, threshold: T })).toBe(false);
+  });
+});
+
+describe("viewportNotice (F1/F4 chip wiring)", () => {
+  const base = { viewportMode: true, spanTooWide: false, truncated: false, spanDismissed: false, sampleDismissed: false };
+  it("truncated window → the sample notice", () => {
+    expect(viewportNotice({ ...base, truncated: true })).toEqual({
+      kind: "sample", message: "Showing a sample — zoom in for all pins",
+    });
+  });
+  it("non-truncated window → no notice", () => {
+    expect(viewportNotice(base)).toBeNull();
+  });
+  it("over-wide span → the zoom notice, and it beats a stale sample flag", () => {
+    expect(viewportNotice({ ...base, spanTooWide: true, truncated: true })).toEqual({
+      kind: "zoom", message: "Zoom in to load pins",
+    });
+  });
+  it("dismissal hides only its own condition; full-feed mode never notices", () => {
+    expect(viewportNotice({ ...base, truncated: true, sampleDismissed: true })).toBeNull();
+    expect(viewportNotice({ ...base, spanTooWide: true, spanDismissed: true })).toBeNull();
+    expect(viewportNotice({ ...base, viewportMode: false, truncated: true, spanTooWide: true })).toBeNull();
+  });
+});
+
+describe("truncated latest-fetch wins (F1)", () => {
+  // Simulates the cache writer at MapView's viewport merge: truncated is the
+  // LATEST fetched window's flag — the window covers the viewport +20% margin,
+  // so it is the honest answer for what's on screen.
+  const write = (_old: any, truncated: boolean) => ({ truncated });
+
+  it("panning dense → sparse CLEARS the flag (and re-arms the dismissal reset)", () => {
+    let entry = write(undefined, true);   // dense window capped
+    expect(entry.truncated).toBe(true);
+    entry = write(entry, false);          // panned to a sparse window
+    expect(entry.truncated).toBe(false);  // chip clears
+  });
+
+  it("dismiss in dense → pan sparse (chip gone) → pan to ANOTHER dense window (chip returns, undismissed)", () => {
+    // The MapView wiring this pins: sampledPins = viewportMode && truncated;
+    // the dismissal-reset effect fires on sampledPins false→true, so a flag
+    // that CLEARS between dense windows is what re-arms the warning.
+    let dismissed = false;
+    const notice = (viewportMode: boolean, truncated: boolean) => {
+      if (!truncated) dismissed = false; // the reset effect
+      return viewportNotice({
+        viewportMode, spanTooWide: false, truncated,
+        spanDismissed: false, sampleDismissed: dismissed,
+      });
+    };
+    // Dense window: chip shows; user dismisses it.
+    expect(notice(true, true)?.kind).toBe("sample");
+    dismissed = true;
+    expect(notice(true, true)).toBeNull();
+    // Pan to a sparse window: flag clears, chip gone, dismissal resets.
+    expect(notice(true, false)).toBeNull();
+    expect(dismissed).toBe(false);
+    // Pan to ANOTHER dense truncated window: the warning returns.
+    expect(notice(true, true)?.kind).toBe("sample");
   });
 });

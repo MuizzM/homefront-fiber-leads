@@ -133,6 +133,18 @@ describe("bbox window rows", () => {
     expect(nope.pins).toHaveLength(0);
   });
 
+  it("LIKE metacharacters in the tag match literally (escaped)", async () => {
+    // "fcc_fresh" as a PREFIX: must match fcc_fresh_block but NOT
+    // fccXfresh_block — an unescaped '_' would wildcard-match the X.
+    const lookalike = lead(1, null, 35.56, -80.46, { leadTag: "fccXfresh_block" });
+    const real = lead(1, null, 35.57, -80.47, { leadTag: "fcc_fresh_block" });
+    const bbox = "bbox=-80.6,35.4,-80.1,35.6";
+    const body = await (await req(`/api/leads/map?${bbox}&tag=fcc_fresh`, fx.manager.session)).json();
+    const ids = body.pins.map((p: any) => p.id);
+    expect(ids).toContain(real);
+    expect(ids).not.toContain(lookalike);
+  });
+
   it("cross-tenant bbox returns EMPTY — the tenant wall holds in window mode", async () => {
     // The window covers tenant 1's pins, but the caller belongs to tenant 2.
     const body = await (await req("/api/leads/map?bbox=-80.6,35.4,-80.1,35.6", fx.foreign.session)).json();
@@ -155,7 +167,12 @@ describe("bbox window rows", () => {
     expect(mgrCount.total).toBeGreaterThan(count.total);
   });
 
-  it("the full feed (no bbox) is unchanged: no truncated key, ETag present, 304 works", async () => {
+  // The wire SCHEMA evolved (v7→v8: freshSources/freshConfirmedAt joined every
+  // packed row), so "byte-identical" is NOT the claim. What is preserved: the
+  // full-feed response SHAPE (pins/total, no truncated key) and the ETag/304
+  // semantics existing clients rely on (the ETag busts on redeploy, so no
+  // client can 304 a v7 payload into a v8 reader).
+  it("the full feed (no bbox) keeps its shape and ETag/304 semantics: no truncated key, ETag present, 304 works", async () => {
     const res = await req("/api/leads/map", fx.manager.session);
     expect(res.status).toBe(200);
     expect(res.headers.get("etag")).toBeTruthy();

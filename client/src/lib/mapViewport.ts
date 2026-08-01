@@ -28,6 +28,54 @@ export const VIEWPORT_KEEP_MULTIPLE = 3;
  *  Only used to surface truncation; the server is the authority. */
 export const MAP_BBOX_ROW_CAP = 25_000;
 
+/** Server-side span guard (mirrors MAP_BBOX_MAX_SPAN_DEG in routes.ts). A
+ *  window wider than this is a 400, so the client checks BEFORE fetching and
+ *  asks the user to zoom in instead of burning a failing request per pan. */
+export const MAP_BBOX_MAX_SPAN_DEG = 3;
+
+/** True when the (already margin-expanded) fetch window is wider than the
+ *  server's span guard on either axis. */
+export function bboxExceedsSpanGuard(b: ViewportBBox, guard: number = MAP_BBOX_MAX_SPAN_DEG): boolean {
+  return b.maxLng - b.minLng > guard || b.maxLat - b.minLat > guard;
+}
+
+/** Which amber viewport notice (if any) the map should show. The zoom-in
+ *  notice wins when both apply — an over-wide view is the blocker (no fetch
+ *  happens at all), a truncated sample is only a warning. Dismissal is per
+ *  condition and resets when the condition clears (owned by the caller). */
+export function viewportNotice(opts: {
+  viewportMode: boolean;
+  spanTooWide: boolean;
+  truncated: boolean;
+  spanDismissed: boolean;
+  sampleDismissed: boolean;
+}): { kind: "zoom" | "sample"; message: string } | null {
+  if (!opts.viewportMode) return null;
+  if (opts.spanTooWide) {
+    return opts.spanDismissed ? null : { kind: "zoom", message: "Zoom in to load pins" };
+  }
+  if (opts.truncated && !opts.sampleDismissed) {
+    return { kind: "sample", message: "Showing a sample — zoom in for all pins" };
+  }
+  return null;
+}
+
+/** The full-feed gate (F2 race fix): the multi-MB full feed may only fire
+ *  once the count probe has ANSWERED at/below the viewport threshold, or when
+ *  the probe failed outright (fallback to today's behaviour — never an empty
+ *  map). While the probe is in flight the full feed stays parked. */
+export function fullFeedEnabled(opts: {
+  signedIn: boolean;
+  countIsError: boolean;
+  countTotal: number | null | undefined;
+  threshold?: number;
+}): boolean {
+  if (!opts.signedIn) return false;
+  if (opts.countIsError) return true;
+  if (opts.countTotal == null) return false;
+  return opts.countTotal <= (opts.threshold ?? MAP_VIEWPORT_MODE_THRESHOLD);
+}
+
 export interface ViewportBBox {
   minLng: number;
   minLat: number;

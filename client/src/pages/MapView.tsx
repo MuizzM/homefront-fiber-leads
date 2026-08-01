@@ -104,6 +104,9 @@ import {
   expandBBox,
   keepRegion,
   bboxParam,
+  bboxExceedsSpanGuard,
+  fullFeedEnabled,
+  viewportNotice,
   mergeViewportPins,
   type ViewportBBox,
 } from "@/lib/mapViewport";
@@ -177,6 +180,7 @@ import { resolveCreditedRepId } from "@/features/knocking/savedKnockReconciliati
 import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
 import { RepPicker } from "@/components/territory/RepPicker";
 import { MapFilterSheet } from "@/components/map/MapFilterSheet";
+import { MapViewportNotice } from "@/components/map/MapViewportNotice";
 import { MapSettingsSheet } from "@/components/map/MapSettingsSheet";
 import { MapLegend } from "@/components/map/MapLegend";
 import { FOCUS } from "@/lib/a11y";
@@ -1539,13 +1543,14 @@ export default function MapView() {
   // past it the map fetches only the pins inside the current viewport window
   // and merges them into the same query cache. If the probe fails the map
   // falls back to the full feed — never to an empty map.
-  const { data: mapPinCount } = useQuery<{ total: number }>({
+  const countQuery = useQuery<{ total: number }>({
     queryKey: ["/api/leads/map/count"],
     queryFn: async () => (await apiRequest("GET", "/api/leads/map/count")).json(),
     enabled: !!user,
     staleTime: 60_000,
     retry: 1,
   });
+  const mapPinCount = countQuery.data;
   const viewportMode = (mapPinCount?.total ?? 0) > MAP_VIEWPORT_MODE_THRESHOLD;
   const viewportModeRef = useRef(viewportMode);
   viewportModeRef.current = viewportMode;
@@ -1568,8 +1573,16 @@ export default function MapView() {
     initialDataUpdatedAt: 0,
     // Viewport mode never downloads the full feed: the same cache entry is
     // written by the bbox-window merger below, and the optimistic-update
-    // paths (knock / assignment / live push) target it unchanged.
-    enabled: !!user && !viewportMode,
+    // paths (knock / assignment / live push) target it unchanged. The gate is
+    // the count PROBE, not the derived mode: while the probe is in flight
+    // viewportMode is still false, and React Query would not cancel the
+    // multi-MB fetch when it flipped — so the full feed stays parked until
+    // the probe answers ≤threshold (or fails → today's fallback).
+    enabled: fullFeedEnabled({
+      signedIn: !!user,
+      countIsError: countQuery.isError,
+      countTotal: mapPinCount?.total,
+    }),
     staleTime: 45_000, // toward the 60s poll — fewer redundant revalidations
     retry: 2,
     // Auto-refresh so leads added out-of-band (a scan, the nightly cron,
@@ -1631,6 +1644,9 @@ export default function MapView() {
   // dataset anyway.
   const viewportAbortRef = useRef<AbortController | null>(null);
   const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Zoomed out past the server's 3° span guard → no window is fetchable; the
+  // notice chip asks for a zoom instead of a 400 per moveend.
+  const [viewportSpanTooWide, setViewportSpanTooWide] = useState(false);
   const fetchViewportPins = useCallback(() => {
     if (!viewportModeRef.current) return;
     const map = mapRef.current;
@@ -1648,6 +1664,14 @@ export default function MapView() {
     // Degenerate (pre-init) bounds would trip the server's span guard.
     if (!(view.maxLng > view.minLng) || !(view.maxLat > view.minLat)) return;
     const window = expandBBox(view, VIEWPORT_FETCH_MARGIN);
+    // Zoomed out past the server's span guard: the fetch would 400 on every
+    // moveend and the map would sit silently stale. Skip it and ask the user
+    // to zoom in — the same amber affordance as the truncated-sample notice.
+    if (bboxExceedsSpanGuard(window)) {
+      setViewportSpanTooWide(true);
+      return;
+    }
+    setViewportSpanTooWide(false);
     viewportAbortRef.current?.abort();
     const controller = new AbortController();
     viewportAbortRef.current = controller;
@@ -1660,19 +1684,27 @@ export default function MapView() {
         if (!res.ok) throw new Error(`bbox pins ${res.status}`);
         return unpackMapPins<MapPin>(await res.json());
       })
-      .then(({ pins: fetched }) => {
+      .then(({ pins: fetched, truncated }) => {
         if (controller.signal.aborted) return;
         const keep = keepRegion(view);
         qc.setQueryData(["/api/leads/map"], (old: any) => {
           const prev: MapPin[] = old?.pins ?? [];
           const merged = mergeViewportPins(prev, fetched, keep);
           // Nothing new and nothing pruned → keep the old reference so
-          // structural sharing turns this into a no-op (no re-cluster).
-          if (merged.added === 0 && merged.pruned === 0 && old?.pins) return old;
+          // structural sharing turns this into a no-op (no re-cluster) —
+          // UNLESS the truncation flag moved, which the notice chip reads.
+          if (merged.added === 0 && merged.pruned === 0 && old?.pins && Boolean(old?.truncated) === truncated) return old;
           return {
             pins: merged.pins,
             total: merged.pins.length,
-            truncated: false,
+            // LATEST fetch wins: the fetched window always covers the viewport
+            // +20% margin, so its flag is the honest answer for what's on
+            // screen (off-screen retained pins are refetched before they're
+            // panned to). An OR-merge sticks true for the whole session — the
+            // chip never clears over sparse windows, and because the flag
+            // never returns to false the dismissal reset can never fire, so
+            // one dismiss disarms the warning for every later dense window.
+            truncated,
           };
         });
       })
@@ -1700,6 +1732,15 @@ export default function MapView() {
       try { map.off("moveend", onMoveEnd); } catch {}
     };
   }, [mapReady, styleEpoch, viewportMode]);
+
+  // Amber viewport notices (truncated sample / zoom-in-needed). Dismissible
+  // per condition; dismissal resets the moment the condition clears so the
+  // NEXT dense window or zoom-out warns again.
+  const sampledPins = viewportMode && !!mapPinData?.truncated;
+  const [sampleNoticeDismissed, setSampleNoticeDismissed] = useState(false);
+  const [spanNoticeDismissed, setSpanNoticeDismissed] = useState(false);
+  useEffect(() => { if (!sampledPins) setSampleNoticeDismissed(false); }, [sampledPins]);
+  useEffect(() => { if (!viewportSpanTooWide) setSpanNoticeDismissed(false); }, [viewportSpanTooWide]);
 
   // Reps have refetchOnWindowFocus OFF (they flip to the dialer/camera
   // constantly — a full refetch on every focus is wasteful). But if the
@@ -6031,6 +6072,7 @@ export default function MapView() {
                 onClick={() => {
                   setFilterStatus("all");
                   setFilterRep("all");
+                  setFilterSource("all");
                 }}
                 aria-label="Clear map filters"
                 data-testid="map-active-filter-clear"
@@ -6040,6 +6082,32 @@ export default function MapView() {
               </button>
             </div>
           )}
+
+          {/* ── Viewport-mode notice — the map is under-showing pins and the
+                 user must know: either the window hit the server's row cap
+                 (sample) or the view is wider than the fetchable span. The
+                 zoom-in notice wins when both apply (it is the blocker). ── */}
+          {mapReady && (() => {
+            const notice = viewportNotice({
+              viewportMode,
+              spanTooWide: viewportSpanTooWide,
+              truncated: !!mapPinData?.truncated,
+              spanDismissed: spanNoticeDismissed,
+              sampleDismissed: sampleNoticeDismissed,
+            });
+            if (!notice) return null;
+            return (
+              <MapViewportNotice
+                message={notice.message}
+                onDismiss={() =>
+                  notice.kind === "zoom"
+                    ? setSpanNoticeDismissed(true)
+                    : setSampleNoticeDismissed(true)
+                }
+                testId={`map-viewport-${notice.kind}-notice`}
+              />
+            );
+          })()}
 
           {/* ── Search PANEL — opens only from the magnifier (no permanent bar).
                  Scoped to the org's leads via the same /api/leads data the map
@@ -7997,8 +8065,10 @@ export default function MapView() {
             }}
             leads={inViewLeads}
             totalOnMap={mapTotalLeads.length}
-            orgTotal={mapPinData?.total ?? 0}
-            filtered={mapTotalLeads.length !== (mapPinData?.total ?? 0)}
+            // In viewport mode the merged cache total is just the accumulated
+            // window subset — the honest org total is the count probe's.
+            orgTotal={mapPinCount?.total ?? mapPinData?.total ?? 0}
+            filtered={mapTotalLeads.length !== (mapPinCount?.total ?? mapPinData?.total ?? 0)}
             showLeadsLayer={showLeads}
             onShowLeadsLayer={() => setShowLeads(true)}
             onRowTap={onLeadsRowTap}
@@ -8006,6 +8076,7 @@ export default function MapView() {
             onClearFilters={() => {
               setFilterStatus("all");
               setFilterRep("all");
+              setFilterSource("all");
             }}
             repNameById={repNameById}
           />

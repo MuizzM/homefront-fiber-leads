@@ -1494,7 +1494,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Same role scoping as the full feed, narrowed spatially, ordered by id,
     // hard-capped. UNCACHED and NOT ETag'd on purpose: windows are nearly
     // unique per pan, so the pin cache/ETag machinery would only churn — the
-    // full-feed path below is byte-identical to before for existing clients.
+    // full-feed path below is untouched for existing clients: same ETag/304
+    // semantics (the wire SCHEMA evolved v7→v8, and the ETag busts on redeploy,
+    // so no client can 304 a v7 payload into a v8 reader).
     const bbox = parseMapBBox(req.query.bbox);
     if (bbox && "error" in bbox) return res.status(400).json({ error: bbox.error });
     const tag = parseMapTag(req.query.tag);

@@ -2777,8 +2777,13 @@ export class Storage implements IStorage {
       scopePred += " AND l.lat BETWEEN ? AND ? AND l.lng BETWEEN ? AND ?";
       params.push(window.minLat, window.maxLat, window.minLng, window.maxLng);
       if (window.tag) {
-        scopePred += " AND (l.lead_tag = ? OR l.lead_tag LIKE (? || '_%'))";
-        params.push(window.tag, window.tag);
+        // LIKE metachars must match literally: escape \, %, _ in the tag with
+        // a backslash (declared via ESCAPE), and escape the appended family
+        // separator too so "fcc" matches fcc_fresh_block but a literal '_' in
+        // a tag can never act as a wildcard.
+        const esc = window.tag.replace(/[\\%_]/g, (c) => "\\" + c);
+        scopePred += " AND (l.lead_tag = ? OR l.lead_tag LIKE ? ESCAPE '\\')";
+        params.push(window.tag, `${esc}\\_%`);
       }
     }
     // TWO statements merged via a JS Map, replacing the single CTE query whose
