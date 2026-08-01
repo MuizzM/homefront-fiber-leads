@@ -79,11 +79,16 @@ describe("clampToGridGuard", () => {
     expect(clampToGridGuard(w)).toEqual(w);
   });
 
-  it("shrinks an over-guard window symmetric about its center", () => {
+  it("shrinks an over-guard window symmetric about its center, INSIDE the guard", () => {
     const w = { minLng: -100, minLat: 25, maxLng: -60, maxLat: 50 }; // 40° x 25°
     const c = clampToGridGuard(w);
-    expect(c.maxLng - c.minLng).toBe(MAP_GRID_MAX_SPAN_DEG);
-    expect(c.maxLat - c.minLat).toBe(MAP_GRID_MAX_SPAN_DEG);
+    // Strictly inside the guard (serialization headroom), never exactly ON it:
+    // an exactly-15° window rounds/parses to 15.000000000000002° server-side
+    // and 400s — the production blank-density defect.
+    expect(c.maxLng - c.minLng).toBeLessThan(MAP_GRID_MAX_SPAN_DEG);
+    expect(c.maxLng - c.minLng).toBeGreaterThan(MAP_GRID_MAX_SPAN_DEG - 1e-3);
+    expect(c.maxLat - c.minLat).toBeLessThan(MAP_GRID_MAX_SPAN_DEG);
+    expect(c.maxLat - c.minLat).toBeGreaterThan(MAP_GRID_MAX_SPAN_DEG - 1e-3);
     // centered on the original view — density where the user is looking
     expect((c.minLng + c.maxLng) / 2).toBeCloseTo((w.minLng + w.maxLng) / 2, 9);
     expect((c.minLat + c.maxLat) / 2).toBeCloseTo((w.minLat + w.maxLat) / 2, 9);
@@ -94,7 +99,56 @@ describe("clampToGridGuard", () => {
     const c = clampToGridGuard(w);
     expect(c.minLng).toBe(-84);
     expect(c.maxLng).toBe(-76);
-    expect(c.maxLat - c.minLat).toBe(15);
+    expect(c.maxLat - c.minLat).toBeLessThan(15);
+    expect(c.maxLat - c.minLat).toBeGreaterThan(14.999);
+  });
+
+  // ── Regression: the production blank-map incident ─────────────────────────
+  // A clamped window serialized with bboxParam (5dp) and re-parsed as binary
+  // doubles (exactly what the server does) MUST never exceed the 15° guard.
+  // Before the headroom fix, a view centered near lng -80.4 clamped to
+  // [-87.9, -72.9], whose parsed span is 15.000000000000002 → the server
+  // 400'd, the catch swallowed it, and the density tier rendered NOTHING —
+  // no bubbles AND no pins (the pin fetch is tier-gated off past 3°).
+  it("a clamped window NEVER serializes to a span the server rejects", () => {
+    const centers = [
+      [-80.4, 35.3],   // the observed production repro (Rockwell territory)
+      [-80.41, 35.545],
+      [-97.7431, 30.2672],
+      [-118.2437, 34.0522],
+      [151.2093, -33.8688],
+    ] as const;
+    for (const [lng, lat] of centers) {
+      for (const viewSpan of [16, 21.1, 28, 42.2, 94.7]) {
+        const w = {
+          minLng: lng - viewSpan / 2, maxLng: lng + viewSpan / 2,
+          minLat: lat - viewSpan / 4, maxLat: lat + viewSpan / 4,
+        };
+        const clamped = clampToGridGuard(w);
+        const parsed = bboxParam(clamped).split(",").map(Number);
+        expect(parsed[2] - parsed[0], `lng span for center ${lng},${lat} view ${viewSpan}`)
+          .toBeLessThanOrEqual(MAP_GRID_MAX_SPAN_DEG);
+        expect(parsed[3] - parsed[1], `lat span for center ${lng},${lat} view ${viewSpan}`)
+          .toBeLessThanOrEqual(MAP_GRID_MAX_SPAN_DEG);
+      }
+    }
+  });
+
+  // ── Regression: world-zoom windows must cover the VIEW, not Greenwich ─────
+  // A world-spanning fetch window has already been clamped to ±180/±90 by
+  // expandBBox, dragging its midpoint to 0°,0°. Clamping about THAT midpoint
+  // fetched density for the Greenwich ocean while the user looked at their
+  // territory — deterministic empty cells (a blank map) at world zooms. The
+  // view-center anchor keeps the density under the user's territory.
+  it("anchors the clamp on the raw view center when given (world-clamped windows)", () => {
+    const world = { minLng: -180, minLat: -85, maxLng: 180, maxLat: 85 };
+    const c = clampToGridGuard(world, undefined, { lng: -80.4, lat: 35.5 });
+    expect(c.minLng).toBeLessThan(-80.4);
+    expect(c.maxLng).toBeGreaterThan(-80.4);
+    expect(c.minLat).toBeLessThan(35.5);
+    expect(c.maxLat).toBeGreaterThan(35.5);
+    // …and Greenwich is NOT in the fetched window.
+    expect(c.maxLng).toBeLessThan(0);
   });
 });
 

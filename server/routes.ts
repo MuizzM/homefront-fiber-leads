@@ -1471,7 +1471,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     maxLat = Math.max(-90, Math.min(90, maxLat));
     if (minLng > maxLng) [minLng, maxLng] = [maxLng, minLng];
     if (minLat > maxLat) [minLat, maxLat] = [maxLat, minLat];
-    if (maxLng - minLng > maxSpanDeg || maxLat - minLat > maxSpanDeg) {
+    // Float-dust tolerance on the span guard: an exactly-guard-wide window
+    // (the client clamps to the guard, rounds to 5dp, and we re-parse binary
+    // doubles) can subtract to e.g. 15.000000000000002 — that is a legitimate
+    // request, not a malformed one, and rejecting it silently blanked the
+    // density tier in production. Real violations are whole zoom levels past
+    // the guard, so a 1e-6° (≈10cm) allowance changes nothing else.
+    const SPAN_GUARD_EPS = 1e-6;
+    if (maxLng - minLng > maxSpanDeg + SPAN_GUARD_EPS || maxLat - minLat > maxSpanDeg + SPAN_GUARD_EPS) {
       return { error: `bbox span too large (max ${maxSpanDeg}° per axis)` };
     }
     return { minLng, minLat, maxLng, maxLat };

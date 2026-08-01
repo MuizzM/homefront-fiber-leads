@@ -82,18 +82,39 @@ export function gridCellForSpan(spanDeg: number): number {
   return Math.min(5, Math.max(0.05, Number(snapped.toFixed(2))));
 }
 
-/** Shrink a window symmetric about its center until both axes fit the grid
- *  guard. Zoomed out past 15° the fetch covers the CENTRAL 15° of the view —
- *  density where the user is looking, never a 400. */
-export function clampToGridGuard(b: ViewportBBox, guard: number = MAP_GRID_MAX_SPAN_DEG): ViewportBBox {
-  const clampAxis = (min: number, max: number): [number, number] => {
+/** Serialization headroom for the grid clamp. The fetch bbox is rounded to
+ *  5dp (bboxParam) and re-parsed as binary doubles on the server, so a window
+ *  clamped to EXACTLY the guard can read back as 15.000000000000002° and trip
+ *  the server's `span > guard` rejection — a silent 400 that blanked the
+ *  density tier in production (no bubbles, and no pins either: the pin fetch
+ *  is tier-gated off past the pin boundary). Two 5dp rounding quanta (~2m on
+ *  a 15° window — invisible) guarantee the serialized span can never exceed
+ *  the guard, whatever direction each endpoint rounds. */
+export const GRID_CLAMP_SERIALIZATION_EPS = 2e-5;
+
+/** Shrink a window symmetric about its center until both axes fit INSIDE the
+ *  grid guard (guard minus the serialization headroom — see
+ *  GRID_CLAMP_SERIALIZATION_EPS). Zoomed out past 15° the fetch covers the
+ *  central ~15° of the view — density where the user is looking, never a 400.
+ *
+ *  `center` (when given) anchors the shrink on the RAW VIEW center instead of
+ *  the window's own midpoint: a world-spanning window has already been
+ *  clamped to ±180/±90 (expandBBox), which drags its midpoint toward 0°/0° —
+ *  clamping about THAT midpoint fetched density for Greenwich while the user
+ *  was looking at their own territory. */
+export function clampToGridGuard(
+  b: ViewportBBox,
+  guard: number = MAP_GRID_MAX_SPAN_DEG,
+  center?: { lng: number; lat: number },
+): ViewportBBox {
+  const inner = guard - GRID_CLAMP_SERIALIZATION_EPS;
+  const clampAxis = (min: number, max: number, mid: number): [number, number] => {
     const span = max - min;
-    if (span <= guard) return [min, max];
-    const mid = (min + max) / 2;
-    return [mid - guard / 2, mid + guard / 2];
+    if (span <= inner) return [min, max];
+    return [mid - inner / 2, mid + inner / 2];
   };
-  const [minLng, maxLng] = clampAxis(b.minLng, b.maxLng);
-  const [minLat, maxLat] = clampAxis(b.minLat, b.maxLat);
+  const [minLng, maxLng] = clampAxis(b.minLng, b.maxLng, center?.lng ?? (b.minLng + b.maxLng) / 2);
+  const [minLat, maxLat] = clampAxis(b.minLat, b.maxLat, center?.lat ?? (b.minLat + b.maxLat) / 2);
   return { minLng, minLat, maxLng, maxLat };
 }
 
