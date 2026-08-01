@@ -71,21 +71,29 @@ export function mapPinsSnapshotKey(scope: MapPinsSnapshotScope): string {
   return `${MAP_PINS_SNAPSHOT_PREFIX}v${MAP_PINS_WIRE_VERSION}.t${scope.tenantId ?? 0}.u${scope.userId ?? 0}`;
 }
 
-/** Remove every snapshot key except `keep` (pass nothing to clear them all).
- *  Runs on both read and write so a stale-version or previous-user snapshot
- *  never outlives the first map open of the current identity. */
-export function pruneMapPinsSnapshots(keep?: string, storage: SnapshotStorage | null = defaultStorage()): void {
+/** Shared sweep: remove every key under `prefix` except `keep`. Each persisted
+ *  map family (full-feed snapshot, window snapshot, viewport mode) runs it on
+ *  its own prefix on both read and write, so a stale-version or previous-user
+ *  entry never outlives the first map open of the current identity. */
+function prunePrefix(prefix: string, keep: string | undefined, storage: SnapshotStorage | null): void {
   if (!storage) return;
   try {
     const doomed: string[] = [];
     for (let i = 0; i < storage.length; i++) {
       const k = storage.key(i);
-      if (k && k.startsWith(MAP_PINS_SNAPSHOT_PREFIX) && k !== keep) doomed.push(k);
+      if (k && k.startsWith(prefix) && k !== keep) doomed.push(k);
     }
     for (const k of doomed) storage.removeItem(k);
   } catch {
     /* storage blocked mid-iteration — nothing to prune */
   }
+}
+
+/** Remove every snapshot key except `keep` (pass nothing to clear them all).
+ *  Runs on both read and write so a stale-version or previous-user snapshot
+ *  never outlives the first map open of the current identity. */
+export function pruneMapPinsSnapshots(keep?: string, storage: SnapshotStorage | null = defaultStorage()): void {
+  prunePrefix(MAP_PINS_SNAPSHOT_PREFIX, keep, storage);
 }
 
 /**
@@ -137,6 +145,171 @@ export function writeMapPinsSnapshot<T extends Partial<Record<MapPinWireField, u
       // Too big to store safely — also drop any smaller stale copy rather than
       // let last week's map keep painting first.
       storage.removeItem(key);
+      return false;
+    }
+    storage.setItem(key, serialized);
+    return true;
+  } catch {
+    return false; // quota exceeded / storage blocked — cold open just fetches
+  }
+}
+
+// ── Persisted viewport MODE — kills the count-probe leg of the cold-open ─────
+// waterfall. The probe (a network RTT) used to be the FIRST hop of every big-
+// map cold open: until it answered, viewportMode stayed false, so the window
+// loader never armed and no pin fetch could even start. Persisting the last
+// KNOWN answer lets a returning big-map user fire their first window fetch the
+// moment the map is ready; the probe still runs and its answer reconciles the
+// mode (and rewrites this hint) when it lands. The value is a HINT, never
+// truth: the full-feed gate (fullFeedEnabled) still waits for the real probe,
+// so a stale hint can never double-fetch — it can only start the window path
+// early. Keyed per identity and version-swept exactly like the snapshots, so
+// one user's mode can never leak to the next login on a shared device.
+export const MAP_VIEWPORT_MODE_PREFIX = "hf.mapViewportMode.";
+/** Bump when the hint's meaning changes (e.g. a threshold semantics change). */
+export const MAP_VIEWPORT_MODE_VERSION = 1;
+
+export function mapViewportModeKey(scope: MapPinsSnapshotScope): string {
+  return `${MAP_VIEWPORT_MODE_PREFIX}v${MAP_VIEWPORT_MODE_VERSION}.t${scope.tenantId ?? 0}.u${scope.userId ?? 0}`;
+}
+
+export function pruneMapViewportModes(keep?: string, storage: SnapshotStorage | null = defaultStorage()): void {
+  prunePrefix(MAP_VIEWPORT_MODE_PREFIX, keep, storage);
+}
+
+/** The last probe-confirmed mode for this identity, or null when unknown
+ *  (first launch, storage blocked, other-user/stale-version entry — those are
+ *  swept as a side effect). null must be treated as "wait for the probe". */
+export function readPersistedViewportMode(
+  scope: MapPinsSnapshotScope,
+  storage: SnapshotStorage | null = defaultStorage(),
+): boolean | null {
+  if (!storage) return null;
+  const key = mapViewportModeKey(scope);
+  pruneMapViewportModes(key, storage);
+  try {
+    const raw = storage.getItem(key);
+    return raw === "1" ? true : raw === "0" ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Store the probe's ANSWER (never the derived hint — only a real probe
+ *  response may teach the next cold open). */
+export function writePersistedViewportMode(
+  scope: MapPinsSnapshotScope,
+  viewportMode: boolean,
+  storage: SnapshotStorage | null = defaultStorage(),
+): void {
+  if (!storage) return;
+  const key = mapViewportModeKey(scope);
+  pruneMapViewportModes(key, storage);
+  try {
+    storage.setItem(key, viewportMode ? "1" : "0");
+  } catch {
+    /* storage blocked — next boot just waits for the probe as before */
+  }
+}
+
+// ── WINDOW-scoped snapshot — instant first paint for viewport-mode orgs ──────
+// The full-feed snapshot above is category-banned in viewport mode (a bbox
+// window is a partial slice of the org), and the mode-flip prune deletes any
+// stored one — which left big-map orgs cold-opening on an EMPTY cache, waiting
+// a full network round-trip before the first pin painted. This family persists
+// the most recent COMPLETE fetched window's pins TOGETHER WITH the window bbox
+// so the next cold open can answer "do I hold pins for where the camera will
+// open?" — if the persisted camera's view intersects the stored window, the
+// cache seeds instantly (born stale) and the immediate boot window fetch
+// replaces it (with in-window eviction — see mergeViewportPins' evictWindow).
+// Unlike the full-feed snapshot this one CAN refresh every session (every pan
+// rewrites it), so it is per-session-fresh by construction and needs no
+// mode-entry prune; it is dropped only when the probe answers full-feed (the
+// window concept itself is then meaningless). Same keying/sweeping/size rules
+// as the full-feed family; the byte cap is tighter because a 25k-row window at
+// the cap would not fit and a partial city is plenty for a first paint.
+export const MAP_WINDOW_SNAPSHOT_PREFIX = "hf.mapWindowSnapshot.";
+
+/** ~1.5MB: a dense (but sub-cap) window packs well under this; anything bigger
+ *  skips the write rather than risk the shared localStorage quota. */
+export const MAP_WINDOW_SNAPSHOT_MAX_BYTES = 1_500_000;
+
+export interface MapWindowSnapshotBBox {
+  minLng: number;
+  minLat: number;
+  maxLng: number;
+  maxLat: number;
+}
+
+export function mapWindowSnapshotKey(scope: MapPinsSnapshotScope): string {
+  return `${MAP_WINDOW_SNAPSHOT_PREFIX}v${MAP_PINS_WIRE_VERSION}.t${scope.tenantId ?? 0}.u${scope.userId ?? 0}`;
+}
+
+export function pruneMapWindowSnapshots(keep?: string, storage: SnapshotStorage | null = defaultStorage()): void {
+  prunePrefix(MAP_WINDOW_SNAPSHOT_PREFIX, keep, storage);
+}
+
+function validWindowBBox(w: unknown): w is [number, number, number, number] {
+  return (
+    Array.isArray(w) && w.length === 4 && w.every((n) => Number.isFinite(n)) &&
+    (w[0] as number) < (w[2] as number) && (w[1] as number) < (w[3] as number)
+  );
+}
+
+/**
+ * Read the current identity's window snapshot: the pins in query-cache shape
+ * plus the bbox they were fetched for. null on any invalid payload (missing,
+ * corrupt, wrong wire version, malformed bbox) — the cold open then simply
+ * waits for the immediate window fetch, exactly like today.
+ */
+export function readMapWindowSnapshot<T extends Partial<Record<MapPinWireField, unknown>>>(
+  scope: MapPinsSnapshotScope,
+  storage: SnapshotStorage | null = defaultStorage(),
+): { pins: T[]; total: number; window: MapWindowSnapshotBBox } | null {
+  if (!storage) return null;
+  const key = mapWindowSnapshotKey(scope);
+  pruneMapWindowSnapshots(key, storage);
+  try {
+    const raw = storage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { w?: unknown; p?: unknown };
+    if (!validWindowBBox(parsed?.w)) throw new Error("bad window bbox");
+    // unpackMapPins hard-fails on a version or row-shape mismatch — the same
+    // "stale snapshot must be ignored" contract the full-feed family enforces.
+    const { pins, total } = unpackMapPins<T>(parsed.p);
+    const [minLng, minLat, maxLng, maxLat] = parsed.w;
+    return { pins, total, window: { minLng, minLat, maxLng, maxLat } };
+  } catch {
+    try { storage.removeItem(key); } catch { /* storage blocked */ }
+    return null;
+  }
+}
+
+/**
+ * Persist a COMPLETE fetched window (pins + its bbox) for the given identity.
+ * Callers must never pass a truncated window's pins — a sample replayed as a
+ * seed would paint a misleading thinned view. Temp optimistic pins (negative
+ * ids) are excluded like the full-feed writer. Returns true when stored.
+ */
+export function writeMapWindowSnapshot<T extends Partial<Record<MapPinWireField, unknown>> & { id?: unknown }>(
+  scope: MapPinsSnapshotScope,
+  pins: readonly T[],
+  window: MapWindowSnapshotBBox,
+  storage: SnapshotStorage | null = defaultStorage(),
+): boolean {
+  if (!storage) return false;
+  if (!validWindowBBox([window.minLng, window.minLat, window.maxLng, window.maxLat])) return false;
+  const key = mapWindowSnapshotKey(scope);
+  pruneMapWindowSnapshots(key, storage);
+  try {
+    const durable = pins.filter((p) => typeof p.id === "number" && p.id > 0);
+    if (durable.length === 0) return false; // an empty window must not clobber a seeded one
+    const serialized = JSON.stringify({
+      w: [window.minLng, window.minLat, window.maxLng, window.maxLat],
+      p: packMapPins(durable),
+    });
+    if (serialized.length > MAP_WINDOW_SNAPSHOT_MAX_BYTES) {
+      storage.removeItem(key); // never let a smaller stale window keep winning
       return false;
     }
     storage.setItem(key, serialized);

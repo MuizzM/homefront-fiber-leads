@@ -50,6 +50,7 @@ const Governance = lazy(() => import("@/pages/Governance"));
 const Billing = lazy(() => import("@/pages/Billing"));
 const SuperAdmin = lazy(() => import("@/pages/SuperAdmin"));
 const ReadyToCall = lazy(() => import("@/pages/ReadyToCall"));
+const Training = lazy(() => import("@/pages/Training"));
 const CallingQueue = lazy(() => import("@/pages/CallingQueue"));
 const CallingLead = lazy(() => import("@/pages/CallingLead"));
 const CallingCompliance = lazy(() => import("@/pages/CallingCompliance"));
@@ -226,6 +227,9 @@ function AppRoutes() {
             <Redirect to="/map" />
           </Route>
           <Route path="/clock"><CapabilityGuard role={role} capability="field.app.use"><ClockIn /></CapabilityGuard></Route>
+          {/* Training — D2D psychology & pitch curriculum. Every field role can
+              study; the manager rollup inside the page is gated separately. */}
+          <Route path="/training"><CapabilityGuard role={role} capability="field.app.use"><Training /></CapabilityGuard></Route>
           {/* Legacy commission bookmarks now land in the role-appropriate,
               authoritative commission workspace. */}
           <Route path="/commissions">

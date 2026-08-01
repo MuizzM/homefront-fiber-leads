@@ -8,6 +8,7 @@
 
 import { Link } from "wouter";
 import { Phone, Building2, Trash2 } from "lucide-react";
+import { FOCUS } from "@/lib/a11y";
 import { VerificationBadge, formatDistance } from "@/components/verification";
 import { isKnockOutcome, OUTCOME_META, type KnockOutcome } from "@shared/knock";
 import { relativeTime, shortRepName, MUTED, BODY_TEXT } from "./utils";
@@ -103,8 +104,11 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
       )}
 
       {/* Deep actions — the gated Calling-workspace jump and the permission-
-          gated admin row. Text labels only — no decorative emoji. */}
-      {(canOpenCalling || (canManage && (onCentralMark || onDelete))) && (
+          gated admin row. Text labels only — no decorative emoji. Delete moved
+          OUT of this pill cluster into its own full-width row below History
+          (owner report: "each pin usually has delete — I need that" — it
+          existed but was buried as a small pill nobody found). */}
+      {(canOpenCalling || (canManage && onCentralMark)) && (
         <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="knock-details-actions">
           {canOpenCalling && (
             <Link
@@ -116,41 +120,23 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
               Open in Calling
             </Link>
           )}
-          {canManage && (onCentralMark || onDelete) ? (
+          {canManage && onCentralMark ? (
             <div className="flex items-center gap-2" data-testid="knock-manager-row">
-              {onCentralMark ? (
-                <button
-                  type="button"
-                  data-testid="knock-central-toggle"
-                  aria-pressed={centralMode}
-                  onClick={onToggleCentral}
-                  className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
-                    centralMode
-                      ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
-                      : "bg-white/[0.06] border-white/15 text-white/70"
-                  }`}
-                  title="Mark this door on behalf of the central team — no rep credit"
-                >
-                  <Building2 className="w-3.5 h-3.5" />
-                  {centralMode ? "Central: ON" : "Central mark"}
-                </button>
-              ) : null}
-              {onDelete ? (
-                <button
-                  type="button"
-                  data-testid="knock-delete"
-                  onClick={onDeleteTap}
-                  className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
-                    deleteArmed
-                      ? "bg-red-500/80 border-red-400 text-white"
-                      : "bg-white/[0.06] border-red-400/40 text-red-300"
-                  }`}
-                  title={deleteArmed ? "Tap again to confirm delete" : "Remove this lead"}
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  {deleteArmed ? "Confirm delete?" : "Delete"}
-                </button>
-              ) : null}
+              <button
+                type="button"
+                data-testid="knock-central-toggle"
+                aria-pressed={centralMode}
+                onClick={onToggleCentral}
+                className={`h-10 px-3.5 rounded-full border text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 active:scale-95 transition ${
+                  centralMode
+                    ? "bg-teal-500/30 border-teal-300/60 text-teal-100"
+                    : "bg-white/[0.06] border-white/15 text-white/70"
+                }`}
+                title="Mark this door on behalf of the central team — no rep credit"
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                {centralMode ? "Central: ON" : "Central mark"}
+              </button>
               {centralMode ? (
                 <span className="text-[11px] text-teal-200/80 leading-tight">Next status tap marks centrally (no rep)</span>
               ) : null}
@@ -242,6 +228,31 @@ export function DetailsBody(props: DetailsBodyProps): JSX.Element {
           )}
         </div>
       </div>
+
+      {/* Delete lead — the destructive row, full-width at the very bottom of
+          Details where destructive actions live (owner ask: "each pin usually
+          has delete"). Same permission gate as before (canManage → MapView's
+          handleDeleteLead, which the server re-checks); works on ANY lead,
+          FCC-imported or manual. Two-step confirm: first tap ARMS (the row
+          turns solid rose and reads "Confirm delete"), a second tap fires
+          onDelete once; the sheet auto-disarms after 4s and on card swap —
+          the Applications reject grammar. 44px target, shared focus ring. */}
+      {canManage && onDelete ? (
+        <button
+          type="button"
+          data-testid="knock-delete"
+          onClick={onDeleteTap}
+          title={deleteArmed ? "Tap again to confirm delete" : "Remove this lead from the map"}
+          className={`mt-4 w-full h-11 rounded-xl border text-[13.5px] font-semibold inline-flex items-center justify-center gap-2 active:scale-[.98] transition ${FOCUS} ${
+            deleteArmed
+              ? "bg-rose-600 border-rose-500 text-white"
+              : "bg-rose-500/10 border-rose-500/40 text-rose-300"
+          }`}
+        >
+          <Trash2 className="w-4 h-4" aria-hidden="true" />
+          {deleteArmed ? "Confirm delete?" : "Delete lead"}
+        </button>
+      ) : null}
     </div>
   );
 }

@@ -2,7 +2,7 @@
 // and WHY (oldest dead item), and offer Retry ONLY when a retry can plausibly
 // work — a Retry that loops into the same rejection forever was the owner's
 // original complaint. Offline/syncing states stay as before.
-import { render, screen, fireEvent } from "@testing-library/react";
+import { render, screen, fireEvent, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { FieldStatusBar } from "@/components/FieldStatusBar";
@@ -120,5 +120,49 @@ describe("FieldStatusBar — needs attention with door + reason", () => {
     mockState.snap = { ...mockState.snap, pendingCount: 2 };
     renderBar();
     expect(screen.getByTestId("field-status").textContent).toContain("Offline — 2 updates saved on this device");
+  });
+});
+
+describe("the map overlay NEVER shows the syncing state (owner directive)", () => {
+  it("overlay renders nothing for a sustained online backlog — only offline and failures surface", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockState.online = true;
+    mockState.snap = { pendingCount: 3, deadCount: 0, deadItems: [], byLead: {}, online: true };
+    const qc = new QueryClient();
+    const { container, rerender } = render(
+      <QueryClientProvider client={qc}>
+        <FieldStatusBar overlay />
+      </QueryClientProvider>,
+    );
+    // Even after the sustained window elapses, the map overlay stays empty.
+    act(() => { vi.advanceTimersByTime(3500); });
+    rerender(
+      <QueryClientProvider client={qc}>
+        <FieldStatusBar overlay />
+      </QueryClientProvider>,
+    );
+    expect(container.querySelector('[data-testid="field-status"]')).toBeNull();
+    expect(screen.queryByText(/Syncing/)).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("the NON-overlay bar still surfaces a genuinely stuck backlog", () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    mockState.online = true;
+    mockState.snap = { pendingCount: 2, deadCount: 0, deadItems: [], byLead: {}, online: true };
+    const qc = new QueryClient();
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <FieldStatusBar />
+      </QueryClientProvider>,
+    );
+    act(() => { vi.advanceTimersByTime(3500); });
+    rerender(
+      <QueryClientProvider client={qc}>
+        <FieldStatusBar />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText(/Syncing 2 field updates/)).toBeTruthy();
+    vi.useRealTimers();
   });
 });

@@ -271,6 +271,38 @@ export function inBBox(lat: number, lng: number, b: ViewportBBox): boolean {
   return lat >= b.minLat && lat <= b.maxLat && lng >= b.minLng && lng <= b.maxLng;
 }
 
+/** True when the two boxes share any area (touching edges count — a snapshot
+ *  window grazing the view is still worth seeding). */
+export function bboxIntersects(a: ViewportBBox, b: ViewportBBox): boolean {
+  return a.minLng <= b.maxLng && b.minLng <= a.maxLng && a.minLat <= b.maxLat && b.minLat <= a.maxLat;
+}
+
+/** Approximate visible bbox for a persisted camera (center + zoom) on a given
+ *  screen — standard 512px-tile Web Mercator span, the same formula the map
+ *  contract tests use. Exists so the COLD OPEN can decide, BEFORE the map (or
+ *  even its container) exists, whether the persisted window snapshot overlaps
+ *  what the restored camera will show. Approximation is fine: the consumer is
+ *  an intersection test against a margin-expanded fetch window, and a false
+ *  positive only seeds pins the immediate window fetch replaces anyway. */
+export function cameraViewBBox(
+  center: [number, number],
+  zoom: number,
+  widthPx: number,
+  heightPx: number,
+): ViewportBBox {
+  const spanLng = (360 * (widthPx / 512)) / 2 ** zoom;
+  // The 1.3 divisor mirrors the mercator lat compression the grid-window
+  // contract test's map stub uses — close enough for an overlap decision.
+  const spanLat = (360 * (heightPx / 512)) / 2 ** zoom / 1.3;
+  const [lng, lat] = center;
+  return {
+    minLng: Math.max(-180, lng - spanLng / 2),
+    maxLng: Math.min(180, lng + spanLng / 2),
+    minLat: Math.max(-90, lat - spanLat / 2),
+    maxLat: Math.min(90, lat + spanLat / 2),
+  };
+}
+
 export function bboxParam(b: ViewportBBox): string {
   // 5dp ≈ 1m — plenty for a fetch window, keeps the URL short.
   const r = (n: number) => Math.round(n * 1e5) / 1e5;
@@ -286,17 +318,35 @@ export function bboxParam(b: ViewportBBox): string {
  *  omits most in-window ids by design, so absence from `fetched` must NOT
  *  evict a previously fetched pin — zooming out keeps the dense detail the
  *  user already loaded (it clusters), and the keep-region prune still bounds
- *  memory because the wide view's keep region covers everything retained. */
+ *  memory because the wide view's keep region covers everything retained.
+ *
+ *  `evictWindow` is the ONE sanctioned exception, for replacing a cold-open
+ *  window-snapshot SEED with server truth: when the fetch is a COMPLETE
+ *  (non-truncated) window, a prev pin inside that window that the fetch did
+ *  not return no longer exists (deleted / suppressed / moved since last
+ *  session) and must not linger. Callers pass the fetched window ONLY when
+ *  the response was complete — a sampled fetch must never evict. */
 export function mergeViewportPins<T extends { id: number; lat?: number | null; lng?: number | null }>(
   prev: readonly T[],
   fetched: readonly T[],
   keep: ViewportBBox,
+  evictWindow?: ViewportBBox | null,
 ): { pins: T[]; added: number; pruned: number } {
   const byId = new Map<number, T>();
+  const fetchedIds = evictWindow ? new Set(fetched.map((p) => p.id)) : null;
   let pruned = 0;
   for (const p of prev) {
     if (p.lat != null && p.lng != null && !inBBox(p.lat, p.lng, keep)) {
       pruned++;
+      continue;
+    }
+    if (
+      fetchedIds &&
+      p.lat != null && p.lng != null &&
+      inBBox(p.lat, p.lng, evictWindow!) &&
+      !fetchedIds.has(p.id)
+    ) {
+      pruned++; // stale seeded row the complete window fetch disowned
       continue;
     }
     byId.set(p.id, p);
