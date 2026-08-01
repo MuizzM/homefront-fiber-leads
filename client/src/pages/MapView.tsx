@@ -107,6 +107,7 @@ import {
   bboxParam,
   bboxExceedsSpanGuard,
   fullFeedEnabled,
+  firstUseEmptyStateEnabled,
   viewportNotice,
   mergeViewportPins,
 } from "@/lib/mapViewport";
@@ -1690,8 +1691,10 @@ export default function MapView() {
   // dataset anyway.
   const viewportAbortRef = useRef<AbortController | null>(null);
   const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Zoomed out past the server's 3° span guard → no window is fetchable; the
-  // notice chip asks for a zoom instead of a 400 per moveend.
+  // Zoomed out past the server's absolute span ceiling (continental view) →
+  // no window is fetchable; the notice chip asks for a zoom instead of a 400
+  // per moveend. Under the ceiling every window fetches — over-dense ones come
+  // back as an even server-side sample (truncated:true → the sample chip).
   const [viewportSpanTooWide, setViewportSpanTooWide] = useState(false);
   // INVISIBLE by contract (#87): this function never flips React state — the
   // only write is the setQueryData cache merge. The zoom-out notice state is
@@ -1702,9 +1705,11 @@ export default function MapView() {
     const bounds = currentFetchWindow(mapRef.current);
     if (!bounds) return;
     const { view, window } = bounds;
-    // Zoomed out past the server's span guard: the fetch would 400 on every
-    // moveend and the map would sit silently stale. Skip it — the notice chip
-    // (set by refreshViewportPins) asks the user to zoom in.
+    // Zoomed out past the server's absolute span ceiling: the fetch would 400
+    // on every moveend and the map would sit silently stale. Skip it — the
+    // notice chip (set by refreshViewportPins) asks the user to zoom in. Any
+    // span UNDER the ceiling is fetched: the server answers wide windows with
+    // an even sample instead of rejecting them.
     if (bboxExceedsSpanGuard(window)) return;
     viewportAbortRef.current?.abort();
     const controller = new AbortController();
@@ -6042,8 +6047,11 @@ export default function MapView() {
               nothing assigned yet) gets one line of guidance, not a blank map
               over a random town. Gated on the pins payload having ARRIVED
               (snapshot or fetch): while the first load is still in flight the
-              map must not claim "no leads" for a few seconds (owner report). */}
-          {mapReady && mapPinData != null && leads.length === 0 && (
+              map must not claim "no leads" for a few seconds (owner report).
+              NEVER in viewport mode: there the cache is a window — empty means
+              unfetched/over-water/sampled, and the mode itself proves the org
+              has >threshold leads (the zoom/sample chips carry the truth). */}
+          {mapReady && firstUseEmptyStateEnabled({ viewportMode, pinsArrived: mapPinData != null, leadCount: leads.length }) && (
             <div
               className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none px-6"
               data-testid="map-empty-state"

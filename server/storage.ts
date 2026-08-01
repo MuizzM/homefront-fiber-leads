@@ -232,7 +232,14 @@ export interface LeadStatsRow {
 /** Spatial/tag window for the bbox mode of /api/leads/map. When present the
  *  map query adds a lat/lng BETWEEN predicate (and an optional lead_tag
  *  exact-or-prefix match), orders by id, and hard-caps at `limit` rows. The
- *  tenant/rep scoping is UNCHANGED — the window narrows the same scoped set. */
+ *  tenant/rep scoping is UNCHANGED — the window narrows the same scoped set.
+ *
+ *  `sampleStep` (>1) additionally thins the window to rows whose id is a
+ *  multiple of the step — the deterministic even sample the wide-zoom path
+ *  uses when the window holds more rows than the cap. Modulo over id spreads
+ *  the sample across insertion order (which correlates with geography
+ *  per-scan), unlike ORDER BY id LIMIT whose prefix is the first-scanned
+ *  town only. */
 export interface MapPinWindow {
   minLat: number;
   minLng: number;
@@ -240,6 +247,7 @@ export interface MapPinWindow {
   maxLng: number;
   tag?: string;
   limit?: number;
+  sampleStep?: number;
 }
 
 export interface IStorage {
@@ -252,6 +260,10 @@ export interface IStorage {
   // eligibility) — powers the client's full-feed-vs-viewport-mode decision
   // without downloading a single pin.
   getLeadsMapCount(tenantId?: number, assignedRep?: number | number[]): number;
+  // COUNT over the SAME scoped + windowed predicate getLeadsForMap uses —
+  // the wide-zoom sampler's step calculation (only runs when a window
+  // overflows the row cap, so the extra indexed count stays rare).
+  getLeadsMapWindowCount(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapPinWindow): number;
   getFreshLeads(tenantId: number | undefined, assignedRep: number | number[] | undefined, opts: { city?: string; state?: string; days: number }): Array<{ id: number; lat: number | null; lng: number | null; leadStatus: string; competitorName: string | null; address: string; city: string; state: string; createdAt: string | null }>;
   getLeadsPage(
     tenantId: number | undefined,
@@ -2766,26 +2778,54 @@ export class Storage implements IStorage {
     return row.c;
   }
 
+  // Bbox/tag window predicate: the SAME scoped set, narrowed spatially.
+  // BETWEEN keeps the idx_leads_lat_lng range scan usable; the tag predicate
+  // is an exact match OR an underscore-prefix match ("fcc" → fcc_fresh_block,
+  // fcc_fiber_d25) so a family of tags filters with one param. The ONE place
+  // the window predicate is built — getLeadsForMap and getLeadsMapWindowCount
+  // compose from it, so the sampler's count can never drift from the rows the
+  // sampled query would return.
+  private mapWindowPred(scopePred: string, params: any[], window: MapPinWindow): string {
+    scopePred += " AND l.lat BETWEEN ? AND ? AND l.lng BETWEEN ? AND ?";
+    params.push(window.minLat, window.maxLat, window.minLng, window.maxLng);
+    if (window.tag) {
+      // LIKE metachars must match literally: escape \, %, _ in the tag with
+      // a backslash (declared via ESCAPE), and escape the appended family
+      // separator too so "fcc" matches fcc_fresh_block but a literal '_' in
+      // a tag can never act as a wildcard.
+      const esc = window.tag.replace(/[\\%_]/g, (c) => "\\" + c);
+      scopePred += " AND (l.lead_tag = ? OR l.lead_tag LIKE ? ESCAPE '\\')";
+      params.push(window.tag, `${esc}\\_%`);
+    }
+    // Deterministic even thinning for over-cap windows: keep every id that is
+    // a multiple of the step. Stable across pans (same window → same rows),
+    // spread across insertion order — which correlates with geography per
+    // scan batch — so a state-wide sample shows every scanned town rather
+    // than the ORDER BY id LIMIT prefix (= the first-scanned city only).
+    // Tradeoff: modulo over id is not spatially uniform (dense scans keep
+    // proportionally more pins), but it is cheap, index-friendly, and cannot
+    // blank out a region the way prefix truncation does.
+    const step = Math.floor(window.sampleStep ?? 1);
+    if (step > 1) {
+      scopePred += " AND (l.id % ?) = 0";
+      params.push(step);
+    }
+    return scopePred;
+  }
+
+  getLeadsMapWindowCount(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapPinWindow): number {
+    // Empty team scope → empty map (same fail-closed rule as getLeadsForMap).
+    if (Array.isArray(assignedRep) && !assignedRep.length) return 0;
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const pred = this.mapWindowPred(where, params, window);
+    const row = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads l WHERE ${pred}`).get(...params) as { c: number };
+    return row.c;
+  }
+
   getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[] {
     const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
-    // Bbox/tag window: the SAME scoped set, narrowed spatially. BETWEEN keeps
-    // the idx_leads_lat_lng range scan usable; the tag predicate is an exact
-    // match OR an underscore-prefix match ("fcc" → fcc_fresh_block,
-    // fcc_fiber_d25) so a family of tags filters with one param.
     let scopePred = where;
-    if (window) {
-      scopePred += " AND l.lat BETWEEN ? AND ? AND l.lng BETWEEN ? AND ?";
-      params.push(window.minLat, window.maxLat, window.minLng, window.maxLng);
-      if (window.tag) {
-        // LIKE metachars must match literally: escape \, %, _ in the tag with
-        // a backslash (declared via ESCAPE), and escape the appended family
-        // separator too so "fcc" matches fcc_fresh_block but a literal '_' in
-        // a tag can never act as a wildcard.
-        const esc = window.tag.replace(/[\\%_]/g, (c) => "\\" + c);
-        scopePred += " AND (l.lead_tag = ? OR l.lead_tag LIKE ? ESCAPE '\\')";
-        params.push(window.tag, `${esc}\\_%`);
-      }
-    }
+    if (window) scopePred = this.mapWindowPred(scopePred, params, window);
     // TWO statements merged via a JS Map, replacing the single CTE query whose
     // window pass sorted every scoped knock AND whose wide MATERIALIZED CTE was
     // re-scanned through an automatic index for the final join (measured
