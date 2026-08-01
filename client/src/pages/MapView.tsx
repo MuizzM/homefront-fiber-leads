@@ -114,6 +114,7 @@ import {
 import {
   readMapPinsSnapshot,
   writeMapPinsSnapshot,
+  pruneMapPinsSnapshots,
   MAP_PINS_SNAPSHOT_DEBOUNCE_MS,
 } from "@/lib/mapPinsSnapshot";
 import {
@@ -1680,6 +1681,47 @@ export default function MapView() {
       if (snapshotTimerRef.current) clearTimeout(snapshotTimerRef.current);
     };
   }, [mapPinData, user, viewportMode]);
+
+  // The org has outgrown the full feed (the count probe answered > threshold).
+  // A persisted full-feed snapshot can never refresh again — viewport mode
+  // never writes one — so left in place it would repaint an ever-staler full
+  // map on every cold open. Worse, the seed it painted THIS open has no
+  // replacement path in viewport mode: the full-feed fetch is disabled, and a
+  // bbox merge can only add/replace the ids it fetched — it can never evict a
+  // stale seeded row inside the window (sampled windows must not evict — see
+  // mergeViewportPins). So on entering viewport mode: drop the stored snapshot,
+  // and drop the seed when it is ALL the cache holds (dataUpdatedAt 0 is the
+  // initialData stamp — no real fetch ever completed). A full feed that DID
+  // complete this session (org crossed the threshold mid-session) is kept:
+  // it is fresh data, and the keep-region prune bounds it.
+  useEffect(() => {
+    if (!viewportMode) return;
+    pruneMapPinsSnapshots();
+    const state = qc.getQueryState(["/api/leads/map"]);
+    if (state && state.data != null && state.dataUpdatedAt === 0) {
+      qc.setQueryData(["/api/leads/map"], { pins: [], total: 0 });
+    }
+  }, [viewportMode, qc]);
+
+  // Invalidation bridge: every shared mutation path (saved-knock
+  // reconciliation, the dead-knock auto-resolve in useKnockLogger, bulk lasso
+  // actions, one-tap add) says "map cache is stale" via
+  // invalidateQueries(["/api/leads/map"]). In full-feed mode that refetches;
+  // in viewport mode the full-feed query is DISABLED, so the invalidate
+  // refetches nothing and an optimistic write that needs pulling back to
+  // server truth (e.g. the recolor of a knock that was dropped as
+  // undeliverable) would sit wrong until the next pan. Translate the
+  // invalidate into a window refetch instead.
+  useEffect(() => {
+    const cache = qc.getQueryCache();
+    return cache.subscribe((event: any) => {
+      if (!viewportModeRef.current) return;
+      if (event?.type !== "updated" || event?.action?.type !== "invalidate") return;
+      const key = event.query?.queryKey;
+      if (!Array.isArray(key) || key.length !== 1 || key[0] !== "/api/leads/map") return;
+      refreshViewportPinsRef.current();
+    });
+  }, [qc]);
 
   // ── Viewport (bbox) window loader ─────────────────────────────────────────
   // Active only past MAP_VIEWPORT_MODE_THRESHOLD scoped pins. Fetches the
@@ -5262,12 +5304,29 @@ export default function MapView() {
           feature.properties.ds = serverDs;
           scheduleClusterSetData();
         }
-        if (updated.leadStatus !== nextLeadStatus) {
-          qc.setQueryData(["/api/leads/map"], (old: any) => {
-            if (!old?.pins) return old;
-            return { ...old, pins: old.pins.map((p: any) => p.id === lead.id ? { ...p, leadStatus: updated.leadStatus } : p) };
-          });
-        }
+        // Reconcile the cache pin to the SERVER's row unconditionally — most
+        // importantly its CAS clock. The optimistic lastOutcomeAt above was
+        // the CLIENT clock; if this device runs ahead of the server, the pin
+        // would defend its outcome with a future timestamp: the stream echo of
+        // this very mark loses the recency comparison (mergePushedPin), and so
+        // does every GENUINELY newer push (a teammate's later knock) until a
+        // full refetch replaces the pin — which viewport mode never does
+        // without a pan. Adopting the response's last_outcome_at re-anchors
+        // the local clock to server truth the moment the write lands.
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          if (!old?.pins) return old;
+          return {
+            ...old,
+            pins: old.pins.map((p: any) => p.id === lead.id
+              ? {
+                  ...p,
+                  leadStatus: updated.leadStatus ?? nextLeadStatus,
+                  lastOutcome: updated.lastOutcome ?? outcome,
+                  lastOutcomeAt: updated.lastOutcomeAt ?? p.lastOutcomeAt,
+                }
+              : p),
+          };
+        });
         // The server writes a [central]-flagged knock row, so History HAS a new
         // entry — but the card fetched that query when it opened and nothing
         // told it to look again. Result: "No changes yet" under a mark you just
@@ -6410,6 +6469,24 @@ export default function MapView() {
                     </button>
                   </div>
 
+                  {/* Sampled-window honesty: past the viewport threshold a
+                      wide zoom ships an even SAMPLE of the window's pins
+                      (truncated:true), and the lasso can only select pins the
+                      client holds — so Assign/Status/Mark would silently skip
+                      every unsampled door inside the loop. Saving an AREA is
+                      unaffected (the polygon is evaluated server-side), so the
+                      warning names the id-based actions, not the panel. */}
+                  {sampledPins && lassoHasLeads && (
+                    <span
+                      className="text-[12px] text-amber-300/90 leading-tight"
+                      aria-live="polite"
+                      data-testid="lasso-sample-warning"
+                    >
+                      The map is showing a sample of this area&apos;s pins —
+                      Assign, Status and Mark apply only to the doors loaded.
+                      Zoom in to load every door, or save the loop as an Area.
+                    </span>
+                  )}
                   {!lassoHasLeads ? (
                     <span
                       className="text-[12px] text-white/60 leading-tight"

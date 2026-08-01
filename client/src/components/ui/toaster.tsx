@@ -26,7 +26,7 @@ export function Toaster() {
 
   return (
     <ToastProvider>
-      {toasts.map(function ({ id, title, description, action, severity, variant, ...props }) {
+      {toasts.map(function ({ id, title, description, action, severity, variant, duration: _duration, dedupeKey: _dedupeKey, createdAt: _createdAt, ...props }) {
         const sev: NotificationSeverity = severity ?? (variant === "destructive" ? "error" : "info")
         const m = META[sev]
         const Icon = m.Icon
@@ -34,6 +34,17 @@ export function Toaster() {
           <Toast
             key={id}
             {...props}
+            // The notification service owns ALL timing (severity windows,
+            // duration:null persistence, dedupe timer refresh). Radix runs its
+            // OWN close timer — `durationProp || provider default (5s)`, and a
+            // null/undefined duration falls through to the 5s default — which
+            // would force-close a persistent (duration:null) or loading toast
+            // at 5s and cut the 6s error window short. Infinity is Radix's
+            // documented opt-out, so its timer never fires; the service's
+            // DISMISS_TOAST drives open=false instead. duration/dedupeKey/
+            // createdAt are service-level fields, destructured out above so
+            // they never reach the DOM element.
+            duration={Infinity}
             type={m.politeness}
             data-severity={sev}
             className={`items-start ${m.accent}`}

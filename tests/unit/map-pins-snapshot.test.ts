@@ -183,4 +183,21 @@ describe("MapView seeds and writes the snapshot correctly", () => {
     expect(guard).toBeGreaterThan(-1);
     expect(guard).toBeLessThan(write);
   });
+
+  it("entering viewport mode DROPS the stored snapshot and the never-fetched seed", () => {
+    // Once the org outgrows the full feed the persisted full-feed snapshot can
+    // never refresh again (viewport mode never writes one) — kept, it would
+    // repaint an ever-staler full map on every cold open, and the cache seed
+    // it painted has no replacement path (the full-feed fetch is disabled and
+    // bbox merges cannot evict a stale seeded row). The flip to viewport mode
+    // must prune storage and clear the pure-seed cache entry (dataUpdatedAt 0
+    // is the initialData stamp — no real fetch ever completed).
+    const effectEnd = src.indexOf("}, [viewportMode, qc]);");
+    expect(effectEnd).toBeGreaterThan(-1);
+    const effect = src.slice(src.lastIndexOf("useEffect(", effectEnd), effectEnd);
+    expect(effect).toContain("if (!viewportMode) return;");
+    expect(effect).toContain("pruneMapPinsSnapshots();");
+    expect(effect).toContain("dataUpdatedAt === 0");
+    expect(effect).toContain('qc.setQueryData(["/api/leads/map"], { pins: [], total: 0 })');
+  });
 });
