@@ -2065,7 +2065,14 @@ export default function MapView() {
       style: "mapbox://styles/mapbox/satellite-streets-v12",
       center: ROCKWELL_CENTER,
       zoom: 13,
+      // No wordmark, no attribution bar on the map (owner ask). The license
+      // text stays reachable behind the compact "i" control added below —
+      // Mapbox's terms require attribution to exist, not to sprawl.
+      attributionControl: false,
     });
+    try {
+      map.addControl(new (window as any).mapboxgl.AttributionControl({ compact: true }), "bottom-right");
+    } catch { /* attribution collapse is cosmetic — never block map boot */ }
     mapRef.current = map; // claim immediately so a re-render can't spawn a second map
     if (import.meta.env.DEV) {
       (window as any).__map = map; // debug handle (dev only)

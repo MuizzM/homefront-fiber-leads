@@ -170,3 +170,13 @@ describe("house numbers are opt-in from the settings sheet", () => {
     expect(src).not.toMatch(/^\s*ensureHousenumLayer\(/m);
   });
 });
+
+describe("no map vendor chrome at rest", () => {
+  it("the wordmark is hidden and attribution collapses to the compact control", () => {
+    expect(src).toContain("attributionControl: false");
+    expect(src).toContain("AttributionControl({ compact: true })");
+    const css = readFileSync(join(ROOT, "client/src/index.css"), "utf8");
+    expect(css).toContain(".mapboxgl-ctrl-logo");
+    expect(css.slice(css.indexOf(".mapboxgl-ctrl-logo"))).toContain("display: none !important");
+  });
+});
