@@ -2166,12 +2166,10 @@ export default function MapView() {
         type: "geojson",
         data: emptyFeatureCollection(),
       });
-      map.addLayer({
-        id: "draw-bbox-fill",
-        type: "fill",
-        source: "draw-bbox",
-        paint: { "fill-color": "#f97316", "fill-opacity": 0.1 },
-      });
+      // Outline ONLY while dragging (SalesRabbit reference, owner directive):
+      // the shape being drawn is a dashed boundary, never a live fill — the
+      // box clears on release when the scan starts, so a fill layer here only
+      // ever tinted the in-progress drag.
       map.addLayer({
         id: "draw-bbox-outline",
         type: "line",
@@ -3511,12 +3509,7 @@ export default function MapView() {
           type: "geojson",
           data: emptyFeatureCollection(),
         });
-        map.addLayer({
-          id: "draw-bbox-fill",
-          type: "fill",
-          source: "draw-bbox",
-          paint: { "fill-color": "#f97316", "fill-opacity": 0.1 },
-        });
+        // Outline only — mirrors the init block (owner: no fill while drawing).
         map.addLayer({
           id: "draw-bbox-outline",
           type: "line",
