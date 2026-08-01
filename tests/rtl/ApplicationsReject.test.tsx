@@ -69,7 +69,11 @@ describe("Applications — two-step reject", () => {
     const btn = await screen.findByTestId("reject-application");
     expect(btn).toHaveTextContent("Reject");
     fireEvent.click(btn);
-    expect(btn).toHaveTextContent("Confirm reject");
+    // waitFor, not a same-tick assertion: under full-suite CI load React's
+    // commit for the arm can land a beat later — the CONTRACT is that the
+    // arm happens, not that it happens in the same macrotask. (This test
+    // flaked three times tonight on exactly this line.)
+    await waitFor(() => expect(btn).toHaveTextContent("Confirm reject"));
     expect(btn.className).toMatch(/rose/);
     expect(apiRequest).not.toHaveBeenCalledWith("PATCH", expect.anything(), expect.anything());
   });
@@ -78,7 +82,8 @@ describe("Applications — two-step reject", () => {
     renderPage();
     const btn = await screen.findByTestId("reject-application");
     fireEvent.click(btn); // arm
-    fireEvent.click(btn); // confirm
+    await waitFor(() => expect(btn).toHaveTextContent("Confirm reject"));
+    fireEvent.click(btn); // confirm — deterministically AFTER the arm committed
     await waitFor(() =>
       expect(apiRequest).toHaveBeenCalledWith(
         "PATCH",
@@ -96,11 +101,15 @@ describe("Applications — two-step reject", () => {
   it("auto-disarms after 3 seconds without a confirming tap", async () => {
     renderPage();
     const btn = await screen.findByTestId("reject-application"); // real timers for the fetch
-    vi.useFakeTimers(); // then a deterministic clock for the 3s disarm window
+    // shouldAdvanceTime keeps React's internal scheduling (and waitFor)
+    // running while the 3s disarm window stays deterministically ours —
+    // bare fake timers could freeze the arm commit itself, so advancing
+    // 3100ms flushed arm AND disarm together and the test saw only "Reject".
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     fireEvent.click(btn);
-    expect(btn).toHaveTextContent("Confirm reject");
+    await waitFor(() => expect(btn).toHaveTextContent("Confirm reject"));
     act(() => { vi.advanceTimersByTime(3100); });
-    expect(btn).toHaveTextContent("Reject");
+    await waitFor(() => expect(btn).toHaveTextContent("Reject"));
     expect(btn).not.toHaveTextContent("Confirm reject");
     // A tap after the window has closed must only re-arm, never fire.
     fireEvent.click(btn);
