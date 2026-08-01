@@ -45,6 +45,7 @@ import { PeekBar } from "@/components/lead-sheet/PeekBar";
 import { QuickBody } from "@/components/lead-sheet/QuickBody";
 import { DetailsBody } from "@/components/lead-sheet/DetailsBody";
 import { relativeTime, prefersReducedMotion, shortRepName, MUTED, BODY_TEXT } from "@/components/lead-sheet/utils";
+import { isFccReportedLead } from "@/lib/leadSourceFilter";
 import type { HistoryRow, LeadDetail, TeamMember } from "@/components/lead-sheet/types";
 
 // The three snap levels. "quick" is the default open state.
@@ -636,6 +637,11 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
   // No stacked badge rows anywhere in the header.
   const needsReview = renderedLead.leadStatus === "address_review" || detailQuery.data?.leadStatus === "address_review";
   const freshFiber = renderedLead.leadTag === "fresh_fiber_confirmed";
+  // FCC-reported fiber (fcc_fresh_block / fcc_fiber_d25): the tag is the
+  // carrier's filing, not a door verification — the card warns the rep to
+  // confirm serviceability at the door. One inline amber chip under the
+  // status line; no new card section.
+  const fccReported = isFccReportedLead(renderedLead);
   const statusBadge: { text: string; className: string } | null = needsReview
     ? { text: "Needs review", className: "border-amber-400/35 bg-amber-400/10 text-amber-300" }
     : freshFiber
@@ -864,6 +870,14 @@ function LeadKnockSheetInner(props: LeadKnockSheetProps): JSX.Element | null {
                     </span>
                   )}
                 </div>
+                {fccReported && (
+                  <span
+                    data-testid="fcc-fiber-chip"
+                    className="mt-1 inline-flex w-fit items-center rounded-full border border-amber-400/35 bg-amber-400/10 px-2 py-px text-2xs font-bold uppercase tracking-wide text-amber-300"
+                  >
+                    FCC-reported fiber — verify at door
+                  </span>
+                )}
               </div>
               <button
                 type="button"

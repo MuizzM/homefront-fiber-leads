@@ -5,9 +5,10 @@
 // sheet can never disagree on a color or a word). Tapping the active chip or
 // rep row toggles back to "all", so one thumb can always get out of a filter.
 // Container/scrim grammar matches ReclaimAllDialog exactly.
-import { X } from "lucide-react";
+import { X, Zap } from "lucide-react";
 import { STATE_COLORS, STATE_LABELS } from "@shared/knock";
 import { FOCUS } from "@/lib/a11y";
+import type { LeadSourceFilter, LeadSourceOption } from "@/lib/leadSourceFilter";
 
 export interface MapFilterSheetProps {
   open: boolean;
@@ -20,6 +21,12 @@ export interface MapFilterSheetProps {
   unassignedCount?: number;
   activeRep: string;
   onRep: (r: string) => void;
+  // Lead SOURCE lens (FCC) — optional so older callers render unchanged.
+  // ANDs with the status filter; counts come from the same pre-status lens.
+  sources?: readonly LeadSourceOption[];
+  sourceCounts?: Partial<Record<Exclude<LeadSourceFilter, "all">, number>>;
+  activeSource?: LeadSourceFilter;
+  onSource?: (s: LeadSourceFilter) => void;
   onClearAll: () => void;
   shown: number;
   total: number;
@@ -36,13 +43,18 @@ const EYEBROW = "text-[11px] font-semibold uppercase tracking-wide text-muted-fo
 
 export function MapFilterSheet({
   open, onClose, statusOrder, statusCounts, activeStatus, onStatus,
-  reps, unassignedCount, activeRep, onRep, onClearAll, shown, total,
+  reps, unassignedCount, activeRep, onRep,
+  sources, sourceCounts, activeSource = "all", onSource,
+  onClearAll, shown, total,
 }: MapFilterSheetProps) {
   if (!open) return null;
 
   const colors = STATE_COLORS as Record<string, string>;
   const labels = STATE_LABELS as Record<string, string>;
-  const filtered = activeStatus !== "all" || activeRep !== "all";
+  const filtered = activeStatus !== "all" || activeRep !== "all" || activeSource !== "all";
+  // Zero-count source options are dead UI (lead_tag is null for most pins
+  // until an FCC import lands): they stay hidden, never rendered disabled.
+  const visibleSources = (sources ?? []).filter((o) => (sourceCounts?.[o.key] ?? 0) > 0 || activeSource === o.key);
 
   const repRow = (key: string, name: string, count: number, dot: React.ReactNode) => {
     const active = activeRep === key;
@@ -125,6 +137,41 @@ export function MapFilterSheet({
             })}
           </div>
         </div>
+
+        {/* Source (Fiber / FCC) — a second lens that ANDs with Status. Only
+            rendered when at least one option has pins; "All sources" is the
+            escape and is always present while the section is visible. */}
+        {sources && onSource && visibleSources.length > 0 && (
+          <div className="mt-4">
+            <div className={EYEBROW}>Fiber (FCC)</div>
+            <div className="mt-2 flex flex-wrap gap-2" data-testid="map-filter-sources">
+              {[{ key: "all" as const, label: "All" }, ...visibleSources].map((opt) => {
+                const selected = activeSource === opt.key;
+                const count = opt.key === "all" ? null : (sourceCounts?.[opt.key as Exclude<LeadSourceFilter, "all">] ?? 0);
+                return (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    onClick={() => onSource(opt.key as LeadSourceFilter)}
+                    aria-pressed={selected}
+                    data-testid={`map-filter-source-${opt.key}`}
+                    className={`min-h-11 inline-flex items-center gap-1.5 rounded-full px-3.5 text-[12px] font-semibold border transition active:scale-95 ${
+                      selected
+                        ? "border-amber-400/60 bg-amber-400/15 text-amber-600 dark:text-amber-300"
+                        : "border-border bg-secondary/30 text-foreground hover:bg-secondary/50"
+                    } ${FOCUS}`}
+                  >
+                    <Zap className="w-3.5 h-3.5" aria-hidden="true" />
+                    {opt.label}
+                    {count != null && count > 0 && (
+                      <span className="tabular-nums text-muted-foreground">{count}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Rep — only when the caller has reps to filter by */}
         {reps && (

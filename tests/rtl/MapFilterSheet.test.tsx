@@ -125,3 +125,71 @@ describe("map filter sheet contract", () => {
     expect(screen.queryByTestId("map-filter-sheet")).toBeNull();
   });
 });
+
+// ── Fiber (FCC) source lens ──────────────────────────────────────────────────
+// The source pills AND with the status filter; zero-count options are dead UI
+// and stay hidden; "All" is always the escape while the section is visible.
+import { LEAD_SOURCE_OPTIONS } from "@/lib/leadSourceFilter";
+
+describe("fiber (FCC) source pills", () => {
+  const SOURCE_COUNTS = { fcc_fresh: 12, fcc_fiber: 34, field_verified: 5 };
+
+  function renderWithSources(over: Partial<React.ComponentProps<typeof MapFilterSheet>> = {}) {
+    const onSource = vi.fn();
+    const utils = renderSheet({
+      sources: LEAD_SOURCE_OPTIONS,
+      sourceCounts: SOURCE_COUNTS,
+      activeSource: "all",
+      onSource,
+      ...over,
+    });
+    return { ...utils, onSource };
+  }
+
+  it("renders one pill per option WITH pins, plus an All escape, each count shown", () => {
+    renderWithSources();
+    expect(screen.getByTestId("map-filter-source-all")).toBeInTheDocument();
+    expect(screen.getByTestId("map-filter-source-fcc_fresh").textContent).toContain("FCC fresh (H2-25)");
+    expect(screen.getByTestId("map-filter-source-fcc_fresh").textContent).toContain("12");
+    expect(screen.getByTestId("map-filter-source-fcc_fiber").textContent).toContain("FCC fiber");
+    expect(screen.getByTestId("map-filter-source-fcc_fiber").textContent).toContain("34");
+    expect(screen.getByTestId("map-filter-source-field_verified").textContent).toContain("Field-verified");
+    expect(screen.getByTestId("map-filter-source-field_verified").textContent).toContain("5");
+  });
+
+  it("tapping a pill reports its key; the active pill is aria-pressed", () => {
+    const { onSource } = renderWithSources({ activeSource: "fcc_fiber" });
+    expect(screen.getByTestId("map-filter-source-fcc_fiber")).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(screen.getByTestId("map-filter-source-fcc_fresh"));
+    expect(onSource).toHaveBeenLastCalledWith("fcc_fresh");
+    fireEvent.click(screen.getByTestId("map-filter-source-all"));
+    expect(onSource).toHaveBeenLastCalledWith("all");
+  });
+
+  it("zero-count options are hidden entirely (no dead UI before the FCC import)", () => {
+    const first = renderWithSources({ sourceCounts: { fcc_fiber: 3 } });
+    expect(screen.queryByTestId("map-filter-source-fcc_fresh")).toBeNull();
+    expect(screen.queryByTestId("map-filter-source-field_verified")).toBeNull();
+    expect(screen.getByTestId("map-filter-source-fcc_fiber")).toBeInTheDocument();
+    first.unmount();
+    // …and with NO FCC data at all the whole section stays out of the sheet.
+    renderSheet({ sources: LEAD_SOURCE_OPTIONS, sourceCounts: {}, activeSource: "all", onSource: vi.fn() });
+    expect(screen.queryByTestId("map-filter-sources")).toBeNull();
+  });
+
+  it("the active option stays visible even at zero count (state is never invisible)", () => {
+    renderWithSources({ sourceCounts: {}, activeSource: "fcc_fresh" });
+    expect(screen.getByTestId("map-filter-source-fcc_fresh")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("an active source makes the sheet filtered (Clear all appears) and composes with status", () => {
+    const { onClearAll } = renderWithSources({ activeSource: "field_verified", activeStatus: "sold" });
+    fireEvent.click(screen.getByTestId("map-filter-clear-all"));
+    expect(onClearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("older callers without source props render unchanged (no section)", () => {
+    renderSheet();
+    expect(screen.queryByTestId("map-filter-sources")).toBeNull();
+  });
+});

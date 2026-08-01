@@ -99,6 +99,23 @@ import {
   iconOpacityExpr,
 } from "@/lib/mapPins";
 import {
+  MAP_VIEWPORT_MODE_THRESHOLD,
+  VIEWPORT_FETCH_MARGIN,
+  expandBBox,
+  keepRegion,
+  bboxParam,
+  mergeViewportPins,
+  type ViewportBBox,
+} from "@/lib/mapViewport";
+import {
+  LEAD_SOURCE_OPTIONS,
+  countLeadsBySource,
+  leadMatchesSource,
+  persistFilterSource,
+  readPersistedFilterSource,
+  type LeadSourceFilter,
+} from "@/lib/leadSourceFilter";
+import {
   createFollowState,
   ingestFix,
   stepFrame,
@@ -208,6 +225,10 @@ interface MapPin {
   leadScore: number;
   leadTag?: string | null;
   freshConfidence?: string | null;
+  // FCC/field-verification provenance — the source filter ("Fiber (FCC)" pill
+  // row) and the card's verify-at-door chip read these straight off the pin.
+  freshSources?: string | null;
+  freshConfirmedAt?: string | null;
   carrier?: string | null;
   visited?: boolean;
   knockCount?: number;
@@ -825,6 +846,15 @@ export default function MapView() {
   useEffect(() => {
     persistFilterStatus(filterStatus);
   }, [filterStatus]);
+  // Source filter ("Fiber (FCC)") — a SECOND, independent lens that ANDs with
+  // the status filter: both apply at once. Own localStorage key; the status
+  // key above is never touched by it.
+  const [filterSource, setFilterSource] = useState<LeadSourceFilter>(() =>
+    readPersistedFilterSource(),
+  );
+  useEffect(() => {
+    persistFilterSource(filterSource);
+  }, [filterSource]);
   // SalesRabbit-style bottom sheets — the Filters sheet is THE filter surface
   // (the old always-on pill/chip row is gone); Settings owns basemap + layers.
   const [mapFilterOpen, setMapFilterOpen] = useState(false);
@@ -1594,15 +1624,35 @@ export default function MapView() {
     }
   }, []);
 
+  // ── Pin-volume probe → full feed vs viewport (bbox) mode ─────────────────
+  // One cheap scoped COUNT(*) decides the loading strategy. At ≤60k pins the
+  // ETag'd full feed stays (single fetch, 304 polls — unchanged behaviour);
+  // past it the map fetches only the pins inside the current viewport window
+  // and merges them into the same query cache. If the probe fails the map
+  // falls back to the full feed — never to an empty map.
+  const { data: mapPinCount } = useQuery<{ total: number }>({
+    queryKey: ["/api/leads/map/count"],
+    queryFn: async () => (await apiRequest("GET", "/api/leads/map/count")).json(),
+    enabled: !!user,
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const viewportMode = (mapPinCount?.total ?? 0) > MAP_VIEWPORT_MODE_THRESHOLD;
+  const viewportModeRef = useRef(viewportMode);
+  viewportModeRef.current = viewportMode;
+
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
   // Fetch ALL map pins from dedicated lean endpoint — only runs after auth is ready
-  const { data: mapPinData } = useQuery<{ pins: MapPin[]; total: number }>({
+  const { data: mapPinData } = useQuery<{ pins: MapPin[]; total: number; truncated?: boolean }>({
     queryKey: ["/api/leads/map"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/leads/map?format=packed");
       return unpackMapPins<MapPin>(await res.json());
     },
-    enabled: !!user,
+    // Viewport mode never downloads the full feed: the same cache entry is
+    // written by the bbox-window merger below, and the optimistic-update
+    // paths (knock / assignment / live push) target it unchanged.
+    enabled: !!user && !viewportMode,
     staleTime: 45_000, // toward the 60s poll — fewer redundant revalidations
     retry: 2,
     // Auto-refresh so leads added out-of-band (a scan, the nightly cron,
@@ -1618,6 +1668,86 @@ export default function MapView() {
     refetchOnWindowFocus: !isRep,
   });
 
+  // ── Viewport (bbox) window loader ─────────────────────────────────────────
+  // Active only past MAP_VIEWPORT_MODE_THRESHOLD scoped pins. Fetches the
+  // current view + 20% margin (debounced on moveend, in-flight aborted),
+  // merges the window into the SAME ["/api/leads/map"] cache entry the full
+  // feed writes — so dedupe, filters, the feature reconcile, and every
+  // optimistic update path work identically in both modes — and prunes pins
+  // outside a 3× keep region so a long session can't accumulate the whole
+  // dataset anyway.
+  const viewportAbortRef = useRef<AbortController | null>(null);
+  const viewportTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchViewportPins = useCallback(() => {
+    if (!viewportModeRef.current) return;
+    const map = mapRef.current;
+    if (!map) return;
+    let view: ViewportBBox;
+    try {
+      const b = map.getBounds();
+      view = {
+        minLng: b.getWest(), minLat: b.getSouth(),
+        maxLng: b.getEast(), maxLat: b.getNorth(),
+      };
+    } catch {
+      return; // map mid-teardown
+    }
+    // Degenerate (pre-init) bounds would trip the server's span guard.
+    if (!(view.maxLng > view.minLng) || !(view.maxLat > view.minLat)) return;
+    const window = expandBBox(view, VIEWPORT_FETCH_MARGIN);
+    viewportAbortRef.current?.abort();
+    const controller = new AbortController();
+    viewportAbortRef.current = controller;
+    const sessionId = getStoredSessionId();
+    fetch(`/api/leads/map?format=packed&bbox=${bboxParam(window)}`, {
+      headers: sessionId ? { "x-session-id": sessionId } : {},
+      signal: controller.signal,
+    })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`bbox pins ${res.status}`);
+        return unpackMapPins<MapPin>(await res.json());
+      })
+      .then(({ pins: fetched }) => {
+        if (controller.signal.aborted) return;
+        const keep = keepRegion(view);
+        qc.setQueryData(["/api/leads/map"], (old: any) => {
+          const prev: MapPin[] = old?.pins ?? [];
+          const merged = mergeViewportPins(prev, fetched, keep);
+          // Nothing new and nothing pruned → keep the old reference so
+          // structural sharing turns this into a no-op (no re-cluster).
+          if (merged.added === 0 && merged.pruned === 0 && old?.pins) return old;
+          return {
+            pins: merged.pins,
+            total: merged.pins.length,
+            truncated: false,
+          };
+        });
+      })
+      .catch((err: any) => {
+        if (err?.name === "AbortError") return; // superseded by a newer pan
+        // A failed window fetch must never empty the map — keep what's there.
+      });
+  }, [qc]);
+  const fetchViewportPinsRef = useRef(fetchViewportPins);
+  fetchViewportPinsRef.current = fetchViewportPins;
+
+  // moveend → debounced 300ms window refetch. Bound per map instance; inactive
+  // in full-feed mode (the ref guard makes every pan free there).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady || !viewportMode) return;
+    const onMoveEnd = () => {
+      if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
+      viewportTimerRef.current = setTimeout(() => fetchViewportPinsRef.current(), 300);
+    };
+    map.on("moveend", onMoveEnd);
+    onMoveEnd(); // the mode may have flipped while the map sat still
+    return () => {
+      if (viewportTimerRef.current) clearTimeout(viewportTimerRef.current);
+      try { map.off("moveend", onMoveEnd); } catch {}
+    };
+  }, [mapReady, styleEpoch, viewportMode]);
+
   // Reps have refetchOnWindowFocus OFF (they flip to the dialer/camera
   // constantly — a full refetch on every focus is wasteful). But if the
   // map-changed SSE dropped while backgrounded, a fresh lead could sit invisible
@@ -1629,7 +1759,8 @@ export default function MapView() {
     if (!isRep) return;
     const onVisible = () => {
       if (document.visibilityState === "visible") {
-        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+        if (viewportModeRef.current) fetchViewportPinsRef.current();
+        else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       }
     };
     document.addEventListener("visibilitychange", onVisible);
@@ -1685,7 +1816,10 @@ export default function MapView() {
               if (refreshTimer) clearTimeout(refreshTimer);
               refreshTimer = setTimeout(() => {
                 refreshTimer = null;
-                void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+                // Viewport mode: the full feed is never fetched, so the
+                // invalidation would be a no-op — refetch the current window.
+                if (viewportModeRef.current) fetchViewportPinsRef.current();
+                else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
               }, ownedJobIdRef.current != null ? 5_000 : 1_000);
             }
           }
@@ -2683,13 +2817,19 @@ export default function MapView() {
   }, [territoryClippedLeads, canAssign, filterRep]);
 
   // The EXACT set of leads currently painted on the map — territory-clip, then
-  // rep filter, then status filter. Single source of truth for the pin layer,
-  // the lasso AND the leads panel, so no surface can disagree with the pins.
-  // The status filter matches the pin's DISPLAY state (what the rep sees).
+  // rep filter, then source filter, then status filter. Single source of truth
+  // for the pin layer, the lasso AND the leads panel, so no surface can
+  // disagree with the pins. Source AND status compose: a rep can work
+  // "FCC-fiber doors that are still unworked". The status filter matches the
+  // pin's DISPLAY state (what the rep sees).
   const visibleLeads = useMemo(() => {
-    if (filterStatus === "all") return repFilteredLeads;
-    return repFilteredLeads.filter((l) => pinDisplayState(l) === filterStatus);
-  }, [repFilteredLeads, filterStatus]);
+    const sourced =
+      filterSource === "all"
+        ? repFilteredLeads
+        : repFilteredLeads.filter((l) => leadMatchesSource(l, filterSource));
+    if (filterStatus === "all") return sourced;
+    return sourced.filter((l) => pinDisplayState(l) === filterStatus);
+  }, [repFilteredLeads, filterStatus, filterSource]);
 
   // Expose the visible set to the (ref-based) lasso handler.
   useEffect(() => {
@@ -4491,6 +4631,10 @@ export default function MapView() {
     }
     return acc;
   }, [repFilteredLeads]);
+  // Source-option counts over the SAME lens (pre-status-filter). Zero-count
+  // options are omitted — lead_tag is null for most pins today, so the FCC
+  // pills only appear once FCC data actually exists (no dead UI).
+  const sourceCountsMap = useMemo(() => countLeadsBySource(repFilteredLeads), [repFilteredLeads]);
 
   // ── Disposition selector options ────────────────────────────────────────────
   // "All" + one row per disposition that has pins, each with its pin color +
@@ -4581,15 +4725,19 @@ export default function MapView() {
         : undefined,
     [isRep, canAssign, team, repLeadCounts],
   );
-  const mapFilterActive = filterStatus !== "all" || filterRep !== "all";
-  // Chip text: status label, rep name, or both — "{label} · {n}" renders in the
-  // top-center chip whenever mapFilterActive (state is never invisible).
+  const mapFilterActive = filterStatus !== "all" || filterRep !== "all" || filterSource !== "all";
+  // Chip text: status label, rep name, source, or any combination —
+  // "{label} · {n}" renders in the top-center chip whenever mapFilterActive
+  // (state is never invisible).
   const activeFilterChipLabel = [
     filterStatus !== "all" ? filterPillLabel : null,
     filterRep !== "all"
       ? filterRep === "unassigned"
         ? "Unassigned"
         : (repNameById.get(Number(filterRep)) ?? "Rep filter")
+      : null,
+    filterSource !== "all"
+      ? (LEAD_SOURCE_OPTIONS.find((o) => o.key === filterSource)?.label ?? filterSource)
       : null,
   ]
     .filter(Boolean)
@@ -4762,7 +4910,8 @@ export default function MapView() {
       // process that has since restarted). Patching from here would leave holes
       // nothing downstream can detect, so the whole scope is refetched.
       onResync: () => {
-        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+        if (viewportModeRef.current) fetchViewportPinsRef.current();
+        else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       },
       // Fallback = the pre-existing refetch behaviour is the only truth again.
       // It never stopped running, so there is nothing to switch on; what this
@@ -4770,7 +4919,8 @@ export default function MapView() {
       // to 60s stale on the way down, and recovering pulls once to close the
       // window between the last poll and the first live frame.
       onFallback: () => {
-        void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+        if (viewportModeRef.current) fetchViewportPinsRef.current();
+        else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
       },
     });
     setLeadStream(handle);
@@ -6757,9 +6907,14 @@ export default function MapView() {
             unassignedCount={repLeadCounts.unassigned}
             activeRep={filterRep}
             onRep={setFilterRep}
+            sources={LEAD_SOURCE_OPTIONS}
+            sourceCounts={sourceCountsMap}
+            activeSource={filterSource}
+            onSource={setFilterSource}
             onClearAll={() => {
               setFilterStatus("all");
               setFilterRep("all");
+              setFilterSource("all");
             }}
             shown={mapTotalLeads.length}
             total={leads.length}
