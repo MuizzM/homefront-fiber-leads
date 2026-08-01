@@ -1,10 +1,13 @@
 import { RefreshCw, TriangleAlert, WifiOff } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { useNetworkStatus } from "@/hooks/use-network-status";
 import { useSustained } from "@/hooks/use-sustained";
+import { needsAttentionText } from "@/features/knocking/knockFailurePolicy";
 
 export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
   const online = useNetworkStatus();
+  const qc = useQueryClient();
   const { queue, snap } = useKnockLogger();
   const failed = snap.deadCount;
   const pending = snap.pendingCount;
@@ -14,6 +17,19 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
   // a real problem; offline and needs-attention remain immediate truth.
   const stuck = useSustained(online && pending > 0, 3000);
   if (online && failed === 0 && !stuck) return null;
+
+  // "Needs attention" tells the rep WHICH door and WHY (oldest dead item);
+  // Retry appears only when a retry can plausibly work (e.g. a 403 that heals
+  // after signing back in) — terminal failures never park here, they
+  // auto-resolve with their own toast.
+  const oldestDead = snap.deadItems[0] ?? null;
+  const deadAddress = (() => {
+    if (!oldestDead) return null;
+    const pins = (qc.getQueryData(["/api/leads/map"]) as { pins?: Array<{ id: number; address?: string }> } | undefined)?.pins;
+    const address = pins?.find((p) => p.id === oldestDead.leadId)?.address;
+    return typeof address === "string" && address.trim() ? address.trim() : null;
+  })();
+  const canRetry = failed > 0 && online && oldestDead?.retryable === true;
 
   const retry = () => {
     queue?.retryDead();
@@ -45,12 +61,12 @@ export function FieldStatusBar({ overlay = false }: { overlay?: boolean }) {
           : <RefreshCw className={`h-4 w-4 shrink-0 animate-spin ${overlay ? "text-teal-400" : ""}`} />}
       <span className="min-w-0 flex-1 truncate">
         {failed > 0
-          ? `${failed} field update${failed === 1 ? "" : "s"} need attention`
+          ? needsAttentionText(failed, deadAddress, oldestDead?.reason ?? null)
           : !online
             ? `Offline — ${pending ? `${pending} update${pending === 1 ? "" : "s"} saved on this device` : "new work will save on this device"}`
             : `Syncing ${pending} field update${pending === 1 ? "" : "s"}…`}
       </span>
-      {failed > 0 && online && (
+      {canRetry && (
         <button type="button" onClick={retry} className={`min-h-11 shrink-0 rounded-full px-4 font-semibold focus-visible:outline-none focus-visible:ring-2 ${overlay ? "bg-white/12 text-white hover:bg-white/20 focus-visible:ring-white" : "bg-secondary text-secondary-foreground hover:bg-secondary/80 focus-visible:ring-ring"}`}>
           Retry
         </button>

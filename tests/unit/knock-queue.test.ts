@@ -23,13 +23,29 @@ import { KNOCK_QUEUE_MAX_ATTEMPTS } from "@shared/knock";
  *
  *   Wire contract: post(url, body) → parsed row {id, deduped?}; body carries
  *   clientId/repId/outcome/knockedAt(tap time, ISO)/notes/callback fields and
- *   NEVER wasHome (server derives it). Errors are Error("<status>: <text>"):
- *   5xx/network = transient (retryDelayMs backoff, dead-letter after
- *   KNOCK_QUEUE_MAX_ATTEMPTS), other 4xx = permanent dead-letter that must not
- *   block other queued items. Persistence: one storage key per rep, envelope
- *   {v:1, items:[QueuedKnock]}; unknown envelope versions are discarded; a
- *   throwing storage degrades to memory-only. byLead "saved" decays to "idle"
- *   after 2000ms.
+ *   NEVER wasHome (server derives it). Errors are Error("<status>: <text>").
+ *
+ *   FAILURE LIFECYCLE (the dead-letter contract):
+ *     401              → auth pause: stays pending, NO attempt consumed,
+ *                        line resumes after re-auth.
+ *     network/5xx/429  → RETRYABLE: stays pending with capped backoff FOREVER —
+ *                        a transient failure never becomes a permanent
+ *                        dead-letter.
+ *     403              → bounded retries, then parks in the DEAD lane (a CSRF
+ *                        403 heals after re-login, so Retry plausibly works).
+ *                        retryDead() resets attempts/backoff and redelivers.
+ *     other 4xx        → TERMINAL: the server can never accept it. AUTO-RESOLVES
+ *                        (dropped, onResolved(item, reason) fired once, logged) —
+ *                        never a "needs attention" nag, never blocks the line.
+ *   Enqueueing a non-positive leadId (temp optimistic pin) throws — poison can
+ *   never enter the queue. Rehydration triages persisted items: stale shapes
+ *   are migrated, undeliverable items (temp ids, unknown outcomes, dead items
+ *   whose last failure was terminal) auto-resolve via onResolved, and dead
+ *   items parked by the old transient policy return to pending.
+ *
+ *   Persistence: one storage key per rep, envelope {v:1, items:[QueuedKnock]};
+ *   unknown envelope versions are discarded; a throwing storage degrades to
+ *   memory-only. byLead "saved" decays to "idle" after 2000ms.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
@@ -71,11 +87,13 @@ function mkQueue(opts: {
   online?: boolean;
   repId?: number;
   onSaved?: (leadId: number) => void;
+  onResolved?: (item: any, reason: string) => void;
 } = {}) {
   const post = vi.fn(opts.post ?? okPost);
   const patch = vi.fn(opts.patch ?? okPost);
   const storage = opts.storage ?? fakeStorage();
   const net = { online: opts.online ?? true };
+  const onResolved = vi.fn(opts.onResolved);
   const q = createKnockQueue({
     repId: opts.repId ?? 9,
     storage,
@@ -84,8 +102,9 @@ function mkQueue(opts: {
     isOnline: () => net.online,
     now: () => Date.now(), // fake timers make this fully deterministic
     onSaved: opts.onSaved,
+    onResolved,
   });
-  return { q, post, patch, storage, setOnline: (v: boolean) => void (net.online = v) };
+  return { q, post, patch, storage, onResolved, setOnline: (v: boolean) => void (net.online = v) };
 }
 
 // Contract: an absent byLead entry means the lead is idle.
@@ -241,11 +260,12 @@ describe("knockQueue — failure handling", () => {
     expect(leadState(q, 7)).toBe("saved");
   });
 
-  it("dead-letters a permanent (404) failure without blocking other queued items", async () => {
-    const { q, post, setOnline } = mkQueue({
+  it("auto-resolves a terminal (404) failure — dropped with a reason, never a dead-letter, line keeps moving", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { q, post, onResolved, setOnline } = mkQueue({
       online: false,
       post: async (url: string) => {
-        if (url === "/api/leads/7/knock") throw new Error("404: gone");
+        if (url === "/api/leads/7/knock") throw new Error("404: Not found");
         return { id: 55 };
       },
     });
@@ -256,47 +276,124 @@ describe("knockQueue — failure handling", () => {
     await q.flush();
 
     const snap = q.getSnapshot();
-    expect(snap.deadCount).toBe(1);
+    // The server will never accept it: not pending, not dead — RESOLVED.
+    expect(snap.deadCount).toBe(0);
     expect(snap.pendingCount).toBe(0);
-    expect(leadState(q, 7)).toBe("error");
+    expect(leadState(q, 7)).toBe("idle");
+    // The rep gets one honest explanation with the door and the reason.
+    expect(onResolved).toHaveBeenCalledTimes(1);
+    const [item, reason] = onResolved.mock.calls[0];
+    expect(item.leadId).toBe(7);
+    expect(reason).toContain("no longer exists");
+    // Support can trace it.
+    expect(console.error).toHaveBeenCalled();
     // The poison item did NOT stop lead 8 from saving.
     expect(leadState(q, 8)).toBe("saved");
     expect(post).toHaveBeenCalledTimes(2);
   });
 
-  it(`dead-letters after ${KNOCK_QUEUE_MAX_ATTEMPTS} consecutive transient failures`, async () => {
-    const { q, post, setOnline } = mkQueue({
-      online: false,
+  it("auto-resolves a 400 the server will never accept, with a validation reason", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { q, onResolved } = mkQueue({
+      post: async () => { throw new Error("400: invalid outcome"); },
+    });
+    await q.enqueue({ leadId: 7, outcome: "sold" });
+
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(onResolved).toHaveBeenCalledTimes(1);
+    expect(onResolved.mock.calls[0][1]).toContain("rejected it as invalid");
+  });
+
+  it(`NEVER dead-letters transient failures: still pending past ${KNOCK_QUEUE_MAX_ATTEMPTS} attempts, delivers on recovery`, async () => {
+    let healthy = false;
+    const { q, post } = mkQueue({
       post: async () => {
-        throw new Error("503: unavailable");
+        if (!healthy) throw new Error("503: unavailable");
+        return { id: 11 };
       },
     });
     await q.enqueue({ leadId: 7, outcome: "interested" });
-    setOnline(true);
 
-    for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS; i++) {
+    // Fail well past the old "8 strikes = dead" limit.
+    for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS + 3; i++) {
       await q.flush();
       vi.advanceTimersByTime(61_000); // clear any backoff before the next pass
     }
+    await q.flush(); // settle the last in-flight attempt
+    expect(post.mock.calls.length).toBeGreaterThan(KNOCK_QUEUE_MAX_ATTEMPTS);
+    expect(q.getSnapshot().deadCount).toBe(0); // transient = never dead
+    expect(q.getSnapshot().pendingCount).toBe(1); // still in delivery
+    expect(leadState(q, 7)).toBe("queued");
 
-    expect(post).toHaveBeenCalledTimes(KNOCK_QUEUE_MAX_ATTEMPTS);
-    expect(q.getSnapshot().deadCount).toBe(1);
+    // The outage ends — the queue's own backoff timer delivers it with no
+    // human action ("saved" then decays to idle within the advance window).
+    healthy = true;
+    await vi.advanceTimersByTimeAsync(61_000);
     expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(q.getSnapshot().deadCount).toBe(0);
+  });
+
+  it("401 pauses the line without consuming an attempt (valid knock waiting for re-auth)", async () => {
+    let authed = false;
+    const { q, post } = mkQueue({
+      post: async () => {
+        if (!authed) throw new Error("401: session expired");
+        return { id: 21 };
+      },
+    });
+    await q.enqueue({ leadId: 7, outcome: "interested" });
+
+    expect(q.getSnapshot().pendingCount).toBe(1);
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(leadState(q, 7)).toBe("queued");
+
+    // Attempts were NOT consumed — re-auth then a heartbeat delivers it.
+    authed = true;
+    vi.advanceTimersByTime(61_000);
+    await q.flush();
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(leadState(q, 7)).toBe("saved");
+    expect(post).toHaveBeenCalledTimes(2);
+  });
+
+  it(`403 gets ${KNOCK_QUEUE_MAX_ATTEMPTS} bounded retries, then parks in the dead lane with a retryable reason`, async () => {
+    const { q, post } = mkQueue({
+      post: async () => { throw new Error("403: CSRF validation failed"); },
+    });
+    await q.enqueue({ leadId: 7, outcome: "sold" });
+
+    for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS; i++) {
+      await q.flush();
+      vi.advanceTimersByTime(61_000);
+    }
+    expect(post).toHaveBeenCalledTimes(KNOCK_QUEUE_MAX_ATTEMPTS);
+    const snap = q.getSnapshot();
+    expect(snap.deadCount).toBe(1);
+    expect(snap.pendingCount).toBe(0);
     expect(leadState(q, 7)).toBe("error");
+    // The FieldStatusBar can say which door, why, and that Retry may work.
+    expect(snap.deadItems).toHaveLength(1);
+    expect(snap.deadItems[0]).toMatchObject({ leadId: 7, retryable: true });
+    expect(snap.deadItems[0].reason).toContain("authorized");
 
     await q.flush(); // dead items are never auto-retried
     expect(post).toHaveBeenCalledTimes(KNOCK_QUEUE_MAX_ATTEMPTS);
   });
 
-  it("retryDead moves the item back to pending, immediately due, and flush retries it", async () => {
+  it("retryDead resets attempts/backoff, moves the item back to pending, and flush redelivers it", async () => {
     let dead = true;
-    const { q, post } = mkQueue({
+    const { q, post, storage } = mkQueue({
       post: async () => {
-        if (dead) throw new Error("400: bad request");
+        if (dead) throw new Error("403: forbidden");
         return { id: 12 };
       },
     });
     await q.enqueue({ leadId: 7, outcome: "sold" });
+    for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS - 1; i++) {
+      vi.advanceTimersByTime(61_000);
+      await q.flush();
+    }
     expect(q.getSnapshot().deadCount).toBe(1);
     expect(leadState(q, 7)).toBe("error");
 
@@ -304,11 +401,130 @@ describe("knockQueue — failure handling", () => {
     q.retryDead();
     expect(q.getSnapshot().deadCount).toBe(0);
     expect(q.getSnapshot().pendingCount).toBe(1);
+    // Reset semantics: fresh attempt budget, immediately due, error cleared.
+    const env = readEnvelope(storage);
+    expect(env.items[0]).toMatchObject({ attempts: 0, nextAttemptAt: 0, lastError: null });
 
     await q.flush(); // no leftover backoff after a manual retry
-    expect(post).toHaveBeenCalledTimes(2);
+    expect(post).toHaveBeenCalledTimes(KNOCK_QUEUE_MAX_ATTEMPTS + 1);
     expect(q.getSnapshot().pendingCount).toBe(0);
     expect(leadState(q, 7)).toBe("saved");
+  });
+
+  it("refuses to enqueue a knock against a non-positive lead id (temp optimistic pin)", () => {
+    const { q, post } = mkQueue();
+    expect(() => q.stage({ leadId: -3, outcome: "interested" })).toThrow(/non-positive/);
+    expect(() => q.stage({ leadId: 0, outcome: "interested" })).toThrow(/non-positive/);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe("knockQueue — rehydration triage (reload survival)", () => {
+  const baseItem = (over: Record<string, unknown> = {}) => ({
+    clientId: `c-${Math.random().toString(36).slice(2)}`,
+    leadId: 7,
+    repId: 9,
+    outcome: "interested",
+    knockedAt: "2026-07-30T12:00:00.000Z",
+    notes: null,
+    callbackDate: null,
+    callbackTime: null,
+    attempts: 0,
+    nextAttemptAt: 0,
+    lastError: null,
+    ...over,
+  });
+  const seed = (storage: ReturnType<typeof fakeStorage>, lane: "hf.knockQueue.v1.9" | "hf.knockDead.v1.9", items: unknown[]) =>
+    storage.setItem(lane, JSON.stringify({ v: 1, items }));
+
+  it("a 403 dead item survives reload in the dead lane and retryDead still redelivers it", async () => {
+    const storage = fakeStorage();
+    seed(storage, "hf.knockDead.v1.9", [baseItem({ lastError: "403: forbidden", attempts: 8 })]);
+
+    const { q, post } = mkQueue({ storage });
+    await vi.advanceTimersByTimeAsync(0); // settle load-time microtasks
+    expect(q.getSnapshot().deadCount).toBe(1);
+    expect(q.getSnapshot().deadItems[0]).toMatchObject({ leadId: 7, retryable: true });
+    expect(leadState(q, 7)).toBe("error");
+
+    q.retryDead();
+    await q.flush();
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(leadState(q, 7)).toBe("saved");
+  });
+
+  it("a legacy dead item with a TERMINAL lastError auto-resolves at load (no permanent nag)", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const storage = fakeStorage();
+    seed(storage, "hf.knockDead.v1.9", [baseItem({ lastError: "404: Not found", attempts: 1 })]);
+
+    const { q, post, onResolved } = mkQueue({ storage });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(onResolved).toHaveBeenCalledTimes(1);
+    expect(onResolved.mock.calls[0][1]).toContain("no longer exists");
+    expect(post).not.toHaveBeenCalled(); // never re-posted into the same 404
+    // And the drop is durable — a THIRD load reports nothing.
+    const again = mkQueue({ storage });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(again.onResolved).not.toHaveBeenCalled();
+    expect(again.q.getSnapshot().deadCount).toBe(0);
+  });
+
+  it("a legacy dead item parked by the old transient policy returns to PENDING and delivers", async () => {
+    const storage = fakeStorage();
+    seed(storage, "hf.knockDead.v1.9", [baseItem({ lastError: "503: unavailable", attempts: 8, nextAttemptAt: 99 })]);
+
+    const { q, post } = mkQueue({ storage });
+    await vi.advanceTimersByTimeAsync(0); // load-time flush runs
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(post).toHaveBeenCalledTimes(1); // fresh budget, immediately due
+    expect(q.getSnapshot().pendingCount).toBe(0);
+  });
+
+  it("a persisted knock against a temp (negative) lead id is dropped at load with a reason", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const storage = fakeStorage();
+    seed(storage, "hf.knockQueue.v1.9", [baseItem({ leadId: -4 }), baseItem({ leadId: 8 })]);
+
+    const { q, post, onResolved } = mkQueue({ storage });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(onResolved).toHaveBeenCalledTimes(1);
+    expect(onResolved.mock.calls[0][0].leadId).toBe(-4);
+    expect(onResolved.mock.calls[0][1]).toContain("never finished saving");
+    // The healthy sibling still delivered.
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][0]).toBe("/api/leads/8/knock");
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(q.getSnapshot().deadCount).toBe(0);
+  });
+
+  it("migrates a stale-shaped pending item (missing new fields) instead of dropping it", async () => {
+    const storage = fakeStorage();
+    // An old app version wrote only the original fields.
+    seed(storage, "hf.knockQueue.v1.9", [{
+      clientId: "old-1", leadId: 7, repId: 9, outcome: "callback",
+      knockedAt: "2026-07-30T12:00:00.000Z", notes: "ring twice",
+      callbackDate: "2026-08-02", callbackTime: "18:00",
+      attempts: 2, nextAttemptAt: 0, lastError: "500: boom",
+    }]);
+
+    const { q, post } = mkQueue({ storage });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(post).toHaveBeenCalledTimes(1);
+    const [url, body] = post.mock.calls[0];
+    expect(url).toBe("/api/leads/7/knock");
+    expect(body).toMatchObject({
+      clientId: "old-1", outcome: "callback", notes: "ring twice",
+      callbackDate: "2026-08-02", repLat: null, mockLocation: null, appVersion: null,
+    });
+    expect(q.getSnapshot().pendingCount).toBe(0);
   });
 });
 

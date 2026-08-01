@@ -9,15 +9,19 @@ import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { getKnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
 import { captureFieldFix } from "@/lib/geoFix";
-import { OUTCOME_TO_STATUS, type KnockOutcome } from "@shared/knock";
+import { OUTCOME_TO_STATUS, type KnockOutcome, type QueuedKnock } from "@shared/knock";
 import {
   createSavedKnockReconciliation,
   deriveFieldQueueOwnerKey,
   queryKeyMatchesApiPrefix,
   resolveCreditedRepId,
 } from "@/features/knocking/savedKnockReconciliation";
+import {
+  droppedKnockToast,
+  isKnockableLeadId,
+} from "@/features/knocking/knockFailurePolicy";
 
-const EMPTY_SNAP: QueueSnapshot = { pendingCount: 0, deadCount: 0, byLead: {}, online: true };
+const EMPTY_SNAP: QueueSnapshot = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true };
 export interface LogLead { id: number; leadStatus: string; assignedRepId?: number | null }
 export interface LogOpts { notes?: string | null; callbackDate?: string | null; callbackTime?: string | null }
 
@@ -44,6 +48,24 @@ export function useKnockLogger() {
     [qc, toast],
   );
 
+  // A knock the server can NEVER accept (lead deleted, temp id from an old
+  // session, payload an old app version wrote) auto-resolves out of the queue:
+  // one honest toast naming the door, then the optimistic recolor is pulled
+  // back to server truth. The queue already console.error-logs it for support;
+  // the destructive toast also lands in the durable error center.
+  const resolveDroppedKnock = useCallback(
+    (item: QueuedKnock, reason: string) => {
+      const pins = (qc.getQueryData(["/api/leads/map"]) as { pins?: Array<{ id: number; address?: string }> } | undefined)?.pins;
+      const address = pins?.find((p) => p.id === item.leadId)?.address ?? null;
+      toast({ ...droppedKnockToast(address, reason), variant: "destructive" });
+      void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+      void qc.invalidateQueries({ queryKey: ["/api/leads"] });
+      void qc.invalidateQueries({ queryKey: ["/api/followups"] });
+      void qc.invalidateQueries({ queryKey: [`/api/leads/${item.leadId}`] });
+    },
+    [qc, toast],
+  );
+
   const queue = useMemo(() => {
     if (queueOwnerKey == null) return null;
     return getKnockQueue({
@@ -53,8 +75,9 @@ export function useKnockLogger() {
       post: (url, body) => apiRequest("POST", url, body).then(r => r.json()),
       patch: (url, body) => apiRequest("PATCH", url, body).then(r => r.json()),
       onSaved: reconcileSavedKnock,
+      onResolved: resolveDroppedKnock,
     });
-  }, [queueOwnerKey, reconcileSavedKnock]);
+  }, [queueOwnerKey, reconcileSavedKnock, resolveDroppedKnock]);
 
   const snap = useSyncExternalStore(
     useCallback(cb => queue ? queue.subscribe(cb) : () => {}, [queue]),
@@ -65,6 +88,18 @@ export function useKnockLogger() {
   // the durable row before its normal flush; reload recovery can safely submit
   // the row without location instead of losing the representative's action.
   const log = useCallback((lead: LogLead, outcome: KnockOutcome, opts: LogOpts = {}): boolean => {
+    // SOURCE GUARD (owner report: permanently stuck "needs attention"): a temp
+    // optimistic pin (negative id from the one-tap add, surfaced via the shared
+    // map cache on Today/anywhere) must never enqueue a knock — the server has
+    // never heard of that id, so delivery could only ever 404 forever.
+    if (!isKnockableLeadId(lead.id)) {
+      toast({
+        title: "This door is still saving",
+        description: "The pin hasn't finished syncing yet — give it a second, then log the outcome again.",
+        variant: "destructive",
+      });
+      return false;
+    }
     const credit = resolveCreditedRepId(user, lead.assignedRepId);
     if (!credit) {
       toast({
