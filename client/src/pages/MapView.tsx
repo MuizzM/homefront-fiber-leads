@@ -846,6 +846,9 @@ export default function MapView() {
 
   // Assign-Area (freehand draw) mode
   const [lassoMode, setLassoMode] = useState(false);
+  // Live mirror of the imperative follow-camera `following` flag, so the locate
+  // FAB can show whether tracking is actually engaged (aria-pressed + ring).
+  const [followEngaged, setFollowEngaged] = useState(false);
   // ── Add-lead / tap-a-house ──────────────────────────────────────────────────
   // addMode: a single map tap reverse-geocodes a rooftop into an address.
   // cardProperty: the property card sheet (from a tapped house or a scanned dot).
@@ -1992,10 +1995,12 @@ export default function MapView() {
     // Any camera move that is not an explicit Locate action must own the camera.
     // Search, lead selection, pan and zoom call this before moving so a pending
     // GPS frame can never overwrite the viewport on the next animation frame.
+    // NOTE: `interacting` is NOT touched here — it mirrors physical pointer
+    // state only (the pointerdown/pointerup counter below owns it).
     const suspendFollow = () => {
       cameraGenerationRef.current += 1;
       following = false;
-      interacting = false;
+      setFollowEngaged(false);
       stopLoop();
     };
     suspendFollowCameraRef.current = suspendFollow;
@@ -2075,10 +2080,12 @@ export default function MapView() {
       locateGeneration = cameraGenerationRef.current + 1;
       cameraGenerationRef.current = locateGeneration;
       following = true;
+      setFollowEngaged(true);
       ensureLoop();
     };
     const onFollowEnd = () => {
       following = false;
+      setFollowEngaged(false);
       stopLoop();
     };
     geolocate.on("trackuserlocationstart", onFollowStart);
@@ -2095,13 +2102,50 @@ export default function MapView() {
     };
     const onGestureEnd = (ev: any) => {
       if (ev?.geolocateSource) return;
-      interacting = false;
+      // Belt-and-suspenders: clear a leaked interacting flag (e.g. a missed
+      // pointerup outside the window) — but never mid-gesture while a finger
+      // is still down (rotateend fires when the SECOND finger lifts first).
+      if (pointersDown === 0) interacting = false;
     };
     map.on("dragstart", onDragStart);
     const gestureStarts = ["zoomstart", "rotatestart", "pitchstart"];
     const gestureEnds = ["dragend", "zoomend", "rotateend", "pitchend"];
     for (const evn of gestureStarts) map.on(evn, onGestureStart);
     for (const evn of gestureEnds) map.on(evn, onGestureEnd);
+
+    // ── THE FREEZE FIX: pause the camera writer while a finger is down. ──────
+    // Every external map.jumpTo runs map.stop() → HandlerManager.stop(), which
+    // RESETS in-progress gesture recognition. With the follow loop issuing a
+    // jumpTo per animation frame, a pan/rotate could never accumulate enough
+    // movement to cross its start threshold: dragstart/rotatestart never fired,
+    // the break-out above never ran, and the map read as frozen ("won't change
+    // direction / can't move") the whole time the loop was live. `interacting`
+    // was checked in frame() but nothing ever set it — this counter is the
+    // missing writer. While a pointer is down the loop keeps running (the puck
+    // stays live) but skips jumpTo, so mapbox can recognise the gesture and the
+    // start handlers above break follow for real. A plain tap (down→up, no
+    // gesture) leaves follow engaged — exactly the legit behavior.
+    let pointersDown = 0;
+    const onPointerDown = () => {
+      pointersDown += 1;
+      interacting = true;
+    };
+    const onPointerUp = () => {
+      pointersDown = Math.max(0, pointersDown - 1);
+      if (pointersDown === 0) interacting = false;
+    };
+    const gestureSurface = map.getCanvasContainer();
+    gestureSurface.addEventListener("pointerdown", onPointerDown);
+    // Window-level: the finger/mouse can lift OUTSIDE the canvas mid-gesture.
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerUp);
+    // Desktop wheel-zoom has no pointerdown: break follow on the wheel event
+    // itself so the per-frame jumpTo can't cancel the wheel zoom before its
+    // (untagged) zoomstart reaches the handlers above.
+    const onWheelBreak = () => {
+      if (following) suspendFollow();
+    };
+    gestureSurface.addEventListener("wheel", onWheelBreak, { passive: true });
 
     // Honour prefers-reduced-motion live (never run the rAF; discrete filtered hops).
     let mmRM: MediaQueryList | null = null;
@@ -2566,10 +2610,17 @@ export default function MapView() {
 
     return () => {
       stopLoop(); // cancel the follow rAF
+      setFollowEngaged(false); // a re-created map starts with follow off
       suspendFollowCameraRef.current = () => {};
       try {
         if (mmRM && onRM) mmRM.removeEventListener("change", onRM);
       } catch {} // window-level, survives map.remove
+      try {
+        gestureSurface.removeEventListener("pointerdown", onPointerDown);
+        gestureSurface.removeEventListener("wheel", onWheelBreak);
+      } catch {}
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
       try {
         puck.remove();
       } catch {}
@@ -3787,11 +3838,14 @@ export default function MapView() {
         map.off("touchend", onTouchEnd);
       } catch {}
       try {
-        map.getCanvas().style.cursor = "";
+        // Re-enable gestures BEFORE touching the canvas: if getCanvas() throws
+        // on a torn-down map the catch must not have swallowed the re-enables —
+        // a map with dead pan/zoom is a worse failure than a stale cursor.
         map.dragPan.enable();
         map.doubleClickZoom.enable();
         map.touchZoomRotate.enable();
         map.touchPitch?.enable();
+        map.getCanvas().style.cursor = "";
       } catch {}
     };
     // styleEpoch: rebind after a style swap / map re-init (setStyle wipes the
@@ -4010,9 +4064,10 @@ export default function MapView() {
         map.off("touchend", onTUp);
       } catch {}
       try {
-        map.getCanvas().style.cursor = "";
+        // Gestures first, cursor second — same rationale as the lasso cleanup.
         map.dragPan.enable();
         map.touchZoomRotate.enable();
+        map.getCanvas().style.cursor = "";
       } catch {}
     };
   }, [scanDrawMode, mapReady, updateDrawBox, clearDrawBox, startBoxScan]);
@@ -6821,6 +6876,10 @@ export default function MapView() {
                       } else {
                         exitLasso();
                         setAddMode(false); // draw tools and add-mode are mutually exclusive
+                        // Scan Map is a draw tool too: leaving it armed under the
+                        // lasso double-binds mousedown (a stroke would ALSO submit
+                        // an area scan) and its auto-exit re-enables dragPan mid-lasso.
+                        setScanDrawMode(false);
                         // Start on a colour nothing else is using, so two areas never
                         // read as one region split by a road. The picker overrides it.
                         setLassoColor(pickFreeColor());
@@ -6846,7 +6905,18 @@ export default function MapView() {
                 {canAssign && (
                   <button
                     type="button"
-                    onClick={() => setAddMode((v) => !v)}
+                    onClick={() => {
+                      // Arming add-mode stands the draw tools down (and vice
+                      // versa — see the lasso/scan handlers): the map click
+                      // handler gives __tapAddressMode priority, so a lasso or
+                      // scan box left armed underneath would double-handle
+                      // every tap (stroke/box + reverse-geocode at once).
+                      if (!addMode) {
+                        exitLasso();
+                        setScanDrawMode(false);
+                      }
+                      setAddMode(!addMode);
+                    }}
                     aria-label={addMode ? "Cancel add-lead mode" : "Add a lead by tapping the map"}
                     aria-pressed={addMode}
                     data-testid="ctl-add-lead"
@@ -7096,6 +7166,7 @@ export default function MapView() {
                   .catch(() => {});
               }}
               aria-label="Center on my location"
+              aria-pressed={followEngaged}
               data-testid="locate-me"
               style={{
                 height: 52,
@@ -7108,7 +7179,9 @@ export default function MapView() {
                     : "calc(env(safe-area-inset-bottom) + 2rem)",
                 boxShadow: "var(--glass-shadow-1)",
               }}
-              className="absolute right-3 z-20 rounded-full ring-1 ring-inset ring-white/[0.18] flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform bg-primary text-white hover:bg-primary/90"
+              // Ring brightens while follow is actually engaged (mirrors the
+              // imperative `following` flag), so the FAB reads as ON/OFF truthfully.
+              className={`absolute right-3 z-20 rounded-full ring-inset flex items-center justify-center active:scale-[0.97] transform-gpu transition-transform bg-primary text-white hover:bg-primary/90 ${followEngaged ? "ring-2 ring-white/80" : "ring-1 ring-white/[0.18]"}`}
             >
               <LocateFixed className="w-6 h-6" />
             </button>
