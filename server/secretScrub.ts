@@ -35,9 +35,28 @@ export const SECRET_TEXT_PATTERNS: readonly RegExp[] = [
   /pk\.eyJ[A-Za-z0-9._-]{20,}/g, // Mapbox public tokens — served via /api/config/map only
 ];
 
+// Cheap pre-filter markers: EVERY pattern in SECRET_TEXT_PATTERNS requires one
+// of these substrings to match at all — "eyJ" (raw JWT, `Bearer eyJ…`, and the
+// `pk.eyJ…` Mapbox token all contain it), "Basic " (HTTP Basic), or "gokinetic"
+// (the upstream host/URL, case-insensitive). A string containing none of them
+// cannot match any pattern, so the 6-regex pass is pure waste on it. Keep this
+// list in lockstep with SECRET_TEXT_PATTERNS above.
+const SECRET_MARKERS: readonly string[] = ["eyJ", "Basic "];
+
 /** Redact every known secret shape from one free-text value. Never throws. */
 export function scrubSecretText<T extends string | null | undefined>(value: T): T {
   if (typeof value !== "string" || value.length === 0) return value;
+  // Fast path for the overwhelming majority of response strings (addresses,
+  // names, statuses, notes): if no secret marker is present, NO pattern can
+  // match, so skip the six /g regexes entirely. This is the same result the
+  // full pass would produce — never weaker — at a fraction of the CPU, which
+  // matters because the global response sanitizer runs this on every string of
+  // every non-exempt response on the single Node thread (e.g. a 500-row lead
+  // list is tens of thousands of strings). The `gokinetic` check is a
+  // case-insensitive regex only reached when the two cheap includes() miss.
+  if (!SECRET_MARKERS.some((m) => value.includes(m)) && !/gokinetic/i.test(value)) {
+    return value;
+  }
   let out: string = value;
   for (const re of SECRET_TEXT_PATTERNS) {
     re.lastIndex = 0;
