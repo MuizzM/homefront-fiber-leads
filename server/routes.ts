@@ -2020,6 +2020,55 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       String((parsed.data as any).zip ?? ""),
     );
     if (existing) {
+      // FCC adopt-on-tap (#61): a one-tap add onto an UNWORKED fcc-imported
+      // "ghost" must NOT dead-end on "already exists / no pin". Adopt it instead
+      // — retag off fcc, drop it at the tapped rooftop, and hand it to the
+      // tapping rep so it becomes their live, in-scope, knockable pin. The guard
+      // lives in storage.adoptFccLead: it re-selects the row through the EXACT
+      // purge "removable" predicate (fcc-family tag + zero history), the caller's
+      // tenant, and a "not another rep's lead" check, all inside one transaction.
+      // A worked/sold/non-fcc/foreign row matches nothing → undefined → we fall
+      // through to today's honest-exists response below, unchanged. Adoption is
+      // NOT a sale: no commission/statement row is created or touched here.
+      //
+      // The adopted pin lives at the tapped rooftop (parsed.data.lat/lng); if the
+      // tap carried no coords we keep the ghost's own (COALESCE in the update),
+      // and only if it has none either do we forward-geocode once, exactly like
+      // the create path below.
+      const repId = req.user?.teamMemberId ?? null;
+      let adoptLat = (parsed.data as any).lat ?? null;
+      let adoptLng = (parsed.data as any).lng ?? null;
+      if ((adoptLat == null || adoptLng == null) &&
+          (existing as any).lat == null && (existing as any).lng == null) {
+        const q = [parsed.data.address, parsed.data.city, parsed.data.state, (parsed.data as any).zip]
+          .filter(Boolean).join(", ");
+        const geo = await forwardGeocodeOnce(q);
+        if (geo) { adoptLat = geo.lat; adoptLng = geo.lng; }
+      }
+      const adoptedRow = storage.adoptFccLead(existing.id, tenantId, { repId, lat: adoptLat, lng: adoptLng });
+      if (adoptedRow) {
+        // A ghost just became a live door → same projection the create path emits
+        // so the map can draw it without a refetch (repCanAccessLead authorizes
+        // it: the lead is now assigned to the tapping rep, i.e. in their scope).
+        emitLeadChange("status", adoptedRow, req.user, tenantId);
+        recordAdminAudit({
+          ...auditContext(req),
+          action: "lead.fcc_adopted", targetType: "lead", targetId: adoptedRow.id,
+          targetLabel: parsed.data.address ?? String(adoptedRow.id),
+          before: { leadTag: (existing as any).lead_tag ?? null, assignedRepId: (existing as any).assigned_rep_id ?? null },
+          after: { leadTag: adoptedRow.leadTag ?? null, assignedRepId: adoptedRow.assignedRepId ?? null },
+          tenantId, outcome: "success",
+        });
+        const assignedRepName = repId != null
+          ? (storage.getTeamMemberById(repId)?.name ?? null)
+          : (req.user?.name ?? null);
+        return res.status(200).json({
+          ...stripProviderIds(adoptedRow, req.user),
+          existed: true,
+          adopted: true,
+          visibility: { geocoded: true, hiddenStatus: null, inYourScope: true, assignedRepName, reason: "visible" },
+        });
+      }
       // Honest surfacing (phantom-duplicate fix): the map only draws a pin when
       // the lead is geocoded, NOT in a suppressing status, IN the caller's scope,
       // and in the viewport. When the existing row fails any of the first three,

@@ -329,6 +329,12 @@ export interface IStorage {
   // fcc-family tag AND completely unworked; everything else is protected.
   countFccPurge(tenantId?: number): { total: number; removable: number; protected: number };
   purgeFccLeads(tenantId?: number): number;
+  // FCC adopt-on-tap (#61): atomically turn an UNWORKED fcc ghost into the
+  // tapping rep's own live pin (retag off fcc, drop at the tapped rooftop,
+  // assign to the rep). Guarded by the SAME "removable" predicate the purge
+  // uses; returns the updated row, or undefined when the row is not adoptable
+  // (worked/sold/non-fcc/foreign/another rep's) so the caller keeps honest-exists.
+  adoptFccLead(leadId: number, tenantId: number, opts: { repId: number | null; lat?: number | null; lng?: number | null }): Lead | undefined;
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[];
   searchLeadsPage(
     query: string,
@@ -3377,6 +3383,48 @@ export class Storage implements IStorage {
     if (removed > 0) bustPinCaches(tenantId);
     return removed;
   }
+
+  // FCC adopt-on-tap (#61): a one-tap add onto an UNWORKED fcc-imported ghost
+  // ADOPTS it — retags off fcc, drops it at the tapped rooftop, and hands it to
+  // the tapping rep — instead of dead-ending on "already exists / no pin". The
+  // guard is the EXACT "removable" notion the purge deletes with (fccPurgeWhere:
+  // fcc-family tag + zero history), so a worked/sold/non-fcc/foreign row is left
+  // untouched and the caller falls through to the honest-exists response.
+  //
+  // ATOMIC: one transaction, one UPDATE whose WHERE re-selects the row through
+  // that same predicate (plus this lead's id, a tenant guard, and a "not another
+  // rep's lead" guard) — so a non-adoptable row changes nothing and returns
+  // undefined, and a second tap (now un-tagged) also matches nothing (idempotent,
+  // no double-adopt). This is NOT a sale: no commission/statement/knock row is
+  // read or written here.
+  adoptFccLead(leadId: number, tenantId: number, opts: { repId: number | null; lat?: number | null; lng?: number | null }): Lead | undefined {
+    const { scope, fcc, removable, params } = this.fccPurgeWhere(tenantId);
+    return rawDb.transaction((): Lead | undefined => {
+      const changed = rawDb.prepare(`
+        UPDATE leads
+        SET lead_tag = NULL,
+            assigned_rep_id = ?,
+            lat = COALESCE(?, lat),
+            lng = COALESCE(?, lng),
+            updated_at = ?
+        WHERE id IN (
+          SELECT l.id FROM leads l
+          WHERE ${scope} AND ${fcc} AND ${removable}
+            AND l.id = ?
+            AND (l.assigned_rep_id IS NULL OR l.assigned_rep_id = ?)
+        )
+      `).run(
+        opts.repId ?? null, opts.lat ?? null, opts.lng ?? null, new Date().toISOString(),
+        ...params, leadId, opts.repId ?? null,
+      ).changes;
+      if (changed === 0) return undefined;
+      // Pins changed (a ghost became a live, in-scope pin) → cache + ETag version
+      // must move, same choke point every lead write uses.
+      bustPinCaches(tenantId);
+      return this.getLeadById(leadId, tenantId);
+    })();
+  }
+
   searchLeads(query: string, tenantId?: number, assignedRep?: number | number[]): Lead[] {
     return this.searchLeadsPage(query, tenantId, assignedRep, { limit: 500, offset: 0 }).rows;
   }
