@@ -7,10 +7,13 @@ import {
   classifyKnockFailure,
   droppedKnockToast,
   forbiddenKnockReason,
+  isAutoRetryableDeadKnock,
   isKnockableLeadId,
+  isLikelyRestartBurst403,
   knockFailureStatus,
   migrateQueuedKnock,
   needsAttentionText,
+  RESTART_BURST_WINDOW_MS,
   summarizeDeadKnock,
   terminalKnockReason,
   triageRehydratedKnock,
@@ -64,6 +67,39 @@ describe("classifyKnockFailure — terminal vs retryable", () => {
     expect(knockFailureStatus("404: Not found")).toBe(404);
     expect(knockFailureStatus("Failed to fetch")).toBeNull();
     expect(knockFailureStatus("99: not an http status")).toBeNull();
+  });
+});
+
+describe("isLikelyRestartBurst403 — a 403 during a restart burst is a proxy artifact", () => {
+  it("treats a 403 within the burst window of a transient failure as transient", () => {
+    expect(isLikelyRestartBurst403("forbidden", 1_000, 1_000)).toBe(true);
+    expect(isLikelyRestartBurst403("forbidden", 1_000, 1_000 + RESTART_BURST_WINDOW_MS)).toBe(true);
+  });
+
+  it("a clean-air 403 (no transient failure seen, or window expired) is NOT a burst", () => {
+    expect(isLikelyRestartBurst403("forbidden", 0, 5_000)).toBe(false); // never saw one
+    expect(isLikelyRestartBurst403("forbidden", 1_000, 1_001 + RESTART_BURST_WINDOW_MS)).toBe(false);
+  });
+
+  it("applies only to the forbidden (403) class and tolerates clock weirdness", () => {
+    expect(isLikelyRestartBurst403("retryable", 1_000, 2_000)).toBe(false);
+    expect(isLikelyRestartBurst403("terminal", 1_000, 2_000)).toBe(false);
+    expect(isLikelyRestartBurst403("auth", 1_000, 2_000)).toBe(false);
+    expect(isLikelyRestartBurst403("forbidden", 5_000, 1_000)).toBe(false); // clock went backwards
+  });
+});
+
+describe("isAutoRetryableDeadKnock — what a recovery signal may silently retry", () => {
+  it("allows the 403 class and transient leftovers — the same set that gets a Retry button", () => {
+    expect(isAutoRetryableDeadKnock(item({ lastError: "403: forbidden" }))).toBe(true);
+    expect(isAutoRetryableDeadKnock(item({ lastError: "503: unavailable" }))).toBe(true);
+    expect(isAutoRetryableDeadKnock(item({ lastError: "Failed to fetch" }))).toBe(true);
+  });
+
+  it("NEVER allows a terminal leftover — auto-retrying it would be the same lie as its Retry", () => {
+    expect(isAutoRetryableDeadKnock(item({ lastError: "404: Not found" }))).toBe(false);
+    expect(isAutoRetryableDeadKnock(item({ lastError: "400: invalid outcome" }))).toBe(false);
+    expect(isAutoRetryableDeadKnock(item({ lastError: "422: unprocessable" }))).toBe(false);
   });
 });
 

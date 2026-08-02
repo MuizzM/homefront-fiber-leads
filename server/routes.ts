@@ -1998,7 +1998,42 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       String((parsed.data as any).zip ?? ""),
     );
     if (existing) {
-      return res.status(200).json({ ...stripProviderIds(existing, req.user), existed: true });
+      // Honest surfacing (phantom-duplicate fix): the map only draws a pin when
+      // the lead is geocoded, NOT in a suppressing status, IN the caller's scope,
+      // and in the viewport. When the existing row fails any of the first three,
+      // the old {existed:true} response let the client "select a pin" that never
+      // rendered → "exists but no pin". `visibility` (ADDITIVE, does not change
+      // what counts as a duplicate) tells the client WHY the caller can't see it
+      // so it can explain + open the lead by id instead of flashing a ghost.
+      //
+      // Fetch the camelCase row (findLeadByAddress returns raw snake_case) so the
+      // SAME scope predicate the map/single-lead reads use (repCanAccessLead)
+      // applies unchanged.
+      const camel = storage.getLeadById(existing.id, tenantId);
+      const HIDDEN_STATUSES = new Set(["competitor_suppressed", "scope_suppressed", "address_review"]);
+      const geocoded = camel?.lat != null && camel?.lng != null;
+      const hiddenStatus = camel && HIDDEN_STATUSES.has(String(camel.leadStatus)) ? String(camel.leadStatus) : null;
+      // inYourScope is AUTHORITATIVE — identical to GET /api/leads/:id's gate, so
+      // the client can trust it to decide whether opening the lead would 404.
+      // Admin/manager => true; team_lead/rep => assigned to them/their team,
+      // holds the lead's territory, or (repCanAccessLead) unassigned-in-scope.
+      const inYourScope = camel ? repCanAccessLead(req.user, camel) : false;
+      const reason: "ungeocoded" | "hidden_status" | "out_of_scope" | "visible" =
+        !geocoded ? "ungeocoded"
+        : hiddenStatus ? "hidden_status"
+        : !inYourScope ? "out_of_scope"
+        : "visible";
+      // NEVER leak another team's rep name to a rep who shouldn't see it: only
+      // when the caller may access the lead (inYourScope is already true for
+      // manager+, whose scope is org-wide).
+      const assignedRepName = camel?.assignedRepId != null && inYourScope
+        ? (storage.getTeamMemberById(camel.assignedRepId)?.name ?? null)
+        : null;
+      return res.status(200).json({
+        ...stripProviderIds(existing, req.user),
+        existed: true,
+        visibility: { geocoded, hiddenStatus, inYourScope, assignedRepName, reason },
+      });
     }
     const safeLead = {
       ...parsed.data,

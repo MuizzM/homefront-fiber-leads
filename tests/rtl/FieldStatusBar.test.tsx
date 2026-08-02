@@ -115,6 +115,29 @@ describe("FieldStatusBar — needs attention with door + reason", () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
+  it("the pill clears itself when the dead lane self-heals — auto-retry delivered, no manual Retry", () => {
+    mockState.snap = { ...mockState.snap, deadCount: 1, deadItems: [deadItem()] };
+    const qc = new QueryClient();
+    qc.setQueryData(["/api/leads/map"], { pins: [{ id: 42, address: "42 Oak St" }] });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <FieldStatusBar />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId("field-status").textContent).toContain("42 Oak St needs attention");
+
+    // A recovery signal (online / foreground / successful response) ran the
+    // queue's silent sweep and the knock delivered — the snapshot heals.
+    mockState.snap = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true };
+    rerender(
+      <QueryClientProvider client={qc}>
+        <FieldStatusBar />
+      </QueryClientProvider>,
+    );
+    expect(screen.queryByTestId("field-status")).toBeNull();
+    expect(mockState.queue.retryDead).not.toHaveBeenCalled(); // zero human action
+  });
+
   it("keeps the offline state's honest saved-on-device copy", () => {
     mockState.online = false;
     mockState.snap = { ...mockState.snap, pendingCount: 2 };

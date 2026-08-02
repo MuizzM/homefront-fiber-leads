@@ -44,7 +44,7 @@ import { apiRequest, getStoredSessionId } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { useSustained } from "@/hooks/use-sustained";
 import { LeadCard, type CardProperty } from "@/components/LeadCard";
-import { AddLeadSheet } from "@/components/AddLeadSheet";
+import { AddLeadSheet, planExistingLead, type LeadVisibility } from "@/components/AddLeadSheet";
 import { reverseGeocode } from "@/lib/reverseGeocode";
 import { useAuth } from "@/lib/auth";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -52,7 +52,7 @@ import type { TeamMember, Territory } from "@shared/schema";
 import { colorForRep } from "@shared/repColors";
 import { TerritoryDetailPanel } from "@/components/TerritoryDetailPanel";
 import { TerritoryActivityDrawer } from "@/components/TerritoryActivityDrawer";
-import { LeadKnockSheet } from "@/components/LeadKnockSheet";
+import { LeadKnockSheet, type SheetLead } from "@/components/LeadKnockSheet";
 import { LeadsInViewPanel } from "@/components/LeadsInViewPanel";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { captureFieldFix } from "@/lib/geoFix";
@@ -1170,6 +1170,13 @@ export default function MapView() {
   // by the selected-ring rAF below — the map twin of the card pill's tap-flash so
   // both surfaces confirm a disposition the same way. { at, color } or null.
   const ringFlashRef = useRef<{ at: number; color: string } | null>(null);
+  // Stable handle to the reason-aware existing-lead handler (defined far below).
+  // The one-tap __onTapAddress effect lives ABOVE that definition, so it calls
+  // through this ref to avoid a temporal-dead-zone reference and to always run
+  // the LATEST closure (fresh leadById/cache) without re-registering the effect.
+  const openExistingLeadRef = useRef<
+    (id: number, address: string, visibility?: LeadVisibility) => void
+  >(() => {});
 
   // Territory requests (admin/manager)
   const { data: territoryRequests = [] } = useQuery<
@@ -3457,15 +3464,12 @@ export default function MapView() {
           if (added?.id == null) throw new Error("lead create returned no id");
           const finalAddress = added.address ?? resolved.address;
           if (added.existed === true) {
-            // Duplicate path: the house is already on the map under the
-            // EXISTING lead's id — drop the temp pin, flash + select the real
-            // one so the rep sees exactly which door they meant.
+            // Duplicate path: drop the temp pin, then let the shared reason-aware
+            // handler decide — flash the real pin when it genuinely renders, or
+            // explain honestly (and open the lead by id) when it doesn't. NEVER
+            // inject a fabricated pin for an ungeocoded/hidden/out-of-scope lead.
             removeTempPin();
-            setSelectedLeadId(added.id);
-            try {
-              ringFlashRef.current = { at: performance.now(), color: STATE_COLORS.unworked };
-            } catch { /* flash is best-effort */ }
-            toast({ title: "Already on the map", severity: "success", description: finalAddress });
+            openExistingLeadRef.current(added.id, finalAddress, added.visibility as LeadVisibility | undefined);
           } else {
             // Reconcile temp id → real id in the query cache…
             qc.setQueryData(["/api/leads/map"], (old: any) => {
@@ -5217,6 +5221,54 @@ export default function MapView() {
     });
   }, []);
 
+  // ── Existing-lead surfacing (phantom-duplicate fix) ────────────────────────
+  // POST /api/leads answers a duplicate address with {existed:true, visibility}.
+  // The map draws a pin ONLY when the lead is geocoded, not in a suppressing
+  // status, in the caller's scope, and in the viewport — so the old blind
+  // "select + flash" flashed nothing when the existing lead failed any of those,
+  // producing "it says it already exists but there's no pin".
+  //
+  // Reason-aware, HONEST behavior (never fabricates a pin or access):
+  //   • visible      → genuinely on the map: select + flash + fly (today's path).
+  //   • ungeocoded / hidden_status / out_of_scope → name WHY in plain words, and
+  //     OPEN THE LEAD BY ID when the caller may access it (visibility.inYourScope
+  //     — the same gate GET /api/leads/:id uses, so opening can't 404). A rep
+  //     locked out of an out-of-scope lead gets the plain explanation only.
+  const openExistingLead = useCallback(
+    (id: number, address: string, visibility?: LeadVisibility) => {
+      const plan = planExistingLead(address, visibility);
+      // Open by id BEFORE the fly: the sheet loads detail from /api/leads/:id and
+      // no longer requires a rendered pin (see the selectedLead fallback below).
+      // `plan.open` is false only for a rep locked out of an out-of-scope lead,
+      // so we never hand them a 404.
+      if (plan.open) setSelectedLeadId(id);
+      if (plan.flash) {
+        try {
+          ringFlashRef.current = { at: performance.now(), color: STATE_COLORS.unworked };
+        } catch { /* flash is best-effort */ }
+      }
+      if (plan.fly) {
+        // The pin exists — fly to it once the cache settles this tick.
+        requestAnimationFrame(() => {
+          const pin =
+            leadById.get(id) ??
+            (qc.getQueryData<any>(["/api/leads/map"])?.pins ?? []).find(
+              (p: MapPin) => p.id === id,
+            );
+          if (pin?.lat && pin?.lng) flyToLead(pin as MapPin);
+        });
+      }
+      toast({
+        title: plan.toastTitle,
+        description: plan.toastDescription,
+        ...(plan.severity ? { severity: plan.severity } : {}),
+      });
+    },
+    [leadById, qc, flyToLead, toast],
+  );
+  // Keep the above-defined one-tap effect pointed at the latest closure.
+  openExistingLeadRef.current = openExistingLead;
+
   // "Next door" — the map's next-best-property flow. Same routing brain as the
   // Today hero (shared nearestUnworkedLead): from where the rep is STANDING
   // (fresh/cached GPS via captureFieldFix — never rejects; falls back to the
@@ -5640,8 +5692,40 @@ export default function MapView() {
     }
   }, [leadStream, queueSnap]);
 
-  const selectedLead =
+  const selectedPin =
     selectedLeadId != null ? (leadById.get(selectedLeadId) ?? null) : null;
+  // Phantom-duplicate fix: a lead surfaced via the existed handler may have NO
+  // pin on this map (ungeocoded, held-back status, or off-viewport but IN the
+  // caller's scope). The knock sheet mounts off the `lead` prop, which normally
+  // comes only from the pin cache — so with no pin it never opened. When a
+  // positive id is selected but absent from the pin cache, fetch its detail
+  // (shares the SAME queryKey the sheet's own detailQuery uses, so no extra
+  // request) and synthesize a minimal SheetLead so the sheet opens from the id
+  // alone. This is the ONLY consumer of this fetch — the map pin pipeline is
+  // untouched, no fabricated pin ever enters the map cache.
+  const needsDetailFallback =
+    selectedLeadId != null && selectedLeadId > 0 && selectedPin == null;
+  const selectedDetailQuery = useQuery<any>({
+    queryKey: [`/api/leads/${selectedLeadId}`],
+    enabled: needsDetailFallback,
+    staleTime: 30_000,
+  });
+  const selectedLead: SheetLead | null = selectedPin
+    ? selectedPin
+    : needsDetailFallback && selectedDetailQuery.data
+      ? {
+          id: selectedDetailQuery.data.id,
+          address: selectedDetailQuery.data.address ?? "",
+          city: selectedDetailQuery.data.city ?? null,
+          state: selectedDetailQuery.data.state ?? null,
+          zip: selectedDetailQuery.data.zip ?? null,
+          lat: selectedDetailQuery.data.lat ?? null,
+          lng: selectedDetailQuery.data.lng ?? null,
+          leadStatus: selectedDetailQuery.data.leadStatus ?? "prospect",
+          assignedRepId: selectedDetailQuery.data.assignedRepId ?? null,
+          leadTag: selectedDetailQuery.data.leadTag ?? null,
+        }
+      : null;
 
   // One-tap disposition: optimistic pin recolor FIRST (marking a door must feel
   // instant in the field), then the offline-safe enqueue. useKnockLogger owns
@@ -8744,11 +8828,18 @@ export default function MapView() {
         <AddLeadSheet
           initial={addLeadInitial}
           onClose={() => setAddLeadInitial(null)}
-          onCreated={(leadId) => {
-            // Confirmation the rep can SEE: select the new/existing pin, fly the
+          onCreated={(leadId, opts) => {
+            // DUPLICATE: hand off to the reason-aware handler — it flashes the
+            // pin only when the lead truly renders, and otherwise explains WHY
+            // it's off the map and opens it by id (no fabricated pin).
+            if (opts?.existed) {
+              openExistingLead(leadId, opts.address ?? "", opts.visibility);
+              return;
+            }
+            // NEW lead: confirmation the rep can SEE: select the pin, fly the
             // camera to it (padded above the knock sheet), pop the ring flash.
-            // The pin itself is already in the map cache (optimistic insert or
-            // the existing feature), so this is pure camera + selection work.
+            // The pin itself is already in the map cache (optimistic insert), so
+            // this is pure camera + selection work.
             setSelectedLeadId(leadId);
             try {
               ringFlashRef.current = {

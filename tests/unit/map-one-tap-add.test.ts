@@ -57,14 +57,33 @@ describe("one-tap add drops the pin BEFORE any network await", () => {
     expect(body).toContain("scheduleClusterSetData()");
   });
 
-  it("duplicate path (existed:true) removes the temp pin and selects the existing lead", () => {
+  it("duplicate path (existed:true) drops the temp pin and hands off to the reason-aware handler", () => {
     const dup = body.indexOf("added.existed === true");
     expect(dup).toBeGreaterThan(-1);
     const arm = body.slice(dup, body.indexOf("} else {", dup));
     expect(arm).toContain("removeTempPin()");
-    expect(arm).toContain("setSelectedLeadId(added.id)");
-    expect(arm).toContain("ringFlashRef.current"); // flash the real pin
-    expect(arm).toContain("Already on the map");
+    // Honest surfacing (phantom-duplicate fix): the arm no longer blindly
+    // selects + flashes (which flashed nothing when the existing lead had no
+    // pin). It delegates to the shared handler, forwarding the server's
+    // visibility so the handler can flash a REAL pin or explain an off-map lead.
+    expect(arm).toContain("openExistingLeadRef.current(added.id, finalAddress, added.visibility");
+    // It must NOT fabricate a pin for a duplicate that isn't on the map.
+    expect(arm).not.toContain('qc.setQueryData(["/api/leads/map"]');
+  });
+
+  it("the shared existing-lead handler flashes/flies only for a genuinely-visible pin and explains otherwise", () => {
+    // The 'visible' branch keeps today's flash + fly + select; the off-map
+    // branches (ungeocoded / hidden / out-of-scope) open by id and explain,
+    // never inject a pin. The decision itself is the pure planExistingLead.
+    const start = src.indexOf("const openExistingLead = useCallback");
+    expect(start).toBeGreaterThan(-1);
+    const handler = src.slice(start, src.indexOf("openExistingLeadRef.current = openExistingLead", start));
+    expect(handler).toContain("planExistingLead(address, visibility)");
+    expect(handler).toContain("ringFlashRef.current"); // flash gated on plan.flash
+    expect(handler).toContain("flyToLead");            // fly gated on plan.fly
+    expect(handler).toContain("setSelectedLeadId(id)"); // open gated on plan.open
+    // No fabricated pin injection anywhere in the handler.
+    expect(handler).not.toContain('qc.setQueryData(["/api/leads/map"]');
   });
 
   it("failure removes the temp pin with ONE destructive toast naming the street", () => {

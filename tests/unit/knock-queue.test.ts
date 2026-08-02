@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { createKnockQueue } from "@/lib/knockQueue";
+import { createKnockQueue, getKnockQueue } from "@/lib/knockQueue";
+import { noteQueryOutcome } from "@/lib/queryClient";
+import { RESTART_BURST_WINDOW_MS } from "@/features/knocking/knockFailurePolicy";
 import { KNOCK_QUEUE_MAX_ATTEMPTS } from "@shared/knock";
 
 /**
@@ -34,9 +36,23 @@ import { KNOCK_QUEUE_MAX_ATTEMPTS } from "@shared/knock";
  *     403              → bounded retries, then parks in the DEAD lane (a CSRF
  *                        403 heals after re-login, so Retry plausibly works).
  *                        retryDead() resets attempts/backoff and redelivers.
+ *                        EXCEPT during a restart burst: a 403 landing within
+ *                        RESTART_BURST_WINDOW_MS of a transient failure on the
+ *                        same queue is a reverse-proxy artifact of the outage —
+ *                        classified TRANSIENT, bounded budget untouched.
  *     other 4xx        → TERMINAL: the server can never accept it. AUTO-RESOLVES
  *                        (dropped, onResolved(item, reason) fired once, logged) —
  *                        never a "needs attention" nag, never blocks the line.
+ *
+ *   SELF-HEALING DEAD LANE: recovery signals — the browser online event, the
+ *   app returning to the foreground (visibilitychange), ANY successful delivery
+ *   on the queue, the query client's first successful fetch after a failure
+ *   period (noteQueryOutcome → signalKnockRecovery → notifyRecovery), and app
+ *   load itself — each run ONE silent retry sweep of the RETRYABLE dead items
+ *   (one attempt per item; success clears the pill with zero human action, a
+ *   clean-air 403 re-parks immediately). A 60s cooldown between sweeps means a
+ *   genuinely broken server is never hot-looped. Non-retryable items are never
+ *   swept. The manual Retry contract is unchanged while items are parked.
  *   Enqueueing a non-positive leadId (temp optimistic pin) throws — poison can
  *   never enter the queue. Rehydration triages persisted items: stale shapes
  *   are migrated, undeliverable items (temp ids, unknown outcomes, dead items
@@ -438,19 +454,46 @@ describe("knockQueue — rehydration triage (reload survival)", () => {
   const seed = (storage: ReturnType<typeof fakeStorage>, lane: "hf.knockQueue.v1.9" | "hf.knockDead.v1.9", items: unknown[]) =>
     storage.setItem(lane, JSON.stringify({ v: 1, items }));
 
-  it("a 403 dead item survives reload in the dead lane and retryDead still redelivers it", async () => {
+  it("REHYDRATION HEAL: a rehydrated retryable dead item gets one SILENT retry at load and clears itself", async () => {
     const storage = fakeStorage();
     seed(storage, "hf.knockDead.v1.9", [baseItem({ lastError: "403: forbidden", attempts: 8 })]);
 
+    // The server restarted overnight and is healthy again — the old parked
+    // knock delivers on load with ZERO human action, and the pill never shows.
     const { q, post } = mkQueue({ storage });
     await vi.advanceTimersByTimeAsync(0); // settle load-time microtasks
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][0]).toBe("/api/leads/7/knock");
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(leadState(q, 7)).toBe("saved");
+  });
+
+  it("a rehydrated dead item whose silent retry STILL 403s re-parks after ONE attempt; manual Retry still redelivers", async () => {
+    const storage = fakeStorage();
+    seed(storage, "hf.knockDead.v1.9", [baseItem({ lastError: "403: forbidden", attempts: 8 })]);
+
+    let broken = true;
+    const { q, post } = mkQueue({
+      storage,
+      post: async () => {
+        if (broken) throw new Error("403: forbidden");
+        return { id: 12 };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // Exactly one silent attempt — the server is genuinely still broken, so the
+    // item goes straight back to the dead lane and the pill stays honest.
+    expect(post).toHaveBeenCalledTimes(1);
     expect(q.getSnapshot().deadCount).toBe(1);
     expect(q.getSnapshot().deadItems[0]).toMatchObject({ leadId: 7, retryable: true });
     expect(leadState(q, 7)).toBe("error");
 
+    // The FieldStatusBar's manual Retry contract is unchanged while it exists.
+    broken = false;
     q.retryDead();
     await q.flush();
-    expect(post).toHaveBeenCalledTimes(1);
+    expect(post).toHaveBeenCalledTimes(2);
     expect(q.getSnapshot().deadCount).toBe(0);
     expect(q.getSnapshot().pendingCount).toBe(0);
     expect(leadState(q, 7)).toBe("saved");
@@ -525,6 +568,206 @@ describe("knockQueue — rehydration triage (reload survival)", () => {
       callbackDate: "2026-08-02", repLat: null, mockLocation: null, appVersion: null,
     });
     expect(q.getSnapshot().pendingCount).toBe(0);
+  });
+});
+
+describe("knockQueue — restart-burst 403 classification", () => {
+  it("a 403 during a restart burst stays PENDING with the retry budget untouched, then delivers on recovery", async () => {
+    let mode: "down" | "proxy403" | "ok" = "down";
+    const { q, storage } = mkQueue({
+      post: async () => {
+        if (mode === "down") throw new Error("503: unavailable");
+        if (mode === "proxy403") throw new Error("403: Forbidden");
+        return { id: 31 };
+      },
+    });
+    await q.enqueue({ leadId: 7, outcome: "interested" }); // 503 opens the burst window
+    expect(readEnvelope(storage).items[0].attempts).toBe(1);
+
+    // The reverse proxy answers 403 while the server restarts — hammer well
+    // past the bounded budget, all inside the burst window (4s backoff each).
+    mode = "proxy403";
+    for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS + 2; i++) {
+      await vi.advanceTimersByTimeAsync(4_000);
+      await q.flush();
+    }
+    expect(q.getSnapshot().deadCount).toBe(0); // never parked — the pill never appears
+    expect(q.getSnapshot().pendingCount).toBe(1); // still in delivery
+    expect(readEnvelope(storage).items[0].attempts).toBe(1); // budget untouched
+    expect(leadState(q, 7)).toBe("queued");
+
+    // Restart finishes — the queue's own timer delivers it, no human action.
+    mode = "ok";
+    await vi.advanceTimersByTimeAsync(4_000);
+    await q.flush();
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(q.getSnapshot().deadCount).toBe(0);
+  });
+
+  it("a clean-air 403 AFTER the burst window closes resumes the bounded → dead-lane path", async () => {
+    let mode: "down" | "authz403" = "down";
+    const { q, setOnline } = mkQueue({
+      post: async () => {
+        throw new Error(mode === "down" ? "503: unavailable" : "403: not your lead");
+      },
+    });
+    await q.enqueue({ leadId: 7, outcome: "sold" }); // 503 opens the window…
+    // …then radio silence until the window has fully expired.
+    setOnline(false);
+    await vi.advanceTimersByTimeAsync(RESTART_BURST_WINDOW_MS + 1_000);
+    setOnline(true);
+
+    mode = "authz403"; // a REAL 403 now — no recent transient failure
+    for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS; i++) {
+      await vi.advanceTimersByTimeAsync(61_000);
+      await q.flush();
+    }
+    // The bounded budget was consumed and the knock parked for a human.
+    expect(q.getSnapshot().deadCount).toBe(1);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(q.getSnapshot().deadItems[0]).toMatchObject({ leadId: 7, retryable: true });
+  });
+});
+
+describe("knockQueue — self-healing dead lane (recovery signals)", () => {
+  // Park one 403 dead item the way production does: bounded retries, then dead.
+  const park403 = async (q: ReturnType<typeof createKnockQueue>) => {
+    await q.enqueue({ leadId: 7, outcome: "sold" });
+    for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS - 1; i++) {
+      vi.advanceTimersByTime(61_000);
+      await q.flush();
+    }
+    expect(q.getSnapshot().deadCount).toBe(1);
+  };
+
+  it("the browser online event auto-retries the dead lane ONCE, with the 60s cooldown enforced", async () => {
+    let healthy = false;
+    const { q, post } = mkQueue({
+      post: async () => {
+        if (!healthy) throw new Error("403: Forbidden");
+        return { id: 61 };
+      },
+    });
+    await park403(q);
+    const before = post.mock.calls.length;
+
+    // Server still broken: the sweep spends exactly ONE silent attempt, then
+    // re-parks — the pill stays honest while the server is actually down.
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(post).toHaveBeenCalledTimes(before + 1);
+    expect(q.getSnapshot().deadCount).toBe(1);
+
+    // A second signal inside the cooldown must NOT hot-loop the server.
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(post).toHaveBeenCalledTimes(before + 1);
+    expect(q.getSnapshot().deadCount).toBe(1);
+
+    // Past the cooldown with the server healthy: the pill clears itself.
+    healthy = true;
+    vi.advanceTimersByTime(60_000);
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    q.destroy();
+  });
+
+  it("returning to the foreground (visibilitychange) sweeps the dead lane — pill clears with zero taps", async () => {
+    let healthy = false;
+    const { q, post } = mkQueue({
+      post: async () => {
+        if (!healthy) throw new Error("403: Forbidden");
+        return { id: 62 };
+      },
+    });
+    await park403(q);
+    const before = post.mock.calls.length;
+
+    healthy = true; // the outage ended while the app was backgrounded
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(post).toHaveBeenCalledTimes(before + 1);
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(leadState(q, 7)).toBe("saved");
+    q.destroy();
+  });
+
+  it("a successful delivery on the queue is itself a recovery signal — dead items ride the same flush", async () => {
+    let broken = true;
+    const { q, post } = mkQueue({
+      post: async () => {
+        if (broken) throw new Error("403: Forbidden");
+        return { id: 71 };
+      },
+    });
+    await park403(q);
+
+    // The rep knocks the next door once the server is back — that first
+    // successful authenticated response heals the parked knock automatically.
+    broken = false;
+    await q.enqueue({ leadId: 8, outcome: "interested" });
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    const lead7Posts = post.mock.calls.filter(([url]) => url === "/api/leads/7/knock").length;
+    expect(lead7Posts).toBe(KNOCK_QUEUE_MAX_ATTEMPTS + 1); // bounded retries + the auto-heal
+    expect(leadState(q, 8)).toBe("saved");
+    q.destroy();
+  });
+
+  it("the query client's first successful fetch after a failure period sweeps registered queues", async () => {
+    let healthy = false;
+    const post = vi.fn(async () => {
+      if (!healthy) throw new Error("403: Forbidden");
+      return { id: 81 };
+    });
+    const q = getKnockQueue({
+      repId: 971, // unique so the registry entry can't collide with other tests
+      storage: fakeStorage(),
+      post,
+      patch: vi.fn(async () => ({})),
+      isOnline: () => true,
+      now: () => Date.now(),
+    });
+    try {
+      await q.enqueue({ leadId: 7, outcome: "sold" });
+      for (let i = 0; i < KNOCK_QUEUE_MAX_ATTEMPTS - 1; i++) {
+        vi.advanceTimersByTime(61_000);
+        await q.flush();
+      }
+      expect(q.getSnapshot().deadCount).toBe(1);
+      healthy = true;
+
+      // A success with NO preceding failure period is not a recovery edge.
+      noteQueryOutcome(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(q.getSnapshot().deadCount).toBe(1);
+
+      // Failure period → FIRST success after it = the recovery edge.
+      noteQueryOutcome(false);
+      noteQueryOutcome(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(q.getSnapshot().deadCount).toBe(0);
+      expect(q.getSnapshot().pendingCount).toBe(0);
+    } finally {
+      q.destroy();
+    }
+  });
+
+  it("flush alone still never touches the dead lane — only recovery signals sweep it", async () => {
+    const { q, post } = mkQueue({
+      post: async () => {
+        throw new Error("403: Forbidden");
+      },
+    });
+    await park403(q);
+    const before = post.mock.calls.length;
+    await q.flush(); // no success, no signal → the dead item is not re-posted
+    expect(post).toHaveBeenCalledTimes(before);
+    expect(q.getSnapshot().deadCount).toBe(1);
+    q.destroy();
   });
 });
 

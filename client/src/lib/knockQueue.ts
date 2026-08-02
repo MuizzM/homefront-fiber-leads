@@ -16,7 +16,9 @@ import {
 } from "@shared/knock";
 import {
   classifyKnockFailure,
+  isAutoRetryableDeadKnock,
   isKnockableLeadId,
+  isLikelyRestartBurst403,
   summarizeDeadKnock,
   terminalKnockReason,
   triageRehydratedKnock,
@@ -97,6 +99,10 @@ export interface KnockQueue {
   updateNote(leadId: number, notes: string): Promise<"merged" | "patched" | "not-found">;
   retryDead(clientId?: string): void; // no arg = retry ALL dead items
   retryLead(leadId: number): void; // sheet's error chip: retry every dead item for a lead
+  // Recovery signal from OUTSIDE the queue (e.g. the query client's first
+  // successful fetch after a failure period): runs one cooldown-gated silent
+  // retry sweep of the RETRYABLE dead items. Safe to call any time.
+  notifyRecovery(): void;
   subscribe(cb: () => void): () => void;
   getSnapshot(): QueueSnapshot; // referentially stable until state changes
   destroy(): void;
@@ -107,10 +113,16 @@ export interface KnockQueue {
 // stay PENDING with capped backoff forever (never a permanent dead-letter);
 // 403 gets bounded retries then parks in the dead lane (retry works after
 // re-auth); every other 4xx is terminal and AUTO-RESOLVES — dropped with a
-// one-time explanation instead of nagging forever.
+// one-time explanation instead of nagging forever. The dead lane SELF-HEALS:
+// a 403 during a restart burst is classified transient (budget untouched),
+// and recovery signals (online, foreground, a successful response, app load)
+// silently auto-retry the retryable dead items — see autoSweep below.
 const SAVED_FLASH_MS = 2000;
 const INTERVAL_MS = 30_000;
 const RECENT_SAVES_CAP = 50;
+// The dead lane self-heals on recovery signals, but at most one silent sweep
+// per this window — a genuinely broken server can never be hot-looped.
+const AUTO_RETRY_COOLDOWN_MS = 60_000;
 
 // Every storage touch is try/caught: sandboxed iframes throw on the
 // window.localStorage getter itself, Safari private mode throws on setItem.
@@ -191,6 +203,12 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
 
   let snapshot: QueueSnapshot = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true };
   let inflight = false;
+  // Restart-burst detection: epoch ms of the last GENUINELY transient failure
+  // (network/timeout/5xx/429) on this queue. A 403 landing inside the burst
+  // window after it is treated as a proxy artifact of the outage, not CSRF.
+  let lastTransientFailureAt = 0;
+  // Self-healing dead lane: epoch ms of the last automatic retry sweep.
+  let lastAutoSweepAt = 0;
   let interval: ReturnType<typeof setInterval> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   const idleTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -293,6 +311,45 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     opts.onResolved?.(item, reason);
   };
 
+  // ── Self-healing dead lane (owner report: "needs attention" after every ─────
+  // server restart, cleared only by a manual tap). A RECOVERY SIGNAL — the
+  // browser coming back online, the app returning to the foreground, ANY
+  // successful delivery on this queue, the query client's first successful
+  // fetch after a failure period (signalKnockRecovery), or app load itself —
+  // runs ONE silent retry sweep of the RETRYABLE dead items (the 403 class).
+  // Each swept item gets a SINGLE attempt (attempts = bound − 1): success
+  // clears the pill with zero human action; another clean-air 403 re-parks it
+  // immediately instead of hiding the pill through a whole fresh retry budget.
+  // The cooldown guarantees a genuinely broken server sees at most one sweep
+  // per minute — this can never hot-loop.
+  const autoSweep = (): void => {
+    if (destroyed || !isOnline()) return;
+    const t = now();
+    if (t - lastAutoSweepAt < AUTO_RETRY_COOLDOWN_MS) return;
+    const targets: QueuedKnock[] = [];
+    for (let i = 0; i < dead.length; ) {
+      // Non-retryable leftovers (legacy terminal shapes) are NEVER touched —
+      // re-posting them would be the same lie as offering their Retry.
+      if (isAutoRetryableDeadKnock(dead[i])) targets.push(...dead.splice(i, 1));
+      else i++;
+    }
+    if (!targets.length) return; // nothing to heal — don't consume the cooldown
+    lastAutoSweepAt = t;
+    for (const item of targets) {
+      item.attempts = KNOCK_QUEUE_MAX_ATTEMPTS - 1; // one silent shot
+      item.nextAttemptAt = 0;
+      pending.push(item);
+      setLeadState(item.leadId, "queued");
+    }
+    persistPending();
+    persistDead();
+    syncInterval();
+    markChanged();
+    // No-op when a flush is already running (it re-checks pending each pass
+    // and delivers the swept items itself); otherwise starts the delivery.
+    void flush();
+  };
+
   async function flush(): Promise<void> {
     if (inflight || destroyed) return;
     if (!isOnline()) return;
@@ -334,6 +391,11 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
           scheduleIdle(item.leadId);
           markChanged();
           opts.onSaved?.(item.leadId, item.outcome, resp?.superseded === true);
+          // A successful authenticated response IS a recovery signal: if an
+          // outage parked retryable knocks in the dead lane, heal them now —
+          // they ride this same flush pass (cooldown-gated, cheap no-op
+          // whenever the dead lane is empty).
+          autoSweep();
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           item.lastError = message; // apiRequest throws Error("<status>: <text>")
@@ -355,19 +417,29 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
             resolveTerminal(idx, item, terminalKnockReason(item));
             continue;
           }
-          item.attempts += 1;
-          if (kind === "forbidden" && item.attempts >= KNOCK_QUEUE_MAX_ATTEMPTS) {
+          // RESTART-BURST 403: a 403 inside the burst window of a genuine
+          // transient failure on this queue is most likely the reverse proxy
+          // answering for a restarting server, not a real CSRF/authz
+          // rejection. Treat it as transient — stays pending with backoff,
+          // bounded-retry budget UNTOUCHED. Only real transient failures
+          // open/refresh the window (checked before the update below), so a
+          // genuine 403 storm can never keep itself classified as transient.
+          const burst403 = isLikelyRestartBurst403(kind, lastTransientFailureAt, now());
+          if (kind === "retryable") lastTransientFailureAt = now();
+          if (!burst403) item.attempts += 1;
+          if (kind === "forbidden" && !burst403 && item.attempts >= KNOCK_QUEUE_MAX_ATTEMPTS) {
             // 403 is ambiguous: a stale CSRF token heals on re-login (retry
             // works), a real authz rejection never will. After the bounded
             // retries, park it where the rep can SEE it, with Retry offered.
             deadLetter(idx, item);
             continue;
           }
-          // Transient (network/5xx/timeout/429 — and 403 still within bounds):
-          // stay pending and back off (capped at 60s). NEVER dead-letter a
-          // transient failure permanently — the heartbeat, the online listener,
-          // and re-auth all redeliver it without the rep doing anything. Stop
-          // the pass: the connection is likely down for the items behind too.
+          // Transient (network/5xx/timeout/429 — and 403 still within bounds
+          // or inside a restart burst): stay pending and back off (capped at
+          // 60s). NEVER dead-letter a transient failure permanently — the
+          // heartbeat, the online listener, and re-auth all redeliver it
+          // without the rep doing anything. Stop the pass: the connection is
+          // likely down for the items behind too.
           item.nextAttemptAt = now() + retryDelayMs(item.attempts);
           persistPending();
           setLeadState(item.leadId, "queued");
@@ -382,8 +454,17 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
     }
   }
 
-  const onOnline = (): void => { markChanged(); void flush(); };
+  // Recovery signals: connectivity returning and the app coming back to the
+  // foreground each run one silent dead-lane sweep (cooldown-gated) before the
+  // normal flush, so the "needs attention" pill heals itself after an outage.
+  const onOnline = (): void => { markChanged(); autoSweep(); void flush(); };
+  const onVisible = (): void => {
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+    autoSweep();
+    void flush();
+  };
   if (typeof window !== "undefined") window.addEventListener("online", onOnline);
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
 
   const stage = (k: EnqueueInput): { clientId: string } => {
     // A temp optimistic pin (negative id) or garbage id must NEVER enter the
@@ -496,6 +577,10 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
       for (const id of ids) queue.retryDead(id);
     },
 
+    notifyRecovery() {
+      autoSweep();
+    },
+
     subscribe(cb) {
       listeners.add(cb);
       return () => { listeners.delete(cb); };
@@ -511,6 +596,7 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
       idleTimers.clear();
       listeners.clear();
       if (typeof window !== "undefined") window.removeEventListener("online", onOnline);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
       if (registry.get(opts.repId) === queue) registry.delete(opts.repId);
     },
   };
@@ -540,7 +626,11 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
       }
     });
   }
-  queueMicrotask(() => { void flush(); });
+  // REHYDRATION HEAL: retryable dead items that survived the reload get one
+  // silent retry attempt right away (autoSweep) instead of waiting for a human
+  // tap — after a server restart the pill vanishes on its own; if the server
+  // is still broken the single attempt re-parks them and the pill stays honest.
+  queueMicrotask(() => { autoSweep(); void flush(); });
 
   return queue;
 }
@@ -555,4 +645,11 @@ export function getKnockQueue(opts: KnockQueueOpts): KnockQueue {
   const q = createKnockQueue(opts);
   registry.set(opts.repId, q);
   return q;
+}
+
+// Recovery broadcast for signals observed OUTSIDE any queue — the query
+// client's first successful fetch after a failure period (see queryClient.ts).
+// Every live queue runs one cooldown-gated silent sweep of its dead lane.
+export function signalKnockRecovery(): void {
+  registry.forEach((q) => q.notifyRecovery());
 }
