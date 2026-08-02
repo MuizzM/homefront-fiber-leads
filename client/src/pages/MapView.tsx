@@ -3463,7 +3463,7 @@ export default function MapView() {
           const added = await addRes.json();
           if (added?.id == null) throw new Error("lead create returned no id");
           const finalAddress = added.address ?? resolved.address;
-          if (added.existed === true) {
+          if (added.existed === true && added.adopted !== true) {
             // Duplicate path: drop the temp pin, then let the shared reason-aware
             // handler decide — flash the real pin when it genuinely renders, or
             // explain honestly (and open the lead by id) when it doesn't. NEVER
@@ -3471,6 +3471,11 @@ export default function MapView() {
             removeTempPin();
             openExistingLeadRef.current(added.id, finalAddress, added.visibility as LeadVisibility | undefined);
           } else {
+            // Fresh add OR FCC adopt-on-tap (#61): both return the rep's own live
+            // pin at the tapped rooftop, so an adopted ghost (existed:true +
+            // adopted:true) takes this SAME success path — reconcile the optimistic
+            // temp pin to the real (adopted) id instead of dead-ending on the
+            // honest-exists open-by-id above.
             // Reconcile temp id → real id in the query cache…
             qc.setQueryData(["/api/leads/map"], (old: any) => {
               if (!old?.pins) return old;
