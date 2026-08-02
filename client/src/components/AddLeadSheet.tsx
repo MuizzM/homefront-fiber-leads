@@ -17,10 +17,72 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Plus, MapPin, LocateFixed } from "lucide-react";
 import type { CardProperty } from "@/components/LeadCard";
 
+// Server-computed reason the caller may NOT see an already-existing lead's pin
+// (POST /api/leads existed branch). Additive to the {existed:true} contract —
+// the client uses it to explain honestly and open the lead by id, never to
+// fabricate a pin. `inYourScope` mirrors GET /api/leads/:id's access gate.
+export interface LeadVisibility {
+  geocoded: boolean;
+  hiddenStatus: string | null;
+  inYourScope: boolean;
+  assignedRepName: string | null;
+  reason: "ungeocoded" | "hidden_status" | "out_of_scope" | "visible";
+}
+
+// Plain-language reason a suppressed lead is off the map (server hiddenStatus →
+// field-honest words). Falls back to a neutral phrase for any unknown status.
+export function hiddenStatusPlain(hiddenStatus: string | null | undefined): string {
+  switch (hiddenStatus) {
+    case "competitor_suppressed": return "a competitor already serves this address";
+    case "scope_suppressed": return "it's outside the current service area";
+    case "address_review": return "its address is under review";
+    default: return "it's currently held back from the map";
+  }
+}
+
+// The reason-aware decision for a duplicate ("existed:true") lead — a PURE
+// function so both the map handler and its tests read the same logic. Never
+// fabricates a pin: `open` means "select the lead id and load its detail", which
+// the sheet does WITHOUT requiring a rendered map feature.
+//   • visible      → genuinely on the caller's map: flash + fly + open.
+//   • ungeocoded / hidden_status / out_of_scope → explain WHY in plain words and
+//     open by id ONLY when the caller may access it (inYourScope — the same gate
+//     GET /api/leads/:id uses, so opening can't 404). No flash, no fly.
+export interface ExistedLeadPlan {
+  reason: LeadVisibility["reason"];
+  onMap: boolean;   // true only for a genuinely-rendered pin
+  fly: boolean;     // camera fly (visible only)
+  flash: boolean;   // ring confirm-flash (visible only)
+  open: boolean;    // select the lead id (load detail; no pin required)
+  toastTitle: string;
+  toastDescription: string;
+  severity?: "success";
+}
+export function planExistingLead(address: string, visibility?: LeadVisibility): ExistedLeadPlan {
+  const reason = visibility?.reason ?? "visible";
+  if (reason === "visible") {
+    return {
+      reason, onMap: true, fly: true, flash: true, open: true,
+      toastTitle: "Already on the map", toastDescription: address, severity: "success",
+    };
+  }
+  const why =
+    reason === "ungeocoded" ? "it doesn't have map coordinates yet"
+    : reason === "hidden_status" ? hiddenStatusPlain(visibility?.hiddenStatus)
+    : visibility?.assignedRepName ? `it's assigned to ${visibility.assignedRepName}`
+    : "it's assigned to another rep or team";
+  const canOpen = visibility?.inYourScope === true;
+  return {
+    reason, onMap: false, fly: false, flash: false, open: canOpen,
+    toastTitle: "Already a lead — not on your map",
+    toastDescription: canOpen ? `${address}: ${why}. Opening it…` : `${address}: ${why}.`,
+  };
+}
+
 export function AddLeadSheet({ initial, onClose, onCreated }: {
   initial: Partial<CardProperty> | null;
   onClose: () => void;
-  onCreated?: (leadId: number, opts?: { existed?: boolean }) => void;
+  onCreated?: (leadId: number, opts?: { existed?: boolean; visibility?: LeadVisibility; address?: string }) => void;
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -127,14 +189,19 @@ export function AddLeadSheet({ initial, onClose, onCreated }: {
           });
         }
         try { navigator.vibrate?.(10); } catch { /* no haptics */ }
-        toast(existed
-          ? { title: "Already in the system — opening it", description: submittedAddress }
-          : { title: "Lead added", description: submittedAddress });
+        // A NEW lead gets the plain success toast here. A DUPLICATE is handed
+        // wholesale to onCreated (MapView), which owns the reason-aware honest
+        // message + open-by-id — the old blanket "opening it" toast lied when
+        // the existing lead was ungeocoded / suppressed / out of the caller's
+        // scope (there was nothing to open).
+        if (!existed) {
+          toast({ title: "Lead added", description: submittedAddress });
+        }
         qc.invalidateQueries({ queryKey: ["/api/leads"] });
         qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
         // The map's camera fly to the real pin is a follow-on flourish — it
         // rides the server response, never the open sheet.
-        if (lead?.id != null) onCreated?.(lead.id, { existed });
+        if (lead?.id != null) onCreated?.(lead.id, { existed, visibility: lead.visibility, address: submittedAddress });
       } catch (e: any) {
         // The sheet is long closed — a loud toast is the only honest signal
         // that this door did NOT save.
