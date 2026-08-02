@@ -10,7 +10,8 @@
 //               because the queue's own heartbeat will deliver it once the
 //               world recovers.
 //   forbidden → 403. Ambiguous: a stale CSRF token heals itself on re-login
-//               (retry works), a real authorization rejection never will. It
+//               (retry works), a scope denial heals once a manager assigns the
+//               door (or the server opens the field to unassigned leads). It
 //               gets bounded retries, then parks in the dead lane where the
 //               rep sees the door + reason WITH a Retry that plausibly works.
 //               Two self-healing refinements (owner report: the pill after
@@ -102,7 +103,11 @@ export function terminalKnockReason(item: Pick<QueuedKnock, "leadId" | "lastErro
   }
   switch (knockFailureStatus(item.lastError)) {
     case 404:
-      return "the lead no longer exists or is no longer yours";
+      // Scope denial surfaces as 404 (the server never leaks existence across
+      // the scope wall), so "gone" and "not your area" are the same status —
+      // name both, and give the one path that actually resolves it. Retry is
+      // NOT offered: nothing the rep can do redeems this knock as-is.
+      return "the lead no longer exists or isn't in your assigned area — your manager can assign it";
     case 400:
     case 422:
       return "the server rejected it as invalid";
@@ -111,8 +116,24 @@ export function terminalKnockReason(item: Pick<QueuedKnock, "leadId" | "lastErro
   }
 }
 
-export function forbiddenKnockReason(): string {
-  return "not authorized right now — sign out and back in, then retry";
+// The one path that resolves a scope-denied knock — assignment, never re-auth.
+export function scopeDeniedKnockReason(): string {
+  return "this door isn't in your assigned area — your manager can assign it";
+}
+
+// Dead-lane copy for the forbidden/auth classes, split by the ACTUAL status
+// the queue recorded ("<status>: <text>" — see knockFailureStatus):
+//   401 → the session really did expire; re-auth is the fix, retry works after.
+//   403 → NOT a re-auth problem. The knock route answers scope denial with 404,
+//         so a 403 is CSRF/capability ambiguity OR a parked scope failure from
+//         before the open-field server fix — either way "sign out and back in"
+//         was a wild goose (owner report: reps told to re-auth on doors that
+//         were simply unassigned). Point at the resolution that exists.
+export function forbiddenKnockReason(lastError?: string | null): string {
+  if (knockFailureStatus(lastError) === 401) {
+    return "not authorized right now — sign out and back in, then retry";
+  }
+  return scopeDeniedKnockReason();
 }
 
 // ── Snapshot summary of a dead-lane item — what the FieldStatusBar renders ────
@@ -134,9 +155,13 @@ export function summarizeDeadKnock(item: QueuedKnock): DeadKnockSummary {
     clientId: item.clientId,
     leadId: item.leadId,
     outcome: item.outcome,
+    // Retryable flags are honest: a real 401 heals on re-auth (retryable), a
+    // 403 heals on re-auth/assignment/server-fix (retryable — the self-heal
+    // sweep depends on it), a terminal 4xx can never be redeemed by the rep
+    // alone (NOT retryable — scope-denied needs a manager to assign the door).
     reason:
-      kind === "forbidden"
-        ? forbiddenKnockReason()
+      kind === "auth" || kind === "forbidden"
+        ? forbiddenKnockReason(item.lastError)
         : kind === "terminal"
           ? terminalKnockReason(item)
           : "delivery keeps failing — retry to send it now",

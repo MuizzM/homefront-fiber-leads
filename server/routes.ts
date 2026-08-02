@@ -454,6 +454,23 @@ function computeTerritoryIdsForScope(scope: number[], tenantId?: number | null):
 // ground they were assigned to. Access now also passes when the caller holds the
 // lead's TERRITORY, which is where "who works this" is already many-to-many.
 //
+// OPEN FIELD (owner report: ~62k imported town leads carry assigned_rep_id=NULL
+// AND assigned_territory_id=NULL, and reps in the field could not log a single
+// knock on them): a lead owned by NOBODY — no rep, no territory — is unworked
+// ground in the tenant pool, so ANY scoped rep in the tenant may access it
+// (self-serve). A lead assigned to ANOTHER rep, sitting in an area another
+// team holds, or belonging to another tenant stays denied exactly as before.
+//
+// Caller audit — every call site is a read or a field-disposition path, so the
+// open-field rule is correct in each: single-lead/knock/history/notes/photo/
+// enrichment reads, the SSE stream's per-event wall, the add-lead duplicate
+// "inYourScope" hint, the knock route itself, bulk-status, and the
+// ready-to-call claim/outcome pair. Management semantics live in SEPARATE
+// predicates and are deliberately NOT widened: reassignment (canReassignLead)
+// stays team-lead-of-the-team/manager, territory admin (canManageTerritory)
+// unchanged, and central-disposition is requireManager before any scope check.
+// Knocking an open-field lead never ASSIGNS it — access, not ownership.
+//
 // The tenant wall is unaffected: callers reach this only after the lead's tenant
 // has been checked, and the territory scan is tenant-filtered too.
 function repCanAccessLead(user: any, lead: any): boolean {
@@ -461,6 +478,10 @@ function repCanAccessLead(user: any, lead: any): boolean {
   if (scope === undefined) return true;
   if (!lead) return false;
   if (lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId)) return true;
+  // Open field: no rep AND no territory → any scoped rep in the tenant may work
+  // this door. Owned leads (a rep id, or a territory the scope check below
+  // answers) are untouched by this branch.
+  if (lead.assignedRepId == null && lead.assignedTerritoryId == null) return true;
   if (lead.assignedTerritoryId == null) return false;
   return territoryIdsForScope(scope as number[], user?.tenantId).has(lead.assignedTerritoryId);
 }

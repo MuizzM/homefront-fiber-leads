@@ -388,10 +388,12 @@ describe("knockQueue — failure handling", () => {
     expect(snap.deadCount).toBe(1);
     expect(snap.pendingCount).toBe(0);
     expect(leadState(q, 7)).toBe("error");
-    // The FieldStatusBar can say which door, why, and that Retry may work.
+    // The FieldStatusBar can say which door, why, and that Retry may work —
+    // and the copy points at assignment, never a re-auth wild goose.
     expect(snap.deadItems).toHaveLength(1);
     expect(snap.deadItems[0]).toMatchObject({ leadId: 7, retryable: true });
-    expect(snap.deadItems[0].reason).toContain("authorized");
+    expect(snap.deadItems[0].reason).toContain("isn't in your assigned area");
+    expect(snap.deadItems[0].reason).not.toContain("sign out");
 
     await q.flush(); // dead items are never auto-retried
     expect(post).toHaveBeenCalledTimes(KNOCK_QUEUE_MAX_ATTEMPTS);
@@ -467,6 +469,46 @@ describe("knockQueue — rehydration triage (reload survival)", () => {
     expect(q.getSnapshot().deadCount).toBe(0);
     expect(q.getSnapshot().pendingCount).toBe(0);
     expect(leadState(q, 7)).toBe("saved");
+  });
+
+  it("FIX 3 (open-field): a knock parked by the unassigned-lead 403 bug redelivers on load once the server opens", async () => {
+    // Production shape of the bug: the rep's knock on an UNASSIGNED lead parked
+    // in the dead lane (403 class) and re-nagged on every app run with a
+    // "sign out and back in" reason. After the server opens the field, the
+    // load-time silent sweep re-attempts the SAME item and it delivers —
+    // no storage migration, no human tap, knock not lost.
+    const storage = fakeStorage();
+    seed(storage, "hf.knockDead.v1.9", [baseItem({ lastError: "403: Forbidden", attempts: 8 })]);
+
+    const onSaved = vi.fn();
+    const { q, post, onResolved } = mkQueue({ storage, onSaved });
+    await vi.advanceTimersByTimeAsync(0); // settle load-time autoSweep + flush
+
+    expect(post).toHaveBeenCalledTimes(1);
+    expect(post.mock.calls[0][0]).toBe("/api/leads/7/knock");
+    expect(post.mock.calls[0][1].outcome).toBe("interested");
+    expect(q.getSnapshot().deadCount).toBe(0);
+    expect(q.getSnapshot().pendingCount).toBe(0);
+    expect(leadState(q, 7)).toBe("saved");
+    expect(onSaved).toHaveBeenCalledTimes(1);
+    expect(onResolved).not.toHaveBeenCalled(); // redelivered, NOT dropped
+
+    // While it WAS parked (server still closed), the pill named the real fix —
+    // assignment — and never sent the rep on a re-auth wild goose.
+    const stillClosed = fakeStorage();
+    seed(stillClosed, "hf.knockDead.v1.9", [baseItem({ lastError: "403: Forbidden", attempts: 8 })]);
+    const parked = mkQueue({
+      storage: stillClosed,
+      post: async () => { throw new Error("403: Forbidden"); },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(parked.q.getSnapshot().deadCount).toBe(1);
+    const summary = parked.q.getSnapshot().deadItems[0];
+    expect(summary.retryable).toBe(true);
+    expect(summary.reason).toContain("isn't in your assigned area");
+    expect(summary.reason).toContain("your manager can assign it");
+    expect(summary.reason).not.toContain("sign out");
+    parked.q.destroy();
   });
 
   it("a rehydrated dead item whose silent retry STILL 403s re-parks after ONE attempt; manual Retry still redelivers", async () => {

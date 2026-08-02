@@ -14,6 +14,7 @@ import {
   migrateQueuedKnock,
   needsAttentionText,
   RESTART_BURST_WINDOW_MS,
+  scopeDeniedKnockReason,
   summarizeDeadKnock,
   terminalKnockReason,
   triageRehydratedKnock,
@@ -121,9 +122,13 @@ describe("terminal reasons — the honest explanation the rep sees", () => {
       .toContain("never finished saving");
   });
 
-  it("explains a 404 as the lead being gone (or reassigned)", () => {
-    expect(terminalKnockReason(item({ lastError: "404: Not found" })))
-      .toBe("the lead no longer exists or is no longer yours");
+  it("explains a 404 as the lead being gone or out of area — with the assignment path, never a retry hint", () => {
+    const reason = terminalKnockReason(item({ lastError: "404: Not found" }));
+    expect(reason).toContain("no longer exists");
+    expect(reason).toContain("isn't in your assigned area");
+    expect(reason).toContain("your manager can assign it");
+    expect(reason).not.toContain("sign out");
+    expect(reason).not.toContain("retry");
   });
 
   it("explains 400/422 as a server rejection", () => {
@@ -137,11 +142,39 @@ describe("terminal reasons — the honest explanation the rep sees", () => {
   });
 });
 
+describe("forbiddenKnockReason — the message splits on the ACTUAL status", () => {
+  it("a real 401 keeps the re-auth guidance (the session really expired)", () => {
+    expect(forbiddenKnockReason("401: session expired"))
+      .toBe("not authorized right now — sign out and back in, then retry");
+  });
+
+  it("a 403 is NOT a re-auth wild goose — it points at assignment", () => {
+    const reason = forbiddenKnockReason("403: Forbidden");
+    expect(reason).toBe(scopeDeniedKnockReason());
+    expect(reason).toContain("isn't in your assigned area");
+    expect(reason).toContain("your manager can assign it");
+    expect(reason).not.toContain("sign out");
+  });
+
+  it("a missing/unparseable status defaults to the scope copy, never re-auth", () => {
+    expect(forbiddenKnockReason(null)).toBe(scopeDeniedKnockReason());
+    expect(forbiddenKnockReason(undefined)).toBe(scopeDeniedKnockReason());
+    expect(forbiddenKnockReason("Failed to fetch")).toBe(scopeDeniedKnockReason());
+  });
+});
+
 describe("summarizeDeadKnock — what the FieldStatusBar renders", () => {
-  it("a 403 item is retryable with the re-auth hint", () => {
+  it("a 403 item stays retryable (heals on assignment/server fix) WITHOUT the re-auth hint", () => {
     const s = summarizeDeadKnock(item({ lastError: "403: forbidden" }));
     expect(s).toMatchObject({ clientId: "c1", leadId: 7, retryable: true });
-    expect(s.reason).toBe(forbiddenKnockReason());
+    expect(s.reason).toBe(scopeDeniedKnockReason());
+    expect(s.reason).not.toContain("sign out");
+  });
+
+  it("a real 401 leftover is retryable WITH the re-auth guidance", () => {
+    const s = summarizeDeadKnock(item({ lastError: "401: session expired" }));
+    expect(s.retryable).toBe(true);
+    expect(s.reason).toBe("not authorized right now — sign out and back in, then retry");
   });
 
   it("a transient leftover is retryable with a retry-now reason", () => {
@@ -154,6 +187,7 @@ describe("summarizeDeadKnock — what the FieldStatusBar renders", () => {
     const s = summarizeDeadKnock(item({ lastError: "404: Not found" }));
     expect(s.retryable).toBe(false);
     expect(s.reason).toContain("no longer exists");
+    expect(s.reason).toContain("isn't in your assigned area");
   });
 });
 
