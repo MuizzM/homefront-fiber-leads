@@ -3151,6 +3151,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m10",
     title: "Reading the Door in Five Seconds",
     tagline: "Homeowner states, doorway tells, and the tone that buys thirty more seconds.",
+    hook: "The door answers before the homeowner does. Learn to hear it in five seconds.",
+    fieldStory:
+      "Two reps hit the same annoyed door an hour apart — the guy mid-dinner, third knock of the week, door yanked open on a sigh. The first rep launches the full opener with a big smile and gets it shut in his face at word four. The second says \"you've had a run of us tonight — one thing worth knowing, then I'm gone,\" gets sixty full seconds, and books the callback. Same house, same offer. The only difference was the read.",
+    sayThisNotThat: {
+      instead: "Hi! How are you doing this evening?",
+      say: "I can see I'm catching you mid-something — twenty seconds and one question, then I'm gone.",
+    },
     lessons: [
       {
         id: "m10-five-second-read",
@@ -3367,6 +3374,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m11",
     title: "The Kinetic Pitch Framework",
     tagline: "One opener structure, three verbatim pitches, and the anchors you quote from.",
+    hook: "One skeleton, three pitches, zero claims they can't check from the couch.",
+    fieldStory:
+      "A rep quotes the gig price off last month's sheet, confident as sunrise. The homeowner pulls up this week's mailer in eight seconds flat — the numbers don't match, and now nothing else the rep says all evening matches either. Two streets over, another rep checks the app on the walk up, quotes the live offer, and books the install. Memorized numbers rot. Verified numbers close.",
+    sayThisNotThat: {
+      instead: "Can I tell you about our internet plans?",
+      say: "The line down your street just went live — who's your provider right now?",
+    },
     lessons: [
       {
         id: "m11-opener-structure",
@@ -3660,6 +3674,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m12",
     title: "Objection Killers",
     tagline: "Every objection you will actually hear, with the words that answer it.",
+    hook: "Every objection is a question wearing armor. Answer the question, not the armor.",
+    fieldStory:
+      "A homeowner on Cedar folds her arms: \"is this a scam?\" The rookie rep gets defensive — badge waving, voice up an octave, insisting he's legit. Door closes. The veteran on the next pass hears the same words and smiles: \"great instinct — here's how you check without trusting me.\" She checks, he waits on the sidewalk, and she signs twenty minutes later. The objection was never the wall. The answer was.",
+    sayThisNotThat: {
+      instead: "But we're cheaper and faster than what you've got!",
+      say: "Happy is great — if you could keep everything you like and pay less for it, would you look at the numbers?",
+    },
     lessons: [
       {
         id: "m12-happy-price-works",
@@ -3955,6 +3976,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m13",
     title: "Card on File the Compliant Way",
     tagline: "Payment details the smooth, legal way — secure form, their hands, their phone.",
+    hook: "You never see the number. That's not the rule blocking the sale — that is the sale.",
+    fieldStory:
+      "Six weeks after a smooth close, the chargeback lands: the customer swears they never agreed, and the only proof anyone can find is a card number scribbled on a torn flyer in the rep's truck. Sale reversed, commission clawed back, rep gone by Friday. The rep on the next street handed over the secure form, looked at the trees for thirty seconds, and has a confirmation email with the customer's own fingerprints on it. Same close. Different armor.",
+    sayThisNotThat: {
+      instead: "I just need your card number real quick.",
+      say: "You type it yourself into the secure form — I never see it, and that's on purpose.",
+    },
     lessons: [
       {
         id: "m13-the-rules",
@@ -4173,6 +4201,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m14",
     title: "The Installation Close",
     tagline: "Assumptive closes that put a truck on the calendar before you leave the porch.",
+    hook: "The close isn't a question. It's a calendar with two open slots.",
+    fieldStory:
+      "Two reps, same pitch, same warm homeowner nodding at the numbers. The first asks \"so, do you want to get on the schedule?\" and watches the yes evaporate into \"let us think about it\" — because no was the easiest answer to the question he asked. The second asks \"Tuesday morning or Thursday afternoon?\" and the homeowner pulls out her phone, not to check the price again, but to check her calendar. That reach for the phone is the close happening.",
+    sayThisNotThat: {
+      instead: "So, do you want to get on the schedule?",
+      say: "I've got Tuesday morning or Thursday afternoon on your street — which works better?",
+    },
     lessons: [
       {
         id: "m14-two-day-choice",
@@ -4393,6 +4428,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m15",
     title: "Door Discipline and the Daily System",
     tagline: "Pacing, logging, compliance, and safety — the boring system that compounds.",
+    hook: "Talent starts the season. The log wins it.",
+    fieldStory:
+      "A new rep inherits a block from a quitter and finds every door a mystery — knocks a do-not-knock house on day two, re-pitches a sold customer on day four, and burns his best evening on doors that said never-come-back in March. His teammate inherits the next block over, where the last rep logged everything, and opens with \"your contract ended last month, right?\" at the second door. One of them is walking a minefield. The other is reading the map.",
+    sayThisNotThat: {
+      instead: "I'll remember that door.",
+      say: "Logged before the next porch: not-home at 11, re-knock at 6.",
+    },
     lessons: [
       {
         id: "m15-territory-pacing",
