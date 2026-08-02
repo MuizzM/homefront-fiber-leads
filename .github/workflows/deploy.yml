@@ -151,17 +151,31 @@ jobs:
           docker image prune -af >/dev/null 2>&1 || true
           docker builder prune -af >/dev/null 2>&1 || true
 
-          git diff --quiet
-          git diff --cached --quiet
           git fetch --no-tags origin "$DEFAULT_BRANCH"
           git fetch --no-tags origin "$RELEASE_SHA"
           test "$(git cat-file -t "${RELEASE_SHA}^{commit}")" = commit
           test "$(git rev-parse "${RELEASE_SHA}^{commit}")" = "$RELEASE_SHA"
           git merge-base --is-ancestor "$RELEASE_SHA" "origin/$DEFAULT_BRANCH"
+
+          # Deploy the EXACT release, recovering from a checkout an interrupted
+          # deploy (or a disk-full write) left dirty. Previously the deploy
+          # ABORTED on any dirty tree ("refusing to build from a dirty
+          # checkout") — but that turned a half-finished prior deploy into a
+          # wedge nothing on the box could clear remotely (production incident
+          # 2026-08-02: git diff --quiet failed in <2s, no output, deploy dead).
+          # We now hard-reset to the release and drop untracked cruft instead.
+          # CRITICAL: `git clean -fd` has NO `-x`, so gitignored operational
+          # data (the SQLite DB, ops-data/) is NEVER removed — only stray
+          # tracked/untracked source files from a broken checkout. The database
+          # also lives on a persistent volume outside this tree, doubly safe.
           git checkout --detach "$RELEASE_SHA"
+          git reset --hard "$RELEASE_SHA"
+          git clean -fd
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          # After the forced clean the tree must be pristine (gitignored data is
+          # excluded from this check); anything left is genuinely unexpected.
           if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
-            echo "Refusing to build from a dirty production checkout" >&2
+            echo "Refusing to build: checkout still dirty after reset --hard + clean" >&2
             git status --short >&2
             exit 1
           fi
