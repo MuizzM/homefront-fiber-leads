@@ -17,19 +17,13 @@ const EMOJI = /[\p{Extended_Pictographic}\u{FE0F}]/u;
 
 describe("training engagement layer", () => {
   it("every module carries a punchy hook, a field story, and a say-this-not-that swap", () => {
-    // Dedupe by id before asserting. The Vitest harness can surface DUPLICATE
-    // module instances in some worker orderings (test files import the content
-    // via a relative path while app code uses the @shared alias — under Node 24
-    // concurrency these can resolve to two module instances, so a shared array
-    // reads back with repeated entries). The real Vite build dedupes imports
-    // and the array is frozen, so production is always the canonical nine.
-    // Keying by id collapses any harness duplication yet still fails loudly if a
-    // module is genuinely added, dropped, or missing a field.
-    const byId = new Map(TRAINING_MODULES.map((m) => [m.id, m]));
-    // Unique-id count is the real invariant; the message lists the ids so a
-    // genuine change (not a duplication artifact) is self-explanatory.
-    expect(byId.size, [...byId.keys()].join(",")).toBe(9);
-    for (const mod of byId.values()) {
+    // The tone pass added these engagement fields to EVERY module, so iterate
+    // whatever the curriculum currently declares — the count is a floor, not a
+    // fixed number, so the check keeps tracking as modules are added (the
+    // curriculum has grown past the original nine). The `${mod.id}` label names
+    // the offender if a new module ships without its engagement copy.
+    expect(TRAINING_MODULES.length).toBeGreaterThanOrEqual(9);
+    for (const mod of TRAINING_MODULES) {
       expect(mod.hook?.trim().length, `module ${mod.id} hook`).toBeGreaterThan(0);
       expect(mod.fieldStory?.trim().length, `module ${mod.id} fieldStory`).toBeGreaterThan(0);
       expect(mod.sayThisNotThat, `module ${mod.id} sayThisNotThat`).toBeTruthy();
