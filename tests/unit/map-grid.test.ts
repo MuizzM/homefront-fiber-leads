@@ -13,6 +13,7 @@ import {
   clampToGridGuard,
   gridCacheKey,
   sourceFilterToGridTag,
+  sourceFilterToMapView,
   gridCellsToGeoJson,
   bboxParam,
   expandBBox,
@@ -164,6 +165,12 @@ describe("gridCacheKey — 60s response cache identity", () => {
     expect(gridCacheKey(w, 0.75, "fcc_fresh")).not.toBe(gridCacheKey(w, 0.75, "fcc_fiber"));
   });
 
+  it("the view segment re-keys the lens and is absent (byte-stable) when unfiltered", () => {
+    expect(gridCacheKey(w, 0.75, undefined, "latest")).toBe(`${bboxParam(w)}|0.75||latest`);
+    expect(gridCacheKey(w, 0.75, undefined, "latest")).not.toBe(gridCacheKey(w, 0.75));
+    expect(gridCacheKey(w, 0.75, "fcc_fiber", "latest")).not.toBe(gridCacheKey(w, 0.75, "fcc_fiber"));
+  });
+
   it("the TTL mirrors the full feed's freshness budget", () => {
     expect(MAP_GRID_CACHE_TTL_MS).toBe(60_000);
   });
@@ -180,6 +187,21 @@ describe("sourceFilterToGridTag", () => {
     // field_verified is pin-level provenance (freshConfirmedAt), no tag —
     // the filter sheet carries the "applies when zoomed in" hint instead.
     expect(sourceFilterToGridTag("field_verified")).toBeUndefined();
+  });
+});
+
+describe("sourceFilterToMapView — the lens as the server-side ?view=", () => {
+  it("maps ONLY latest to a view; every other lens keeps a byte-stable URL", () => {
+    expect(sourceFilterToMapView("latest")).toBe("latest");
+    expect(sourceFilterToMapView("all")).toBeUndefined();
+    expect(sourceFilterToMapView("fcc_fresh")).toBeUndefined();
+    expect(sourceFilterToMapView("fcc_fiber")).toBeUndefined();
+    expect(sourceFilterToMapView("field_verified")).toBeUndefined();
+  });
+
+  it("latest has NO grid tag equivalent (view and tag are orthogonal lenses)", () => {
+    expect(sourceFilterToGridTag("latest")).toBeUndefined();
+    expect(sourceFilterToMapView("latest")).toBe("latest");
   });
 });
 

@@ -151,8 +151,8 @@ describe("the grid loader has pin-fetch parity", () => {
     expect(body).toContain("bounds.view.minLat + bounds.view.maxLat");
   });
 
-  it("caches 60s keyed by bbox+cell+tag", () => {
-    expect(body).toContain("gridCacheKey(window, cell, tag)");
+  it("caches 60s keyed by bbox+cell+tag+view", () => {
+    expect(body).toContain("gridCacheKey(window, cell, tag, view)");
     expect(body).toContain("MAP_GRID_CACHE_TTL_MS");
   });
 
@@ -164,6 +164,11 @@ describe("the grid loader has pin-fetch parity", () => {
   it("passes the FCC source lens as the server-side tag", () => {
     expect(body).toContain("sourceFilterToGridTag(filterSourceRef.current)");
     expect(body).toContain("&tag=${encodeURIComponent(tag)}");
+  });
+
+  it("passes the Latest-fiber lens as the server-side view (grid tier honors the default)", () => {
+    expect(body).toContain("sourceFilterToMapView(filterSourceRef.current)");
+    expect(body).toContain("&view=${view}");
   });
 });
 

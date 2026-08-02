@@ -132,14 +132,14 @@ describe("map filter sheet contract", () => {
 import { LEAD_SOURCE_OPTIONS } from "@/lib/leadSourceFilter";
 
 describe("fiber (FCC) source pills", () => {
-  const SOURCE_COUNTS = { fcc_fresh: 12, fcc_fiber: 34, field_verified: 5 };
+  const SOURCE_COUNTS = { latest: 51, fcc_fresh: 12, fcc_fiber: 34, field_verified: 5 };
 
   function renderWithSources(over: Partial<React.ComponentProps<typeof MapFilterSheet>> = {}) {
     const onSource = vi.fn();
     const utils = renderSheet({
       sources: LEAD_SOURCE_OPTIONS,
       sourceCounts: SOURCE_COUNTS,
-      activeSource: "all",
+      activeSource: "latest",
       onSource,
       ...over,
     });
@@ -147,14 +147,37 @@ describe("fiber (FCC) source pills", () => {
   }
 
   it("renders one pill per option WITH pins, plus an All escape, each count shown", () => {
-    renderWithSources();
+    renderWithSources({ activeSource: "all" });
     expect(screen.getByTestId("map-filter-source-all")).toBeInTheDocument();
+    expect(screen.getByTestId("map-filter-source-latest").textContent).toContain("Latest fiber");
+    expect(screen.getByTestId("map-filter-source-latest").textContent).toContain("51");
     expect(screen.getByTestId("map-filter-source-fcc_fresh").textContent).toContain("FCC fresh (H2-25)");
     expect(screen.getByTestId("map-filter-source-fcc_fresh").textContent).toContain("12");
     expect(screen.getByTestId("map-filter-source-fcc_fiber").textContent).toContain("FCC fiber");
     expect(screen.getByTestId("map-filter-source-fcc_fiber").textContent).toContain("34");
     expect(screen.getByTestId("map-filter-source-field_verified").textContent).toContain("Field-verified");
     expect(screen.getByTestId("map-filter-source-field_verified").textContent).toContain("5");
+  });
+
+  it("Latest fiber is the FIRST pill, All follows as the escape", () => {
+    renderWithSources();
+    const pills = screen.getAllByTestId(/^map-filter-source-/);
+    expect(pills[0]).toHaveAttribute("data-testid", "map-filter-source-latest");
+    expect(pills[1]).toHaveAttribute("data-testid", "map-filter-source-all");
+    // …and the default view is the pressed one.
+    expect(pills[0]).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("the footprint stays DISCOVERABLE with its count — one tap away from the default", () => {
+    const { onSource } = renderWithSources();
+    const fiber = screen.getByTestId("map-filter-source-fcc_fiber");
+    expect(fiber.textContent).toContain("FCC fiber");
+    expect(fiber.textContent).toContain("34");
+    fireEvent.click(fiber);
+    expect(onSource).toHaveBeenLastCalledWith("fcc_fiber");
+    // …and All shows the whole map, footprint included.
+    fireEvent.click(screen.getByTestId("map-filter-source-all"));
+    expect(onSource).toHaveBeenLastCalledWith("all");
   });
 
   it("tapping a pill reports its key; the active pill is aria-pressed", () => {
@@ -180,6 +203,14 @@ describe("fiber (FCC) source pills", () => {
   it("the active option stays visible even at zero count (state is never invisible)", () => {
     renderWithSources({ sourceCounts: {}, activeSource: "fcc_fresh" });
     expect(screen.getByTestId("map-filter-source-fcc_fresh")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("a zero-FCC tenant: Latest == All effectively, the footprint pill hides (existing zero-count rule)", () => {
+    renderWithSources({ sourceCounts: { latest: 8 } });
+    expect(screen.getByTestId("map-filter-source-latest")).toBeInTheDocument();
+    expect(screen.getByTestId("map-filter-source-all")).toBeInTheDocument();
+    expect(screen.queryByTestId("map-filter-source-fcc_fiber")).toBeNull();
+    expect(screen.queryByTestId("map-filter-source-fcc_fresh")).toBeNull();
   });
 
   it("an active source makes the sheet filtered (Clear all appears) and composes with status", () => {

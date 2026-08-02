@@ -126,6 +126,7 @@ import {
   gridCellForSpan,
   gridCellsToGeoJson,
   sourceFilterToGridTag,
+  sourceFilterToMapView,
   type MapGridResponse,
   type ViewportBBox,
 } from "@/lib/mapViewport";
@@ -890,6 +891,11 @@ export default function MapView() {
   useEffect(() => {
     persistFilterSource(filterSource);
   }, [filterSource]);
+  // The lens as a ref: fetch callbacks (count probe, full feed, bbox window,
+  // density grid) read the CURRENT lens without re-subscribing. Declared with
+  // the state so every query below can close over it.
+  const filterSourceRef = useRef(filterSource);
+  filterSourceRef.current = filterSource;
   // SalesRabbit-style bottom sheets — the Filters sheet is THE filter surface
   // (the old always-on pill/chip row is gone); Settings owns basemap + layers.
   const [mapFilterOpen, setMapFilterOpen] = useState(false);
@@ -1625,9 +1631,16 @@ export default function MapView() {
   // past it the map fetches only the pins inside the current viewport window
   // and merges them into the same query cache. If the probe fails the map
   // falls back to the full feed — never to an empty map.
+  // The probe answers for the CURRENT lens: "latest" asks the server for the
+  // FILTERED total (?view=latest), so the full-feed-vs-viewport decision
+  // compares ~51k against the 60k threshold — one ETag'd feed of filtered
+  // pins, exactly the speed win the lens exists for. Keyed by view so a lens
+  // switch probes fresh instead of reusing the other view's total.
+  const countView = sourceFilterToMapView(filterSource);
   const countQuery = useQuery<{ total: number }>({
-    queryKey: ["/api/leads/map/count"],
-    queryFn: async () => (await apiRequest("GET", "/api/leads/map/count")).json(),
+    queryKey: ["/api/leads/map/count", countView ?? "all"],
+    queryFn: async () =>
+      (await apiRequest("GET", `/api/leads/map/count${countView ? `?view=${countView}` : ""}`)).json(),
     enabled: !!user,
     staleTime: 60_000,
     retry: 1,
@@ -1663,9 +1676,16 @@ export default function MapView() {
   // ── Bulk assign mutation (lasso) ────────────────────────────────────────
   // Fetch ALL map pins from dedicated lean endpoint — only runs after auth is ready
   const { data: mapPinData } = useQuery<{ pins: MapPin[]; total: number; truncated?: boolean }>({
+    // ONE cache entry per lens pair is deliberate: the key stays
+    // ["/api/leads/map"] so every optimistic update / viewport merge / SSE
+    // invalidation targets it unchanged; the lens rides the URL (read from
+    // the ref at fetch time) and a lens switch INVALIDATES below, so a stale
+    // other-view payload can never serve the new lens past one refetch — and
+    // the client-side source predicate keeps the render honest during it.
     queryKey: ["/api/leads/map"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/leads/map?format=packed");
+      const view = sourceFilterToMapView(filterSourceRef.current);
+      const res = await apiRequest("GET", `/api/leads/map?format=packed${view ? `&view=${view}` : ""}`);
       return unpackMapPins<MapPin>(await res.json());
     },
     // Cold-open first frame: seed the cache from the last session's snapshot
@@ -1846,11 +1866,6 @@ export default function MapView() {
   //     a failed first grid fetch must never blank the map).
   const pinWindowLandedRef = useRef(true);
   const gridWindowLandedRef = useRef(true);
-  // The FCC source lens as the server-side tag the grid supports (pins apply
-  // the full predicate client-side). Read via ref inside the fetch callback.
-  const filterSourceRef = useRef(filterSource);
-  filterSourceRef.current = filterSource;
-
   // Layer visibility for the current tier — imperative map-thread work (same
   // category as scheduleClusterSetData), never React state, so the fetch
   // callbacks may call it the moment their data lands:
@@ -1910,7 +1925,8 @@ export default function MapView() {
     const controller = new AbortController();
     viewportAbortRef.current = controller;
     const sessionId = getStoredSessionId();
-    fetch(`/api/leads/map?format=packed&bbox=${bboxParam(window)}`, {
+    const mapView = sourceFilterToMapView(filterSourceRef.current);
+    fetch(`/api/leads/map?format=packed&bbox=${bboxParam(window)}${mapView ? `&view=${mapView}` : ""}`, {
       headers: sessionId ? { "x-session-id": sessionId } : {},
       signal: controller.signal,
     })
@@ -1996,7 +2012,8 @@ export default function MapView() {
     const span = Math.max(window.maxLng - window.minLng, window.maxLat - window.minLat);
     const cell = gridCellForSpan(span); // the server's ?cell=auto formula — keyed, not sent
     const tag = sourceFilterToGridTag(filterSourceRef.current);
-    const key = gridCacheKey(window, cell, tag);
+    const view = sourceFilterToMapView(filterSourceRef.current);
+    const key = gridCacheKey(window, cell, tag, view);
     const hit = gridCacheRef.current.get(key);
     if (hit && Date.now() - hit.ts < MAP_GRID_CACHE_TTL_MS) {
       // A cached window IS a landed window — release the pins→grid handoff
@@ -2010,7 +2027,7 @@ export default function MapView() {
     const controller = new AbortController();
     gridAbortRef.current = controller;
     const sessionId = getStoredSessionId();
-    fetch(`/api/leads/map/grid?bbox=${bboxParam(window)}&cell=${cell}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}`, {
+    fetch(`/api/leads/map/grid?bbox=${bboxParam(window)}&cell=${cell}${tag ? `&tag=${encodeURIComponent(tag)}` : ""}${view ? `&view=${view}` : ""}`, {
       headers: sessionId ? { "x-session-id": sessionId } : {},
       signal: controller.signal,
     })
@@ -2087,12 +2104,22 @@ export default function MapView() {
     syncViewportTierLayers(mapRef.current);
   }, [viewportTier, mapReady, styleEpoch, syncViewportTierLayers]);
 
-  // The FCC lens is server-side for the grid tier: switching sources re-keys
-  // the grid fetch (the pins tier filters client-side and needs no refetch).
+  // The source lens is server-side on EVERY tier now ("latest" → ?view= on
+  // the count probe, full feed, bbox windows, and the grid; the FCC tag
+  // lenses stay grid-only): switching sources busts the 60s grid cache,
+  // refetches the active viewport window with the new lens, and invalidates
+  // the full feed so its next fetch carries the new ?view= — the pins on
+  // screen never mix lenses past one round-trip, and the client-side pin
+  // predicate keeps the render honest DURING it. First run is skipped (the
+  // mount fetches already carry the initial lens).
+  const prevFilterSourceRef = useRef(filterSource);
   useEffect(() => {
-    if (!viewportModeRef.current || viewportTierRef.current !== "grid") return;
-    refreshViewportPinsRef.current();
-  }, [filterSource]);
+    if (prevFilterSourceRef.current === filterSource) return;
+    prevFilterSourceRef.current = filterSource;
+    gridCacheRef.current.clear();
+    if (viewportModeRef.current) refreshViewportPinsRef.current();
+    else void qc.invalidateQueries({ queryKey: ["/api/leads/map"] });
+  }, [filterSource, qc]);
 
   // moveend → debounced 300ms window refetch. Bound per map instance; inactive
   // in full-feed mode (the ref guard makes every pan free there).
@@ -6605,6 +6632,10 @@ export default function MapView() {
                     onClick={() => {
                       setFilterStatus("all");
                       setFilterRep("all");
+                      // The source lens can be the SOLE cause of the empty map
+                      // now that "latest" is the default (a footprint-only
+                      // tenant) — a Clear that leaves it on would be dead UI.
+                      setFilterSource("all");
                     }}
                     data-testid="map-all-filtered-clear"
                     className={`min-h-11 px-3.5 text-[13px] font-semibold text-teal-300 hover:text-teal-200 hover:bg-white/[0.06] border-l border-white/10 transition ${FOCUS}`}

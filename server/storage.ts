@@ -240,12 +240,22 @@ export interface LeadStatsRow {
  *  the sample across insertion order (which correlates with geography
  *  per-scan), unlike ORDER BY id LIMIT whose prefix is the first-scanned
  *  town only. */
+/** Map content views — a LENS over the same scoped pin set, never a deletion.
+ *  "latest" hides the established-footprint FCC import (fcc_fiber_d25) so the
+ *  map renders the newly-lit + field-verified + organic + manual-add pins
+ *  (NULL tags included); the footprint stays one tap away via the unfiltered
+ *  view. */
+export type MapView = "latest";
+/** The one tag the "latest" view excludes. */
+export const MAP_LATEST_VIEW_EXCLUDED_TAG = "fcc_fiber_d25";
+
 export interface MapPinWindow {
   minLat: number;
   minLng: number;
   maxLat: number;
   maxLng: number;
   tag?: string;
+  view?: MapView;
   limit?: number;
   sampleStep?: number;
 }
@@ -267,12 +277,23 @@ export interface MapGridCell {
   n: number;
 }
 
+// Result of a guarded lead delete. A lead with field history (knock_log /
+// commissions / lead_photos rows) is REFUSED, not deleted — the probe runs in
+// the same IMMEDIATE transaction as the delete, and even a residual FK
+// constraint error is converted into the same refusal instead of a raw 500.
+// "not_found" keeps the route's 404 semantics (absent row, or another
+// tenant's row under the tenant predicate).
+export type LeadDeleteResult =
+  | { deleted: true }
+  | { deleted: false; reason: "not_found" }
+  | { deleted: false; reason: "has_history"; knocks: number; commissions: number; photos: number };
+
 export interface IStorage {
   // ── Leads ──────────────────────────────────────────────────────────────────
   getLeads(tenantId?: number, assignedRep?: number | number[]): Lead[];
   getLeadFacets(tenantId?: number, repScope?: number[]): Array<{ city: string; state: string }>;
   getLeadsDataVersion(tenantId?: number): string;
-  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[];
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow, view?: MapView): MapPinRow[];
   // SQL-side density aggregation over the exact map scope (tenant + rep
   // visibility + pin eligibility) — powers the wide-zoom tier where shipping
   // individual pins is impossible. Fetches limit+1 so the caller can flag
@@ -281,7 +302,7 @@ export interface IStorage {
   // Cheap COUNT over the exact map scope (tenant + rep visibility + pin
   // eligibility) — powers the client's full-feed-vs-viewport-mode decision
   // without downloading a single pin.
-  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[]): number;
+  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[], view?: MapView): number;
   // COUNT over the SAME scoped + windowed predicate getLeadsForMap uses —
   // the wide-zoom sampler's step calculation (only runs when a window
   // overflows the row cap, so the extra indexed count stays rare).
@@ -301,7 +322,7 @@ export interface IStorage {
   // is NEWER than the recorded one. Returns the updated lead, or undefined when
   // a newer outcome already exists (caller must skip ALL money side effects).
   applyKnockOutcomeCas(leadId: number, status: string, outcome: string, knockedAt: string): Lead | undefined;
-  deleteLead(id: number, tenantId?: number): boolean;
+  deleteLead(id: number, tenantId?: number): LeadDeleteResult;
   // ── FCC-import purge (admin bulk removal) ──────────────────────────────────
   // Preview counts + the delete itself share ONE SQL predicate (fccPurgeWhere)
   // so the numbers an admin confirmed are exactly the rows removed. Removable =
@@ -2774,12 +2795,25 @@ export class Storage implements IStorage {
   // (full feed AND bbox windows) and getLeadsMapCount all compose from this so
   // a scoped read can never drift between the count, the full feed, and a
   // viewport window.
-  private mapScopeWhere(tenantId?: number, assignedRep?: number | number[]): { where: string; params: any[] } {
+  //
+  // The `view` lens composes HERE — at the scope layer mapWindowPred itself
+  // extends — so the full feed, bbox windows, the count probe, and the
+  // density grid all apply the identical "latest" predicate (no forked
+  // builder). Absent view = the byte-stable unfiltered predicate.
+  private mapScopeWhere(tenantId?: number, assignedRep?: number | number[], view?: MapView): { where: string; params: any[] } {
     const clauses: string[] = [];
     const params: any[] = [];
     if (tenantId != null) {
       clauses.push("l.tenant_id = ?");
       params.push(tenantId);
+    }
+    if (view === "latest") {
+      // "Latest fiber": everything EXCEPT the established-footprint import —
+      // NULL tags (organic/manual adds), fcc_fresh_block, fresh-verified, and
+      // any other tag all stay. NULL-safe: `<> 'fcc_fiber_d25'` alone would
+      // silently drop every untagged lead (three-valued logic).
+      clauses.push("(l.lead_tag IS NULL OR l.lead_tag <> ?)");
+      params.push(MAP_LATEST_VIEW_EXCLUDED_TAG);
     }
     if (Array.isArray(assignedRep)) {
       // Fail-closed: an empty team scope sees ZERO pins. The old early-return
@@ -2823,10 +2857,10 @@ export class Storage implements IStorage {
     return { where: scopePred, params };
   }
 
-  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[]): number {
+  getLeadsMapCount(tenantId?: number, assignedRep?: number | number[], view?: MapView): number {
     // Empty team scope → empty map (same fail-closed rule as getLeadsForMap).
     if (Array.isArray(assignedRep) && !assignedRep.length) return 0;
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, view);
     const row = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads l WHERE ${where}`).get(...params) as { c: number };
     return row.c;
   }
@@ -2870,14 +2904,14 @@ export class Storage implements IStorage {
   getLeadsMapWindowCount(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapPinWindow): number {
     // Empty team scope → empty map (same fail-closed rule as getLeadsForMap).
     if (Array.isArray(assignedRep) && !assignedRep.length) return 0;
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, window.view);
     const pred = this.mapWindowPred(where, params, window);
     const row = rawDb.prepare(`SELECT COUNT(*) AS c FROM leads l WHERE ${pred}`).get(...params) as { c: number };
     return row.c;
   }
 
   getLeadsMapGrid(tenantId: number | undefined, assignedRep: number | number[] | undefined, window: MapGridWindow): MapGridCell[] {
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, window.view);
     const scopePred = this.mapWindowPred(where, params, window);
     // Integer FLOOR buckets: lat/lng divided by the cell pitch, floored, then
     // grouped. FLOOR is exact on the float division (no ROUND-half drift), the
@@ -2905,8 +2939,11 @@ export class Storage implements IStorage {
     }));
   }
 
-  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow): MapPinRow[] {
-    const { where, params } = this.mapScopeWhere(tenantId, assignedRep);
+  getLeadsForMap(tenantId?: number, assignedRep?: number | number[], window?: MapPinWindow, view?: MapView): MapPinRow[] {
+    // The view lens rides the window for bbox/grid callers and the explicit
+    // arg for the windowless full feed — both land in the SAME mapScopeWhere
+    // clause, so the feed can never drift from a window over the same view.
+    const { where, params } = this.mapScopeWhere(tenantId, assignedRep, view ?? window?.view);
     let scopePred = where;
     if (window) scopePred = this.mapWindowPred(scopePred, params, window);
     const sampled = window != null && (window.sampleStep ?? 1) > 1;
@@ -3235,13 +3272,47 @@ export class Storage implements IStorage {
     if (row) bustPinCaches(row.tenantId);
     return row;
   }
-  deleteLead(id: number, tenantId?: number): boolean {
-    const condition = tenantId != null
-      ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
-      : eq(leads.id, id);
-    const deleted = db.delete(leads).where(condition).run().changes > 0;
-    if (deleted) bustPinCaches(tenantId); // undefined tenant → global bust
-    return deleted;
+  deleteLead(id: number, tenantId?: number): LeadDeleteResult {
+    // Dependent-row probe. knock_log / commissions / lead_photos hold the
+    // field history (and money) for a door; deleting the lead underneath them
+    // trips SQLITE_CONSTRAINT and used to surface as a raw 500. Counts are
+    // returned so the route can tell the manager exactly what blocks it.
+    const countDeps = () => ({
+      knocks: (rawDb.prepare("SELECT COUNT(*) c FROM knock_log WHERE lead_id = ?").get(id) as { c: number }).c,
+      commissions: (rawDb.prepare("SELECT COUNT(*) c FROM commissions WHERE lead_id = ?").get(id) as { c: number }).c,
+      photos: (rawDb.prepare("SELECT COUNT(*) c FROM lead_photos WHERE lead_id = ?").get(id) as { c: number }).c,
+    });
+    // Probe + delete in ONE IMMEDIATE transaction: the write lock is taken up
+    // front, so no knock/commission/photo can land between the check and the
+    // delete and turn the guard itself into a FK 500.
+    const tx = rawDb.transaction((): LeadDeleteResult => {
+      const condition = tenantId != null
+        ? and(eq(leads.id, id), eq(leads.tenantId, tenantId))
+        : eq(leads.id, id);
+      const exists = db.select({ id: leads.id }).from(leads).where(condition).get();
+      if (!exists) return { deleted: false, reason: "not_found" };
+      const deps = countDeps();
+      if (deps.knocks > 0 || deps.commissions > 0 || deps.photos > 0) {
+        return { deleted: false, reason: "has_history", ...deps };
+      }
+      return db.delete(leads).where(condition).run().changes > 0
+        ? { deleted: true }
+        : { deleted: false, reason: "not_found" };
+    });
+    let result: LeadDeleteResult;
+    try {
+      result = tx.immediate();
+    } catch (e: any) {
+      // Safety net: even with the probe, a dependent row family we don't count
+      // (or a stricter FK in a migrated DB) can still trip the constraint.
+      // Refuse with fresh counts — never let the manager see a raw 500.
+      if (String(e?.code ?? "").startsWith("SQLITE_CONSTRAINT")) {
+        return { deleted: false, reason: "has_history", ...countDeps() };
+      }
+      throw e;
+    }
+    if (result.deleted) bustPinCaches(tenantId); // undefined tenant → global bust
+    return result;
   }
 
   // ── FCC-import purge ─────────────────────────────────────────────────────────

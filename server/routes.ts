@@ -5,7 +5,7 @@ import crypto from "crypto";
 import { sendMailResilient, mailFrom, adminInbox, emailShell, escapeHtml, logoAttachment, emailParagraph, emailCodeBox, emailNote } from "./mail";
 import type { Express, Request, Response, NextFunction } from "express";
 import type { Server } from "http";
-import { storage, getDefaultTenantId, type MapPinRow, type MapPinWindow } from "./storage";
+import { storage, getDefaultTenantId, type MapPinRow, type MapPinWindow, type MapView } from "./storage";
 import { billingSummary, getCreditLedger, isBillingEnabled, ensureBilling, setBillingState, setPlan, grantCredits, getBilling, scanBlockReason } from "./billingStore";
 import { PLANS as BILLING_PLANS, isBillingState, isOverageMode } from "@shared/billing";
 import { stripeConfigured, webhookConfigured, verifyStripeSignature, createCheckoutSession, createPortalSession, processWebhookEvent } from "./stripeAdapter";
@@ -1322,7 +1322,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
   }
 
-  function getMapPins(tenantId?: number, repFilter?: number | number[], dataVer?: string): {
+  function getMapPins(tenantId?: number, repFilter?: number | number[], dataVer?: string, view?: MapView): {
     entry: MapPinCacheEntry;
     cacheHit: boolean;
     scopeKey: string;
@@ -1333,8 +1333,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // (the cache never fired for them). Key by tenant+scope so a rep can never read
     // another scope's pins; the dataVer guard busts it on any lead write (8s TTL
     // otherwise). Scopes are bounded (few reps/tenant); a soft cap bounds growth.
+    // The view lens keys the cache too: a "latest" entry can never serve the
+    // unfiltered feed (or vice versa) — same rule as the scope key.
     const scopeKey = repFilter == null ? "all" : [repFilter].flat().sort((a, b) => a - b).join(",");
-    const cacheKey = `${tenantId ?? 0}|${scopeKey}`;
+    const cacheKey = `${tenantId ?? 0}|${scopeKey}|${view ?? ""}`;
     const hit = _mapPinCache.get(cacheKey);
     // Reuse only within TTL AND if the DB hasn't changed (a scan in another
     // process bumps dataVer) — never serve stale pins after new leads land.
@@ -1343,7 +1345,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     const dbStarted = performance.now();
     // Narrow projection + latest-visit metadata in one scoped SQL query.
-    const all = storage.getLeadsForMap(tenantId, repFilter);
+    const all = storage.getLeadsForMap(tenantId, repFilter, undefined, view);
     const dbMs = performance.now() - dbStarted;
     const buildStarted = performance.now();
     const pins = buildMapPins(all);
@@ -1442,8 +1444,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = req.user;
     const tid = user?.tenantId ?? undefined;
     const repFilter = leadVisibilityScope(user);
+    // The mode-decision probe answers for the REQUESTED view: with
+    // ?view=latest the client compares the FILTERED total against the full-
+    // feed threshold (51k < 60k → one ETag'd feed, not viewport windows).
+    const view = parseMapView(req.query.view);
+    if (view && typeof view === "object") return res.status(400).json({ error: view.error });
     res.set("Cache-Control", "no-store");
-    res.json({ total: storage.getLeadsMapCount(tid, repFilter) });
+    res.json({ total: storage.getLeadsMapCount(tid, repFilter, view) });
   });
 
   // bbox window: minLng,minLat,maxLng,maxLat — clamped to world bounds, span-
@@ -1492,6 +1499,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     }
     return raw;
   }
+  // ?view=latest — the "Latest fiber" lens: the map WITHOUT the established-
+  // footprint import (lead_tag = 'fcc_fiber_d25'), so a newly-lit-heavy org
+  // renders ~51k pins instead of ~174k. A speed/relevance LENS, never a
+  // deletion: every endpoint composes it into the SAME scope predicate, and
+  // an absent view keeps the exact current (byte-stable) behaviour — the
+  // footprint is one tap away. "all" is accepted as the explicit no-op.
+  function parseMapView(raw: unknown): MapView | undefined | { error: string } {
+    if (raw == null || raw === "" || raw === "all") return undefined;
+    if (raw === "latest") return "latest";
+    return { error: "view must be 'latest' (or 'all')" };
+  }
 
   // ── Density grid — the wide-zoom aggregate tier ───────────────────────────
   // When the viewport is wider than the pin path's 3° span guard, shipping
@@ -1538,12 +1556,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if ("error" in bbox) return res.status(400).json({ error: bbox.error });
     const tag = parseMapTag(req.query.tag);
     if (tag && typeof tag === "object") return res.status(400).json({ error: (tag as { error: string }).error });
+    const view = parseMapView(req.query.view);
+    if (view && typeof view === "object") return res.status(400).json({ error: view.error });
     const span = Math.max(bbox.maxLng - bbox.minLng, bbox.maxLat - bbox.minLat);
     const cell = parseGridCell(req.query.cell, span);
     if (typeof cell !== "number") return res.status(400).json({ error: cell.error });
     const started = performance.now();
     const rows = storage.getLeadsMapGrid(tid, repFilter, {
-      ...bbox, cell, tag: tag as string | undefined, limit: MAP_GRID_CELL_CAP + 1,
+      ...bbox, cell, tag: tag as string | undefined, view: view as MapView | undefined, limit: MAP_GRID_CELL_CAP + 1,
     });
     const truncated = rows.length > MAP_GRID_CELL_CAP;
     if (truncated) rows.length = MAP_GRID_CELL_CAP;
@@ -1581,9 +1601,11 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (bbox && "error" in bbox) return res.status(400).json({ error: bbox.error });
     const tag = parseMapTag(req.query.tag);
     if (tag && typeof tag === "object") return res.status(400).json({ error: (tag as { error: string }).error });
+    const view = parseMapView(req.query.view);
+    if (view && typeof view === "object") return res.status(400).json({ error: view.error });
     if (bbox) {
       const started = performance.now();
-      const win = { ...bbox, tag: tag as string | undefined };
+      const win = { ...bbox, tag: tag as string | undefined, view: view as MapView | undefined };
       let rows = storage.getLeadsForMap(tid, repFilter, { ...win, limit: MAP_BBOX_ROW_CAP + 1 });
       const truncated = rows.length > MAP_BBOX_ROW_CAP;
       let sampleStep = 1;
@@ -1622,20 +1644,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // 304 for the cost of a string compare. The scope key keeps role scoping
     // airtight — a rep's 304 token can never validate a manager's payload.
     const scopeKey = repFilter == null ? "all" : [repFilter].flat().sort((a, b) => a - b).join(",");
+    // The view lens joins the ETag's scope segment ONLY when present — an
+    // unfiltered request's token stays byte-identical to before, and a
+    // "latest" 304 can never validate the unfiltered payload.
+    const viewKey = view === "latest" ? "-latest" : "";
     // DB-derived version makes the ETag change on ANY cross-process lead write
     // (scan runner, nightly cron) — not just this process's own mutations. Without
     // it, a browser holding the pre-scan ETag would 304 forever and never see the
     // new leads. The in-memory epoch stays for instant same-process busts.
     const dbVer = storage.getLeadsDataVersion(tid);
     const ver = `${_leadsEpoch}.${_leadsBustByTenant.get(tid ?? 0) ?? 0}.${dbVer}`;
-    const etag = `W/"pins-${format}-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}-${ver}"`;
+    const etag = `W/"pins-${format}-${_leadsEtagBoot}-${tid ?? 0}-${scopeKey}${viewKey}-${ver}"`;
     // This endpoint overrides the global no-store policy with private no-cache:
     // browsers may retain it only for conditional revalidation, never reuse it
     // without the ETag check. That turns unchanged polls into a zero-body 304.
     res.set("Cache-Control", "private, no-cache");
     res.set("ETag", etag);
     if (req.headers["if-none-match"] === etag) return res.status(304).end();
-    const result = getMapPins(tid, repFilter, dbVer);
+    const result = getMapPins(tid, repFilter, dbVer, view as MapView | undefined);
     const packStarted = performance.now();
     const payload = format === "packed"
       ? (result.entry.packed ??= packMapPins(result.entry.pins))
@@ -2075,7 +2101,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   app.delete("/api/leads/:id", requireManager, (req, res) => {
     const tid = (req as any).user?.tenantId ?? undefined;
-    if (!storage.deleteLead(Number(req.params.id), tid)) return res.status(404).json({ error: "Not found" });
+    const result = storage.deleteLead(Number(req.params.id), tid);
+    if (!result.deleted && result.reason === "not_found") return res.status(404).json({ error: "Not found" });
+    if (!result.deleted) {
+      // History-bearing lead: the delete was refused, not attempted (and a
+      // residual FK constraint error lands here too — never a raw 500). Tell
+      // the manager exactly what blocks it and what to do instead.
+      const parts = [
+        `${result.knocks} knock${result.knocks === 1 ? "" : "s"}`,
+        `${result.commissions} commission${result.commissions === 1 ? "" : "s"}`,
+      ];
+      if (result.photos > 0) parts.push(`${result.photos} photo${result.photos === 1 ? "" : "s"}`);
+      return res.status(409).json({
+        error: `This lead has field history (${parts.join(", ")}) and can't be deleted. Ask a manager to mark it not-interested / suppressed instead.`,
+        code: "LEAD_HAS_HISTORY",
+        knocks: result.knocks, commissions: result.commissions, photos: result.photos,
+      });
+    }
     // No projection: after the row is gone there is nothing left to authorize
     // against, and shipping the PRE-delete pin would hand every subscriber a
     // patch that re-draws the door it is telling them to forget. Managers (whose

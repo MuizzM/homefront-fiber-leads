@@ -60,6 +60,16 @@ export function MapFilterSheet({
   // Zero-count source options are dead UI (lead_tag is null for most pins
   // until an FCC import lands): they stay hidden, never rendered disabled.
   const visibleSources = (sources ?? []).filter((o) => (sourceCounts?.[o.key] ?? 0) > 0 || activeSource === o.key);
+  // "Latest fiber" leads the row — it is the DEFAULT view, so it sits first
+  // (one tap back from anywhere); "All" follows as the escape to the
+  // unfiltered map; the footprint (FCC fiber) keeps its count and stays
+  // discoverable, never hidden behind the default.
+  const latestOpt = visibleSources.find((o) => o.key === "latest");
+  const sourceChipRow: Array<{ key: string; label: string }> = [
+    ...(latestOpt ? [latestOpt] : []),
+    { key: "all", label: "All" },
+    ...visibleSources.filter((o) => o.key !== "latest"),
+  ];
 
   const repRow = (key: string, name: string, count: number, dot: React.ReactNode) => {
     const active = activeRep === key;
@@ -144,13 +154,14 @@ export function MapFilterSheet({
         </div>
 
         {/* Source (Fiber / FCC) — a second lens that ANDs with Status. Only
-            rendered when at least one option has pins; "All sources" is the
-            escape and is always present while the section is visible. */}
+            rendered when at least one option has pins; "Latest fiber" leads
+            (the default view) and "All" is the escape, always present while
+            the section is visible. */}
         {sources && onSource && visibleSources.length > 0 && (
           <div className="mt-4">
             <div className={EYEBROW}>Fiber (FCC)</div>
             <div className="mt-2 flex flex-wrap gap-2" data-testid="map-filter-sources">
-              {[{ key: "all" as const, label: "All" }, ...visibleSources].map((opt) => {
+              {sourceChipRow.map((opt) => {
                 const selected = activeSource === opt.key;
                 const count = opt.key === "all" ? null : (sourceCounts?.[opt.key as Exclude<LeadSourceFilter, "all">] ?? 0);
                 return (
