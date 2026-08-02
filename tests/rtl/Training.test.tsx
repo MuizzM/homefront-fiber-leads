@@ -60,7 +60,7 @@ beforeEach(() => {
 });
 
 describe("Training page", () => {
-  it("renders all six modules with their lessons and a 0-of-N hero", async () => {
+  it("renders every module with its lessons and a 0-of-N hero", async () => {
     mockApi();
     renderPage();
     await waitFor(() => {

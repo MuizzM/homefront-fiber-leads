@@ -13,11 +13,11 @@ import {
 } from "../../shared/trainingContent";
 
 describe("training content integrity", () => {
-  it("has exactly 6 modules, each with 3-5 lessons", () => {
-    expect(TRAINING_MODULES).toHaveLength(6);
+  it("has exactly 9 modules, each with 3-6 lessons", () => {
+    expect(TRAINING_MODULES).toHaveLength(9);
     for (const mod of TRAINING_MODULES) {
       expect(mod.lessons.length, `module ${mod.id}`).toBeGreaterThanOrEqual(3);
-      expect(mod.lessons.length, `module ${mod.id}`).toBeLessThanOrEqual(5);
+      expect(mod.lessons.length, `module ${mod.id}`).toBeLessThanOrEqual(6);
     }
   });
 
@@ -70,6 +70,7 @@ describe("training content integrity", () => {
 
   it("validates lesson ids for the server route", () => {
     expect(isTrainingLessonId("m1-rejection-math")).toBe(true);
+    expect(isTrainingLessonId("m7-referral-close")).toBe(true);
     expect(isTrainingLessonId("m9-not-real")).toBe(false);
     expect(isTrainingLessonId("")).toBe(false);
     expect(getTrainingLesson("m1-rejection-math")?.id).toBe("m1-rejection-math");

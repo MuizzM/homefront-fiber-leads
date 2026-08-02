@@ -1390,6 +1390,77 @@ export const TRAINING_MODULES: TrainingModule[] = [
           },
         ],
       },
+      {
+        id: "m5-preemptive-strike",
+        title: "The pre-emptive strike",
+        summary: "Defuse your street's top objection inside the pitch, before it is ever voiced.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "An objection voiced is a position defended",
+            body: [
+              "The moment a homeowner says an objection out loud, it stops being a thought and becomes a stance. People defend what they have said far harder than what they have merely felt — walking it back now costs them consistency in front of a stranger. Answering an objection after it is spoken means arguing with a position; answering it before it is spoken means the position never forms. That is the whole logic of the pre-emptive strike: raise the top objection yourself, casually, and resolve it in the same breath.",
+              "It also flips the frame. An objection you raise about your own offer reads as honesty, not defense. The homeowner hears a rep confident enough to name the catch, and the skeptical part of their brain — the part hunting for the thing you are hiding — finds the search already done.",
+            ],
+          },
+          {
+            heading: "Find your one and fold it in",
+            body: [
+              "Every street has a dominant objection, and your door notes from the debrief habit tell you which one it is. If the block keeps saying I'm happy with what I have, fold the answer into the pitch: Most folks on this loop told me they were fine with their setup — right up until they saw the same speeds at 30 less without the promo games. If the block keeps flinching at switching hassle: People assume the switch is a project — it is one visit, about 90 minutes, and we handle the old provider. One sentence, delivered as an aside, in the value beat of the skeleton.",
+              "The construction is always the same: name the objection as something other people had, then resolve it with one fact. Attributing it to most folks or your neighbors lets the homeowner absorb the answer without ever having to own the objection — nobody has to back down from a stance they never took.",
+            ],
+          },
+          {
+            heading: "One strike, small dose",
+            body: [
+              "Pre-empt exactly one objection — the street's top one — and keep the dose small. A rep who pre-answers three objections is arguing with ghosts, and worse, planting doubts the homeowner never had: they were not worried about contracts until you brought up contracts unprompted, twice. The strike is inoculation, not a rebuttal tour. One sentence inside the pitch, and if a different objection surfaces later, handle it live with agree-bridge-close like any other.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "A spoken objection becomes a defended position — resolve the top one before it is voiced.",
+          "Attribute the objection to most folks so the homeowner never has to own or defend it.",
+          "One sentence, one fact, inside the value beat — the strike is an aside, not a segment.",
+          "Pre-empt only your street's number-one objection; pre-answering three plants doubts that were never there.",
+        ],
+        drillPrompt:
+          "Check your door notes and name your area's most common objection. Script one pre-emptive sentence for it — most folks said X, until Y — and deliver it inside the pitch on your next 10 doors. Count how many doors still voice that objection afterward.",
+        quiz: [
+          {
+            question: "Why is an objection easier to handle before the homeowner says it out loud?",
+            options: [
+              "Because you can talk faster than they can",
+              "Once spoken, it becomes a stance they defend for consistency; unspoken, there is no position to walk back",
+              "Because homeowners forget their objections quickly",
+              "It is not easier — objections should always be drawn out first",
+            ],
+            answerIndex: 1,
+            explanation: "People defend what they have said far harder than what they have felt. The pre-emptive strike resolves the doubt while it is still a doubt, not a declared position.",
+          },
+          {
+            question: "What is the correct construction of a pre-emptive strike?",
+            options: [
+              "Ask the homeowner to list their concerns up front",
+              "Warn them that most people object for bad reasons",
+              "Attribute the objection to most folks around here, then resolve it with one fact, as an aside inside the pitch",
+              "Present a slide of frequently asked questions",
+            ],
+            answerIndex: 2,
+            explanation: "Attribution lets them absorb the answer without owning the objection, and the single-fact aside keeps the pitch a pitch instead of a debate with nobody.",
+          },
+          {
+            question: "Why is pre-empting three objections worse than pre-empting one?",
+            options: [
+              "It takes too long to memorize",
+              "Managers only allow one per pitch",
+              "Three strikes require three facts, which is too many numbers",
+              "You end up arguing with ghosts and planting doubts the homeowner never actually had",
+            ],
+            answerIndex: 3,
+            explanation: "Every unprompted defense suggests a hidden problem. Inoculate against the street's top objection only, and handle anything else live if it actually appears.",
+          },
+        ],
+      },
     ],
   },
 
@@ -1675,6 +1746,1291 @@ export const TRAINING_MODULES: TrainingModule[] = [
             ],
             answerIndex: 1,
             explanation: "A rattled rep reviews the door as a story about themselves. Reset to neutral first, and the debrief becomes an honest reading of the process.",
+          },
+        ],
+      },
+    ],
+  },
+
+  // ── M7 — The Closing Playbook ───────────────────────────────────────────────
+  {
+    id: "m7",
+    title: "The Closing Playbook",
+    tagline: "Six closing styles, when each one is earned, and the failure mode of each.",
+    lessons: [
+      {
+        id: "m7-assumptive-deep",
+        title: "The assumptive close: the full playbook",
+        summary: "Proceed as if the yes is settled, survive the pushback, and let silence finish the job.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "When the assumptive close is earned",
+            body: [
+              "Module 6 introduced the assumptive close; this is the full treatment. The assumptive close is not a trick — it is a reading. When the conversation has already gone yes-shaped, re-asking whether insults the progress. The move is to proceed to logistics as if the decision is settled: Let me pull up the install calendar for your address — looks like the crew has Thursday morning open. No permission requested, no drama, just the natural next step of a conversation that earned it.",
+              "Earned is the operative word. The gate is two or more genuine buying signals: a logistics question, the spouse summoned, the door opened wide, the homeowner stepping out onto the porch. Fired against visible hesitation, the same sentence becomes pressure, and the homeowner feels the mismatch instantly — you just manufactured the objection your close was supposed to skip. Count signals before you assume. Zero or one signal means keep discovering; two or more means stop pitching and proceed.",
+            ],
+          },
+          {
+            heading: "The walk-back that saves it",
+            body: [
+              "Sometimes you misread, and the homeowner says: hold on, I have not agreed to anything. This moment decides the door, and the failure is collapsing into apology. Calibrate instead, lightly and without retreat: You are right — I got ahead of us. What is the piece you are still weighing? One sentence of ownership, one question. Their answer names the real remaining objection, which is more than most doors ever hand you, and the conversation continues from the exact spot that matters.",
+              "What you must not do is restart the pitch, stack apologies, or pretend the close did not happen. The homeowner watched you overreach and recover with composure — done cleanly, the walk-back itself is a credibility deposit.",
+            ],
+          },
+          {
+            heading: "Silence as a close: the 4-second rule",
+            body: [
+              "Every closing ask in this module ends the same way: with your mouth closed. After the ask, hold silence for four full seconds minimum — count them in your head if you have to. The homeowner is running the final math, and the silence is not dead air; it is the close operating. Untrained reps panic at second two and re-pitch, which hands the homeowner new inputs and restarts the decision they were about to finish.",
+              "Four seconds feels like an hour on a porch. Practice it until it feels like what it is: the most productive four seconds of the conversation. When they speak, respond to what they said — not to your nerves.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The assumptive close is a reading, not a trick — it requires two or more genuine buying signals first.",
+          "Proceed to logistics as the natural next step: pull up the calendar, name a real slot.",
+          "If they push back, own it in one sentence and ask what they are still weighing — never collapse into apology.",
+          "After any closing ask, hold four full seconds of silence. Re-pitching into the silence reopens the decision.",
+        ],
+        drillPrompt:
+          "On your next 10 engaged doors, keep a silent signal count and close assumptively only after two signals. After every closing ask, count four seconds in your head before speaking. Log each door: signals counted, close attempted, who spoke first.",
+        quiz: [
+          {
+            question: "What is the gate for deploying an assumptive close?",
+            options: [
+              "The pitch has been fully delivered",
+              "Two or more genuine buying signals have appeared",
+              "The homeowner has been at the door for five minutes",
+              "The rep feels confident",
+            ],
+            answerIndex: 1,
+            explanation: "The assumptive close reads a decision that has already formed. Without the signals, the same words are pressure and create the objection they were meant to skip.",
+          },
+          {
+            question: "The homeowner says 'hold on, I have not agreed to anything.' What is the playbook response?",
+            options: [
+              "Apologize several times and restart the pitch from the top",
+              "Push forward — they are close and momentum matters",
+              "You are right, I got ahead of us — what is the piece you are still weighing?",
+              "Offer a discount to smooth it over",
+            ],
+            answerIndex: 2,
+            explanation: "One sentence of ownership, one question. The pushback locates the real objection, and a composed walk-back deposits credibility instead of draining it.",
+          },
+          {
+            question: "Why does the 4-second rule exist?",
+            options: [
+              "It gives you time to plan the next pitch",
+              "Silence pressures the homeowner into compliance",
+              "It is a courtesy convention",
+              "The homeowner is finishing their internal math — interrupting hands them new inputs and restarts the decision",
+            ],
+            answerIndex: 3,
+            explanation: "The post-ask silence is the close operating. Whoever speaks first ends the decision — make sure it is them, answering it.",
+          },
+        ],
+      },
+      {
+        id: "m7-alternative-choice",
+        title: "The alternative-choice close: two installs, never yes/no",
+        summary: "Replace the whether question with a which question built from two real options.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Why which beats whether",
+            body: [
+              "A yes/no closing question — so, do you want it? — invites the homeowner to re-litigate the entire decision from the top. An alternative-choice close skips the whether and asks about the how: I have Thursday at 10 or Saturday at 9 for your address — which fits better? Both answers advance the sale, and how-questions are cognitively easy in a way that whether-questions never are. The yes is presupposed gently, and if it genuinely exists, the homeowner steps into it without friction.",
+            ],
+          },
+          {
+            heading: "Building the choices right",
+            body: [
+              "Offer exactly two options. One option is a yes/no question in disguise; three or more turns the close into analysis and stalls it. Both options must be real — actual slots on the actual calendar — and both must be acceptable to you. Make them concrete and near-term: named days, named times. Thursday at 10 or Saturday at 9 closes; sometime this week or maybe next does not.",
+              "And the choice must always be between two versions of how, never a manufactured choice about whether. Do you want to save money, or keep overpaying? is not an alternative-choice close — it is a manipulative false choice, the homeowner recognizes it as one, and it costs you the trust the real technique depends on.",
+            ],
+          },
+          {
+            heading: "Failure mode: the choice before the yes",
+            body: [
+              "Deployed before buying signals exist, the alternative-choice close feels like a trap snapping shut, and the standard escape is neither works for me. When you hear neither, read it honestly. Sometimes it is a real calendar conflict — offer to find a slot: What week does work? I can check the crew's rotation. But delivered flat, with no counter-offer, neither is a soft no wearing scheduling clothes. Back out of logistics and return to discovery: Sounds like the timing is not really the question — what is still open for you? Forcing a third slot onto a soft no is how reps turn a recoverable door into a burned one.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Move the close from whether to which: two real install slots, both of which advance the sale.",
+          "Exactly two options, concrete and near-term — one is a yes/no in disguise, three is analysis.",
+          "Never manufacture a false choice about whether; the choice is always between two versions of how.",
+          "A flat 'neither works' with no counter-offer is a soft no — return to discovery, do not offer slot three.",
+        ],
+        drillPrompt:
+          "Before your shift, memorize two real install slots from the actual calendar. On your next 10 engaged doors, close with those two slots by name and log the response: a slot chosen, a genuine conflict, or a flat neither. Treat every flat neither as a discovery question, not a scheduling problem.",
+        quiz: [
+          {
+            question: "Why does 'Thursday at 10 or Saturday at 9?' outperform 'do you want to sign up?'",
+            options: [
+              "It sounds more professional",
+              "It presupposes the yes and asks an easy how-question, so both answers advance the sale",
+              "It hides the commitment until the paperwork",
+              "Homeowners prefer weekends",
+            ],
+            answerIndex: 1,
+            explanation: "Whether-questions reopen the whole decision; which-questions ride the yes that already formed and only ask logistics.",
+          },
+          {
+            question: "What is wrong with 'do you want to save money, or keep overpaying?'",
+            options: [
+              "Nothing — it is a strong alternative-choice close",
+              "It offers too many options",
+              "It is a manufactured false choice about whether, which homeowners recognize as manipulation",
+              "It mentions money too early",
+            ],
+            answerIndex: 2,
+            explanation: "The legitimate technique chooses between two versions of how. A rigged choice about whether burns the trust that makes the real close work.",
+          },
+          {
+            question: "The homeowner says 'neither works' flatly, offering no alternative. What does the playbook say?",
+            options: [
+              "Offer a third and fourth slot until one lands",
+              "Read it as a soft no and return to discovery — ask what is still open for them",
+              "Book Thursday anyway and confirm by text",
+              "Leave immediately without another word",
+            ],
+            answerIndex: 1,
+            explanation: "A real conflict comes with a counter-offer. A flat neither is a decline wearing scheduling clothes; pushing more slots at it burns the door.",
+          },
+        ],
+      },
+      {
+        id: "m7-summary-close",
+        title: "The summary close: stack the agreed pains back",
+        summary: "Replay their own three pains in their own words, then attach the fix and the ask.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Their words, played back",
+            body: [
+              "Through a good door conversation, the homeowner hands you pains in their own words: the bill jumped to 105, the upstairs stream drops every evening, they pay 15 a month to rent a modem. The summary close collects those and plays them back in one stack: So — the bill is at 105 and climbing, the 8 p.m. stream keeps dropping, and 15 of that bill is renting their modem. Fiber puts you at 65 flat on a dedicated line with your own equipment. Want me to grab Thursday? Three items, their words, then the fix, then one ask.",
+            ],
+          },
+          {
+            heading: "Why stacking works",
+            body: [
+              "Each pain alone is tolerable — people live with a bad bill or a flaky stream for years. Stacked in one sentence, the pains describe the situation the way it actually is, and tolerable stops being the right word. And because every item in the stack came out of the homeowner's own mouth, the summary is not a set of claims to argue with — it is agreement replay. Nobody rebuts their own words. This is also why the summary close is the natural finish after a long conversation, with analytical buyers who want the logic assembled, or when a spouse arrives late and needs the whole picture in ten seconds.",
+            ],
+          },
+          {
+            heading: "Failure modes",
+            body: [
+              "Three ways to break it. First, inventing a pain they never voiced — they notice instantly, the whole stack collapses, and you have proven you were building a case instead of listening. Second, over-stacking: five or six items stops sounding like a summary and starts sounding like a prosecution. Three is the ceiling. Third, the gotcha tone — delivered with a raised eyebrow and a so-there cadence, the same words become a trap closing. Deliver it the way a good waiter reads back an order: accurate, neutral, and on their side.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Stack a maximum of three pains, each one in the homeowner's own words, then the fix, then one ask.",
+          "Their own words are agreement replay, not claims — nobody rebuts their own words.",
+          "Best deployed after long conversations, with analytical buyers, or to catch up a late-arriving spouse.",
+          "Never invent a pain, never stack past three, and deliver it like an order read-back, not a prosecution.",
+        ],
+        drillPrompt:
+          "On your next 10 doors, keep a mental slot for every pain the homeowner voices, verbatim. At any door that reaches a close, deliver a three-item summary using only their words before the ask. Afterward, log whether the stack was accurate or you caught yourself paraphrasing.",
+        quiz: [
+          {
+            question: "Why is a summary built from the homeowner's own words hard to argue with?",
+            options: [
+              "It is technically accurate",
+              "Homeowners forget what they said",
+              "It is agreement replay — rebutting it would mean rebutting themselves",
+              "Long sentences discourage interruption",
+            ],
+            answerIndex: 2,
+            explanation: "Claims invite counter-claims. Their own voiced pains, played back accurately, carry testimony weight that no assertion of yours can match.",
+          },
+          {
+            question: "What is the maximum stack size, and why?",
+            options: [
+              "Five — more evidence is more persuasive",
+              "Three — beyond that the summary reads as a prosecution instead of a read-back",
+              "One — simplicity always wins",
+              "There is no limit if the pains are real",
+            ],
+            answerIndex: 1,
+            explanation: "Three stacked pains reframe the situation; five turn the close into a case against the homeowner's judgment, which triggers defense.",
+          },
+          {
+            question: "You are mid-summary and realize one of your three items was never actually said by the homeowner. What happened?",
+            options: [
+              "Nothing — it was probably true anyway",
+              "You strengthened the close with an extra pain",
+              "A minor slip that homeowners rarely catch",
+              "You broke the technique — an invented pain collapses the stack and reveals case-building instead of listening",
+            ],
+            answerIndex: 3,
+            explanation: "The summary close's entire power is that every item is theirs. One planted item converts agreement replay back into arguable claims and costs the trust behind all three.",
+          },
+        ],
+      },
+      {
+        id: "m7-takeaway-close",
+        title: "The takeaway close: honest scarcity and the walk-back",
+        summary: "Stop pulling and let the offer's real limits do the work — without ever inventing one.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "The psychology of the takeaway",
+            body: [
+              "Resistance needs something to push against. A rep who is always pulling toward the sale gives the homeowner a force to resist; the takeaway removes the force. Honestly — it might not be worth switching for you. If the bill is genuinely under 70 and stays there, you are one of the rare setups I would leave alone. Said sincerely, this does one of two things: it closes — well, it is actually 95 — because the homeowner starts selling themselves the moment you stop; or it disqualifies correctly, which is also a win. The takeaway is qualification wearing a close's clothes.",
+            ],
+          },
+          {
+            heading: "Install-slot scarcity and the walk-back",
+            body: [
+              "The second form uses the real limits of the operation: The crew wraps this street Friday — after that, the same install waits for the next rotation through. That is honest scarcity, and it moves people because it is true and verifiable from their porch. The manager test from Module 6 applies word for word: if the homeowner repeated your scarcity line to your manager, would it hold? If not, it does not leave your mouth.",
+              "The walk-back is the physical version. At a stalled door, begin a genuine warm exit — the half turn, no problem at all, if the bill ever jumps the line is in the street now. Some meaningful fraction of doors re-open right there: hang on — what was the price again? Losing access, even to something they were declining, changes its weight. But the walk must be real. If they do not call you back, keep walking, warmly. A fake walk-back that loops at the end of the driveway is theater, and homeowners have seen the play.",
+            ],
+          },
+          {
+            heading: "The ethics line",
+            body: [
+              "The takeaway only works from abundance — from a rep who genuinely does not need this particular yes because the math says the next door pays the same. Faked reluctance, invented deadlines, might-not-qualify games played on an address you know qualifies: these are lies with a short shelf life and a long complaint tail. Two hard rules: never take away anything that is not really limited, and never suggest doubt about qualification that you do not actually have. If you cannot walk away honestly, do not fake the walk — fix your pipeline until you can.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The takeaway removes the force resistance pushes against — stop pulling and they start selling themselves.",
+          "It might not be worth it for you is qualification wearing a close's clothes: it either closes or correctly disqualifies.",
+          "Real scarcity only: crew rotations and calendar limits that pass the manager test word for word.",
+          "The walk-back must be genuine — if they do not call you back, keep walking, warmly.",
+        ],
+        drillPrompt:
+          "On your next 10 doors, deploy one honest takeaway at any stalled-but-qualified door: name the real limit or concede they might be fine as-is, then start a genuine warm exit. Count how many doors re-open behind you, and confirm every scarcity line you used would survive the manager test.",
+        quiz: [
+          {
+            question: "Why does the takeaway close work psychologically?",
+            options: [
+              "It insults the homeowner into proving you wrong",
+              "Resistance needs a pulling force to push against — remove the pull and the homeowner starts weighing the offer on its merits",
+              "It saves time on doors that will not buy",
+              "Scarcity always overrides judgment",
+            ],
+            answerIndex: 1,
+            explanation: "The takeaway ends the tug-of-war. With nothing to resist, the homeowner is left alone with the actual math, and losing access changes the offer's weight.",
+          },
+          {
+            question: "Which line stays on the right side of the ethics line?",
+            options: [
+              "This price expires when I leave the porch",
+              "I can only do this for one more house tonight",
+              "The crew wraps this street Friday — after that, the install waits for the next rotation",
+              "You probably will not qualify, so decide fast",
+            ],
+            answerIndex: 2,
+            explanation: "Crew rotation is real, verifiable, and would hold if repeated to your manager. The others are invented pressure — short shelf life, long complaint tail.",
+          },
+          {
+            question: "You start a genuine walk-back and the homeowner does not call you back. What now?",
+            options: [
+              "Keep walking, warmly — the walk was real and the door stays warm for the next pass",
+              "Circle back at the end of the driveway with a better offer",
+              "Knock again in ten minutes",
+              "Log the door as hostile",
+            ],
+            answerIndex: 0,
+            explanation: "A walk-back that loops around is theater the homeowner has seen before. The technique only exists because the walk is genuine — honor it and the seed line does its slow work.",
+          },
+        ],
+      },
+      {
+        id: "m7-trial-close",
+        title: "The trial close and the no-risk frame",
+        summary: "Temperature checks that measure without demanding, and the puppy-dog frame that lets the product close itself.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Temperature checks before the ask",
+            body: [
+              "A trial close is a question that measures readiness without demanding a decision: How does that 65 compare to what you are paying now? or If the speeds hold the way they are holding next door, is there anything else that would give you pause? The answer tells you which move is next — a warm answer says stop pitching and close; a cool answer names the gap you still need to fill. Trial closes are how you avoid the two classic errors: closing too early against hesitation, and overtalking past a door that was already sold.",
+              "You have been running one all along: the address-check micro-close — worth checking if your address qualifies? — is itself a trial close. The yes costs the homeowner nothing, and how they say it is a temperature reading on everything that follows.",
+            ],
+          },
+          {
+            heading: "The puppy-dog frame",
+            body: [
+              "The name comes from pet stores that let the family take the puppy home for the weekend — nobody brings the puppy back, because ownership does the selling. The fiber version is the 30-day no-risk frame: Try it for a month. If the evening speeds do not do what I said, switch back and you have lost nothing. Two weeks of a household living on symmetrical speeds and no 8 p.m. sag, and going back feels like a downgrade. You are not closing the sale; you are closing the trial, and the product closes the sale.",
+              "The frame is only available if your actual terms support it. Know precisely what the guarantee, cancellation window, and any fees really are before the words no risk leave your mouth.",
+            ],
+          },
+          {
+            heading: "Failure modes",
+            body: [
+              "Two ways this goes wrong. First, the interrogation: trial-close questions fired in a row — how does that sound? does that work? are we good? — stop measuring temperature and start applying heat. One trial close per stage of the conversation, then act on the reading. Second, the false no-risk: if there is an early termination fee, an install charge, or a return-equipment hassle, the frame is not literally true, and the homeowner who discovers that in month two becomes a cancellation, a complaint, and a story the whole block hears. No-risk must mean no risk, or it must not be said.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Trial closes measure readiness without demanding a decision — warm answers say close, cool answers name the gap.",
+          "The address-check micro-close is your ever-present trial close; read how the yes sounds.",
+          "The puppy-dog frame closes the trial and lets lived-in speeds close the sale.",
+          "One trial close per stage, and never say no-risk unless the terms make it literally true.",
+        ],
+        drillPrompt:
+          "On your next 10 engaged doors, run exactly one trial close after the value beat — how does that compare to what you are paying? — and write down the answer's temperature: warm, neutral, or cool. Close only the warm ones and note whether your close rate on attempted closes improves.",
+        quiz: [
+          {
+            question: "What is a trial close for?",
+            options: [
+              "Locking the homeowner into a verbal commitment",
+              "Measuring readiness without demanding a decision, so you know whether to close or keep filling the gap",
+              "Practicing your closing lines on low-value doors",
+              "Extending the conversation length",
+            ],
+            answerIndex: 1,
+            explanation: "The trial close is a thermometer, not a contract. It prevents both premature closes against hesitation and overtalking past a sold door.",
+          },
+          {
+            question: "Why does the puppy-dog frame work?",
+            options: [
+              "Everyone loves dogs",
+              "It hides the real price until after install",
+              "Ownership does the selling — two weeks of lived-in fiber speeds makes going back feel like a downgrade",
+              "It legally obligates the homeowner after 30 days",
+            ],
+            answerIndex: 2,
+            explanation: "You close the low-stakes trial; the daily experience of the product closes the sale. That is why the frame converts skeptics that arguments cannot.",
+          },
+          {
+            question: "When is the phrase no-risk allowed at the door?",
+            options: [
+              "Whenever it helps close a hesitant buyer",
+              "Only when the actual terms make it literally true — no fees, real cancellation window, no hidden hassle",
+              "Only in writing",
+              "Never — risk language is always banned",
+            ],
+            answerIndex: 1,
+            explanation: "A no-risk claim the homeowner disproves in month two produces a cancellation, a complaint, and a block-wide story. The frame is powerful precisely because it is checkable — so it must check out.",
+          },
+        ],
+      },
+      {
+        id: "m7-referral-close",
+        title: "The referral close: the next door starts on this porch",
+        summary: "Ask at peak goodwill, get the name-drop permissioned, and knock the referral within 48 hours.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The moment to ask",
+            body: [
+              "The best time to open the next sale is the sixty seconds after closing this one. The new customer is at peak goodwill — they just made a decision they feel good about, and helping a neighbor get the same deal confirms it was smart. While you confirm the install: Who else on the street complains about the bill? Anyone you would want on the same install week so the crew does both in one pass? Ask for names, plural and specific. Anyone you know? produces a shrug; who complains about the bill? produces the Hendersons.",
+            ],
+          },
+          {
+            heading: "Permissioned name-drops",
+            body: [
+              "A name is only usable with permission, so get it on the spot: Mind if I mention you are getting connected Thursday when I knock the Hendersons? Most say yes, and that yes converts the next door's cold open into a warm one: Dana two doors down is getting installed Thursday — she figured you would want the same numbers. A permissioned name-drop carries the referrer's credibility to a porch you have never stood on.",
+              "The rule is absolute: never drop a name you did not clear. One unauthorized name-drop, discovered over a fence conversation, travels the block faster than ten good installs — and it takes your permissioned drops down with it, because now every name you use is suspect.",
+            ],
+          },
+          {
+            heading: "Closing the neighbor from this porch",
+            body: [
+              "The strongest referral does not wait for your knock. If the goodwill is high, compress the distance to zero: Worth a text? Tell them the fiber guy is out front and the crew is doing the street this week. A referred door whose owner is already expecting you closes at multiples of any cold door, because the trust arrived before you did. Short of a live text, log every referral like an appointment — name, address, permission status — and knock it within 48 hours, while the referrer's install is visible, fresh news on the street. A referral knocked two weeks later is just a cold door with a stale story.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Ask in the sixty seconds after the yes — helping a neighbor confirms their own decision was smart.",
+          "Ask specifically: who complains about the bill beats anyone you know, every time.",
+          "Permission the name-drop on the spot, and never use a name you did not clear.",
+          "Text now or knock within 48 hours — referrals decay into cold doors.",
+        ],
+        drillPrompt:
+          "At every close and every genuinely warm exit on your next 10 doors, ask the two-part referral question: who complains about the bill, and may I mention your name? Log names, permission status, and knock or text every referral within 48 hours.",
+        quiz: [
+          {
+            question: "Why is the minute right after a close the best referral moment?",
+            options: [
+              "The paperwork requires a reference",
+              "The customer is at peak goodwill, and helping a neighbor confirms their own decision was smart",
+              "It is the only compliant time to ask",
+              "Neighbors are usually watching",
+            ],
+            answerIndex: 1,
+            explanation: "Post-decision goodwill is real and brief. A referral given in that window carries enthusiasm the same ask a week later cannot recover.",
+          },
+          {
+            question: "What makes 'who on the street complains about the bill?' better than 'do you know anyone interested?'",
+            options: [
+              "It is shorter",
+              "It avoids the word interested",
+              "Specific questions search memory for a matching person; vague ones produce a polite shrug",
+              "It implies the neighbors are unhappy",
+            ],
+            answerIndex: 2,
+            explanation: "The brain answers concrete questions. Complains-about-the-bill retrieves an actual face and name; anyone-you-know retrieves nothing.",
+          },
+          {
+            question: "What is the standing rule on name-drops?",
+            options: [
+              "Any customer's name may be used — installs are visible anyway",
+              "Names may be used only with that person's explicit permission, obtained on the spot",
+              "Names may be used after the install completes",
+              "Only first names may be used freely",
+            ],
+            answerIndex: 1,
+            explanation: "A permissioned name carries borrowed trust; an unpermissioned one is a privacy breach that travels the block and poisons every future drop.",
+          },
+        ],
+      },
+    ],
+  },
+
+  // ── M8 — Advanced Door Psychology ───────────────────────────────────────────
+  {
+    id: "m8",
+    title: "Advanced Door Psychology",
+    tagline: "The professional persuasion layer — reciprocity, consistency, proof, authority, pacing, and loss — used honestly.",
+    lessons: [
+      {
+        id: "m8-reciprocity",
+        title: "Reciprocity at the door: give first",
+        summary: "Real value delivered before any ask — the speed check and the honest bill review.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The oldest lever, used honestly",
+            body: [
+              "People are wired to return what they receive — favors, information, effort. Sales abuses this with trinkets and fake gifts, and homeowners smell those instantly. The professional version is different: deliver something genuinely useful before you ask for anything. Run a speed check on their current connection right there on the porch, on their phone: Pull up a speed test — let us see what you are actually getting for that bill. Tell them what plans in the area actually cost post-promo. Point out the modem rental line they forgot they pay. Each of these is worth real money to them whether or not they ever buy from you.",
+              "The give does two jobs. It creates a genuine debt of attention — people find it hard to wave off someone who just did them a favor — and it proves your frame from Module 1: you are the street's fiber consultant, and consultants deliver value on contact.",
+            ],
+          },
+          {
+            heading: "The honest bill review",
+            body: [
+              "The strongest give in this business is the bill review: Grab the bill sometime and I will walk you through what every line actually is — even if you never switch, you will know what you are paying for. Then do it straight. Name the fees, the rental charges, the promo expiration date, and what each one means. And if their setup is genuinely good — a real grandfathered rate, a plan that fits — say exactly that: Honestly, that is a good rate. I would keep it. That sentence costs you one sale and buys you a street. The homeowner you told to keep their plan becomes your loudest reference, because they have proof you tell the truth against your own interest.",
+            ],
+          },
+          {
+            heading: "The rules that keep it clean",
+            body: [
+              "Three rules. The give must be real — a gift that only exists to obligate is a setup, and it reads as one. No strings voiced, ever: I did the review, so the least you can do is hear me out cancels the entire effect and replaces debt with resentment. And reciprocity buys attention, not agreement — it earns you a fair hearing, and the product still has to win the hearing on its own. A rep who expects the favor to close the sale has misunderstood the lever.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Give first, for real: the porch speed check and the honest bill review are worth money to them either way.",
+          "If their setup is genuinely good, say so — truth against your own interest builds a street-wide reference.",
+          "Never voice the string: an invoked favor cancels the debt and creates resentment.",
+          "Reciprocity earns the fair hearing, not the sale — the product still has to win.",
+        ],
+        drillPrompt:
+          "On your next 10 doors, lead every engaged conversation with one real give — a live speed test on their phone or one useful fact about local post-promo pricing — before any pitch beat. Track how many doors give you a full hearing compared to your normal rate.",
+        quiz: [
+          {
+            question: "What separates professional reciprocity from the trinket version?",
+            options: [
+              "The dollar value of the gift",
+              "The give is genuinely useful to the homeowner whether or not they ever buy",
+              "Professionals give at the end instead of the start",
+              "There is no difference — all giving obligates",
+            ],
+            answerIndex: 1,
+            explanation: "A speed check or honest bill review has standalone value, so it reads as help. A gift that only exists to obligate reads as the setup it is.",
+          },
+          {
+            question: "The bill review reveals the homeowner has a genuinely great grandfathered rate. What do you do?",
+            options: [
+              "Find something else wrong with their setup",
+              "Pivot to speed pain instead",
+              "Tell them plainly it is a good rate and they should keep it",
+              "End the review early",
+            ],
+            answerIndex: 2,
+            explanation: "Truth against your own interest is the most credible sentence you can say on a porch. It costs one sale and creates a reference the whole street hears.",
+          },
+          {
+            question: "Why does saying 'after all I did, at least hear me out' destroy the reciprocity effect?",
+            options: [
+              "It is grammatically weak",
+              "Voicing the string converts a felt debt into an invoice, and resentment replaces the urge to reciprocate",
+              "It takes too long to say",
+              "It does not — naming the favor strengthens it",
+            ],
+            answerIndex: 1,
+            explanation: "Reciprocity works precisely because it is unspoken. The moment the favor is invoked as leverage, the homeowner realizes it was a purchase, not a gift.",
+          },
+        ],
+      },
+      {
+        id: "m8-consistency",
+        title: "Commitment and consistency: the micro-yes ladder",
+        summary: "Why small agreements compound toward the close — and why trick-yeses backfire.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Small agreements compound",
+            body: [
+              "People act in line with what they have already said and done — contradicting your own recent steps feels wrong in a way psychologists have measured for decades. This is the engine under the micro-commitment ladder from Module 3: the one-minute address check leads to seeing the price, which leads to picking an install window. Each rung is small, and each makes the next one natural, because refusing rung four would quietly contradict rungs one through three. Nobody climbs a ladder and then argues the ladder should not exist.",
+              "Notice what the ladder is not: it is not a trap. Every rung is a real, informative step — the check produces a real answer, the price is a real number, the window is a real slot. The homeowner is not being walked into anything; they are walking through a decision at a comfortable step size.",
+            ],
+          },
+          {
+            heading: "Build the ladder from their statements",
+            body: [
+              "Words are commitments too. Every true thing the homeowner says about their situation — yeah, the bill did the jump, and evenings are honestly rough up here — is a rung. When the close arrives, consistency is on your side, because the close follows from what they said, not from what you claimed. This is exactly why the summary close from the Closing Playbook hits: it is a consistency engine, replaying their own commitments in order until the conclusion is standing in the room.",
+              "Practical habit: ask questions whose honest answers are rungs. What is the bill running now? Does it hold up at 8 p.m.? Who streams upstairs? You are not extracting yeses — you are letting them describe a situation that argues for the switch in their own voice.",
+            ],
+          },
+          {
+            heading: "Never trick-yeses",
+            body: [
+              "The manipulative cousin is the momentum chain: You like saving money, right? You care about your family, right? So you would want the best for them, right? Homeowners recognize the pattern by the second question, feel herded, and produce reactance — the strong urge to do the opposite of whatever the herder wants. Every trick-yes also poisons the real rungs that came before it. The rule: every micro-yes must be a step the homeowner would take knowingly, with full information. If a yes exists only to harvest compliance, cut it from the pitch.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Small real steps compound: refusing rung four would contradict rungs one through three.",
+          "Their true statements are rungs too — ask questions whose honest answers argue your case in their voice.",
+          "The summary close works because it is a consistency engine replaying their own commitments.",
+          "Every micro-yes must be a step they would take knowingly — compliance-harvesting yeses trigger reactance and poison the ladder.",
+        ],
+        drillPrompt:
+          "On your next 10 doors, count rungs: every real micro-step (address check accepted, bill number shared, pain named) is one. At doors reaching three or more rungs, attempt a close that references the rungs. Log rung count against close attempts to see your ladder working.",
+        quiz: [
+          {
+            question: "Why does agreeing to a one-minute address check make agreeing to see the price easier?",
+            options: [
+              "The homeowner forgets they can refuse",
+              "Refusing the next small step would quietly contradict the step they just took — people act consistently with their own recent actions",
+              "The check legally obligates them to continue",
+              "It does not — every step is independent",
+            ],
+            answerIndex: 1,
+            explanation: "Consistency pressure is internal, not imposed. Each real step makes the next one the natural continuation of a path they chose.",
+          },
+          {
+            question: "Which of these is a legitimate ladder rung?",
+            options: [
+              "You care about your family, right?",
+              "You would agree that overpaying is foolish, correct?",
+              "What is the bill running these days?",
+              "Everyone wants the best deal, do you not?",
+            ],
+            answerIndex: 2,
+            explanation: "The bill question invites a true, informative statement about their situation. The others are compliance-harvesting yeses that homeowners recognize and resent.",
+          },
+          {
+            question: "What does a trick-yes chain produce by the second or third question?",
+            options: [
+              "Momentum toward the close",
+              "Reactance — the felt urge to do the opposite of what the herder wants — plus contamination of every real step before it",
+              "Confusion that slows the decision",
+              "A stronger commitment than real questions",
+            ],
+            answerIndex: 1,
+            explanation: "Being herded is unmistakable. The homeowner pushes back against the herding itself, and retroactively distrusts the genuine agreements that preceded it.",
+          },
+        ],
+      },
+      {
+        id: "m8-social-proof-mechanics",
+        title: "Social proof mechanics: specific beats general",
+        summary: "The 3-neighbor rule, showing instead of telling, and the proof-inflation trap.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The 3-neighbor rule",
+            body: [
+              "Module 3 established that proof shrinks with distance. The mechanics layer adds a number: one neighbor is an anecdote, three is a pattern. A single install can be a fluke or a brother-in-law deal; three on the same street means the street is deciding. So before working a block, arm yourself with three true, street-level proof points — two installs on the cul-de-sac, the corner house holding 900 up and down on last week's test, eight address checks completed on the loop yesterday. Deliver them as a set when the moment calls for weight: That is three on this street this month. The homeowner is not being asked to be first, and not-first is where most buyers live.",
+            ],
+          },
+          {
+            heading: "Show, do not tell",
+            body: [
+              "A proof the homeowner can see with their own eyes from the porch outranks any sentence you can say. Point at the visible drop line on the corner house. Nod at the crew truck staged at the end of the street. Run the speed test live on your tablet instead of quoting the result. Physical evidence bypasses the salesperson filter entirely, because their eyes are not listening to a pitch — they are just seeing. Build the habit: for every claim you make on a block, ask yourself whether there is a version of it the homeowner can see, and use that version.",
+            ],
+          },
+          {
+            heading: "Failure modes and proof inflation",
+            body: [
+              "Three ways proof dies. Vague proof — lots of people are switching — is categorized as sales noise and discarded on contact. Unpermissioned specifics about individuals burn the block, per the standing rule. Distant proof — another town, another state, a national statistic — carries near-zero porch weight no matter how impressive the number. And above all: proof inflation. Round eight checks up to twenty once, get caught by a homeowner who talks to their neighbors — and every true number you say afterward gets discounted like a currency nobody trusts. Your proof inventory only works if every item in it survives a fence-line conversation between neighbors.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "One neighbor is an anecdote, three is a pattern — arm yourself with three true street-level proof points per block.",
+          "Visible proof bypasses the salesperson filter: point at the drop line, run the test live, nod at the crew truck.",
+          "Vague, distant, or unpermissioned proof carries no weight or negative weight.",
+          "Never inflate: one caught exaggeration discounts every true number you say afterward.",
+        ],
+        drillPrompt:
+          "Before your next 10 doors, write down three true proof points for that exact block and identify one piece of visible evidence you can physically point at. Use the set at every engaged door and note which form — the count, the name, or the pointed finger — moves people most.",
+        quiz: [
+          {
+            question: "Why is three the magic number in the 3-neighbor rule?",
+            options: [
+              "Three fits in a short sentence",
+              "One install reads as a fluke; three reads as the street deciding — and joining is easier than going first",
+              "Compliance limits proof claims to three",
+              "Three is easier to remember than four",
+            ],
+            answerIndex: 1,
+            explanation: "Most buyers do not want to be first. A pattern of three makes saying yes an act of joining rather than pioneering.",
+          },
+          {
+            question: "What makes pointing at the corner house's visible drop line stronger than describing the same install?",
+            options: [
+              "Pointing is more dramatic",
+              "It proves you know the neighborhood",
+              "Seen evidence bypasses the salesperson filter — eyes do not audit claims the way ears do",
+              "It saves pitch time",
+            ],
+            answerIndex: 2,
+            explanation: "Spoken claims get processed through skepticism; physical evidence is simply perceived. When a see-able version of a claim exists, use it.",
+          },
+          {
+            question: "You did eight address checks yesterday but twenty sounds better. What does proof inflation actually cost?",
+            options: [
+              "Nothing, if the trend is real",
+              "A slightly awkward moment if questioned",
+              "Only that one claim's credibility",
+              "Every future true number you say gets discounted once one inflated number is caught",
+            ],
+            answerIndex: 3,
+            explanation: "Neighbors compare notes over fences. One caught exaggeration reprices all your claims at a discount — eight, said honestly, outperforms twenty said falsely.",
+          },
+        ],
+      },
+      {
+        id: "m8-authority-signals",
+        title: "Authority and credibility signals",
+        summary: "What the porch reads in two seconds, competence talk, and the one sentence that ends it all.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "What the porch reads in two seconds",
+            body: [
+              "Before a word lands, the homeowner has already priced your authority from signals: a badge they can read without asking, a clean uniform or branded shirt, a tablet held like a tool rather than a phone held like a distraction, posture that is settled instead of shifty. These are processed pre-verbally, the same channel as the threat assessment from Module 2, and they either open a credibility account or start you in debt.",
+              "Then there is borrowed authority, and it is real: you represent the carrier building the street. The crews, the network operations center, the install calendar — that entire operation stands behind your sentences. Speak with its calm. The crew wraps this street Friday is a report from an organization, not a claim from a stranger, and homeowners hear the difference in reps who believe it.",
+            ],
+          },
+          {
+            heading: "Competence talk",
+            body: [
+              "Nothing signals authority like precise local knowledge. Knowing which houses on the street are already lit, what the construction schedule actually is, and what local cable bills run post-promo — two precise, checkable local facts outrank any credential you could carry. This is competence the homeowner can verify from their own porch, which makes it the only kind that fully lands.",
+              "The counterintuitive signal: I do not know — I will find out and text you today. Calibrated uncertainty, delivered without flinching, is itself an authority marker, because experts know the edges of their knowledge and frauds do not. Bluffing an answer is the opposite signal, and one bluff discovered retroactively converts everything else you said into suspected bluffs.",
+            ],
+          },
+          {
+            heading: "What destroys credibility instantly",
+            body: [
+              "Credibility is asymmetric: built over minutes, destroyed in one sentence, and it does not rebuild on the same porch. The instant killers: one exaggerated number, a direct question dodged, visible pushiness after a no, a badge flipped backward or hidden, and the classic self-inflicted wound — opening with I am not selling anything when you visibly are. That last one deserves its own mention because reps reach for it under pressure: it trades the entire interaction's trust for two seconds of lowered guard, and the homeowner spends the rest of the conversation confirming that you lied in your first sentence.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The porch prices your authority pre-verbally: readable badge, clean kit, tablet as tool, settled posture.",
+          "Borrowed authority is real — speak with the calm of the operation behind you.",
+          "Two precise, locally checkable facts outrank any credential; calibrated I-do-not-know outranks any bluff.",
+          "Credibility is asymmetric: one exaggeration, dodge, or I-am-not-selling-anything ends it for good on that porch.",
+        ],
+        drillPrompt:
+          "Before your next 10 doors, run a 30-second kit check — badge readable, shirt straight, tablet charged — and memorize two precise facts about that street: which addresses are lit and the local post-promo bill range. Deliver both facts at every engaged door and never answer a question you are not sure of without flagging it.",
+        quiz: [
+          {
+            question: "Why do two precise local facts outrank a credential or award?",
+            options: [
+              "Credentials are usually fake",
+              "Local facts are checkable from the homeowner's own porch, so the competence fully lands",
+              "Facts are shorter to say",
+              "Homeowners dislike institutions",
+            ],
+            answerIndex: 1,
+            explanation: "Verifiable-from-here beats impressive-from-far. The homeowner can test street knowledge instantly, and passing that test authorizes everything else you say.",
+          },
+          {
+            question: "A homeowner asks a technical question you cannot answer. What is the authority-preserving move?",
+            options: [
+              "Give your best guess confidently — hesitation looks weak",
+              "Change the subject to savings",
+              "Say you do not know, commit to finding out, and follow through the same day",
+              "Refer them to the website",
+            ],
+            answerIndex: 2,
+            explanation: "Experts know the edges of their knowledge. Calibrated uncertainty plus same-day follow-through signals professionalism; one discovered bluff reprices your entire pitch.",
+          },
+          {
+            question: "Why is 'I am not selling anything' uniquely self-destructive?",
+            options: [
+              "It violates disclosure law in most states",
+              "It confuses the homeowner about your role",
+              "It wastes the pattern-interrupt window",
+              "It is a visible lie in your first sentence — the homeowner spends the rest of the conversation confirming you lied",
+            ],
+            answerIndex: 3,
+            explanation: "The homeowner can see the badge and the tablet. Trading permanent trust for two seconds of lowered guard is the worst exchange rate on the porch.",
+          },
+        ],
+      },
+      {
+        id: "m8-mirroring-pacing",
+        title: "Mirroring and pacing without mimicry",
+        summary: "Match cadence, register, and their words for things — never their gestures in real time.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Why matching works",
+            body: [
+              "People relax around what feels familiar, and nothing feels more familiar than their own rhythm. Matching a homeowner's speaking pace, volume, and formality quiets the stranger-alarm that every doorstep interaction starts with. This is the full version of match-then-lead from Module 2: tone was the melody; mirroring and pacing extend it to the body, the sentence length, and the vocabulary. Match first so they relax, then lead the exchange toward calm and unhurried — the state where decisions happen.",
+            ],
+          },
+          {
+            heading: "What to match",
+            body: [
+              "Match the pace of speech: slow talkers experience fast talkers as pressure, fast talkers experience slow ones as dim. Match sentence length — clipped speakers get clipped answers, storytellers get a little room. Match the formality register: a yes-sir porch and a hey-man porch are different countries, and the border matters. Match posture in broad strokes: leaning relaxed if they are relaxed, upright if they are formal. And most powerfully, match their words for things. If they say wifi, say wifi — not bandwidth. If they said it crawls at night, bridge with their phrase: that crawl at night is the shared line — that is the thing fiber removes. Hearing their own words come back means being heard, and being heard is half the sale.",
+            ],
+          },
+          {
+            heading: "The mimicry line",
+            body: [
+              "There is a line, and crossing it reverses everything. Copying gestures in real time — they cross their arms, you cross yours — reads as mockery within seconds. Faking an accent or adopting their slang mid-conversation is worse. The safe discipline is delay and dilute: shift your overall register toward theirs and let specific moves go unmatched. The test is where your attention sits. Matching should run on attention to them — genuinely listening produces natural alignment on its own. If you are consciously choreographing your hands, you have crossed from rapport into performance, and performances get detected.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Match pace, volume, sentence length, and formality first — then lead toward calm.",
+          "Use their words for things: wifi, not bandwidth; their phrase for the pain, replayed in the bridge.",
+          "Delay and dilute: shift your general register, never copy specific gestures in real time.",
+          "Real listening produces natural alignment; conscious choreography is performance, and it gets detected.",
+        ],
+        drillPrompt:
+          "On your next 10 doors, capture the homeowner's exact phrase for their pain and use that phrase — word for word — once in your bridge or close. Separately, note each door's register (formal or casual) and whether you matched it in your first two sentences.",
+        quiz: [
+          {
+            question: "What is the legitimate core of mirroring at a door?",
+            options: [
+              "Copying the homeowner's gestures as they make them",
+              "Matching pace, register, and vocabulary so the interaction feels familiar, then leading toward calm",
+              "Agreeing with everything they say",
+              "Imitating their regional accent",
+            ],
+            answerIndex: 1,
+            explanation: "Familiar rhythm quiets the stranger-alarm. Real-time gesture copying and accent imitation are mimicry — they read as mockery and reverse the effect.",
+          },
+          {
+            question: "The homeowner says their internet 'crawls at night.' What is the highest-rapport bridge?",
+            options: [
+              "Our bandwidth degradation is significantly lower",
+              "That crawl at night is the shared line — that is exactly what fiber removes",
+              "Everyone says that about cable",
+              "Define the technical cause of congestion first",
+            ],
+            answerIndex: 1,
+            explanation: "Replaying their own phrase proves you heard them, and being heard is half the sale. Translating their words into your jargon proves the opposite.",
+          },
+          {
+            question: "How do you know you have crossed from matching into mimicry?",
+            options: [
+              "The conversation gets longer",
+              "The homeowner matches you back",
+              "Your attention has moved from listening to them to choreographing yourself",
+              "You start using their name",
+            ],
+            answerIndex: 2,
+            explanation: "Genuine attention produces natural alignment for free. The moment matching becomes a performance you are managing, it becomes detectable — and mockery is how it lands.",
+          },
+        ],
+      },
+      {
+        id: "m8-loss-framing",
+        title: "Loss framing done honestly",
+        summary: "What staying on copper actually costs — and the rules that keep the frame out of fear-mongering.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Losses weigh double",
+            body: [
+              "Decades of research agree on one asymmetry: losing something weighs roughly twice as much as gaining the same thing. You are losing 30 a month moves people that you could save 30 a month does not — same arithmetic, different gravity. Used honestly, loss framing is not manipulation; it is accurate accounting. The homeowner on a post-promo cable bill genuinely is losing money every month relative to the fiber price on their street. Saying so plainly is truer than the polite gain-frame, not less true.",
+            ],
+          },
+          {
+            heading: "What staying on copper actually costs",
+            body: [
+              "Do the real arithmetic, from their own numbers. The 30-a-month overpay they told you about is 360 a year — leaving the house every year, for the same speeds. The 15-a-month modem rental is 180 a year for a box they could own. The evening slowdown they named is a cost they are already paying nightly in the currency of household friction. And the upload starvation of copper has a quiet price too: cloud backups that never finish, video calls that freeze on their end. Frame only from pains they voiced or numbers they gave you — the loss frame borrows all its honesty from the summary-close rule: their words, their bill, their evenings.",
+            ],
+          },
+          {
+            heading: "The line you never cross",
+            body: [
+              "Loss framing becomes fear-mongering the moment the loss is invented, inflated, or aimed at safety. Copper is dangerous, your provider is about to go under, this neighborhood is getting left behind — none of it leaves your mouth, ever, true or not, because fear closes exactly the deals that cancel and complain. Three framing rules that never bend: only losses the homeowner can verify on their own bill or in their own evenings; state the frame once and let it sit — a repeated loss frame becomes a pressure campaign; and if the frame needs a raised voice or a darkened tone to work, it is not framing anymore. The loss frame is an accountant's move, delivered like an accountant: flat, factual, and once.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Losses weigh about double gains: losing 30 a month moves people that saving 30 does not.",
+          "Compute the real annual cost of staying — overpay, rental, nightly friction — from their own numbers only.",
+          "State the loss frame once, flatly, and let it sit; repetition converts framing into pressure.",
+          "Invented, inflated, or safety-aimed losses are fear-mongering — they close deals that cancel and complain.",
+        ],
+        drillPrompt:
+          "On your next 10 engaged doors, after the homeowner gives you their bill number, deliver one honest loss frame built from it — that is X a year leaving the house for the same speeds — exactly once, in a flat accountant's tone. Log whether the door engaged deeper or pulled back, and adjust nothing else.",
+        quiz: [
+          {
+            question: "Why does 'you are losing 30 a month' outperform 'you could save 30 a month'?",
+            options: [
+              "It is more polite",
+              "Losses psychologically weigh about twice as much as equivalent gains",
+              "It implies the provider is cheating them",
+              "It does not — gain frames always test better",
+            ],
+            answerIndex: 1,
+            explanation: "Loss aversion is one of the most replicated findings in decision research. Same arithmetic, roughly double the motivational weight.",
+          },
+          {
+            question: "Which loss frame stays on the honest side of the line?",
+            options: [
+              "Copper networks are becoming a safety risk",
+              "This neighborhood is getting left behind",
+              "At the bill you just told me, that is 360 a year leaving the house for the same speeds",
+              "Your provider probably will not exist in five years",
+            ],
+            answerIndex: 2,
+            explanation: "It is built from their own stated number and verifiable on their own bill. The others are invented or safety-aimed fears — the definition of crossing the line.",
+          },
+          {
+            question: "How many times should a loss frame be stated at one door?",
+            options: [
+              "Once, flatly, then let it sit",
+              "At every beat of the pitch for reinforcement",
+              "Twice — once early, once at the close",
+              "Until the homeowner acknowledges it",
+            ],
+            answerIndex: 0,
+            explanation: "A loss frame stated once is accounting; repeated, it becomes a pressure campaign, and the homeowner starts defending against you instead of weighing the math.",
+          },
+        ],
+      },
+    ],
+  },
+
+  // ── M9 — Pitch Styles and Situations ────────────────────────────────────────
+  {
+    id: "m9",
+    title: "Pitch Styles and Situations",
+    tagline: "Four deployable pitch styles, the context playbook, and the two-buyer door.",
+    lessons: [
+      {
+        id: "m9-analyst-pitch",
+        title: "The analyst pitch: numbers first",
+        summary: "The full pitch build for spreadsheet people — comparison, fine print, and homework that converts.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Reading the spreadsheet person",
+            body: [
+              "You met the analytical archetype in Module 4; this is the complete pitch built for them. The tells are unmistakable: precise answers to your questions, unprompted interest in terms and fine print, exact figures instead of roughly, and a visible allergy to enthusiasm. This homeowner does not want to be sold — they want to be given inputs. The analyst pitch is the discipline of becoming a clean data source.",
+            ],
+          },
+          {
+            heading: "The structure: comparison, fine print, writing",
+            body: [
+              "Lead with the comparison, not the story. Current bill next to fiber price, line by line: base rate, equipment, the promo expiration and what the rate becomes after it. Volunteer the fine print before they ask — term length, install cost, whether the price is fixed, no data caps — because fine print you surface is transparency, while fine print they extract is concealment. Offer everything in writing: analysts trust documents over conversations, and the rep willing to be held to paper is the rep whose numbers are real.",
+              "Slow your pace by another notch and let silences sit while they read or compute — an analyst doing math is a door converting, and interrupting the math is overtalking. One exaggeration, even a small rounded-up one, ends the door permanently: this is the one archetype guaranteed to check.",
+            ],
+          },
+          {
+            heading: "Closing an analyst: assign the homework",
+            body: [
+              "Analysts close themselves when the math is undeniable — your close is a numbers summary plus a low-pressure verification step: Run the one-minute check, take the sheet, and hold it against your actual bill tonight. I am back on this street tomorrow evening. Pushing tempo on an analyst reads as a reason to distrust the numbers; assigning verification homework reads as confidence in them. The analyst who checks your numbers and finds them right becomes your most durable customer and your most quotable proof point — accurate people vouch precisely.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Analysts want inputs, not persuasion — become a clean data source.",
+          "Volunteer the fine print before it is asked for: surfaced fine print is transparency, extracted fine print is concealment.",
+          "Let silences sit while they compute; interrupting the math is overtalking.",
+          "Close with a verification step, not tempo — an analyst who checks your numbers and finds them right stays for years.",
+        ],
+        drillPrompt:
+          "Build a one-page comparison sheet for your current street: local post-promo bill range, fiber price, equipment, term, and the fine print. On your next 10 doors, hand it to every analytical read, volunteer one piece of fine print unprompted, and offer the check-it-tonight close. Log how many ask a follow-up question — that is the analyst engaging.",
+        quiz: [
+          {
+            question: "Why volunteer the fine print before an analyst asks?",
+            options: [
+              "It fills time while they think",
+              "Fine print you surface reads as transparency; fine print they have to extract reads as concealment",
+              "It is legally required at the door",
+              "It prevents them from reading the contract later",
+            ],
+            answerIndex: 1,
+            explanation: "Analysts assume hidden terms until shown otherwise. Surfacing the term, fees, and rate behavior unprompted converts their core suspicion into your credibility.",
+          },
+          {
+            question: "The analyst goes quiet, staring at your comparison sheet. What do you do?",
+            options: [
+              "Recap the key numbers so they stay engaged",
+              "Ask if everything is okay",
+              "Let the silence sit — they are computing, and the math is your close working",
+              "Move to the emotional benefits",
+            ],
+            answerIndex: 2,
+            explanation: "An analyst doing arithmetic is a door converting. Interrupting hands them a reason to restart — this is the overtalking failure in its analyst-specific form.",
+          },
+          {
+            question: "What is the correct close for an analytical homeowner?",
+            options: [
+              "Create urgency so they decide before overthinking",
+              "The assumptive close, immediately",
+              "Repeat the savings number with more enthusiasm",
+              "A numbers summary plus verification homework: check the sheet against your bill tonight, I am back tomorrow",
+            ],
+            answerIndex: 3,
+            explanation: "Tempo pressure reads as distrust-my-numbers. Inviting verification signals the numbers survive scrutiny — and an analyst who verifies becomes your most durable customer.",
+          },
+        ],
+      },
+      {
+        id: "m9-story-pitch",
+        title: "The story pitch: the neighbor narrative",
+        summary: "A 30-second true story with a character, a problem, a turn, and an ending on their porch.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Why stories carry",
+            body: [
+              "For the relators and expressives of Module 4, data slides off and narrative sticks. A story smuggles the same facts past the salesperson filter because brains process stories as experience, not as claims. The doorstep story has four beats and a hard time cap: a character (the neighbor two streets over), a problem (the 8 p.m. buffering fights, the bill that hit 110), a turn (the Thursday install), and an ending (what actually changed at their house). Thirty to forty-five seconds, total. Any longer and the story stops working and starts costing.",
+            ],
+          },
+          {
+            heading: "Build a true story bank",
+            body: [
+              "Collect two or three real install stories per area, permissioned the same way as name-drops. Detail is what makes a story land: the install that finished before the school pickup, the kid whose game nights stopped lagging, the household that watched the bill drop 40 from the promo-cliff rate. Log the details while they are fresh — a story bank is field equipment, as real as your tablet.",
+              "Never invent one. An invented story collapses under a single follow-up question — which house was that? — and takes your real stories down with it. If you are new and have no stories yet, borrow honestly from the team: My teammate installed a family on Hawthorne last week — and here is what they told him.",
+            ],
+          },
+          {
+            heading: "Landing the story",
+            body: [
+              "End the arc on their porch, not in the past: That is three houses on this loop now. The check takes a minute — want to see your address? The story built the feeling; the close converts the feeling into a step while it is warm. Two failure modes to watch. Story sprawl: at ninety seconds you are no longer a storyteller, you are the porch bore, and the door glazes over. And archetype mismatch: telling a story to a driver who wanted the point in one line is how you lose a door that a single sentence would have won. The story pitch is a tool for relators — read the archetype first.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Four beats, 30 to 45 seconds: character, problem, turn, ending — then stop.",
+          "Build a permissioned, true story bank per area; detail is what makes stories land.",
+          "Never invent a story — one follow-up question collapses it and everything else you said.",
+          "End the arc on their porch with the micro-commitment, and never story-pitch a driver.",
+        ],
+        drillPrompt:
+          "Write out your best true install story in exactly four sentences — character, problem, turn, ending — and time it under 45 seconds out loud. On your next 10 doors, deliver it at every relator-read door and end every telling with the address-check ask. Log which detail made eyes change.",
+        quiz: [
+          {
+            question: "Why does a story move a relator when the same facts as bullet points do not?",
+            options: [
+              "Stories are longer and feel more thorough",
+              "Brains process narrative as experience rather than claims, so the facts bypass the salesperson filter",
+              "Relators cannot follow numbers",
+              "Stories are harder to interrupt",
+            ],
+            answerIndex: 1,
+            explanation: "A claim gets audited; a story gets lived. The same savings number lands differently inside a neighbor's narrative than inside a pitch beat.",
+          },
+          {
+            question: "What is the hard time cap on a doorstep story, and why?",
+            options: [
+              "Three minutes — enough for full context",
+              "Ten seconds — attention spans demand it",
+              "There is no cap if the story is good",
+              "About 45 seconds — beyond that the storyteller becomes the porch bore and the door glazes",
+            ],
+            answerIndex: 3,
+            explanation: "The story is a vehicle for one feeling and one close. Past 45 seconds it stops carrying and starts costing the attention you won.",
+          },
+          {
+            question: "You have no install stories of your own yet. What does the lesson prescribe?",
+            options: [
+              "Compose a plausible one — nobody checks",
+              "Skip story pitching until you close your own installs",
+              "Borrow honestly from the team, attributed: my teammate installed a family on Hawthorne last week",
+              "Use a story from another city",
+            ],
+            answerIndex: 2,
+            explanation: "Attributed borrowing keeps the story true and checkable. Invented stories collapse at the first which-house question, and distant stories carry no porch weight.",
+          },
+        ],
+      },
+      {
+        id: "m9-demo-pitch",
+        title: "The demo pitch: seeing is believing",
+        summary: "A live speed test outperforms every claim — if the stagecraft is rehearsed.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "A demo beats a claim",
+            body: [
+              "Every pitch beat is a claim the homeowner must decide whether to believe. A demo removes the decision: run a live speed test on your tablet on the fiber network, next to one on their phone over their own wifi, and let the two numbers sit side by side. The gap sells silently — no adjective you own is as loud as their 43 next to your 940. Demos are the native language of skeptics and show-me people: the doors that distrust talk are precisely the doors a demo wins.",
+            ],
+          },
+          {
+            heading: "Stagecraft rules",
+            body: [
+              "A demo is theater and theater is preparation. Set up before the porch: test app loaded, tablet charged, connection verified, one tap from running. Narrate what they are watching, because raw numbers do not explain themselves: That top number is download — and watch upload, that is the one copper starves. Cable gives you a tenth of that on a good night. Then the highest-leverage move: hand them the tablet. Run it yourself, they watched a demo; run it in their hands, they did it — and touch creates ownership the same way the puppy-dog frame does.",
+              "Invite the comparison on their device too: Pull up the same test on your phone right now. Their own hardware producing the sad number closes the credibility gap completely — you did not even supply the evidence.",
+            ],
+          },
+          {
+            heading: "When demos fail",
+            body: [
+              "A fumbled demo is worse than no demo: the rep pecking at a frozen tablet is a live metaphor for the thing they are selling. Rehearse the tap sequence like a line of script, and have the fallback ready — a screenshot of last week's test at the corner house, dated and named. Demo only what reproduces at their address: showing gigabit speeds their address cannot get yet is a lie with a progress bar. And read the archetype: a driver in a hurry does not want your theater — for them the demo is one sentence, the number, and the ask. The demo pitch is for skeptics with two minutes, not sprinters with none.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "A demo removes the believe-or-not decision — the gap between their number and yours sells silently.",
+          "Prepare to one tap, narrate what they are seeing, and hand them the tablet: touch creates ownership.",
+          "A fumbled demo is a live metaphor against you — rehearse the sequence and carry a dated fallback screenshot.",
+          "Demo only what reproduces at their address, and never make a hurried driver sit through theater.",
+        ],
+        drillPrompt:
+          "Rehearse your demo to a single tap and a 15-second narration, then run it on your next 10 engaged doors — handing the tablet over every time and inviting the same test on their phone. Log the two numbers each door saw and how many doors advanced to the address check afterward.",
+        quiz: [
+          {
+            question: "Why does a live side-by-side speed test outperform the same numbers spoken aloud?",
+            options: [
+              "Screens are more entertaining than talk",
+              "Spoken numbers are claims to audit; seen numbers are just perceived — the demo removes the believe-or-not decision",
+              "Speed tests are more accurate in person",
+              "It slows the conversation down usefully",
+            ],
+            answerIndex: 1,
+            explanation: "The demo converts your strongest claim into the homeowner's own observation, and nobody argues with what they watched happen on their own porch.",
+          },
+          {
+            question: "Why hand the homeowner the tablet instead of running the test yourself?",
+            options: [
+              "It frees your hands for the paperwork",
+              "It proves the tablet is not rigged",
+              "Touch creates ownership — run it yourself and they watched a demo; run it in their hands and they did it",
+              "It is a politeness convention",
+            ],
+            answerIndex: 2,
+            explanation: "Participation converts an audience into an actor. The same psychology that powers the puppy-dog frame starts working the moment the device is in their hands.",
+          },
+          {
+            question: "What makes a fumbled demo worse than no demo at all?",
+            options: [
+              "It wastes shift time",
+              "The frozen tablet becomes a live metaphor for the product you are selling",
+              "It voids the speed guarantee",
+              "Homeowners report fumbled demos",
+            ],
+            answerIndex: 1,
+            explanation: "You are selling fast, reliable technology while visibly wrestling slow, unreliable technology. Rehearse to one tap and carry the dated fallback screenshot.",
+          },
+        ],
+      },
+      {
+        id: "m9-ten-second-pitch",
+        title: "The 10-second pitch for the closing door",
+        summary: "One complete, honest line that earns ten more seconds — and plants a seed when it does not.",
+        minutes: 4,
+        sections: [
+          {
+            heading: "One line that earns ten more seconds",
+            body: [
+              "Some doors are closing as they open — the homeowner is mid-task, mid-call, or mid-brush-off, and the window is one sentence wide. The 10-second pitch is that sentence, built in advance: Ten seconds: fiber went live on this street and most folks are cutting the bill by about 30 — that is the whole pitch. Naming the time cap and honoring it is the move; a rep who visibly respects their time is the rare rep who might deserve more of it. The line does not try to sell — it tries to earn the next ten seconds.",
+            ],
+          },
+          {
+            heading: "The construction",
+            body: [
+              "One local fact plus one number plus a full stop. No greeting, no company preamble, no how-are-you-today — the closing door has no budget for throat-clearing. And no question at the end: a question demands an answer and demanding anything from a closing door speeds it up. The question comes only if the door stops moving. Rehearse the line until it runs at conversational speed on autopilot, because you get exactly one take, usually while the door is in motion, and a fumbled version of it is just noise.",
+            ],
+          },
+          {
+            heading: "After the line",
+            body: [
+              "Two outcomes. The door pauses: now ask the smallest question you own — worth a minute for the actual number at your address? You have been granted ten more seconds; spend them on the micro-commitment, not on beats you skipped. Or the door keeps closing: finish warm — no problem, have a good one — and log the door for the next pass. Do not chase, do not raise your voice through the gap, do not treat the close as a loss. A clean 10-second line delivered with a warm exit is a planted seed, and Module 3's block math says you will be back on this street when the promo cliff hits their bill.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Build the line in advance: one local fact, one number, full stop — no greeting, no question.",
+          "Name the time cap and honor it; respecting their ten seconds is what earns the next ten.",
+          "If the door pauses, ask only the micro-commitment; if it closes, exit warm and log for the next pass.",
+          "Rehearse to autopilot — you get one take, usually against a moving door.",
+        ],
+        drillPrompt:
+          "Write your 10-second line — local fact, number, full stop — and time it under ten seconds out loud. On your next 10 doors, deliver it the instant any door starts to close, and log the result: paused, closed warm, or closed cold. Two pauses out of ten means the line is working.",
+        quiz: [
+          {
+            question: "Why does the 10-second pitch end with a full stop instead of a question?",
+            options: [
+              "Questions are impolite to strangers",
+              "A question demands an answer, and demanding anything from a closing door speeds up the close",
+              "It is faster to say",
+              "Statements are more memorable than questions",
+            ],
+            answerIndex: 1,
+            explanation: "The line is a gift of information with no bill attached. The question is only earned — and only asked — if the door stops moving.",
+          },
+          {
+            question: "The door pauses after your line. What do you spend the granted seconds on?",
+            options: [
+              "The full four-beat pitch skeleton, quickly",
+              "Your credibility beat, since they do not know you",
+              "The micro-commitment: worth a minute for the actual number at your address?",
+              "A story from the street",
+            ],
+            answerIndex: 2,
+            explanation: "Ten more seconds funds exactly one small ask. The address check converts the pause into a real conversation; a compressed monologue converts it back into a closing door.",
+          },
+          {
+            question: "The door closes anyway, mid-line. What did the pitch accomplish?",
+            options: [
+              "Nothing — the door was a loss",
+              "It planted a seed: a respectful line plus a warm exit leaves the door workable on the next pass",
+              "It disqualified the address permanently",
+              "It counts as a completed pitch for your funnel",
+            ],
+            answerIndex: 1,
+            explanation: "Blocks get worked in passes, and promo cliffs arrive on schedule. The rep who left warm at ten seconds is the rep whose knock gets answered next month.",
+          },
+        ],
+      },
+      {
+        id: "m9-context-playbook",
+        title: "The time-of-day and context playbook",
+        summary: "Morning doors, dinner-hour doors, weekend porches, and bad weather as an ally.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Morning, afternoon, dinner hour",
+            body: [
+              "The same door is three different doors across a day. Mornings belong to retirees, remote workers, and parents post-school-run: answer rates are lower but conversations run longer and calmer — lead softer, budget more time per door, and let the amiable pace breathe. Early afternoons are thin on decision-makers; spend them on callbacks, referral knocks, and note-drops rather than burning fresh doors into empty houses. The dinner hour, roughly five to seven-thirty, is the paradox window: the highest decision-maker density of the weekday and the highest interruption cost. Work it compressed: acknowledge the hour in your first breath — I can tell it is dinner time, twenty seconds — and prefer booking a return over forcing a full pitch into a kitchen-timer window.",
+            ],
+          },
+          {
+            heading: "Weekends and porches",
+            body: [
+              "Saturday morning is the best pitch real estate of the week: both decision-makers home, no commute clock, and the joint-decision problem from the spouse objection solves itself at the door. Protect those hours for your best blocks. Sunday runs slower and later — start after the late morning and keep the register softer. And porch-sitters, any day, are a different species of door entirely: the door is already open and the threat assessment is half done. Do not knock — approach as a passerby, angled, unhurried: Saw you out enjoying the evening — you have probably seen the fiber crews up the street. The porch conversation starts warmer than any knock can.",
+            ],
+          },
+          {
+            heading: "Bad weather as an ally",
+            body: [
+              "Rain thins every competing solicitor off the street and buys you a sympathy read: a rep working politely in weather registers as serious, not casual. Use it — I will be quick, it is ugly out — and watch doors open that would not have on a sunny Tuesday. The disciplines that keep weather working for you: shorten every pitch, keep materials dry and the tablet sleeved, and never drip on the threshold — step back a touch further than usual. In heat, work the shaded side of the street, respect the early-afternoon lull, and carry water; a visibly wilting rep signals desperation, which is the one read no weather excuses.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Mornings: fewer answers, longer calmer talks. Early afternoons: callbacks and referrals, not fresh doors.",
+          "Dinner hour is peak decision-makers at peak interruption cost — compress, acknowledge the meal, book returns.",
+          "Saturday morning is the week's best window; porch-sitters get the passerby approach, never a knock.",
+          "Weather thins competitors and earns sympathy — shorten the pitch, protect the kit, never drip on the porch.",
+        ],
+        drillPrompt:
+          "Split your next shift into labeled blocks — morning, afternoon, dinner hour — and match the work to the window: fresh doors in the morning, callbacks midafternoon, compressed twenty-second openers with return-booking after five. Log conversations per hour by block and compare against your normal unplanned day.",
+        quiz: [
+          {
+            question: "What is the right use of the early-afternoon lull?",
+            options: [
+              "Fresh doors — volume matters most",
+              "A long break to preserve energy",
+              "Callbacks, referral knocks, and note-drops — decision-maker density is too low to burn fresh doors",
+              "Switching neighborhoods entirely",
+            ],
+            answerIndex: 2,
+            explanation: "Fresh doors knocked into empty houses are wasted inventory. The lull is made for the follow-up work that pays at appointment rates.",
+          },
+          {
+            question: "How do you approach a homeowner sitting on their porch?",
+            options: [
+              "Knock on the door frame to signal formality",
+              "As a passerby — angled, unhurried, referencing the visible street work — since the threat assessment is already half done",
+              "Wait until they go inside, then knock properly",
+              "Skip them — porch sitters do not buy",
+            ],
+            answerIndex: 1,
+            explanation: "The open door and visible person mean the coldest part of the interaction is already over. A knock would formalize what is warmer as a passing conversation.",
+          },
+          {
+            question: "Why can rain genuinely improve door outcomes?",
+            options: [
+              "Homeowners are bored indoors",
+              "Wet reps get invited inside",
+              "Speeds test better in cool weather",
+              "It clears competing solicitors and a rep working politely in weather reads as serious rather than casual",
+            ],
+            answerIndex: 3,
+            explanation: "Scarcity of solicitors plus the sympathy read opens doors sunshine does not — provided the pitch shortens and the kit stays dry.",
+          },
+        ],
+      },
+      {
+        id: "m9-two-buyers",
+        title: "Multi-decision-maker doors",
+        summary: "Two people, one pitch, two channels — and the spouse-alignment move that closes both.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Two people, one pitch, two channels",
+            body: [
+              "When two adults share the doorway, you are delivering one pitch to two different archetypes simultaneously — often a driver and an amiable, or an analyst and a relator. The cardinal error is pitching past the quieter one. Reps naturally lock onto whoever talks, but the silent partner kills more deals than the vocal skeptic: they were never engaged, so their default no costs you the sale in the kitchen an hour after you leave. Split your eye contact roughly evenly, direct at least one question to the quieter person by name if you have it, and watch their face at your numbers — their reaction is data the talker will consult later.",
+            ],
+          },
+          {
+            heading: "The spouse-alignment move",
+            body: [
+              "In most households the pains are divided: one person owns the bill and its promo cliff, the other owns the 8 p.m. buffering and the dropped video calls. Find each person's pain separately with one question each, then give each their own number: That is the 30 a month back on the bill for you — and the upstairs stream holding at 8 p.m. for you. The close is not getting them to agree with you; it is getting them to agree with each other. When the moment shows, name it: Sounds like you two are saying the same thing from two directions. Aligned spouses close themselves — the decision becomes their joint idea, which is the only kind of household decision that survives the night.",
+            ],
+          },
+          {
+            heading: "When one arrives mid-pitch, and when to go silent",
+            body: [
+              "A spouse arriving mid-pitch gets the 10-second recap from Module 4 — the pain, the number — followed immediately by a question to the newcomer, never a restart: We were just looking at the bill jump — does the evening slowdown hit your side of the house too? The recap keeps the message accurate; the question makes them a participant instead of an audience. And when the two of them start deciding between themselves — trading looks, doing math out loud, negotiating install day — go completely quiet. They are closing each other, which is better than anything you could add. Interrupting a couple mid-agreement is the overtalking failure at double stakes: you can lose two yeses with one sentence.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Never pitch past the quiet one — the silent partner kills more deals than the vocal skeptic.",
+          "Find each person's separate pain and give each their own number.",
+          "Close by aligning them with each other, not with you — joint ideas survive the night.",
+          "Spouse arrives mid-pitch: 10-second recap plus a question to the newcomer. Couple starts deciding: go silent.",
+        ],
+        drillPrompt:
+          "At every two-person door in your next 10, direct your second question to the quieter person and log both pains separately. If you reach a close, phrase it as an alignment observation — you two are saying the same thing — and count to four in silence whenever they start talking to each other.",
+        quiz: [
+          {
+            question: "Why is the silent partner more dangerous to the sale than the vocal skeptic?",
+            options: [
+              "Silence signals hidden hostility",
+              "They were never engaged, so their default no wins the kitchen conversation after you leave",
+              "Quiet people control household finances",
+              "They are memorizing your claims to check later",
+            ],
+            answerIndex: 1,
+            explanation: "The skeptic at least processes your answers. The unengaged partner decides later, without you, from a default of no — unless you pulled them in at the door.",
+          },
+          {
+            question: "What is the spouse-alignment move?",
+            options: [
+              "Getting each spouse to agree with you individually",
+              "Asking which spouse makes the decisions",
+              "Finding each person's separate pain, giving each their own number, and naming the moment they agree with each other",
+              "Pitching only the financially responsible spouse",
+            ],
+            answerIndex: 2,
+            explanation: "A decision aligned between the couple is their joint idea and survives the night. A decision aligned with the rep gets re-litigated at dinner.",
+          },
+          {
+            question: "The couple starts doing the math out loud between themselves. What do you do?",
+            options: [
+              "Correct any small errors in their math immediately",
+              "Summarize the offer once more so they have it fresh",
+              "Suggest an install date while enthusiasm is high",
+              "Go completely silent — they are closing each other, and one sentence from you can lose two yeses",
+            ],
+            answerIndex: 3,
+            explanation: "A couple negotiating logistics together is the sale completing itself. This is the overtalking failure at double stakes: protect the silence.",
           },
         ],
       },
