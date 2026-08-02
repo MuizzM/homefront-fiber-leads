@@ -13,8 +13,8 @@ import {
 } from "../../shared/trainingContent";
 
 describe("training content integrity", () => {
-  it("has exactly 9 modules, each with 3-6 lessons", () => {
-    expect(TRAINING_MODULES).toHaveLength(9);
+  it("has exactly 15 modules, each with 3-6 lessons", () => {
+    expect(TRAINING_MODULES).toHaveLength(15);
     for (const mod of TRAINING_MODULES) {
       expect(mod.lessons.length, `module ${mod.id}`).toBeGreaterThanOrEqual(3);
       expect(mod.lessons.length, `module ${mod.id}`).toBeLessThanOrEqual(6);
@@ -66,6 +66,24 @@ describe("training content integrity", () => {
     // Extended_Pictographic covers emoji + pictographs; the variation selector
     // catches emoji-styled text characters slipping through.
     expect(everything).not.toMatch(/[\p{Extended_Pictographic}\u{FE0F}]/u);
+  });
+
+  it("arsenal modules m10-m15 carry verbatim scripts and [VERIFY] discipline", () => {
+    const arsenal = TRAINING_MODULES.filter((m) => ["m10", "m11", "m12", "m13", "m14", "m15"].includes(m.id));
+    expect(arsenal.map((m) => m.id)).toEqual(["m10", "m11", "m12", "m13", "m14", "m15"]);
+    for (const mod of arsenal) {
+      // Field-usable verbatim: every arsenal lesson quotes at least one script.
+      for (const lesson of mod.lessons) {
+        const text = lesson.sections.flatMap((s) => s.body).join(" ");
+        expect(text.includes('"'), `${lesson.id} should carry a verbatim script in quotes`).toBe(true);
+      }
+    }
+    // Factual offer claims are marked for verification across the arsenal
+    // (m10 is pure psychology and legitimately carries none).
+    for (const mod of arsenal.filter((m) => m.id !== "m10")) {
+      const moduleText = JSON.stringify(mod);
+      expect(moduleText.includes("[VERIFY]"), `module ${mod.id} should mark live-offer claims`).toBe(true);
+    }
   });
 
   it("validates lesson ids for the server route", () => {
