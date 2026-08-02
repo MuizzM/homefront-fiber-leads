@@ -138,6 +138,19 @@ jobs:
           git check-ref-format --branch "$DEFAULT_BRANCH" >/dev/null
 
           cd /srv/homefront
+
+          # Reclaim disk BEFORE the checkout/build. Every release builds a full
+          # image; without this, images from prior deploys accumulate until the
+          # host runs out of space and `git fetch`/`checkout` fail outright
+          # (production incident 2026-08-02). `-a` drops every image that no
+          # CONTAINER references — the running app's image is in use, so it is
+          # always kept; only superseded release images and stale build cache
+          # are removed. It never touches volumes, so the database is safe.
+          # Best-effort: a prune hiccup (or docker absent) must never abort a
+          # deploy, hence `|| true` under `set -e`.
+          docker image prune -af >/dev/null 2>&1 || true
+          docker builder prune -af >/dev/null 2>&1 || true
+
           git diff --quiet
           git diff --cached --quiet
           git fetch --no-tags origin "$DEFAULT_BRANCH"
