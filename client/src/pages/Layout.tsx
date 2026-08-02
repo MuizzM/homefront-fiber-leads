@@ -408,7 +408,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
           {children}
         </main>
-        {!onMap && !onCalling && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
+        {!onMap && !onCalling && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} moreDot={canManage && pendingTerritoryCount > 0} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
       </div>
 
       {/* The More sheet renders wherever the header does (everywhere but the

@@ -67,6 +67,13 @@ describe("the liquid floating bar", () => {
     }
   });
 
+  it("shows a notification dot on More only when moreDot is set", () => {
+    const { rerender } = render(<BottomTabs role="rep" />);
+    expect(screen.queryByTestId("tab-more-dot")).toBeNull();
+    rerender(<BottomTabs role="rep" moreDot />);
+    expect(screen.getByTestId("tab-more-dot")).toBeInTheDocument();
+  });
+
   it("marks the active destination with a pill inside the glass, not a rim underline", () => {
     window.location.hash = "#/today";
     render(<BottomTabs role="rep" />);
@@ -108,12 +115,13 @@ describe("liquid motion: the sliding active pill", () => {
     go("#/leads");
 
     // Tab change: transition restored (CSS spring takes over) and the pill's
-    // translate is the MEASURED leads capsule offset relative to the bar —
-    // bar left 12 / top 700, slot 1 capsule at x 12+73.2+14.6 → 87.8px, y 16.
+    // translate CENTERS the 56x40 lozenge on the MEASURED 44x28 leads capsule
+    // relative to the bar — capsule left offset 73.2+14.6, minus the (56-44)/2
+    // and (40-28)/2 the larger lozenge overhangs → x 81.8, y 10.
     expect(pill.style.transitionDuration).toBe("");
     const [x, y] = pill.style.transform.match(/-?[\d.]+/g)!.map(Number).slice(1);
-    expect(x).toBeCloseTo(73.2 + (73.2 - 44) / 2, 5);
-    expect(y).toBe(16);
+    expect(x).toBeCloseTo(73.2 + (73.2 - 44) / 2 - (56 - 44) / 2, 5);
+    expect(y).toBe(16 + (28 - 40) / 2);
     expect(navigator.vibrate).toHaveBeenCalledWith(8);
     expect(anchors[1].className).toContain("tab-icon-pop"); // incoming icon pops
     expect(anchors[0].className).not.toContain("tab-icon-pop"); // outgoing fades via transition-colors
