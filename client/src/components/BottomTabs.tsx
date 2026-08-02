@@ -38,13 +38,15 @@ const TABS = [
 // (visible tabs + the always-present More button).
 const GRID_COLS = ["grid-cols-1", "grid-cols-2", "grid-cols-3", "grid-cols-4", "grid-cols-5"] as const;
 
-// The sliding pill's fixed footprint (matches the h-7 w-11 icon capsule).
+// The sliding lozenge's fixed footprint. It is a touch LARGER than the h-7 w-11
+// icon capsule (56x40 vs 44x28) so the active icon floats centered on a soft
+// frosted squircle with breathing room — the iOS-26 / Instagram look.
 // Positioning is MEASURED, not derived from slot math: each tab's icon capsule
 // is a data-pill-anchor ref, and the pill centers on the active anchor's rect
 // relative to the bar. That stays exact at every viewport width regardless of
 // grid padding, safe-area insets, or how many capability-gated tabs render.
-const PILL_W = 44;
-const PILL_H = 28;
+const PILL_W = 56;
+const PILL_H = 40;
 
 // The entrance animation (rise + fade) runs ONCE per app session. BottomTabs
 // unmounts on the full-bleed map and calling routes, so a mount-scoped flag
@@ -53,7 +55,7 @@ let barHasEntered = false;
 /** Test-only: lets the suite exercise the run-once entrance deterministically. */
 export function __resetBarEntranceForTests() { barHasEntered = false; }
 
-export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef }: { role: Role; onMore?: () => void; moreOpen?: boolean; moreButtonRef?: Ref<HTMLButtonElement> }) {
+export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef, moreDot = false }: { role: Role; onMore?: () => void; moreOpen?: boolean; moreButtonRef?: Ref<HTMLButtonElement>; moreDot?: boolean }) {
   const [location] = useHashLocation();
   const visibleTabs = TABS.filter(tab => can(role, tab.cap));
 
@@ -152,10 +154,10 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef }: { 
               data-pill-anchor
               className={`${popped === href ? "tab-icon-pop " : ""}${primary
                 ? `grid h-11 w-11 place-items-center rounded-full border-4 border-card shadow-lg transition-colors ${active ? "bg-primary text-primary-foreground" : "bg-foreground text-background"}`
-                : `grid h-7 w-11 place-items-center rounded-full transition-colors ${active ? "text-primary" : "text-muted-foreground"}`}`}>
+                : `grid h-7 w-11 place-items-center rounded-full transition-colors ${active ? "text-foreground" : "text-muted-foreground"}`}`}>
               <Icon className={primary ? "w-5 h-5" : "w-[19px] h-[19px]"} strokeWidth={active ? 2.4 : 2} />
             </span>
-            <span className={`text-2xs font-semibold transition-colors ${active ? "text-primary" : "text-muted-foreground"}`}>
+            <span className={`text-2xs font-semibold transition-colors ${active ? "text-foreground" : "text-muted-foreground"}`}>
               {label}
             </span>
           </Link>
@@ -171,7 +173,16 @@ export function BottomTabs({ role, onMore, moreOpen = false, moreButtonRef }: { 
         onClick={() => onMore ? onMore() : window.dispatchEvent(new CustomEvent("hfs:open-menu"))}
         className="relative flex flex-col items-center justify-center gap-0.5 active:scale-[.94] transition-transform"
       >
-        <span className={`grid h-7 w-11 place-items-center rounded-full transition-colors ${moreOpen ? "bg-primary/[0.16] text-primary" : "text-muted-foreground"}`}><Menu className="w-[19px] h-[19px]" /></span>
+        <span className={`relative grid h-7 w-11 place-items-center rounded-2xl transition-colors ${moreOpen ? "bg-foreground/10 text-foreground" : "text-muted-foreground"}`}>
+          <Menu className="w-[19px] h-[19px]" />
+          {moreDot && (
+            <span
+              data-testid="tab-more-dot"
+              aria-hidden="true"
+              className="absolute right-1.5 top-0 h-2 w-2 rounded-full bg-red-500 ring-2 ring-[hsl(var(--card))]"
+            />
+          )}
+        </span>
         <span className={`text-2xs font-semibold transition-colors ${moreOpen ? "text-primary" : "text-muted-foreground"}`}>More</span>
       </button>
       </div>

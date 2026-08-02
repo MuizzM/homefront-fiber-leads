@@ -17,16 +17,12 @@ const EMOJI = /[\p{Extended_Pictographic}\u{FE0F}]/u;
 
 describe("training engagement layer", () => {
   it("every module carries a punchy hook, a field story, and a say-this-not-that swap", () => {
-    // TEMP DIAGNOSTIC (remove after CI root-cause): CI (Node 24) reports a
-    // module hook as undefined while every local check shows all nine present.
-    // Dump exactly what THIS runtime sees so the CI log names the culprit.
-    // eslint-disable-next-line no-console
-    console.log(
-      `DIAG-TE count=${TRAINING_MODULES.length} :: ` +
-        TRAINING_MODULES.map((m) => `${m?.id}=${typeof m?.hook}`).join(","),
-    );
-    // These are optional in the type for back-compat, but the tone pass adds
-    // them to all nine — pin that so a regression that drops them is caught.
+    // The tone pass added these engagement fields to EVERY module, so iterate
+    // whatever the curriculum currently declares — the count is a floor, not a
+    // fixed number, so the check keeps tracking as modules are added (the
+    // curriculum has grown past the original nine). The `${mod.id}` label names
+    // the offender if a new module ships without its engagement copy.
+    expect(TRAINING_MODULES.length).toBeGreaterThanOrEqual(9);
     for (const mod of TRAINING_MODULES) {
       expect(mod.hook?.trim().length, `module ${mod.id} hook`).toBeGreaterThan(0);
       expect(mod.fieldStory?.trim().length, `module ${mod.id} fieldStory`).toBeGreaterThan(0);
