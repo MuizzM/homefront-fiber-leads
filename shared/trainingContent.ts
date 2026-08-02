@@ -3169,6 +3169,25 @@ export const TRAINING_LESSONS: TrainingLesson[] = TRAINING_MODULES.flatMap((m) =
 
 export const TOTAL_TRAINING_LESSONS = TRAINING_LESSONS.length;
 
+// This is READ-ONLY reference content. Freeze the singletons so nothing — a
+// component, a helper, or (the reason this exists) a test running earlier in a
+// shared worker — can mutate a module/lesson in place and have that edit leak
+// into every later reader. A stray in-place edit was the only mechanism that
+// could explain an engagement field reading `undefined` for one reader while
+// the source literal plainly defines it; freezing makes that class impossible
+// and turns any offending write into a loud error at its source instead of a
+// silent, order-dependent failure somewhere else.
+function deepFreeze<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const nested of Object.values(value as Record<string, unknown>)) deepFreeze(nested);
+  }
+  return value;
+}
+deepFreeze(TRAINING_MODULES);
+deepFreeze(TRAINING_FAST_START);
+deepFreeze(TRAINING_LESSONS);
+
 const LESSON_ID_SET = new Set(TRAINING_LESSONS.map((l) => l.id));
 
 /** Server-side validation gate: POST /api/training/lessons/:lessonId/complete
