@@ -1,0 +1,208 @@
+// ── Areas — the index into the Area Console ───────────────────────────────────
+//
+// One card per area, sorted the way a manager triages: the ground somebody is
+// walking first, the pool after it. Each card carries only what decides whether
+// you open it — who holds it, how far through it is, and what it has produced.
+//
+// The whole page is ONE request: GET /api/territories/progress already returns
+// a stats row for every area the caller may see (server-scoped), so there is no
+// second fetch and no client-side maths. Percentages are printed exactly as the
+// server computed them against availableBase (shared/territoryMetrics.ts).
+
+import { useMemo, useState } from "react";
+import { Link } from "wouter";
+import { useQuery } from "@tanstack/react-query";
+import { LayoutGrid, Search, X } from "lucide-react";
+
+import { FOCUS } from "@/lib/a11y";
+import { cn } from "@/lib/utils";
+import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
+import { Skeleton } from "@/components/ui/skeleton";
+import { EmptyState } from "@/components/EmptyState";
+import { repColorOf } from "@shared/repColors";
+import { shortDate } from "@shared/territoryLabel";
+import {
+  AREA_STATUS_FILTERS, areaStatusMeta, isPoolArea, type AreaProgressRow,
+} from "@/lib/areaProgress";
+
+const CHIP = "text-[10px] font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
+
+export default function Areas() {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<string>("all");
+
+  const { data, isLoading, isError } = useQuery<AreaProgressRow[]>({
+    queryKey: ["/api/territories/progress"],
+  });
+
+  const rows = useMemo(() => {
+    const all = data ?? [];
+    const needle = query.trim().toLowerCase();
+    const filtered = all.filter(row => {
+      if (status !== "all" && String(row.status) !== status) return false;
+      if (!needle) return true;
+      return String(row.name ?? "").toLowerCase().includes(needle);
+    });
+    // Held ground first (it is the ground being worked right now), then by the
+    // most recent activity, then by name so the order never shuffles.
+    return [...filtered].sort((a, b) =>
+      Number(isPoolArea(a)) - Number(isPoolArea(b))
+      || String(b.lastActivityAt ?? "").localeCompare(String(a.lastActivityAt ?? ""))
+      || String(a.name ?? "").localeCompare(String(b.name ?? "")));
+  }, [data, query, status]);
+
+  const total = data?.length ?? 0;
+
+  return (
+    <div className="mx-auto w-full max-w-5xl space-y-5 p-4 pt-5 pb-24 md:p-6" data-testid="areas-page">
+      <PageHeader
+        title="Areas"
+        icon={LayoutGrid}
+        subtitle="Every area you can see, with who holds it and how far through it is."
+      />
+
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-0 flex-1 sm:max-w-xs">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <input
+            type="text"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="Search areas by name"
+            aria-label="Search areas by name"
+            data-testid="areas-search"
+            className={cn("h-11 w-full rounded-xl border border-border bg-card pl-8 pr-8 text-sm text-foreground placeholder:text-muted-foreground", FOCUS)}
+          />
+          {query && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              data-testid="areas-search-clear"
+              onClick={() => setQuery("")}
+              className={cn("absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground", FOCUS)}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        <select
+          value={status}
+          onChange={e => setStatus(e.target.value)}
+          aria-label="Filter areas by status"
+          data-testid="areas-status-filter"
+          className={cn("h-11 rounded-xl border border-border bg-card px-3 text-sm text-foreground", FOCUS)}
+        >
+          <option value="all">All statuses</option>
+          {AREA_STATUS_FILTERS.map(s => (
+            <option key={s} value={s}>{areaStatusMeta(s).label}</option>
+          ))}
+        </select>
+      </div>
+
+      {isLoading ? (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="areas-loading">
+          {[0, 1, 2, 3, 4, 5].map(i => <Skeleton key={i} className="h-40 rounded-2xl" />)}
+        </div>
+      ) : isError ? (
+        <div role="alert" className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-foreground" data-testid="areas-error">
+          Couldn't load your areas. Check your connection and try again.
+        </div>
+      ) : total === 0 ? (
+        <EmptyState
+          icon={LayoutGrid}
+          title="No areas yet"
+          description="Areas are drawn on the Field Map. Draw one there and it shows up here with its numbers."
+          action={
+            <Link href="/map" className={cn("text-sm font-semibold text-primary underline underline-offset-4", FOCUS)}>
+              Open the Field Map
+            </Link>
+          }
+          testId="areas-empty"
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={Search}
+          bordered
+          title="No areas match"
+          description="Nothing here fits that name and status. Clear the filters to see all of them again."
+          testId="areas-no-match"
+        />
+      ) : (
+        <>
+          <div data-testid="areas-count">
+            <SectionLabel>{rows.length} of {total} {total === 1 ? "area" : "areas"}</SectionLabel>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="areas-grid">
+            {rows.map(row => <AreaCard key={row.id} row={row} />)}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AreaCard({ row }: { row: AreaProgressRow }) {
+  const meta = areaStatusMeta(row.status);
+  const pool = isPoolArea(row);
+  const dot = row.color || repColorOf({ id: row.repId, color: null });
+  // Straight off the wire: knocked / available doors, already computed once,
+  // server-side, against the one denominator.
+  const covered = Math.max(0, Math.min(100, Number(row.knockCompletionRate) || 0));
+
+  return (
+    <Link
+      href={`/areas/${row.id}`}
+      data-testid={`area-card-${row.id}`}
+      className={cn(
+        "block rounded-2xl border border-border bg-card p-4 transition-colors hover:bg-secondary/40",
+        FOCUS,
+      )}
+    >
+      <div className="flex items-start gap-2.5">
+        <span
+          aria-hidden="true"
+          className="mt-1 h-3 w-3 shrink-0 rounded-full border border-foreground/10"
+          style={{ backgroundColor: dot }}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-bold text-foreground">{row.name}</div>
+          <div className="truncate text-[13px] text-muted-foreground" data-testid={`area-card-${row.id}-rep`}>
+            {pool ? "Unassigned" : row.repName}
+          </div>
+        </div>
+        <span className={cn(CHIP, meta.chip, "shrink-0")}>{meta.label}</span>
+      </div>
+
+      <dl className="mt-3 grid grid-cols-3 gap-2 text-center">
+        <CardStat label="Doors" value={row.total} />
+        <CardStat label="Knocked" value={row.knocked} />
+        <CardStat label="Sold" value={row.sold} />
+      </dl>
+
+      <div
+        className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-secondary"
+        role="progressbar"
+        aria-valuenow={Math.round(covered)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-label={`${row.name} knocked ${covered}% of available doors`}
+      >
+        <div className="h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${covered}%` }} />
+      </div>
+      <div className="mt-1.5 flex items-baseline justify-between gap-2 text-[11px] text-muted-foreground">
+        <span><span className="tabular-nums">{row.knockCompletionRate}%</span> of available doors knocked</span>
+        <span>{shortDate(row.lastActivityAt) ?? "no activity"}</span>
+      </div>
+    </Link>
+  );
+}
+
+function CardStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl bg-secondary/50 py-1.5">
+      <dt className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
+      <dd className="text-base font-bold leading-tight tabular-nums text-foreground">{value.toLocaleString()}</dd>
+    </div>
+  );
+}
