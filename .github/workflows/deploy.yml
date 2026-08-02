@@ -182,6 +182,30 @@ jobs:
 
           RUN_DIR=/srv/homefront/.deploy-run
           mkdir -p "$RUN_DIR"
+          # Self-heal a WEDGED prior deploy. A deploy.sh that hung (e.g. the disk
+          # filled mid-build) keeps its flock on .deploy.lock, and every later
+          # deploy then dies with "another deploy is already running" — the
+          # permanent wedge behind the 2026-08-02 outage, previously cleared only
+          # by a human `pkill` on the box. The workflow's concurrency group
+          # (deploy-production, cancel-in-progress: false) serializes Actions
+          # runs, so no LEGITIMATE peer deploy is executing while THIS job runs;
+          # a deploy.sh still alive is an orphan from a job that already ended
+          # (timed out / cancelled / lost its runner) but left the detached
+          # process behind. We kill only a clearly-STUCK orphan — one alive far
+          # longer than a healthy deploy (~7 min); a fresh process is left
+          # untouched so a rare hand-run SSH deploy is never yanked mid-cutover.
+          # flock releases when the holder dies; removing the lock file is
+          # belt-and-suspenders. All best-effort under set -e.
+          for stuck in $(pgrep -f 'scripts/deploy\.sh' 2>/dev/null || true); do
+            secs="$(ps -o etimes= -p "$stuck" 2>/dev/null | tr -cd '0-9')"
+            if [ -n "$secs" ] && [ "$secs" -gt 1200 ]; then
+              echo "Clearing stuck orphaned deploy pid $stuck (alive ${secs}s, no live peer possible under the concurrency group)" >&2
+              kill -TERM "$stuck" 2>/dev/null || true
+              for _ in 1 2 3 4 5; do kill -0 "$stuck" 2>/dev/null || break; sleep 1; done
+              kill -KILL "$stuck" 2>/dev/null || true
+              rm -f /srv/homefront/.deploy.lock
+            fi
+          done
           if [ -f "$RUN_DIR/pid" ] && kill -0 "$(cat "$RUN_DIR/pid")" 2>/dev/null; then
             echo "Refusing: a deploy is already running (pid $(cat "$RUN_DIR/pid"))" >&2
             exit 1
