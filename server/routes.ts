@@ -99,6 +99,7 @@ import {
 import { ApplicationIntakeError, submitPublicApplication } from "./onboardingApplicationService";
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
+import * as spiffStore from "./spiffStore";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
 import { registerFiberOperationsRoutes } from "./fiberOperationsRoutes";
@@ -5392,6 +5393,32 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         }
       } catch { /* audit is best-effort */ }
     }
+    // ── Spiff engine (recognition bonus — READ-ONLY on sale data) ────────────
+    // Additive and fully isolated from the commission transaction above. It runs
+    // OUTSIDE the money bundle, only READS knock_log to build a performance
+    // snapshot, and writes ONLY to its own `spiffs` ledger — it never touches
+    // commission/payroll. Wrapped so a spiff failure can NEVER affect the sale or
+    // its commission (the money bundle already committed above). Server supplies
+    // the clock + the deterministic seed at this call site; idempotent on the
+    // knock id, so a dedupe-replay re-evaluates to the same row, not a 2nd award.
+    if (!superseded && parsed.data.outcome === "sold" && parsed.data.repId != null) {
+      try {
+        const spiffTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
+        if (spiffTenant != null) {
+          spiffStore.evaluateSpiffForSale({
+            tenantId: spiffTenant,
+            repId: parsed.data.repId,
+            saleRef: `knock:${knock.id}`,
+            nowMs: Date.parse(serverTs),
+            seed: `${spiffTenant}:${parsed.data.repId}:knock:${knock.id}:${serverTs}`,
+            actorId: (req as any).user?.id ?? null,
+          });
+        }
+      } catch (e: any) {
+        // Recognition is best-effort — a spiff must never fail a sale.
+        console.warn("[spiff] evaluate failed (non-fatal):", e?.message);
+      }
+    }
     // REVIEWER GATE: persist the CAS result ON the knock row — retries,
     // history, and counters can all tell the truth (it was previously
     // ephemeral: only the live response knew it).
@@ -8518,6 +8545,66 @@ export function registerSaasRoutes(app: any) {
   // ── Proxy Status ──────────────────────────────────────────────────────────────
   app.get("/api/proxy/status", requireAdmin, (_req: Request, res: Response) => {
     res.json(getProxyStatus());
+  });
+
+  // ── Spiffs (sales-incentive recognition) ──────────────────────────────────────
+  // A SEPARATE recognition ledger, tracked earned → approved → paid. These
+  // routes only READ the spiffs table + build the read-only heat snapshot; they
+  // never touch commission/payroll. RBAC is strict and every read is tenant-
+  // walled: a rep sees only their own feed, the team heat (the algorithm data) is
+  // manager+, and money-state transitions (approve / paid) are admin-only + audited.
+  app.get("/api/spiffs/mine", requireCapability("field.app.use"), (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = user?.tenantId;
+    if (tenantId == null) return res.json({ spiffs: [], heat: 0, snapshot: null, totals: { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 }, noTenant: true });
+    const repId = user?.teamMemberId;
+    // A user with no linked team member has no sales identity → empty feed, never
+    // another rep's spiffs.
+    if (repId == null) return res.json({ spiffs: [], heat: 0, snapshot: null, totals: { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 } });
+    res.json(spiffStore.getRepSpiffs(tenantId, repId, Date.now()));
+  });
+
+  app.get("/api/spiffs/team", requireManager, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = user?.tenantId;
+    if (tenantId == null) return res.json({ reps: [] });
+    // Manager/admin see the whole tenant; leadVisibilityScope returns undefined
+    // for them. (requireManager already excludes reps/team_leads.)
+    const scope = leadVisibilityScope(user);
+    const normScope = scope === undefined ? undefined : (Array.isArray(scope) ? scope : [scope]);
+    const reps = spiffStore.getTeamHeat(tenantId, Date.now(), normScope);
+    // The approve/mark-paid work queue rides along so an admin has the algorithm
+    // data AND the actionable rows on one surface.
+    const pending = spiffStore.getActionableSpiffs(tenantId, normScope);
+    res.json({ reps, pending });
+  });
+
+  app.post("/api/spiffs/:id/approve", requireAdmin, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = Number(user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    const id = Number(req.params.id);
+    const result = spiffStore.approveSpiff(tenantId, id, user.id, Date.now());
+    if (!result.ok) {
+      if (result.reason === "not_found") return res.status(404).json({ error: "Not found" });
+      return res.status(409).json({ error: `Cannot approve a spiff that is '${result.from}'` });
+    }
+    storage.logActivity(user.id, "spiff.approved", "spiff", id, { repId: result.spiff.repId, amountCents: result.spiff.amountCents }, req.ip, tenantId);
+    res.json(result.spiff);
+  });
+
+  app.post("/api/spiffs/:id/paid", requireAdmin, (req: Request, res: Response) => {
+    const user = (req as any).user;
+    const tenantId = Number(user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    const id = Number(req.params.id);
+    const result = spiffStore.markSpiffPaid(tenantId, id, Date.now());
+    if (!result.ok) {
+      if (result.reason === "not_found") return res.status(404).json({ error: "Not found" });
+      return res.status(409).json({ error: `Cannot mark paid a spiff that is '${result.from}'` });
+    }
+    storage.logActivity(user.id, "spiff.paid", "spiff", id, { repId: result.spiff.repId, amountCents: result.spiff.amountCents }, req.ip, tenantId);
+    res.json(result.spiff);
   });
 
   // Start nightly cron at server boot

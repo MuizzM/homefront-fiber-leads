@@ -37,6 +37,7 @@ const FiberIntelligence = lazy(() => import("@/pages/FiberIntelligence"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
 const Team = lazy(() => import("@/pages/Team"));
 const Leaderboard = lazy(() => import("@/pages/Leaderboard"));
+const Spiffs = lazy(() => import("@/pages/Spiffs"));
 const Applications = lazy(() => import("@/pages/Applications"));
 const MyCommission = lazy(() => import("@/pages/MyCommission"));
 const CommissionConsole = lazy(() => import("@/pages/CommissionConsole"));
@@ -222,6 +223,10 @@ function AppRoutes() {
           <Route path="/map"><CapabilityGuard role={role} capability="field.app.use"><MapView /></CapabilityGuard></Route>
           <Route path="/leads"><CapabilityGuard role={role} capability="field.app.use"><Leads /></CapabilityGuard></Route>
           <Route path="/leaderboard"><CapabilityGuard role={role} capability="field.app.use"><Leaderboard /></CapabilityGuard></Route>
+          {/* Spiffs — the sales-incentive surface. Every field role sees their own
+              spiff feed + heat; the team heat leaderboard and admin approve/pay
+              controls are gated inside the page and independently on the server. */}
+          <Route path="/spiffs"><CapabilityGuard role={role} capability="field.app.use"><Spiffs /></CapabilityGuard></Route>
           {/* My Territory removed — everyone knocks + manages via Field Map & Leads */}
           <Route path="/my-territory">
             <Redirect to="/map" />

@@ -20,6 +20,15 @@ export type TrainingSection = {
   body: string[];
 };
 
+/** A memorable "say this, not that" swap. Additive engagement element —
+ *  optional, so old renderers and progress storage are unaffected. */
+export type TrainingSayThisNotThat = {
+  /** The dead, scripted line reps reach for by reflex. */
+  instead: string;
+  /** The line that actually lands at the door. */
+  say: string;
+};
+
 export type TrainingLesson = {
   /** Stable id — stored in training_progress.lesson_id. Never rename. */
   id: string;
@@ -33,6 +42,10 @@ export type TrainingLesson = {
   /** "Try this on your next 10 doors" card. */
   drillPrompt: string;
   quiz: TrainingQuizQuestion[];
+  /** Spoken-pitch rehearsal script for the Pitch Recorder — present only on
+   *  lessons where a rep practices a pitch out loud (openers, the skeleton,
+   *  closes, situational pitches). Additive, optional, back-compatible. */
+  pitchDrill?: string;
 };
 
 export type TrainingModule = {
@@ -40,6 +53,24 @@ export type TrainingModule = {
   title: string;
   tagline: string;
   lessons: TrainingLesson[];
+  /** Punchy one-liner that sets the module's energy — shown above the calmer
+   *  tagline. Additive engagement element, optional. */
+  hook?: string;
+  /** Real-talk callout: a vivid 2-3 sentence scenario a rep will recognize the
+   *  moment they read it. Additive engagement element, optional. */
+  fieldStory?: string;
+  /** One memorable say-this-not-that swap for the module, where useful. */
+  sayThisNotThat?: TrainingSayThisNotThat;
+};
+
+/** One step of the "Get ready for doors in 15 minutes" fast-start track. It
+ *  references an existing lesson by id — no content is duplicated here. */
+export type FastStartStep = {
+  /** Must be a real id in TRAINING_LESSONS (pinned by tests). */
+  lessonId: string;
+  /** One line on why this lesson is door-critical — derived guidance, not a
+   *  copy of the lesson body. */
+  why: string;
 };
 
 export const TRAINING_MODULES: TrainingModule[] = [
@@ -48,6 +79,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m1",
     title: "The Door Mindset",
     tagline: "Rejection math, identity, and the habits that keep you knocking.",
+    hook: "Every no is already paid for. Learn to hear it that way.",
+    fieldStory:
+      "Two reps knock the same street. One gets a slammed door at house six and knocks the next four like a whipped dog — no sales. The other logs the no, exhales on the walk, and knocks house seven exactly like house one. Same doors, same weather, same script. One of them just does the math, and the math does not flinch.",
+    sayThisNotThat: {
+      instead: "Sorry to bother you, do you have a quick second?",
+      say: "I handle the fiber build on this street — thirty seconds and I'm gone either way.",
+    },
     lessons: [
       {
         id: "m1-rejection-math",
@@ -334,6 +372,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m2",
     title: "The First Seven Seconds",
     tagline: "Approach, opener, and tone — the window where doors are won or lost.",
+    hook: "The homeowner decides in seven seconds. Give them the right seven.",
+    fieldStory:
+      "You knock, and before you say a word the homeowner's face is already halfway to no — arms crossing, weight shifting back. That is not about your offer. That is the salesperson-at-my-door reflex firing on schedule, and it fires for every rep on the street. Your whole job in the first seven seconds is to not look like the person that reflex is built for.",
+    sayThisNotThat: {
+      instead: "Hi! How are you doing today?",
+      say: "You've seen the crews on the road up here — I'm with the fiber build, that's what the flags are about.",
+    },
     lessons: [
       {
         id: "m2-approach",
@@ -441,6 +486,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "Write one street-specific opener for the area you are knocking (name the visible construction, the recent installs, or the street itself). Use it word for word on your next 10 doors and count how many homeowners ask a question back.",
+        pitchDrill:
+          "Record your street-level opener as if the door just opened. Aim for a neighbor explaining the crews, not a salesperson starting a pitch: \"You've probably seen the crews on the road up here — I'm with the fiber build, just letting folks know what the flags and digging are about.\" Play it back and check one thing: did the last word land down, or did it lift up into a question?",
         quiz: [
           {
             question: "What does a pattern interrupt actually buy you?",
@@ -620,6 +667,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m3",
     title: "The Pitch That Lands",
     tagline: "Problem-first framing, the 30-second skeleton, and numbers that stick.",
+    hook: "Nobody buys internet. They fire the one they've got. Start with the pain.",
+    fieldStory:
+      "A rep leads with speeds and features and watches the homeowner glaze over in four seconds flat. Next door, a rep asks one question — did your bill do the jump after the first year? — and the homeowner talks for a minute straight about the forty dollars that appeared out of nowhere. Same product, same street. One rep pitched. The other let the homeowner sell themselves.",
+    sayThisNotThat: {
+      instead: "We offer blazing-fast symmetrical gigabit fiber with no data caps.",
+      say: "Evenings, when everyone's on it at once — does it hold up, or does it start dragging?",
+    },
     lessons: [
       {
         id: "m3-problem-first",
@@ -655,6 +709,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "On your next 10 doors, do not mention fiber until the homeowner has answered one pain question about their bill or their evening speeds. Count how many doors reach a named pain — that number is your real pitch count.",
+        pitchDrill:
+          "Record your two pain-finding questions back to back, the way you'd actually ask them on a porch: \"Out of curiosity, what's the bill running these days — did yours do the thing where it jumps after the first year?\" and \"Evenings, when everyone's on it at once — does it hold up?\" Listen back for tone. Do they sound curious and easy, or like a form you're reading? Re-record until they sound like a neighbor wondering out loud.",
         quiz: [
           {
             question: "Why does asking about the bill beat stating that their bill is probably too high?",
@@ -725,6 +781,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "Write your four beats as four short lines on a card. On your next 10 doors, deliver all four beats in under 40 seconds wherever a door engages, and end every pitch with the address-check question. Count completed skeletons.",
+        pitchDrill:
+          "This is the big one — record the full 30-second skeleton and time it. Hit all four beats: hook (\"they're running the fiber line down this street right now\"), credibility (\"we connected six houses on Maple last week — your neighbor at the corner is already on it\"), value (\"most folks here are cutting the bill about 30 a month and getting speeds that don't sag at night\"), and the micro-commitment (\"worth checking if your address qualifies? Takes about a minute\"). Play it back with a stopwatch. Under 40 seconds, all four beats present, and it ends on the small ask — not the sale.",
         quiz: [
           {
             question: "What is the correct micro-commitment at the end of the 30-second pitch?",
@@ -899,6 +957,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m4",
     title: "Reading People",
     tagline: "Archetypes, buying signals, and the discipline of disqualifying fast.",
+    hook: "The pitch is for their brain, not yours. Read it, then flex.",
+    fieldStory:
+      "An analytical rep buries a driver in fine print and loses a door a single sentence would have won. Two houses down, that same driver would have signed on the spot for bottom line: same speeds, thirty less, one-minute check. The facts never changed. The shape they came in did — and the rep who can't change shape leaves money on every third porch.",
+    sayThisNotThat: {
+      instead: "Let me walk you through all our plans and features first.",
+      say: "Bottom line: same speeds, about thirty less a month, one-minute check — want it?",
+    },
     lessons: [
       {
         id: "m4-archetypes",
@@ -1116,6 +1181,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m5",
     title: "Objection Psychology",
     tagline: "Reflexes, the agree-bridge-close pattern, and the big six answered.",
+    hook: "The first no isn't a decision. It's a reflex. Don't argue with weather.",
+    fieldStory:
+      "Not interested comes out three seconds in, before you've said what there is to not be interested in. Rookies hear a verdict and fold. Veterans hear a reflex, nod, and ask one real question — and watch the same door that just said no lean back in. Most doors that close, close on that second exchange. Fold at the first no and you're leaving your paycheck inside doors you already knocked.",
+    sayThisNotThat: {
+      instead: "But wait — if you'd just let me explain why we're better...",
+      say: "Totally fair — quick thing though: did the bill do the post-promo jump yet?",
+    },
     lessons: [
       {
         id: "m5-reflex",
@@ -1216,6 +1288,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "Pick the objection you hear most. Script one agree sentence, one bridge sentence, and one closing question for it. Use it verbatim on your next 10 doors whenever that objection appears, and log the response each time.",
+        pitchDrill:
+          "Record your agree-bridge-close against the objection you hear most. One sentence each: agree with the true kernel, bridge with one reframing fact, close with a small ask. For \"my internet is fine,\" that's: \"Honestly, if it works, that's fair — most people here said the same. The one thing that changed minds was seeing the same speeds priced 30 lower without the promo games. Worth a minute to see your address's number?\" Play it back and listen for the word \"but\" — if it snuck in after your agreement, re-record without it.",
         quiz: [
           {
             question: "What does the word 'but' do to an agreement?",
@@ -1469,6 +1543,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m6",
     title: "Closing and Follow-through",
     tagline: "Assumptive closes, honest urgency, callbacks that happen, and the debrief habit.",
+    hook: "Stop asking whether. Start asking which. Then close your mouth.",
+    fieldStory:
+      "The pitch landed, the signals fired, and the rep — nervous — asks so, do you want to sign up? and hands the homeowner a fresh chance to re-litigate everything. Next door, the rep says mornings or afternoons for the install crew? and just waits. Same sold customer, two questions. One reopens the decision. The other schedules it.",
+    sayThisNotThat: {
+      instead: "So... do you want to go ahead and sign up?",
+      say: "I've got Thursday at 10 or Saturday at 9 for your address — which works?",
+    },
     lessons: [
       {
         id: "m6-closes",
@@ -1504,6 +1585,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "On your next 10 engaged doors, end every pitch with a choice close — mornings or afternoons — and then count silently to ten before saying another word. Log how many homeowners answer inside the silence.",
+        pitchDrill:
+          "Record your choice close and the silence that follows it. Say it as the natural next step of a conversation that already went well: \"Mornings or afternoons better for the install crew?\" Then stop the recording after you've held a real five to ten seconds of silence. Play it back — the close should sound like scheduling, not asking permission, and the pause after it should be long enough to feel uncomfortable. That discomfort is the close working.",
         quiz: [
           {
             question: "What makes 'mornings or afternoons better for the install?' stronger than 'do you want to sign up?'",
@@ -1757,6 +1840,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m7",
     title: "The Closing Playbook",
     tagline: "Six closing styles, when each one is earned, and the failure mode of each.",
+    hook: "Six ways to close. The skill is knowing which one the door just earned.",
+    fieldStory:
+      "A rep hits an assumptive close against a homeowner who's still visibly weighing it — and manufactures the exact objection the close was supposed to skip. The homeowner feels the mismatch instantly. Closes aren't lines you fire on cue; they're reads. Count the buying signals first, pick the close the conversation earned, then hold four seconds of silence and let them finish the math.",
+    sayThisNotThat: {
+      instead: "Do you want to save money, or keep overpaying every month?",
+      say: "I've got Thursday at 10 or Saturday at 9 — which fits your week better?",
+    },
     lessons: [
       {
         id: "m7-assumptive-deep",
@@ -1794,6 +1884,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "On your next 10 engaged doors, keep a silent signal count and close assumptively only after two signals. After every closing ask, count four seconds in your head before speaking. Log each door: signals counted, close attempted, who spoke first.",
+        pitchDrill:
+          "Record the assumptive close plus the walk-back that saves it. First the close: \"Let me pull up the install calendar for your address — looks like the crew has Thursday morning open.\" Then, in the same take, handle the pushback: \"You're right — I got ahead of us. What's the piece you're still weighing?\" Play it back and check the recovery line: does it own the overreach in one calm sentence, or does it collapse into a puddle of apology? Composure here is a credibility deposit.",
         quiz: [
           {
             question: "What is the gate for deploying an assumptive close?",
@@ -2188,6 +2280,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m8",
     title: "Advanced Door Psychology",
     tagline: "The professional persuasion layer — reciprocity, consistency, proof, authority, pacing, and loss — used honestly.",
+    hook: "The real levers work in daylight. If a move needs the dark, it's not one of these.",
+    fieldStory:
+      "A rep runs a live speed test on the homeowner's own phone, shows them the modem-rental line they forgot they pay, and says honestly, that's a good rate — I'd keep it. Costs him the sale. Buys him the street: that homeowner becomes his loudest reference because they've got proof he tells the truth against his own wallet. Every lever in this module works the same way — used straight, it compounds; faked, it burns.",
+    sayThisNotThat: {
+      instead: "You could save about thirty a month if you switched.",
+      say: "At the bill you just told me, that's 360 a year leaving the house for the same speeds.",
+    },
     lessons: [
       {
         id: "m8-reciprocity",
@@ -2616,6 +2715,13 @@ export const TRAINING_MODULES: TrainingModule[] = [
     id: "m9",
     title: "Pitch Styles and Situations",
     tagline: "Four deployable pitch styles, the context playbook, and the two-buyer door.",
+    hook: "One product, four pitches, every kind of door. Pick the tool, don't force one.",
+    fieldStory:
+      "The door's already closing as it opens — homeowner mid-call, one foot back inside. A rookie launches the full pitch into the gap and gets nothing. The pro fires one built-in line: ten seconds — fiber went live on this street, most folks are cutting about thirty. The door stops. That's not luck. That's having the right pitch pre-loaded for the door in front of you instead of the door you wish you had.",
+    sayThisNotThat: {
+      instead: "Hi, do you have a few minutes to hear about our fiber service?",
+      say: "Ten seconds: fiber's live on this street and most folks are cutting the bill by about thirty.",
+    },
     lessons: [
       {
         id: "m9-analyst-pitch",
@@ -2721,6 +2827,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "Write out your best true install story in exactly four sentences — character, problem, turn, ending — and time it under 45 seconds out loud. On your next 10 doors, deliver it at every relator-read door and end every telling with the address-check ask. Log which detail made eyes change.",
+        pitchDrill:
+          "Record your best true install story in four beats and time it under 45 seconds: character (the neighbor two streets over), problem (the 8 p.m. buffering fights, the bill that hit 110), turn (the Thursday install), ending (what actually changed at their house). Land it on their porch: \"That's three houses on this loop now. The check takes a minute — want to see your address?\" Play it back. Past 45 seconds you're the porch bore; if one concrete detail made you lean in even on playback, keep it.",
         quiz: [
           {
             question: "Why does a story move a relator when the same facts as bullet points do not?",
@@ -2860,6 +2968,8 @@ export const TRAINING_MODULES: TrainingModule[] = [
         ],
         drillPrompt:
           "Write your 10-second line — local fact, number, full stop — and time it under ten seconds out loud. On your next 10 doors, deliver it the instant any door starts to close, and log the result: paused, closed warm, or closed cold. Two pauses out of ten means the line is working.",
+        pitchDrill:
+          "Record your 10-second line and time it hard: one local fact, one number, full stop. \"Ten seconds: fiber went live on this street and most folks are cutting the bill by about 30 — that's the whole pitch.\" No greeting, no company preamble, no question at the end. Play it back — it has to run at conversational speed on autopilot, because at a closing door you get exactly one take against a moving door. If it's over ten seconds or ends on an upswing, run it again.",
         quiz: [
           {
             question: "Why does the 10-second pitch end with a full stop instead of a question?",
@@ -3038,6 +3148,22 @@ export const TRAINING_MODULES: TrainingModule[] = [
   },
 ];
 
+// ── Fast-start track ──────────────────────────────────────────────────────────
+// "Get ready for doors in 15 minutes." The five highest-leverage lessons, in
+// the order a brand-new rep should steep in them: steel yourself, get in the
+// door, land the pitch, survive the first no, ask for the sale. Pure id
+// references — the lesson content lives once, in TRAINING_MODULES.
+export const TRAINING_FAST_START: FastStartStep[] = [
+  { lessonId: "m1-rejection-math", why: "Price a no before you take one. This is the head you knock with." },
+  { lessonId: "m2-pattern-interrupt", why: "The first sentence that stops the reflex brush-off. No door opens without it." },
+  { lessonId: "m3-pitch-skeleton", why: "The whole pitch in 30 seconds: hook, proof, one number, small ask." },
+  { lessonId: "m5-agree-bridge", why: "The first no is a reflex. Agree, bridge, and ask again without arguing." },
+  { lessonId: "m6-closes", why: "Stop asking whether, start asking which. Book the install and go quiet." },
+];
+
+/** The bare lesson ids of the fast-start track, in order. */
+export const FAST_START_LESSON_IDS: string[] = TRAINING_FAST_START.map((s) => s.lessonId);
+
 // ── Derived lookups ───────────────────────────────────────────────────────────
 export const TRAINING_LESSONS: TrainingLesson[] = TRAINING_MODULES.flatMap((m) => m.lessons);
 
@@ -3057,4 +3183,16 @@ export function getTrainingLesson(id: string): TrainingLesson | undefined {
 
 export function getTrainingModuleForLesson(lessonId: string): TrainingModule | undefined {
   return TRAINING_MODULES.find((m) => m.lessons.some((l) => l.id === lessonId));
+}
+
+/** Resolve the fast-start track to its lessons, dropping any step whose id no
+ *  longer resolves (defensive — tests pin that all ids are real). */
+export function getFastStartLessons(): { step: FastStartStep; lesson: TrainingLesson; module: TrainingModule }[] {
+  const out: { step: FastStartStep; lesson: TrainingLesson; module: TrainingModule }[] = [];
+  for (const step of TRAINING_FAST_START) {
+    const lesson = getTrainingLesson(step.lessonId);
+    const module = getTrainingModuleForLesson(step.lessonId);
+    if (lesson && module) out.push({ step, lesson, module });
+  }
+  return out;
 }
