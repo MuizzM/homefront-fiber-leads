@@ -18,15 +18,22 @@ import {
   Target,
   RefreshCw,
   Users,
+  Zap,
+  Mic,
+  ArrowRight,
+  MessageSquare,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
+import PitchRecorder, { isPitchRecorderSupported } from "@/components/training/PitchRecorder";
 import {
   TRAINING_MODULES,
   TOTAL_TRAINING_LESSONS,
+  TRAINING_FAST_START,
+  getFastStartLessons,
   getTrainingLesson,
   getTrainingModuleForLesson,
   type TrainingLesson,
@@ -225,6 +232,9 @@ function LessonView({
         <p className="mt-2 text-sm leading-relaxed text-foreground">{lesson.drillPrompt}</p>
       </div>
 
+      {/* Pitch practice — only on lessons that carry a spoken-pitch drill */}
+      {lesson.pitchDrill && <PitchRecorder prompt={lesson.pitchDrill} persistKey={lesson.id} />}
+
       <LessonQuiz lesson={lesson} onScore={setQuizScore} />
 
       <div className="flex items-center gap-3 pb-6">
@@ -300,12 +310,108 @@ function TeamProgressTable() {
   );
 }
 
+// ── Fast-start track ──────────────────────────────────────────────────────────
+// The "get door-ready in 15 minutes" curated path, surfaced at the top for reps
+// who have barely started. Pure references into the existing lessons.
+function FastStartTrack({
+  completedById, onOpen,
+}: {
+  completedById: Map<string, ProgressRow>;
+  onOpen: (lessonId: string) => void;
+}) {
+  const steps = getFastStartLessons();
+  if (!steps.length) return null;
+  return (
+    <div className="rounded-2xl border border-primary/30 bg-primary/[0.06] p-4 md:p-5" data-testid="fast-start-track">
+      <div className="flex items-center gap-2">
+        <Zap className="h-4 w-4 text-primary" aria-hidden="true" />
+        <SectionLabel className="text-primary">Get door-ready in 15 minutes</SectionLabel>
+      </div>
+      <p className="mt-1 text-sm leading-relaxed text-foreground">
+        New here? Start with these five. They are the highest-leverage lessons on the whole board — enough to knock your
+        first block with a real pitch instead of winging it.
+      </p>
+      <ol className="mt-3 space-y-1.5">
+        {steps.map(({ step, lesson }, i) => {
+          const done = completedById.has(lesson.id);
+          return (
+            <li key={lesson.id}>
+              <button
+                type="button"
+                onClick={() => onOpen(lesson.id)}
+                data-testid={`fast-start-step-${lesson.id}`}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-xl border border-border bg-background px-3 py-2.5 text-left transition-colors hover:border-primary/40 hover:bg-secondary/50",
+                  FOCUS,
+                )}
+              >
+                <span
+                  className={cn(
+                    "grid h-7 w-7 shrink-0 place-items-center rounded-full text-xs font-bold tabular-nums",
+                    done ? "bg-emerald-500 text-white" : "bg-primary text-primary-foreground",
+                  )}
+                  aria-hidden="true"
+                >
+                  {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[13px] font-semibold text-foreground">{lesson.title}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{step.why}</span>
+                </span>
+                <ArrowRight className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
+// ── Standalone pitch practice ─────────────────────────────────────────────────
+// The headline feature reachable from the header: rehearse the two pitches every
+// rep needs cold, without hunting for the right lesson first.
+const STANDALONE_PITCH_LESSON_IDS = ["m3-pitch-skeleton", "m9-ten-second-pitch"] as const;
+
+function PitchPracticeView({ onBack }: { onBack: () => void }) {
+  const lessons = STANDALONE_PITCH_LESSON_IDS
+    .map((id) => getTrainingLesson(id))
+    .filter((l): l is TrainingLesson => !!l && !!l.pitchDrill);
+  return (
+    <div className="space-y-5" data-testid="pitch-practice-view">
+      <button
+        type="button"
+        onClick={onBack}
+        data-testid="pitch-practice-back"
+        className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-lg px-2 -ml-2 text-sm font-semibold text-muted-foreground transition-colors hover:text-foreground", FOCUS)}
+      >
+        <ChevronLeft className="h-4 w-4" aria-hidden="true" /> Back to training
+      </button>
+      <PageHeader
+        icon={Mic}
+        title="Pitch practice"
+        subtitle="Record your pitch, hear it back, and tighten it before you hit the doors."
+      />
+      <div className="space-y-4">
+        {lessons.map((lesson) => (
+          <div key={lesson.id}>
+            <SectionLabel className="mb-1.5 px-1">{lesson.title}</SectionLabel>
+            <PitchRecorder prompt={lesson.pitchDrill!} persistKey={`standalone-${lesson.id}`} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function Training() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [openLessonId, setOpenLessonId] = useState<string | null>(null);
+  const [showPitchPractice, setShowPitchPractice] = useState(false);
   const canSeeTeam = ["admin", "manager", "super_admin"].includes(user?.role ?? "rep");
+  const pitchSupported = isPitchRecorderSupported();
 
   const { data, isLoading, isError, refetch } = useQuery<ProgressPayload>({
     queryKey: PROGRESS_KEY,
@@ -358,10 +464,15 @@ export default function Training() {
   const total = TOTAL_TRAINING_LESSONS;
   const openLesson = openLessonId ? getTrainingLesson(openLessonId) : undefined;
   const openModule = openLessonId ? getTrainingModuleForLesson(openLessonId) : undefined;
+  // Surface the fast-start track while a rep is still ramping — once they have
+  // cleared the curated five, they no longer need the "start here" scaffold.
+  const showFastStart = doneCount < TRAINING_FAST_START.length;
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5 p-4 pb-24 pt-5 md:p-6 md:pb-10">
-      {openLesson && openModule ? (
+      {showPitchPractice ? (
+        <PitchPracticeView onBack={() => setShowPitchPractice(false)} />
+      ) : openLesson && openModule ? (
         <LessonView
           lesson={openLesson}
           module={openModule}
@@ -377,6 +488,21 @@ export default function Training() {
             icon={GraduationCap}
             title="Training"
             subtitle="Door-to-door psychology and pitch craft, built for the field."
+            actions={
+              pitchSupported ? (
+                <button
+                  type="button"
+                  onClick={() => setShowPitchPractice(true)}
+                  data-testid="open-pitch-practice"
+                  className={cn(
+                    "inline-flex min-h-11 items-center gap-2 rounded-xl border border-primary/30 bg-primary/[0.08] px-4 text-sm font-semibold text-primary transition-colors hover:bg-primary/[0.14]",
+                    FOCUS,
+                  )}
+                >
+                  <Mic className="h-4 w-4" aria-hidden="true" /> Pitch practice
+                </button>
+              ) : undefined
+            }
           />
 
           {/* Overall progress hero */}
@@ -409,6 +535,9 @@ export default function Training() {
             )}
           </div>
 
+          {/* Fast-start track — "start here" for reps still ramping */}
+          {showFastStart && <FastStartTrack completedById={completedById} onOpen={setOpenLessonId} />}
+
           {/* Manager rollup */}
           {canSeeTeam && <TeamProgressTable />}
 
@@ -426,6 +555,44 @@ export default function Training() {
                       <div className="truncate text-xs text-muted-foreground">{mod.tagline}</div>
                     </div>
                   </div>
+
+                  {/* Engagement layer — punchy hook, a real-talk field story, and
+                      one say-this-not-that swap. All optional and additive. */}
+                  {(mod.hook || mod.fieldStory || mod.sayThisNotThat) && (
+                    <div className="space-y-3 border-b border-border bg-secondary/20 px-4 py-3" data-testid={`training-module-engagement-${mod.id}`}>
+                      {mod.hook && (
+                        <p className="flex items-start gap-2 text-[13px] font-semibold leading-snug text-foreground">
+                          <Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+                          <span>{mod.hook}</span>
+                        </p>
+                      )}
+                      {mod.fieldStory && (
+                        <div className="rounded-lg border border-border bg-card p-3">
+                          <SectionLabel className="text-primary">Real talk</SectionLabel>
+                          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{mod.fieldStory}</p>
+                        </div>
+                      )}
+                      {mod.sayThisNotThat && (
+                        <div className="rounded-lg border border-border bg-card p-3" data-testid={`training-say-this-${mod.id}`}>
+                          <div className="flex items-center gap-1.5">
+                            <MessageSquare className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+                            <SectionLabel className="text-primary">Say this, not that</SectionLabel>
+                          </div>
+                          <div className="mt-2 space-y-1.5 text-xs leading-relaxed">
+                            <p className="flex items-start gap-2 text-muted-foreground line-through decoration-red-500/50">
+                              <span aria-hidden="true" className="font-semibold text-red-500/80 no-underline">Not</span>
+                              <span>{mod.sayThisNotThat.instead}</span>
+                            </p>
+                            <p className="flex items-start gap-2 text-foreground">
+                              <span aria-hidden="true" className="font-semibold text-emerald-500">Say</span>
+                              <span>{mod.sayThisNotThat.say}</span>
+                            </p>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="divide-y divide-border">
                     {mod.lessons.map((lesson) => {
                       const done = completedById.has(lesson.id);

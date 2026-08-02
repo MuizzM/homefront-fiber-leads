@@ -29,6 +29,7 @@ import {
   FileSignature,
   PhoneCall,
   GraduationCap,
+  Gift,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -78,6 +79,7 @@ const NAV_ITEMS: NavItem[] = [
   // ── Field ─────────────────────────────────────────────────────────────────
   { href: "/ready-to-call", label: "Ready to Call", icon: PhoneCall,  show: isFieldRole,                              group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
+  { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },
   { href: "/training",     label: "Training",     icon: GraduationCap,show: isFieldRole,                              group: "Field" },
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
   { href: "/my-commission",label: "My Commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
