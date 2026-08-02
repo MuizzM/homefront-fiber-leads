@@ -3146,6 +3146,1510 @@ export const TRAINING_MODULES: TrainingModule[] = [
       },
     ],
   },
+  // ── M10 — Reading the Door in Five Seconds ──────────────────────────────────
+  {
+    id: "m10",
+    title: "Reading the Door in Five Seconds",
+    tagline: "Homeowner states, doorway tells, and the tone that buys thirty more seconds.",
+    hook: "The door answers before the homeowner does. Learn to hear it in five seconds.",
+    fieldStory:
+      "Two reps hit the same annoyed door an hour apart — the guy mid-dinner, third knock of the week, door yanked open on a sigh. The first rep launches the full opener with a big smile and gets it shut in his face at word four. The second says \"you've had a run of us tonight — one thing worth knowing, then I'm gone,\" gets sixty full seconds, and books the callback. Same house, same offer. The only difference was the read.",
+    sayThisNotThat: {
+      instead: "Hi! How are you doing this evening?",
+      say: "I can see I'm catching you mid-something — twenty seconds and one question, then I'm gone.",
+    },
+    lessons: [
+      {
+        id: "m10-five-second-read",
+        title: "The four states behind every open door",
+        summary: "Busy, curious, guarded, annoyed — identify the state before you say your third word.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Four states, four different doors",
+            body: [
+              "Every door you will ever knock opens into one of four states, and each one needs a different first sentence. The busy state: door opens fast and half, body angled back into the house, first word is \"yeah?\" The curious state: full open, eye contact, they saw the trucks or heard from a neighbor and they are waiting to see what you are. The guarded state: opens on the chain or through the glass, arms crossed, weight back — you are a threat until proven otherwise. The annoyed state: door yanked open, exhale before hello, you are the third knock this week.",
+              "You read the state in the first five seconds from three signals: how the door opens (crack versus full), where their weight sits (leaning in versus braced back), and the first sound they make (a question versus a sigh). You do not need to be right with certainty. You need a working guess fast enough that your opener matches their reality instead of the script in your head.",
+            ],
+          },
+          {
+            heading: "Name the state silently, then match it",
+            body: [
+              "Busy gets compression and respect for the clock: \"I can see I'm catching you mid-something — twenty seconds and one question, then I'm gone.\" Curious gets the door opened wider: \"You've probably seen the crews up the street — that's us. Want the two-minute version of what just changed on your block?\" Guarded gets the threat removed first: \"Totally fair — I'm not asking you to buy anything on the porch. I'm checking which houses on this street the new fiber actually reaches.\" Annoyed gets the acknowledgment, because being seen defuses faster than being pitched: \"You've probably had a run of knocks lately — I'll make this painless. One thing worth knowing, then I'm off your porch.\"",
+              "The psychology underneath: people cooperate when the interaction matches their current state, and resist when it demands a state change. Asking an annoyed person to be cheerful is a state change. Acknowledging the annoyance and being brief is a state match — and a matched state is the only road to a real conversation.",
+            ],
+          },
+          {
+            heading: "The state is about them, never about you",
+            body: [
+              "The rookie error is reading every flat door as rejection of you. An annoyed state is almost never about you — it is the interrupted dinner, the crying kid, the last solicitor. Your job is to route around the state, not absorb it. When you stop taking the state personally, you can work it: busy doors become callbacks, guarded doors become your best customers once the threat clears, and annoyed doors respect the rep who keeps it to one honest sentence and leaves.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Every open door is busy, curious, guarded, or annoyed — read it in five seconds from the crack, the weight, and the first sound.",
+          "Match the state with your first sentence; never ask a homeowner to change state for you.",
+          "Busy: compress. Curious: expand. Guarded: remove the threat. Annoyed: acknowledge and be brief.",
+          "A flat state is about their day, not about you — route around it, don't absorb it.",
+        ],
+        drillPrompt:
+          "On your next 10 doors, say the state out loud in your head before you speak — busy, curious, guarded, or annoyed — and pick your first sentence from the matching script. After each door, log whether your read was right and how the matching sentence changed the first thirty seconds.",
+        quiz: [
+          {
+            question: "The door opens six inches on the chain, arms crossed, weight back. What state are you in?",
+            options: ["Busy", "Curious", "Guarded", "Annoyed"],
+            answerIndex: 2,
+            explanation: "Physical barriers and braced posture are the guarded state's signature. Remove the threat before you pitch anything.",
+          },
+          {
+            question: "A homeowner yanks the door open with an audible sigh — you're clearly the third knock this week. What is the right first move?",
+            options: [
+              "Deliver your full opener with extra energy to reset the mood",
+              "Acknowledge the run of knocks, promise one painless thing, and keep it brief",
+              "Apologize and leave immediately",
+              "Ask what's bothering them",
+            ],
+            answerIndex: 1,
+            explanation: "Annoyed doors respond to being seen, not to being pitched. Acknowledgment plus brevity is the state match that earns the one sentence.",
+          },
+          {
+            question: "Why does state-matching work psychologically?",
+            options: [
+              "It mirrors their body language, which builds rapport",
+              "It meets the interaction where the homeowner already is instead of demanding a state change",
+              "It signals you are an experienced salesperson",
+              "It shortens the pitch, which everyone prefers",
+            ],
+            answerIndex: 1,
+            explanation: "People cooperate when the interaction matches their current state. Demanding cheerfulness from an annoyed homeowner is a state change — and state changes get resisted.",
+          },
+        ],
+      },
+      {
+        id: "m10-doorway-tells",
+        title: "Doorway tells: the house speaks first",
+        summary: "Dish on the roof, carrier van outside, ONT box, dog — the intel you gather walking up the driveway.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The hardware audit from the sidewalk",
+            body: [
+              "The house tells you what the pitch should be before anyone opens the door. A satellite dish on the roof means a TV bundle — the homeowner is paying one company for internet plus TV, and the switch conversation includes what they watch. A competitor's van parked outside today means a technician is in the house right now: expect a homeowner freshly reminded of a bill or a repair, and be ready to be compared to whoever is in their driveway. An ONT box on the exterior wall means fiber has already reached this house — check the app before you knock, because that door may be an existing Kinetic customer (mark already_customer and thank them) or a competitor's fiber, which changes everything about your angle.",
+              "A dog changes the mechanics, not the math. Barking means the door opens less and the homeowner's attention splits. Step back off the porch, keep your body angled, speak to the person and ignore the dog entirely — the homeowner reads your calm around their dog as calm in general. If they apologize for the noise, defuse it with one light line and get back to the pitch: \"No worries — he's just doing his job. Quick question while he's on duty: who's your internet provider?\"",
+            ],
+          },
+          {
+            heading: "Reading the approach",
+            body: [
+              "The driveway is a briefing. Two cars and toys in the yard means a full household with streaming, gaming, and work-from-home loads — your pain questions can go straight to peak-hour slowdowns. A doorbell camera means you are being recorded from the street: assume the whole interaction is reviewable, because it is, and let that keep your claims clean and your register professional. A no-soliciting sign is not a tell to work around — it is a boundary to honor. Skip the door, log it, and move on.",
+              "The freshest tell is construction itself: fresh conduit flags, a crew trailer, a bored line under the sidewalk. That is the freshest-fiber pitch in Module 11 arriving in physical form — the build is your proof, visible from the porch.",
+            ],
+          },
+          {
+            heading: "Tells set the angle, not the verdict",
+            body: [
+              "None of this decides the door before you knock it. A dish is not a lost door — it is a pointer to the bundle conversation. A competitor van is not a lost door — it is a homeowner with internet service on their mind today. Tells choose your opening question and your anchor, nothing more. The only tells that end a knock are the legal and safety ones: no-soliciting signage, a do-not-knock flag in the app, or a situation your gut says to leave. Everything else is just information, and information is the whole job.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Dish on the roof = bundle conversation. Competitor van = internet is on their mind today. ONT box = check the app before you knock.",
+          "Dogs change mechanics, not math: step back, angle your body, ignore the dog.",
+          "A doorbell camera means the interaction is reviewable — let it keep your claims clean.",
+          "No-soliciting signs and do-not-knock flags end the knock. Every other tell just chooses your angle.",
+        ],
+        drillPrompt:
+          "On your next 10 doors, spend the walk up the driveway naming every tell you can see — hardware, vehicles, cameras, signage — and choose your opening question from the strongest one. Log the tell in your door note when it proved useful.",
+        quiz: [
+          {
+            question: "You spot an ONT box on the exterior wall as you approach. What does it tell you?",
+            options: [
+              "The house cannot get fiber",
+              "Fiber already reaches this house — check the app before knocking; it may be an existing customer or a competitor's fiber",
+              "The homeowner is a satellite customer",
+              "Nothing — ONT boxes are decorative",
+            ],
+            answerIndex: 1,
+            explanation: "An ONT means fiber is lit at the address. The app tells you whether it is ours (thank them, mark already_customer) or a competitor's (a completely different angle).",
+          },
+          {
+            question: "A competitor's technician van is parked in the driveway when you arrive. What is the best read?",
+            options: [
+              "A lost door — skip it",
+              "A hostile door — expect a fight",
+              "A homeowner with internet service freshly on their mind — be ready to be compared",
+              "A door to return to tomorrow",
+            ],
+            answerIndex: 2,
+            explanation: "A service visit means a bill or a repair is front of mind today. That is attention on exactly your category — a tell for your angle, not a verdict on the door.",
+          },
+          {
+            question: "Which tells legitimately end a knock before it starts?",
+            options: [
+              "A satellite dish and a barking dog",
+              "A doorbell camera and two cars",
+              "No-soliciting signage, a do-not-knock flag in the app, or a situation your gut says to leave",
+              "A competitor van and an ONT box",
+            ],
+            answerIndex: 2,
+            explanation: "Legal boundaries and safety instincts end knocks. Hardware, pets, and cameras only choose the angle of the conversation.",
+          },
+        ],
+      },
+      {
+        id: "m10-ten-second-rule",
+        title: "The ten-second rule",
+        summary: "The homeowner decides whether you exist in ten seconds. Spend them on three beats.",
+        minutes: 4,
+        sections: [
+          {
+            heading: "You get ten seconds, not thirty",
+            body: [
+              "The homeowner's decision to keep listening happens in roughly the first ten seconds, and it is mostly not about your product. They are answering one question: is this person worth thirty more seconds of my evening? Everything they need to decide that is visible fast — your posture, your pace, whether your first sentence sounds like every other solicitor or like a person with specific, useful news about their street.",
+              "The practical consequence: anything in your opener that does not fit in ten seconds is not in your opener. If your name, your connection to Kinetic, and the reason this street matters today cannot be said inside one breath, the pitch is too long and the door is already closing while you finish it.",
+            ],
+          },
+          {
+            heading: "The three beats that fit",
+            body: [
+              "The ten seconds hold exactly three beats. Who you are: \"Hey, I'm Dana — I work with Kinetic.\" Why this street, right now: \"The crews just ran new fiber down this block, so your house can finally get it.\" One easy question: \"Who's your internet provider right now?\" The question is the load-bearing beat. It hands the homeowner a question they can answer in one word, which converts a doorstep monologue into a conversation — and conversations are what close.",
+              "Notice what is missing: pricing, speeds, the company history, the contract terms. All of it is real and none of it belongs in the first ten seconds. You are not selling fiber in the opener; you are earning the right to sell it in the next thirty seconds.",
+            ],
+          },
+          {
+            heading: "Buying the next ten seconds",
+            body: [
+              "When a door is wavering — hand still on the knob, half-turned back to the game — buy time honestly with a permission micro-close: \"Twenty seconds — worth it?\" This works because it is a small, specific, honest ask with an exit built in. The homeowner who says yes has now actively chosen to listen, and a chosen listen is worth ten times a tolerated one. The homeowner who says no just saved you four minutes — mark the outcome accurately and take the next door.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The keep-listening decision happens in about ten seconds and is about you, not the product.",
+          "Three beats fit: who you are, why this street right now, one easy question.",
+          "The question converts a monologue into a conversation — it is the load-bearing beat.",
+          "Wavering door: buy time with an honest permission ask — \"Twenty seconds — worth it?\"",
+        ],
+        drillPrompt:
+          "Time your opener with a stopwatch before your next shift — name, street reason, question, in under ten seconds. At your next 10 doors, use the permission micro-close on any door that wavers, and log how often a chosen listen outperforms a tolerated one.",
+        quiz: [
+          {
+            question: "What is the homeowner actually deciding in the first ten seconds?",
+            options: [
+              "Whether fiber beats cable",
+              "Whether the price is fair",
+              "Whether you are worth thirty more seconds of their evening",
+              "Whether they need internet at all",
+            ],
+            answerIndex: 2,
+            explanation: "The keep-listening decision is about the person on the porch, not the product. Product decisions come later, only if you pass this one.",
+          },
+          {
+            question: "Why is the closing question of the opener the load-bearing beat?",
+            options: [
+              "It gathers competitor data for the app",
+              "It hands the homeowner a one-word answer, converting a monologue into a conversation",
+              "It fills the ten-second window",
+              "It qualifies their budget",
+            ],
+            answerIndex: 1,
+            explanation: "An easy question makes the homeowner a participant. Conversations close; doorstep monologues get doors closed on them.",
+          },
+          {
+            question: "Why does \"Twenty seconds — worth it?\" work on a wavering door?",
+            options: [
+              "It pressures the homeowner into politeness",
+              "It is a small, specific, honest ask with an exit built in — a yes is a chosen listen, a no saves you four minutes",
+              "It implies a limited-time offer",
+              "It restarts the ten-second clock",
+            ],
+            answerIndex: 1,
+            explanation: "Permission micro-closes convert tolerated listening into chosen listening, and an honest no is itself a win: accurate outcome, next door.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M11 — The Kinetic Pitch Framework ───────────────────────────────────────
+  {
+    id: "m11",
+    title: "The Kinetic Pitch Framework",
+    tagline: "One opener structure, three verbatim pitches, and the anchors you quote from.",
+    hook: "One skeleton, three pitches, zero claims they can't check from the couch.",
+    fieldStory:
+      "A rep quotes the gig price off last month's sheet, confident as sunrise. The homeowner pulls up this week's mailer in eight seconds flat — the numbers don't match, and now nothing else the rep says all evening matches either. Two streets over, another rep checks the app on the walk up, quotes the live offer, and books the install. Memorized numbers rot. Verified numbers close.",
+    sayThisNotThat: {
+      instead: "Can I tell you about our internet plans?",
+      say: "The line down your street just went live — who's your provider right now?",
+    },
+    lessons: [
+      {
+        id: "m11-opener-structure",
+        title: "The four-beat opener",
+        summary: "Name, authorized-partner, new-fiber hook, question — the skeleton every Kinetic pitch hangs on.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The skeleton",
+            body: [
+              "Every Kinetic pitch in this module hangs on the same four beats, in order. Beat one, your name — a person, not a company: \"I'm Alex.\" Beat two, the authorized-partner line — why you specifically are on this porch: \"I work with Kinetic, the company building out the fiber network on this side of town.\" Beat three, the new-fiber hook — the news about their street: \"The crews just lit the line down your block, so your house can get fiber for the first time.\" Beat four, the question — the handoff: \"Who's your provider right now?\"",
+              "The order is the psychology. Name first makes you a person before you are a pitch. Partner second borrows the authority of the whole build behind you. The hook third gives them news, not an ask — people open doors for news. The question last moves the work to them, in the easiest possible form. Skip a beat and the door feels it: no name reads as a script, no partner line reads as a random stranger, no hook reads as a favor you want, no question reads as a lecture.",
+            ],
+          },
+          {
+            heading: "The full opener, verbatim",
+            body: [
+              "\"Hey, I'm Alex — I work with Kinetic, the company that's been building the new fiber network through this neighborhood. The line down your street just went live, so your house can finally get real fiber. Quick question — who's your internet provider right now?\"",
+              "Say it at conversation pace, not recital pace. The moment it sounds memorized it loses the news quality that makes it work, so learn the beats cold and let the words flex. Two rules of honesty that are also rules of effectiveness: only claim the street is live if the app shows it serviceable, and confirm your exact authorized-partner wording with your manager before you use it — the relationship between field reps and Kinetic has specific approved language [VERIFY].",
+            ],
+          },
+          {
+            heading: "Why the question does the closing",
+            body: [
+              "\"Who's your provider right now?\" looks like small talk and functions like a close. It is answerable in one word, so nearly everyone answers it. It is not a commitment, so nobody resists it. And their answer routes the entire rest of the conversation: cable gets the upload-and-price-creep angle, satellite gets the weather-and-latency angle, a competitor's fiber gets the Module 12 pivot, and \"I don't really know\" gets the bill-check move. One question, four clean branches, zero wasted words.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Four beats in order: name, authorized-partner, new-fiber hook, question.",
+          "The hook is news, not an ask — people open doors for news.",
+          "Learn the beats cold and let the words flex; recital pace kills the opener.",
+          "Only claim live service the app confirms, and verify your partner wording with your manager [VERIFY].",
+        ],
+        drillPrompt:
+          "Write the four beats on a card in your own words and rehearse it ten times before your next shift — out loud, at conversation pace. On your next 10 doors, count how many homeowners answer the routing question, and note which branch each answer sent you down.",
+        quiz: [
+          {
+            question: "What is the correct order of the four opener beats?",
+            options: [
+              "Hook, name, question, partner",
+              "Name, authorized-partner, new-fiber hook, question",
+              "Question, name, hook, partner",
+              "Partner, hook, name, question",
+            ],
+            answerIndex: 1,
+            explanation: "Person first, authority second, news third, handoff last. Each beat earns the next one's right to exist.",
+          },
+          {
+            question: "Why does the opener end with \"Who's your provider right now?\"",
+            options: [
+              "To fill out the lead record",
+              "It is easy to answer, carries no commitment, and routes the rest of the pitch down the right branch",
+              "To check whether they can afford fiber",
+              "To compare their provider's pricing",
+            ],
+            answerIndex: 1,
+            explanation: "One easy question converts the doorstep into a conversation and tells you which angle — cable, satellite, competitor fiber, or unknown — the rest of the pitch needs.",
+          },
+          {
+            question: "Before telling a street \"your line just went live,\" what must you do?",
+            options: [
+              "Nothing — momentum language is always fine",
+              "Ask the homeowner if they've seen crews",
+              "Confirm serviceability in the app, and confirm your approved partner wording with your manager",
+              "Check whether neighbors already bought",
+            ],
+            answerIndex: 2,
+            explanation: "A false hook is both dishonest and instantly checkable. The app is the source of truth for serviceability; your manager owns the approved partner language.",
+          },
+        ],
+      },
+      {
+        id: "m11-pitch-fresh-fiber",
+        title: "Verbatim: the fresh-fiber street pitch",
+        summary: "For blocks where the crews just left — the build itself is your proof.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "When to run it",
+            body: [
+              "Run this pitch on streets where the build is fresh — the app shows the cluster as newly serviceable, the conduit flags are still in yards, the neighbors are still talking about the trucks. Fresh fiber is the strongest position in D2D internet: you are not asking the homeowner to imagine an improvement, you are pointing at one they watched get buried in their easement.",
+            ],
+          },
+          {
+            heading: "The pitch, verbatim",
+            body: [
+              "\"Hey, I'm Alex — I work with Kinetic. You've seen the crews on your street the past few weeks — that was us, burying brand-new fiber. It just went live, which means your house can get real fiber internet for the first time. Not the cable company's version — a dedicated fiber line to your house. Quick question: who's your provider right now?\"",
+              "After the answer, the anchor block: \"Here's what changes. Fiber is symmetrical — your upload matches your download, so video calls and cloud backups stop crawling. There are no data caps [VERIFY current plan terms] and no annual contract [VERIFY], so you're not locked in. And because the build is fresh, standard installation is free during the install window [VERIFY current install offer]. Most folks here go with the gig plan, but there are 300, 1000, and 2000 meg tiers depending on how the house uses it [VERIFY current speed tiers and pricing]. Want me to check which one fits your house?\"",
+              "Every bracketed claim is a live offer that changes — confirm the current tiers, pricing, contract terms, and install offer in the app or with your manager before you quote them. A rep quoting last month's promo is one fact-check away from a lost sale and a complaint.",
+            ],
+          },
+          {
+            heading: "Why it works",
+            body: [
+              "Three forces stack. Recency: the build is visible and memorable, so your claims are checkable in the homeowner's own memory — trust arrives pre-built. Fairness framing: \"for the first time\" positions fiber as something their house was owed and finally got, not a product being pushed. And the routing question plus anchor block structure means the pitch is a conversation with a menu, not a monologue with a price.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Fresh-fiber streets are the strongest position in D2D — the build itself is your proof.",
+          "Structure: four-beat opener, routing question, then the anchor block (symmetry, caps, contract, install).",
+          "Every speed tier, price, contract, and install claim gets quoted only after you verify the current offer [VERIFY].",
+          "\"For the first time\" frames fiber as something the house was owed — fairness beats salesmanship.",
+        ],
+        drillPrompt:
+          "Run the fresh-fiber pitch verbatim at your next 10 newly-serviceable doors. After each, note which anchor — symmetry, no caps, no contract, or free install — produced the visible reaction, and lead with that anchor at the next door.",
+        quiz: [
+          {
+            question: "What makes a fresh-fiber street the strongest pitch position?",
+            options: [
+              "Homeowners there have higher incomes",
+              "The build is visible in the homeowner's own memory, so your claims arrive pre-verified",
+              "Cable doesn't serve those streets",
+              "The pricing is lower on new streets",
+            ],
+            answerIndex: 1,
+            explanation: "Recency means the homeowner watched your proof get buried in their easement. Checkable claims build trust faster than any adjective.",
+          },
+          {
+            question: "A homeowner asks the exact monthly price of the gig plan and you haven't checked today's offer. What do you do?",
+            options: [
+              "Quote last month's price from memory",
+              "Give a range and move on quickly",
+              "Check the current offer in the app before quoting — live offers change, and a stale quote costs the sale and trust",
+              "Avoid the question until the close",
+            ],
+            answerIndex: 2,
+            explanation: "The [VERIFY] discipline: quoting a stale price is one fact-check away from a lost sale and a complaint. The app is the current source of truth.",
+          },
+          {
+            question: "What does \"for the first time\" do psychologically in this pitch?",
+            options: [
+              "Creates artificial urgency",
+              "Frames fiber as something the house was owed and finally received — fairness framing",
+              "Signals the technology is untested",
+              "Implies the offer expires soon",
+            ],
+            answerIndex: 1,
+            explanation: "Fairness framing positions fiber as a long-overdue arrival, not a product push. People act on rectified gaps faster than on upgrades.",
+          },
+        ],
+      },
+      {
+        id: "m11-pitch-upgrade",
+        title: "Verbatim: the established-fiber upgrade pitch",
+        summary: "For streets lit a while ago where most neighbors still sit on cable — the switch pitch.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "When to run it",
+            body: [
+              "Run this on streets the app shows serviceable for months or years, where the build story is old news and the door's reality is an entrenched cable or DSL habit. You cannot sell these homeowners on novelty — the fiber has been there. You sell them on the gap between what they settled for and what has been available one truck-roll away the whole time.",
+            ],
+          },
+          {
+            heading: "The pitch, verbatim",
+            body: [
+              "\"Hey, I'm Alex with Kinetic. Your street's actually had our fiber for a while now — most of your neighbors are still on cable, which is exactly why I'm knocking. Quick question: who's your provider, and roughly what are they charging you these days?\"",
+              "Then the gap block, built from their own numbers: \"Okay — so here's the honest comparison. Cable download is fine; upload is where it falls over — most cable plans top out around 20 to 35 meg upload [VERIFY against current competitor plans in your market]. Fiber is symmetrical, so a gig plan is a gig both ways [VERIFY current tiers]. The other thing cable does: the promo price you signed at is not the price you're paying now — bills creep. Pull up your last bill and I'll show you the comparison in real numbers, not adjectives.\"",
+              "The bill pull-up is the heart of this pitch. Their real bill — equipment fees, broadcast fees, the post-promo rate — is the only comparison that survives the night. If your price only wins before fees, say so and pivot to the upload and no-contract story [VERIFY current contract terms]. Never invent a savings number; read theirs off the screen and do the arithmetic in front of them.",
+            ],
+          },
+          {
+            heading: "The psychology: dissatisfaction by arithmetic",
+            body: [
+              "Established-fiber doors are not unhappy enough to switch on adjectives. They switch when their own numbers indict their current provider — the promo cliff they forgot, the upload speed they never tested, the fee stack they stopped reading. Your job is not to criticize their provider, which triggers defense of a decision they made; your job is to put their bill next to your offer and let the arithmetic do the criticizing. Homeowners trust conclusions they reach themselves — your whole pitch is arranging for them to reach this one.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Established streets: sell the gap between what they settled for and what has been available all along.",
+          "Lead with upload symmetry and promo-cliff price creep — cable's two structural weaknesses [VERIFY current competitor plans].",
+          "The bill pull-up is the heart of the pitch: their real fees versus your real offer, arithmetic in front of them.",
+          "Never invent savings — read their numbers, do the math together, and let the arithmetic criticize.",
+        ],
+        drillPrompt:
+          "At your next 10 established-fiber doors, ask for the bill pull-up on every engaged conversation. Log how often the real bill is higher than the number they quoted from memory, and use that gap as your opening evidence at the next door.",
+        quiz: [
+          {
+            question: "Why doesn't the fresh-build pitch work on long-established fiber streets?",
+            options: [
+              "The fiber there is slower",
+              "The build story is old news — the pitch has to sell the gap between what they settled for and what's been available",
+              "Homeowners there dislike new technology",
+              "The install window has closed everywhere",
+            ],
+            answerIndex: 1,
+            explanation: "Novelty expired years ago on those streets. The switch pitch runs on dissatisfaction by arithmetic, not on news.",
+          },
+          {
+            question: "What is the bill pull-up and why is it the heart of the upgrade pitch?",
+            options: [
+              "Asking to see their bill so you can judge their budget",
+              "Comparing their real bill — promo cliff, fees, actual rate — against your real offer, so their own numbers make the case",
+              "Pulling up their credit profile",
+              "Showing them a neighbor's bill",
+            ],
+            answerIndex: 1,
+            explanation: "Adjectives don't move entrenched customers; their own arithmetic does. The real bill is the only comparison that survives the night.",
+          },
+          {
+            question: "Why should you avoid directly criticizing their current provider?",
+            options: [
+              "It's illegal",
+              "It triggers defense of a decision they made — better to arrange for them to reach the conclusion themselves",
+              "The competitor might hear about it",
+              "It's a waste of breath",
+            ],
+            answerIndex: 1,
+            explanation: "Attacking a choice attacks the chooser. Self-reached conclusions are trusted; imposed ones get defended against.",
+          },
+        ],
+      },
+      {
+        id: "m11-pitch-lit-your-block",
+        title: "Verbatim: \"Kinetic just lit your block\"",
+        summary: "The momentum pitch — real installs, real neighbors, real calendar, and the honesty rule that powers it.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "The pitch, verbatim",
+            body: [
+              "\"Hey, I'm Alex with Kinetic — and I'm on your porch for a specific reason: Kinetic just lit your block. The line went live this month, the crews are still in the neighborhood, and houses around you are already getting on the install calendar. I'm working this street while the install window is open. Who's your provider right now?\"",
+              "Then the momentum block: \"Here's the part worth knowing. While the build crews are still on this side of town, standard installs are booking fast — and the current offer includes free standard installation during this window [VERIFY current install offer]. I'm not telling you a date to pressure you; I'm telling you because the calendar in my app is real, and I'd rather put you on it than have you call in six weeks from now and wait. Want to see what the week looks like?\"",
+              "The close folds straight into Module 14: \"I've got Tuesday morning or Thursday afternoon open on your street — which one works better?\"",
+            ],
+          },
+          {
+            heading: "The honesty rule that powers it",
+            body: [
+              "Momentum is the most abused claim in door-to-door, which is exactly why it is powerful when it is true and fatal when it is invented. Before you run this pitch, the momentum must be real: the app shows the block newly serviceable, installs are actually booking on the street, and the calendar slots you offer actually exist. If three neighbors are on the calendar, you may say three neighbors are on the calendar. If none are, you do not say \"everyone's signing up\" — you say the block just went live and the window is open, which is true.",
+              "The reason is not just ethics. A fabricated momentum claim is checkable — the homeowner asks the neighbor at the barbecue on Saturday, and when your story collapses you lose the street, not just the door. The map's install history is your receipt; work streets where the app shows real momentum and quote only what it shows.",
+            ],
+          },
+          {
+            heading: "Why urgency works here without manipulation",
+            body: [
+              "Real urgency is a service: install windows genuinely fill, build crews genuinely move on, and early adopters genuinely get installed faster. You are not manufacturing pressure; you are reporting logistics the homeowner cannot see from their couch. The line you never cross is inventing scarcity — fake expiration dates, phantom \"last slots,\" imaginary signing neighbors. Report the real calendar honestly and the urgency takes care of itself, because the real calendar is genuinely finite.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Momentum pitch: the block just lit, installs are booking, the window is open — then straight to the two-day-choice close.",
+          "Quote only momentum the app confirms; fabricated claims are checkable at the Saturday barbecue.",
+          "Real urgency is a service — install windows genuinely fill and crews genuinely move on.",
+          "Never invent scarcity: no fake expirations, phantom slots, or imaginary neighbors.",
+        ],
+        drillPrompt:
+          "Before your next session, pull the map and pick the street with the strongest real install momentum. Run the lit-your-block pitch at 10 doors there, quoting only numbers the app shows. Compare your engagement rate against a street with no momentum story.",
+        quiz: [
+          {
+            question: "When may you tell a homeowner \"three of your neighbors are already on the install calendar\"?",
+            options: [
+              "Whenever it helps the close",
+              "When at least one neighbor has inquired",
+              "Only when the app actually shows three installs booked on that street",
+              "When the block was recently built out",
+            ],
+            answerIndex: 2,
+            explanation: "Momentum claims must match the map exactly. The app's install history is your receipt — and the homeowner's neighbors are the fact-check.",
+          },
+          {
+            question: "Why is fabricated momentum especially dangerous in D2D?",
+            options: [
+              "It violates quota rules",
+              "It is checkable — the homeowner asks the neighbors, and a collapsed story loses the whole street",
+              "Neighbors talk to competitors",
+              "It slows down your knock rate",
+            ],
+            answerIndex: 1,
+            explanation: "You are selling to a social network with fences. One false claim discovered at a barbecue poisons every door on the block.",
+          },
+          {
+            question: "What makes the urgency in this pitch legitimate rather than manipulative?",
+            options: [
+              "Nothing — urgency is always manipulation",
+              "You are reporting real, finite logistics — install windows fill and crews move on — not inventing scarcity",
+              "The offers really do expire at midnight",
+              "Urgency is fine if the pitch is friendly",
+            ],
+            answerIndex: 1,
+            explanation: "Real urgency is a service: the calendar is genuinely finite and visible in your app. Manufactured scarcity is the line you never cross.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M12 — Objection Killers ─────────────────────────────────────────────────
+  {
+    id: "m12",
+    title: "Objection Killers",
+    tagline: "Every objection you will actually hear, with the words that answer it.",
+    hook: "Every objection is a question wearing armor. Answer the question, not the armor.",
+    fieldStory:
+      "A homeowner on Cedar folds her arms: \"is this a scam?\" The rookie rep gets defensive — badge waving, voice up an octave, insisting he's legit. Door closes. The veteran on the next pass hears the same words and smiles: \"great instinct — here's how you check without trusting me.\" She checks, he waits on the sidewalk, and she signs twenty minutes later. The objection was never the wall. The answer was.",
+    sayThisNotThat: {
+      instead: "But we're cheaper and faster than what you've got!",
+      say: "Happy is great — if you could keep everything you like and pay less for it, would you look at the numbers?",
+    },
+    lessons: [
+      {
+        id: "m12-happy-price-works",
+        title: "\"I'm happy,\" \"what's the price,\" \"it works fine\"",
+        summary: "The satisfaction wall — three ways through the most common doors in the territory.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "\"I'm happy with my provider\"",
+            body: [
+              "\"Happy is great — I'm not here to fix what isn't broken. Most of your neighbors were happy too; they just didn't know fiber had reached their street. Let me ask it differently: if you could keep everything you like and pay less for it, would you want to see the numbers? Takes two minutes.\"",
+              "The psychology: happy is not an objection to fiber, it is an objection to change. Arguing against their happiness makes you the enemy of a decision they feel good about. Reframing — keep the happiness, add the savings — makes the comparison free of risk. You are not asking them to switch; you are asking them to look. Looking is cheap, which is why happy people say yes to it.",
+            ],
+          },
+          {
+            heading: "\"What's the price?\" and \"that's too expensive\"",
+            body: [
+              "When they lead with price: \"Fair question — it depends on the speed your house needs, and I don't quote numbers I haven't checked. Can I ask what you're paying now? Then I'll show you the real comparison, not a guess.\" Their current bill is the anchor that makes your price legible; without it you are quoting into a vacuum.",
+              "When your number lands as too expensive: \"Totally fair — can I show you what that number includes? No equipment rental fee [VERIFY], no data-cap overage charges [VERIFY], no annual contract [VERIFY]. The number on a cable bill and the number you actually pay are usually two different numbers — pull up your last bill and let's compare totals, not stickers.\" If the honest total comparison does not favor you at the speed they need, say so and pivot to the upload and reliability story. Winning on a false price claim is losing on a delay.",
+            ],
+          },
+          {
+            heading: "\"My internet works fine\"",
+            body: [
+              "\"It works fine — until when? Most folks tell me it's fine until 8 p.m. when everyone's streaming, or until a work call drops. Where does yours hold up worst?\" The question presumes nothing and invites the crack to name itself.",
+              "The psychology: works-fine is a summary judgment, not a measurement. Nobody has tested their upload during the evening peak; they have only stopped noticing the failures they adapted to — the call taken on the phone instead of the laptop, the show paused to buffer. Your job is to make the adaptation visible again, gently, with one question. Once the homeowner says the crack out loud, works-fine is gone and you are solving a problem they just admitted to having.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Happy is an objection to change, not to fiber — reframe as keep-the-happiness, add-the-savings, just look.",
+          "Never quote price into a vacuum; anchor on their current bill first.",
+          "Compare totals, not stickers — fees and promo cliffs live off the headline number [VERIFY your current plan terms].",
+          "Works-fine is a summary judgment; one \"until when?\" question makes the hidden crack visible.",
+        ],
+        drillPrompt:
+          "At your next 10 doors, answer every satisfaction objection with the matching script, then ask the routing question (their bill, or the \"until when\" crack). Log which of the three walls you hit most often and how many converted to a real conversation.",
+        quiz: [
+          {
+            question: "Why is \"I'm happy with my provider\" not really an objection to fiber?",
+            options: [
+              "Happy customers are lying",
+              "It is an objection to change — reframe the ask as a risk-free comparison that keeps everything they like",
+              "It is a request for pricing",
+              "It means they already have fiber",
+            ],
+            answerIndex: 1,
+            explanation: "You are not asking them to switch, only to look. Looking is cheap, so happy people say yes to it — and the numbers do the switching.",
+          },
+          {
+            question: "A homeowner says your price is too expensive. What is the strongest honest move?",
+            options: [
+              "Offer a discount immediately",
+              "Drop the price topic and pitch speed instead",
+              "Break down what the number includes and compare total bills — fees, overages, promo cliffs — against their real statement",
+              "Tell them the competition charges more",
+            ],
+            answerIndex: 2,
+            explanation: "Sticker-to-sticker comparisons hide the fee stack and the promo cliff. Totals are the honest ground — and if the totals don't favor you, pivot to upload and reliability rather than fake the math.",
+          },
+          {
+            question: "What is the function of \"It works fine — until when?\"",
+            options: [
+              "It contradicts the homeowner",
+              "It invites the homeowner to name the failure they've adapted to, turning a summary judgment into an admitted problem",
+              "It introduces the speed tiers",
+              "It buys time to think",
+            ],
+            answerIndex: 1,
+            explanation: "People adapt to failures and forget them. One question makes the adaptation visible again — and a problem they name out loud is one you can solve.",
+          },
+        ],
+      },
+      {
+        id: "m12-renting-spouse-think",
+        title: "\"I'm renting,\" \"my spouse decides,\" \"let me think about it\"",
+        summary: "The deferral family — objections that hand the decision to someone or sometime else.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "\"I'm renting\"",
+            body: [
+              "\"A lot of folks on this street rent — here's how it usually works. Fiber internet service doesn't require owning the house; it requires the person who pays the internet bill. Is that you? Then this is your call. The install itself is designed for rentals — the line to the house is already there [VERIFY current install requirements for rentals with your manager].\"",
+              "The psychology: renting is half objection, half question — the renter is asking whether this is even allowed to be their decision. Answer the permission question factually and the objection usually evaporates. When it doesn't — a genuinely landlord-controlled setup — get the decision-maker's contact or a follow_up and log it; a routed objection is a future door, not a dead one.",
+            ],
+          },
+          {
+            heading: "\"My spouse handles that\"",
+            body: [
+              "\"Totally fair — most households split decisions like that. Here's the thing: the pitch takes two minutes and it's the same two minutes I'll give them. When are you both usually home? I'll swing back and give it to you together — that way nobody has to repeat me.\" Then book the return in the app as a follow_up with a real day and time before you leave the porch.",
+              "Never pitch the non-decider into carrying the message — a secondhand pitch loses half its force and all its control, and the spouse hears the weakest version at the worst moment. Also never use the spouse line as leverage (\"don't you make decisions for yourself?\") — it manufactures one resentful ally and one hostile veto. The joint visit is the only play that respects the household and keeps the close alive; Module 9's two-buyers lesson covers what to do once you have both of them.",
+            ],
+          },
+          {
+            heading: "\"Let me think about it\"",
+            body: [
+              "\"Absolutely — most people want to, and I'd rather you be sure. Just so I leave you the right information: is it the price you're weighing, or whether switching is worth the hassle?\" Think-about-it is almost always a polite wrapper on one real, nameable concern, and you cannot answer a concern you have not named.",
+              "Once the real concern is on the table, answer it — then, if the hesitation is genuine and not a hidden no, offer the soft-commit from Module 14: \"Tell you what — I'll pencil you in for Thursday's install window while you decide. No charge to cancel [VERIFY cancellation policy]; if it's not a fit, one text and it's off the calendar.\" The penciled slot converts open-ended deliberation into a decision with a date — and a dated decision gets made.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Renting is a permission question: the person who pays the bill makes the call — answer it factually [VERIFY rental install policy].",
+          "Spouse-decides: book the joint visit with a real day and time, never pitch the messenger.",
+          "Think-about-it is a wrapper on one nameable concern — isolate it before you answer anything.",
+          "Genuine hesitation earns the soft-commit pencil-in; a hidden no earns an honest outcome log.",
+        ],
+        drillPrompt:
+          "At your next 10 deferral objections, use the isolating question — \"is it the price, or the hassle?\" — before answering anything. Log the real concern behind each deferral; by door 10 you will know which two concerns run your territory.",
+        quiz: [
+          {
+            question: "What is \"I'm renting\" usually really asking?",
+            options: [
+              "Whether fiber reaches rentals",
+              "Whether this decision is even theirs to make — answer the permission question and the objection usually evaporates",
+              "Whether the deposit is refundable",
+              "Whether the landlord gets a commission",
+            ],
+            answerIndex: 1,
+            explanation: "It is half objection, half permission question. The person who pays the internet bill owns the decision — say so plainly and verify the install requirements for rentals.",
+          },
+          {
+            question: "Why is pitching the non-deciding spouse into carrying your message a losing play?",
+            options: [
+              "They will forget your name",
+              "A secondhand pitch loses half its force and all its control — book the joint visit instead",
+              "It takes too long",
+              "It violates the spouse's privacy",
+            ],
+            answerIndex: 1,
+            explanation: "The deciding spouse hears the weakest version at the worst moment. A booked joint visit keeps the message intact and the close alive.",
+          },
+          {
+            question: "What should you do before answering \"let me think about it\"?",
+            options: [
+              "Restate the whole pitch",
+              "Offer the soft-commit immediately",
+              "Isolate the real concern with one question — price, or the hassle of switching",
+              "Accept it and leave a flyer",
+            ],
+            answerIndex: 2,
+            explanation: "You cannot answer a concern you have not named. Isolate first, answer second, then — if the hesitation is genuine — pencil the install.",
+          },
+        ],
+      },
+      {
+        id: "m12-scam-bad-notinterested",
+        title: "\"Is this a scam,\" \"I had a bad experience,\" \"not interested\"",
+        summary: "The trust family — fear, history, and the flat no, handled without pressure.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "\"Is this a scam?\"",
+            body: [
+              "\"Great instinct — you should check. Don't take my word for anything. Here's my rep ID, and here's how you verify without trusting me: Kinetic's official site lists the build areas, and you can call the number on the site — not a number I give you — and ask whether reps are working this street [VERIFY the current verification path with your manager]. I'll wait while you check, or I'll come back after you have.\"",
+              "The psychology: the scam question is a gift, not a threat — it means the homeowner is engaged enough to care whether you are real. Reps who get defensive confirm the fear; reps who invite verification dissolve it, because scammers never hand you the tools to check them. Every verification behavior you welcome — the ID, the official website, the call-them-yourself move — builds exactly the trust the question was asking for.",
+            ],
+          },
+          {
+            heading: "\"I had a bad experience\"",
+            body: [
+              "\"What happened?\" Then stop talking and listen to the whole story without defending anything. When they finish: \"That's exactly the stuff that makes people switch for good — installs that don't show, bills that jump, support that reads from a script. Here's what I can put in front of you today, in writing, before you decide anything [VERIFY what your offers guarantee in writing].\"",
+              "If the bad experience was with Kinetic itself, honesty is the only move: \"I hear you, and I'm not going to pretend that didn't happen. What I can do is make sure the right people know — and show you what's changed since.\" Log the story in the door note so the next rep does not walk in blind, and mark a follow_up if there is any opening. Defending the company against a customer's own story loses twice: the door, and the customer's respect.",
+            ],
+          },
+          {
+            heading: "\"Not interested\"",
+            body: [
+              "First, sort the brush-off from the real no. A brush-off arrives before you have said anything — it is the state, not the pitch, and the Module 10 state-match applies. A real no arrives after your opener, with eye contact: respect it instantly. \"No problem at all. One thing before I go, then I'm gone: fiber's live on your street now, and if the video calls ever lag, that's the upload — now you know why. Have a good one.\"",
+              "Then mark the door not_interested in the app and mean it — never re-pitch a marked door on the same pass. The instant respect is not just manners; it is strategy. The homeowner who got a clean, one-sentence exit remembers the rep who didn't push, and that memory is the only thing that makes next pass's door open differently. Pressure at a real no buys nothing and costs the street.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Scam questions are engagement — invite verification and hand them the tools to check you [VERIFY the current verification path].",
+          "Bad experience: ask, listen fully, never defend — then show what you can put in writing today.",
+          "Sort the brush-off from the real no; respect the real no instantly with one memorable fact and a clean exit.",
+          "Mark not_interested accurately and never re-pitch a marked door on the same pass — the clean exit is next pass's open door.",
+        ],
+        drillPrompt:
+          "At your next 10 trust-family objections, run the matching script and measure the exit: did the conversation end with the homeowner still talking to you? Log which verification behavior (ID, website, call-them-yourself) landed hardest on scam doors.",
+        quiz: [
+          {
+            question: "Why is \"is this a scam?\" actually good news at the door?",
+            options: [
+              "It means they will buy out of fear",
+              "It means they are engaged enough to care whether you are real — and inviting verification dissolves the fear",
+              "It is a legal trap",
+              "It means a competitor warned them",
+            ],
+            answerIndex: 1,
+            explanation: "Scammers never hand you verification tools. A rep who welcomes the check builds the exact trust the question was asking for.",
+          },
+          {
+            question: "A homeowner describes a bad past install experience. What is the correct first response?",
+            options: [
+              "Explain what the company policy actually is",
+              "Apologize on behalf of the industry and pitch your reliability",
+              "\"What happened?\" — then listen to the whole story without defending anything",
+              "Offer a discount for their trouble",
+            ],
+            answerIndex: 2,
+            explanation: "Defending against their own story loses the door and their respect. Full listening first; written, verifiable terms second.",
+          },
+          {
+            question: "Why does instantly respecting a real \"not interested\" pay off later?",
+            options: [
+              "It doesn't — you should always try twice",
+              "It keeps your knock rate up",
+              "The clean, one-sentence exit is what the homeowner remembers, and it's what opens the door differently on the next pass",
+              "It prevents complaints to the city",
+            ],
+            answerIndex: 2,
+            explanation: "Pressure at a real no buys nothing and costs the street. The memory of the rep who didn't push is next pass's competitive advantage.",
+          },
+        ],
+      },
+      {
+        id: "m12-competitor-pivot",
+        title: "The competitor pivot: Google Fiber, AT&T, and the rest",
+        summary: "When to concede gracefully, when to win — and how to mark both in the app.",
+        minutes: 6,
+        sections: [
+          {
+            heading: "Know when the door is already won or lost",
+            body: [
+              "A homeowner on Google Fiber or AT&T Fiber who is genuinely happy has no gap for you to sell into — symmetrical fiber is symmetrical fiber, and pretending otherwise insults their intelligence and your credibility. Concede gracefully: \"If you're on their fiber and it's solid, honestly — keep it. That's a good product. If anything ever changes, you know Kinetic's on this street now.\" Then mark the door accurately — already_customer if they're on Kinetic, not_interested with a note naming the competitor if they're not — so the next pass doesn't waste itself.",
+              "Note the map usually already knows: addresses served by a fiber competitor are typically excluded from your working set upstream. If you find yourself standing at one anyway, you are the exception — which means the app needs the accurate outcome more than ever.",
+            ],
+          },
+          {
+            heading: "When the competitor is beatable",
+            body: [
+              "Cable and satellite are a different story — the gap is structural, and you can win on it honestly. Against cable: symmetrical upload, no data caps [VERIFY], no annual contract [VERIFY], and the promo-cliff bill creep from Module 11. Against satellite: latency that video calls and gaming cannot tolerate, weather dropouts, and data thresholds [VERIFY current competitor plan details in your market]. Against fixed wireless: the shared-tower slowdown at peak hours [VERIFY].",
+              "The winning frame is never trash-talk: \"I'm not going to tell you your provider is bad — I'll tell you where fiber is structurally different, and you can test both claims tonight.\" Specific, checkable, structural claims beat general disparagement every time, because the homeowner can verify them from their couch — and a claim they verify themselves converts harder than one they simply heard.",
+            ],
+          },
+          {
+            heading: "The graceful concession is a long game",
+            body: [
+              "The conceded door is not a lost door — it is a planted one. The homeowner who heard \"honestly, keep it\" from a Kinetic rep just watched the company choose honesty over a sale, and that story gets told at the fence line. Leave your name and the one fact that matters (\"if the bill ever jumps or the service ever drops, we're lit on your street\"), log the accurate outcome with the competitor named in the note, and let the pass system bring you back when their contract renewal or first outage does the pitching for you.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Happy competitor-fiber customers have no gap — concede gracefully and mark the door accurately.",
+          "Cable, satellite, and fixed wireless lose on structure: upload symmetry, caps, contracts, latency [VERIFY competitor details in your market].",
+          "Never trash-talk — offer specific, checkable, structural claims the homeowner can verify tonight.",
+          "A graceful concession plants next season's sale: leave your name, one fact, and an accurate log.",
+        ],
+        drillPrompt:
+          "At your next 10 competitor doors, classify each as concede or winnable within the first two answers. Concede gracefully with the script and log the competitor in the note; on winnable doors, make one structural claim and invite the homeowner to test it. Track which classification you got wrong most.",
+        quiz: [
+          {
+            question: "A homeowner is on Google Fiber and genuinely happy. What is the right play?",
+            options: [
+              "Pitch symmetrical upload anyway",
+              "Concede gracefully — \"honestly, keep it\" — and mark the door accurately with the competitor named in the note",
+              "Offer a lower price to win the switch",
+              "Ask to see their bill to find a gap",
+            ],
+            answerIndex: 1,
+            explanation: "Symmetrical fiber has no structural gap to sell into. The concession earns credibility and a future opening; the accurate log saves the next pass.",
+          },
+          {
+            question: "What makes cable and satellite beatable where competitor fiber is not?",
+            options: [
+              "Their customers are less loyal",
+              "Structural gaps — upload asymmetry, data caps, contracts, latency — that fiber genuinely fixes",
+              "Their service areas are shrinking",
+              "Their pricing is always higher",
+            ],
+            answerIndex: 1,
+            explanation: "You win where fiber is structurally different, with claims the homeowner can verify from their couch. Structure beats slogans.",
+          },
+          {
+            question: "Why name the competitor in the door note after conceding?",
+            options: [
+              "So managers can complain to the competitor",
+              "So the next pass knows the door is handled and the exact reason why — the log is the team's memory",
+              "It is required by law",
+              "To track competitor market share for commission",
+            ],
+            answerIndex: 1,
+            explanation: "The map is the team's memory. An accurate note turns your conceded door into saved time and better timing for every future pass.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M13 — Card on File the Compliant Way ────────────────────────────────────
+  {
+    id: "m13",
+    title: "Card on File the Compliant Way",
+    tagline: "Payment details the smooth, legal way — secure form, their hands, their phone.",
+    hook: "You never see the number. That's not the rule blocking the sale — that is the sale.",
+    fieldStory:
+      "Six weeks after a smooth close, the chargeback lands: the customer swears they never agreed, and the only proof anyone can find is a card number scribbled on a torn flyer in the rep's truck. Sale reversed, commission clawed back, rep gone by Friday. The rep on the next street handed over the secure form, looked at the trees for thirty seconds, and has a confirmation email with the customer's own fingerprints on it. Same close. Different armor.",
+    sayThisNotThat: {
+      instead: "I just need your card number real quick.",
+      say: "You type it yourself into the secure form — I never see it, and that's on purpose.",
+    },
+    lessons: [
+      {
+        id: "m13-the-rules",
+        title: "The two nevers and the one always",
+        summary: "Never paper, never voice — always the secure form. The rules that protect the rep as much as the customer.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The two nevers",
+            body: [
+              "Never write a card number down — not on paper, not in a notebook, not in a notes app, not in a text message, not in a door note in this app. Never take a card number by voice — the homeowner reading sixteen digits to you on a porch is how numbers end up misheard, overheard, and misused. There is no experienced-rep exception to either rule, because the rules are not about trust in you; they are about removing you from the path the number travels.",
+            ],
+          },
+          {
+            heading: "The one always",
+            body: [
+              "Always: the customer enters their own payment details into the secure checkout form or payment link — on their own phone where possible, on your device with them typing where not. You never see the full number, you never touch the card, and the confirmation goes to them directly. Confirm the exact secure-payment flow for the current build of the app with your manager before your first close [VERIFY] — the screens change, the rule does not.",
+              "The whole module in one sentence, the way you say it at the door: \"Here's how we do payment — you type it yourself into the secure form, I never see the number, and the receipt goes straight to your email.\" Memorize it. Said early and casually, it pre-answers the objection Module 13's third lesson handles in full.",
+            ],
+          },
+          {
+            heading: "Why this protects you, not just them",
+            body: [
+              "Reps sometimes experience payment security as friction imposed on the sale. Reframe it: it is armor built around the rep. When a customer later disputes a charge or claims misuse, the rep who never saw the number has a complete defense — the record shows the customer typed it into a secure form themselves. The rep who wrote it on paper has nothing but their word. Compliance also builds the sale: a customer who watches you insist on the secure flow learns, at the exact moment of maximum suspicion, that this company handles their money more carefully than they expected. That lesson converts.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Never write a card number anywhere — paper, notes apps, texts, and door notes are all violations.",
+          "Never take a number by voice; misheard, overheard, and misused all start there.",
+          "Always: the customer types their own details into the secure form, on their phone where possible [VERIFY current flow].",
+          "Compliance is the rep's armor: if you never saw the number, no dispute can touch you.",
+        ],
+        drillPrompt:
+          "Before your next shift, walk the current secure-payment flow on your own device twice until you can do it without thinking. At your next close, narrate the security out loud as the customer types — \"you'll see the confirmation hit your email in a second\" — and notice what it does to their posture.",
+        quiz: [
+          {
+            question: "A customer offers to read you their card number to save time. What do you do?",
+            options: [
+              "Take it — the customer consented",
+              "Write it down but destroy the paper after",
+              "Decline and hand them the secure form — voice and paper are never acceptable paths for a card number",
+              "Type it into the door note for later",
+            ],
+            answerIndex: 2,
+            explanation: "Customer consent does not change the rule. The number must travel only through the secure form, typed by the customer — no exceptions for convenience.",
+          },
+          {
+            question: "Why do the payment rules protect the rep, not just the customer?",
+            options: [
+              "They speed up commission payout",
+              "If a charge is ever disputed, the rep who never saw the number has a complete defense — the record shows the customer typed it themselves",
+              "They reduce data entry errors",
+              "They keep the rep's phone storage clean",
+            ],
+            answerIndex: 1,
+            explanation: "The secure flow creates a record that removes you from the payment path entirely. The rep who wrote the number on paper has only their word.",
+          },
+          {
+            question: "What does insisting on the secure flow do for the sale itself?",
+            options: [
+              "Nothing — it's pure friction",
+              "It slows the close but avoids liability",
+              "At the moment of maximum suspicion, it teaches the customer this company handles money more carefully than expected — and that converts",
+              "It lets you skip the confirmation step",
+            ],
+            answerIndex: 2,
+            explanation: "Payment time is when trust is most fragile. Watching a rep insist on security is a live demonstration of the company's character.",
+          },
+        ],
+      },
+      {
+        id: "m13-secure-form-script",
+        title: "Verbatim: the secure-form handoff",
+        summary: "The exact words for the smoothest thirty seconds in the whole close.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The handoff, verbatim",
+            body: [
+              "\"Last step — and this part's designed to protect you. Payment goes through the secure form, and you enter it yourself, on your phone. I never see the number, and that's on purpose: it protects you, and it protects me. You'll get the confirmation in your email within a minute.\"",
+              "Then the mechanics: pull up the secure checkout on your device or send the payment link to theirs [VERIFY current flow], hand it over or watch them open it, and physically turn your attention away while they type — look at the street, check the install calendar, give them privacy. When the confirmation lands, point at their screen, not yours: \"There it is — you're set for Tuesday.\"",
+            ],
+          },
+          {
+            heading: "Why the framing matters",
+            body: [
+              "The same action — handing someone a payment form — reads as either pressure or protection depending entirely on your thirty seconds of framing. \"I need your card\" raises every defense. \"You enter it yourself; I never see it; that's on purpose\" lowers them all, because it answers the customer's unspoken question — why should I trust this stranger with my card? — before they have to ask it. You are not downplaying the payment step; you are starring its security as a feature.",
+            ],
+          },
+          {
+            heading: "The small behaviors that sell it",
+            body: [
+              "Hand the phone over promptly — hesitation reads as reluctance to give up control. Look away while they type, visibly and obviously. Narrate the milestones out loud: the secure page, the masked number, the confirmation email. Each behavior is a proof, and proofs stack: by the time the confirmation email lands, the customer has watched three separate demonstrations that their card was safer with you than it is in their own wallet. That feeling is what they describe to the neighbor who asks about the salesperson who came by.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "The script: secure form, you type it, I never see it, that's on purpose, confirmation in your email.",
+          "Framing decides everything — the same form reads as pressure or protection depending on your thirty seconds.",
+          "Answer the unspoken trust question before it gets asked; star the security as a feature.",
+          "Hand over promptly, look away visibly, narrate the milestones — proofs stack into a story the customer retells.",
+        ],
+        drillPrompt:
+          "Rehearse the handoff script verbatim five times before your next shift, including the physical look-away. At your next 3 closes, narrate each milestone out loud and log the customer's reaction at the confirmation email — that moment is your referral seed.",
+        quiz: [
+          {
+            question: "What does \"I never see the number, and that's on purpose\" accomplish?",
+            options: [
+              "It shifts liability to the customer",
+              "It answers the customer's unspoken trust question before they have to ask it",
+              "It lets you skip PCI training",
+              "It speeds up the form",
+            ],
+            answerIndex: 1,
+            explanation: "The unasked question — why should I trust you with my card? — gets answered with the design of the process itself. Defenses lower when the answer arrives unrequested.",
+          },
+          {
+            question: "While the customer types their payment details, where should your attention be?",
+            options: [
+              "On the screen, helping them along",
+              "Visibly elsewhere — the street, the install calendar — giving obvious privacy",
+              "On the next door you'll knock",
+              "On their body language for upsell signals",
+            ],
+            answerIndex: 1,
+            explanation: "The visible look-away is a proof, not a courtesy. It demonstrates the privacy you just claimed, and proofs stack.",
+          },
+          {
+            question: "Why narrate the confirmation email out loud when it lands?",
+            options: [
+              "To fill awkward silence",
+              "It closes the proof loop — the customer sees the system working exactly as you described it",
+              "To confirm the email address is correct",
+              "It is required for commission",
+            ],
+            answerIndex: 1,
+            explanation: "Each narrated milestone demonstrates that reality matches your framing. The final proof — confirmation in their inbox — is the story they retell to neighbors.",
+          },
+        ],
+      },
+      {
+        id: "m13-no-card-objection",
+        title: "\"I don't give my card out\"",
+        summary: "The hardest payment objection — validate it, route around it compliantly, never workaround it.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Validate first — the objection is rational",
+            body: [
+              "\"Totally understand — most people who say that got burned once. I'm the same way with my card.\" This is not a technique; it is the truth, and saying it first changes what the conversation is about. The customer arrived braced for a rep who would push past their boundary. When you honor the boundary instead, the conversation stops being about whether to trust you and becomes about which compliant path works for them.",
+            ],
+          },
+          {
+            heading: "The compliant routes around it",
+            body: [
+              "Depending on current policy, there are usually several legitimate paths, and you must confirm which ones are live before offering them [VERIFY current payment policy with your manager]. Autopay framing: if autopay is not required, say so plainly — \"the card on file is for the first bill; you're not locked into autopay\" [VERIFY]. Pay-later framing: some offers let the customer complete payment through the official online checkout after the visit, from their own couch [VERIFY]. Install-first framing: where policy allows, book the install now and the customer finishes payment through the official channel before the truck rolls [VERIFY].",
+              "Notice what every route has in common: the number still only ever travels through the official secure channel. The customer's rule — I don't hand my card to people — is fully honored; you have simply moved the moment and the device.",
+            ],
+          },
+          {
+            heading: "The workaround is never worth it",
+            body: [
+              "If none of the compliant routes fit, the answer is a follow_up with the secure payment link — never a workaround. Taking the number \"just this once\" to save a sale is how reps lose the sale, the commission, and the job in a single afternoon: the first dispute or the first audit unwinds everything, and the door note history in this app means the unwinding is fully traceable. A lost sale is a statistic. A compliance violation is a career event. Treat them accordingly.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Validate the boundary first — most people who guard their card got burned once, and honoring the rule reframes the whole conversation.",
+          "Compliant routes: autopay-not-required framing, official online checkout later, install-first-then-pay — all [VERIFY current policy].",
+          "Every legitimate route keeps the number inside the official secure channel; you only move the moment and the device.",
+          "No route fits? Follow_up with the secure link. A workaround unwinds the sale, the commission, and the career.",
+        ],
+        drillPrompt:
+          "Role-play this objection three times with a teammate before your next shift: validate, offer two verified compliant routes, and land the follow_up if neither fits. In the field, log which route your territory's card-guarders choose most — that route becomes your default offer.",
+        quiz: [
+          {
+            question: "What is the correct first response to \"I don't give my card out\"?",
+            options: [
+              "Explain the company's security certifications",
+              "Validate the boundary — most people who say it got burned once — then offer compliant routes",
+              "Assure them you're trustworthy",
+              "Offer to hold the card while they decide",
+            ],
+            answerIndex: 1,
+            explanation: "The customer is braced for pressure. Honoring the boundary first converts the conversation from trust-you-or-not to which-path-works.",
+          },
+          {
+            question: "What do all compliant routes around the card objection have in common?",
+            options: [
+              "They avoid taking payment entirely",
+              "The number still travels only through the official secure channel — you move the moment and the device, never the channel",
+              "They require manager approval",
+              "They postpone the install",
+            ],
+            answerIndex: 1,
+            explanation: "Autopay framing, online checkout later, install-first — every legitimate path keeps the card inside the secure system. Only the timing changes.",
+          },
+          {
+            question: "A workaround would save today's sale. Why refuse it anyway?",
+            options: [
+              "Workarounds are slower",
+              "The first dispute or audit unwinds the sale, the commission, and the job — and the app's history makes it fully traceable",
+              "Customers dislike workarounds",
+              "It violates the price list",
+            ],
+            answerIndex: 1,
+            explanation: "A lost sale is a statistic; a compliance violation is a career event. The logged history means there is no such thing as an untraceable shortcut.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M14 — The Installation Close ────────────────────────────────────────────
+  {
+    id: "m14",
+    title: "The Installation Close",
+    tagline: "Assumptive closes that put a truck on the calendar before you leave the porch.",
+    hook: "The close isn't a question. It's a calendar with two open slots.",
+    fieldStory:
+      "Two reps, same pitch, same warm homeowner nodding at the numbers. The first asks \"so, do you want to get on the schedule?\" and watches the yes evaporate into \"let us think about it\" — because no was the easiest answer to the question he asked. The second asks \"Tuesday morning or Thursday afternoon?\" and the homeowner pulls out her phone, not to check the price again, but to check her calendar. That reach for the phone is the close happening.",
+    sayThisNotThat: {
+      instead: "So, do you want to get on the schedule?",
+      say: "I've got Tuesday morning or Thursday afternoon on your street — which works better?",
+    },
+    lessons: [
+      {
+        id: "m14-two-day-choice",
+        title: "The two-day-choice close",
+        summary: "\"Tuesday morning or Thursday afternoon?\" — the assumptive close that ends every strong pitch.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The mechanics",
+            body: [
+              "When the value conversation lands — the homeowner has nodded at the numbers, asked a logistics question, or compared plans out loud — do not ask whether they want to schedule. Ask which slot: \"I've got Tuesday morning or Thursday afternoon on your street — which works better for you?\" Then go quiet and let them check their calendar, which is the physical act of deciding.",
+              "The two options must be real slots in the real install calendar from the app. If Tuesday fills while you stand there, offer the next real pair without blinking. The close's power comes entirely from its honesty — you are a person with a live calendar offering genuine capacity, not a trick question with dates attached.",
+            ],
+          },
+          {
+            heading: "Why it works",
+            body: [
+              "Choice architecture: \"do you want to schedule?\" presents a yes/no decision where no is the safe, effort-free answer. \"Tuesday or Thursday?\" presumes the yes and moves the decision to logistics — and logistics questions are easier to answer than commitment questions, so the homeowner answers the easy one and arrives at the commitment through it. Both options being yeses is not manipulation; it is respect for how decisions actually get made on porches, by tired people, at 6 p.m.",
+              "The psychology underneath is decision fatigue: every additional open question you leave standing costs energy the homeowner does not have. The two-day choice collapses the decision to one small, concrete, answerable question — and a question they can answer is a question they will answer.",
+            ],
+          },
+          {
+            heading: "Variants and the \"neither\" answer",
+            body: [
+              "The install-window variant works the same way one level down: \"Morning window or evening window?\" Use it when the day is settled but the timing is not. And when they say neither day works, that is not a failed close — it is a scheduling question wearing a no costume: \"What day do you usually have off? Let me check that one.\" Pull up the calendar, find their day, offer the window. The homeowner who negotiates the date with you is closing; the calendar is where the close happens, so keep them standing in it.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Never ask whether they want to schedule — ask which of two real slots works better.",
+          "Both options are yeses: the decision moves from commitment to logistics, which tired people can actually answer.",
+          "Only offer slots that exist in the app's live calendar — the close's power is its honesty.",
+          "\"Neither works\" is a scheduling question — find their day and keep them standing in the calendar.",
+        ],
+        drillPrompt:
+          "At your next 10 closes, use the two-day choice verbatim and count to four in silence after asking. Log how often the homeowner physically pulls out their phone to check their calendar — that reach is the close happening in front of you.",
+        quiz: [
+          {
+            question: "Why is \"Tuesday morning or Thursday afternoon?\" stronger than \"Do you want to schedule an install?\"",
+            options: [
+              "It sounds more confident",
+              "It presumes the yes and moves the decision to logistics — an easier question that carries the commitment inside it",
+              "It limits the install team's workload",
+              "It creates false urgency",
+            ],
+            answerIndex: 1,
+            explanation: "Yes/no questions make no the effortless answer. A choice between two real slots makes the homeowner answer logistics — and arrive at yes through them.",
+          },
+          {
+            question: "What must be true of the two slots you offer?",
+            options: [
+              "They must be this week",
+              "They must be real capacity in the app's live install calendar",
+              "They must be mornings",
+              "They must match the neighbor's install day",
+            ],
+            answerIndex: 1,
+            explanation: "The close works because it is honest — genuine capacity, genuinely offered. Invented slots unravel at the first scheduling call.",
+          },
+          {
+            question: "The homeowner says neither Tuesday nor Thursday works. What is happening?",
+            options: [
+              "The close failed — mark not_interested",
+              "A scheduling question is wearing a no costume — ask what day works for them and check the calendar",
+              "They want a discount first",
+              "They need to think about it",
+            ],
+            answerIndex: 1,
+            explanation: "Negotiating the date is closing behavior. Keep them in the calendar — that is where the close completes.",
+          },
+        ],
+      },
+      {
+        id: "m14-trial-soft-commit",
+        title: "The trial close and the pencil-in",
+        summary: "\"Let me just check the schedule\" — testing readiness without asking for a decision, and the soft-commit for genuine hesitation.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The trial close: \"let me just check the schedule\"",
+            body: [
+              "Before the two-day choice, when you are not sure the value has landed, test the water with the trial close: \"Let me just check what the install schedule looks like for your street.\" Then pull up the calendar and narrate what you see. The homeowner's reaction to you browsing their install slots tells you everything: leaning in, asking about days, checking their own calendar — proceed to the two-day choice. Stepping back, arms crossing, \"oh I wasn't saying I wanted it\" — return to value, because you tried to close a sale that does not exist yet.",
+              "The trial close works because it asks for nothing. The homeowner has not agreed to anything, so there is nothing to refuse — yet their behavior around the calendar reveals their readiness more honestly than any answer to \"so what do you think?\" would.",
+            ],
+          },
+          {
+            heading: "The soft-commit: penciling them in",
+            body: [
+              "For genuine think-about-it hesitation — real deliberation, not a hidden no — the soft-commit: \"Tell you what. I'll pencil you in for Thursday's window while you decide. There's no charge to cancel [VERIFY cancellation policy], and it holds your slot — if it's not a fit, one text and it's off the calendar. Sound fair?\"",
+              "The psychology: open-ended deliberation has no forcing function, so it defaults to forgetting. A penciled install converts deliberation into a dated decision — the homeowner now decides by Thursday, with a concrete thing to keep or cancel, and keeping is the path of least resistance. The soft-commit only works because cancellation is genuinely easy [VERIFY]; a slot that is hard to cancel is not a soft-commit, it is a trap, and traps generate cancellations, complaints, and chargebacks at triple the rate of honest holds.",
+            ],
+          },
+          {
+            heading: "The ethics line you never cross",
+            body: [
+              "A penciled install must be real: actually booked in the system, actually cancellable for free [VERIFY], actually followed up by you before the window. Three failure modes to never commit: penciling someone who said no (that is a booking without consent), inventing the cancel-for-free part (that is a lie with a truck attached), and forgetting the follow-up (that is a surprise truck, and surprise trucks become disputes). The soft-commit is a service you perform for a genuinely deciding customer. The moment it becomes a numbers trick, it is the worst thing in this module.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Trial close: browse their install slots out loud — the reaction tells you whether to close or return to value.",
+          "The trial close asks for nothing, so there is nothing to refuse — and readiness reveals itself honestly.",
+          "Soft-commit: pencil the slot with genuinely free cancellation [VERIFY], converting open deliberation into a dated decision.",
+          "Ethics line: real booking, real cancellation, real follow-up — anything less is a trap, not a close.",
+        ],
+        drillPrompt:
+          "At your next 10 pitches, run the trial close before the two-day choice and log the reaction (lean-in vs. step-back). Use the soft-commit only on genuine deliberation, and follow up every penciled slot the evening before — count how many hold.",
+        quiz: [
+          {
+            question: "What does the trial close actually test?",
+            options: [
+              "Whether the calendar has openings",
+              "The homeowner's readiness — their behavior around the calendar reveals it without asking for any decision",
+              "Whether they understood the pricing",
+              "Whether the address is serviceable",
+            ],
+            answerIndex: 1,
+            explanation: "It asks for nothing, so nothing can be refused — and the homeowner's reaction to the calendar tells you honestly whether to close or return to value.",
+          },
+          {
+            question: "Why does the pencil-in work on genuine deliberation?",
+            options: [
+              "It locks the customer into a contract",
+              "It converts open-ended deliberation — which defaults to forgetting — into a dated decision where keeping is the path of least resistance",
+              "It creates artificial scarcity",
+              "It commits the install crew",
+            ],
+            answerIndex: 1,
+            explanation: "Deliberation without a forcing function evaporates. A real, easily-cancellable slot gives the decision a date and a default.",
+          },
+          {
+            question: "Which of these is a legitimate soft-commit?",
+            options: [
+              "Penciling in a customer who said no, in case they warm up",
+              "Telling them cancellation is free without checking policy",
+              "Booking a real slot for a genuinely deciding customer, with verified free cancellation, and following up before the window",
+              "Skipping the follow-up to let the truck surprise them",
+            ],
+            answerIndex: 2,
+            explanation: "Real booking, real cancellation terms, real follow-up. Every shortcut version is a trap that ends in cancellations, complaints, or disputes.",
+          },
+        ],
+      },
+      {
+        id: "m14-honest-walk-away",
+        title: "The honest walk-away",
+        summary: "Leaving a real no so well that the door opens for you next pass.",
+        minutes: 4,
+        sections: [
+          {
+            heading: "When to walk",
+            body: [
+              "Walk when the no is real — stated after your opener with eye contact, restated after one honest attempt at the Module 12 answer, or driven by circumstances no pitch fixes: moving next month, house for sale, genuinely locked contract. Walking well is a skill with a payoff structure: the door you leave gracefully is winnable later, and the door you pressure past a real no is lost permanently, along with its fence-line neighbors.",
+            ],
+          },
+          {
+            heading: "The walk-away, verbatim",
+            body: [
+              "\"No pressure at all — I appreciate the time. I'll leave you my number. The fiber's not going anywhere, and honestly neither am I: I'm working this street all month. If the bill jumps or the video calls start dropping, you'll know exactly why — and where to find me.\"",
+              "Then leave exactly one memorable fact, not a stack of flyers: the upload explanation for the works-fine household, the promo-cliff warning for the promo-price household. One fact sticks; five brochures hit the recycling before you reach the sidewalk. The fact you leave is the hook the next conversation hangs on — theirs or their neighbor's.",
+            ],
+          },
+          {
+            heading: "Logging the walk-away",
+            body: [
+              "The walk-away is not finished until the app reflects reality. Real no: not_interested. Circumstance with a date — contract ends in spring, moving plans settle in a month: follow_up with the reason and the timing in the note. Never mark a real no as follow_up to keep your pipeline pretty; a fantasy pipeline sends you back to closed doors and keeps you off open ones. And write the one-sentence note for the next pass: \"contract renews in March, hates the promo cliff\" is worth more than a sold pin on the wrong day.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Walk when the no is real — pressured doors are lost permanently, graceful doors are winnable later.",
+          "The script: no pressure, my number, fiber's not going anywhere, neither am I, one memorable fact.",
+          "One fact sticks; five brochures hit the recycling. The fact is the hook for the next conversation.",
+          "Log reality: not_interested for real no's, follow_up with reason and timing for real circumstances — never a fantasy pipeline.",
+        ],
+        drillPrompt:
+          "At your next 10 real no's, deliver the walk-away verbatim and leave exactly one tailored fact. Log each with the honest outcome and a one-sentence note. Review your notes after the shift and mark the three doors you'd most want handed back to you next pass.",
+        quiz: [
+          {
+            question: "Why leave exactly one memorable fact instead of a stack of flyers?",
+            options: [
+              "Flyers are expensive",
+              "One tailored fact sticks and becomes the hook the next conversation hangs on; five brochures hit the recycling before you reach the sidewalk",
+              "It saves time between doors",
+              "It avoids paper waste rules",
+            ],
+            answerIndex: 1,
+            explanation: "Memory holds one thing. Choose the fact that matches their situation and it becomes the reason they call — or the reason the next pass opens warm.",
+          },
+          {
+            question: "A homeowner's contract ends in four months and they ask you to come back then. The correct outcome is:",
+            options: [
+              "not_interested — they said no today",
+              "follow_up with the reason and timing in the note",
+              "sold — it's basically a future sale",
+              "Leave it unmarked and remember it",
+            ],
+            answerIndex: 1,
+            explanation: "A circumstance with a date is a real follow_up — and the note with reason and timing is what makes next pass's door open warm.",
+          },
+          {
+            question: "Why not mark a real no as follow_up to keep the pipeline looking healthy?",
+            options: [
+              "Managers audit follow_ups",
+              "A fantasy pipeline sends you back to closed doors and keeps you off open ones — the map only works if it reflects reality",
+              "follow_ups expire automatically",
+              "It affects your commission",
+            ],
+            answerIndex: 1,
+            explanation: "The log is navigation, not decoration. Inflated pipelines route future-you to dead doors while live ones age out.",
+          },
+        ],
+      },
+    ],
+  },
+  // ── M15 — Door Discipline and the Daily System ──────────────────────────────
+  {
+    id: "m15",
+    title: "Door Discipline and the Daily System",
+    tagline: "Pacing, logging, compliance, and safety — the boring system that compounds.",
+    hook: "Talent starts the season. The log wins it.",
+    fieldStory:
+      "A new rep inherits a block from a quitter and finds every door a mystery — knocks a do-not-knock house on day two, re-pitches a sold customer on day four, and burns his best evening on doors that said never-come-back in March. His teammate inherits the next block over, where the last rep logged everything, and opens with \"your contract ended last month, right?\" at the second door. One of them is walking a minefield. The other is reading the map.",
+    sayThisNotThat: {
+      instead: "I'll remember that door.",
+      say: "Logged before the next porch: not-home at 11, re-knock at 6.",
+    },
+    lessons: [
+      {
+        id: "m15-territory-pacing",
+        title: "Territory pacing and the honest door count",
+        summary: "Thirty to forty-five real doors a day, worked in passes — what a working day actually looks like.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The honest numbers",
+            body: [
+              "A real working day is thirty to forty-five doors knocked — not doors driven past, not doors glanced at, doors where you stood on the porch and knocked. Dense blocks run toward the top of the range; rural sprawl with long driveways runs under it. Out of those knocks, expect roughly a third to answer and a third of those to become real conversations — which means an honest day yields eight to fifteen conversations, and your close rate does the rest from Module 1's math.",
+              "Anyone promising you eighty quality doors a day is selling you a fantasy that ends in skipped logging and burned territory. The reps who last are not the ones who knock the most doors once; they are the ones who knock an honest count every day, log every one, and let the passes compound.",
+            ],
+          },
+          {
+            heading: "Work in passes, not in wanders",
+            body: [
+              "Territory pays when it is swept systematically. Work the map in passes: sweep a block, log every door, and let the app carry the memory — not-home doors resurface as next-door candidates on your next pass, sold and do-not-knock doors stay frozen out of the working set. Wandering to whatever street feels lucky today produces Swiss-cheese territory: half-knocked blocks, double-knocked neighbors, and no momentum story anywhere.",
+              "The not-home door is the most underworked asset in the territory. A door that was empty at 11 a.m. is a different door at 6 p.m. Schedule your second pass of a block for a different hour than the first, and watch a third of your territory's \"dead\" doors come alive.",
+            ],
+          },
+          {
+            heading: "Pace the day around the golden window",
+            body: [
+              "Structure the day: mid-morning doors for the at-home crowd — retirees, remote workers, stay-at-home parents — then a midday break when answer rates crater, then the 5:30 to 7:30 golden window when working households are home and both decision-makers are reachable. Protect the golden window the way closers protect their best pitch: it is worth two of any other hour. And start on time — the first hour of the day sets the knock rhythm, and a day that starts at noon never finds one.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Honest day: thirty to forty-five real knocks, eight to fifteen real conversations — then close rate does the rest.",
+          "Work the map in passes; wandering produces Swiss-cheese territory and double-knocked neighbors.",
+          "Not-home at 11 a.m. is a different door at 6 p.m. — re-pass blocks at a different hour.",
+          "Protect the 5:30 to 7:30 golden window; start on time, because the first hour sets the rhythm.",
+        ],
+        drillPrompt:
+          "For your next 5 working days, log your honest count: doors knocked, answered, conversations, sales. Compute your own funnel from Module 1 and find which stage is leaking. Re-pass one morning block in the evening golden window and compare answer rates.",
+        quiz: [
+          {
+            question: "What is an honest expectation for doors knocked in a real working day?",
+            options: [
+              "Eighty to a hundred",
+              "Thirty to forty-five, depending on territory density",
+              "Ten to fifteen",
+              "As many as physically possible",
+            ],
+            answerIndex: 1,
+            explanation: "Thirty to forty-five real knocks, honestly logged, beats an inflated count that ends in skipped logging and burned territory.",
+          },
+          {
+            question: "Why work territory in passes instead of wandering to lucky-feeling streets?",
+            options: [
+              "Passes are required by management",
+              "Systematic sweeps let the app carry the memory; wandering leaves half-knocked blocks, double-knocks, and no momentum story",
+              "Passes save gas",
+              "Lucky streets run out",
+            ],
+            answerIndex: 1,
+            explanation: "The pass system plus the map is what makes territory compound. Wandering spends territory without banking any of it.",
+          },
+          {
+            question: "What is the correct treatment for a block full of morning not-homes?",
+            options: [
+              "Mark them not_interested",
+              "Skip the block permanently",
+              "Re-pass it during the 5:30 to 7:30 golden window — the same door is a different door at a different hour",
+              "Leave flyers on every door",
+            ],
+            answerIndex: 2,
+            explanation: "Not-home is a timing read, not a verdict. A third of a territory's \"dead\" doors come alive when the pass hour changes.",
+          },
+        ],
+      },
+      {
+        id: "m15-logging-discipline",
+        title: "Every door gets an outcome",
+        summary: "The map is the team's memory — and the log is why tomorrow's you knocks smarter.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "The rule and the reasons",
+            body: [
+              "Every knocked door gets an outcome in the app before you reach the next porch: not_home, interested, sold, not_interested, already_customer, or follow_up. Not at the end of the street, not at the end of the day — before the next porch, while the conversation is still accurate in your head. The sixty-second memory decay after a hard door is real; the rep who batches logging is the rep whose notes say \"seemed nice\" about a door that said never come back.",
+              "The discipline pays you directly. not_home at 11 a.m. becomes your 6 p.m. re-knock. follow_up with a real callback time becomes the appointment that converts at triple the cold rate. sold through the proper outcome is what mints the commission — a sale that never gets logged as sold is a sale you may never get paid on. Skipped logs create phantom territory: doors that look unworked get double-knocked by teammates, and nothing poisons a street faster than two reps knocking the same annoyed household in one week.",
+            ],
+          },
+          {
+            heading: "The map is the team's memory",
+            body: [
+              "No individual rep remembers four hundred doors. The team that logs honestly never has to: the pin colors, the outcome history, and the door notes hold everything — the promo-cliff complaint at 412, the dog at 418, the contract that ends in March at 422. When you get reassigned or a teammate picks up your block, the map hands them your whole season of learning in one glance. That only works if every rep treats the log as a message to a future colleague, because it is.",
+              "Write notes for the reader, not for yourself: \"hates promo pricing, contract renews March, prefers evening\" beats \"nice lady, maybe later.\" One sentence, concrete, forward-looking. The note you write today is the opener some rep — possibly you — uses in three months.",
+            ],
+          },
+          {
+            heading: "Callback discipline",
+            body: [
+              "Every \"come back later\" becomes a callback with a specific day and time, set in the app before you leave the porch, honored exactly. \"Thursday after 5\" is a callback; \"sometime next week\" is a wish. And the honor-exactly part is the product: anyone can promise a return, almost nobody arrives when promised, and the homeowner who watches you pull up at 5:15 on Thursday as agreed has just received a live demonstration of how this company keeps commitments. The kept callback is the highest-converting door in the business — you arrive pre-trusted, which is the whole game.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Log the outcome before the next porch — batching means inaccurate notes and poisoned streets.",
+          "The log pays you: re-knocks, callbacks, and commissions all run through accurate outcomes.",
+          "Write notes for the future reader: one concrete, forward-looking sentence.",
+          "Callbacks get a specific day and time, honored exactly — the kept callback arrives pre-trusted.",
+        ],
+        drillPrompt:
+          "For your next full day in the field, log every outcome within thirty seconds of leaving each porch and write one forward-looking note per contact. At day's end, audit: any door without an outcome? Any note you couldn't act on in three months? Fix both before clocking out.",
+        quiz: [
+          {
+            question: "Why log the outcome before reaching the next porch instead of at day's end?",
+            options: [
+              "The app requires it",
+              "Memory decays in sixty seconds after a hard door — batched logging produces inaccurate notes and phantom territory",
+              "It improves GPS accuracy",
+              "Managers watch in real time",
+            ],
+            answerIndex: 1,
+            explanation: "\"Seemed nice\" about a door that said never-come-back is what batched logging produces. Accurate, immediate logs are the whole system.",
+          },
+          {
+            question: "What does \"the map is the team's memory\" mean in practice?",
+            options: [
+              "Managers can see where you are",
+              "Pins, outcome history, and door notes hold what no rep can remember — and hand a whole season of learning to whoever works the block next",
+              "The map remembers your commission rate",
+              "Sold pins stay visible permanently",
+            ],
+            answerIndex: 1,
+            explanation: "Four hundred doors exceed any human memory. The log is a message to a future colleague — often future you.",
+          },
+          {
+            question: "Why is the kept callback the highest-converting door in the business?",
+            options: [
+              "Callbacks have better demographics",
+              "Arriving exactly when promised is a live demonstration that this company keeps commitments — you arrive pre-trusted",
+              "Callback customers forget their objections",
+              "It skips the opener entirely",
+            ],
+            answerIndex: 1,
+            explanation: "Almost nobody arrives when they say they will. Doing so proves the company's character before you say a word.",
+          },
+        ],
+      },
+      {
+        id: "m15-compliance-safety",
+        title: "Compliance non-negotiables and safety basics",
+        summary: "Do-not-knock is forever, claims get verified, and no sale is worth an unsafe situation.",
+        minutes: 5,
+        sections: [
+          {
+            heading: "Suppression respect is permanent",
+            body: [
+              "A do-not-knock flag is the closest thing this job has to sacred law. When an occupant asks not to be visited again, that flag goes on the door, it stays forever, and it survives every pass reset — the system is built so that a manager clearing a block for a new sweep cannot accidentally reopen it. Never knock a flagged door, never ask a teammate to knock it for you, and never mark a door inaccurately to dodge a suppression. The same respect extends to no-soliciting signage, gated-community rules, and building policies — a sale extracted past a posted boundary is a complaint with a commission attached, and the complaint always outlives the commission.",
+              "The phone side has its own hard rules: do-not-call lists govern who you may call and text, and the calling side of this app blocks listed numbers for a reason. A callback number a homeowner gave you at the door is permission for that callback — it is not permission to add them to a campaign. When in doubt, ask your manager before the call, not after the complaint.",
+            ],
+          },
+          {
+            heading: "Honesty is a compliance rule, not a style choice",
+            body: [
+              "Every factual claim in your pitch — speeds, prices, contract terms, install windows, cancellation policy — is either verified against the current offer or it does not leave your mouth. That is what the [VERIFY] tags across this curriculum mean in practice: offers change, and the rep quoting last month's promo is one fact-check away from a cancelled install and a compliance flag. Fabricated urgency is the same violation in a different costume: no fake \"last day,\" no phantom neighbors, no invented deadlines. The map, the calendar, and the current offer sheet give you enough true urgency to close with.",
+            ],
+          },
+          {
+            heading: "Safety basics, every day",
+            body: [
+              "Wear your visible ID on the outside layer. Work daylight when you can, and know the local rules on soliciting hours — many areas restrict evening knocking [VERIFY local ordinances for your territory]. Tell someone your territory before you start and check in when you finish. Give dogs full respect: off the porch, body angled, hands still. Watch weather and traffic, not just the app. And honor the gut rule absolutely: if a porch, a person, or a situation feels wrong, leave — no note, no second look, no sale in this territory is worth an unsafe minute. Mark the door with whatever is accurate and let the next pass decide.",
+            ],
+          },
+        ],
+        keyTakeaways: [
+          "Do-not-knock is permanent and survives every reset — never knock it, never route around it, never mis-mark to dodge it.",
+          "DNC lists govern the phone side; a door-given callback number is permission for that callback only.",
+          "Quote only verified current offers — the [VERIFY] tags are a compliance discipline, not a style choice.",
+          "Safety: visible ID, daylight, check-ins, dog respect, local curfews [VERIFY], and the absolute gut rule — leave.",
+        ],
+        drillPrompt:
+          "Before your next shift, verify three things and write them down: the current offer terms you'll quote today, the local soliciting-hours rule for your territory, and your check-in contact. At shift's end, audit the day: every claim verified, every boundary honored, every door accurately marked.",
+        quiz: [
+          {
+            question: "A manager resets the block for a new pass. What happens to a do-not-knock door?",
+            options: [
+              "It becomes knockable again after thirty days",
+              "It stays frozen — do-not-knock is permanent and survives every pass reset",
+              "It resets like any other door",
+              "It switches to follow_up",
+            ],
+            answerIndex: 1,
+            explanation: "The system is built so the occupant's request can never be silently undone — not by a reset, not by a rep, not by a teammate.",
+          },
+          {
+            question: "A homeowner gives you their number for a callback. What may you use it for?",
+            options: [
+              "Any future campaign",
+              "Sharing with the team's text list",
+              "That callback — nothing more, unless they give separate permission",
+              "Weekly check-ins until they buy",
+            ],
+            answerIndex: 2,
+            explanation: "Door-given permission is specific. DNC rules and basic respect both say the number covers exactly what they agreed to.",
+          },
+          {
+            question: "A porch situation feels wrong but the homeowner seems interested. What do you do?",
+            options: [
+              "Close fast and leave",
+              "Stay on the public side of the threshold",
+              "Leave — the gut rule is absolute, and no sale is worth an unsafe minute",
+              "Call a teammate to join you at the door",
+            ],
+            answerIndex: 2,
+            explanation: "Interest does not override instinct. Mark the door accurately, leave, and let the next pass decide — the sale is never the priority over safety.",
+          },
+        ],
+      },
+    ],
+  },
 ];
 
 // ── Fast-start track ──────────────────────────────────────────────────────────
