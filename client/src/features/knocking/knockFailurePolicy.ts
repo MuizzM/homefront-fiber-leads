@@ -13,6 +13,13 @@
 //               (retry works), a real authorization rejection never will. It
 //               gets bounded retries, then parks in the dead lane where the
 //               rep sees the door + reason WITH a Retry that plausibly works.
+//               Two self-healing refinements (owner report: the pill after
+//               every server restart): a 403 within RESTART_BURST_WINDOW_MS of
+//               a transient failure on the same queue is treated as TRANSIENT
+//               (proxy artifact of the restart, budget untouched), and parked
+//               retryable items are silently auto-retried on recovery signals
+//               (see knockQueue's autoSweep) so the pill clears on its own
+//               once the server is actually healthy.
 //   terminal  → every other 4xx (400 validation, 404 lead gone/not yours…).
 //               The server will NEVER accept this payload, so retrying is a
 //               lie. The queue AUTO-RESOLVES it: drop the item, tell the rep
@@ -50,6 +57,38 @@ export function classifyKnockFailure(lastError: string | null | undefined): Knoc
   if (status >= 500) return "retryable";
   if (status >= 400) return "terminal";
   return "retryable"; // 1xx-3xx should never surface as an error; stay safe
+}
+
+// ── Restart-burst 403s (owner report: the pill after every server restart) ────
+// While the server restarts, the reverse proxy can answer with 403/4xx bursts
+// for requests that never reached the app at all. A 403 landing while the SAME
+// queue is also seeing genuinely transient failures (network flap, 5xx,
+// timeout) is far more likely such a proxy artifact than a real CSRF/authz
+// rejection — so the queue reclassifies it as TRANSIENT: it stays pending with
+// backoff and the bounded-retry budget is untouched, instead of marching an
+// honest knock into the dead lane. Deliberately conservative: only REAL
+// transient failures open/refresh the window (a burst-classified 403 never
+// does, so a genuine 403 storm cannot keep itself "transient" forever), and a
+// clean-air 403 keeps the current bounded → dead-lane behavior.
+export const RESTART_BURST_WINDOW_MS = 120_000;
+
+export function isLikelyRestartBurst403(
+  kind: KnockFailureKind,
+  lastTransientFailureAt: number,
+  at: number,
+): boolean {
+  if (kind !== "forbidden") return false;
+  if (!(lastTransientFailureAt > 0)) return false; // no transient failure seen — clean air
+  const elapsed = at - lastTransientFailureAt;
+  return elapsed >= 0 && elapsed <= RESTART_BURST_WINDOW_MS;
+}
+
+// Which dead-lane items a RECOVERY SIGNAL (back online, app foregrounded, a
+// successful authenticated response, app load) may silently retry: exactly the
+// ones whose manual Retry the FieldStatusBar offers. A terminal leftover is
+// never re-posted — retrying it would be the same lie as showing its Retry.
+export function isAutoRetryableDeadKnock(item: Pick<QueuedKnock, "lastError">): boolean {
+  return classifyKnockFailure(item.lastError) !== "terminal";
 }
 
 // Short human reason for a knock the queue is dropping — completes the

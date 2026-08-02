@@ -1,5 +1,6 @@
-import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { QueryCache, QueryClient, QueryFunction } from "@tanstack/react-query";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
+import { signalKnockRecovery } from "@/lib/knockQueue";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
@@ -171,7 +172,30 @@ export const getQueryFn: <T>(options: {
     return await res.json();
   };
 
+// ── Knock-queue recovery signal ───────────────────────────────────────────────
+// The FIRST successful query after any query failure means connectivity + auth
+// are demonstrably healthy again — exactly the moment the knock queue's dead
+// lane should try to heal itself (server-restart 403s parked there otherwise
+// wait for a human tap). The queue side is cooldown-gated (one silent sweep
+// per minute at most), so this edge-triggered nudge can never hot-loop.
+// Exported so the queue tests can drive the signal without mounting queries.
+let _sawQueryFailure = false;
+export function noteQueryOutcome(ok: boolean): void {
+  if (!ok) {
+    _sawQueryFailure = true;
+    return;
+  }
+  if (_sawQueryFailure) {
+    _sawQueryFailure = false;
+    signalKnockRecovery();
+  }
+}
+
 export const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: () => noteQueryOutcome(false),
+    onSuccess: () => noteQueryOutcome(true),
+  }),
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
