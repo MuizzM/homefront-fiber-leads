@@ -1,0 +1,154 @@
+// ── SPIFF campaign API ───────────────────────────────────────────────────────
+// Registered from routes.ts alongside registerCommissionRoutes with the same
+// injected middleware. Three audiences, three gates:
+//
+//   manager+  (commission.structure.manage) launch / pause / resume / cancel
+//   admin     (commission.read.all)         live liability on a running campaign
+//   rep       (field.app.use)               their own cards, their own progress
+//
+// A campaign COMMITS MONEY, so launching it is gated on the same capability as
+// editing the commission plan — not on a softer "manager can post announcements"
+// permission. Tenant comes from the session, never the body; rep identity on the
+// rep route comes from the session's teamMemberId, never the body. Out-of-tenant
+// ids read as 404, never 403, matching the rest of the app.
+
+import type { Express, Request, Response, NextFunction } from "express";
+import { storage } from "./storage";
+import {
+  createCampaign, getCampaign, listCampaigns, setCampaignStatus,
+  campaignLiability, repCampaignCards, awardedTotal,
+} from "./spiffCampaignStore";
+import {
+  validateCampaignInput, describeTrigger, CAMPAIGN_TRIGGER_KINDS,
+  type CampaignTrigger,
+} from "@shared/spiffCampaign";
+
+type Mw = (req: Request, res: Response, next: NextFunction) => void;
+interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
+
+/** Narrow the client's loose JSON into a trigger the pure engine accepts.
+ *  Numbers arrive as strings from some form libraries; everything the rules
+ *  branch on is coerced to an integer HERE so the engine never sees a string. */
+function parseTrigger(raw: any): CampaignTrigger | null {
+  const kind = String(raw?.kind ?? "");
+  if (!(CAMPAIGN_TRIGGER_KINDS as readonly string[]).includes(kind)) return null;
+  const int = (v: unknown) => Math.trunc(Number(v));
+  switch (kind) {
+    case "per_sale":       return { kind: "per_sale" };
+    case "knocks_by_time": return { kind: "knocks_by_time", knocks: int(raw.knocks), byHourLocal: int(raw.byHourLocal) };
+    case "sale_by_time":   return { kind: "sale_by_time", byHourLocal: int(raw.byHourLocal) };
+    case "sales_in_day":   return { kind: "sales_in_day", sales: int(raw.sales) };
+    case "knock_streak":   return { kind: "knock_streak", days: int(raw.days), knocksPerDay: int(raw.knocksPerDay) };
+    default:               return null;
+  }
+}
+
+export function registerSpiffCampaignRoutes(app: Express, deps: Deps) {
+  const { requireCapability } = deps;
+  const tid = (req: Request): number | null => {
+    const n = Number((req as any).user?.tenantId);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  };
+  const uid = (req: Request) => (req as any).user?.id ?? null;
+
+  // ── Rep surface ───────────────────────────────────────────────────────────
+  // The card the rep stares at between doors. Progress is computed live from
+  // knock_log/commission_sales, so it moves the moment they knock — a bar that
+  // only updates on refresh does not change behaviour.
+  app.get("/api/me/campaigns", requireCapability("field.app.use"), (req, res) => {
+    const tenantId = tid(req);
+    const repId = (req as any).user?.teamMemberId;
+    // No org or no sales identity → no campaigns. Never another rep's.
+    if (tenantId == null || repId == null) return res.json({ campaigns: [] });
+    res.json({ campaigns: repCampaignCards(tenantId, Number(repId), Date.now()) });
+  });
+
+  // ── Manager surface ───────────────────────────────────────────────────────
+  app.get("/api/spiff-campaigns", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const campaigns = listCampaigns(tenantId, Date.now()).map(c => ({
+      ...c,
+      summary: `$${(c.rewardCents / 100).toFixed(2)} ${describeTrigger(c.trigger)}`.trim(),
+      awardedCents: awardedTotal(tenantId, c.id),
+    }));
+    res.json({ campaigns });
+  });
+
+  app.post("/api/spiff-campaigns", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+
+    const b = req.body ?? {};
+    const trigger = parseTrigger(b.trigger);
+    const input = {
+      name: b.name,
+      description: typeof b.description === "string" ? b.description.slice(0, 400) : "",
+      startsAtMs: Number(b.startsAtMs),
+      endsAtMs: Number(b.endsAtMs),
+      trigger: trigger ?? undefined,
+      rewardCents: Math.trunc(Number(b.rewardCents)),
+      perRepCapCents: b.perRepCapCents == null ? 0 : Math.trunc(Number(b.perRepCapCents)),
+      campaignCapCents: b.campaignCapCents == null ? 0 : Math.trunc(Number(b.campaignCapCents)),
+    };
+    // ONE validator, shared with the launcher form, so the server and the UI
+    // cannot disagree about what a sane campaign is.
+    const problem = validateCampaignInput(input as any);
+    if (problem) return res.status(400).json({ error: problem });
+
+    // A targeted campaign may only name reps in the caller's own org. A foreign
+    // id is dropped rather than 404'd — the list is a filter, not a lookup, and
+    // echoing "that rep is not yours" leaks another tenant's roster.
+    let eligibleRepIds: number[] | null = null;
+    if (Array.isArray(b.eligibleRepIds) && b.eligibleRepIds.length) {
+      eligibleRepIds = b.eligibleRepIds
+        .map(Number)
+        .filter((n: number) => Number.isInteger(n) && n > 0)
+        .filter((n: number) => (storage.getTeamMemberById(n) as any)?.tenantId === tenantId);
+      if (!eligibleRepIds!.length) {
+        return res.status(400).json({ error: "None of the selected reps are in your organization." });
+      }
+    }
+
+    const created = createCampaign(tenantId, uid(req), {
+      name: String(input.name),
+      description: input.description,
+      startsAtMs: input.startsAtMs,
+      endsAtMs: input.endsAtMs,
+      trigger: trigger!,
+      rewardCents: input.rewardCents,
+      eligibleRepIds,
+      perRepCapCents: input.perRepCapCents,
+      campaignCapCents: input.campaignCapCents,
+      nowMs: Date.now(),
+    });
+    res.status(201).json({ campaign: created });
+  });
+
+  // Pause / resume / cancel. One handler, three verbs — the store enforces that
+  // cancelled is terminal and that a finished window cannot be resumed.
+  for (const [verb, next] of [["pause", "paused"], ["resume", "live"], ["cancel", "cancelled"]] as const) {
+    app.post(`/api/spiff-campaigns/:id/${verb}`, requireCapability("commission.structure.manage"), (req, res) => {
+      const tenantId = tid(req);
+      if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+      const id = Number(req.params.id);
+      if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid campaign id" });
+      const updated = setCampaignStatus(tenantId, uid(req), id, next, Date.now());
+      if (!updated) return res.status(404).json({ error: "Not found" });
+      res.json({ campaign: updated });
+    });
+  }
+
+  // What this promise has cost so far, live. A manager who launched "$75 a sale"
+  // on a Saturday should be able to watch the bill climb before it surprises
+  // them in payroll.
+  app.get("/api/spiff-campaigns/:id/liability", requireCapability("commission.read.all"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ error: "Invalid campaign id" });
+    const campaign = getCampaign(tenantId, id);
+    if (!campaign) return res.status(404).json({ error: "Not found" });
+    res.json({ campaign, ...campaignLiability(tenantId, id) });
+  });
+}

@@ -22,7 +22,10 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
+import { CampaignBoard } from "@/components/CampaignBoard";
+import { CampaignLauncher } from "@/components/CampaignLauncher";
 import { useAuth } from "@/lib/auth";
+import { can, type Role as AppRole } from "@shared/capabilities";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -267,6 +270,11 @@ function MySpiffs({ repKey }: { repKey: number | string }) {
   return (
     <section className="space-y-4" data-testid="my-spiffs">
       {reveal && <NewAwardReveal spiff={reveal} onDismiss={dismissReveal} />}
+
+      {/* Live campaigns sit ABOVE the ledger. The ledger is what a rep already
+          won; the board is what they can still win in the next two hours — and
+          only one of those changes what they do this afternoon. */}
+      <CampaignBoard />
 
       <StatStrip columns={4}>
         <StatTile label="Total won" accent testId="stat-total"
@@ -618,6 +626,11 @@ export default function Spiffs() {
   const role = user?.role;
   const isManager = role === "manager" || role === "admin" || role === "super_admin";
   const isAdmin = role === "admin" || role === "super_admin";
+  // Launching a campaign COMMITS MONEY, so it rides the same capability as
+  // editing the commission plan (team lead and up) — not the manager role check
+  // above, which would silently hide it from the team leads who hold the
+  // permission on the server.
+  const canLaunch = can(role as AppRole | undefined, "commission.structure.manage");
   const band = spiffAmountBand(DEFAULT_SPIFF_CONFIG);
 
   return (
@@ -630,6 +643,7 @@ export default function Spiffs() {
       {/* Keyed on identity: if auth resolves late (or the viewer changes), the
           "already seen" bookmark is re-read for the RIGHT person rather than
           carrying another rep's state. */}
+      {canLaunch && <CampaignLauncher />}
       <MySpiffs key={String(user?.teamMemberId ?? user?.id ?? "anon")}
                 repKey={user?.teamMemberId ?? user?.id ?? "anon"} />
       {isManager && <TeamHeat isAdmin={isAdmin} />}

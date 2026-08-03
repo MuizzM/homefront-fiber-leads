@@ -1,6 +1,15 @@
 export type SavedKnockMessage = {
-  title: "Sale saved" | "Outcome saved" | "A newer outcome already stands";
+  title: "Sale saved" | "Outcome saved" | "A newer outcome already stands" | "SPIFF earned";
   description?: string;
+};
+
+/** A campaign award the server booked on THIS knock. The server only returns
+ *  freshly-INSERTED awards, so an offline-queue replay of the same knock can
+ *  never re-celebrate money the rep has already been told about. */
+export type KnockCampaignAward = {
+  campaignName: string;
+  amountCents: number;
+  reason: string;
 };
 
 export type MoneyQueryPrefix =
@@ -85,6 +94,7 @@ export function createSavedKnockReconciliation(
     leadId: number,
     outcome?: string,
     superseded = false,
+    campaignAwards?: readonly KnockCampaignAward[],
   ): void => {
     if (superseded) {
       effects.notify({
@@ -98,8 +108,22 @@ export function createSavedKnockReconciliation(
       });
     }
 
+    // The campaign the rep just cleared, announced AT the door rather than the
+    // next time they happen to open the Spiffs tab. A bonus a rep finds out
+    // about on Friday did not change anything on Tuesday.
+    for (const award of campaignAwards ?? []) {
+      const whole = Math.floor(Math.abs(award.amountCents) / 100).toLocaleString("en-US");
+      const rem = Math.abs(award.amountCents) % 100;
+      const amount = rem === 0 ? `$${whole}` : `$${whole}.${String(rem).padStart(2, "0")}`;
+      effects.notify({ title: "SPIFF earned", description: `${amount} — ${award.reason}` });
+    }
+
     effects.invalidateQuery(["/api/leads/map"]);
     effects.invalidateQuery(["/api/leaderboard"]);
+    // Every knock moves campaign progress, sale or not — that is the point of an
+    // effort-shaped trigger. Refetch so the card the rep looks at next is live.
+    effects.invalidateQuery(["/api/me/campaigns"]);
+    effects.invalidateQuery(["/api/spiffs/mine"]);
     effects.invalidateQuery(["/api/leads"]);
     effects.invalidateQuery(["/api/followups"]);
     effects.invalidateQuery([`/api/leads/${leadId}`]);

@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 import { captureFieldFix } from "@/lib/geoFix";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
+import { CampaignStrip } from "@/components/CampaignBoard";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
@@ -219,6 +220,14 @@ export default function Today() {
               </div>
             </div>
           )}
+        </div>
+
+        {/* The live SPIFF, above the route. A rep opens this screen to decide
+            whether today is a grind or a coast — the contest they can still win
+            in the next two hours belongs in that decision, not three taps away
+            on the Spiffs tab. Renders nothing when nothing is running. */}
+        <div className="mt-4 empty:mt-0" data-testid="today-campaign">
+          <CampaignStrip />
         </div>
 
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}

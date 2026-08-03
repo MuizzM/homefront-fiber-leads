@@ -111,6 +111,8 @@ import {
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
+import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
+import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
@@ -1108,6 +1110,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   registerOnboardingDocumentRoutes(app, { requireAuth, requireCapability });
   // ── PAY-A2: contractor banking + W-9 + NACHA ACH export ─────────────────────
   registerPayRoutes(app, { requireAuth, requireCapability });
+  // Manager-launched SPIFF contests — awards land in the existing spiffs ledger.
+  registerSpiffCampaignRoutes(app, { requireAuth, requireCapability });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle
@@ -5629,6 +5633,31 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         console.warn("[spiff] evaluate failed (non-fatal):", e?.message);
       }
     }
+    // ── SPIFF CAMPAIGNS (the contests a manager launched out loud) ──────────
+    // Distinct from the recognition spiff above: that one is the system's own
+    // surprise award, these are a promise the floor was shown ("$100 to anyone
+    // who hits 40 doors before noon"). It fires on EVERY applied knock, not just
+    // sales, because the door itself is what is being paid for — that is the
+    // whole reason this exists.
+    //
+    // Outside the money bundle, wrapped, and idempotent on a UNIQUE key, so a
+    // retry can never pay twice and a campaign failure can never fail a knock.
+    let campaignAwards: Awaited<ReturnType<typeof awardCampaignsForRep>> = [];
+    if (!superseded && parsed.data.repId != null) {
+      try {
+        const campTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
+        if (campTenant != null) {
+          campaignAwards = awardCampaignsForRep(
+            campTenant, parsed.data.repId, Date.parse(serverTs),
+            // Per-sale campaigns key on the sale, so they only fire when this
+            // knock IS one. Everything else keys on the local day.
+            parsed.data.outcome === "sold" ? `knock:${knock.id}` : undefined,
+          );
+        }
+      } catch (e: any) {
+        console.warn("[spiff-campaign] award failed (non-fatal):", e?.message);
+      }
+    }
     // REVIEWER GATE: persist the CAS result ON the knock row — retries,
     // history, and counters can all tell the truth (it was previously
     // ephemeral: only the live response knew it).
@@ -5638,7 +5667,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // P1-1: a superseded (stale) knock is recorded as history but applied to
     // NOTHING — 200 + marker distinguishes it from an applied knock (201).
     if (superseded) return res.status(200).json({ ...knock, superseded: true });
-    res.status(201).json(knock);
+    // Only FRESH awards ride the response. A dedupe-replay must not re-fire the
+    // celebration for money the rep was already told about.
+    const won = campaignAwards.filter(a => a.inserted);
+    res.status(201).json(won.length ? { ...knock, campaignAwards: won } : knock);
   });
 
   // Note typed AFTER the knock saved — attaches to the existing knock row without

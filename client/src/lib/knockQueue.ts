@@ -50,7 +50,10 @@ export interface KnockQueueOpts {
   storage?: StorageLike;
   now?: () => number;
   isOnline?: () => boolean;
-  onSaved?: (leadId: number, outcome?: string, superseded?: boolean) => void; // parent hook invalidates react-query here
+  // parent hook invalidates react-query here. `campaignAwards` is whatever SPIFF
+  // campaigns this knock just cleared — the server only returns freshly-booked
+  // ones, so a dedupe replay carries none and cannot re-celebrate.
+  onSaved?: (leadId: number, outcome?: string, superseded?: boolean, campaignAwards?: any[]) => void;
   // A knock the server can NEVER accept was auto-resolved (dropped from the
   // queue) — the parent hook toasts the door + reason once and re-syncs the
   // optimistic map state back to server truth. Fired at most once per item.
@@ -390,7 +393,10 @@ export function createKnockQueue(opts: KnockQueueOpts): KnockQueue {
           setLeadState(item.leadId, resp?.superseded ? "superseded" : "saved");
           scheduleIdle(item.leadId);
           markChanged();
-          opts.onSaved?.(item.leadId, item.outcome, resp?.superseded === true);
+          opts.onSaved?.(
+            item.leadId, item.outcome, resp?.superseded === true,
+            Array.isArray(resp?.campaignAwards) ? resp.campaignAwards : undefined,
+          );
           // A successful authenticated response IS a recovery signal: if an
           // outage parked retryable knocks in the dead lane, heal them now —
           // they ride this same flush pass (cooldown-gated, cheap no-op
