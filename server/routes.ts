@@ -114,6 +114,7 @@ import * as spiffStore from "./spiffStore";
 import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
 import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { awardMilestonesForRep } from "./knockMilestoneStore";
+import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
@@ -5645,6 +5646,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // retry can never pay twice and a campaign failure can never fail a knock.
     let campaignAwards: ReturnType<typeof awardCampaignsForRep> = [];
     let milestoneAwards: ReturnType<typeof awardMilestonesForRep> = [];
+    let momentumArmed: ReturnType<typeof armMomentumOffer> = null;
+    let momentumWin: ReturnType<typeof convertMomentumOffer> = null;
     if (!superseded && parsed.data.repId != null) {
       const bonusTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
       try {
@@ -5671,6 +5674,24 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       } catch (e: any) {
         console.warn("[spiff-milestone] award failed (non-fatal):", e?.message);
       }
+      // ── MOMENTUM: catch this rep while they are hot ───────────────────────
+      // Order matters. A SALE tries to convert an offer the rep is already
+      // holding; any other outcome may ARM one. Doing it the other way round
+      // would let the sale that should have collected the bonus instead arm a
+      // brand-new offer the rep then has to chase all over again.
+      try {
+        if (bonusTenant != null) {
+          if (parsed.data.outcome === "sold") {
+            momentumWin = convertMomentumOffer(
+              bonusTenant, parsed.data.repId, `knock:${knock.id}`, Date.parse(serverTs),
+            );
+          } else {
+            momentumArmed = armMomentumOffer(bonusTenant, parsed.data.repId, Date.parse(serverTs));
+          }
+        }
+      } catch (e: any) {
+        console.warn("[spiff-momentum] evaluate failed (non-fatal):", e?.message);
+      }
     }
     // REVIEWER GATE: persist the CAS result ON the knock row — retries,
     // history, and counters can all tell the truth (it was previously
@@ -5689,8 +5710,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         .map(a => ({ amountCents: a.amountCents, reason: a.reason, campaignName: a.campaignName })),
       ...milestoneAwards.filter(a => a.inserted)
         .map(a => ({ amountCents: a.amountCents, reason: a.reason, campaignName: "Milestone" })),
+      ...(momentumWin?.inserted
+        ? [{ amountCents: momentumWin.amountCents, reason: momentumWin.reason, campaignName: "Hot streak" }]
+        : []),
     ];
-    res.status(201).json(won.length ? { ...knock, campaignAwards: won } : knock);
+    // A newly-armed offer rides the response too, so the rep is told AT THE
+    // DOOR that they just went hot — the whole mechanic is worthless if they
+    // find out about it on their next poll, a minute after the moment passed.
+    const body: Record<string, unknown> = { ...knock };
+    if (won.length) body.campaignAwards = won;
+    if (momentumArmed) body.momentumOffer = momentumArmed;
+    res.status(201).json(body);
   });
 
   // Note typed AFTER the knock saved — attaches to the existing knock row without

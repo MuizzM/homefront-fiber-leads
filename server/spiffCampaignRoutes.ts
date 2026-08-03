@@ -24,6 +24,10 @@ import {
 } from "@shared/spiffCampaign";
 import { getLadder, setLadder, repMilestoneCard, milestoneExposure } from "./knockMilestoneStore";
 import { validateLadder } from "@shared/knockMilestones";
+import {
+  getMomentumConfig, setMomentumConfig, repMomentumCard, momentumExposure,
+} from "./momentumSpiffStore";
+import { validateMomentumConfig } from "@shared/momentumSpiff";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -89,6 +93,56 @@ export function registerSpiffCampaignRoutes(app: Express, deps: Deps) {
     if (problem) return res.status(400).json({ error: problem });
     const saved = setLadder(tenantId, uid(req), ladder as any);
     res.json({ ladder: saved, exposure: milestoneExposure(tenantId, Date.now()) });
+  });
+
+  // ── Momentum: the offer that arms itself when a rep goes hot ──────────────
+  // The card is served even when COLD, carrying the live score, because a
+  // hidden mechanic motivates nobody — a rep who watches the meter climb learns
+  // what the system rewards, which is the behaviour we want more of.
+  app.get("/api/me/momentum", requireCapability("field.app.use"), (req, res) => {
+    const tenantId = tid(req);
+    const repId = (req as any).user?.teamMemberId;
+    if (tenantId == null || repId == null) {
+      return res.json({ enabled: false, offer: null, score: 0 });
+    }
+    res.json(repMomentumCard(tenantId, Number(repId), Date.now()));
+  });
+
+  app.get("/api/spiff-momentum", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    res.json({ config: getMomentumConfig(tenantId), exposure: momentumExposure(tenantId, Date.now()) });
+  });
+
+  app.put("/api/spiff-momentum", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const b = req.body ?? {};
+    const int = (v: unknown, d: number) => (v == null ? d : Math.trunc(Number(v)));
+    const current = getMomentumConfig(tenantId);
+    const cfg = {
+      ...current,
+      enabled: b.enabled !== false,
+      windowMinutes: int(b.windowMinutes, current.windowMinutes),
+      offerMinutes: int(b.offerMinutes, current.offerMinutes),
+      dryMinutes: int(b.dryMinutes, current.dryMinutes),
+      minDoorsInWindow: int(b.minDoorsInWindow, current.minDoorsInWindow),
+      minConversationsInWindow: int(b.minConversationsInWindow, current.minConversationsInWindow),
+      minInterestSignals: int(b.minInterestSignals, current.minInterestSignals),
+      paceRatio: b.paceRatio == null ? current.paceRatio : Number(b.paceRatio),
+      armAtScore: int(b.armAtScore, current.armAtScore),
+      tiers: Array.isArray(b.tiers)
+        ? b.tiers.map((t: any) => ({ atScore: Math.trunc(Number(t?.atScore)), amountCents: Math.trunc(Number(t?.amountCents)) }))
+        : current.tiers,
+      maxOffersPerRepPerDay: int(b.maxOffersPerRepPerDay, current.maxOffersPerRepPerDay),
+      maxCentsPerRepPerDay: int(b.maxCentsPerRepPerDay, current.maxCentsPerRepPerDay),
+      maxCentsPerOrgPerDay: int(b.maxCentsPerOrgPerDay, current.maxCentsPerOrgPerDay),
+    };
+    // ONE validator, shared with the admin form.
+    const problem = validateMomentumConfig(cfg);
+    if (problem) return res.status(400).json({ error: problem });
+    const saved = setMomentumConfig(tenantId, uid(req), cfg as any);
+    res.json({ config: saved, exposure: momentumExposure(tenantId, Date.now()) });
   });
 
   // ── Rep surface ───────────────────────────────────────────────────────────

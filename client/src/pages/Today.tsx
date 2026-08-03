@@ -15,6 +15,7 @@ import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { CampaignStrip } from "@/components/CampaignBoard";
 import { MilestoneCard } from "@/components/MilestoneCard";
+import { MomentumOffer } from "@/components/MomentumOffer";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
@@ -228,6 +229,10 @@ export default function Today() {
             in the next two hours belongs in that decision, not three taps away
             on the Spiffs tab. Renders nothing when nothing is running. */}
         <div className="mt-4 space-y-3 empty:mt-0" data-testid="today-campaign">
+          {/* Momentum first. It is the only incentive here measured in MINUTES,
+              so it outranks a contest running until 6 PM and a ladder running
+              until Sunday — if the rep reads one card, it should be this one. */}
+          <MomentumOffer />
           <CampaignStrip />
           {/* The standing door bonus. It is on this screen every single day,
               which is the point — a rep with a cold week still has a number to
