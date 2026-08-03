@@ -55,6 +55,9 @@ export function ensureMomentumSchema(): void {
     );
     CREATE INDEX IF NOT EXISTS idx_momentum_offers_live
       ON momentum_offers(tenant_id, rep_id, status, expires_at_ms);
+    -- Serves the daily cap reads (rep and org), which run on every knock.
+    CREATE INDEX IF NOT EXISTS idx_momentum_offers_converted
+      ON momentum_offers(tenant_id, status, converted_at_ms);
   `);
   // At most ONE live offer per rep. Two concurrent knocks racing to arm would
   // otherwise both succeed and the rep would see a promise flicker between two
@@ -175,15 +178,26 @@ function minutesSinceLastSale(tenantId: number, repId: number, nowMs: number): n
   return Math.max(0, Math.round((nowMs - t) / 60_000));
 }
 
+/**
+ * Cents this rep (or the whole org) has converted from momentum offers today.
+ *
+ * PERF: read straight off `momentum_offers`, which already carries the amount
+ * and the conversion instant. The first cut joined `spiffs` back to the offer
+ * through `CAST(substr(sale_ref, 10) AS INTEGER)` — a function on every row,
+ * which no index can serve, so it degraded into a full scan of the whole spiff
+ * ledger. Twice per knock (once for the rep, once for the org).
+ *
+ * The offer row is the authoritative record of what was committed anyway; the
+ * spiff is its downstream ledger entry. Reading the source is both faster and
+ * one less place for the two to disagree.
+ */
 function awardedToday(tenantId: number, repId: number | null, nowMs: number): number {
   const { startMs, endMs } = localDayBounds(tenantId, nowMs);
-  const sql = `SELECT COALESCE(SUM(s.amount_cents), 0) AS c
-                 FROM spiffs s
-                 JOIN momentum_offers o ON o.id = CAST(substr(s.sale_ref, 10) AS INTEGER)
-                WHERE s.tenant_id = ? AND s.sale_ref LIKE 'momentum:%'
-                  AND s.status IN ('earned','approved','paid')
-                  AND o.converted_at_ms >= ? AND o.converted_at_ms < ?
-                  ${repId != null ? "AND s.rep_id = ?" : ""}`;
+  const sql = `SELECT COALESCE(SUM(amount_cents), 0) AS c
+                 FROM momentum_offers
+                WHERE tenant_id = ? AND status = 'converted'
+                  AND converted_at_ms >= ? AND converted_at_ms < ?
+                  ${repId != null ? "AND rep_id = ?" : ""}`;
   const args: any[] = [tenantId, startMs, endMs];
   if (repId != null) args.push(repId);
   const row = rawDb.prepare(sql).get(...args) as any;

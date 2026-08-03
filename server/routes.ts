@@ -6074,18 +6074,41 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.json({ sent: true, emailDelivered: true });
     }
     const code = storage.createOtp(cleanEmail);
+
+    // ── PERF: the mail send is NOT awaited in production ────────────────────
+    // The code is already generated and stored by the line above; email is only
+    // the DELIVERY channel. Awaiting the provider meant every login paid a full
+    // outbound round-trip before the UI would even render the code field —
+    // typically several hundred ms, and up to ~16s when the Resend API stalls
+    // and the SMTP fallback burns two 8s connect timeouts in a row. That wait
+    // bought the user nothing: the failure branch already advanced the flow.
+    //
+    // It also closes a real account-enumeration TIMING oracle. The unknown-email
+    // branch above returns instantly while a known address used to block on the
+    // send, so response time alone distinguished a registered account — which
+    // defeated the byte-identical body the branch above is careful to produce.
+    //
+    // Development still awaits, because the console transport is what puts
+    // `developmentCode` in the response and a local login depends on it.
+    if (process.env.NODE_ENV === "production") {
+      void sendOtpEmail(cleanEmail, code, user.name)
+        .then(() => storage.logLoginAttempt(cleanEmail, "request", true, "code_sent", ip, req.headers["user-agent"] as string, user?.tenantId ?? null))
+        .catch((mailErr: any) => {
+          // A mail outage must never be a lockout: the code stands and still
+          // verifies through any channel that works.
+          console.warn("[otp] mail delivery failed (login already advanced):", mailErr?.message);
+          try {
+            storage.logLoginAttempt(cleanEmail, "request", true, "code_created_mail_failed", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
+          } catch { /* audit is best-effort once the response is gone */ }
+        });
+      // Byte-identical to the unknown-email response above.
+      return res.json({ sent: true, emailDelivered: true });
+    }
+
     let delivery: "email" | "console" | "failed" = "failed";
     try {
       delivery = await sendOtpEmail(cleanEmail, code, user.name);
     } catch (mailErr: any) {
-      // Mail delivery down (e.g. provider daily-quota 429). Do NOT hard-block login:
-      // the code is ALREADY generated and stored, and email is only the DELIVERY
-      // channel. A 502 here strands every user on the email step with no code field
-      // (Login.tsx only advances to code entry on a 2xx) — a mail outage becomes a
-      // total lockout. Advance the flow instead (sent:true, emailDelivered:false) so a
-      // code obtained through any working channel still verifies, and the client can
-      // warn that the email may be delayed. The code is NEVER returned in the API
-      // response in production — email remains the only automated delivery path.
       console.warn("[otp] mail delivery failed; advancing login flow anyway:", mailErr?.message);
       storage.logLoginAttempt(cleanEmail, "request", true, "code_created_mail_failed", ip, req.headers["user-agent"] as string, user?.tenantId ?? null);
       return res.json({ sent: true, emailDelivered: false });
@@ -6097,7 +6120,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     res.json({
       sent: true,
       emailDelivered: true,
-      ...(process.env.NODE_ENV !== "production" && delivery === "console" ? { developmentCode: code } : {}),
+      ...(delivery === "console" ? { developmentCode: code } : {}),
     });
   });
 

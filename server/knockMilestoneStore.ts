@@ -31,6 +31,20 @@ import {
 
 const LADDER_SETTING = "spiff.knock_milestones";
 
+// PERF: every incentive counter in the app — milestones, campaign triggers, and
+// momentum signals — asks the same shape of question: "this rep's verified doors
+// between two instants". The existing indexes are `rep_id` alone and
+// `knocked_at` alone, so SQLite picked the time index and scanned EVERY rep's
+// knocks in the window to count one rep's doors. That cost grows with headcount,
+// which is exactly the wrong way round.
+//
+// The composite makes it a single indexed range seek per rep. `verification_status`
+// rides along so the filter is answered from the index without touching the row.
+try {
+  rawDb.exec(`CREATE INDEX IF NOT EXISTS idx_knock_log_rep_time_verified
+                ON knock_log(rep_id, knocked_at, verification_status)`);
+} catch { /* index already present */ }
+
 function orgTimezone(tenantId: number): string {
   try {
     const row = rawDb.prepare(`SELECT commission_timezone AS tz FROM tenants WHERE id = ?`).get(tenantId) as any;
