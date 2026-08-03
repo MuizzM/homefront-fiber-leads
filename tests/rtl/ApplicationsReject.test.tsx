@@ -63,17 +63,26 @@ afterEach(() => vi.useRealTimers());
 // Another suite's fake timers must never leak into the arm/disarm timing here.
 beforeEach(() => vi.useRealTimers());
 
+// WHY THE ARM IS ASSERTED SYNCHRONOUSLY BELOW
+// The armed state disarms itself after 3 seconds of REAL time. `fireEvent` is
+// act-wrapped, so React has already committed the arm by the time it returns —
+// but `waitFor` yields to the event loop before its first check, and on a
+// saturated CI runner (this suite took 452s there against 179s locally) that
+// yield can outlast the whole 3s window. The poll then sees "Reject", having
+// missed an arm that did happen, and the failure reports the exact opposite of
+// the truth. Asserting on the same tick removes the window entirely; the
+// dedicated auto-disarm test below owns the timer with fake timers.
 describe("Applications — two-step reject", () => {
   it("first tap only arms: rose 'Confirm reject', no mutation fires", async () => {
     renderPage();
     const btn = await screen.findByTestId("reject-application");
     expect(btn).toHaveTextContent("Reject");
     fireEvent.click(btn);
-    // waitFor, not a same-tick assertion: under full-suite CI load React's
-    // commit for the arm can land a beat later — the CONTRACT is that the
-    // arm happens, not that it happens in the same macrotask. (This test
-    // flaked three times tonight on exactly this line.)
-    await waitFor(() => expect(btn).toHaveTextContent("Confirm reject"));
+    // SYNCHRONOUS on purpose — see the note above `describe`. `waitFor` yields
+    // to the event loop, and on a loaded runner that yield can outlast the arm's
+    // own 3s disarm timer, so the poll observes "Reject" and the test fails
+    // reporting the exact opposite of what happened.
+    expect(btn).toHaveTextContent("Confirm reject");
     expect(btn.className).toMatch(/rose/);
     expect(apiRequest).not.toHaveBeenCalledWith("PATCH", expect.anything(), expect.anything());
   });
@@ -82,7 +91,7 @@ describe("Applications — two-step reject", () => {
     renderPage();
     const btn = await screen.findByTestId("reject-application");
     fireEvent.click(btn); // arm
-    await waitFor(() => expect(btn).toHaveTextContent("Confirm reject"));
+    expect(btn).toHaveTextContent("Confirm reject"); // synchronous — no yield, no disarm race
     fireEvent.click(btn); // confirm — deterministically AFTER the arm committed
     await waitFor(() =>
       expect(apiRequest).toHaveBeenCalledWith(

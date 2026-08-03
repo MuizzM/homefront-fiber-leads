@@ -7,7 +7,10 @@ import {
 
 export interface SignatureEvidence {
   recordId: string;
+  /** Canonical account name the typed signature was matched against. */
   signerName: string;
+  /** Verbatim keystrokes from the signature field — the signature itself. */
+  typedSignatureName?: string;
   signerEmail: string;
   signedAt: string;
   authenticatedUserId: number;
@@ -69,15 +72,21 @@ export function renderSignedAgreementPdf(snapshot: AgreementSnapshot, evidence: 
       doc.moveDown(0.35).font("Helvetica").fontSize(9.5).fillColor("#263746").text(paragraph, { lineGap: 2.2 });
     }
 
-    doc.moveDown(1.1).roundedRect(58, doc.y, 496, 122, 8).fillAndStroke("#f7fafc", "#d9e1e8");
+    // The signature shown is what the SIGNER TYPED, verbatim. The canonical
+    // account name appears separately as what it was matched against — a
+    // certificate that printed the profile name as the signature would be
+    // showing a name the server supplied, not a mark the human made.
+    doc.moveDown(1.1).roundedRect(58, doc.y, 496, 138, 8).fillAndStroke("#f7fafc", "#d9e1e8");
     const signY = doc.y + 15;
     doc.fillColor("#617081").font("Helvetica-Bold").fontSize(8).text("ELECTRONIC SIGNATURE", 74, signY);
-    doc.fillColor("#12314c").font("Helvetica-Oblique").fontSize(19).text(evidence.signerName, 74, signY + 17, { width: 460 });
+    doc.fillColor("#12314c").font("Helvetica-Oblique").fontSize(19)
+      .text(evidence.typedSignatureName || evidence.signerName, 74, signY + 17, { width: 460 });
     doc.font("Helvetica").fontSize(9).fillColor("#263746")
-      .text(`Signed: ${new Date(evidence.signedAt).toISOString()}`, 74, signY + 50)
-      .text(`Authenticated account: ${evidence.signerEmail} (user ${evidence.authenticatedUserId})`, 74, signY + 66)
-      .text(`IP: ${evidence.ipAddress} • Browser: ${evidence.userAgent.slice(0, 90)}`, 74, signY + 82, { width: 455 });
-    doc.y = signY + 130;
+      .text(`Typed by the signer and matched to account name: ${evidence.signerName}`, 74, signY + 50, { width: 455 })
+      .text(`Signed: ${new Date(evidence.signedAt).toISOString()}`, 74, signY + 66)
+      .text(`Authenticated account: ${evidence.signerEmail} (user ${evidence.authenticatedUserId})`, 74, signY + 82)
+      .text(`IP: ${evidence.ipAddress} • Browser: ${evidence.userAgent.slice(0, 90)}`, 74, signY + 98, { width: 455 });
+    doc.y = signY + 146;
 
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#12314c").text("Tamper-evident record identifiers");
     doc.moveDown(0.35).font("Courier").fontSize(7.2).fillColor("#263746")

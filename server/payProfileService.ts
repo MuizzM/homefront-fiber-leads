@@ -7,7 +7,12 @@
 
 import { rawDb } from "./db";
 import { decryptPaySecret, encryptPaySecret, last4, maskTin } from "./payCrypto";
-import { isValidAbaRouting, isValidAccountNumber, isValidTin } from "./payValidation";
+import {
+  isValidAbaRouting, isValidAccountNumber, isValidTin,
+  W9_LLC_TAX_CLASSES, W9_TAX_CLASSIFICATIONS,
+  type W9LlcTaxClass, type W9TaxClassification,
+} from "./payValidation";
+import { renderW9Pdf } from "./w9Pdf";
 
 const nowIso = () => new Date().toISOString();
 
@@ -73,25 +78,52 @@ export function getBankSecrets(tenantId: number, repId: number): { routing: stri
 export interface W9Row {
   id: number; tenant_id: number; rep_id: number; legal_name: string; business_name: string | null;
   address_line1: string; city: string; state: string; zip: string; tin_enc: string; tin_type: "ssn" | "ein";
+  tax_classification: W9TaxClassification; llc_tax_class: W9LlcTaxClass | null;
+  other_classification: string | null; foreign_partners: number;
+  exempt_payee_code: string | null; fatca_exemption_code: string | null; account_numbers: string | null;
+  subject_to_backup_withholding: number;
   signature_name: string; signature_date: string; signature_ip: string | null; signature_ua: string | null;
-  consent: number; pdf_path: string | null; created_at: string;
+  consent: number; rendered_names: string | null; pdf_path: string | null; created_at: string;
 }
 
 export function saveW9(tenantId: number, repId: number, input: {
   legalName: string; businessName: string | null;
   address: { line1: string; city: string; state: string; zip: string };
   tin: string; tinType: "ssn" | "ein"; signatureName: string;
-  signatureIp: string | null; signatureUa: string | null; pdfPath: string;
+  taxClassification: W9TaxClassification; llcTaxClass: W9LlcTaxClass | null;
+  otherClassification: string | null; foreignPartners: boolean;
+  exemptPayeeCode: string | null; fatcaExemptionCode: string | null; accountNumbers: string | null;
+  subjectToBackupWithholding: boolean;
+  /** ESIGN consent as ASSERTED BY THE SIGNER — never hardcoded. */
+  consent: boolean;
+  signatureIp: string | null; signatureUa: string | null;
+  renderedNames: { legalName: string; businessName: string | null; signatureName: string } | null;
 }): W9Row {
   if (!isValidTin(input.tin)) throw new PayError("INVALID_TIN", "tin must be exactly 9 digits");
+  if (!W9_TAX_CLASSIFICATIONS.includes(input.taxClassification)) {
+    throw new PayError("INVALID_TAX_CLASSIFICATION", `taxClassification must be one of: ${W9_TAX_CLASSIFICATIONS.join(", ")}`);
+  }
+  if (input.taxClassification === "llc" && !W9_LLC_TAX_CLASSES.includes(input.llcTaxClass as W9LlcTaxClass)) {
+    throw new PayError("INVALID_LLC_TAX_CLASS", "an LLC must declare its tax classification letter (C, S, or P)");
+  }
+  if (input.taxClassification === "other" && !String(input.otherClassification ?? "").trim()) {
+    throw new PayError("INVALID_OTHER_CLASSIFICATION", 'tax classification "other" requires a description');
+  }
+  if (!input.consent) throw new PayError("W9_CONSENT_REQUIRED", "an electronic-signature consent is required (ESIGN)");
   const now = nowIso();
   const info = rawDb.prepare(
     `INSERT INTO w9_forms (tenant_id, rep_id, legal_name, business_name, address_line1, city, state, zip,
-       tin_enc, tin_type, signature_name, signature_date, signature_ip, signature_ua, consent, pdf_path, created_at)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`
+       tin_enc, tin_type, tax_classification, llc_tax_class, other_classification, foreign_partners,
+       exempt_payee_code, fatca_exemption_code, account_numbers, subject_to_backup_withholding,
+       signature_name, signature_date, signature_ip, signature_ua, consent, rendered_names, created_at)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
   ).run(tenantId, repId, input.legalName, input.businessName, input.address.line1, input.address.city,
     input.address.state, input.address.zip, encryptPaySecret(input.tin), input.tinType,
-    input.signatureName, now, input.signatureIp, input.signatureUa, input.pdfPath, now);
+    input.taxClassification, input.llcTaxClass, input.otherClassification, input.foreignPartners ? 1 : 0,
+    input.exemptPayeeCode, input.fatcaExemptionCode, input.accountNumbers,
+    input.subjectToBackupWithholding ? 1 : 0,
+    input.signatureName, now, input.signatureIp, input.signatureUa, input.consent ? 1 : 0,
+    input.renderedNames ? JSON.stringify(input.renderedNames) : null, now);
   return getW9ById(tenantId, Number(info.lastInsertRowid))!;
 }
 
@@ -103,18 +135,69 @@ export function getLatestW9(tenantId: number, repId: number): W9Row | undefined 
   return rawDb.prepare(`SELECT * FROM w9_forms WHERE tenant_id = ? AND rep_id = ? ORDER BY id DESC LIMIT 1`).get(tenantId, repId) as W9Row | undefined;
 }
 
-export function getW9Status(tenantId: number, repId: number): {
-  submitted: true; legalName: string; businessName: string | null; tinType: string; tinMasked: string;
+export interface W9Status {
+  submitted: true; w9Id: number; legalName: string; businessName: string | null;
+  tinType: string; tinMasked: string;
+  taxClassification: W9TaxClassification; llcTaxClass: W9LlcTaxClass | null;
+  otherClassification: string | null; foreignPartners: boolean;
+  exemptPayeeCode: string | null; fatcaExemptionCode: string | null;
+  /** TRUE ⇒ the rep certified the IRS has them subject to backup withholding.
+   *  The pay lane MUST flag this rep (24% withholding) before paying them. */
+  subjectToBackupWithholding: boolean;
   signatureName: string; signatureDate: string; createdAt: string;
-} | null {
+}
+
+export function getW9Status(tenantId: number, repId: number): W9Status | null {
   const row = getLatestW9(tenantId, repId);
   if (!row || !row.consent) return null;
   const tin = decryptPaySecret(row.tin_enc); // decrypted only to derive the mask
   return {
-    submitted: true, legalName: row.legal_name, businessName: row.business_name,
+    submitted: true, w9Id: row.id, legalName: row.legal_name, businessName: row.business_name,
     tinType: row.tin_type, tinMasked: maskTin(tin, row.tin_type),
+    taxClassification: (row.tax_classification ?? "individual") as W9TaxClassification,
+    llcTaxClass: row.llc_tax_class ?? null,
+    otherClassification: row.other_classification ?? null,
+    foreignPartners: !!row.foreign_partners,
+    exemptPayeeCode: row.exempt_payee_code ?? null,
+    fatcaExemptionCode: row.fatca_exemption_code ?? null,
+    subjectToBackupWithholding: !!row.subject_to_backup_withholding,
     signatureName: row.signature_name, signatureDate: row.signature_date, createdAt: row.created_at,
   };
+}
+
+/**
+ * Re-render a stored W-9 as a PDF, ON DEMAND, from the encrypted TIN.
+ *
+ * We deliberately do NOT keep the filled PDF on disk: it contains the complete
+ * 9-digit SSN in plaintext, it lived outside Litestream replication, and the
+ * old repId-keyed path silently overwrote the append-only history. Every byte
+ * of the document is reproducible from this row, so the ciphertext in tin_enc
+ * stays the only copy of the number at rest.
+ *
+ * Callers MUST have authorized the request (self, or an admin-only capability)
+ * and MUST audit it — this returns a full, unredacted SSN on paper.
+ */
+export async function renderStoredW9(tenantId: number, row: W9Row): Promise<Uint8Array> {
+  const company = getCompanyProfileRow(tenantId);
+  const result = await renderW9Pdf({
+    legalName: row.legal_name,
+    businessName: row.business_name,
+    taxClassification: (row.tax_classification ?? "individual") as W9TaxClassification,
+    llcTaxClass: (row.llc_tax_class ?? null) as W9LlcTaxClass | null,
+    otherClassification: row.other_classification ?? null,
+    foreignPartners: !!row.foreign_partners,
+    exemptPayeeCode: row.exempt_payee_code ?? null,
+    fatcaExemptionCode: row.fatca_exemption_code ?? null,
+    accountNumbers: row.account_numbers ?? null,
+    address: { line1: row.address_line1, city: row.city, state: row.state, zip: row.zip },
+    tin: decryptPaySecret(row.tin_enc),
+    tinType: row.tin_type,
+    signatureName: row.signature_name,
+    signatureDate: new Date(row.signature_date),
+    requesterName: company?.legal_name,
+    subjectToBackupWithholding: !!row.subject_to_backup_withholding,
+  });
+  return result.pdf;
 }
 
 /** INTERNAL ONLY — 1099 computation. Never expose through a route. */
