@@ -25,7 +25,8 @@ export type CommissionErrorCode =
   | "UNSUPPORTED_TIER_MODE" | "NO_EFFECTIVE_PLAN_ASSIGNMENT" | "OVERLAPPING_PLAN_ASSIGNMENT"
   | "STATEMENT_LOCKED" | "DUPLICATE_SALE" | "CROSS_TENANT_ACCESS"
   | "UNAUTHORIZED_COMMISSION_ACTION" | "INVALID_WORKWEEK" | "INVALID_ADJUSTMENT"
-  | "CONCURRENT_STATEMENT_UPDATE" | "WEEK_KEY_FROZEN" | "OPEN_CLOCK_SESSION";
+  | "CONCURRENT_STATEMENT_UPDATE" | "WEEK_KEY_FROZEN" | "OPEN_CLOCK_SESSION"
+  | "INVALID_HOUSE_AMOUNT";
 
 export class CommissionError extends Error {
   constructor(public code: CommissionErrorCode, message: string, public httpStatus = 400) {
@@ -44,6 +45,9 @@ export interface OrgCommissionConfig extends WorkweekConfig {
    *  so no tenant's payroll changes until an operator sets it (the agreement's
    *  10% is a deliberate opt-in, gated by the same counsel review). */
   reservePercent: number;
+  /** What the company books for one qualified sale, in cents. 0 = not set, and
+   *  the statement omits the house column instead of printing $0.00 per door. */
+  houseAmountCents: number;
 }
 export type QualificationBasis = "SOLD_AT" | "QUALIFIED_AT" | "INSTALLED_AT" | "ACTIVATED_AT";
 const BASIS_COLUMN: Record<QualificationBasis, string> = {
@@ -64,7 +68,8 @@ export function loadOrgConfig(tenantId: number): OrgCommissionConfig {
             commission_finalization_delay_hours AS finalizationDelayHours,
             commission_correction_window_days AS correctionWindowDays,
             commission_auto_finalize_enabled AS autoFinalizeEnabled,
-            commission_reserve_percent AS reservePercent
+            commission_reserve_percent AS reservePercent,
+            commission_house_amount_cents AS houseAmountCents
      FROM tenants WHERE id = ?`
   ).get(tenantId) as any;
   const tz = row?.tz || DEFAULT_WORKWEEK.timezone;
@@ -82,6 +87,7 @@ export function loadOrgConfig(tenantId: number): OrgCommissionConfig {
     correctionWindowDays: Number(row?.correctionWindowDays ?? 30),
     autoFinalizeEnabled: !!row?.autoFinalizeEnabled,
     reservePercent: Math.min(100, Math.max(0, Number(row?.reservePercent ?? 0))),
+    houseAmountCents: Math.max(0, Math.trunc(Number(row?.houseAmountCents ?? 0))),
   };
 }
 
@@ -705,7 +711,14 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
   commissionTimezone: string; commissionWeekStartsOn: number; commissionWeekStartLocalTime: string;
   commissionQualificationBasis: QualificationBasis; commissionFinalizationDelayHours: number;
   commissionCorrectionWindowDays: number; commissionAutoFinalizeEnabled: boolean;
+  commissionHouseAmountCents: number;
 }>): OrgCommissionConfig {
+  // House amount is display-only revenue reporting — it never enters a payout —
+  // but a negative or fractional value would print nonsense on every statement.
+  if (patch.commissionHouseAmountCents != null
+      && (!Number.isInteger(patch.commissionHouseAmountCents) || patch.commissionHouseAmountCents < 0)) {
+    throw new CommissionError("INVALID_HOUSE_AMOUNT", "House amount must be a non-negative whole number of cents.");
+  }
   if (patch.commissionTimezone != null && !isValidTimezone(patch.commissionTimezone)) {
     throw new CommissionError("INVALID_TIMEZONE", `Unsupported timezone: ${patch.commissionTimezone}`);
   }
@@ -736,6 +749,7 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
     commissionWeekStartLocalTime: "commission_week_start_local_time", commissionQualificationBasis: "commission_qualification_basis",
     commissionFinalizationDelayHours: "commission_finalization_delay_hours", commissionCorrectionWindowDays: "commission_correction_window_days",
     commissionAutoFinalizeEnabled: "commission_auto_finalize_enabled",
+    commissionHouseAmountCents: "commission_house_amount_cents",
   };
   for (const [k, col] of Object.entries(map)) {
     const val = (patch as any)[k];
@@ -1356,7 +1370,7 @@ export function listWeekSalesForRep(tenantId: number, repId: number, weekReferen
   const basisCol = BASIS_COLUMN[config.qualificationBasis];
   return rawDb.prepare(
     `SELECT cs.id, cs.external_id, cs.status, cs.sold_at, cs.qualified_at, cs.reversed_at,
-            cs.lead_id, l.address, l.city
+            cs.lead_id, cs.house_amount_cents, l.address, l.city
      FROM commission_sales cs LEFT JOIN leads l ON l.id = cs.lead_id
      WHERE cs.tenant_id = ? AND cs.rep_id = ?
        AND COALESCE(cs.${basisCol}, cs.sold_at) >= ? AND COALESCE(cs.${basisCol}, cs.sold_at) < ?

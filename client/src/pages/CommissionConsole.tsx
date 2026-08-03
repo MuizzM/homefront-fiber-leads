@@ -10,7 +10,7 @@ import {
   Download, Users, Zap, X, FileText, Plus, ShieldCheck, Layers, DollarSign, Printer,
   Send, Loader2, XCircle, Landmark, History, ExternalLink, Info,
 } from "lucide-react";
-import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
+import { CommissionStatement } from "@/components/CommissionStatement";
 import { Button } from "@/components/ui/button";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -73,6 +73,7 @@ export default function CommissionConsole() {
   const qc = useQueryClient();
   const canClose = useCan("commission.read.all");        // manager/admin: finalize, export, adjust
   const canPay = useCan("payouts.pay");                  // admin only: moves real money
+  const canManageOrg = useCan("settings.manage.org");    // org settings (house amount)
   const [section, setSection] = useState<"overview" | "pay">("overview");
   const [weekOffset, setWeekOffset] = useState(0);       // 0 = current, -1 = last week…
   const [drillRep, setDrillRep] = useState<OverviewRow | null>(null);
@@ -402,7 +403,10 @@ export default function CommissionConsole() {
       )}
 
       {section === "pay" && canClose && (
-        <PayWorkspace key={weekRef} weekRef={weekRef} canPay={canPay} />
+        <>
+          {canManageOrg && <HouseAmountCard />}
+          <PayWorkspace key={weekRef} weekRef={weekRef} canPay={canPay} />
+        </>
       )}
 
       {/* Confirm closeout */}
@@ -639,22 +643,6 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canMoveReserve, o
   const stmt = detail?.statement;
   const adjustments: any[] = detail?.adjustments ?? [];
 
-  // Build the printable statement for THIS rep's week from the drawer's data.
-  const statementModel: StatementModel = {
-    repName: row.repName,
-    weekLabel,
-    status: row.status,
-    qualifiedSaleCount: row.qualifiedSaleCount,
-    rateCents: row.rateCents,
-    grossCents: row.grossCommissionCents,
-    adjustmentCents: row.adjustmentCents,
-    finalCents: row.finalCommissionCents,
-    tierLabel: row.tierLabel,
-    planName: stmt?.plan_snapshot?.name ?? null,
-    sales: (sales ?? []).map((s: any) => ({ date: s.qualified_at ?? s.sold_at, address: s.address ?? s.external_id, city: s.city, status: s.status })),
-    adjustments: (adjustments ?? []).filter((a: any) => a.approved_at || a.status === "APPROVED").map((a: any) => ({ amount_cents: a.amount_cents, reason: a.reason })),
-    statementNo: row.statementId ? `HFS-${String(row.statementId).padStart(5, "0")}` : `HFS-${row.repId}-${weekLabel.replace(/[^0-9]/g, "").slice(0, 6)}`,
-  };
   const saleStatusStyle: Record<string, string> = {
     QUALIFIED: "text-emerald-400", PENDING: "text-amber-400", REVERSED: "text-red-400 line-through", DISQUALIFIED: "text-red-400", CANCELLED: "text-muted-foreground",
   };
@@ -670,15 +658,21 @@ function StatementDrawer({ row, weekRef, weekLabel, canAdjust, canMoveReserve, o
             <button
               type="button"
               onClick={() => setShowStmt(true)}
+              disabled={row.statementId == null}
               data-testid="print-rep-statement"
-              className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-secondary border border-border text-xs font-semibold text-foreground active:scale-95 transition-transform shrink-0"
+              className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg bg-secondary border border-border text-xs font-semibold text-foreground active:scale-95 transition-transform shrink-0 disabled:opacity-50"
             >
               <Printer className="w-3.5 h-3.5" /> Statement
             </button>
           </div>
         </DialogHeader>
 
-        {showStmt && <CommissionStatement model={statementModel} onClose={() => setShowStmt(false)} />}
+        {/* The statement pulls its own server-assembled document by ID, so a
+            manager printing a rep's week sees exactly what the rep sees. A row
+            with no statement yet (NO_PLAN) has nothing to print. */}
+        {showStmt && row.statementId != null && (
+          <CommissionStatement statementId={row.statementId} onClose={() => setShowStmt(false)} />
+        )}
 
         {/* The equation: count × rate = gross, + adjustments = final */}
         <div className="rounded-xl bg-secondary/40 border border-border p-3 text-sm" data-testid="statement-equation">
@@ -1172,6 +1166,86 @@ function PayRepsPanel({ weekRef, canPay, availableCents }: { weekRef: string; ca
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ── House amount per sale ─────────────────────────────────────────────────────
+// What the COMPANY books for one qualified sale. It never enters a payout —
+// it's the revenue side of the commission statement, so a rep's statement can
+// show what the door was worth alongside what they earned on it. Leaving it at
+// $0 hides the column entirely rather than printing $0.00 next to every door.
+function HouseAmountCard() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const { data: config } = useQuery<{ houseAmountCents: number }>({
+    queryKey: ["/api/commission/config"],
+    queryFn: () => apiRequest("GET", "/api/commission/config").then(r => r.json()),
+  });
+  // `undefined` = "showing the saved value"; a string = the operator is editing.
+  const [draft, setDraft] = useState<string | undefined>(undefined);
+  const saved = config?.houseAmountCents ?? 0;
+  const shown = draft ?? (saved > 0 ? (saved / 100).toFixed(2) : "");
+
+  const save = useMutation({
+    mutationFn: (cents: number) =>
+      apiRequest("PATCH", "/api/commission/config", { commissionHouseAmountCents: cents }).then(r => r.json()),
+    onSuccess: (cfg: any) => {
+      setDraft(undefined);
+      qc.setQueryData(["/api/commission/config"], cfg);
+      toast({
+        title: cfg.houseAmountCents > 0 ? `House amount set to ${usd(cfg.houseAmountCents)}` : "House amount cleared",
+        description: cfg.houseAmountCents > 0
+          ? "Statements now show what each sale is worth to the company beside what the rep earned."
+          : "Statements will omit the house column.",
+      });
+    },
+    onError: (e: any) => toast({ title: "Couldn't save", description: e.message, variant: "destructive" }),
+  });
+
+  const submit = () => {
+    const dollars = Number(shown);
+    if (shown.trim() === "") return save.mutate(0);
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      return toast({ title: "Enter a dollar amount", description: "House amount must be zero or more.", variant: "destructive" });
+    }
+    save.mutate(Math.round(dollars * 100));
+  };
+
+  return (
+    <div className="rounded-xl bg-card border border-border p-4" data-testid="house-amount-card">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0">
+          <Label htmlFor="house-amount" className="text-sm font-semibold">House amount per sale</Label>
+          <p className="text-[12px] text-muted-foreground mt-0.5 max-w-md">
+            What the company books for one qualified sale. Shown on every commission
+            statement beside the rep's commission. Leave blank to hide the column.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+            <Input
+              id="house-amount"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={shown}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") submit(); }}
+              className="w-32 pl-7 tabular-nums"
+              data-testid="house-amount-input"
+            />
+          </div>
+          <Button
+            size="sm"
+            onClick={submit}
+            disabled={save.isPending || draft === undefined}
+            data-testid="house-amount-save"
+          >
+            {save.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }
