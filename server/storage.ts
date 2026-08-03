@@ -2189,6 +2189,25 @@ export function runMigrations() {
        pdf_path TEXT,
        created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_w9_forms_rep ON w9_forms(tenant_id, rep_id)`,
+    // W-9 hardening. These MUST exist in the raw DDL as well as shared/schema.ts
+    // — a Drizzle-only column does not exist at runtime. ALTERs are idempotent
+    // here (the "duplicate column" swallow below) so both a fresh CREATE above
+    // and an already-deployed table converge on the same shape.
+    // Line 3a: the signer's real federal tax classification. 'individual' is the
+    // backfill for rows written before the classification was captured — it is
+    // what those PDFs actually assert.
+    `ALTER TABLE w9_forms ADD COLUMN tax_classification TEXT NOT NULL DEFAULT 'individual'`,
+    `ALTER TABLE w9_forms ADD COLUMN llc_tax_class TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN other_classification TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN foreign_partners INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE w9_forms ADD COLUMN exempt_payee_code TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN fatca_exemption_code TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN account_numbers TEXT`,
+    // Part II item 2 — struck on the PDF when 1; surfaced on the W-9 status so
+    // the pay lane can flag the rep for 24% backup withholding.
+    `ALTER TABLE w9_forms ADD COLUMN subject_to_backup_withholding INTEGER NOT NULL DEFAULT 0`,
+    // What was PRINTED when a non-Latin legal name had to be transliterated.
+    `ALTER TABLE w9_forms ADD COLUMN rendered_names TEXT`,
     `CREATE TABLE IF NOT EXISTS company_profile (
        tenant_id INTEGER PRIMARY KEY,
        legal_name TEXT NOT NULL,

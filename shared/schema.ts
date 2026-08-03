@@ -767,12 +767,28 @@ export const w9Forms = sqliteTable("w9_forms", {
   zip: text("zip").notNull(),
   tinEnc: text("tin_enc").notNull(),                     // AES-256-GCM ciphertext
   tinType: text("tin_type").notNull(),                   // 'ssn' | 'ein'
+  // Line 3a — the signer's ACTUAL federal tax classification. Never assumed:
+  // 'individual'|'c_corp'|'s_corp'|'partnership'|'trust_estate'|'llc'|'other'.
+  taxClassification: text("tax_classification").notNull().default("individual"),
+  llcTaxClass: text("llc_tax_class"),                    // 'C'|'S'|'P' when llc
+  otherClassification: text("other_classification"),     // free text when 'other'
+  foreignPartners: integer("foreign_partners").notNull().default(0), // Line 3b
+  exemptPayeeCode: text("exempt_payee_code"),            // Line 4
+  fatcaExemptionCode: text("fatca_exemption_code"),      // Line 4
+  accountNumbers: text("account_numbers"),               // Line 7
+  // Part II item 2 — 1 ⇒ the IRS notified the signer they ARE subject to backup
+  // withholding, item 2 is struck on the issued PDF, and the pay lane must flag
+  // the rep for 24% withholding.
+  subjectToBackupWithholding: integer("subject_to_backup_withholding").notNull().default(0),
   signatureName: text("signature_name").notNull(),
   signatureDate: text("signature_date").notNull(),
   signatureIp: text("signature_ip"),
   signatureUa: text("signature_ua"),
   consent: integer("consent").notNull().default(0),      // 1 = ESIGN consent given
-  pdfPath: text("pdf_path"),
+  // JSON {legalName,businessName,signatureName} of what was PRINTED when a
+  // non-Latin name had to be transliterated (NULL when printed verbatim).
+  renderedNames: text("rendered_names"),
+  pdfPath: text("pdf_path"),                             // legacy; no longer written
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export type W9Form = typeof w9Forms.$inferSelect;

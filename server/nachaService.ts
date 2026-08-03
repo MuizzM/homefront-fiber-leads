@@ -204,6 +204,11 @@ export function get1099Summary(tenantId: number, year: number): Array<{
   repId: number; repName: string; legalName: string | null;
   address: { line1: string; city: string; state: string; zip: string } | null;
   tinMasked: string | null; tinType: string | null;
+  taxClassification: string | null;
+  // TRUE ⇒ the rep certified (Part II item 2, struck on their W-9) that the IRS
+  // has notified them they ARE subject to backup withholding. The 24% withhold
+  // itself is NOT implemented here — this flag is the operator's signal.
+  subjectToBackupWithholding: boolean;
   grossCents: number; overThreshold: boolean; hasW9: boolean; hasBank: boolean;
 }> {
   if (!Number.isInteger(year) || year < 2000 || year > 2200) throw new NachaError("INVALID_YEAR", "year must be a 4-digit calendar year");
@@ -227,6 +232,8 @@ export function get1099Summary(tenantId: number, year: number): Array<{
       address: w9 ? (() => { const full = getLatestW9(tenantId, rep.id)!; return { line1: full.address_line1, city: full.city, state: full.state, zip: full.zip }; })() : null,
       tinMasked: w9?.tinMasked ?? null,
       tinType: w9?.tinType ?? null,
+      taxClassification: w9?.taxClassification ?? null,
+      subjectToBackupWithholding: w9?.subjectToBackupWithholding ?? false,
       grossCents,
       overThreshold: grossCents >= 60000, // $600 1099-NEC filing threshold
       hasW9: !!w9,

@@ -93,13 +93,22 @@ async function buildAll() {
   }
 
   // Copy the vendored IRS W-9 template (PAY-A2) so the prod bundle can fill it.
-  try {
+  // FATAL on failure: without this asset every W-9 submission 500s in
+  // production, and a build that exits 0 hides it until a rep tries to onboard.
+  {
     const { mkdir, copyFile: cp } = await import("fs/promises");
     await mkdir("dist/assets", { recursive: true });
     await cp("server/assets/fw9.pdf", "dist/assets/fw9.pdf");
-    console.log("copied W-9 template to dist/assets/");
-  } catch (e) {
-    console.warn("Could not copy W-9 template:", e);
+    // Integrity-pin the copy too — the server refuses any other revision, so a
+    // corrupt/substituted asset must break the BUILD, not the first signer.
+    const { createHash } = await import("node:crypto");
+    const expected = (await readFile("server/w9Pdf.ts", "utf-8")).match(/W9_TEMPLATE_SHA256 = "([0-9a-f]{64})"/)?.[1];
+    if (!expected) throw new Error("build: could not read W9_TEMPLATE_SHA256 from server/w9Pdf.ts");
+    const actual = createHash("sha256").update(await readFile("dist/assets/fw9.pdf")).digest("hex");
+    if (actual !== expected) {
+      throw new Error(`build: dist/assets/fw9.pdf sha256 ${actual} does not match the pinned Form W-9 (Rev. 3-2024) hash ${expected}`);
+    }
+    console.log("copied W-9 template to dist/assets/ (sha256 verified)");
   }
 }
 

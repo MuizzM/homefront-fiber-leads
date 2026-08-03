@@ -13,7 +13,7 @@ import { payWriteLimiter } from "./limiters";
 import { paySecretsReady } from "./payCrypto";
 import { validateW9Input } from "./payValidation";
 import * as profile from "./payProfileService";
-import { renderW9Pdf } from "./w9Pdf";
+import { renderW9Pdf, W9EncodingError, W9FieldError, W9TemplateError } from "./w9Pdf";
 import * as nacha from "./nachaService";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
@@ -21,6 +21,14 @@ interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
 
 function fail(res: Response, e: unknown) {
   if (e instanceof profile.PayError) return res.status(e.httpStatus).json({ error: e.message, code: e.code });
+  // A name the IRS form's Latin font cannot print is the SIGNER'S input, not a
+  // server fault — 400 with a fixable explanation, never a raw 500.
+  if (e instanceof W9EncodingError) return res.status(400).json({ error: e.message, code: "W9_NAME_NOT_PRINTABLE", field: e.field });
+  // Template/field drift is an OPERATOR fault: fail loudly rather than issuing
+  // a blank-but-"valid" W-9. 503 = this deployment cannot produce a W-9 today.
+  if (e instanceof W9TemplateError || e instanceof W9FieldError) {
+    return res.status(503).json({ error: e.message, code: "W9_TEMPLATE_INVALID" });
+  }
   if (e instanceof nacha.NachaError) {
     const body: any = { error: e.message, code: e.code };
     if (e.exceptions) body.exceptions = e.exceptions;
@@ -39,23 +47,47 @@ const requirePaySecrets: Mw = (_req, res, next) => {
   next();
 };
 
-function w9PdfDir(): string {
-  const dir = path.join(process.env.DATA_DIR || process.cwd(), "uploads", "w9");
-  fs.mkdirSync(dir, { recursive: true });
-  return dir;
+// ── Full-SSN document delivery ───────────────────────────────────────────────
+// A filled W-9 shows the COMPLETE 9-digit SSN. It is never written to disk
+// (see profile.renderStoredW9) — it is re-rendered from the encrypted TIN for
+// the length of one response, delivered no-store, and ALWAYS audited.
+async function sendW9Pdf(req: Request, res: Response, opts: {
+  tenantId: number; actorId: number | null; scope: "self" | "admin";
+  row: profile.W9Row | undefined; repId: number;
+}) {
+  const { row } = opts;
+  if (!row || !row.consent) return res.status(404).json({ error: "W-9 PDF not found" });
+  let pdf: Uint8Array;
+  try { pdf = await profile.renderStoredW9(opts.tenantId, row); }
+  catch (e) { return fail(res, e); }
+  // Audit EVERY access to a full-TIN document. Masked identifiers only — the
+  // audit row must never be a second place the number leaks.
+  storage.logActivity(opts.actorId, "pay.w9.pdf.downloaded", "w9_form", row.id,
+    { repId: opts.repId, scope: opts.scope, tinType: row.tin_type }, req.ip);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Cache-Control", "no-store, private");
+  res.setHeader("Content-Disposition", `inline; filename="w9-${row.rep_id}-${row.id}.pdf"`);
+  res.send(Buffer.from(pdf));
 }
 
-function streamW9Pdf(res: Response, row: profile.W9Row | undefined) {
-  if (!row?.pdf_path) return res.status(404).json({ error: "W-9 PDF not found" });
-  const abs = path.resolve(row.pdf_path);
-  // The stored path must stay inside the w9 uploads dir — never trust a row to
-  // point anywhere else (defense against a tampered DB row becoming an LFI).
-  if (!abs.startsWith(path.resolve(w9PdfDir()) + path.sep) || !fs.existsSync(abs)) {
-    return res.status(404).json({ error: "W-9 PDF not found" });
-  }
-  res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `inline; filename="w9-${row.rep_id}.pdf"`);
-  fs.createReadStream(abs).pipe(res);
+// One-time cleanup for deployments that ran the pre-hardening code: it wrote
+// ${DATA_DIR}/uploads/w9/<repId>.pdf — a plaintext, unreplicated, unencrypted
+// copy of a full SSN, and each new submission silently overwrote the last.
+// Nothing reads that directory any more (every W-9 is re-rendered from tin_enc
+// on demand), so the files are pure liability. Scoped to exactly that folder
+// and to *.pdf; never fatal.
+export function purgeLegacyW9Pdfs(): number {
+  const dir = path.join(process.env.DATA_DIR || process.cwd(), "uploads", "w9");
+  let removed = 0;
+  try {
+    if (!fs.existsSync(dir)) return 0;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.toLowerCase().endsWith(".pdf")) continue;
+      try { fs.unlinkSync(path.join(dir, name)); removed++; } catch { /* leave it */ }
+    }
+  } catch { /* unreadable dir — nothing to do */ }
+  if (removed) console.warn(`[pay] purged ${removed} legacy plaintext W-9 PDF(s) from ${dir} (SSNs at rest, now rendered on demand)`);
+  return removed;
 }
 
 const parseWeekRef = (v: any): string | undefined => {
@@ -66,6 +98,7 @@ const parseWeekRef = (v: any): string | undefined => {
 
 export function registerPayRoutes(app: Express, deps: Deps) {
   const { requireAuth, requireCapability } = deps;
+  purgeLegacyW9Pdfs();
   const uid = (req: Request) => (req as any).user?.id ?? null;
   const tid = (req: Request) => (req as any).user?.tenantId as number;
   const repIdOf = (req: Request) => (req as any).user?.teamMemberId as number | null;
@@ -107,20 +140,28 @@ export function registerPayRoutes(app: Express, deps: Deps) {
       if (!parsed.ok) return res.status(400).json({ error: parsed.error, code: "INVALID_W9" });
       const v = parsed.value;
       const company = profile.getCompanyProfileRow(tid(req));
-      const pdf = await renderW9Pdf({
+      // Render FIRST: a form we cannot fill (unprintable name, template drift)
+      // must never leave a consented row behind claiming the rep is W-9 complete.
+      // The rendered bytes are then DISCARDED — never written to disk.
+      const render = await renderW9Pdf({
         legalName: v.legalName, businessName: v.businessName, address: v.address,
+        taxClassification: v.taxClassification, llcTaxClass: v.llcTaxClass,
+        otherClassification: v.otherClassification, foreignPartners: v.foreignPartners,
+        exemptPayeeCode: v.exemptPayeeCode, fatcaExemptionCode: v.fatcaExemptionCode,
+        accountNumbers: v.accountNumbers,
         tin: v.tin, tinType: v.tinType, signatureName: v.signatureName,
         signatureDate: new Date(), requesterName: company?.legal_name,
+        subjectToBackupWithholding: v.subjectToBackupWithholding,
       });
-      const pdfPath = path.join(w9PdfDir(), `${repId}.pdf`);
-      fs.writeFileSync(pdfPath, pdf, { mode: 0o600 });
       const row = profile.saveW9(tid(req), repId, {
-        ...v, signatureIp: req.ip ?? null,
+        ...v, consent: true, signatureIp: req.ip ?? null,
         signatureUa: String(req.headers["user-agent"] ?? "").slice(0, 500) || null,
-        pdfPath,
+        renderedNames: render.transliterated ? render.rendered : null,
       });
       storage.logActivity(uid(req), "pay.w9.submitted", "w9_form", row.id,
-        { legalName: v.legalName, tinType: v.tinType }, req.ip);
+        { legalName: v.legalName, tinType: v.tinType, taxClassification: v.taxClassification,
+          subjectToBackupWithholding: v.subjectToBackupWithholding,
+          transliterated: render.transliterated }, req.ip);
       res.status(201).json(profile.getW9Status(tid(req), repId));
     } catch (e) { fail(res, e); }
   });
@@ -135,10 +176,14 @@ export function registerPayRoutes(app: Express, deps: Deps) {
     } catch (e) { fail(res, e); }
   });
 
-  app.get("/api/me/w9/pdf", requireAuth, (req, res) => {
+  // A rep may always download their OWN W-9 — it is their document.
+  app.get("/api/me/w9/pdf", requireAuth, requirePaySecrets, async (req, res) => {
     const repId = repIdOf(req);
     if (!repId) return res.status(400).json({ error: "No rep profile linked to your login." });
-    streamW9Pdf(res, profile.getLatestW9(tid(req), repId));
+    await sendW9Pdf(req, res, {
+      tenantId: tid(req), actorId: uid(req), scope: "self", repId,
+      row: profile.getLatestW9(tid(req), repId),
+    });
   });
 
   // ══ MANAGER / ADMIN OVERSIGHT — masked status only, never numbers ═════════
@@ -163,10 +208,20 @@ export function registerPayRoutes(app: Express, deps: Deps) {
     } catch (e) { fail(res, e); }
   });
 
-  app.get("/api/team-members/:id/w9/pdf", requireCapability("commission.read.all"), (req, res) => {
+  // ══ FULL-SSN DOCUMENT — ADMIN ONLY ════════════════════════════════════════
+  // The rendered W-9 carries the complete, unredacted 9-digit SSN, so it does
+  // NOT belong to the manager oversight band above ("masked status only, never
+  // numbers"). It is gated on payouts.pay — the same admin-only capability that
+  // guards moving real money (shared/capabilities.ts: "a manager is
+  // oversight/read; only the org owner may move real money"). Every hit is
+  // audited by sendW9Pdf.
+  app.get("/api/team-members/:id/w9/pdf", requireCapability("payouts.pay"), requirePaySecrets, async (req, res) => {
     const member = memberInTenant(req, Number(req.params.id));
     if (!member) return res.status(404).json({ error: "Not found" });
-    streamW9Pdf(res, profile.getLatestW9(tid(req), member.id));
+    await sendW9Pdf(req, res, {
+      tenantId: tid(req), actorId: uid(req), scope: "admin", repId: member.id,
+      row: profile.getLatestW9(tid(req), member.id),
+    });
   });
 
   // ══ COMPANY (ODFI) PROFILE — admin writes, manager reads masked ═══════════
