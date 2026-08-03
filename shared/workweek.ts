@@ -46,6 +46,25 @@ function tzOffsetMs(utcMs: number, timeZone: string): number {
 
 // Convert a local wall-clock time in `timeZone` to the UTC epoch ms. Two-pass so
 // a DST change between the naive guess and the real instant is corrected.
+/** The UTC instant of a local wall-clock time in `timeZone`. Exported because
+ *  the SPIFF campaign engine needs "today at 12 PM local" as a UTC bound to
+ *  query knock rows against — a cutoff hour is meaningless without it. */
+export function localWallToUtcMs(
+  y: number, mo: number, d: number, h: number, mi: number, timeZone: string,
+): number {
+  return zonedWallToUtcMs(y, mo, d, h, mi, timeZone);
+}
+
+/** The org's local calendar date parts for an instant. */
+export function localYmdParts(utcMs: number, timeZone: string): { y: number; mo: number; d: number } {
+  return localYmd(utcMs, timeZone);
+}
+
+/** The org's local hour (0–23) for an instant. */
+export function localHourIn(utcMs: number, timeZone: string): number {
+  return new Date(utcMs + tzOffsetMs(utcMs, timeZone)).getUTCHours();
+}
+
 function zonedWallToUtcMs(y: number, mo: number, d: number, h: number, mi: number, timeZone: string): number {
   const guess = Date.UTC(y, mo - 1, d, h, mi, 0);
   const off1 = tzOffsetMs(guess, timeZone);
