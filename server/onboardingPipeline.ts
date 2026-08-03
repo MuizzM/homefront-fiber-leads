@@ -1,6 +1,8 @@
 import { ONBOARDING_DOCUMENT_META, ONBOARDING_DOCUMENT_TYPES, type OnboardingDocumentType } from "../shared/onboardingDocuments";
+import { HR_CHECKPOINT_META, type HrCheckpointKind, type HrCheckpointStatus } from "../shared/onboardingHr";
 import { rawDb } from "./db";
 import { listRepDocuments } from "./onboardingDocumentStore";
+import { listHrCheckpoints, summariseHr } from "./onboardingHrStore";
 import {
   getRecruitingInviteByApplication,
   listRecruitingInvites,
@@ -45,6 +47,19 @@ export interface OnboardingPipelineRecord {
     type: OnboardingDocumentType; label: string; required: boolean;
     status: string; envelopeId: number | null; sentAt: string | null; completedAt: string | null;
   }>;
+  // Post-approval HR / compliance gates — orthogonal to the document pipeline,
+  // rendered as their own console card (never folded into `timeline`, which the
+  // client lays out on a fixed 7-column grid).
+  hr: {
+    cleared: number; total: number; allClear: boolean; anyFailed: boolean;
+    checkpoints: Array<{
+      kind: HrCheckpointKind; label: string; description: string; required: boolean;
+      status: HrCheckpointStatus; statuses: readonly HrCheckpointStatus[];
+      provider: string | null; externalRef: string | null;
+      hasBadgePhoto: boolean; notes: string | null;
+      cleared: boolean; failed: boolean; completedAt: string | null; updatedAt: string | null;
+    }>;
+  };
   timeline: Array<{ label: string; at: string; done: boolean }>;
 }
 
@@ -111,6 +126,33 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
     { label: "Rep activated", at: invite?.activatedAt ?? "", done: active },
   ];
 
+  // HR compliance gates only exist once there is an application to attach them
+  // to; an invite that hasn't been applied to yet reports an empty set.
+  const hrCheckpoints = application ? listHrCheckpoints(tenantId, Number(application.id)) : [];
+  const hrStats = summariseHr(hrCheckpoints);
+  const hr = {
+    cleared: hrStats.cleared,
+    total: hrStats.total,
+    allClear: hrStats.allClear,
+    anyFailed: hrStats.anyFailed,
+    checkpoints: hrCheckpoints.map(checkpoint => ({
+      kind: checkpoint.kind,
+      label: HR_CHECKPOINT_META[checkpoint.kind].label,
+      description: HR_CHECKPOINT_META[checkpoint.kind].description,
+      required: HR_CHECKPOINT_META[checkpoint.kind].required,
+      status: checkpoint.status,
+      statuses: HR_CHECKPOINT_META[checkpoint.kind].statuses,
+      provider: checkpoint.provider,
+      externalRef: checkpoint.externalRef,
+      hasBadgePhoto: checkpoint.hasBadgePhoto,
+      notes: checkpoint.notes,
+      cleared: checkpoint.cleared,
+      failed: checkpoint.failed,
+      completedAt: checkpoint.completedAt,
+      updatedAt: checkpoint.updatedAt,
+    })),
+  };
+
   return {
     key: invite ? `invite-${invite.id}` : `application-${application.id}`,
     inviteId: invite?.id ?? null,
@@ -136,6 +178,7 @@ function deriveRecord(invite: RecruitingInvite | null, application: any | null, 
     } : null,
     account: user ? { userId: Number(user.id), repId: rep?.id == null ? null : Number(rep.id), active } : null,
     documents,
+    hr,
     timeline,
   };
 }

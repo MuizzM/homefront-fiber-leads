@@ -682,6 +682,12 @@ export function runMigrations() {
     `ALTER TABLE rep_applications ADD COLUMN agreements_issued_at TEXT`,
     `ALTER TABLE rep_applications ADD COLUMN activated_at TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_rep_applications_tenant_status_source ON rep_applications(tenant_id, status, application_source, created_at DESC)`,
+    // HR / compliance checkpoints — parallel post-approval gates (background
+    // check, drug screen, badge photo, Gusto). One row per (application, kind);
+    // the UNIQUE index makes setHrCheckpoint an idempotent upsert.
+    `CREATE TABLE IF NOT EXISTS rep_hr_checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, application_id INTEGER NOT NULL, rep_id INTEGER, kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'not_started', provider TEXT, external_ref TEXT, badge_photo_path TEXT, notes TEXT, updated_by INTEGER, ordered_at TEXT, completed_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rep_hr_checkpoints_app_kind ON rep_hr_checkpoints(application_id, kind)`,
+    `CREATE INDEX IF NOT EXISTS idx_rep_hr_checkpoints_tenant ON rep_hr_checkpoints(tenant_id, application_id)`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
     // Persisted rep hue, allocated at creation (first free REP_PALETTE slot per

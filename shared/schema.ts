@@ -438,6 +438,31 @@ export const insertRepApplicationSchema = createInsertSchema(repApplications).om
 export type InsertRepApplication = z.infer<typeof insertRepApplicationSchema>;
 export type RepApplication = typeof repApplications.$inferSelect;
 
+// ── HR / compliance checkpoints ───────────────────────────────────────────────
+// One row per (application, kind). The post-approval compliance gates a rep
+// clears in parallel with the document-signing pipeline: background check, drug
+// screen, badge photo, and Gusto payroll confirmation. Status transitions are
+// validated against shared/onboardingHr.ts. Uniqueness is (application_id, kind)
+// so an upsert never creates duplicates for the same gate.
+export const repHrCheckpoints = sqliteTable("rep_hr_checkpoints", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id"),
+  applicationId: integer("application_id").notNull(),
+  repId: integer("rep_id"),                       // teamMembers.id once the account exists
+  kind: text("kind").notNull(),                   // HrCheckpointKind
+  status: text("status").notNull().default("not_started"), // HrCheckpointStatus
+  provider: text("provider"),                     // e.g. "checkr", "quest", "gusto"
+  externalRef: text("external_ref"),              // vendor case id / Gusto employee id
+  badgePhotoPath: text("badge_photo_path"),       // relative path under uploads/ for badge_photo
+  notes: text("notes"),
+  updatedBy: integer("updated_by"),               // users.id of the reviewer
+  orderedAt: text("ordered_at"),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type RepHrCheckpoint = typeof repHrCheckpoints.$inferSelect;
+
 // ── Territory Requests ────────────────────────────────────────────────────────
 export const territoryRequests = sqliteTable("territory_requests", {
   id: integer("id").primaryKey({ autoIncrement: true }),

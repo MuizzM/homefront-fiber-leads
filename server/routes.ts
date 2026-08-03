@@ -99,6 +99,14 @@ import {
   markInviteRejected,
 } from "./onboardingRecruitingStore";
 import { ApplicationIntakeError, submitPublicApplication } from "./onboardingApplicationService";
+import { getHrCheckpoint, listHrCheckpoints, setHrCheckpoint, summariseHr } from "./onboardingHrStore";
+import { gustoConfigured, verifyGustoConnection } from "./gustoAdapter";
+import {
+  HR_CHECKPOINT_META,
+  isHrCheckpointKind,
+  isValidHrStatus,
+  type HrCheckpointKind,
+} from "../shared/onboardingHr";
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
@@ -7909,6 +7917,123 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     });
   });
 
+  // ── HR / compliance checkpoints ─────────────────────────────────────────────
+  // Post-approval gates (background check → drug screen → badge photo →
+  // confirmed in Gusto) that run in parallel with the agreement-signing
+  // pipeline. A manager may view and advance the gates; only an admin confirms
+  // Gusto (payroll-adjacent) or runs the connectivity check. The badge photo is
+  // stored under uploads/badges and streamed through an authed, tenant-walled
+  // route — the admin-only /uploads static handler can't carry the session
+  // header from an <img> tag.
+  const badgesDir = path.join(uploadsDir, "badges");
+  if (!fs.existsSync(badgesDir)) fs.mkdirSync(badgesDir, { recursive: true });
+  const badgeUpload = multer({
+    storage: multer.diskStorage({
+      destination: (_req, _file, cb) => cb(null, badgesDir),
+      filename: (_req, file, cb) => cb(null, crypto.randomUUID() + path.extname(file.originalname).toLowerCase()),
+    }),
+    // No text fields — fields:0/parts:2 stops an unbounded multipart text body
+    // from buffering into RAM before the file handler runs (same guard as lead
+    // photos above).
+    limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 0, parts: 2, fieldSize: 1024 },
+    fileFilter: (_req, file, cb) => {
+      const ok = [".jpg", ".jpeg", ".png", ".webp"].includes(path.extname(file.originalname).toLowerCase());
+      if (ok) cb(null, true);
+      else cb(new Error("Only JPG, PNG or WebP photos"));
+    },
+  });
+
+  // Resolve the application under the caller's tenant. 404 (never 403) when it
+  // belongs to another org so existence never leaks. Returns the linked rep
+  // profile id when the account already exists, so gates can attach to the rep.
+  function loadHrApplication(req: Request, res: Response): { application: any; tenantId: number; repId: number | null } | null {
+    const tenantId = (req as any).user?.tenantId ?? null;
+    if (tenantId == null) { res.status(403).json({ error: "Your account is not assigned to an organization." }); return null; }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Invalid application id" }); return null; }
+    const application = storage.getRepApplicationById(id);
+    if (!application || application.tenantId !== tenantId) { res.status(404).json({ error: "Application not found" }); return null; }
+    const account = application.email ? storage.getUserByEmail(application.email) : undefined;
+    return { application, tenantId, repId: account?.teamMemberId ?? null };
+  }
+
+  // GET the full checkpoint set + summary for one application.
+  app.get("/api/onboarding/applications/:id/hr", requireManager, (req: Request, res: Response) => {
+    const ctx = loadHrApplication(req, res);
+    if (!ctx) return;
+    const checkpoints = listHrCheckpoints(ctx.tenantId, Number(ctx.application.id));
+    res.json({ checkpoints, summary: summariseHr(checkpoints), gustoConfigured: gustoConfigured() });
+  });
+
+  // PATCH one gate's status / provider / vendor case id / notes.
+  app.patch("/api/onboarding/applications/:id/hr/:kind", requireManager, (req: Request, res: Response) => {
+    const ctx = loadHrApplication(req, res);
+    if (!ctx) return;
+    const kind = req.params.kind;
+    if (!isHrCheckpointKind(kind)) return res.status(400).json({ error: "Unknown checkpoint" });
+    // Gusto is payroll-adjacent — confirming it is admin-only. A manager may
+    // still order/track the other gates.
+    if (kind === "gusto" && (req as any).user?.role !== "admin" && (req as any).user?.role !== "super_admin") {
+      return res.status(403).json({ error: "Only an administrator can confirm the Gusto record." });
+    }
+    const { status, provider, externalRef, notes } = req.body ?? {};
+    if (status !== undefined && !isValidHrStatus(kind, status)) {
+      return res.status(400).json({ error: `Invalid status for ${HR_CHECKPOINT_META[kind].label}` });
+    }
+    const clean = (value: unknown, max: number) =>
+      value === null ? null : typeof value === "string" ? value.trim().slice(0, max) || null : undefined;
+    const checkpoint = setHrCheckpoint(ctx.tenantId, Number(ctx.application.id), kind as HrCheckpointKind, {
+      status,
+      provider: clean(provider, 60),
+      externalRef: clean(externalRef, 200),
+      notes: clean(notes, 1000),
+      repId: ctx.repId,
+      updatedBy: (req as any).user?.id ?? null,
+    });
+    const summary = summariseHr(listHrCheckpoints(ctx.tenantId, Number(ctx.application.id)));
+    res.json({ checkpoint, summary });
+  });
+
+  // Upload the badge photo → sets the gate to "uploaded" (awaiting approval),
+  // unless it is already approved (a re-upload keeps the approval).
+  app.post("/api/onboarding/applications/:id/hr/badge-photo", requireManager, badgeUpload.single("badge"), (req: Request, res: Response) => {
+    const ctx = loadHrApplication(req, res);
+    if (!ctx) { if (req.file) { try { fs.unlinkSync(req.file.path); } catch { /* best effort */ } } return; }
+    if (!req.file) return res.status(400).json({ error: "No photo uploaded" });
+    const existing = getHrCheckpoint(Number(ctx.application.id), "badge_photo");
+    // Remove the previous badge file so re-uploads don't orphan on disk.
+    if (existing.badgePhotoPath) {
+      const prev = path.resolve(uploadsDir, existing.badgePhotoPath.replace(/^\//, ""));
+      if (prev.startsWith(badgesDir + path.sep)) { try { fs.unlinkSync(prev); } catch { /* already gone */ } }
+    }
+    const checkpoint = setHrCheckpoint(ctx.tenantId, Number(ctx.application.id), "badge_photo", {
+      status: existing.status === "approved" ? "approved" : "uploaded",
+      badgePhotoPath: `badges/${req.file.filename}`,
+      repId: ctx.repId,
+      updatedBy: (req as any).user?.id ?? null,
+    });
+    res.json({ checkpoint });
+  });
+
+  // Stream the badge photo through the authed, tenant-walled route.
+  app.get("/api/onboarding/applications/:id/hr/badge-photo", requireManager, (req: Request, res: Response) => {
+    const ctx = loadHrApplication(req, res);
+    if (!ctx) return;
+    const checkpoint = getHrCheckpoint(Number(ctx.application.id), "badge_photo");
+    if (!checkpoint.badgePhotoPath) return res.status(404).json({ error: "No badge photo" });
+    const file = path.resolve(uploadsDir, checkpoint.badgePhotoPath.replace(/^\//, ""));
+    if (!file.startsWith(badgesDir + path.sep) || !fs.existsSync(file)) return res.status(404).json({ error: "No badge photo" });
+    res.setHeader("Content-Disposition", "inline");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Cache-Control", "private, no-store");
+    res.sendFile(file);
+  });
+
+  // Admin-only Gusto connectivity check — inert (configured:false, no network)
+  // until GUSTO_API_TOKEN + GUSTO_COMPANY_ID are set.
+  app.post("/api/onboarding/hr/gusto/verify", requireAdmin, async (_req: Request, res: Response) => {
+    res.json(await verifyGustoConnection());
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
