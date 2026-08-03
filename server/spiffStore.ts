@@ -5,6 +5,22 @@
 // is tracked (earned → approved → paid) and an admin approves it; money is never
 // silently injected into pay.
 //
+// ── EXACTLY-ONCE PAYMENT (read this before touching a status) ─────────────────
+// A spiff is payable exactly once, and the ledger status is the ONLY thing that
+// says so:
+//
+//   earned    the algorithm awarded it. Not money yet — nobody owes anything.
+//   approved  an admin OK'd it. It is OWED, and it is what the weekly payroll
+//             export bills (server/hourlyPay.ts → sumPayableSpiffCentsByRep
+//             selects status = 'approved' and NOTHING else).
+//   paid      settled. Terminal. It leaves the payroll export permanently.
+//
+// So the payroll export is the single payment instruction, and marking a spiff
+// paid is what retires it from that instruction. Both transitions are
+// compare-and-swap UPDATEs (`WHERE status = <expected>` + rowcount check), so two
+// managers clicking at the same instant produce exactly one transition and
+// exactly one audit event — never a doubled payment.
+//
 // Determinism: the pure award logic lives in shared/spiffEngine.ts. Everything
 // clock-/dice-/DB-dependent lives HERE, and the "random" roll is derived from a
 // caller-supplied seed via a pure hash — so the same sale evaluates identically
@@ -77,6 +93,7 @@ export function buildPerfSnapshot(
   repId: number,
   nowMs: number,
   spiffsGrantedToday = 0,
+  spiffCentsGrantedToday = 0,
 ): PerfSnapshot {
   const windowDays = 7;
   const baselineDays = 21; // the 3 weeks BEFORE the recent week
@@ -133,19 +150,29 @@ export function buildPerfSnapshot(
     currentStreakDays,
     recentTrend,
     spiffsGrantedToday,
+    spiffCentsGrantedToday,
   };
 }
 
-/** Count of spiffs a rep has already earned on a given UTC day. */
-function spiffsGrantedOn(tenantId: number, repId: number, nowMs: number): number {
+/**
+ * What a rep has already been awarded on a given UTC day — BOTH the count and
+ * the cents. The cents figure is the one the anti-farming money cap reads: with
+ * a variable award amount, "2 spiffs" no longer means "$100", so bounding the
+ * count alone would not bound the spend.
+ */
+export function spiffsGrantedOn(
+  tenantId: number,
+  repId: number,
+  nowMs: number,
+): { count: number; cents: number } {
   try {
     const row = rawDb.prepare(
-      `SELECT COUNT(*) AS n FROM spiffs
+      `SELECT COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS c FROM spiffs
         WHERE tenant_id = ? AND rep_id = ? AND substr(created_at, 1, 10) = ?`,
-    ).get(tenantId, repId, ymdUtc(nowMs)) as { n: number };
-    return row?.n ?? 0;
+    ).get(tenantId, repId, ymdUtc(nowMs)) as { n: number; c: number };
+    return { count: Number(row?.n ?? 0), cents: Number(row?.c ?? 0) };
   } catch {
-    return 0;
+    return { count: 0, cents: 0 };
   }
 }
 
@@ -212,7 +239,7 @@ export function evaluateSpiffForSale(input: EvaluateInput): EvaluateResult {
   }
 
   const grantedToday = spiffsGrantedOn(tenantId, repId, nowMs);
-  const perf = buildPerfSnapshot(tenantId, repId, nowMs, grantedToday);
+  const perf = buildPerfSnapshot(tenantId, repId, nowMs, grantedToday.count, grantedToday.cents);
   // This sale is already committed to knock_log, so totalSales includes it → it
   // is the rep's lifetime sale ordinal for the milestone check.
   const decision = decideSpiff({ saleRef, lifetimeSaleNumber: perf.totalSales }, perf, seededRoll(seed), config);
@@ -251,17 +278,30 @@ export interface RepSpiffSummary {
   totals: { earnedCents: number; approvedCents: number; paidCents: number; count: number };
 }
 
+/** How many spiff cards the rep feed returns. The TOTALS are always computed
+ *  over the whole ledger in SQL, so a long-tenured rep's running total stays
+ *  exact even though the feed itself is bounded. */
+const REP_FEED_LIMIT = 100;
+
 /** A rep's own spiff feed + their current heat score. Tenant-walled by caller. */
 export function getRepSpiffs(tenantId: number, repId: number, nowMs: number): RepSpiffSummary {
   const rows = rawDb.prepare(
-    `SELECT * FROM spiffs WHERE tenant_id = ? AND rep_id = ? ORDER BY created_at DESC, id DESC`,
-  ).all(tenantId, repId).map(mapRow);
-  const snapshot = buildPerfSnapshot(tenantId, repId, nowMs, spiffsGrantedOn(tenantId, repId, nowMs));
-  const totals = { earnedCents: 0, approvedCents: 0, paidCents: 0, count: rows.length };
-  for (const s of rows) {
-    if (s.status === "earned") totals.earnedCents += s.amountCents;
-    else if (s.status === "approved") totals.approvedCents += s.amountCents;
-    else if (s.status === "paid") totals.paidCents += s.amountCents;
+    `SELECT * FROM spiffs WHERE tenant_id = ? AND rep_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).all(tenantId, repId, REP_FEED_LIMIT).map(mapRow);
+  const granted = spiffsGrantedOn(tenantId, repId, nowMs);
+  const snapshot = buildPerfSnapshot(tenantId, repId, nowMs, granted.count, granted.cents);
+  // Integer-cent aggregation in SQL — never a sum of floats, and never bounded
+  // by the feed limit above.
+  const totals = { earnedCents: 0, approvedCents: 0, paidCents: 0, count: 0 };
+  const agg = rawDb.prepare(
+    `SELECT status, COUNT(*) AS n, COALESCE(SUM(amount_cents), 0) AS c FROM spiffs
+      WHERE tenant_id = ? AND rep_id = ? GROUP BY status`,
+  ).all(tenantId, repId) as Array<{ status: string; n: number; c: number }>;
+  for (const r of agg) {
+    totals.count += Number(r.n) || 0;
+    if (r.status === "earned") totals.earnedCents += Number(r.c) || 0;
+    else if (r.status === "approved") totals.approvedCents += Number(r.c) || 0;
+    else if (r.status === "paid") totals.paidCents += Number(r.c) || 0;
   }
   return { repId, spiffs: rows, heat: heatScore(snapshot), snapshot, totals };
 }
@@ -350,26 +390,131 @@ export function getSpiffById(tenantId: number, id: number): SpiffRow | null {
 
 export type TransitionResult =
   | { ok: true; spiff: SpiffRow }
-  | { ok: false; reason: "not_found" | "invalid_transition"; from?: string };
+  | { ok: false; reason: "not_found" | "invalid_transition" | "self_approval"; from?: string };
 
-/** earned → approved. Records approver + timestamp. Idempotent-safe: only a
- *  currently-`earned` spiff may be approved. */
-export function approveSpiff(tenantId: number, id: number, approverUserId: number, nowMs: number): TransitionResult {
+/**
+ * earned → approved. Records approver + timestamp.
+ *
+ * COMPARE-AND-SWAP: the UPDATE itself carries `AND status = 'earned'` and the
+ * rowcount is checked, so two managers approving the same spiff at the same
+ * instant produce exactly ONE transition — the loser gets `invalid_transition`
+ * and the caller emits no second audit/payment event.
+ *
+ * SEGREGATION OF DUTIES: `approverRepId` (the approver's own team-member id, if
+ * they have one) may never equal the spiff's rep. An admin who also sells does
+ * not get to sign off their own bonus.
+ */
+export function approveSpiff(
+  tenantId: number,
+  id: number,
+  approverUserId: number,
+  nowMs: number,
+  approverRepId?: number | null,
+): TransitionResult {
   const cur = getSpiffById(tenantId, id);
   if (!cur) return { ok: false, reason: "not_found" };
+  if (approverRepId != null && Number(approverRepId) === Number(cur.repId)) {
+    return { ok: false, reason: "self_approval", from: cur.status };
+  }
   if (cur.status !== "earned") return { ok: false, reason: "invalid_transition", from: cur.status };
-  rawDb.prepare(`UPDATE spiffs SET status = 'approved', approved_by = ?, approved_at = ? WHERE tenant_id = ? AND id = ?`)
-    .run(approverUserId, new Date(nowMs).toISOString(), tenantId, id);
+  const info = rawDb.prepare(
+    `UPDATE spiffs SET status = 'approved', approved_by = ?, approved_at = ?
+      WHERE tenant_id = ? AND id = ? AND status = 'earned'`,
+  ).run(approverUserId, new Date(nowMs).toISOString(), tenantId, id);
+  if (info.changes !== 1) {
+    // Lost the race: somebody else moved it between our read and our write.
+    const after = getSpiffById(tenantId, id);
+    return { ok: false, reason: "invalid_transition", from: after?.status ?? cur.status };
+  }
   return { ok: true, spiff: getSpiffById(tenantId, id)! };
 }
 
-/** approved → paid. Stamps paid_at. Only a currently-`approved` spiff may be
- *  marked paid (an admin approves before pay leaves the building). */
+/**
+ * approved → paid. Stamps paid_at. Only a currently-`approved` spiff may be
+ * marked paid (an admin approves before pay leaves the building).
+ *
+ * THIS IS THE EXACTLY-ONCE POINT. `paid` is terminal and removes the spiff from
+ * the payroll export forever, so the transition is a compare-and-swap on
+ * `status = 'approved'`: a double-click, a retried request, or two managers at
+ * once all collapse to one settlement and one audit line.
+ */
 export function markSpiffPaid(tenantId: number, id: number, nowMs: number): TransitionResult {
   const cur = getSpiffById(tenantId, id);
   if (!cur) return { ok: false, reason: "not_found" };
   if (cur.status !== "approved") return { ok: false, reason: "invalid_transition", from: cur.status };
-  rawDb.prepare(`UPDATE spiffs SET status = 'paid', paid_at = ? WHERE tenant_id = ? AND id = ?`)
-    .run(new Date(nowMs).toISOString(), tenantId, id);
+  const info = rawDb.prepare(
+    `UPDATE spiffs SET status = 'paid', paid_at = ?
+      WHERE tenant_id = ? AND id = ? AND status = 'approved'`,
+  ).run(new Date(nowMs).toISOString(), tenantId, id);
+  if (info.changes !== 1) {
+    const after = getSpiffById(tenantId, id);
+    return { ok: false, reason: "invalid_transition", from: after?.status ?? cur.status };
+  }
   return { ok: true, spiff: getSpiffById(tenantId, id)! };
+}
+
+export interface BulkTransitionResult {
+  /** Spiffs that actually transitioned on THIS call (never a repeat). */
+  changed: SpiffRow[];
+  /** Ids that were skipped, with why — wrong status, wrong tenant, self-approval. */
+  skipped: Array<{ id: number; reason: "not_found" | "invalid_transition" | "self_approval"; from?: string }>;
+  /** Cents that moved on this call. */
+  totalCents: number;
+}
+
+/**
+ * Bulk earned → approved. Applies the SAME compare-and-swap per row inside one
+ * transaction, so a bulk approve is exactly as safe as clicking each row: a row
+ * someone else already approved is reported as skipped, not silently re-approved.
+ */
+export function approveSpiffs(
+  tenantId: number,
+  ids: number[],
+  approverUserId: number,
+  nowMs: number,
+  approverRepId?: number | null,
+): BulkTransitionResult {
+  return runBulk(ids, (id) => approveSpiff(tenantId, id, approverUserId, nowMs, approverRepId));
+}
+
+/**
+ * Bulk approved → paid — the payroll settlement action. Per-row compare-and-swap
+ * inside one transaction: every id in `ids` is paid at most once, no matter how
+ * many times the button is pressed or how many admins press it.
+ */
+export function markSpiffsPaid(tenantId: number, ids: number[], nowMs: number): BulkTransitionResult {
+  return runBulk(ids, (id) => markSpiffPaid(tenantId, id, nowMs));
+}
+
+function runBulk(ids: number[], step: (id: number) => TransitionResult): BulkTransitionResult {
+  const unique = [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  const out: BulkTransitionResult = { changed: [], skipped: [], totalCents: 0 };
+  const apply = rawDb.transaction(() => {
+    for (const id of unique) {
+      const r = step(id);
+      if (r.ok) { out.changed.push(r.spiff); out.totalCents += r.spiff.amountCents; }
+      else out.skipped.push({ id, reason: r.reason, from: r.from });
+    }
+  });
+  apply();
+  return out;
+}
+
+/**
+ * Every spiff this tenant currently OWES: status = 'approved'. This is the exact
+ * set the weekly payroll export bills (see server/hourlyPay.ts), so it is also
+ * the exact set a "mark paid" settlement should retire. Tenant-walled; `scope`
+ * (undefined = whole tenant) restricts by rep, an empty scope returns nothing.
+ */
+export function getPayableSpiffs(tenantId: number, scope: number[] | undefined): SpiffRow[] {
+  if (scope !== undefined && scope.length === 0) return [];
+  const params: any[] = [tenantId];
+  let scopeSql = "";
+  if (scope !== undefined) {
+    scopeSql = ` AND rep_id IN (${scope.map(() => "?").join(",")})`;
+    params.push(...scope);
+  }
+  return (rawDb.prepare(
+    `SELECT * FROM spiffs WHERE tenant_id = ? AND status = 'approved'${scopeSql} ORDER BY created_at ASC, id ASC`,
+  ).all(...params) as any[]).map(mapRow);
 }
