@@ -9,8 +9,6 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { can } from "@shared/capabilities";
 import { storage } from "./storage";
 import * as svc from "./commissionService";
-import { hourlyBlockForStatement, sumWeekSpiffsByRep } from "./hourlyPay";
-import { computeHoldback } from "@shared/commissionReserve";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -45,7 +43,7 @@ function fail(res: Response, e: unknown) {
 // UTC so it lands squarely inside the intended org week — a bare "2026-07-06"
 // parses as UTC-midnight, which in America/New_York is the *previous* Sunday
 // evening and would silently resolve to the prior commission week.
-export const parseWeekRef = (v: any): string | undefined => {
+const parseWeekRef = (v: any): string | undefined => {
   if (typeof v !== "string" || !v.trim()) return undefined;
   const s = v.trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T12:00:00.000Z` : s;
@@ -231,11 +229,6 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       const finalCents = Number(payload?.statement?.final_commission_cents ?? payload?.computation?.finalCommissionCents ?? 0);
       return {
         ...payload,
-        // The hourly block ({hours, rateCents, hourlyPayCents}) — live from the
-        // computation when present, else the persisted statement row.
-        hourly: payload?.hourly
-          ? { hours: payload.hourly.hours, rateCents: payload.hourly.rateCents, hourlyPayCents: payload.hourly.payCents }
-          : hourlyBlockForStatement(payload?.statement),
         sales: svc.listWeekSalesForRep(tid(req), repId, now),
         adjustments: adjustmentsFor(payload?.statement?.id),
         holdback: {
@@ -289,39 +282,20 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
   });
 
   // Penny-exact payroll CSV for the week — what the payroll provider ingests.
-  // The original 8 columns are STABLE (provider-compat); the hourly+spiff+
-  // reserve+total money-plane columns are APPENDED after them. Per-row:
-  // Total = Hourly Pay + Gross commissions + Adjustments + Spiffs − Reserve.
   app.get("/api/commission/week-export.csv", requireCapability("commission.read.all"), (req, res) => {
     const weekReference = parseWeekRef(req.query.week) ?? new Date().toISOString();
     try {
       const ov = svc.getWeekOverview(tid(req), uid(req), weekReference, null);
       const money = (c: number) => (c / 100).toFixed(2);
-      const spiffs = sumWeekSpiffsByRep(tid(req), ov.bounds.weekStartUtc, ov.bounds.nextWeekStartUtc);
-      const reservePercent = svc.loadOrgConfig(tid(req)).reservePercent;
-      const rowMoney = (r: (typeof ov.rows)[number]) => {
-        const spiffCents = spiffs.get(r.repId) ?? 0;
-        const reserveCents = computeHoldback({ earnedCents: r.finalCommissionCents, reservePercent }).reserveCents;
-        const totalCents = r.hourlyPayCents + r.grossCommissionCents + r.adjustmentCents + spiffCents - reserveCents;
-        return { spiffCents, reserveCents, totalCents };
-      };
       const lines = [
         `Week,${csvCell(ov.bounds.localWeekLabel)}`,
-        "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final,Hours,Hourly Rate,Hourly Pay,Spiffs,Reserve,Total",
-        ...ov.rows.map(r => {
-          const m = rowMoney(r);
-          return [
-            csvCell(r.repName), csvCell(r.status), r.qualifiedSaleCount,
-            csvCell(r.tierLabel ?? (r.structure === "FLAT" ? "Flat" : "—")),
-            money(r.rateCents), money(r.grossCommissionCents), money(r.adjustmentCents), money(r.finalCommissionCents),
-            r.hours.toFixed(2), r.hourlyRateCents != null ? money(r.hourlyRateCents) : "", money(r.hourlyPayCents),
-            money(m.spiffCents), money(m.reserveCents), money(m.totalCents),
-          ].join(",");
-        }),
-        (() => {
-          const sum = (f: (r: (typeof ov.rows)[number]) => number) => ov.rows.reduce((s, r) => s + f(r), 0);
-          return `Total,,,,,${money(sum(r => r.grossCommissionCents))},${money(sum(r => r.adjustmentCents))},${money(sum(r => r.finalCommissionCents))},${sum(r => r.hours).toFixed(2)},,${money(sum(r => r.hourlyPayCents))},${money(sum(r => rowMoney(r).spiffCents))},${money(sum(r => rowMoney(r).reserveCents))},${money(sum(r => rowMoney(r).totalCents))}`;
-        })(),
+        "Rep,Status,Qualified Sales,Tier,Rate,Gross,Adjustments,Final",
+        ...ov.rows.map(r => [
+          csvCell(r.repName), csvCell(r.status), r.qualifiedSaleCount,
+          csvCell(r.tierLabel ?? (r.structure === "FLAT" ? "Flat" : "—")),
+          money(r.rateCents), money(r.grossCommissionCents), money(r.adjustmentCents), money(r.finalCommissionCents),
+        ].join(",")),
+        `Total,,,,,${money(ov.rows.reduce((s, r) => s + r.grossCommissionCents, 0))},${money(ov.rows.reduce((s, r) => s + r.adjustmentCents, 0))},${money(ov.rows.reduce((s, r) => s + r.finalCommissionCents, 0))}`,
       ];
       storage.logActivity(uid(req), "commission.week.exported", "commission_statement", undefined, { week: ov.bounds.localWeekLabel, rows: ov.rows.length }, req.ip);
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -360,7 +334,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       let sales: any[];
       if (locked && stmt.contributing_sales) { try { sales = JSON.parse(stmt.contributing_sales); } catch { sales = svc.listWeekSalesForRep(tid(req), stmt.rep_id, stmt.week_start_utc); } }
       else sales = svc.listWeekSalesForRep(tid(req), stmt.rep_id, stmt.week_start_utc);
-      res.json({ statement: stmt, hourly: hourlyBlockForStatement(stmt), adjustments: svc.getStatementAdjustments(tid(req), stmt.id), sales });
+      res.json({ statement: stmt, adjustments: svc.getStatementAdjustments(tid(req), stmt.id), sales });
     } catch (e) { fail(res, e); }
   });
 

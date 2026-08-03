@@ -297,14 +297,6 @@ export const teamMembers = sqliteTable("team_members", {
   // NULL = legacy row or palette exhausted; both resolve through
   // repColorOf()'s repId-hash fallback, so nothing ever renders colourless.
   color: text("color"),
-  // Hourly pay (Sequifi-style hybrid hourly+commission). NULL rate = a
-  // commission-only rep. Integer cents/hour — money is integer cents everywhere.
-  // effectiveFrom gates which weeks a rate governs: a week's rate is the one
-  // effective at the week's START (a mid-week change never re-prices the
-  // running week). Full rate history is reconstructed from the
-  // 'pay.hourly_rate.changed' audit events (see server/hourlyPay.ts).
-  hourlyRateCents: integer("hourly_rate_cents"),
-  hourlyRateEffectiveFrom: text("hourly_rate_effective_from"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
@@ -468,49 +460,6 @@ export const clockSessions = sqliteTable("clock_sessions", {
 });
 export const insertClockSessionSchema = createInsertSchema(clockSessions).omit({ id: true });
 export type InsertClockSession = z.infer<typeof insertClockSessionSchema>;
-
-// ── Punch corrections (append-only time audit) ────────────────────────────────
-// A manager's correction to a rep's recorded time. clock_sessions raw rows are
-// NEVER edited — every fix lands here as an append-only audit row the hours
-// aggregation folds into the weekly sum. minutes_delta is signed (+ missed
-// punch, − over-counted time) and attributed to a UTC day (the session's
-// clock-in day when sessionId is set, else the row's created_at day).
-export const punchCorrections = sqliteTable("punch_corrections", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  tenantId: integer("tenant_id").notNull(),
-  repId: integer("rep_id").notNull(),
-  sessionId: integer("session_id"),            // nullable — correction need not name a session
-  kind: text("kind").notNull(),                // 'missed_in' | 'missed_out' | 'adjust'
-  minutesDelta: integer("minutes_delta").notNull(),
-  reason: text("reason").notNull(),
-  actorUserId: integer("actor_user_id"),
-  createdAt: text("created_at").notNull().default(new Date().toISOString()),
-});
-export type PunchCorrection = typeof punchCorrections.$inferSelect;
-
-// ── Pay disputes (rep-facing) ─────────────────────────────────────────────────
-// A rep disputes ONE line of one week's pay (the hourly block, the commission
-// line, or a specific legacy commission row). Managers resolve from a tenant
-// queue; an 'adjusted' resolution references an existing commission_adjustments
-// row (money math is never duplicated here).
-export const payDisputes = sqliteTable("pay_disputes", {
-  id: integer("id").primaryKey({ autoIncrement: true }),
-  tenantId: integer("tenant_id").notNull(),
-  repId: integer("rep_id").notNull(),
-  weekStart: text("week_start").notNull(),     // canonical week_start_utc
-  lineKind: text("line_kind").notNull(),       // 'hourly' | 'commission'
-  commissionId: integer("commission_id"),      // set when disputing one commission row
-  message: text("message").notNull(),
-  status: text("status").notNull().default("open"), // 'open' | 'resolved'
-  resolution: text("resolution"),              // 'upheld' | 'adjusted'
-  resolutionNote: text("resolution_note"),
-  adjustmentId: integer("adjustment_id"),
-  resolvedBy: integer("resolved_by"),
-  idemKey: text("idem_key"),                   // idempotency key (unique per tenant)
-  createdAt: text("created_at").notNull().default(new Date().toISOString()),
-  resolvedAt: text("resolved_at"),
-});
-export type PayDispute = typeof payDisputes.$inferSelect;
 export type ClockSession = typeof clockSessions.$inferSelect;
 
 // ── Scan targets — persistent address pool ───────────────────────────────────
