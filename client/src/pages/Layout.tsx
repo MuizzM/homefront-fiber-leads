@@ -30,6 +30,7 @@ import {
   PhoneCall,
   GraduationCap,
   Gift,
+  LayoutGrid,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -77,6 +78,10 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/calling", label: "Calling Queue", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
   { href: "/calling/compliance", label: "Calling Compliance", icon: ShieldCheck, show: r => can(r, "calling.compliance.read"), group: "Calling" },
   // ── Field ─────────────────────────────────────────────────────────────────
+  // Areas — the console for territory ground truth. Every field role can read
+  // it (the server scopes the rows); the lifecycle actions inside are gated by
+  // rank on the page itself.
+  { href: "/areas",        label: "Areas",         icon: LayoutGrid,   show: isFieldRole,                              group: "Field" },
   { href: "/ready-to-call", label: "Ready to Call", icon: PhoneCall,  show: isFieldRole,                              group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
   { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },

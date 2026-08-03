@@ -1,0 +1,676 @@
+// ── Area Console: one area, end to end ────────────────────────────────────────
+//
+// The map answers "where"; this screen answers "what is happening here". It is
+// the addressable page for a single territory: who holds it, which pass it is
+// on, how much of it has actually been walked, and the lifecycle actions a
+// manager takes about it — in one place, with a URL you can send someone.
+//
+// Everything on screen comes off endpoints that already exist and are already
+// RBAC-guarded server-side. Nothing here recomputes a rate: every percentage is
+// rendered exactly as the server sent it, because shared/territoryMetrics.ts
+// owns the denominators (availableBase = total - unavailable - disqualified,
+// never total) and a second opinion client-side is how two screens start
+// disagreeing about the same ground.
+//
+// Out-of-scope areas 404 by design (the API refuses to confirm they exist), so
+// "not found" and "not yours" render as ONE calm state that leaks nothing.
+
+import { useMemo, useState } from "react";
+import { Link, useRoute } from "wouter";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import {
+  ArrowLeft, DoorOpen, Hand, BadgeDollarSign, CalendarClock, Map as MapIcon,
+  MapPinned, RotateCcw, UserMinus, UserCog, ShieldCheck, AlertTriangle, Ban,
+  Ruler, History, Loader2, SearchX, type LucideIcon,
+} from "lucide-react";
+
+import { FOCUS } from "@/lib/a11y";
+import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+import { Skeleton } from "@/components/ui/skeleton";
+import { SectionLabel } from "@/components/ui/page-scaffold";
+import { EmptyState } from "@/components/EmptyState";
+import { PassHistory } from "@/components/territory/PassHistory";
+import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
+import { RepPicker } from "@/components/territory/RepPicker";
+import { can as roleCan } from "@shared/permissions";
+import { repColorOf } from "@shared/repColors";
+import { shortDate, shortRep } from "@shared/territoryLabel";
+import {
+  areaStatusMeta, initialsOf, isNotFoundError, isPoolArea,
+  type AreaHistoryEvent, type AreaPassesResponse, type AreaProgressRow,
+} from "@/lib/areaProgress";
+
+// Territory lifecycle authority lives in shared/permissions.ts, NOT in the
+// capability map: that rank model is what the Express middleware enforces on
+// these exact routes (requireTeamLead for assign/unassign/reclaim,
+// requireManager for a pass reset), so gating the buttons on the same function
+// means the UI can never offer an action the API will reject.
+type TeamRow = { id: number; name: string; active?: boolean; color?: string | null };
+
+type TabId = "overview" | "passes" | "stats" | "doors" | "map";
+
+const CHIP = "text-[10px] font-bold uppercase tracking-[0.09em] rounded-full px-2.5 py-1";
+
+export default function AreaDetail() {
+  const [, params] = useRoute("/areas/:id");
+  const id = Number.parseInt(params?.id ?? "", 10);
+  const validId = Number.isFinite(id) && id > 0;
+
+  const { user } = useAuth();
+  const role = user?.role;
+  const { toast } = useToast();
+
+  // team_lead+ may hand areas out and pull them back; a pass reset clears an
+  // entire team's outcomes with no undo and stays manager+.
+  const canAssign = roleCan(role, "assign_territory");
+  const canNextPass = roleCan(role, "reset_territory_pass");
+  // /passes and /history are requireTeamLead routes. A rep asking for them gets
+  // a 403, so we never ask: the tab and the pass chip simply are not theirs.
+  const canSeePasses = canAssign;
+
+  const [tab, setTab] = useState<TabId>("overview");
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [nextPassOpen, setNextPassOpen] = useState(false);
+  const [pickedRepId, setPickedRepId] = useState<number | null>(null);
+
+  const progressQuery = useQuery<AreaProgressRow>({
+    queryKey: [`/api/territories/${id}/progress`],
+    enabled: validId,
+  });
+  const area = progressQuery.data;
+
+  const passesQuery = useQuery<AreaPassesResponse>({
+    queryKey: [`/api/territories/${id}/passes`],
+    enabled: validId && canSeePasses,
+  });
+
+  const historyQuery = useQuery<AreaHistoryEvent[]>({
+    queryKey: [`/api/territories/${id}/history`],
+    enabled: validId && canSeePasses && tab === "passes",
+  });
+
+  const teamQuery = useQuery<TeamRow[]>({
+    queryKey: ["/api/team"],
+    enabled: canAssign && (assignOpen || nextPassOpen),
+  });
+  const reps = useMemo(
+    () => (teamQuery.data ?? []).filter(m => m.active !== false).map(m => ({ id: m.id, name: m.name, color: m.color })),
+    [teamQuery.data],
+  );
+
+  const invalidateArea = () => {
+    queryClient.invalidateQueries({ queryKey: [`/api/territories/${id}/progress`] });
+    queryClient.invalidateQueries({ queryKey: [`/api/territories/${id}/passes`] });
+    queryClient.invalidateQueries({ queryKey: [`/api/territories/${id}/history`] });
+    queryClient.invalidateQueries({ queryKey: ["/api/territories"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/territories/progress"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/leads"] });
+  };
+
+  // Handing the area to a rep. An area nobody holds is an /assign; taking one
+  // off its current holder and giving it to someone else is a reclaim in
+  // reassign mode — the same two calls the Field Map makes, so both screens
+  // move the same rows.
+  const assignMutation = useMutation({
+    mutationFn: async (repId: number) => {
+      const pool = area ? isPoolArea(area) : true;
+      const res = pool
+        ? await apiRequest("POST", `/api/territories/${id}/assign`, { repId })
+        : await apiRequest("POST", `/api/territories/${id}/reclaim`, { mode: "reassign", newRepId: repId });
+      return res.json();
+    },
+    onSuccess: () => {
+      setAssignOpen(false);
+      setPickedRepId(null);
+      invalidateArea();
+      toast({ title: "Area assigned", severity: "success" });
+    },
+    onError: (e: any) => toast({
+      title: "Couldn't assign this area",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
+  });
+
+  const unassignMutation = useMutation({
+    mutationFn: async (repId: number) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/unassign`, { repId });
+      return res.json();
+    },
+    onSuccess: () => {
+      invalidateArea();
+      toast({ title: "Rep removed from this area", severity: "success" });
+    },
+    onError: (e: any) => toast({
+      title: "Couldn't remove the rep from this area",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
+  });
+
+  const nextPassMutation = useMutation({
+    mutationFn: async (body: {
+      territoryAction: string; newRepId?: number; keepPendingCallbacks: boolean; note?: string;
+    }) => {
+      const res = await apiRequest("POST", `/api/territories/${id}/next-pass`, body);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      setNextPassOpen(false);
+      invalidateArea();
+      toast({
+        title: data?.nextPass != null ? `Pass ${data.nextPass} started` : "Next pass started",
+        severity: "success",
+      });
+    },
+    onError: (e: any) => toast({
+      title: "Couldn't start the next pass",
+      description: String(e?.message ?? e).slice(0, 160),
+      variant: "destructive",
+    }),
+  });
+
+  // ── Not found / not yours ───────────────────────────────────────────────────
+  if (!validId || (progressQuery.isError && isNotFoundError(progressQuery.error))) {
+    return (
+      <div className="mx-auto w-full max-w-5xl p-4 pt-5 pb-24 md:p-6" data-testid="area-not-found">
+        <BackLink />
+        <EmptyState
+          icon={SearchX}
+          title="Area not found"
+          description="This area either doesn't exist or isn't one of yours. Ask your manager if you think it should be."
+          action={<Link href="/areas" className={cn("text-sm font-semibold text-primary underline underline-offset-4", FOCUS)}>Back to areas</Link>}
+          testId="area-not-found-state"
+        />
+      </div>
+    );
+  }
+
+  if (progressQuery.isError) {
+    return (
+      <div className="mx-auto w-full max-w-5xl p-4 pt-5 pb-24 md:p-6" data-testid="area-error">
+        <BackLink />
+        <div role="alert" className="rounded-2xl border border-destructive/40 bg-destructive/10 p-4 text-sm text-foreground">
+          Couldn't load this area. Check your connection and try again.
+        </div>
+      </div>
+    );
+  }
+
+  if (progressQuery.isLoading || !area) {
+    return (
+      <div className="mx-auto w-full max-w-5xl space-y-5 p-4 pt-5 pb-24 md:p-6" data-testid="area-loading">
+        <BackLink />
+        <Skeleton className="h-8 w-56 rounded-lg" />
+        <Skeleton className="h-6 w-72 rounded-full" />
+        <Skeleton className="h-28 w-full rounded-2xl" />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          {[0, 1, 2, 3].map(i => <Skeleton key={i} className="h-28 rounded-2xl" />)}
+        </div>
+      </div>
+    );
+  }
+
+  const meta = areaStatusMeta(area.status);
+  const pool = isPoolArea(area);
+  const currentPass = passesQuery.data?.currentPass;
+  const lastPass = passesQuery.data?.passes?.[0] ?? null;
+  const dot = area.color || repColorOf({ id: area.repId, color: null });
+  const ownerName = pool ? null : area.repName;
+
+  const tabs: Array<{ id: TabId; label: string }> = [
+    { id: "overview", label: "Overview" },
+    ...(canSeePasses ? [{ id: "passes" as TabId, label: "Passes & history" }] : []),
+    { id: "stats", label: "Stats" },
+    { id: "doors", label: "Doors" },
+    { id: "map", label: "Map" },
+  ];
+
+  return (
+    <div className="mx-auto w-full max-w-5xl space-y-5 p-4 pt-5 pb-24 md:p-6" data-testid="area-detail">
+      <BackLink />
+
+      {/* ── Title: the area's own colour, then its name. Nothing else at this size. */}
+      <div className="flex items-center gap-2.5">
+        <span
+          data-testid="area-color-dot"
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0 rounded-full border border-foreground/10"
+          style={{ backgroundColor: dot }}
+        />
+        <h1 className="min-w-0 truncate text-xl font-bold tracking-tight text-foreground" data-testid="area-name">
+          {area.name}
+        </h1>
+      </div>
+
+      {/* ── Chips: state, sweep, and the two facts that date the area. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={cn(CHIP, meta.chip)} data-testid="area-status-chip">{meta.label}</span>
+        {currentPass != null && (
+          <span className={cn(CHIP, "bg-secondary text-muted-foreground")} data-testid="area-pass-chip">
+            Pass {currentPass}
+          </span>
+        )}
+        <span className="text-[13px] text-muted-foreground" data-testid="area-meta">
+          <span className="tabular-nums">{area.total.toLocaleString()}</span> doors
+          {" · "}last activity {shortDate(area.lastActivityAt) ?? "never"}
+        </span>
+      </div>
+
+      {/* ── Actions. Hidden, never disabled: a control you may not use should not
+             be on screen at all. The server enforces the same ranks. */}
+      <div className="flex flex-wrap gap-2" data-testid="area-actions">
+        {canAssign && (
+          <button
+            type="button"
+            data-testid="area-action-reassign"
+            onClick={() => { setPickedRepId(area.repId); setAssignOpen(true); }}
+            className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70", FOCUS)}
+          >
+            <UserCog className="h-4 w-4" aria-hidden="true" />
+            {pool ? "Assign" : "Re-assign"}
+          </button>
+        )}
+        {canAssign && !pool && area.repId != null && (
+          <button
+            type="button"
+            data-testid="area-action-unassign"
+            disabled={unassignMutation.isPending}
+            onClick={() => unassignMutation.mutate(area.repId as number)}
+            className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70 disabled:opacity-50", FOCUS)}
+          >
+            {unassignMutation.isPending
+              ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+              : <UserMinus className="h-4 w-4" aria-hidden="true" />}
+            Unassign {shortRep(area.repName)}
+          </button>
+        )}
+        {canNextPass && (
+          <button
+            type="button"
+            data-testid="area-action-next-pass"
+            onClick={() => setNextPassOpen(true)}
+            className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70", FOCUS)}
+          >
+            <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            Start next pass
+          </button>
+        )}
+        <Link
+          href="/map"
+          data-testid="area-action-open-map"
+          className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-card px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/60", FOCUS)}
+        >
+          <MapIcon className="h-4 w-4" aria-hidden="true" />
+          Open in map
+        </Link>
+      </div>
+
+      {/* ── Tabs ───────────────────────────────────────────────────────────── */}
+      <div className="inline-flex w-full flex-wrap rounded-xl border border-border bg-card p-1 sm:w-auto" role="tablist" aria-label="Area console">
+        {tabs.map(t => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+            data-testid={`area-tab-${t.id}`}
+            className={cn(
+              "h-9 flex-1 rounded-lg px-4 text-xs font-semibold transition-colors sm:flex-none",
+              tab === t.id ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+              FOCUS,
+            )}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "overview" && (
+        <section className="space-y-4" data-testid="area-panel-overview">
+          {/* Hero: the one thing a manager opens this page to learn. */}
+          <div
+            className={cn("rounded-2xl border bg-gradient-to-br p-4 md:flex md:items-stretch md:gap-6", meta.hero)}
+            data-testid="area-hero"
+          >
+            <div className="min-w-0 flex-1">
+              <SectionLabel>Current assignment</SectionLabel>
+              <div className="mt-1 text-2xl font-bold tracking-tight text-foreground" data-testid="area-hero-value">
+                {pool ? meta.label : `${meta.label} to ${area.repName}`}
+              </div>
+              <p className="mt-1 text-[13px] text-muted-foreground">{meta.blurb}</p>
+            </div>
+            <div className="mt-4 border-t border-border pt-4 md:mt-0 md:w-56 md:shrink-0 md:border-l md:border-t-0 md:pl-6 md:pt-0" data-testid="area-hero-snapshot">
+              <SectionLabel>Snapshot</SectionLabel>
+              <dl className="mt-1.5 space-y-1 text-[13px]">
+                <div className="flex items-baseline justify-between gap-2">
+                  <dt className="text-muted-foreground">Last pass closed</dt>
+                  <dd className="font-semibold text-foreground">
+                    {lastPass ? shortDate(lastPass.closedAt) ?? "—" : canSeePasses ? "None yet" : "—"}
+                  </dd>
+                </div>
+                <div className="flex items-baseline justify-between gap-2">
+                  <dt className="text-muted-foreground">Doors</dt>
+                  <dd className="font-semibold tabular-nums text-foreground">{area.total.toLocaleString()}</dd>
+                </div>
+              </dl>
+            </div>
+          </div>
+
+          {/* Owner */}
+          <div className="rounded-2xl border border-border bg-card p-4" data-testid="area-owner">
+            <SectionLabel>Owner</SectionLabel>
+            {pool ? (
+              <div className="mt-2 flex items-center gap-3" data-testid="area-owner-empty">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 border-dashed border-border text-muted-foreground" aria-hidden="true">
+                  <UserMinus className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-foreground">Unassigned</div>
+                  <div className="text-[13px] text-muted-foreground">
+                    Nobody holds this area. Its doors stay in the pool until you hand it out.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="mt-2 flex items-center gap-3">
+                <span
+                  data-testid="area-owner-avatar"
+                  aria-hidden="true"
+                  style={{ borderColor: repColorOf({ id: area.repId, color: null }) }}
+                  className="grid h-10 w-10 shrink-0 place-items-center rounded-full border-2 text-[13px] font-bold text-foreground"
+                >
+                  {initialsOf(ownerName)}
+                </span>
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-foreground" data-testid="area-owner-name">{area.repName}</div>
+                  <div className="text-[13px] text-muted-foreground">
+                    Assigned rep{currentPass != null ? ` · working pass ${currentPass}` : ""}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* The four numbers. Rates are printed as sent — see the file header. */}
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4" data-testid="area-stat-grid">
+            <HeadlineStat
+              label="Doors in area" value={area.total} sub="Matches current filter set"
+              icon={DoorOpen} chip="bg-primary/15" tone="text-primary" testId="area-stat-total"
+            />
+            <HeadlineStat
+              label="Knocked" value={area.knocked} sub={`${area.knockCompletionRate}% of the area covered`}
+              icon={Hand} chip="bg-sky-500/15" tone="text-sky-600 dark:text-sky-400" testId="area-stat-knocked"
+            />
+            <HeadlineStat
+              label="Sold" value={area.sold} sub={`${area.penetrationRate}% penetration`}
+              icon={BadgeDollarSign} chip="bg-emerald-500/15" tone="text-emerald-600 dark:text-emerald-400" testId="area-stat-sold"
+            />
+            <HeadlineStat
+              label="Follow-ups" value={area.followUp} sub="Callbacks to sweep"
+              icon={CalendarClock} chip="bg-amber-500/15" tone="text-amber-600 dark:text-amber-400" testId="area-stat-followup"
+            />
+          </div>
+        </section>
+      )}
+
+      {tab === "passes" && canSeePasses && (
+        <section className="space-y-5" data-testid="area-panel-passes">
+          <PassHistory
+            currentPass={passesQuery.data?.currentPass ?? 1}
+            passes={passesQuery.data?.passes ?? []}
+            loading={passesQuery.isLoading}
+            error={passesQuery.isError ? "Couldn't load this area's pass history." : null}
+          />
+
+          <div>
+            <SectionLabel className="mb-2">Event log</SectionLabel>
+            {historyQuery.isLoading ? (
+              <div className="space-y-2" data-testid="area-history-loading">
+                {[0, 1, 2].map(i => <Skeleton key={i} className="h-12 w-full rounded-xl" />)}
+              </div>
+            ) : historyQuery.isError ? (
+              <div role="alert" className="text-sm text-destructive">Couldn't load this area's events.</div>
+            ) : (historyQuery.data ?? []).length === 0 ? (
+              <EmptyState
+                icon={History} bordered title="No events yet"
+                description="Assignments, reclaims, and pass resets are recorded here as they happen."
+                testId="area-history-empty"
+              />
+            ) : (
+              <ol className="space-y-2" data-testid="area-history-list">
+                {(historyQuery.data ?? []).map(ev => (
+                  <li key={ev.id} className="flex items-baseline justify-between gap-3 rounded-xl border border-border bg-card px-3 py-2.5">
+                    <span className="min-w-0">
+                      <span className="block truncate text-[13px] font-semibold text-foreground">
+                        {ev.event.replace(/[_:]/g, " ")}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {ev.actorId != null ? `by user #${ev.actorId}` : "system"}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                      {shortDate(ev.createdAt) ?? ev.createdAt}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        </section>
+      )}
+
+      {tab === "stats" && (
+        <section className="space-y-4" data-testid="area-panel-stats">
+          <div>
+            <SectionLabel className="mb-2">Door breakdown</SectionLabel>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3" data-testid="area-breakdown">
+              <MiniStat label="Contacted" value={area.contacted} hint={`${area.contactRate}% of doors knocked answered`} testId="area-stat-contacted" />
+              <MiniStat label="Nobody home" value={area.notHome} hint="Knocked, no answer yet" testId="area-stat-nothome" />
+              <MiniStat label="Untouched" value={area.untouched} hint="Available doors never knocked" testId="area-stat-untouched" />
+              <MiniStat label="Disqualified" value={area.disqualified} hint="Terminal no — out of the base" testId="area-stat-disqualified" />
+              <MiniStat label="Unavailable" value={area.unavailable} hint="Do not knock — out of the base" testId="area-stat-unavailable" />
+              <MiniStat label="Knock attempts" value={area.attempts} hint="Every knock, including repeat visits" testId="area-stat-attempts" />
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground" data-testid="area-base-note">
+              Every rate divides by the <span className="tabular-nums">{area.availableBase.toLocaleString()}</span> available
+              doors ({area.total.toLocaleString()} total minus {area.unavailable} unavailable and {area.disqualified} disqualified),
+              never by the raw total.
+            </p>
+          </div>
+
+          <div>
+            <SectionLabel className="mb-2">Location verification</SectionLabel>
+            <div className="rounded-2xl border border-border bg-card p-4">
+              <div className="grid grid-cols-3 gap-2" data-testid="area-verification">
+                <VerifyTile icon={ShieldCheck} label="Verified" value={area.verified}
+                  className="border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" testId="area-verified" />
+                <VerifyTile icon={AlertTriangle} label="Needs review" value={area.needsReview}
+                  className="border-amber-500/25 bg-amber-500/10 text-amber-600 dark:text-amber-400" testId="area-needs-review" />
+                <VerifyTile icon={Ban} label="Invalid" value={area.invalid}
+                  className="border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400" testId="area-invalid" />
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5">
+                  <Ruler className="h-3.5 w-3.5" aria-hidden="true" />
+                  Average distance when marked{" "}
+                  <span className="tabular-nums text-foreground">{area.avgDistanceM != null ? `${area.avgDistanceM} m` : "—"}</span>
+                </span>
+                <span>Max allowed <span className="tabular-nums">{area.maxAllowedDistanceM} m</span></span>
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Counts are knocks, not doors: one door knocked three times contributes three verdicts.
+                Area worked is <span className="tabular-nums text-foreground">{area.areaWorkedPct}%</span> —
+                {" "}{area.verifiedWorkedLeads} of {area.total} doors have a location-verified worked knock.
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {tab === "doors" && (
+        <section className="rounded-2xl border border-border bg-card p-4" data-testid="area-panel-doors">
+          <SectionLabel>Doors</SectionLabel>
+          <p className="mt-2 text-[13px] text-muted-foreground">
+            The door list lives on the Leads screen, which owns search, filters, dispositions, and assignment.
+            It has no per-area filter yet, so this opens the full list rather than pretending to scope it.
+            To see only this area's doors, use the map: the polygon is the filter.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link href="/leads" data-testid="area-doors-leads-link"
+              className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90", FOCUS)}>
+              <MapPinned className="h-4 w-4" aria-hidden="true" /> Open Leads
+            </Link>
+            <Link href="/map" data-testid="area-doors-map-link"
+              className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-border bg-secondary px-3.5 text-sm font-semibold text-foreground transition-colors hover:bg-secondary/70", FOCUS)}>
+              <MapIcon className="h-4 w-4" aria-hidden="true" /> Open the map
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {tab === "map" && (
+        <section className="rounded-2xl border border-border bg-card p-4" data-testid="area-panel-map">
+          <SectionLabel>Map</SectionLabel>
+          <p className="mt-2 text-[13px] text-muted-foreground">
+            The Field Map is the one place this area's boundary is drawn, edited, and knocked from.
+            It doesn't take an area in its URL yet, so this opens the map itself — select
+            {" "}<span className="font-semibold text-foreground">{area.name}</span> there to see its polygon and pins.
+          </p>
+          <Link href="/map" data-testid="area-map-link"
+            className={cn("mt-3 inline-flex min-h-11 items-center gap-1.5 rounded-xl bg-primary px-3.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90", FOCUS)}>
+            <MapIcon className="h-4 w-4" aria-hidden="true" /> Open the Field Map
+          </Link>
+        </section>
+      )}
+
+      {/* ── Assign / re-assign ─────────────────────────────────────────────── */}
+      {assignOpen && canAssign && (
+        <div role="dialog" aria-modal="true" aria-label="Assign this area"
+             data-testid="area-assign-dialog"
+             className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
+          <button
+            type="button" aria-label="Close" data-testid="area-assign-scrim"
+            disabled={assignMutation.isPending}
+            onClick={() => setAssignOpen(false)}
+            className="absolute inset-0 bg-black/50"
+          />
+          <div className="relative max-h-[85vh] w-full space-y-3 overflow-y-auto rounded-t-2xl border border-border bg-card p-4 text-foreground sm:max-w-md sm:rounded-2xl">
+            <h2 className="text-base font-semibold">{pool ? "Assign this area" : "Hand this area to another rep"}</h2>
+            <p className="text-xs text-muted-foreground">
+              The chosen rep gets the area and every door inside it.
+            </p>
+            {teamQuery.isLoading ? (
+              <Skeleton className="h-32 w-full rounded-lg" />
+            ) : (
+              <RepPicker
+                reps={reps}
+                value={pickedRepId}
+                onChange={setPickedRepId}
+                disabled={assignMutation.isPending}
+                label="Assign to"
+              />
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <button type="button" onClick={() => setAssignOpen(false)} disabled={assignMutation.isPending}
+                className={cn("min-h-11 rounded-xl border border-border px-4 text-sm font-semibold disabled:opacity-50", FOCUS)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                data-testid="area-assign-confirm"
+                disabled={pickedRepId == null || assignMutation.isPending}
+                onClick={() => pickedRepId != null && assignMutation.mutate(pickedRepId)}
+                className={cn("inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-4 text-sm font-semibold text-primary-foreground disabled:opacity-50", FOCUS)}
+              >
+                {assignMutation.isPending && <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+                Assign
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Start next pass — the existing dialog, unchanged ────────────────── */}
+      {nextPassOpen && canNextPass && (
+        <StartNextPassDialog
+          open
+          territoryId={id}
+          busy={nextPassMutation.isPending}
+          reps={reps}
+          fetchPreview={async (territoryId, keepPendingCallbacks) => {
+            const res = await apiRequest(
+              "GET",
+              `/api/territories/${territoryId}/next-pass/preview?keepPendingCallbacks=${keepPendingCallbacks}`,
+            );
+            return res.json();
+          }}
+          onConfirm={opts => nextPassMutation.mutate(opts)}
+          onCancel={() => setNextPassOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function BackLink() {
+  return (
+    <Link href="/areas" data-testid="area-back-link"
+      className={cn("inline-flex items-center gap-1.5 text-[13px] font-semibold text-muted-foreground transition-colors hover:text-foreground", FOCUS)}>
+      <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" /> Areas
+    </Link>
+  );
+}
+
+/** KpiTile's grammar (rounded-2xl / border-border / bg-card / tinted icon chip /
+ *  26px tabular number) plus the sub-line KpiTile has no slot for. */
+function HeadlineStat({ label, value, sub, icon: Icon, chip, tone, testId }: {
+  label: string;
+  value: number;
+  sub: string;
+  icon: LucideIcon;
+  chip: string;
+  tone: string;
+  testId: string;
+}) {
+  return (
+    <div className="relative min-w-0 rounded-2xl border border-border bg-card p-3.5" data-testid={testId}>
+      <span className={cn("absolute right-3.5 top-3.5 inline-flex h-7 w-7 items-center justify-center rounded-lg", chip)}>
+        <Icon className={cn("h-4 w-4", tone)} aria-hidden="true" />
+      </span>
+      <div className="pr-9 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1.5 text-[26px] font-bold leading-none tracking-tight tabular-nums text-foreground" data-testid={`${testId}-value`}>
+        {value.toLocaleString()}
+      </div>
+      <div className="mt-1.5 text-[11px] text-muted-foreground" data-testid={`${testId}-sub`}>{sub}</div>
+    </div>
+  );
+}
+
+function MiniStat({ label, value, hint, testId }: { label: string; value: number; hint: string; testId: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-3" data-testid={testId}>
+      <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-xl font-bold leading-none tabular-nums text-foreground">{value.toLocaleString()}</div>
+      <div className="mt-1 text-[11px] text-muted-foreground">{hint}</div>
+    </div>
+  );
+}
+
+function VerifyTile({ icon: Icon, label, value, className, testId }: {
+  icon: LucideIcon; label: string; value: number; className: string; testId: string;
+}) {
+  return (
+    <div className={cn("rounded-xl border px-2 py-2 text-center", className)} data-testid={testId}>
+      <div className="inline-flex items-center gap-1">
+        <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+        <span className="text-sm font-bold tabular-nums">{value.toLocaleString()}</span>
+      </div>
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+    </div>
+  );
+}

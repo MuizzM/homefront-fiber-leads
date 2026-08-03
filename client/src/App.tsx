@@ -32,6 +32,10 @@ const MapView = lazy(() => {
   return import("@/pages/MapView");
 });
 const Leads = lazy(() => import("@/pages/Leads"));
+// Area Console — the addressable read-and-act surface for one territory, plus
+// its index. Both are pure consumers of the existing /api/territories* routes.
+const Areas = lazy(() => import("@/pages/Areas"));
+const AreaDetail = lazy(() => import("@/pages/AreaDetail"));
 const Scanners = lazy(() => import("@/pages/Scanners"));
 const FiberIntelligence = lazy(() => import("@/pages/FiberIntelligence"));
 const TokenSetup = lazy(() => import("@/pages/TokenSetup"));
@@ -222,6 +226,13 @@ function AppRoutes() {
           <Route path="/lead/:id"><CapabilityGuard role={role} capability="field.app.use"><PropertyDetail /></CapabilityGuard></Route>
           <Route path="/map"><CapabilityGuard role={role} capability="field.app.use"><MapView /></CapabilityGuard></Route>
           <Route path="/leads"><CapabilityGuard role={role} capability="field.app.use"><Leads /></CapabilityGuard></Route>
+          {/* Area Console. The detail route is listed first so /areas/:id can
+              never be shadowed by the index as the switch grows. Both sit on
+              field.app.use like the rest of the field surfaces; the lifecycle
+              ACTIONS inside the detail page are separately rank-gated (and the
+              server independently enforces the same ranks). */}
+          <Route path="/areas/:id"><CapabilityGuard role={role} capability="field.app.use"><AreaDetail /></CapabilityGuard></Route>
+          <Route path="/areas"><CapabilityGuard role={role} capability="field.app.use"><Areas /></CapabilityGuard></Route>
           <Route path="/leaderboard"><CapabilityGuard role={role} capability="field.app.use"><Leaderboard /></CapabilityGuard></Route>
           {/* Spiffs — the sales-incentive surface. Every field role sees their own
               spiff feed + heat; the team heat leaderboard and admin approve/pay
