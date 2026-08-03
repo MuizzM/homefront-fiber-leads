@@ -2154,31 +2154,6 @@ export function runMigrations() {
        UNIQUE(tenant_id, user_id, lesson_id))`,
     `CREATE INDEX IF NOT EXISTS idx_training_progress_user ON training_progress(tenant_id, user_id)`,
 
-    // ══ HOURLY PAY (Sequifi-style hybrid hourly+commission) — additive ════════
-    // The rep's CURRENT hourly rate (integer cents/hour). NULL = commission-only.
-    // effective_from gates which weeks it governs (a week's rate is the one
-    // effective at week start); prior rates are reconstructed from the
-    // 'pay.hourly_rate.changed' audit events.
-    `ALTER TABLE team_members ADD COLUMN hourly_rate_cents INTEGER`,
-    `ALTER TABLE team_members ADD COLUMN hourly_rate_effective_from TEXT`,
-    // Append-only manager corrections to recorded time — clock_sessions raw rows
-    // are NEVER edited. minutes_delta is signed and day-attributed (session's
-    // clock-in day when session_id set, else created_at day) so the hours
-    // aggregation can floor at 0/day and flag >16h days.
-    `CREATE TABLE IF NOT EXISTS punch_corrections (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, session_id INTEGER, kind TEXT NOT NULL, minutes_delta INTEGER NOT NULL, reason TEXT NOT NULL, actor_user_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
-    `CREATE INDEX IF NOT EXISTS idx_punch_corrections_rep ON punch_corrections(tenant_id, rep_id, created_at)`,
-    // Rep-facing pay disputes + manager queue. One disputed line per row;
-    // 'adjusted' resolutions reference an existing commission_adjustments row.
-    `CREATE TABLE IF NOT EXISTS pay_disputes (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, week_start TEXT NOT NULL, line_kind TEXT NOT NULL, commission_id INTEGER, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', resolution TEXT, resolution_note TEXT, adjustment_id INTEGER, resolved_by INTEGER, idem_key TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), resolved_at TEXT)`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS idx_pay_disputes_idem ON pay_disputes(tenant_id, idem_key) WHERE idem_key IS NOT NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_pay_disputes_tenant ON pay_disputes(tenant_id, status, created_at)`,
-    `CREATE INDEX IF NOT EXISTS idx_pay_disputes_rep ON pay_disputes(tenant_id, rep_id, week_start)`,
-    // Hourly block persisted on the weekly statement (computed at generation
-    // with the rate effective at week start; recompute is truthful/idempotent).
-    `ALTER TABLE commission_statements ADD COLUMN hourly_minutes INTEGER`,
-    `ALTER TABLE commission_statements ADD COLUMN hourly_rate_cents INTEGER`,
-    `ALTER TABLE commission_statements ADD COLUMN hourly_pay_cents INTEGER NOT NULL DEFAULT 0`,
-
   ];
   for (const stmt of stmts) {
     try { raw.exec(stmt); } catch (e: any) {
