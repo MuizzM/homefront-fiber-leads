@@ -2,14 +2,15 @@
 // Every field surface, including MapView, consumes THIS hook so the critical
 // path (offline queue + GPS evidence + optimistic recolor + authoritative saved
 // reconciliation) cannot drift between screens.
-import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { getKnockQueue, type QueueSnapshot } from "@/lib/knockQueue";
+import { installPendingKnockOverlay, mergePendingOutcomes } from "@/lib/pendingKnockOverlay";
 import { captureFieldFix } from "@/lib/geoFix";
-import { OUTCOME_TO_STATUS, type KnockOutcome, type QueuedKnock } from "@shared/knock";
+import { type KnockOutcome, type QueuedKnock } from "@shared/knock";
 import {
   createSavedKnockReconciliation,
   deriveFieldQueueOwnerKey,
@@ -21,7 +22,7 @@ import {
   isKnockableLeadId,
 } from "@/features/knocking/knockFailurePolicy";
 
-const EMPTY_SNAP: QueueSnapshot = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true };
+const EMPTY_SNAP: QueueSnapshot = { pendingCount: 0, deadCount: 0, deadItems: [], byLead: {}, online: true, pendingOutcomes: {} };
 export interface LogLead { id: number; leadStatus: string; assignedRepId?: number | null }
 export interface LogOpts { notes?: string | null; callbackDate?: string | null; callbackTime?: string | null }
 
@@ -79,6 +80,15 @@ export function useKnockLogger() {
     });
   }, [queueOwnerKey, reconcileSavedKnock, resolveDroppedKnock]);
 
+  // Re-apply unsent knocks after every server read of the map, so a poll, the
+  // map-changed stream, or a tab refocus can no longer revert a pin the rep has
+  // already tapped. The overlay is derived from the queue's DURABLE pending set,
+  // so it survives reload and clears itself the moment the knock lands.
+  useEffect(() => {
+    if (!queue) return;
+    return installPendingKnockOverlay(qc, () => queue.getSnapshot().pendingOutcomes);
+  }, [queue, qc]);
+
   const snap = useSyncExternalStore(
     useCallback(cb => queue ? queue.subscribe(cb) : () => {}, [queue]),
     useCallback(() => queue ? queue.getSnapshot() : EMPTY_SNAP, [queue]),
@@ -121,11 +131,19 @@ export function useKnockLogger() {
     // what applyKnockOutcomeCas writes to last_outcome_at), so a teammate's
     // OLDER push arriving after this tap loses the stream merge's recency
     // comparison exactly like it loses the server CAS.
-    qc.setQueryData(["/api/leads/map"], (old: any) => old?.pins
-      ? { ...old, pins: old.pins.map((p: any) => p.id === lead.id
-          ? { ...p, leadStatus: OUTCOME_TO_STATUS[outcome] ?? p.leadStatus, visited: true, knockCount: (p.knockCount ?? 0) + 1, lastOutcome: outcome, lastKnockedAt: at, lastOutcomeAt: at }
-          : p) }
-      : old);
+    // Instant feedback for THIS tap. The knockCount bump is applied only here —
+    // the overlay deliberately does not increment, because it re-runs on every
+    // read and a per-read increment would climb without bound.
+    qc.setQueryData(["/api/leads/map"], (old: any) => {
+      const bumped = old?.pins
+        ? { ...old, pins: old.pins.map((p: any) => p.id === lead.id
+            ? { ...p, knockCount: (p.knockCount ?? 0) + 1 }
+            : p) }
+        : old;
+      // Same merge the overlay uses, so the immediate patch and every later
+      // re-application can never disagree about what the pin should look like.
+      return mergePendingOutcomes(bumped, { [lead.id]: { outcome, at } });
+    });
     const staged = queue.stage({
       leadId: lead.id,
       repId: credit,

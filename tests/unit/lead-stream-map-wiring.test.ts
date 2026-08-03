@@ -12,6 +12,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { mergePendingOutcomes } from "../../client/src/lib/pendingKnockOverlay";
 
 const ROOT = join(__dirname, "..", "..");
 const src = readFileSync(join(ROOT, "client/src/pages/MapView.tsx"), "utf8");
@@ -110,9 +111,29 @@ describe("background/foreground convergence", () => {
 
 describe("optimistic writes stamp the CAS clock", () => {
   it("a rep's own tap sets lastOutcomeAt so an older push cannot repaint their door", () => {
-    // useKnockLogger is the one shared field-logging path; its optimistic
-    // cache write must carry the same clock the server CAS will record.
-    expect(knockLoggerSrc).toContain("lastOutcomeAt: at");
+    // useKnockLogger is the one shared field-logging path; its optimistic cache
+    // write must carry the same clock the server CAS will record.
+    //
+    // Asserted through the shared merge rather than by grepping the hook for a
+    // literal, because the stamping now lives in mergePendingOutcomes — the same
+    // function the post-refetch overlay uses, which is precisely what stops a
+    // poll from reverting the pin. A source-text assertion would have gone green
+    // on a hook that stamped the clock and then had it overwritten anyway.
+    expect(knockLoggerSrc).toContain("mergePendingOutcomes");
+    const at = "2026-08-03T12:00:00.000Z";
+    const merged = mergePendingOutcomes(
+      { pins: [{ id: 7, leadStatus: "new", visited: false, lastOutcome: null, lastOutcomeAt: null }] },
+      { 7: { outcome: "not_home", at } },
+    )!;
+    expect(merged.pins[0].lastOutcomeAt).toBe(at);
+
+    // …and the clock is what makes an OLDER teammate push lose, exactly as it
+    // loses the server's outcome CAS.
+    const older = mergePendingOutcomes(
+      { pins: [{ id: 7, leadStatus: "sold", visited: true, lastOutcome: "sold", lastOutcomeAt: "2026-08-03T13:00:00.000Z" }] },
+      { 7: { outcome: "not_home", at } },
+    )!;
+    expect(older.pins[0].lastOutcome).toBe("sold");
   });
 
   it("a central mark's optimistic write carries the clock too", () => {
