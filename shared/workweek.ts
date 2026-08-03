@@ -83,6 +83,24 @@ function parseHm(hm: string): { h: number; mi: number } {
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
 /**
+ * The calendar date (YYYY-MM-DD) of an instant AS SEEN in the org's timezone.
+ *
+ * Use this anywhere a date is compared against week bounds. `new Date()
+ * .toISOString().slice(0,10)` is the UTC date, which is a DIFFERENT day from
+ * the org's local date for part of every day (e.g. 03:30Z Monday is still
+ * Sunday in America/New_York). Mixing the two silently dated a newly assigned
+ * commission plan into the FOLLOWING week every Sunday evening Eastern, so the
+ * week in progress resolved to "no plan assigned".
+ */
+export function localDateISO(instantUtc: Date | string | number = Date.now(), cfg: WorkweekConfig = DEFAULT_WORKWEEK): string {
+  const ms = instantUtc instanceof Date ? instantUtc.getTime()
+    : typeof instantUtc === "number" ? instantUtc
+    : Date.parse(instantUtc);
+  const { y, mo, d } = localYmd(ms, cfg.timezone);
+  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/**
  * The commission-week bounds that CONTAIN `instantUtc`, in the org's timezone.
  * Returns a half-open [weekStartUtc, nextWeekStartUtc) interval — use it as:
  *   soldAt >= weekStartUtc AND soldAt < nextWeekStartUtc

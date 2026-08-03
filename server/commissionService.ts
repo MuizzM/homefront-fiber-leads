@@ -8,7 +8,7 @@
 import crypto from "crypto";
 import { rawDb } from "./db";
 import { storage } from "./storage";
-import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds } from "@shared/workweek";
+import { weekBoundsFor, type WorkweekConfig, DEFAULT_WORKWEEK, type WeekBounds, localDateISO } from "@shared/workweek";
 import { computeHoldback, rollupReserve, type Holdback, type ReserveLedger } from "@shared/commissionReserve";
 import {
   validateTiers, calculateRetroactiveCommission, calculateFlatCommission, formatUsdCents,
@@ -695,7 +695,13 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
 const STANDARD_TIERED_PLAN_NAME = "Standard Weekly Tiers";
 const FLAT_PLAN_NAME = "Flat Per-Sale";
 const CUSTOM_TIERED_PLAN_NAME = "Custom Weekly Tiers";
-const today = () => new Date().toISOString().slice(0, 10);
+// The org's LOCAL calendar date, not the UTC one. These dates are compared
+// against commission-week bounds, which are computed in the org's timezone —
+// so a UTC date is simply the wrong calendar day for part of every day. Using
+// it dated a newly assigned plan onto the NEXT week's boundary every Sunday
+// evening Eastern, and the week in progress then resolved to "no plan
+// assigned" (NO_EFFECTIVE_PLAN_ASSIGNMENT) for that rep.
+const today = () => localDateISO();
 
 export type CommissionStructure = "FLAT" | "TIERED";
 
