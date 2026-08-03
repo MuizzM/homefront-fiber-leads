@@ -115,7 +115,7 @@ import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
 import { isTrainingGated, pathAllowedWhileGated } from "@shared/trainingGate";
 import {
   gateStateFor, statusFor as trainingGateStatus, setTrainingRequired,
-  requiredLessons, setRequiredLessons, gatedRoster,
+  requiredLessons, setRequiredLessons, trainingRoster,
 } from "./trainingGateStore";
 import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { awardMilestonesForRep } from "./knockMilestoneStore";
@@ -8257,8 +8257,16 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // their first week.
   app.get("/api/training/gate/roster", requireManager, (req: Request, res: Response) => {
     const tenantId = (req as any).user?.tenantId;
-    if (tenantId == null) return res.json({ reps: [], requiredLessons: 0 });
-    res.json({ reps: gatedRoster(Number(tenantId)), requiredLessons: requiredLessons(tenantId) });
+    if (tenantId == null) return res.json({ reps: [], everyone: [], requiredLessons: 0 });
+    // `everyone` drives the admin lock/unlock console; `reps` stays the
+    // locked-only list the manager view already reads.
+    const everyone = trainingRoster(Number(tenantId));
+    res.json({
+      reps: everyone.filter(r => r.gated),
+      everyone,
+      requiredLessons: requiredLessons(tenantId),
+      totalAvailable: TOTAL_TRAINING_LESSONS,
+    });
   });
 
   // Manual unlock / re-lock for one account. Reality outruns policy: a rep who

@@ -238,6 +238,56 @@ describe("admin overrides", () => {
     expect((await res.json() as any).error).toMatch(/only \d+ lessons/);
   });
 
+  it("the roster lists EVERYONE, so an admin can lock a rep who is currently unlocked", async () => {
+    // This is the case the console exists for: a rep already on the roster when
+    // the gate shipped is grandfathered UNLOCKED, and the admin now wants them
+    // to do the course. A locked-only list could never surface them.
+    const res = await request("/api/training/gate/roster", admin.session);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+
+    const vet = body.everyone.find((r: any) => r.userId === veteran.userId);
+    expect(vet, "a grandfathered rep must still appear").toBeTruthy();
+    expect(vet.gated).toBe(false);
+    expect(vet.trainingRequired).toBe(false);
+
+    // Exempt roles are present but flagged, so it is visible WHY they have no
+    // toggle rather than them being silently missing.
+    const boss = body.everyone.find((r: any) => r.userId === mgr.userId);
+    expect(boss).toBeTruthy();
+    expect(boss.gated).toBe(false);
+  });
+
+  it("locking a previously-unlocked rep takes effect immediately", async () => {
+    // The veteran could work a moment ago; after the admin locks them they are
+    // refused the field on their EXISTING session, with no sign-out required.
+    expect((await request("/api/leads", veteran.session)).status).not.toBe(403);
+
+    expect((await post(`/api/training/gate/${veteran.userId}`, admin.session, { required: true })).status).toBe(200);
+    const res = await request("/api/leads", veteran.session);
+    expect(res.status).toBe(403);
+    expect((await res.json() as any).code).toBe("TRAINING_REQUIRED");
+
+    // …and they now show as locked on the console.
+    const roster = await (await request("/api/training/gate/roster", admin.session)).json() as any;
+    expect(roster.everyone.find((r: any) => r.userId === veteran.userId).gated).toBe(true);
+    expect(roster.reps.some((r: any) => r.userId === veteran.userId)).toBe(true);
+
+    // Put them back so later assertions see the original state.
+    expect((await post(`/api/training/gate/${veteran.userId}`, admin.session, { required: false })).status).toBe(200);
+    expect((await request("/api/leads", veteran.session)).status).not.toBe(403);
+  });
+
+  it("locking an EXEMPT role changes nothing — a manager is never gated", async () => {
+    // The flag can be set on anyone, but the rule ignores it for exempt roles.
+    // Without this, an admin could accidentally lock a manager out of the org.
+    expect((await post(`/api/training/gate/${mgr.userId}`, admin.session, { required: true })).status).toBe(200);
+    expect((await request("/api/leads", mgr.session)).status).not.toBe(403);
+    const roster = await (await request("/api/training/gate/roster", admin.session)).json() as any;
+    expect(roster.everyone.find((r: any) => r.userId === mgr.userId).gated).toBe(false);
+    await post(`/api/training/gate/${mgr.userId}`, admin.session, { required: false });
+  });
+
   it("the roster names who is still locked out", async () => {
     await put("/api/training/gate-threshold", admin.session, { requiredLessons: TRAINING_LESSONS.length });
     const fresh = makePerson("Roster Rep", "rep", 1, "rep");
