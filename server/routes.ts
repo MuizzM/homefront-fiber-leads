@@ -82,6 +82,7 @@ import {
 } from "@shared/capabilities";
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
 import { registerCommissionRoutes } from "./commissionRoutes";
+import { registerHourlyPayRoutes } from "./hourlyPayRoutes";
 import { registerPayoutRoutes } from "./payoutRoutes";
 import {
   issueOnboardingDocuments,
@@ -1068,6 +1069,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
   registerCommissionRoutes(app, { requireAuth, requireCapability });
+  // Hourly pay plane (rates, punch corrections, pay disputes) — same injected auth.
+  registerHourlyPayRoutes(app, { requireAuth, requireCapability });
   registerPayoutRoutes(app, { requireAuth, requireCapability });
   registerOnboardingDocumentRoutes(app, { requireAuth, requireCapability });
 
