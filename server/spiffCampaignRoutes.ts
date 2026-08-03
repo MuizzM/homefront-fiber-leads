@@ -28,6 +28,9 @@ import {
   getMomentumConfig, setMomentumConfig, repMomentumCard, momentumExposure,
 } from "./momentumSpiffStore";
 import { validateMomentumConfig } from "@shared/momentumSpiff";
+import {
+  getDoorDropConfig, setDoorDropConfig, repDoorDropCard, doorDropExposure,
+} from "./doorDropStore";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -143,6 +146,49 @@ export function registerSpiffCampaignRoutes(app: Express, deps: Deps) {
     if (problem) return res.status(400).json({ error: problem });
     const saved = setMomentumConfig(tenantId, uid(req), cfg as any);
     res.json({ config: saved, exposure: momentumExposure(tenantId, Date.now()) });
+  });
+
+  // ── Door drops: any verified door can pay a small surprise ────────────────
+  app.get("/api/me/door-drops", requireCapability("field.app.use"), (req, res) => {
+    const tenantId = tid(req);
+    const repId = (req as any).user?.teamMemberId;
+    if (tenantId == null || repId == null) return res.json({ enabled: false, statusLine: "" });
+    res.json(repDoorDropCard(tenantId, Number(repId), Date.now()));
+  });
+
+  app.get("/api/spiff-door-drops", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const doors = Number(req.query.doorsPerRepPerDay);
+    res.json({
+      config: getDoorDropConfig(tenantId),
+      exposure: doorDropExposure(tenantId, Date.now(), Number.isFinite(doors) && doors > 0 ? doors : 70),
+    });
+  });
+
+  app.put("/api/spiff-door-drops", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const b = req.body ?? {};
+    const current = getDoorDropConfig(tenantId);
+    const int = (v: unknown, d: number) => (v == null ? d : Math.trunc(Number(v)));
+    try {
+      const saved = setDoorDropConfig(tenantId, uid(req), {
+        ...current,
+        enabled: b.enabled !== false,
+        oddsOneIn: int(b.oddsOneIn, current.oddsOneIn),
+        pityAtDoors: int(b.pityAtDoors, current.pityAtDoors),
+        minCents: int(b.minCents, current.minCents),
+        maxCents: int(b.maxCents, current.maxCents),
+        stepCents: int(b.stepCents, current.stepCents),
+        maxPerRepPerDay: int(b.maxPerRepPerDay, current.maxPerRepPerDay),
+        maxCentsPerRepPerDay: int(b.maxCentsPerRepPerDay, current.maxCentsPerRepPerDay),
+        maxCentsPerOrgPerDay: int(b.maxCentsPerOrgPerDay, current.maxCentsPerOrgPerDay),
+      });
+      res.json({ config: saved, exposure: doorDropExposure(tenantId, Date.now()) });
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not save" });
+    }
   });
 
   // ── Rep surface ───────────────────────────────────────────────────────────

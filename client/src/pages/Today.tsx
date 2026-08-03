@@ -16,6 +16,7 @@ import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { CampaignStrip } from "@/components/CampaignBoard";
 import { MilestoneCard } from "@/components/MilestoneCard";
 import { MomentumOffer } from "@/components/MomentumOffer";
+import { DoorDropCard } from "@/components/DoorDropCard";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
@@ -238,6 +239,10 @@ export default function Today() {
               which is the point — a rep with a cold week still has a number to
               chase, and the number is the input that produces sales. */}
           <MilestoneCard compact />
+          {/* Last, and quietly. A drop is not a plan for the day — but a rep who
+              does not know the mechanic exists cannot be motivated by it, and
+              the line is one sentence. */}
+          <DoorDropCard compact />
         </div>
 
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}

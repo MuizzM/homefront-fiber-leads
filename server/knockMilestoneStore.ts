@@ -169,9 +169,9 @@ export function awardMilestonesForRep(tenantId: number, repId: number, nowMs: nu
     const key = `milestone:${win.key}:rep:${repId}:doors:${rung.doors}`;
     const reason = milestoneReason(rung, ladder.period);
     const info = rawDb.prepare(
-      `INSERT OR IGNORE INTO spiffs (tenant_id, rep_id, sale_ref, amount_cents, reason, status)
-       VALUES (?,?,?,?,?,'earned')`,
-    ).run(tenantId, repId, key, rung.rewardCents, reason);
+      `INSERT OR IGNORE INTO spiffs (tenant_id, rep_id, sale_ref, amount_cents, reason, status, created_at)
+       VALUES (?,?,?,?,?,'earned',?)`,
+    ).run(tenantId, repId, key, rung.rewardCents, reason, new Date(nowMs).toISOString());
 
     const inserted = info.changes === 1;
     if (inserted) {

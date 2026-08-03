@@ -54,6 +54,10 @@ export function ensureSpiffSchema(): void {
       amount_cents INTEGER NOT NULL,
       reason TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'earned',
+      -- ISO-8601 with milliseconds and a trailing Z, ALWAYS. Every writer passes
+      -- one explicitly; the SQLite default below is the odd one out and only
+      -- exists because the column predates that rule. See the note on
+      -- normalizeSpiffTimestamps for why the mismatch is not cosmetic.
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       approved_by INTEGER,
       approved_at TEXT,
@@ -62,6 +66,39 @@ export function ensureSpiffSchema(): void {
     CREATE INDEX IF NOT EXISTS idx_spiffs_tenant_rep ON spiffs(tenant_id, rep_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_spiffs_sale_ref ON spiffs(tenant_id, sale_ref) WHERE sale_ref IS NOT NULL;
   `);
+  normalizeSpiffTimestamps();
+}
+
+/**
+ * Rewrite any `created_at` still in SQLite's `datetime('now')` shape
+ * (`2026-08-03 21:05:00`) into the ISO shape everything else uses
+ * (`2026-08-03T21:05:00.000Z`).
+ *
+ * WHY THIS MATTERS, given both strings name the same instant: this column is
+ * compared and ordered as TEXT. `' '` sorts before `'T'`, so the two formats do
+ * not interleave — every space-form row sorts before every ISO row regardless of
+ * date, and a range filter written against ISO bounds matches NONE of them.
+ *
+ * That silently broke real behaviour. The award stores (campaigns, milestones,
+ * momentum, door drops) all relied on the default, so:
+ *   · door-drop daily caps never engaged — the "awarded today" query matched
+ *     nothing, so every cap read as $0 spent;
+ *   · the doors-since-last-drop counter never reset after a payout, leaving reps
+ *     permanently past the pity ceiling and dropping on EVERY verified door;
+ *   · rep spiff history and payout batches ordered those awards as a block
+ *     instead of by date.
+ *
+ * Idempotent, cheap (indexed by nothing, but the table is small and the LIKE is
+ * anchored), and safe to run on every boot.
+ */
+export function normalizeSpiffTimestamps(): void {
+  try {
+    rawDb.prepare(
+      `UPDATE spiffs
+          SET created_at = replace(created_at, ' ', 'T') || '.000Z'
+        WHERE created_at LIKE '____-__-__ __:__:__'`,
+    ).run();
+  } catch { /* a read-only or mid-migration db must not block boot */ }
 }
 ensureSpiffSchema();
 
