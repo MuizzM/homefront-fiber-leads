@@ -456,8 +456,19 @@ describe("territory lifecycle routes are walled", () => {
     expect(storage.getTerritoryById(ids.bTerritory)!.name).toBe("Dana's area");
   });
 
-  it("DELETE /api/territories/:id → 404, and the foreign area survives", async () => {
-    expect((await req(`/api/territories/${ids.bTerritory}`, aManager, { method: "DELETE" })).status).toBe(404);
+  it("DELETE /api/territories/:id → 404 even for an ADMIN, and the foreign area survives", async () => {
+    // Deliberately the tenant's ADMIN, not its manager. Delete is admin-gated
+    // (shared/permissions.ts: delete_territory → admin), so a manager is turned
+    // away by the ROLE check and never reaches the tenant boundary — which would
+    // prove nothing about isolation. Sending someone who clears the role gate is
+    // what actually exercises the wall.
+    expect((await req(`/api/territories/${ids.bTerritory}`, aAdmin, { method: "DELETE" })).status).toBe(404);
+    expect(storage.getTerritoryById(ids.bTerritory)).toBeDefined();
+
+    // And a manager is refused earlier, on role alone — 403 rather than 404,
+    // which leaks nothing: it is a statement about the CALLER, not about whether
+    // that area exists.
+    expect((await req(`/api/territories/${ids.bTerritory}`, aManager, { method: "DELETE" })).status).toBe(403);
     expect(storage.getTerritoryById(ids.bTerritory)).toBeDefined();
   });
 

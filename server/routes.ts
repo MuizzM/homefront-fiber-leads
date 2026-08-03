@@ -123,7 +123,11 @@ import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
 import { rollDoorDrop } from "./doorDropStore";
 import { publishSale, publishStreak, feedForUser, markRead } from "./teamFeedStore";
 import { emitAnnouncement, onAnnouncement } from "./announcementBus";
-import { visibleTo } from "@shared/teamFeed";
+import { visibleTo, usd as feedUsd } from "@shared/teamFeed";
+import {
+  publicKey as pushPublicKey, saveSubscription, removeSubscription,
+  pushToUsers, tenantUserIds, subscriptionCount,
+} from "./pushStore";
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
@@ -2029,6 +2033,37 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const userId = Number(req.user?.id);
     if (!Number.isFinite(userId)) return res.status(401).json({ error: "Unauthenticated" });
     res.json({ lastReadId: markRead(userId, Number(req.body?.upToId ?? 0), Date.now()) });
+  });
+
+  // ── Phone notifications ─────────────────────────────────────────────────────
+  // The public VAPID key. Public by design — it is the applicationServerKey the
+  // browser needs to call pushManager.subscribe(), and it identifies us to the
+  // push service without authorizing anything.
+  app.get("/api/push/key", requireAuth, (_req: any, res: Response) => {
+    res.json({ publicKey: pushPublicKey() });
+  });
+
+  app.post("/api/push/subscribe", requireAuth, (req: any, res: Response) => {
+    const tenantId = req.user?.tenantId, userId = Number(req.user?.id);
+    const { endpoint, p256dh, auth, userAgent } = req.body ?? {};
+    if (tenantId == null || !Number.isFinite(userId)) return res.status(403).json({ error: "Organization required" });
+    if (typeof endpoint !== "string" || !/^https:\/\//.test(endpoint) || !p256dh || !auth) {
+      return res.status(400).json({ error: "A valid push subscription is required" });
+    }
+    saveSubscription({
+      tenantId: Number(tenantId), userId, repId: req.user?.teamMemberId ?? null,
+      endpoint, p256dh: String(p256dh), auth: String(auth),
+      userAgent: typeof userAgent === "string" ? userAgent.slice(0, 300) : null,
+    });
+    res.json({ ok: true, devices: subscriptionCount(Number(tenantId), userId) });
+  });
+
+  app.post("/api/push/unsubscribe", requireAuth, (req: any, res: Response) => {
+    const endpoint = req.body?.endpoint;
+    // No ownership check needed: an endpoint is an unguessable, push-service-
+    // minted URL, and deleting one only stops that device receiving.
+    if (typeof endpoint === "string" && endpoint) removeSubscription(endpoint);
+    res.json({ ok: true });
   });
 
   // GET /api/leads/fresh — confirmed fresh-fiber leads published within the last
@@ -5792,21 +5827,55 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       try {
         if (bonusTenant != null) {
           if (parsed.data.outcome === "sold") {
-            emitAnnouncement(bonusTenant, publishSale(
+            const a = publishSale(
               bonusTenant, parsed.data.repId, knock.id, Number(req.params.id), Date.parse(serverTs),
-            ));
+            );
+            emitAnnouncement(bonusTenant, a);
+            // A teammate's sale is a PHONE notification only for reps whose app
+            // is closed — the ones already looking at it got the live frame and
+            // do not need a buzz too. `tag` collapses consecutive sale pings into
+            // one line rather than stacking six on a busy Saturday.
+            //
+            // Fire-and-forget: a knock must never wait on Apple's servers, and a
+            // push failure must never surface as a failed sale.
+            if (a) {
+              void pushToUsers(
+                bonusTenant, tenantUserIds(bonusTenant),
+                { title: a.headline, body: a.body, url: "/spiffs", tag: "team-sale" },
+                (req as any).user?.id ?? null,   // never buzz the rep who closed it
+              ).catch(() => { /* best effort */ });
+            }
           } else if (momentumArmed) {
             // The momentum engine's arming decision IS the hot-streak signal —
             // re-deriving "hot" here would be a second, looser definition that
             // sidesteps its anti-sandbagging floors.
-            emitAnnouncement(bonusTenant, publishStreak(
+            const streak = publishStreak(
               bonusTenant, parsed.data.repId,
               {
                 id: momentumArmed.id, amountCents: momentumArmed.amountCents,
                 score: momentumArmed.score, remainingMs: momentumArmed.remainingMs,
               },
               Date.parse(serverTs),
-            ));
+            );
+            emitAnnouncement(bonusTenant, streak);
+            if (streak) {
+              void pushToUsers(
+                bonusTenant, tenantUserIds(bonusTenant),
+                { title: streak.headline, body: streak.body, url: "/spiffs", tag: "team-streak" },
+                (req as any).user?.id ?? null,
+              ).catch(() => { /* best effort */ });
+            }
+            // The rep who is ON the streak gets their own, different push: the
+            // clock is theirs and the money is theirs, so "catch up" would be
+            // nonsense addressed to them.
+            void pushToUsers(
+              bonusTenant, [(req as any).user?.id].filter((n): n is number => Number.isFinite(n)),
+              {
+                title: `You're running hot — ${feedUsd(momentumArmed.amountCents)} on the line`,
+                body: `Close one in the next ${Math.max(1, Math.round(momentumArmed.remainingMs / 60_000))} min and it's yours.`,
+                url: "/spiffs", tag: "my-streak",
+              },
+            ).catch(() => { /* best effort */ });
           }
         }
       } catch (e: any) {

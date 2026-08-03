@@ -25,6 +25,7 @@
 
 export const CAMPAIGN_TRIGGER_KINDS = [
   "per_sale", "knocks_by_time", "sale_by_time", "sales_in_day", "knock_streak",
+  "knocks_and_sale_by_time",
 ] as const;
 export type CampaignTriggerKind = typeof CAMPAIGN_TRIGGER_KINDS[number];
 
@@ -39,7 +40,21 @@ export type CampaignTrigger =
   /** N sales in a single day — rewards not stopping after the first. */
   | { kind: "sales_in_day"; sales: number }
   /** N consecutive days each clearing a knock bar — rewards showing up. */
-  | { kind: "knock_streak"; days: number; knocksPerDay: number };
+  | { kind: "knock_streak"; days: number; knocksPerDay: number }
+  /**
+   * BOTH: N knocks AND a sale, both before a local hour. "20 doors and a sale
+   * before 3."
+   *
+   * Worth its own kind rather than two campaigns, because two campaigns pay
+   * twice and pay for either half alone — which is exactly the behaviour this
+   * is designed to prevent. A knocks-only campaign rewards someone who walks
+   * past 20 doors without pitching; a sale-only campaign rewards a lucky first
+   * door and then a long lunch. Requiring both in one trigger is what makes it
+   * mean "work the morning properly", and it is still winnable at 1 PM by
+   * anyone willing to move, which is the property that keeps the bottom half of
+   * the board trying.
+   */
+  | { kind: "knocks_and_sale_by_time"; knocks: number; byHourLocal: number };
 
 export const CAMPAIGN_STATUSES = ["scheduled", "live", "paused", "ended", "cancelled"] as const;
 export type CampaignStatus = typeof CAMPAIGN_STATUSES[number];
@@ -129,6 +144,13 @@ export function triggerMet(trigger: CampaignTrigger, counters: RepWindowCounters
       return counters.salesToday >= Math.max(1, trigger.sales);
     case "knock_streak":
       return counters.streakDaysMeetingBar >= Math.max(1, trigger.days);
+    case "knocks_and_sale_by_time":
+      // BOTH halves, both before the cutoff. The sale check reuses
+      // firstSaleHourLocalToday rather than salesToday so a sale closed at 4 PM
+      // cannot satisfy a "before 3" campaign.
+      return counters.knocksBeforeCutoffToday >= Math.max(1, trigger.knocks)
+        && counters.firstSaleHourLocalToday != null
+        && counters.firstSaleHourLocalToday < trigger.byHourLocal;
     default:
       return false;
   }
@@ -197,6 +219,38 @@ export function campaignProgress(
       const left = Math.max(0, target - current);
       headline = met ? `${current}-day streak — bonus earned` : `Day ${current} of ${target}`;
       nextStep = met ? "" : `${left} more day${left === 1 ? "" : "s"} at ${t.knocksPerDay}+ knocks.`;
+      break;
+    }
+    case "knocks_and_sale_by_time": {
+      // Two halves, so the bar tracks the one still OUTSTANDING rather than an
+      // average of the two. A bar at 50% because the doors are done but the sale
+      // is not tells a rep nothing about what to do next; "doors done — now get
+      // one in" does.
+      const doorsTarget = Math.max(1, t.knocks);
+      const doorsDone = counters.knocksBeforeCutoffToday >= doorsTarget;
+      const saleDone = counters.firstSaleHourLocalToday != null
+        && counters.firstSaleHourLocalToday < t.byHourLocal;
+      const by = hour12(t.byHourLocal);
+
+      if (met) {
+        current = 2; target = 2;
+        headline = `${doorsTarget} doors and a sale before ${by} — bonus earned`;
+        nextStep = "";
+      } else if (doorsDone) {
+        // The motivating state: the hard, slow half is banked and one sale
+        // collects it. Say exactly that.
+        current = 1; target = 2;
+        headline = `Doors done — one sale before ${by} takes it`;
+        nextStep = `Close one before ${by}.`;
+      } else {
+        // Track doors, because that is the half the rep controls directly.
+        current = counters.knocksBeforeCutoffToday; target = doorsTarget;
+        const left = Math.max(0, doorsTarget - current);
+        headline = `${current} of ${doorsTarget} doors before ${by}`;
+        nextStep = saleDone
+          ? `Sale's in — ${left} more door${left === 1 ? "" : "s"} before ${by}.`
+          : `${left} more door${left === 1 ? "" : "s"} and a sale before ${by}.`;
+      }
       break;
     }
   }

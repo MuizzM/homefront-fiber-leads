@@ -268,9 +268,21 @@ describe("team leads are bounded to their own team", () => {
     expect((await req(`/api/territories/${ids.team2Territory}`, who.teamLead1.session, {
       method: "PATCH", body: JSON.stringify({ name: "seized" }),
     })).status).toBe(404);
-    expect((await req(`/api/territories/${ids.team2Territory}`, who.teamLead1.session, { method: "DELETE" })).status).toBe(404);
+    // 403, not 404: a team lead may not delete ANY area, their own included
+    // (shared/permissions.ts: delete_territory → admin), so the role gate turns
+    // them away before the scope check runs. That leaks nothing — it says
+    // something about the caller, not about whether this area exists.
+    expect((await req(`/api/territories/${ids.team2Territory}`, who.teamLead1.session, { method: "DELETE" })).status).toBe(403);
     expect((await req(`/api/territories/${ids.team2Territory}/history`, who.teamLead1.session)).status).toBe(404);
     expect(storage.getTerritoryById(ids.team2Territory)!.name).toBe("Team Two area");
+  });
+
+  it("a team lead cannot delete their OWN area either — delete is admin-only", async () => {
+    // The gap this closes: the route was requireTeamLead while permissions.ts
+    // declared admin, so a team lead could delete an area (detaching every door
+    // in it) despite the policy the client and the unit tests both assert.
+    expect((await req(`/api/territories/${ids.team1Territory}`, who.teamLead1.session, { method: "DELETE" })).status).toBe(403);
+    expect(storage.getTerritoryById(ids.team1Territory)).toBeDefined();
   });
 
   it("a team lead cannot edit or offboard a peer team lead (strictly-above rule)", async () => {

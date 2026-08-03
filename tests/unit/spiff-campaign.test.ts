@@ -230,3 +230,66 @@ describe("validateCampaignInput — a manager cannot promise nonsense", () => {
     expect(validateCampaignInput({ ...ok, campaignCapCents: 10.5 })).toMatch(/Campaign cap/);
   });
 });
+
+// ── "20 doors AND a sale before 3" ──────────────────────────────────────────
+// A compound trigger exists so the two halves cannot be won separately. Two
+// campaigns would pay twice and pay for either half alone — a rep who walks past
+// 20 doors without pitching, or one who gets a lucky first door and then takes a
+// long lunch. Requiring both in one trigger is the whole point.
+describe("knocks_and_sale_by_time", () => {
+  const trig = { kind: "knocks_and_sale_by_time", knocks: 20, byHourLocal: 15 } as const;
+  const counters = (over: Partial<RepWindowCounters> = {}): RepWindowCounters => ({
+    repId: 1, knocksInWindow: 0, knocksBeforeCutoffToday: 0,
+    salesInWindow: 0, salesToday: 0, firstSaleHourLocalToday: null,
+    streakDaysMeetingBar: 0, awardedToRepCents: 0, awardedTotalCents: 0,
+    ...over,
+  });
+
+  it("pays only when BOTH halves are done", () => {
+    expect(triggerMet(trig, counters({ knocksBeforeCutoffToday: 20, firstSaleHourLocalToday: 11 }))).toBe(true);
+  });
+
+  it("doors alone is not enough — walking past 20 doors is not selling", () => {
+    expect(triggerMet(trig, counters({ knocksBeforeCutoffToday: 40 }))).toBe(false);
+  });
+
+  it("a sale alone is not enough — one lucky door is not a morning's work", () => {
+    expect(triggerMet(trig, counters({ knocksBeforeCutoffToday: 3, firstSaleHourLocalToday: 9 }))).toBe(false);
+  });
+
+  it("a sale AFTER the cutoff does not count, however many doors", () => {
+    // The reason this reads firstSaleHourLocalToday rather than salesToday: a
+    // 4 PM close must not satisfy a "before 3" campaign.
+    expect(triggerMet(trig, counters({ knocksBeforeCutoffToday: 50, firstSaleHourLocalToday: 16 }))).toBe(false);
+  });
+
+  it("tells the rep which half is still missing", () => {
+    const c = { ...campaign, trigger: trig };
+    // Doors banked, sale outstanding — the motivating state, and it says so.
+    const nearlyThere = campaignProgress(c, counters({ knocksBeforeCutoffToday: 22 }), c.startsAtMs + 1);
+    expect(nearlyThere.headline).toBe("Doors done — one sale before 3 PM takes it");
+    expect(nearlyThere.nextStep).toBe("Close one before 3 PM.");
+    expect(nearlyThere.met).toBe(false);
+
+    // Sale banked, doors outstanding — track the half the rep controls.
+    const doorsLeft = campaignProgress(c, counters({ knocksBeforeCutoffToday: 12, firstSaleHourLocalToday: 10 }), c.startsAtMs + 1);
+    expect(doorsLeft.headline).toBe("12 of 20 doors before 3 PM");
+    expect(doorsLeft.nextStep).toBe("Sale's in — 8 more doors before 3 PM.");
+
+    // Neither.
+    const fresh = campaignProgress(c, counters(), c.startsAtMs + 1);
+    expect(fresh.nextStep).toBe("20 more doors and a sale before 3 PM.");
+  });
+
+  it("reads 100% only when it is actually earned", () => {
+    const c = { ...campaign, trigger: trig };
+    const done = campaignProgress(c, counters({ knocksBeforeCutoffToday: 20, firstSaleHourLocalToday: 11 }), c.startsAtMs + 1);
+    expect(done.met).toBe(true);
+    expect(done.pct).toBe(100);
+    // Doors done but no sale must NOT read as complete — the bar promising what
+    // the ledger will refuse is the bug class this whole engine avoids.
+    const half = campaignProgress(c, counters({ knocksBeforeCutoffToday: 20 }), c.startsAtMs + 1);
+    expect(half.pct).toBe(50);
+    expect(half.met).toBe(false);
+  });
+});
