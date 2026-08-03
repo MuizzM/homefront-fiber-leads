@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 import { Button } from "@/components/ui/button";
+import { PdfReviewPane } from "@/components/PdfReviewPane";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -326,6 +327,9 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
   const [signatureName, setSignatureName] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  // Collapsed by default: the official form is 6 pages, and a signer who wants
+  // it should get it on demand rather than have it pushed in front of the fields.
+  const [showOfficialW9, setShowOfficialW9] = useState(false);
 
   const errors = useMemo<W9Errors>(() => {
     const e: W9Errors = {};
@@ -427,6 +431,47 @@ function W9Form({ onSubmitted, onCancel, showCancel }: {
           <AlertDescription>{serverError}</AlertDescription>
         </Alert>
       )}
+
+      {/* ── Read the real form first ─────────────────────────────────────────
+           This page asks the W-9's questions in plain language, which is the
+           right way to COLLECT them — but a form signed under penalties of
+           perjury should never be the first and only version of itself a signer
+           sees. This opens the actual IRS document, all six pages including the
+           certification language and the instructions that explain it, before
+           anyone types a TIN. ── */}
+      <div className="rounded-xl border border-border bg-secondary/30 p-4" data-testid="w9-official-form">
+        <div className="flex items-start gap-3 flex-wrap">
+          <FileText className="w-4 h-4 text-primary mt-0.5 shrink-0" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <h3 className="text-sm font-semibold text-foreground">Read the official IRS Form W-9</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              The questions below are the same ones on the government form, asked in plain language.
+              You are signing under penalties of perjury — open the real form and its instructions first.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            onClick={() => setShowOfficialW9(v => !v)}
+            aria-expanded={showOfficialW9}
+            data-testid="w9-official-toggle"
+          >
+            {showOfficialW9 ? "Hide the form" : "Open the form"}
+          </Button>
+        </div>
+        {showOfficialW9 && (
+          <div className="mt-3 h-[60vh] min-h-[380px] rounded-lg border border-border overflow-hidden flex">
+            <PdfReviewPane
+              url="/api/onboarding/w9/blank.pdf"
+              fileName="irs-form-w9.pdf"
+              title="IRS Form W-9 (Rev. 3-2024) — official form and instructions"
+              testId="w9-official-pane"
+            />
+          </div>
+        )}
+      </div>
 
       {/* ── Lines 1 & 2 ── */}
       <fieldset className="space-y-4">
