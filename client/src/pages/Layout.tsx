@@ -31,7 +31,6 @@ import {
   GraduationCap,
   Gift,
   LayoutGrid,
-  Landmark,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -44,6 +43,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { prefetchRoute } from "@/lib/routePrefetch";
 import { useTheme } from "@/hooks/use-theme";
 import { can, type Role as AppRole } from "@shared/capabilities";
+import { can as roleCan } from "@shared/permissions";
 
 // (BrandMark logo removed per owner — brand is now text-only wordmark.)
 
@@ -80,10 +80,13 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/calling", label: "Calling Queue", icon: PhoneCall, show: r => can(r, "calling.queue.read"), group: "Calling" },
   { href: "/calling/compliance", label: "Calling Compliance", icon: ShieldCheck, show: r => can(r, "calling.compliance.read"), group: "Calling" },
   // ── Field ─────────────────────────────────────────────────────────────────
-  // Areas — the console for territory ground truth. Every field role can read
-  // it (the server scopes the rows); the lifecycle actions inside are gated by
-  // rank on the page itself.
-  { href: "/areas",        label: "Areas",         icon: LayoutGrid,   show: isFieldRole,                              group: "Field" },
+  // Areas — the console for territory ground truth: who holds which ground,
+  // pass progress, assignment and reclaim. That is a MANAGEMENT view, not a
+  // rep's daily surface. A rep works the doors they were given, on the Field
+  // Map; showing them the roster of every area invites them to go looking for
+  // ground that is not theirs. Gated on the same capability that hands areas
+  // out, so the people who can assign are the people who can see the board.
+  { href: "/areas",        label: "Areas",         icon: LayoutGrid,   show: r => roleCan(r, "assign_territory"),          group: "Field" },
   { href: "/ready-to-call", label: "Ready to Call", icon: PhoneCall,  show: isFieldRole,                              group: "Field" },
   { href: "/leaderboard",  label: "Leaderboard",  icon: Trophy,       show: isFieldRole,                              group: "Field" },
   { href: "/spiffs",       label: "Spiffs",       icon: Gift,         show: isFieldRole,                              group: "Field" },
@@ -91,10 +94,11 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
   { href: "/my-commission",label: "My commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
   { href: "/my-documents", label: "My documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
-  // Tax & direct deposit — the rep's own W-9 + bank details. Every field role
-  // gets paid, so every field role needs it; the server scopes each request to
-  // the caller's own rep record.
-  { href: "/tax-and-pay",  label: "Tax & pay",     icon: Landmark,     show: isFieldRole,                              group: "Field" },
+  // NOTE: /tax-and-pay is deliberately NOT a nav item. The W-9 and direct
+  // deposit are onboarding paperwork, not a standing destination — a rep fills
+  // them once. They live inside My documents alongside the agreements they
+  // sign, so there is ONE place a rep goes for "paperwork I owe the company".
+  // The route stays registered so existing links and bookmarks resolve.
   // ── Fiber Intelligence — ONE consolidated map-first workspace (Fresh Now · Map
   //    · Coming Soon · Coverage · Operations). Old Markets/Sweeps/Scanner routes
   //    redirect here. Deep scan tools stay admin-only.

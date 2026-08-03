@@ -155,15 +155,11 @@ describe("view=latest — density grid", () => {
 
 describe("view=latest — scoping preserved", () => {
   it("the lens composes with rep scope: the rep's workable set, minus the footprint tag", async () => {
-    // A rep's scope is their own doors PLUS open field (no rep, no territory) —
-    // the one rule in shared/leadVisibility. Every fixture except repFiber and
-    // repDoor is open field, so the rep may work all eight; the lens then drops
-    // the three tagged fcc_fiber_d25.
-    //
-    // This test previously expected ONE door, encoding the defect it was written
-    // beside: open-field doors were knockable but never drawn as pins.
-    const workable = [ids.fiber1, ids.fiber2, ids.fresh, ids.untagged, ids.otherTag, ids.verified, ids.repFiber, ids.repDoor];
-    const afterLens = [ids.fresh, ids.untagged, ids.otherTag, ids.verified, ids.repDoor]; // the three d25 doors drop
+    // Self-serve open field is OPT-IN and off for this tenant, so the rep's
+    // scope is exactly the two doors assigned to them. The lens then drops the
+    // one tagged fcc_fiber_d25, leaving repDoor.
+    const workable = [ids.repFiber, ids.repDoor];
+    const afterLens = [ids.repDoor];
 
     const count = await (await req("/api/leads/map/count?view=latest", fx.rep.session)).json();
     expect(count.total).toBe(afterLens.length);

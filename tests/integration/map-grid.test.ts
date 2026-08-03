@@ -162,12 +162,11 @@ describe("grid cells", () => {
     expect(body.cells).toHaveLength(0);
   });
 
-  it("a rep's grid counts the doors they may WORK — theirs plus open field, never another rep's", async () => {
-    // The grid must agree with the one visibility rule in shared/leadVisibility:
-    // a rep's own doors, doors in an area they hold, and OPEN FIELD (no rep and
-    // no territory — unowned ground in the tenant pool). This test used to
-    // assert that open field was invisible, which was the defect: those doors
-    // were legal to knock and never drawn as a pin.
+  it("a rep's grid counts only the doors ASSIGNED to them", async () => {
+    // The grid must agree with the one visibility rule in shared/leadVisibility.
+    // Self-serve open field is OPT-IN and off for this tenant, so unowned ground
+    // is not a rep's to work — an org that imported a whole market's footprint
+    // must not hand every rep every unassigned door.
     lead(1, fx.rep.memberId, 35.54, -80.44);
     lead(1, fx.manager.memberId, 35.55, -80.45);
     const inBox = "bbox=-81,35,-78,36&cell=0.25";
@@ -187,8 +186,8 @@ describe("grid cells", () => {
       Math.abs(p.lat - lat) < 1e-6 && Math.abs(p.lng - lng) < 1e-6);
     expect(at(35.54, -80.44), "the rep's own door").toBe(true);
     expect(at(35.55, -80.45), "the manager's door").toBe(false);
-    // …and the open-field doors seeded earlier ARE counted.
-    expect(at(35.51, -80.41), "an open-field door").toBe(true);
+    // …and the unassigned doors seeded earlier are NOT counted.
+    expect(at(35.51, -80.41), "an unassigned door").toBe(false);
   });
 
   it("the tag filter scopes the aggregate (FCC lens at state zoom)", async () => {

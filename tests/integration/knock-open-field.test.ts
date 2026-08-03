@@ -96,6 +96,11 @@ beforeAll(async () => {
 
 afterAll(async () => { await new Promise<void>((resolve) => server.close(() => resolve())); });
 
+// Open field is OPT-IN and OFF by default (an org that imported a market's whole
+// FCC footprint must not hand every rep every unowned door). This suite proves
+// the feature still works for a tenant that WANTS it, so it switches it on.
+beforeAll(() => { rawDb.prepare(`UPDATE tenants SET open_field_enabled = 1`).run(); });
+
 describe("open field — a lead owned by nobody is workable by any rep in the tenant", () => {
   it("a rep knocks an unassigned lead (no rep, no territory) → 201, knock logged, NOTHING assigned", async () => {
     const lead = makeLead(TENANT_A); // assignedRepId NULL, assignedTerritoryId NULL
