@@ -2160,6 +2160,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // closest the wire type gets, and the projection tells the map everything it
     // needs to draw it without a refetch.
     emitLeadChange("status", created, req.user, tenantId);
+    // "Adds then disappears" fix: GET /api/leads/map serves from _mapPinCache,
+    // and the client re-fetches the map the instant this POST returns. Without
+    // busting the cache here, that re-fetch returns the STALE pre-add list and
+    // wipes the optimistic pin (it only came back later via SSE, or not at all
+    // for a coords-present tap/locate add). Bust now so the immediate re-fetch
+    // already includes the new pin — it stays put.
+    bustMapCache(tenantId);
     res.status(201).json(stripProviderIds(created, req.user));
     if (needsGeocode) {
       const q = [safeLead.address, safeLead.city, safeLead.state, (safeLead as any).zip]
