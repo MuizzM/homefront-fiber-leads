@@ -12,8 +12,11 @@
 import { useMemo, useState } from "react";
 import { Link } from "wouter";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutGrid, Search, X } from "lucide-react";
+import { LayoutGrid, Search, Trash2, X } from "lucide-react";
 
+import { useAuth } from "@/lib/auth";
+import { can } from "@shared/permissions";
+import { AreaDeleteDialog, type AreaDeleteTarget } from "@/components/AreaDeleteDialog";
 import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
@@ -30,6 +33,12 @@ const CHIP = "text-[10px] font-bold uppercase tracking-[0.09em] rounded-full px-
 export default function Areas() {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<string>("all");
+  const { user } = useAuth();
+  // Admin-only, matching the API. A team lead sees no delete affordance at all
+  // rather than one that 403s — an action you are offered and then refused is
+  // worse than one that was never there.
+  const canDelete = can(user?.role, "delete_territory");
+  const [pendingDelete, setPendingDelete] = useState<AreaDeleteTarget | null>(null);
 
   const { data, isLoading, isError } = useQuery<AreaProgressRow[]>({
     queryKey: ["/api/territories/progress"],
@@ -134,15 +143,29 @@ export default function Areas() {
             <SectionLabel>{rows.length} of {total} {total === 1 ? "area" : "areas"}</SectionLabel>
           </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="areas-grid">
-            {rows.map(row => <AreaCard key={row.id} row={row} />)}
+            {rows.map(row => (
+              <AreaCard key={row.id} row={row}
+                onDelete={canDelete ? () => setPendingDelete({
+                  id: row.id, name: String(row.name ?? "this area"),
+                  total: Number(row.total) || 0, sold: Number(row.sold) || 0,
+                  repName: isPoolArea(row) ? null : row.repName,
+                }) : undefined} />
+            ))}
           </div>
         </>
       )}
+
+      <AreaDeleteDialog
+        target={pendingDelete}
+        open={pendingDelete != null}
+        onOpenChange={open => { if (!open) setPendingDelete(null); }}
+        onDeleted={() => setPendingDelete(null)}
+      />
     </div>
   );
 }
 
-function AreaCard({ row }: { row: AreaProgressRow }) {
+function AreaCard({ row, onDelete }: { row: AreaProgressRow; onDelete?: () => void }) {
   const meta = areaStatusMeta(row.status);
   const pool = isPoolArea(row);
   const dot = row.color || repColorOf({ id: row.repId, color: null });
@@ -151,6 +174,25 @@ function AreaCard({ row }: { row: AreaProgressRow }) {
   const covered = Math.max(0, Math.min(100, Number(row.knockCompletionRate) || 0));
 
   return (
+    // The delete control is a SIBLING of the Link, not a child: a <button>
+    // nested in an <a> is invalid HTML and breaks keyboard activation — the
+    // Enter key would follow the link instead of opening the dialog.
+    <div className="relative">
+      {onDelete && (
+        <button
+          type="button"
+          onClick={onDelete}
+          aria-label={`Delete ${row.name}`}
+          data-testid={`area-card-${row.id}-delete`}
+          className={cn(
+            "absolute right-2 top-2 z-10 grid h-9 w-9 place-items-center rounded-xl",
+            "text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive",
+            FOCUS,
+          )}
+        >
+          <Trash2 className="h-4 w-4" aria-hidden="true" />
+        </button>
+      )}
     <Link
       href={`/areas/${row.id}`}
       data-testid={`area-card-${row.id}`}
@@ -195,6 +237,7 @@ function AreaCard({ row }: { row: AreaProgressRow }) {
         <span>{shortDate(row.lastActivityAt) ?? "no activity"}</span>
       </div>
     </Link>
+    </div>
   );
 }
 

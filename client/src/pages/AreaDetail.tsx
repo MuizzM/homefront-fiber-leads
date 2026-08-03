@@ -16,11 +16,11 @@
 // "not found" and "not yours" render as ONE calm state that leaks nothing.
 
 import { useMemo, useState } from "react";
-import { Link, useRoute } from "wouter";
+import { Link, useLocation, useRoute } from "wouter";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   ArrowLeft, DoorOpen, Hand, BadgeDollarSign, CalendarClock, Map as MapIcon,
-  MapPinned, RotateCcw, UserMinus, UserCog, ShieldCheck, AlertTriangle, Ban,
+  MapPinned, RotateCcw, Trash2, UserMinus, UserCog, ShieldCheck, AlertTriangle, Ban,
   Ruler, History, Loader2, SearchX, type LucideIcon,
 } from "lucide-react";
 
@@ -35,6 +35,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { PassHistory } from "@/components/territory/PassHistory";
 import { StartNextPassDialog } from "@/components/territory/StartNextPassDialog";
 import { RepPicker } from "@/components/territory/RepPicker";
+import { AreaDeleteDialog } from "@/components/AreaDeleteDialog";
 import { can as roleCan } from "@shared/permissions";
 import { repColorOf } from "@shared/repColors";
 import { shortDate, shortRep } from "@shared/territoryLabel";
@@ -60,6 +61,7 @@ export default function AreaDetail() {
   const validId = Number.isFinite(id) && id > 0;
 
   const { user } = useAuth();
+  const [, setLocation] = useLocation();
   const role = user?.role;
   const { toast } = useToast();
 
@@ -67,6 +69,10 @@ export default function AreaDetail() {
   // entire team's outcomes with no undo and stays manager+.
   const canAssign = roleCan(role, "assign_territory");
   const canNextPass = roleCan(role, "reset_territory_pass");
+  // Admin-only and last in the row: deleting is the one action here that ends
+  // the area rather than changing it.
+  const canDelete = roleCan(role, "delete_territory");
+  const [deleteOpen, setDeleteOpen] = useState(false);
   // /passes and /history are requireTeamLead routes. A rep asking for them gets
   // a 403, so we never ask: the tab and the pass chip simply are not theirs.
   const canSeePasses = canAssign;
@@ -286,6 +292,17 @@ export default function AreaDetail() {
               ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
               : <UserMinus className="h-4 w-4" aria-hidden="true" />}
             Unassign {shortRep(area.repName)}
+          </button>
+        )}
+        {canDelete && (
+          <button
+            type="button"
+            data-testid="area-action-delete"
+            onClick={() => setDeleteOpen(true)}
+            className={cn("inline-flex min-h-11 items-center gap-1.5 rounded-xl border border-destructive/40 bg-destructive/5 px-3.5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/10", FOCUS)}
+          >
+            <Trash2 className="h-4 w-4" aria-hidden="true" />
+            Delete area
           </button>
         )}
         {canNextPass && (
@@ -596,6 +613,20 @@ export default function AreaDetail() {
       )}
 
       {/* ── Start next pass — the existing dialog, unchanged ────────────────── */}
+      {canDelete && area && (
+        <AreaDeleteDialog
+          target={{
+            id: Number(id), name: String(area.name ?? "this area"),
+            total: Number(area.total) || 0, sold: Number(area.sold) || 0,
+            repName: area.repName ?? null,
+          }}
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          // The area this page is about no longer exists, so staying on it
+          // would render a 404 shell. Go back to the index.
+          onDeleted={() => setLocation("/areas")}
+        />
+      )}
       {nextPassOpen && canNextPass && (
         <StartNextPassDialog
           open

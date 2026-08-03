@@ -175,9 +175,25 @@ export interface LeadStreamHandle {
   status(): LeadStreamStatus;
 }
 
+/** A team announcement as it arrives on the wire. Mirrors StoredAnnouncement on
+ *  the server; carries no lead id and no customer data by construction. */
+export interface StreamAnnouncement {
+  id: number;
+  kind: "sale" | "hot_streak";
+  actorRepId: number;
+  actorName: string;
+  headline: string;
+  body: string;
+  amountCents?: number;
+  createdAtMs: number;
+}
+
 export interface SubscribeLeadStreamOptions {
   url?: string;
   onEvent: (evt: LeadStreamEvent, meta: LeadStreamEventMeta) => void;
+  /** A teammate won something. Already filtered server-side — a rep is never
+   *  sent their own win. */
+  onAnnouncement?: (a: StreamAnnouncement) => void;
   /** Cursor is unrecoverable — refetch the scope through /api/leads/map. */
   onResync?: (reason: LeadStreamResyncReason) => void;
   /** The control signal. true → the stream is not delivering, start polling.
@@ -671,6 +687,29 @@ export function subscribeLeadStream(opts: SubscribeLeadStreamOptions): LeadStrea
     // "defer" needs nothing here — the event is buffered and released later.
   };
 
+  /**
+   * Team announcements share this socket. (Server-side reasoning: a second SSE
+   * stream is a second TLS session and a second 15s keepalive on a phone that is
+   * on LTE all day.)
+   *
+   * They bypass the gate entirely, and that is deliberate rather than lazy. The
+   * gate exists to order and deduplicate LEAD patches against a cursor, because
+   * a missed pin update is silently wrong. An announcement has no cursor, no
+   * ordering requirement, and a durable home in /api/announcements — the worst
+   * case for a dropped frame is that it appears on the next refetch. Feeding it
+   * through the gate would make it answerable to a sequence it is not part of,
+   * and a resync would then discard it for no reason.
+   */
+  const onAnnouncementFrame = (ev: any): void => {
+    if (closed || !opts.onAnnouncement) return;
+    try {
+      const parsed = JSON.parse(String(ev?.data ?? ""));
+      if (parsed && typeof parsed === "object" && typeof parsed.id === "number") {
+        opts.onAnnouncement(parsed as StreamAnnouncement);
+      }
+    } catch { /* a malformed frame must never take down the stream */ }
+  };
+
   const onError = (ev: any): void => {
     if (closed) return;
     const httpStatus = typeof ev?.status === "number" ? ev.status : null;
@@ -712,6 +751,7 @@ export function subscribeLeadStream(opts: SubscribeLeadStreamOptions): LeadStrea
     }
     source.addEventListener("ready", onReady);
     source.addEventListener("lead", onLead);
+    source.addEventListener("announcement", onAnnouncementFrame);
     source.addEventListener("error", onError);
   };
 
