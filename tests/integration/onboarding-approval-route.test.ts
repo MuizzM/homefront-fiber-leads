@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import express from "express";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetSigningTables } from "../helpers/signingTables";
 
 let server: Server;
 let baseUrl: string;
@@ -51,8 +52,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  rawDb.prepare("DELETE FROM onboarding_signature_events").run();
-  rawDb.prepare("DELETE FROM onboarding_signing_documents").run();
+  resetSigningTables(rawDb);
   rawDb.prepare("DELETE FROM onboarding_recruiting_invites").run();
   rawDb.prepare("DELETE FROM rep_applications").run();
   rawDb.prepare("DELETE FROM otp_codes").run();
@@ -316,5 +316,116 @@ describe("onboarding approval route", () => {
       reviewNotes: "Territory staffing requirements changed.",
     });
     expect(storage.getUserByEmail(email)).toBeUndefined();
+  });
+});
+
+describe("onboarding signature chain routes", () => {
+  async function approvedRepWithDocuments(email: string) {
+    const application = createCareersApplication(email);
+    const response = await review(application.id, adminSession, { status: "approved" });
+    expect(response.status).toBe(200);
+    const account = storage.getUserByEmail(email)!;
+    const documents = rawDb.prepare(
+      "SELECT id, document_type AS documentType FROM onboarding_signing_documents WHERE rep_id = ? ORDER BY id",
+    ).all(account.teamMemberId) as Array<{ id: number; documentType: string }>;
+    return { account, session: storage.createSession(account.id).id, documents };
+  }
+
+  const call = (path: string, sessionId: string, init: RequestInit = {}) => realFetch(`${baseUrl}${path}`, {
+    ...init,
+    headers: { "content-type": "application/json", "x-session-id": sessionId },
+  });
+
+  it("shows the rep their own chain with no session forensics, and the manager the full record", async () => {
+    const { session, documents } = await approvedRepWithDocuments("chain-view@approval-flow.example.com");
+    // Opening the agreement is itself an event, and it carries the rep's IP and
+    // browser — precisely the data a browser response must not echo back.
+    expect((await call(`/api/onboarding/documents/${documents[0].id}/content`, session)).status).toBe(200);
+
+    const repResponse = await call(`/api/onboarding/documents/${documents[0].id}/events`, session);
+    const repBody = await repResponse.json() as any;
+    expect(repResponse.status, JSON.stringify(repBody)).toBe(200);
+    expect(repBody.verification).toMatchObject({ ok: true });
+    expect(repBody.events.map((event: any) => event.eventType)).toEqual(["document_created", "invitation_sent", "document_viewed"]);
+    const repSerialized = JSON.stringify(repBody);
+    expect(repSerialized).not.toContain("signedIp");
+    expect(repSerialized).not.toContain("userAgent");
+    expect(repSerialized).not.toContain("evidence");
+    for (const event of repBody.events) {
+      expect(event.ipAddress).toBeUndefined();
+      expect(event.userAgent).toBeUndefined();
+      expect(event.payload).toBeUndefined();
+      expect(event.eventSha256).toMatch(/^[a-f0-9]{64}$/);
+    }
+
+    const managerResponse = await call(`/api/onboarding/documents/${documents[0].id}/events`, managerSession);
+    const managerBody = await managerResponse.json() as any;
+    expect(managerResponse.status, JSON.stringify(managerBody)).toBe(200);
+    expect(managerBody.verification).toMatchObject({ ok: true, eventCount: 3 });
+    expect(managerBody.events[2].userAgent).toBeTruthy();
+    expect(managerBody.events[2].payload).toBeTruthy();
+
+    // Another tenant's admin cannot see the chain at all.
+    expect((await call(`/api/onboarding/documents/${documents[0].id}/events`, otherTenantAdminSession)).status).toBe(404);
+  });
+
+  it("lets a manager void an unsigned agreement and refuses to void a signed one", async () => {
+    const { session, documents } = await approvedRepWithDocuments("void-flow@approval-flow.example.com");
+    const target = documents[0];
+
+    // A rep cannot void their own agreement — voiding is a manager action.
+    expect((await call(`/api/onboarding/documents/${target.id}/void`, session, {
+      method: "POST", body: JSON.stringify({ reason: "I would rather not" }),
+    })).status).toBe(403);
+    // A reason is required.
+    expect((await call(`/api/onboarding/documents/${target.id}/void`, managerSession, {
+      method: "POST", body: JSON.stringify({ reason: "" }),
+    })).status).toBe(400);
+
+    const voided = await call(`/api/onboarding/documents/${target.id}/void`, managerSession, {
+      method: "POST", body: JSON.stringify({ reason: "Issued with the wrong commission plan" }),
+    });
+    const voidedBody = await voided.json() as any;
+    expect(voided.status, JSON.stringify(voidedBody)).toBe(200);
+    expect(voidedBody.document).toMatchObject({ status: "voided", failureReason: "Issued with the wrong commission plan" });
+    // Public projection rules still hold on the void response.
+    expect(JSON.stringify(voidedBody)).not.toContain("signedIp");
+
+    // The rep can no longer open or sign it, and the void is in the chain.
+    expect((await call(`/api/onboarding/documents/${target.id}/content`, session)).status).toBe(409);
+    const chain = await (await call(`/api/onboarding/documents/${target.id}/events`, managerSession)).json() as any;
+    expect(chain.events.map((event: any) => event.eventType)).toContain("document_voided");
+    expect(chain.verification.ok).toBe(true);
+    // And it cannot be voided twice.
+    expect((await call(`/api/onboarding/documents/${target.id}/void`, managerSession, {
+      method: "POST", body: JSON.stringify({ reason: "again" }),
+    })).status).toBe(409);
+
+    // A SIGNED agreement is never voidable.
+    const signable = documents[1];
+    const content = await (await call(`/api/onboarding/documents/${signable.id}/content`, session)).json() as any;
+    const signed = await call(`/api/onboarding/documents/${signable.id}/sign`, session, {
+      method: "POST",
+      body: JSON.stringify({
+        typedName: "approval flow candidate",
+        documentSha256: content.contentSha256,
+        consentToElectronicRecords: true,
+        acknowledgeRead: true,
+        intentToSign: true,
+      }),
+    });
+    const signedBody = await signed.json() as any;
+    expect(signed.status, JSON.stringify(signedBody)).toBe(200);
+    expect(signedBody.completedPdfSha256).toMatch(/^[a-f0-9]{64}$/);
+    // The verbatim keystrokes are preserved next to the canonical account name.
+    expect(rawDb.prepare("SELECT signature_name AS canonical, signature_typed_name AS typed FROM onboarding_signing_documents WHERE id = ?").get(signable.id))
+      .toMatchObject({ canonical: "Approval Flow Candidate", typed: "approval flow candidate" });
+
+    const refused = await call(`/api/onboarding/documents/${signable.id}/void`, managerSession, {
+      method: "POST", body: JSON.stringify({ reason: "manager regret" }),
+    });
+    expect(refused.status).toBe(409);
+    expect((await refused.json() as any).error).toMatch(/signed agreement cannot be voided/i);
+    expect(rawDb.prepare("SELECT status FROM onboarding_signing_documents WHERE id = ?").get(signable.id)).toMatchObject({ status: "completed" });
   });
 });
