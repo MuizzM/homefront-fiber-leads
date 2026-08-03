@@ -9,6 +9,8 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { can } from "@shared/capabilities";
 import { storage } from "./storage";
 import * as svc from "./commissionService";
+import * as reserve from "./reserveService";
+
 import { hourlyBlockForStatement, sumWeekSpiffsByRep } from "./hourlyPay";
 import { computeHoldback } from "@shared/commissionReserve";
 
@@ -34,9 +36,11 @@ export function canReadRep(user: any, repId: number): boolean {
   return repIds === null || repIds.includes(repId);
 }
 
-// Map a thrown CommissionError to its HTTP status; everything else is a 500.
+// Map a thrown CommissionError / ReserveError to its HTTP status; everything
+// else is a 500. Both carry {code, httpStatus} so the mapping is identical.
 function fail(res: Response, e: unknown) {
   if (e instanceof svc.CommissionError) return res.status(e.httpStatus).json({ error: e.message, code: e.code });
+  if (e instanceof reserve.ReserveError) return res.status(e.httpStatus).json({ error: e.message, code: e.code });
   const msg = e instanceof Error ? e.message : "Internal error";
   return res.status(500).json({ error: msg });
 }
@@ -50,6 +54,35 @@ export const parseWeekRef = (v: any): string | undefined => {
   const s = v.trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T12:00:00.000Z` : s;
 };
+
+// Shape-check the two per-rep chargeback-reserve overrides off a request body.
+// Tri-state on purpose: a field ABSENT means "leave it alone", an explicit
+// `null` means "clear the override, inherit the org default", and a number is
+// the override itself. Whole numbers only — money is integer cents and the
+// percent is whole, so a float here is a client bug, not something to round
+// into a rep's pay. `reserveCapDollars` is accepted as a convenience for the
+// editor and converted ONCE, here, at the boundary.
+function parseReservePatch(body: any): { patch: { reservePercent?: number | null; reserveCapCents?: number | null }; error?: string } {
+  const patch: { reservePercent?: number | null; reserveCapCents?: number | null } = {};
+  if (body.reservePercent !== undefined) {
+    if (body.reservePercent === null) patch.reservePercent = null;
+    else if (!Number.isInteger(body.reservePercent) || body.reservePercent < 0 || body.reservePercent > 100) {
+      return { patch, error: "reservePercent must be a whole number from 0 to 100, or null to inherit the org default." };
+    } else patch.reservePercent = body.reservePercent;
+  }
+  if (body.reserveCapCents !== undefined) {
+    if (body.reserveCapCents === null) patch.reserveCapCents = null;
+    else if (!Number.isInteger(body.reserveCapCents) || body.reserveCapCents < 0) {
+      return { patch, error: "reserveCapCents must be a whole number of cents (0 = uncapped), or null to inherit the org default." };
+    } else patch.reserveCapCents = body.reserveCapCents;
+  } else if (body.reserveCapDollars !== undefined) {
+    if (body.reserveCapDollars === null) patch.reserveCapCents = null;
+    else if (typeof body.reserveCapDollars !== "number" || !Number.isFinite(body.reserveCapDollars) || body.reserveCapDollars < 0) {
+      return { patch, error: "reserveCapDollars must be a non-negative number, or null to inherit the org default." };
+    } else patch.reserveCapCents = Math.round(body.reserveCapDollars * 100);
+  }
+  return { patch };
+}
 
 // CSV formula-injection guard: a leading = + - @ (or tab/CR) makes a cell
 // executable in Excel/Sheets. Rep names come from the PUBLIC application form,
@@ -151,6 +184,11 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
         parsedTiers.push({ position: i, minimumSales: min, maximumSales: max, rateCents: rc, label: typeof (t as any)?.label === "string" ? (t as any).label.slice(0, 40) : "" });
       }
     }
+    // Chargeback-reserve overrides ride along with the comp change. Both are
+    // OPTIONAL: omit → leave as-is; explicit null → clear back to the org
+    // default. Integer cents only — the service re-validates the range.
+    const reservePatch = parseReservePatch(req.body || {});
+    if (reservePatch.error) return res.status(400).json({ error: reservePatch.error, code: "RESERVE_INVALID_CONFIG" });
     try {
       const out = svc.assignStructureToRep(tid(req), uid(req), {
         repId: Number(repId), structure, flatRateCents: rate,
@@ -158,6 +196,7 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
         effectiveFrom: effectiveFrom || undefined,
         closeExisting: closeExisting !== false, // default true (re-assign replaces)
         tiers: parsedTiers,
+        ...reservePatch.patch,
       });
       res.status(201).json(out);
     } catch (e) { fail(res, e); }
@@ -179,6 +218,81 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
     const repId = Number(req.params.repId);
     if (!canReadRep((req as any).user, repId)) return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
     try { res.json(svc.listRepAssignments(tid(req), repId)); } catch (e) { fail(res, e); }
+  });
+
+  // ══ CHARGEBACK RESERVE ══════════════════════════════════════════════════════
+  // Per the owner's explicit decisions: a chargeback is applied MANUALLY by an
+  // admin (the reserve never auto-draws when a sale reverses) and a release is
+  // MANUAL (nothing auto-releases on a timer or on departure).
+  //
+  // CAPABILITIES, deliberately split:
+  //   • read   → commission.read.all  (manager oversight may SEE a rep's reserve)
+  //   • config → commission.structure.manage  (the existing money-config cap)
+  //   • move   → payouts.pay          (admin/owner ONLY — a drawdown or release
+  //                                    moves real money, and a manager's
+  //                                    oversight read must never authorize it)
+  // Every route is tenant-scoped by the session's tenantId; a rep from another
+  // tenant resolves to 404, never 403 (repo convention — no id-space probing).
+
+  // Admin/manager read: summary + append-only ledger history for one rep.
+  app.get("/api/commission/reps/:repId/reserve", requireCapability("commission.read.all"), (req, res) => {
+    const repId = Number(req.params.repId);
+    if (!canReadRep((req as any).user, repId)) return res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
+    try {
+      res.json(reserve.getReserveSummary(tid(req), repId, { actorId: uid(req), historyLimit: 200 }));
+    } catch (e) { fail(res, e); }
+  });
+
+  // Set a rep's reserve percent / cap on its own (the comp editor also sends
+  // these on assign-structure). Same money-config capability as every other
+  // rate change, plus the write-scope + self-dealing guard.
+  app.patch("/api/commission/reps/:repId/reserve-config", requireCapability("commission.structure.manage"), (req, res) => {
+    const repId = Number(req.params.repId);
+    if (denyOutOfScope(req, res, repId)) return;
+    const parsed = parseReservePatch(req.body || {});
+    if (parsed.error) return res.status(400).json({ error: parsed.error, code: "RESERVE_INVALID_CONFIG" });
+    if (Object.keys(parsed.patch).length === 0) {
+      return res.status(400).json({ error: "Nothing to update — send reservePercent and/or reserveCapCents.", code: "RESERVE_INVALID_CONFIG" });
+    }
+    try { res.json(reserve.setRepReserveConfig(tid(req), repId, uid(req), parsed.patch)); } catch (e) { fail(res, e); }
+  });
+
+  // Apply a chargeback AGAINST the reserve. Bounded so it can never take the
+  // balance below zero (400 if it would) — the guard and the append happen in
+  // one transaction inside the service, so two admins cannot race past it.
+  app.post("/api/commission/reps/:repId/reserve/drawdown", requireCapability("payouts.pay"), (req, res) => {
+    const repId = Number(req.params.repId);
+    const { amountCents, reason } = req.body || {};
+    try {
+      res.status(201).json(reserve.applyDrawdown({
+        tenantId: tid(req), repId, amountCents, reason, actorId: uid(req),
+      }));
+    } catch (e) { fail(res, e); }
+  });
+
+  // Return reserve to the rep. `amountCents: null` (or omitted) releases the
+  // FULL balance. Same non-negative guard; a reason is always required.
+  app.post("/api/commission/reps/:repId/reserve/release", requireCapability("payouts.pay"), (req, res) => {
+    const repId = Number(req.params.repId);
+    const { amountCents, reason } = req.body || {};
+    try {
+      res.status(201).json(reserve.releaseReserve({
+        tenantId: tid(req), repId,
+        amountCents: amountCents === undefined ? null : amountCents,
+        reason, actorId: uid(req),
+      }));
+    } catch (e) { fail(res, e); }
+  });
+
+  // ── Rep-facing, SELF-SCOPED ────────────────────────────────────────────────
+  // The repId is taken from the SESSION, never from the request, so a rep can
+  // only ever read their own reserve — there is no parameter to tamper with.
+  app.get("/api/me/reserve", requireCapability("commission.read.self"), (req, res) => {
+    const repId = (req as any).user?.teamMemberId;
+    if (!repId) return res.json({ noRepProfile: true });
+    try {
+      res.json(reserve.getReserveSummary(tid(req), Number(repId), { actorId: uid(req), historyLimit: 50 }));
+    } catch (e) { fail(res, e); }
   });
 
   // ── Commissionable sales (idempotent ingest + lifecycle) ──────────────────────
@@ -239,7 +353,9 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
         sales: svc.listWeekSalesForRep(tid(req), repId, now),
         adjustments: adjustmentsFor(payload?.statement?.id),
         holdback: {
-          current: svc.holdbackForStatement(tid(req), finalCents),
+          // Per-rep + cap-aware: once the rep's balance reaches their cap this
+          // reports a 0 hold and a full net, which is exactly what they'll be paid.
+          current: svc.holdbackForStatement(tid(req), finalCents, repId),
           ledger: svc.getReserveLedgerForRep(tid(req), repId),
         },
       };
