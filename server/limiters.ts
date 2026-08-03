@@ -66,3 +66,15 @@ export const geocodeLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: "Too many geocode lookups. Slow down for a moment." },
 });
+
+// Pay-plane self-service writes (bank details + W-9). Authenticated and
+// own-record only, but these endpoints accept the most sensitive identifiers
+// in the product (bank numbers, TINs) — a tight per-IP ceiling blunts
+// credential-stuffing / scripted probing of a hijacked session.
+export const payWriteLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many pay-profile updates. Please try again in an hour." },
+});
