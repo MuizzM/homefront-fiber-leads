@@ -16,7 +16,7 @@
 import { rawDb } from "./db";
 import { storage } from "./storage";
 import {
-  isTrainingGated, gateProgress, validateRequiredLessons,
+  isTrainingGated, isRoleExempt, gateProgress, validateRequiredLessons,
   type TrainingGateState,
 } from "@shared/trainingGate";
 import { TOTAL_TRAINING_LESSONS } from "@shared/trainingContent";
@@ -140,24 +140,58 @@ export function setTrainingRequired(
   return true;
 }
 
-/** Who is still locked out, for the manager's team view. */
-export function gatedRoster(tenantId: number): Array<{
-  userId: number; name: string; email: string; completed: number; required: number;
-}> {
+export interface RosterRow {
+  userId: number;
+  name: string;
+  email: string;
+  role: string;
+  completed: number;
+  required: number;
+  /** Is the requirement switched ON for this account? */
+  trainingRequired: boolean;
+  /** Is this account actually locked out right now? */
+  gated: boolean;
+}
+
+/**
+ * EVERY active person in the org with their training state — the admin's
+ * lock/unlock console.
+ *
+ * Deliberately not just the currently-gated ones. An admin's most common need is
+ * to LOCK someone who is presently unlocked (a rep grandfathered in when the
+ * gate shipped, or one who needs re-training after a bad month), and you cannot
+ * act on a person who is not on the list. Returning only the locked reps made
+ * the one control an admin reaches for unreachable.
+ *
+ * Exempt roles are included but flagged, so it is visible WHY a manager has no
+ * lock toggle rather than them being silently absent.
+ */
+export function trainingRoster(tenantId: number): RosterRow[] {
   const need = requiredLessons(tenantId);
   const rows = rawDb.prepare(
-    `SELECT u.id, u.name, u.email,
+    `SELECT u.id, u.name, u.email, u.role, u.training_required AS req,
             (SELECT COUNT(DISTINCT tp.lesson_id) FROM training_progress tp
               WHERE tp.user_id = u.id AND tp.tenant_id = u.tenant_id) AS completed
        FROM users u
-      WHERE u.tenant_id = ? AND u.active = 1 AND u.training_required = 1
-        AND u.role = 'rep'
-      ORDER BY completed DESC, u.name ASC`,
+      WHERE u.tenant_id = ? AND u.active = 1
+      ORDER BY u.name ASC`,
   ).all(tenantId) as any[];
-  return rows
-    .filter(r => Number(r.completed ?? 0) < need)
-    .map(r => ({
-      userId: Number(r.id), name: String(r.name), email: String(r.email),
-      completed: Number(r.completed ?? 0), required: need,
-    }));
+
+  return rows.map(r => {
+    const completed = Number(r.completed ?? 0);
+    const trainingRequired = Number(r.req ?? 0) === 1;
+    const role = String(r.role ?? "");
+    return {
+      userId: Number(r.id), name: String(r.name), email: String(r.email), role,
+      completed, required: need, trainingRequired,
+      // The same rule the middleware enforces: exempt roles are never gated, and
+      // neither is anyone who has cleared the bar.
+      gated: trainingRequired && !isRoleExempt(role) && completed < need,
+    };
+  });
+}
+
+/** Back-compat: just the people currently locked out. */
+export function gatedRoster(tenantId: number): RosterRow[] {
+  return trainingRoster(tenantId).filter(r => r.gated);
 }

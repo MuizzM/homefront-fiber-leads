@@ -29,6 +29,7 @@ import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
 import { TrainingGateBanner, TrainingClearedBanner } from "@/components/TrainingLock";
+import { TrainingAccessPanel } from "@/components/TrainingAccessPanel";
 import PitchRecorder, { isPitchRecorderSupported } from "@/components/training/PitchRecorder";
 import {
   TRAINING_MODULES,
@@ -412,6 +413,7 @@ export default function Training() {
   const [openLessonId, setOpenLessonId] = useState<string | null>(null);
   const [showPitchPractice, setShowPitchPractice] = useState(false);
   const canSeeTeam = ["admin", "manager", "super_admin"].includes(user?.role ?? "rep");
+  const isAdmin = ["admin", "super_admin"].includes(user?.role ?? "rep");
   const pitchSupported = isPitchRecorderSupported();
 
   const { data, isLoading, isError, refetch } = useQuery<ProgressPayload>({
@@ -489,6 +491,10 @@ export default function Training() {
               it — and the one-time "you're in" when they clear it. */}
           <TrainingGateBanner />
           <TrainingClearedBanner />
+          {/* Admin lock/unlock console. Lives on the Training page because that
+              is where someone goes when they are thinking about who has and has
+              not been trained. */}
+          {isAdmin && <TrainingAccessPanel />}
           <PageHeader
             icon={GraduationCap}
             title="Training"
