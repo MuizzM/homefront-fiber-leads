@@ -102,8 +102,12 @@ export function verifyConsentArtifactManifest(input: ConsentArtifactManifest, si
   return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
 }
 
-export function encryptSensitive(value: string): string {
-  const key = keyFromEnv("CALLING_DATA_ENCRYPTION_KEY");
+// AES-256-GCM at rest. The optional `keyName` lets a sibling data plane (e.g.
+// the pay plane's PAY_CRYPTO_KEY) reuse THIS ONE established crypto path with a
+// different env key — never a second cipher/format. Default preserves the
+// original calling-plane behavior bit-for-bit.
+export function encryptSensitive(value: string, keyName = "CALLING_DATA_ENCRYPTION_KEY"): string {
+  const key = keyFromEnv(keyName);
   const iv = crypto.randomBytes(12);
   const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
   const encrypted = Buffer.concat([cipher.update(value, "utf8"), cipher.final()]);
@@ -111,13 +115,18 @@ export function encryptSensitive(value: string): string {
   return ["v1", iv.toString("base64url"), encrypted.toString("base64url"), tag.toString("base64url")].join(".");
 }
 
-export function decryptSensitive(value: string): string {
+export function decryptSensitive(value: string, keyName = "CALLING_DATA_ENCRYPTION_KEY"): string {
   const [version, ivText, payloadText, tagText] = value.split(".");
   if (version !== "v1" || !ivText || !payloadText || !tagText) throw new Error("Unsupported encrypted payload");
-  const key = keyFromEnv("CALLING_DATA_ENCRYPTION_KEY");
+  const key = keyFromEnv(keyName);
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, Buffer.from(ivText, "base64url"));
   decipher.setAuthTag(Buffer.from(tagText, "base64url"));
   return Buffer.concat([decipher.update(Buffer.from(payloadText, "base64url")), decipher.final()]).toString("utf8");
+}
+
+// Readiness probe for an arbitrary AES-256-GCM key slot (e.g. PAY_CRYPTO_KEY).
+export function encryptionKeyReady(name: string): boolean {
+  try { keyFromEnv(name); return true; } catch { return false; }
 }
 
 export function hashPhone(tenantId: number, e164: string): string {

@@ -310,6 +310,15 @@ export const teamMembers = sqliteTable("team_members", {
   // every existing row is, so nobody's pay changes until an admin sets one.
   reservePercent: integer("reserve_percent"),      // whole percent 0..100
   reserveCapCents: integer("reserve_cap_cents"),   // ceiling in integer cents; 0 = uncapped
+
+  // Hourly pay (Sequifi-style hybrid hourly+commission). NULL rate = a
+  // commission-only rep. Integer cents/hour — money is integer cents everywhere.
+  // effectiveFrom gates which weeks a rate governs: a week's rate is the one
+  // effective at the week's START (a mid-week change never re-prices the
+  // running week). Full rate history is reconstructed from the
+  // 'pay.hourly_rate.changed' audit events (see server/hourlyPay.ts).
+  hourlyRateCents: integer("hourly_rate_cents"),
+  hourlyRateEffectiveFrom: text("hourly_rate_effective_from"),
   active: integer("active", { mode: "boolean" }).notNull().default(true),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
@@ -473,6 +482,50 @@ export const clockSessions = sqliteTable("clock_sessions", {
 });
 export const insertClockSessionSchema = createInsertSchema(clockSessions).omit({ id: true });
 export type InsertClockSession = z.infer<typeof insertClockSessionSchema>;
+
+// ── Punch corrections (append-only time audit) ────────────────────────────────
+// A manager's correction to a rep's recorded time. clock_sessions raw rows are
+// NEVER edited — every fix lands here as an append-only audit row the hours
+// aggregation folds into the weekly sum. minutes_delta is signed (+ missed
+// punch, − over-counted time) and attributed to a UTC day (the session's
+// clock-in day when sessionId is set, else the row's created_at day).
+export const punchCorrections = sqliteTable("punch_corrections", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),
+  sessionId: integer("session_id"),            // nullable — correction need not name a session
+  kind: text("kind").notNull(),                // 'missed_in' | 'missed_out' | 'adjust'
+  minutesDelta: integer("minutes_delta").notNull(),
+  reason: text("reason").notNull(),
+  actorUserId: integer("actor_user_id"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type PunchCorrection = typeof punchCorrections.$inferSelect;
+
+// ── Pay disputes (rep-facing) ─────────────────────────────────────────────────
+// A rep disputes ONE line of one week's pay (the hourly block, the commission
+// line, or a specific legacy commission row). Managers resolve from a tenant
+// queue; an 'adjusted' resolution references an existing commission_adjustments
+// row (money math is never duplicated here).
+export const payDisputes = sqliteTable("pay_disputes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),
+  weekStart: text("week_start").notNull(),     // canonical week_start_utc
+  lineKind: text("line_kind").notNull(),       // 'hourly' | 'commission'
+  commissionId: integer("commission_id"),      // set when disputing one commission row
+  commissionPrevStatus: text("commission_prev_status"), // status before the dispute; restored on 'upheld'
+  message: text("message").notNull(),
+  status: text("status").notNull().default("open"), // 'open' | 'resolved'
+  resolution: text("resolution"),              // 'upheld' | 'adjusted'
+  resolutionNote: text("resolution_note"),
+  adjustmentId: integer("adjustment_id"),
+  resolvedBy: integer("resolved_by"),
+  idemKey: text("idem_key"),                   // idempotency key (unique per tenant)
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  resolvedAt: text("resolved_at"),
+});
+export type PayDispute = typeof payDisputes.$inferSelect;
 export type ClockSession = typeof clockSessions.$inferSelect;
 
 // ── Scan targets — persistent address pool ───────────────────────────────────
@@ -769,3 +822,61 @@ export const reserveEntries = sqliteTable("reserve_entries", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export type ReserveEntry = typeof reserveEntries.$inferSelect;
+
+// ── PAY-A2: contractor pay plane (banking, W-9, company DFI profile) ─────────
+// APPEND-ONLY tables. Secrets (routing/account/TIN/EIN/DFI numbers) are stored
+// AES-256-GCM ciphertext via server/payCrypto.ts — the *_enc columns. last4 is
+// the only plaintext secret-derived value (display masking).
+
+// One ACTIVE bank account per rep (rep_id is the PK). Self-service onboarding;
+// reps can replace their own row (upsert), which re-encrypts the new numbers.
+export const repBankDetails = sqliteTable("rep_bank_details", {
+  repId: integer("rep_id").primaryKey(),                 // team_members.id
+  tenantId: integer("tenant_id").notNull(),
+  routingEnc: text("routing_enc").notNull(),             // AES-256-GCM ciphertext
+  accountEnc: text("account_enc").notNull(),             // AES-256-GCM ciphertext
+  accountType: text("account_type").notNull(),           // 'checking' | 'savings'
+  last4: text("last4").notNull(),                        // display mask only
+  status: text("status").notNull().default("active"),    // 'active' | 'disabled'
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type RepBankDetails = typeof repBankDetails.$inferSelect;
+
+// ESIGN-compliant electronic W-9. TIN encrypted; signature evidence (typed
+// name, date, IP, user agent, consent flag) retained with the generated PDF.
+export const w9Forms = sqliteTable("w9_forms", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),                    // team_members.id
+  legalName: text("legal_name").notNull(),
+  businessName: text("business_name"),
+  addressLine1: text("address_line1").notNull(),
+  city: text("city").notNull(),
+  state: text("state").notNull(),
+  zip: text("zip").notNull(),
+  tinEnc: text("tin_enc").notNull(),                     // AES-256-GCM ciphertext
+  tinType: text("tin_type").notNull(),                   // 'ssn' | 'ein'
+  signatureName: text("signature_name").notNull(),
+  signatureDate: text("signature_date").notNull(),
+  signatureIp: text("signature_ip"),
+  signatureUa: text("signature_ua"),
+  consent: integer("consent").notNull().default(0),      // 1 = ESIGN consent given
+  pdfPath: text("pdf_path"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type W9Form = typeof w9Forms.$inferSelect;
+
+// Originating company profile for NACHA files (per tenant). The DFI account +
+// EIN are encrypted; the DFI routing (bank's own transit number) and company id
+// are operational identifiers left readable for file generation/ops.
+export const companyProfile = sqliteTable("company_profile", {
+  tenantId: integer("tenant_id").primaryKey(),
+  legalName: text("legal_name").notNull(),
+  einEnc: text("ein_enc").notNull(),                     // AES-256-GCM ciphertext
+  dfiAccountEnc: text("dfi_account_enc").notNull(),      // AES-256-GCM ciphertext
+  dfiRouting: text("dfi_routing").notNull(),             // ODFI transit (BofA)
+  companyId: text("company_id").notNull(),               // NACHA company id (10)
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type CompanyProfile = typeof companyProfile.$inferSelect;

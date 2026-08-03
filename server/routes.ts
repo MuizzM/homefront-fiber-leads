@@ -82,7 +82,9 @@ import {
 } from "@shared/capabilities";
 import { buildDiagnostics, APP_VERSION } from "@shared/diagnostics";
 import { registerCommissionRoutes } from "./commissionRoutes";
+import { registerHourlyPayRoutes } from "./hourlyPayRoutes";
 import { registerPayoutRoutes } from "./payoutRoutes";
+import { registerPayRoutes } from "./payRoutes";
 import {
   issueOnboardingDocuments,
   onboardingAppOrigin,
@@ -1068,8 +1070,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
   registerCommissionRoutes(app, { requireAuth, requireCapability });
+  // Hourly pay plane (rates, punch corrections, pay disputes) — same injected auth.
+  registerHourlyPayRoutes(app, { requireAuth, requireCapability });
   registerPayoutRoutes(app, { requireAuth, requireCapability });
   registerOnboardingDocumentRoutes(app, { requireAuth, requireCapability });
+  // ── PAY-A2: contractor banking + W-9 + NACHA ACH export ─────────────────────
+  registerPayRoutes(app, { requireAuth, requireCapability });
 
   // ── Health check — used by the hosting platform (Railway) to gate deploys ────
   // No auth, no secrets, and a cheap DB round-trip so a wedged SQLite handle

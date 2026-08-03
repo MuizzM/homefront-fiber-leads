@@ -17,6 +17,7 @@ import {
   validateTiers, calculateRetroactiveCommission, calculateFlatCommission, formatUsdCents,
   type CommissionTier, type RetroResult, DEFAULT_RETRO_TIERS,
 } from "@shared/commissionTiers";
+import { hourlyPayForWeek, type WeekHourlyPay } from "./hourlyPay";
 
 // ── Typed domain errors ───────────────────────────────────────────────────────
 export type CommissionErrorCode =
@@ -24,7 +25,7 @@ export type CommissionErrorCode =
   | "UNSUPPORTED_TIER_MODE" | "NO_EFFECTIVE_PLAN_ASSIGNMENT" | "OVERLAPPING_PLAN_ASSIGNMENT"
   | "STATEMENT_LOCKED" | "DUPLICATE_SALE" | "CROSS_TENANT_ACCESS"
   | "UNAUTHORIZED_COMMISSION_ACTION" | "INVALID_WORKWEEK" | "INVALID_ADJUSTMENT"
-  | "CONCURRENT_STATEMENT_UPDATE" | "WEEK_KEY_FROZEN";
+  | "CONCURRENT_STATEMENT_UPDATE" | "WEEK_KEY_FROZEN" | "OPEN_CLOCK_SESSION";
 
 export class CommissionError extends Error {
   constructor(public code: CommissionErrorCode, message: string, public httpStatus = 400) {
@@ -212,6 +213,9 @@ export interface StatementDTO {
   statement: any;
   computation: StatementComputation;
   bounds: WeekBounds;
+  // The weekly HOURLY block (hybrid hourly+commission): hours from clock
+  // sessions + punch corrections, priced at the rate effective at week start.
+  hourly: WeekHourlyPay;
 }
 
 export function calculateOrRecalculateStatement(input: {
@@ -231,50 +235,76 @@ export function calculateOrRecalculateStatement(input: {
       `Week ${bounds.localWeekLabel} is ${existing.status}. Use an adjustment or an authorized reopen.`, 409);
   }
 
+  // The hourly block is computed for EVERY statement generation from source
+  // (clock sessions + corrections, rate effective at week start) so a re-run
+  // always recomputes truthfully — never accumulated, never double-counted.
+  const hourly = hourlyPayForWeek(tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc);
+  const approvedAdjustmentCents = existing ? sumApprovedAdjustments(tenantId, existing.id) : 0;
+
   // Resolve the plan version effective for this week (tenant-scoped).
   const assignments = rawDb.prepare(
     `SELECT id, commission_plan_version_id AS commissionPlanVersionId, effective_from AS effectiveFrom, effective_to AS effectiveTo
      FROM rep_commission_assignments WHERE tenant_id = ? AND rep_id = ? ORDER BY effective_from DESC`
   ).all(tenantId, repId) as AssignmentRow[];
   const assignment = resolveAssignmentForWeek(assignments, bounds.weekStartUtc, bounds.nextWeekStartUtc);
-  if (!assignment) throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT",
-    `No commission plan assigned to rep ${repId} for week ${bounds.localWeekLabel}.`);
 
-  const version = rawDb.prepare(
-    `SELECT * FROM commission_plan_versions WHERE id = ? AND tenant_id = ?`
-  ).get(assignment.commissionPlanVersionId, tenantId) as any;
-  if (!version) throw new CommissionError("CROSS_TENANT_ACCESS", "Plan version not found in tenant.", 404);
-  const plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE id = ? AND tenant_id = ?`).get(version.commission_plan_id, tenantId) as any;
-  if (!plan) throw new CommissionError("INVALID_COMMISSION_PLAN", "Plan not found in tenant.", 404);
+  let comp: StatementComputation;
+  let plan: any = null;
+  let version: any = null;
+  let basis = config.qualificationBasis as QualificationBasis;
+  let planSnapshot: string | null = null;
+  if (!assignment) {
+    // HOURLY-ONLY rep: no commission plan, but an hourly rate governs this
+    // week → they still get a weekly statement (hourly pay + adjustments,
+    // commission zeros). A rep with NEITHER plan nor rate keeps the legacy
+    // NO_EFFECTIVE_PLAN_ASSIGNMENT behavior.
+    if (hourly.rateCents == null) throw new CommissionError("NO_EFFECTIVE_PLAN_ASSIGNMENT",
+      `No commission plan assigned to rep ${repId} for week ${bounds.localWeekLabel}.`);
+    comp = {
+      qualifiedSaleCount: 0, tierId: null, tierLabel: null, rateCents: 0,
+      grossCommissionCents: 0, adjustmentCents: approvedAdjustmentCents,
+      finalCommissionCents: approvedAdjustmentCents, retro: null,
+    };
+  } else {
+    version = rawDb.prepare(
+      `SELECT * FROM commission_plan_versions WHERE id = ? AND tenant_id = ?`
+    ).get(assignment.commissionPlanVersionId, tenantId) as any;
+    if (!version) throw new CommissionError("CROSS_TENANT_ACCESS", "Plan version not found in tenant.", 404);
+    plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE id = ? AND tenant_id = ?`).get(version.commission_plan_id, tenantId) as any;
+    if (!plan) throw new CommissionError("INVALID_COMMISSION_PLAN", "Plan not found in tenant.", 404);
 
-  const tiers = plan.type === "TIERED" ? loadTiers(tenantId, version.id) : [];
-  const basis = (version.qualification_basis || config.qualificationBasis) as QualificationBasis;
-  const qualifiedSaleCount = countQualifiedSales(tenantId, repId, basis, bounds);
-  const approvedAdjustmentCents = existing ? sumApprovedAdjustments(tenantId, existing.id) : 0;
+    const tiers = plan.type === "TIERED" ? loadTiers(tenantId, version.id) : [];
+    basis = (version.qualification_basis || config.qualificationBasis) as QualificationBasis;
+    const qualifiedSaleCount = countQualifiedSales(tenantId, repId, basis, bounds);
 
-  const comp = computeStatement({
-    planType: plan.type, tierMode: plan.tier_mode, flatRateCents: version.flat_rate_cents,
-    tiers, qualifiedSaleCount, approvedAdjustmentCents,
-  });
+    comp = computeStatement({
+      planType: plan.type, tierMode: plan.tier_mode, flatRateCents: version.flat_rate_cents,
+      tiers, qualifiedSaleCount, approvedAdjustmentCents,
+    });
 
-  const planSnapshot = JSON.stringify({
-    planId: plan.id, versionNumber: version.version_number, type: plan.type, tierMode: plan.tier_mode,
-    flatRateCents: version.flat_rate_cents, currency: plan.currency,
-    tiers: tiers.map(t => ({ minimumSales: t.minimumSales, maximumSales: t.maximumSales, rateCents: t.rateCents, label: t.label })),
-    qualificationBasis: basis,
-  });
+    planSnapshot = JSON.stringify({
+      planId: plan.id, versionNumber: version.version_number, type: plan.type, tierMode: plan.tier_mode,
+      flatRateCents: version.flat_rate_cents, currency: plan.currency,
+      tiers: tiers.map(t => ({ minimumSales: t.minimumSales, maximumSales: t.maximumSales, rateCents: t.rateCents, label: t.label })),
+      qualificationBasis: basis,
+    });
+  }
   const now = new Date().toISOString();
 
-  // No-op guard: if nothing material changed (count, money, plan version), skip
-  // the write AND the audit entry — read-model views (the week console) recompute
-  // freely without bumping calculation_version or spamming the activity log.
+  // No-op guard: if nothing material changed (count, money, plan version,
+  // hourly block), skip the write AND the audit entry — read-model views (the
+  // week console) recompute freely without bumping calculation_version or
+  // spamming the activity log.
   if (existing
     && existing.qualified_sale_count === comp.qualifiedSaleCount
     && existing.gross_commission_cents === comp.grossCommissionCents
     && existing.adjustment_cents === comp.adjustmentCents
     && existing.final_commission_cents === comp.finalCommissionCents
-    && existing.commission_plan_version_id === version.id) {
-    return { statement: existing, computation: comp, bounds };
+    && existing.commission_plan_version_id === (version?.id ?? null)
+    && existing.hourly_minutes === hourly.minutes
+    && (existing.hourly_rate_cents ?? null) === hourly.rateCents
+    && (existing.hourly_pay_cents ?? 0) === hourly.payCents) {
+    return { statement: existing, computation: comp, bounds, hourly };
   }
 
   // Transactional upsert — the unique (tenant,rep,week) index + synchronous
@@ -285,14 +315,18 @@ export function calculateOrRecalculateStatement(input: {
         (tenant_id, rep_id, week_start_utc, next_week_start_utc, timezone, local_week_label, qualification_basis,
          commission_plan_id, commission_plan_version_id, plan_version_number, plan_snapshot,
          qualified_sale_count, tier_id, tier_label, rate_cents, gross_commission_cents, adjustment_cents,
-         final_commission_cents, calculation_version, status, calculated_at, created_at, updated_at)
-       VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?,1,'OPEN',?,?,?)
+         final_commission_cents, hourly_minutes, hourly_rate_cents, hourly_pay_cents,
+         calculation_version, status, calculated_at, created_at, updated_at)
+       VALUES (?,?,?,?,?,?,?, ?,?,?,?, ?,?,?,?,?,?, ?,?,?,?,1,'OPEN',?,?,?)
        ON CONFLICT(tenant_id, rep_id, week_start_utc) DO UPDATE SET
          qualified_sale_count = excluded.qualified_sale_count,
          tier_id = excluded.tier_id, tier_label = excluded.tier_label, rate_cents = excluded.rate_cents,
          gross_commission_cents = excluded.gross_commission_cents,
          adjustment_cents = excluded.adjustment_cents,
          final_commission_cents = excluded.final_commission_cents,
+         hourly_minutes = excluded.hourly_minutes,
+         hourly_rate_cents = excluded.hourly_rate_cents,
+         hourly_pay_cents = excluded.hourly_pay_cents,
          plan_snapshot = excluded.plan_snapshot,
          commission_plan_id = excluded.commission_plan_id,
          commission_plan_version_id = excluded.commission_plan_version_id,
@@ -301,9 +335,9 @@ export function calculateOrRecalculateStatement(input: {
          calculated_at = excluded.calculated_at, updated_at = excluded.updated_at`
     ).run(
       tenantId, repId, bounds.weekStartUtc, bounds.nextWeekStartUtc, bounds.timezone, bounds.localWeekLabel, basis,
-      plan.id, version.id, version.version_number, planSnapshot,
+      plan?.id ?? null, version?.id ?? null, version?.version_number ?? null, planSnapshot,
       comp.qualifiedSaleCount, comp.tierId as any, comp.tierLabel, comp.rateCents, comp.grossCommissionCents, comp.adjustmentCents,
-      comp.finalCommissionCents, now, now, now,
+      comp.finalCommissionCents, hourly.minutes, hourly.rateCents, hourly.payCents, now, now, now,
     );
   });
   tx();
@@ -314,9 +348,9 @@ export function calculateOrRecalculateStatement(input: {
 
   storage.logActivity(actorId, existing ? "commission.statement.recalculated" : "commission.statement.created",
     "commission_statement", (statement as any).id,
-    { requestId: input.requestId ?? null, repId, week: bounds.localWeekLabel, qualifiedSaleCount: comp.qualifiedSaleCount, finalCommissionCents: comp.finalCommissionCents }, undefined);
+    { requestId: input.requestId ?? null, repId, week: bounds.localWeekLabel, qualifiedSaleCount: comp.qualifiedSaleCount, finalCommissionCents: comp.finalCommissionCents, hourlyPayCents: hourly.payCents }, undefined);
 
-  return { statement, computation: comp, bounds };
+  return { statement, computation: comp, bounds, hourly };
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -624,6 +658,18 @@ export function transitionStatement(tenantId: number, actorId: number | null, st
   const now = nowIso();
   if (action === "FINALIZE") {
     if (stmt.status === "PAID") throw new CommissionError("STATEMENT_LOCKED", "Paid statements cannot be re-finalized.", 409);
+    if (stmt.status !== "FINALIZED") {
+      // Same freeze rules as batchTransitionWeek: (1) the OPEN_CLOCK_SESSION
+      // guard — an hourly rep with a forgotten open punch must never lock
+      // partial hours; (2) recompute-before-freeze so the locked number always
+      // matches the live ledger (sales + hourly block) at freeze time.
+      const hp = hourlyPayForWeek(tenantId, stmt.rep_id, stmt.week_start_utc, stmt.next_week_start_utc);
+      if (hp.rateCents != null && hp.openSessionCount > 0) {
+        throw new CommissionError("OPEN_CLOCK_SESSION",
+          "Close the open clock session before finalizing hourly pay.", 409);
+      }
+      calculateOrRecalculateStatement({ tenantId, repId: stmt.rep_id, weekReference: stmt.week_start_utc, actorId, requestId: "finalize-recompute" });
+    }
     // Freeze the exact doors that composed this locked number, so the audit
     // drill-down always matches even if a sale is reversed afterward.
     const snapshot = JSON.stringify(listWeekSalesForRep(tenantId, stmt.rep_id, stmt.week_start_utc).filter((s: any) => s.status === "QUALIFIED"));
@@ -713,7 +759,15 @@ export function updateOrgConfig(tenantId: number, actorId: number | null, patch:
 const STANDARD_TIERED_PLAN_NAME = "Standard Weekly Tiers";
 const FLAT_PLAN_NAME = "Flat Per-Sale";
 const CUSTOM_TIERED_PLAN_NAME = "Custom Weekly Tiers";
-const today = () => new Date().toISOString().slice(0, 10);
+// "Today" for default effective-dating. Assignments are resolved against ORG-
+// TIMEZONE weeks (weekBoundsFor), so the default must be the org's LOCAL
+// calendar date — the UTC date flips to tomorrow during the evening window
+// (e.g. 20:00–24:00 ET), which stranded a same-day assignment OUTSIDE the
+// running week's resolution window and broke recalculate with
+// NO_EFFECTIVE_PLAN_ASSIGNMENT (nightly CI failure 2026-08-02/03).
+const todayInTz = (timezone: string) =>
+  new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const orgToday = (tenantId: number) => todayInTz(loadOrgConfig(tenantId).timezone);
 
 export type CommissionStructure = "FLAT" | "TIERED";
 
@@ -723,7 +777,7 @@ export function getOrCreateStandardTieredVersion(tenantId: number, actorId: numb
   let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'TIERED' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, STANDARD_TIERED_PLAN_NAME) as any;
   if (!plan) plan = createPlan(tenantId, actorId, { name: STANDARD_TIERED_PLAN_NAME, type: "TIERED", tierMode: "RETROACTIVE_WEEKLY", description: "Default retroactive weekly tiers (1–7 $150, 8–12 $200, 13–16 $250, 17+ $300)." });
   let version = rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ? ORDER BY version_number DESC LIMIT 1`).get(tenantId, plan.id) as any;
-  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: today(), qualificationBasis: "QUALIFIED_AT", tiers: DEFAULT_RETRO_TIERS });
+  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: orgToday(tenantId), qualificationBasis: "QUALIFIED_AT", tiers: DEFAULT_RETRO_TIERS });
   if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
   return { planId: plan.id, versionId: version.id };
 }
@@ -737,7 +791,7 @@ export function getOrCreateFlatVersion(tenantId: number, actorId: number | null,
   let plan = rawDb.prepare(`SELECT * FROM commission_plans WHERE tenant_id = ? AND type = 'FLAT' AND name = ? ORDER BY id ASC LIMIT 1`).get(tenantId, FLAT_PLAN_NAME) as any;
   if (!plan) plan = createPlan(tenantId, actorId, { name: FLAT_PLAN_NAME, type: "FLAT", description: "Flat per-qualified-sale commission." });
   let version = rawDb.prepare(`SELECT * FROM commission_plan_versions WHERE tenant_id = ? AND commission_plan_id = ? AND flat_rate_cents = ? ORDER BY version_number DESC LIMIT 1`).get(tenantId, plan.id, flatRateCents) as any;
-  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: today(), flatRateCents, qualificationBasis: "QUALIFIED_AT" });
+  if (!version) version = addPlanVersion(tenantId, actorId, plan.id, { effectiveFrom: orgToday(tenantId), flatRateCents, qualificationBasis: "QUALIFIED_AT" });
   if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
   return { planId: plan.id, versionId: version.id };
 }
@@ -768,7 +822,7 @@ export function getOrCreateCustomTieredVersion(
     }
   }
   const version = addPlanVersion(tenantId, actorId, plan.id, {
-    effectiveFrom: today(), qualificationBasis: "QUALIFIED_AT", tiers: v.normalized,
+    effectiveFrom: orgToday(tenantId), qualificationBasis: "QUALIFIED_AT", tiers: v.normalized,
     changeSummary: `Ladder: ${v.normalized.map(t => `${t.label} ${t.rateCents / 100}`).join(", ")}`,
   });
   if (plan.status !== "ACTIVE") activatePlan(tenantId, actorId, plan.id);
@@ -790,7 +844,7 @@ export function assignStructureToRep(tenantId: number, actorId: number | null, i
 }): { assignment: any; versionId: number; structure: CommissionStructure } {
   const rep = storage.getTeamMemberById(input.repId);
   if (!rep || rep.tenantId !== tenantId) throw new CommissionError("CROSS_TENANT_ACCESS", "Rep not found in tenant.", 404);
-  const effectiveFrom = input.effectiveFrom || today();
+  const effectiveFrom = input.effectiveFrom || orgToday(tenantId);
 
   // Resolve the concrete version: an explicit custom plan version wins; else the
   // structure's canonical plan.
@@ -1010,6 +1064,13 @@ export interface WeekOverviewRepRow {
   finalCommissionCents: number;
   structure: "FLAT" | "TIERED" | null;
   planAccepted: boolean;
+  // Hourly block (hybrid hourly+commission): hours worked, the rate effective
+  // at week start, and the hourly pay. rateCents null = commission-only rep.
+  hours: number;
+  hourlyMinutes: number;
+  hourlyRateCents: number | null;
+  hourlyPayCents: number;
+  openClockSessions: number;
   // Tier-movement intelligence (tiered plans, open weeks only)
   salesUntilNextTier: number | null;
   nextTierRateCents: number | null;
@@ -1048,6 +1109,9 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
 
     const structure = getCurrentStructureForRep(tenantId, rep.id);
     const acceptedAt = structure?.acceptedAt ?? null;
+    // Hourly block for the week (source-truthful: sessions + corrections, rate
+    // effective at week start). Also drives the OPEN_CLOCK_SESSION exception.
+    const hp = hourlyPayForWeek(tenantId, rep.id, bounds.weekStartUtc, bounds.nextWeekStartUtc);
 
     let row: WeekOverviewRepRow = {
       repId: rep.id, repName: rep.name, active: !!rep.active,
@@ -1058,9 +1122,23 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
       tierLabel: null, rateCents: 0, grossCommissionCents: 0,
       adjustmentCents: 0, finalCommissionCents: 0,
       structure: structure?.structure ?? null, planAccepted: !!acceptedAt,
+      hours: hp.hours, hourlyMinutes: hp.minutes, hourlyRateCents: hp.rateCents,
+      hourlyPayCents: hp.payCents, openClockSessions: hp.openSessionCount,
       salesUntilNextTier: null, nextTierRateCents: null,
       nextTierProjectedCommissionCents: null, marginalJumpCents: null,
     };
+
+    // Auto-close rule: an ended week with a forgotten open clock-in can never
+    // finalize truthfully — surface the named exception (mirrors the other
+    // closeout blockers) so a manager closes the punch first.
+    if (hp.weekEnded && hp.openSessionCount > 0) {
+      exceptions.push({ type: "OPEN_CLOCK_SESSION", repId: rep.id, repName: rep.name,
+        detail: `${hp.openSessionCount} open clock session(s) reach into this ended week — clock out (or correct the punch) before finalizing hourly pay.` });
+    }
+    // Set when NO plan governs this week (either the calc threw, or it took the
+    // hourly-only path) — drives SALES_WITHOUT_PLAN from the LEDGER counts so
+    // it also fires for hourly-only reps, whose statement calc no longer throws.
+    let noPlanForWeek = false;
 
     try {
       const existing = rawDb.prepare(
@@ -1068,7 +1146,12 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
       ).get(tenantId, rep.id, bounds.weekStartUtc) as any;
 
       if (existing && (existing.status === "FINALIZED" || existing.status === "PAID")) {
-        // Locked — read as stored, never recompute.
+        // Locked — read as stored, never recompute. The hourly block is frozen
+        // with the statement (audit fidelity). A statement locked BEFORE the
+        // hourly plane existed (hourly_minutes IS NULL) renders a zero/empty
+        // block — NEVER the live read: backdating a rate before a frozen week
+        // must not pay money the locked statement never had (CSV/overview
+        // consume these fields).
         row = { ...row,
           statementId: existing.id, status: existing.status,
           qualifiedSaleCount: existing.qualified_sale_count,
@@ -1076,6 +1159,14 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
           grossCommissionCents: existing.gross_commission_cents,
           adjustmentCents: existing.adjustment_cents,
           finalCommissionCents: existing.final_commission_cents,
+          ...(existing.hourly_minutes != null ? {
+            hours: Math.round((existing.hourly_minutes / 60) * 100) / 100,
+            hourlyMinutes: existing.hourly_minutes,
+            hourlyRateCents: existing.hourly_rate_cents ?? null,
+            hourlyPayCents: existing.hourly_pay_cents ?? 0,
+          } : {
+            hours: 0, hourlyMinutes: 0, hourlyRateCents: null, hourlyPayCents: 0,
+          }),
         };
         if (existing.status === "PAID") paid += existing.final_commission_cents;
         else finalized += existing.final_commission_cents;
@@ -1095,6 +1186,7 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
         // Open (or missing) — live recompute so the console is always current.
         const out = calculateOrRecalculateStatement({ tenantId, repId: rep.id, weekReference: bounds.weekStartUtc, actorId, requestId: "week-overview" });
         const c = out.computation;
+        noPlanForWeek = out.statement.commission_plan_version_id == null;
         row = { ...row,
           statementId: out.statement.id, status: out.statement.status,
           qualifiedSaleCount: c.qualifiedSaleCount, tierLabel: c.tierLabel,
@@ -1116,11 +1208,13 @@ export function getWeekOverview(tenantId: number, actorId: number | null, weekRe
       }
     } catch (e) {
       if (e instanceof CommissionError && e.code === "NO_EFFECTIVE_PLAN_ASSIGNMENT") {
-        if ((row.qualifiedSaleCount + row.pendingSaleCount) > 0) {
-          exceptions.push({ type: "SALES_WITHOUT_PLAN", repId: rep.id, repName: rep.name,
-            detail: `${row.qualifiedSaleCount + row.pendingSaleCount} sale(s) this week but no commission plan assigned — these pay $0 until a plan is set.` });
-        }
+        noPlanForWeek = true; // no plan AND no hourly rate — exception below
       } else { throw e; }
+    }
+
+    if (noPlanForWeek && (row.qualifiedSaleCount + row.pendingSaleCount) > 0) {
+      exceptions.push({ type: "SALES_WITHOUT_PLAN", repId: rep.id, repName: rep.name,
+        detail: `${row.qualifiedSaleCount + row.pendingSaleCount} sale(s) this week but no commission plan assigned — these pay $0 until a plan is set.` });
     }
 
     if (structure && !acceptedAt && row.status !== "NO_PLAN") {
@@ -1201,6 +1295,15 @@ export function batchTransitionWeek(tenantId: number, actorId: number | null, we
     if (repIds && !repIds.includes(s.rep_id)) continue;
     if (action === "FINALIZE") {
       if (s.status === "FINALIZED" || s.status === "PAID") { results.push({ repId: s.rep_id, statementId: s.id, result: `already ${s.status}` }); continue; }
+      // Auto-close rule: a week is final only when it has ended AND no open
+      // clock session remains. An open punch would freeze partial hourly pay,
+      // so it BLOCKS finalize with a named exception (mirrors the week-overview
+      // OPEN_CLOCK_SESSION exception) — commission-only reps are unaffected.
+      const hp = hourlyPayForWeek(tenantId, s.rep_id, bounds.weekStartUtc, bounds.nextWeekStartUtc);
+      if (hp.rateCents != null && hp.openSessionCount > 0) {
+        results.push({ repId: s.rep_id, statementId: s.id, result: "BLOCKED (OPEN_CLOCK_SESSION: close the open clock session before finalizing hourly pay)" });
+        continue;
+      }
       // Recompute right before locking so the frozen number matches the ledger.
       const fresh = calculateOrRecalculateStatement({ tenantId, repId: s.rep_id, weekReference: bounds.weekStartUtc, actorId, requestId: "batch-finalize" });
       const locked = transitionStatement(tenantId, actorId, fresh.statement.id, "FINALIZE");
