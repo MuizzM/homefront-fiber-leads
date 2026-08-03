@@ -13,6 +13,7 @@ import { rawDb } from "./db";
 import { storage } from "./storage";
 import * as svc from "./commissionService";
 import { hourlyBlockForStatement, sumWeekSpiffsByRep } from "./hourlyPay";
+import { getReserveBalanceCents, resolveRepReserveConfig } from "./reserveService";
 import {
   buildStatementDocument,
   type StatementDocInput,
@@ -83,8 +84,12 @@ export function buildStatementDocumentFor(
   const spiffCents = sumWeekSpiffsByRep(tenantId, stmt.week_start_utc, stmt.next_week_start_utc).get(stmt.rep_id) ?? 0;
   const hourly = hourlyBlockForStatement(stmt);
   const finalCents = Number(stmt.final_commission_cents ?? 0);
-  const holdback = svc.holdbackForStatement(tenantId, finalCents);
-  const ledger = svc.getReserveLedgerForRep(tenantId, stmt.rep_id);
+  // Per-rep, cap-aware split against the LIVE ledger balance — the same numbers
+  // the reserve endpoints and the rep's reserve card report, so the statement
+  // can never quote a holdback the ledger disagrees with.
+  const holdback = svc.holdbackForStatement(tenantId, finalCents, stmt.rep_id);
+  const reserveConfig = resolveRepReserveConfig(tenantId, stmt.rep_id);
+  const reserveBalanceCents = getReserveBalanceCents(tenantId, stmt.rep_id);
 
   const input: StatementDocInput = {
     company: { name: tenant?.company_name || "Home Front Solutions", supportEmail: tenant?.owner_email ?? null },
@@ -115,10 +120,11 @@ export function buildStatementDocumentFor(
     },
     holdback,
     reserve: {
-      balanceCents: ledger.reserveBalanceCents,
-      // The per-rep cap lands with the chargeback-reserve ledger; until then the
-      // ledger reports no ceiling and the statement simply shows the balance.
-      capCents: (ledger as any).reserveCapCents ?? null,
+      balanceCents: reserveBalanceCents,
+      // 0 means "uncapped" in the reserve config; the document treats that as
+      // "no ceiling to show" rather than a $0.00 cap the rep is already past.
+      capCents: reserveConfig.reserveCapCents && reserveConfig.reserveCapCents > 0
+        ? reserveConfig.reserveCapCents : null,
     },
     adjustments: svc.getStatementAdjustments(tenantId, stmt.id)
       .filter((a: any) => a.status === "APPROVED")
