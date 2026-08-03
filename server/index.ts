@@ -11,6 +11,7 @@ import { runMigrations } from "./storage";
 import { rawDb } from "./db";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import helmet from "helmet";
+import { scriptSrcElem, inlineScriptsAreHashed } from "./cspHashes";
 import cors from "cors";
 import compression from "compression";
 import { structuredLog } from "./structuredLog";
@@ -127,11 +128,21 @@ app.use(helmet({
       defaultSrc:     ["'self'"],
       // SEC-B: script eval removed — no part of the app (Mapbox GL included)
       // evaluates strings as code, and eval is the highest-leverage XSS sink.
-      // TODO(csp-nonces): 'unsafe-inline' on scriptSrcElem/styleSrc below is
-      // retained until the Vite bundle + Mapbox <script> tag move to nonced
-      // loads; nonce migration is tracked separately and is out of scope here.
+      //
+      // 'unsafe-inline' is now GONE from scripts. index.html's two inline
+      // scripts (the pre-paint theme switch, the lazy Mapbox loader) are allowed
+      // by sha256 hash, computed at boot from the file actually being served so
+      // the hashes cannot drift from the bytes. Hashes rather than nonces
+      // because the scripts are static and index.html stays a cacheable file.
+      // Falls back to 'unsafe-inline' only when that file cannot be read — in
+      // dev, Vite injects its own inline HMR client, which no hash can cover.
+      // See server/cspHashes.ts.
+      //
+      // styleSrc keeps 'unsafe-inline' below: Radix and Mapbox both set element
+      // style attributes at runtime, and CSS injection is a far weaker primitive
+      // than script injection. Tracked, not forgotten.
       scriptSrc:      ["'self'", "blob:", "https://api.mapbox.com"],   // Mapbox GL CDN
-      scriptSrcElem:  ["'self'", "'unsafe-inline'", "blob:", "https://api.mapbox.com"],   // Mapbox GL <script> tag
+      scriptSrcElem:  scriptSrcElem(["blob:", "https://api.mapbox.com"]),
       workerSrc:      ["'self'", "blob:"],   // service worker (PWA offline shell)
       manifestSrc:    ["'self'"],            // installable web app manifest
       styleSrc:       ["'self'", "'unsafe-inline'", "https://api.mapbox.com", "https://fonts.googleapis.com"],
@@ -164,6 +175,74 @@ app.use(helmet({
   referrerPolicy: { policy: "no-referrer" },
   permittedCrossDomainPolicies: { permittedPolicies: "none" },
 }));
+
+// Say out loud which policy actually applied. The hash path silently falls back
+// to 'unsafe-inline' when index.html can't be read, and a security control that
+// fails open without saying so is one nobody notices is off.
+console.log(inlineScriptsAreHashed()
+  ? "[csp] inline scripts pinned by sha256 — 'unsafe-inline' is OFF for scripts"
+  : "[csp] WARNING: could not hash index.html; script-src-elem is falling back to 'unsafe-inline'");
+
+// ── Trusted Types — REPORT-ONLY, deliberately ───────────────────────────────
+// `require-trusted-types-for 'script'` stops strings ever reaching a DOM
+// injection sink, which is the strongest DOM-XSS defence available. The app's
+// own code is already clean: there are zero occurrences of
+// dangerouslySetInnerHTML, innerHTML, document.write, eval or string timers in
+// client/src and server (the one dangerouslySetInnerHTML lived in an unused
+// shadcn chart component and has been deleted).
+//
+// But we do not control React's internals or Mapbox GL, and BOTH are known to
+// touch innerHTML. Enforcing this today would risk a white screen on the map —
+// the single most important thing a rep uses. So it ships report-only: the
+// browser reports what WOULD have been blocked and blocks nothing.
+//
+// Promote to enforcing only when the report endpoint below has been quiet for a
+// full release cycle across iOS Safari, Chrome Android and desktop. That is the
+// whole point of the report-only phase; skipping it is how a hardening change
+// becomes an outage.
+const REPORT_ONLY_CSP = [
+  "require-trusted-types-for 'script'",
+  // 'default' covers React DOM; 'dompurify' is reserved so adding a sanitizer
+  // later does not require re-learning the report baseline.
+  "trusted-types default dompurify",
+  "report-uri /api/security/csp-report",
+].join("; ");
+app.use((_req, res, next) => {
+  res.setHeader("Content-Security-Policy-Report-Only", REPORT_ONLY_CSP);
+  next();
+});
+
+// Violation sink. Unauthenticated ON PURPOSE — a browser posts these without
+// credentials, and a report that needs a session is a report we never see.
+// Rate-limited and size-capped because an unauthenticated write endpoint is
+// exactly what gets abused, and the body is only ever logged, never stored or
+// rendered anywhere.
+const cspReportSeen = new Map<string, number>();
+app.post(
+  "/api/security/csp-report",
+  express.json({ type: ["application/csp-report", "application/json"], limit: "8kb" }),
+  (req, res) => {
+    try {
+      const r = (req.body?.["csp-report"] ?? req.body ?? {}) as Record<string, unknown>;
+      const directive = String(r["effective-directive"] ?? r["violated-directive"] ?? "unknown");
+      const blocked = String(r["blocked-uri"] ?? "").slice(0, 200);
+      const key = `${directive}|${blocked}`;
+      // One line per distinct violation per hour. Without this, a single broken
+      // page on a hundred phones writes a hundred identical lines a second.
+      const last = cspReportSeen.get(key) ?? 0;
+      if (Date.now() - last > 3_600_000) {
+        cspReportSeen.set(key, Date.now());
+        if (cspReportSeen.size > 500) cspReportSeen.clear();   // bounded
+        console.warn("[csp-report]", JSON.stringify({
+          directive, blocked,
+          sample: String(r["script-sample"] ?? "").slice(0, 120),
+          doc: String(r["document-uri"] ?? "").slice(0, 200),
+        }));
+      }
+    } catch { /* a malformed report must never 500 */ }
+    res.status(204).end();
+  },
+);
 
 // ── Cache-Control: no-store on all API routes (prevent browser caching of sensitive data) ──
 app.use("/api", (_req, res, next) => {

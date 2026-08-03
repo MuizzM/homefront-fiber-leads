@@ -74,3 +74,46 @@ self.addEventListener("fetch", (event) => {
     }),
   );
 });
+
+// ── Push notifications ───────────────────────────────────────────────────────
+// Payload arrives encrypted (RFC 8291) and is decrypted by the browser before
+// it reaches here, so event.data is already plaintext JSON.
+//
+// `tag` is the collapse key and it matters in the field: "Power Hour, 20 min
+// left" should REPLACE "Power Hour, 40 min left" rather than stacking beneath
+// it. A rep who unlocks their phone to six notifications about one challenge
+// turns notifications off, and we never get them back.
+self.addEventListener("push", (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { /* malformed → generic */ }
+  const title = data.title || "Homefront";
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || "",
+      icon: "/icon-192.png",
+      badge: "/icon-192.png",
+      tag: data.tag || "hfs",
+      renotify: true,
+      data: { url: data.url || "/" },
+    }),
+  );
+});
+
+// Tapping a notification focuses an existing tab rather than opening a new one —
+// a rep mid-knock should land back in the app they already had open, with their
+// map state intact, not in a fresh window that reloads everything.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if ("focus" in client) {
+          if ("navigate" in client && target !== "/") client.navigate(target).catch(() => {});
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(target);
+    }),
+  );
+});
