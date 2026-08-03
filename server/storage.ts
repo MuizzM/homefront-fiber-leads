@@ -682,6 +682,12 @@ export function runMigrations() {
     `ALTER TABLE rep_applications ADD COLUMN agreements_issued_at TEXT`,
     `ALTER TABLE rep_applications ADD COLUMN activated_at TEXT`,
     `CREATE INDEX IF NOT EXISTS idx_rep_applications_tenant_status_source ON rep_applications(tenant_id, status, application_source, created_at DESC)`,
+    // HR / compliance checkpoints — parallel post-approval gates (background
+    // check, drug screen, badge photo, Gusto). One row per (application, kind);
+    // the UNIQUE index makes setHrCheckpoint an idempotent upsert.
+    `CREATE TABLE IF NOT EXISTS rep_hr_checkpoints (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER, application_id INTEGER NOT NULL, rep_id INTEGER, kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'not_started', provider TEXT, external_ref TEXT, badge_photo_path TEXT, notes TEXT, updated_by INTEGER, ordered_at TEXT, completed_at TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_rep_hr_checkpoints_app_kind ON rep_hr_checkpoints(application_id, kind)`,
+    `CREATE INDEX IF NOT EXISTS idx_rep_hr_checkpoints_tenant ON rep_hr_checkpoints(tenant_id, application_id)`,
     // Org hierarchy: which team_lead/manager a member reports to (null = top-level)
     `ALTER TABLE team_members ADD COLUMN reports_to_id INTEGER`,
     // Persisted rep hue, allocated at creation (first free REP_PALETTE slot per
@@ -839,6 +845,11 @@ export function runMigrations() {
     `ALTER TABLE tenants ADD COLUMN commission_correction_window_days INTEGER NOT NULL DEFAULT 30`,
     `ALTER TABLE tenants ADD COLUMN commission_auto_finalize_enabled INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE tenants ADD COLUMN commission_reserve_percent INTEGER NOT NULL DEFAULT 0`,
+    // What the COMPANY books for one qualified sale — the "house amount" on a
+    // commission statement. 0 means the org has not set one, and the statement
+    // then HIDES the column rather than printing $0.00 beside every door (which
+    // reads as "this sale was worth nothing" instead of "not configured").
+    `ALTER TABLE tenants ADD COLUMN commission_house_amount_cents INTEGER NOT NULL DEFAULT 0`,
 
     `CREATE TABLE IF NOT EXISTS commission_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, name TEXT NOT NULL, description TEXT, currency TEXT NOT NULL DEFAULT 'USD', type TEXT NOT NULL DEFAULT 'TIERED', tier_mode TEXT NOT NULL DEFAULT 'RETROACTIVE_WEEKLY', status TEXT NOT NULL DEFAULT 'DRAFT', created_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE INDEX IF NOT EXISTS idx_commission_plans_tenant ON commission_plans(tenant_id, status)`,
@@ -855,6 +866,10 @@ export function runMigrations() {
     `CREATE TABLE IF NOT EXISTS commission_sales (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, external_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING', sold_at TEXT NOT NULL, qualified_at TEXT, installed_at TEXT, activated_at TEXT, reversed_at TEXT, disqualification_reason TEXT, lead_id INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_tenant_external ON commission_sales(tenant_id, external_id)`,
     `CREATE INDEX IF NOT EXISTS idx_sales_agg ON commission_sales(tenant_id, rep_id, status, qualified_at)`,
+    // Per-sale override of the org's house amount, for shops whose doors are not
+    // all worth the same (different speeds/bundles). NULL = fall back to the org
+    // default; the statement never invents a number for a door nobody priced.
+    `ALTER TABLE commission_sales ADD COLUMN house_amount_cents INTEGER`,
 
     `CREATE TABLE IF NOT EXISTS commission_statements (id INTEGER PRIMARY KEY AUTOINCREMENT, tenant_id INTEGER NOT NULL, rep_id INTEGER NOT NULL, week_start_utc TEXT NOT NULL, next_week_start_utc TEXT NOT NULL, timezone TEXT NOT NULL, local_week_label TEXT NOT NULL, qualification_basis TEXT NOT NULL, commission_plan_id INTEGER, commission_plan_version_id INTEGER, plan_version_number INTEGER, plan_snapshot TEXT, qualified_sale_count INTEGER NOT NULL DEFAULT 0, tier_id INTEGER, tier_label TEXT, rate_cents INTEGER NOT NULL DEFAULT 0, gross_commission_cents INTEGER NOT NULL DEFAULT 0, adjustment_cents INTEGER NOT NULL DEFAULT 0, final_commission_cents INTEGER NOT NULL DEFAULT 0, calculation_version INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'OPEN', calculated_at TEXT NOT NULL DEFAULT (datetime('now')), finalized_at TEXT, finalized_by INTEGER, paid_at TEXT, paid_by INTEGER, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_statements_tenant_rep_week ON commission_statements(tenant_id, rep_id, week_start_utc)`,
@@ -2191,6 +2206,59 @@ export function runMigrations() {
        quiz_score INTEGER,
        UNIQUE(tenant_id, user_id, lesson_id))`,
     `CREATE INDEX IF NOT EXISTS idx_training_progress_user ON training_progress(tenant_id, user_id)`,
+
+    // ══ CHARGEBACK RESERVE ══════════════════════════════════════════════════════
+    // Per-rep overrides of the org reserve policy. BOTH nullable — NULL means
+    // "inherit the org default", which every pre-existing row is, so no rep's pay
+    // changes until an admin sets one. (Drizzle-only columns don't exist at
+    // runtime; these ALTERs are what actually create them.)
+    `ALTER TABLE team_members ADD COLUMN reserve_percent INTEGER`,
+    `ALTER TABLE team_members ADD COLUMN reserve_cap_cents INTEGER`,
+    // Org-level ceiling. NULL → the product default ($2,500); 0 → uncapped.
+    `ALTER TABLE tenants ADD COLUMN commission_reserve_cap_cents INTEGER`,
+
+    // The append-only reserve ledger — the ONE source of truth for a balance.
+    // Balance = SUM(amount_cents) in SQL. holds are positive; drawdowns and
+    // releases are negative. Nothing here is ever UPDATEd or DELETEd.
+    `CREATE TABLE IF NOT EXISTS reserve_entries (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       rep_id INTEGER NOT NULL,
+       kind TEXT NOT NULL CHECK (kind IN ('hold','drawdown','release')),
+       amount_cents INTEGER NOT NULL,
+       statement_id INTEGER,
+       week_start_utc TEXT,
+       week_label TEXT,
+       reason TEXT NOT NULL,
+       actor_user_id INTEGER,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_reserve_entries_rep ON reserve_entries(tenant_id, rep_id, id)`,
+    // IDEMPOTENT WEEKLY HOLD: at most ONE hold per (tenant, rep, week). This is
+    // what makes recalculating / re-finalizing a statement unable to double-hold
+    // — the second insert hits this index and is ignored, not applied twice.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_reserve_entries_hold_week
+       ON reserve_entries(tenant_id, rep_id, week_start_utc) WHERE kind = 'hold'`,
+    // Append-only, enforced in the DB (same pattern as consent_records /
+    // internal DNC in server/calling/migrations.ts): no code path — present or
+    // future, app or console — can rewrite a rep's reserve history. Corrections
+    // are new rows.
+    `CREATE TRIGGER IF NOT EXISTS trg_reserve_entries_no_update
+       BEFORE UPDATE ON reserve_entries
+       BEGIN SELECT RAISE(ABORT,'reserve_entries_are_append_only'); END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_reserve_entries_no_delete
+       BEFORE DELETE ON reserve_entries
+       BEGIN SELECT RAISE(ABORT,'reserve_entries_are_append_only'); END`,
+    // Sign + type discipline: money is INTEGER cents, a hold can only add, a
+    // drawdown/release can only subtract, and no entry may be zero. A wrong-signed
+    // row would silently invert a balance, so it can never be written at all.
+    `CREATE TRIGGER IF NOT EXISTS trg_reserve_entries_amount_sign
+       BEFORE INSERT ON reserve_entries
+       WHEN typeof(NEW.amount_cents) <> 'integer'
+         OR NEW.amount_cents = 0
+         OR (NEW.kind = 'hold' AND NEW.amount_cents < 0)
+         OR (NEW.kind IN ('drawdown','release') AND NEW.amount_cents > 0)
+         OR length(trim(COALESCE(NEW.reason,''))) = 0
+       BEGIN SELECT RAISE(ABORT,'reserve_entry_amount_or_reason_invalid'); END`,
 
     // ══ HOURLY PAY (Sequifi-style hybrid hourly+commission) — additive ════════
     // The rep's CURRENT hourly rate (integer cents/hour). NULL = commission-only.

@@ -38,6 +38,14 @@ export const tenants = sqliteTable("tenants", {
   commissionFinalizationDelayHours: integer("commission_finalization_delay_hours").notNull().default(0),
   commissionCorrectionWindowDays: integer("commission_correction_window_days").notNull().default(30),
   commissionAutoFinalizeEnabled: integer("commission_auto_finalize_enabled", { mode: "boolean" }).notNull().default(false),
+  // ── Chargeback reserve — ORG DEFAULTS (each rep may override, see teamMembers) ─
+  // Whole-percent weekly holdback; 0 = disabled, so no tenant's payroll changes
+  // until an operator opts in.
+  commissionReservePercent: integer("commission_reserve_percent").notNull().default(0),
+  // Ceiling the running reserve balance stops accruing at. NULL = fall back to
+  // the product default ($2,500 — shared/commissionReserve.DEFAULT_RESERVE_CAP_CENTS);
+  // 0 = deliberately UNCAPPED (the pre-cap behaviour).
+  commissionReserveCapCents: integer("commission_reserve_cap_cents"),
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
   updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
 });
@@ -297,6 +305,12 @@ export const teamMembers = sqliteTable("team_members", {
   // NULL = legacy row or palette exhausted; both resolve through
   // repColorOf()'s repId-hash fallback, so nothing ever renders colourless.
   color: text("color"),
+  // ── Per-rep chargeback-reserve overrides (set at onboarding / in the comp
+  // editor). BOTH nullable — NULL means "inherit the org default", which is what
+  // every existing row is, so nobody's pay changes until an admin sets one.
+  reservePercent: integer("reserve_percent"),      // whole percent 0..100
+  reserveCapCents: integer("reserve_cap_cents"),   // ceiling in integer cents; 0 = uncapped
+
   // Hourly pay (Sequifi-style hybrid hourly+commission). NULL rate = a
   // commission-only rep. Integer cents/hour — money is integer cents everywhere.
   // effectiveFrom gates which weeks a rate governs: a week's rate is the one
@@ -423,6 +437,31 @@ export const insertRepApplicationSchema = createInsertSchema(repApplications).om
 });
 export type InsertRepApplication = z.infer<typeof insertRepApplicationSchema>;
 export type RepApplication = typeof repApplications.$inferSelect;
+
+// ── HR / compliance checkpoints ───────────────────────────────────────────────
+// One row per (application, kind). The post-approval compliance gates a rep
+// clears in parallel with the document-signing pipeline: background check, drug
+// screen, badge photo, and Gusto payroll confirmation. Status transitions are
+// validated against shared/onboardingHr.ts. Uniqueness is (application_id, kind)
+// so an upsert never creates duplicates for the same gate.
+export const repHrCheckpoints = sqliteTable("rep_hr_checkpoints", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id"),
+  applicationId: integer("application_id").notNull(),
+  repId: integer("rep_id"),                       // teamMembers.id once the account exists
+  kind: text("kind").notNull(),                   // HrCheckpointKind
+  status: text("status").notNull().default("not_started"), // HrCheckpointStatus
+  provider: text("provider"),                     // e.g. "checkr", "quest", "gusto"
+  externalRef: text("external_ref"),              // vendor case id / Gusto employee id
+  badgePhotoPath: text("badge_photo_path"),       // relative path under uploads/ for badge_photo
+  notes: text("notes"),
+  updatedBy: integer("updated_by"),               // users.id of the reviewer
+  orderedAt: text("ordered_at"),
+  completedAt: text("completed_at"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+  updatedAt: text("updated_at").notNull().default(new Date().toISOString()),
+});
+export type RepHrCheckpoint = typeof repHrCheckpoints.$inferSelect;
 
 // ── Territory Requests ────────────────────────────────────────────────────────
 export const territoryRequests = sqliteTable("territory_requests", {
@@ -784,6 +823,30 @@ export const commissionAdjustments = sqliteTable("commission_adjustments", {
   createdAt: text("created_at").notNull().default(new Date().toISOString()),
 });
 export type CommissionAdjustment = typeof commissionAdjustments.$inferSelect;
+
+// ── Chargeback reserve ledger — APPEND-ONLY, the ONE source of a rep's balance ─
+// Balance = SUM(amount_cents) computed in SQL, never folded in JS. Rows are
+// NEVER updated or deleted (DB triggers ABORT both — see server/storage.ts);
+// a correction is a NEW entry. Signs are enforced by trigger too:
+//   hold      → weekly accrual, POSITIVE, at most one per (tenant, rep, week)
+//   drawdown  → an admin applying a chargeback against the reserve, NEGATIVE
+//   release   → an admin returning balance to the rep, NEGATIVE
+// Both drawdown and release are MANUAL admin actions by product decision: the
+// reserve never auto-draws on a chargeback and never auto-releases on a timer.
+export const reserveEntries = sqliteTable("reserve_entries", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  tenantId: integer("tenant_id").notNull(),
+  repId: integer("rep_id").notNull(),                    // teamMembers.id
+  kind: text("kind").notNull(),                          // hold | drawdown | release
+  amountCents: integer("amount_cents").notNull(),        // signed; never 0
+  statementId: integer("statement_id"),                  // holds: the statement held from
+  weekStartUtc: text("week_start_utc"),                  // holds: the week key (idempotency)
+  weekLabel: text("week_label"),                         // holds: human week label
+  reason: text("reason").notNull(),                      // required on every entry
+  actorUserId: integer("actor_user_id"),
+  createdAt: text("created_at").notNull().default(new Date().toISOString()),
+});
+export type ReserveEntry = typeof reserveEntries.$inferSelect;
 
 // ── PAY-A2: contractor pay plane (banking, W-9, company DFI profile) ─────────
 // APPEND-ONLY tables. Secrets (routing/account/TIN/EIN/DFI numbers) are stored

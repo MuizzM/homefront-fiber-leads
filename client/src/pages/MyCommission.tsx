@@ -2,51 +2,22 @@ import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { useAuth } from "@/lib/auth";
 import { usd } from "@/lib/money";
 import {
   DollarSign, Target, Zap, Trophy, Info, Lock, Layers, CalendarDays,
   FileSignature, CheckCircle2, Home, FileText, Printer,
   Landmark, Wallet, ShieldCheck, Clock, XCircle, RotateCcw, ArrowRight, Loader2, TrendingDown, Medal, Crown, PiggyBank, Sparkles, Check,
 } from "lucide-react";
-import { CommissionStatement, type StatementModel } from "@/components/CommissionStatement";
+import { CommissionStatement } from "@/components/CommissionStatement";
 import { calculateRetroactiveCommission } from "@shared/commissionTiers";
 import { rankProgress, type Rank } from "@shared/commissionRanks";
 
-// Map the live week / a past-week snapshot into the printable statement shape.
-function currentWeekModel(data: WeekResponse, repName: string): StatementModel {
-  const c = data.computation;
-  const label = data.bounds?.localWeekLabel ?? "This week";
-  return {
-    repName, weekLabel: label,
-    status: data.statement?.status ?? "OPEN",
-    qualifiedSaleCount: c?.qualifiedSaleCount ?? 0,
-    rateCents: c?.rateCents ?? 0,
-    grossCents: c?.grossCommissionCents ?? 0,
-    adjustmentCents: c?.adjustmentCents ?? 0,
-    finalCents: c?.finalCommissionCents ?? 0,
-    tierLabel: c?.tierLabel ?? null,
-    planName: data.structure?.planName ?? null,
-    sales: (data.sales ?? []).map(s => ({ date: s.qualified_at ?? s.sold_at, address: s.address, city: s.city, status: s.status })),
-    adjustments: (data.adjustments ?? []).map(a => ({ amount_cents: a.amount_cents, reason: a.reason })),
-    statementNo: `HFS-${label.replace(/[^0-9]/g, "").slice(0, 8) || "CUR"}`,
-  };
-}
-function historyModel(s: any, repName: string): StatementModel {
-  const gross = s.gross_commission_cents ?? (s.rate_cents ?? 0) * (s.qualified_sale_count ?? 0);
-  return {
-    repName, weekLabel: s.local_week_label,
-    status: s.status,
-    qualifiedSaleCount: s.qualified_sale_count ?? 0,
-    rateCents: s.rate_cents ?? 0,
-    grossCents: gross,
-    adjustmentCents: s.adjustment_cents ?? 0,
-    finalCents: s.final_commission_cents ?? gross,
-    tierLabel: s.tier_label ?? null,
-    planName: null, sales: [], adjustments: [],
-    statementNo: `HFS-${String(s.id).padStart(5, "0")}`,
-  };
-}
+// The statement opens by ID and pulls its own server-assembled document, so the
+// rep's paper copy is the same document the PDF renders — house amounts,
+// holdback and reserve balance included. The page no longer re-derives a
+// statement shape client-side, which is what let the screen and the payroll
+// file drift apart (per-door credit from `rate × count`, spiffs and hourly pay
+// missing from the total, a hardcoded company name).
 
 // ── Rep-facing "My Commission this week" ──────────────────────────────────────
 // Reads GET /api/commission/statements/me/current — the caller's own live week.
@@ -121,9 +92,9 @@ const PAYOUT_STATUS: Record<PayoutStatus, { label: string; cls: string; Icon: Re
 };
 
 export default function MyCommission() {
-  const { user } = useAuth();
-  const repName = user?.name ?? "Field Representative";
-  const [stmt, setStmt] = useState<StatementModel | null>(null);
+
+
+  const [stmtId, setStmtId] = useState<number | null>(null);
   const { data, isLoading, isError, refetch } = useQuery<WeekResponse>({
     queryKey: ["/api/commission/statements/me/current"],
     queryFn: () => apiRequest("GET", "/api/commission/statements/me/current").then(r => r.json()),
@@ -145,10 +116,10 @@ export default function MyCommission() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {!isLoading && data && !data.noPlan && !data.noRepProfile && (
+          {!isLoading && data?.statement?.id && !data.noPlan && !data.noRepProfile && (
             <button
               type="button"
-              onClick={() => setStmt(currentWeekModel(data, repName))}
+              onClick={() => setStmtId(Number(data.statement.id))}
               data-testid="open-statement"
               className="inline-flex items-center gap-1.5 h-10 px-3 rounded-lg bg-secondary border border-border text-sm font-semibold text-foreground active:scale-95 transition-transform"
             >
@@ -161,7 +132,7 @@ export default function MyCommission() {
         </div>
       </div>
 
-      {stmt && <CommissionStatement model={stmt} onClose={() => setStmt(null)} />}
+      {stmtId != null && <CommissionStatement statementId={stmtId} onClose={() => setStmtId(null)} />}
 
       {isLoading && (
         <div className="space-y-4">
@@ -265,7 +236,7 @@ export default function MyCommission() {
                   <StatusPill status={s.status} />
                   <button
                     type="button"
-                    onClick={() => setStmt(historyModel(s, repName))}
+                    onClick={() => setStmtId(Number(s.id))}
                     aria-label={`Open statement for ${s.local_week_label}`}
                     data-testid={`statement-${s.id}`}
                     className="inline-flex items-center justify-center h-8 w-8 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/60 active:scale-95 transition-all"
@@ -289,18 +260,74 @@ export default function MyCommission() {
 // tenant actually runs a reserve (percent > 0) — a disabled tenant sees nothing
 // invented. Every number is the authoritative split from the server, so the
 // "paid this week" line always reconciles with the hero above it.
+// A rep's own reserve, from GET /api/me/reserve. Self-scoped on the SERVER (the
+// rep id comes from the session, not a parameter), so this can only ever be the
+// caller's own balance.
+interface ReserveEntry {
+  id: number; kind: "hold" | "drawdown" | "release"; amountCents: number;
+  weekLabel: string | null; reason: string; createdAt: string;
+}
+export interface ReserveSummaryResponse {
+  reservePercent: number;
+  reserveCapCents: number | null;
+  balanceCents: number;
+  capRemainingCents: number | null;
+  capProgressPercent: number | null;
+  atCap: boolean;
+  heldToDateCents: number;
+  drawnDownToDateCents: number;
+  releasedToDateCents: number;
+  latestHold: ReserveEntry | null;
+  entries: ReserveEntry[];
+  noRepProfile?: boolean;
+}
+
+// Plain-language labels — a rep should never have to decode "drawdown".
+const ENTRY_COPY: Record<ReserveEntry["kind"], { label: string; tone: string }> = {
+  hold:     { label: "Held from your pay",      tone: "text-amber-400 [.light_&]:text-amber-700" },
+  drawdown: { label: "Used for a cancellation", tone: "text-rose-400 [.light_&]:text-rose-700" },
+  release:  { label: "Released back to you",    tone: "text-emerald-400 [.light_&]:text-emerald-700" },
+};
+
 function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdback"]> }) {
   const { current, ledger } = holdback;
+  // The rep's OWN reserve ledger. Self-scoped on the SERVER — the rep id comes
+  // from the session, not from this request — so there is no id here that could
+  // ever point at another rep.
+  const { data: reserve } = useQuery<ReserveSummaryResponse>({
+    queryKey: ["/api/me/reserve"],
+    queryFn: () => apiRequest("GET", "/api/me/reserve").then(r => r.json()),
+    enabled: (current?.reservePercent ?? 0) > 0,
+  });
   if (!current || current.reservePercent <= 0) return null;   // reserve disabled → no card
+
+  // The ledger endpoint is authoritative for the BALANCE (it is the only thing
+  // that knows about manual drawdowns and releases); the week payload is
+  // authoritative for THIS WEEK's split. Fall back to the week payload's rolled
+  // balance if the ledger read hasn't landed yet, so the card never shows a hole.
+  const balanceCents = reserve?.balanceCents ?? ledger.reserveBalanceCents;
+  const capCents = reserve?.reserveCapCents ?? null;
+  const progress = reserve?.capProgressPercent ?? null;
+  const atCap = reserve?.atCap ?? false;
+  const entries = reserve?.entries ?? [];
+
   return (
-    <div className="rounded-xl bg-card border border-border overflow-hidden" data-testid="holdback-card">
+    <div className="rounded-2xl bg-card border border-border overflow-hidden" data-testid="holdback-card">
       <header className="px-4 py-3 border-b border-border flex items-center gap-2">
         <span className="grid h-7 w-7 place-items-center rounded-lg bg-amber-500/15 text-amber-400">
           <PiggyBank className="w-4 h-4" aria-hidden="true" />
         </span>
         <span className="text-sm font-semibold tracking-tight text-foreground">Chargeback reserve</span>
-        <span className="ml-auto text-[11px] font-semibold text-amber-400 tabular-nums">{current.reservePercent}% held</span>
+        <span className="ml-auto text-[11px] font-semibold text-amber-400 [.light_&]:text-amber-700 tabular-nums">
+          {atCap ? "Fully covered" : `${current.reservePercent}% held`}
+        </span>
       </header>
+
+      {/* What this IS, said first and in plain language. */}
+      <p className="px-4 pt-3 text-[11px] leading-snug text-muted-foreground" data-testid="reserve-explainer">
+        A small part of each week's pay is set aside to cover sales that later cancel or charge back.
+        It builds up to a maximum and then stops — nothing more is held after that.
+      </p>
 
       {/* This week's split — earned → −reserve → net paid (the alias pattern). */}
       <dl className="px-4 py-3 space-y-2 text-[13px]">
@@ -310,25 +337,90 @@ function HoldbackCard({ holdback }: { holdback: NonNullable<WeekResponse["holdba
         </div>
         <div className="flex items-center justify-between">
           <dt className="text-muted-foreground">Reserve held ({current.reservePercent}%)</dt>
-          <dd className="tabular-nums text-amber-400" data-testid="holdback-reserve">−{usd(current.reserveCents)}</dd>
+          <dd className="tabular-nums text-amber-400 [.light_&]:text-amber-700" data-testid="holdback-reserve">−{usd(current.reserveCents)}</dd>
         </div>
         <div className="flex items-center justify-between border-t border-border pt-2">
           <dt className="font-semibold text-foreground">Paid to you this week</dt>
-          <dd className="tabular-nums font-bold text-emerald-400" data-testid="holdback-net">{usd(current.netPayableCents)}</dd>
+          <dd className="tabular-nums font-bold text-emerald-400 [.light_&]:text-emerald-700" data-testid="holdback-net">{usd(current.netPayableCents)}</dd>
         </div>
       </dl>
 
-      {/* Running balance (Linktree pending-vs-lifetime) + release explainer. */}
+      {/* Balance + progress toward the cap. Integer percent from the server —
+          the bar and the number can never disagree with the ledger. */}
       <div className="px-4 py-3 border-t border-border bg-secondary/30">
-        <div className="flex items-center justify-between">
-          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Reserve balance</span>
-          <span className="tabular-nums text-base font-bold text-foreground" data-testid="holdback-balance">{usd(ledger.reserveBalanceCents)}</span>
+        <div className="flex items-baseline justify-between gap-3">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Your reserve balance</span>
+          <span className="tabular-nums text-base font-bold text-foreground" data-testid="holdback-balance">{usd(balanceCents)}</span>
         </div>
+
+        {capCents != null && (
+          <div className="mt-2" data-testid="reserve-cap-progress">
+            <div
+              className="h-1.5 w-full overflow-hidden rounded-full bg-border"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={progress ?? 0}
+              aria-label="Progress toward your reserve maximum"
+            >
+              <div
+                className={atCap ? "h-full rounded-full bg-emerald-500" : "h-full rounded-full bg-amber-500"}
+                style={{ width: `${Math.min(100, Math.max(0, progress ?? 0))}%` }}
+              />
+            </div>
+            <div className="mt-1.5 flex items-center justify-between text-[11px] text-muted-foreground">
+              <span className="tabular-nums" data-testid="reserve-cap-label">{usd(balanceCents)} of {usd(capCents)} maximum</span>
+              <span className="tabular-nums">{progress ?? 0}%</span>
+            </div>
+          </div>
+        )}
+
+        {atCap ? (
+          <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug font-medium text-emerald-400 [.light_&]:text-emerald-700" data-testid="reserve-at-cap">
+            <ShieldCheck className="w-3.5 h-3.5 mt-px shrink-0" aria-hidden="true" />
+            You're fully covered — nothing more is being held. Your whole commission is paid to you each week.
+          </p>
+        ) : (
+          <p className="mt-2 text-[11px] leading-snug text-muted-foreground" data-testid="reserve-remaining">
+            {capCents != null
+              ? <>{usd(reserve?.capRemainingCents ?? Math.max(0, capCents - balanceCents))} left before the reserve is full and nothing more is held.</>
+              : <>Held as a chargeback reserve across your paid weeks.</>}
+          </p>
+        )}
+
         <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
-          Held as a chargeback reserve across your paid weeks. After your contract ends, the remaining
-          balance is released within 90 days, less any valid chargebacks, reversals, or amounts owed.
+          Your reserve is released by your admin — it is never taken automatically. After your contract ends,
+          the remaining balance is released within 90 days, less any valid chargebacks, reversals, or amounts owed.
         </p>
       </div>
+
+      {/* History — every hold, chargeback, and release with its date and reason.
+          The ledger is append-only, so this list is the complete record. */}
+      {entries.length > 0 && (
+        <div className="border-t border-border" data-testid="reserve-history">
+          <div className="px-4 pt-3 pb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Reserve history
+          </div>
+          <ul className="divide-y divide-border">
+            {entries.slice(0, 8).map(e => {
+              const copy = ENTRY_COPY[e.kind] ?? ENTRY_COPY.hold;
+              return (
+                <li key={e.id} className="px-4 py-2.5 flex items-start justify-between gap-3" data-testid={`reserve-entry-${e.id}`}>
+                  <span className="min-w-0">
+                    <span className="block text-[12px] font-medium text-foreground">{copy.label}</span>
+                    <span className="block text-[11px] text-muted-foreground truncate">
+                      {e.weekLabel ? `${e.weekLabel} · ` : ""}{e.reason}
+                    </span>
+                  </span>
+                  <span className={`shrink-0 text-[13px] font-semibold tabular-nums ${copy.tone}`}>
+                    {e.amountCents > 0 ? "+" : "−"}{usd(Math.abs(e.amountCents))}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

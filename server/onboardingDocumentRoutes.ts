@@ -13,6 +13,7 @@ import {
   type OnboardingDocumentType,
 } from "../shared/onboardingDocuments";
 import { storage } from "./storage";
+import { gustoConfigured } from "./gustoAdapter";
 import { AGREEMENT_VERSION, buildAgreementSnapshot } from "./onboardingAgreementTemplates";
 import { renderSignedAgreementPdf } from "./onboardingPdf";
 import {
@@ -394,7 +395,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       inProgress: records.filter(record => ["approved", "login_code_sent", "agreements_issued", "partially_signed", "fully_signed"].includes(record.stage)).length,
       active: records.filter(record => record.stage === "active").length,
     };
-    res.json({ configured: resendConfigured(), summary, records });
+    res.json({ configured: resendConfigured(), gustoConfigured: gustoConfigured(), summary, records });
   });
 
   app.post("/api/onboarding/invitations/:id/resend", requireAuth, requireCapability("onboarding.documents.manage"), recruitingInviteLimiter, async (req, res) => {

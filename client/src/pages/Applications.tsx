@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
-  AlertTriangle, ArrowRight, Check, CheckCircle2, ClipboardCheck, Clock3, Copy,
-  DollarSign, Download, FileCheck2, FileText, Filter, KeyRound, Layers, Link2,
-  Loader2, Mail, MapPin, RefreshCw, RotateCw, Search, Send, ShieldCheck,
-  TrendingUp, UserCheck, UserPlus, Users, XCircle,
+  AlertTriangle, ArrowRight, Building2, Camera, Check, CheckCircle2, ClipboardCheck, Clock3, Copy,
+  DollarSign, Download, FileCheck2, FileText, Filter, Fingerprint, FlaskConical, KeyRound, Layers, Link2,
+  Loader2, Mail, MapPin, PlugZap, RefreshCw, RotateCw, Search, Send, ShieldAlert, ShieldCheck,
+  TrendingUp, Upload, UserCheck, UserPlus, Users, XCircle,
 } from "lucide-react";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, apiUpload, queryClient } from "@/lib/queryClient";
 import { useAuth } from "@/lib/auth";
 import { useToast } from "@/hooks/use-toast";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import type { OnboardingDocumentType } from "@shared/onboardingDocuments";
+import { hrStatusLabel, type HrCheckpointKind, type HrCheckpointStatus } from "@shared/onboardingHr";
 
 type PipelineStage =
   | "invited" | "under_review" | "approved" | "login_code_sent"
@@ -25,6 +26,31 @@ interface PipelineDocument {
   envelopeId: number | null;
   sentAt: string | null;
   completedAt: string | null;
+}
+
+interface HrCheckpoint {
+  kind: HrCheckpointKind;
+  label: string;
+  description: string;
+  required: boolean;
+  status: HrCheckpointStatus;
+  statuses: HrCheckpointStatus[];
+  provider: string | null;
+  externalRef: string | null;
+  hasBadgePhoto: boolean;
+  notes: string | null;
+  cleared: boolean;
+  failed: boolean;
+  completedAt: string | null;
+  updatedAt: string | null;
+}
+
+interface HrState {
+  cleared: number;
+  total: number;
+  allClear: boolean;
+  anyFailed: boolean;
+  checkpoints: HrCheckpoint[];
 }
 
 interface PipelineRecord {
@@ -53,11 +79,13 @@ interface PipelineRecord {
   };
   account: null | { userId: number; repId: number | null; active: boolean };
   documents: PipelineDocument[];
+  hr: HrState;
   timeline: Array<{ label: string; at: string; done: boolean }>;
 }
 
 interface PipelineResponse {
   configured: boolean;
+  gustoConfigured: boolean;
   summary: { total: number; needsAction: number; inProgress: number; active: number };
   records: PipelineRecord[];
 }
@@ -95,6 +123,39 @@ function documentTone(status: string) {
   if (["sent", "delivered"].includes(status)) return "text-violet-400 bg-violet-500/10 border-violet-500/20";
   if (status === "failed") return "text-rose-400 bg-rose-500/10 border-rose-500/20";
   return "text-muted-foreground bg-secondary border-border";
+}
+
+const HR_ICON: Record<HrCheckpointKind, typeof Fingerprint> = {
+  background_check: Fingerprint,
+  drug_screen: FlaskConical,
+  badge_photo: Camera,
+  gusto: Building2,
+};
+
+function hrTone(checkpoint: HrCheckpoint) {
+  if (checkpoint.failed) return "text-rose-400 bg-rose-500/10 border-rose-500/20";
+  if (checkpoint.cleared) return "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
+  if (checkpoint.status !== "not_started") return "text-amber-400 bg-amber-500/10 border-amber-500/20";
+  return "text-muted-foreground bg-secondary border-border";
+}
+
+// Badge photo is served through an authed, tenant-walled endpoint; an <img src>
+// can't carry the session header, so fetch it as a blob (same pattern as the
+// door-photo AuthedImg in PropertyDetail).
+function BadgePhoto({ applicationId, cacheKey, alt }: { applicationId: number; cacheKey: string; alt: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    let objectUrl = "";
+    setUrl(null);
+    apiRequest("GET", `/api/onboarding/applications/${applicationId}/hr/badge-photo`)
+      .then(response => response.blob())
+      .then(blob => { if (!alive) return; objectUrl = URL.createObjectURL(blob); setUrl(objectUrl); })
+      .catch(() => { /* no photo yet */ });
+    return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [applicationId, cacheKey]);
+  if (!url) return <div className="grid h-16 w-16 shrink-0 place-items-center rounded-lg bg-secondary"><Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /></div>;
+  return <img src={url} alt={alt} className="h-16 w-16 shrink-0 rounded-lg object-cover" />;
 }
 
 export default function Applications() {
@@ -217,6 +278,32 @@ export default function Applications() {
     onError: (error: any) => toast({ title: "Could not void", description: error.message, variant: "destructive" }),
   });
 
+  const hrMutation = useMutation({
+    mutationFn: ({ kind, body }: { kind: HrCheckpointKind; body: Record<string, unknown> }) => {
+      if (!selected?.applicationId) throw new Error("Application not found");
+      return apiRequest("PATCH", `/api/onboarding/applications/${selected.applicationId}/hr/${kind}`, body).then(response => response.json());
+    },
+    onSuccess: () => refresh(),
+    onError: (error: any) => toast({ title: "Update failed", description: error.message, variant: "destructive" }),
+  });
+
+  const badgeMutation = useMutation({
+    mutationFn: (file: File) => {
+      if (!selected?.applicationId) throw new Error("Application not found");
+      const form = new FormData();
+      form.append("badge", file);
+      return apiUpload(`/api/onboarding/applications/${selected.applicationId}/hr/badge-photo`, form).then(response => response.json());
+    },
+    onSuccess: () => { refresh(); toast({ title: "Badge photo uploaded", description: "Marked awaiting approval." }); },
+    onError: (error: any) => toast({ title: "Upload failed", description: error.message, variant: "destructive" }),
+  });
+
+  const gustoVerifyMutation = useMutation({
+    mutationFn: () => apiRequest("POST", "/api/onboarding/hr/gusto/verify", {}).then(response => response.json()),
+    onSuccess: (data: any) => toast({ title: data.ok ? "Gusto connected" : "Gusto not connected", description: data.message, variant: data.ok ? "default" : "destructive" }),
+    onError: (error: any) => toast({ title: "Verification failed", description: error.message, variant: "destructive" }),
+  });
+
   async function copySecureLink(record: PipelineRecord) {
     if (!record.invite?.secureUrl) return;
     await navigator.clipboard.writeText(record.invite.secureUrl);
@@ -323,6 +410,81 @@ export default function Applications() {
               {selected.milestones.approved && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound className="h-4 w-4 text-cyan-400" />Account access</h3><span className={`text-[11px] font-semibold ${selected.milestones.loginCodeSent ? "text-emerald-400" : "text-amber-400"}`}>{selected.milestones.loginCodeSent ? "Login code sent" : "Delivery pending"}</span></div><p className="text-xs text-muted-foreground">The rep account can access My Documents while the field-sales profile stays inactive until every required agreement is signed.</p>{selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "login", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary"><RotateCw className="h-3.5 w-3.5" />Send a new login code</button>}</div>}
 
               {selected.milestones.approved && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><FileCheck2 className="h-4 w-4 text-violet-400" />Required agreements</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.signedCount} of 4 signed</p></div>{selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "documents", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary"><RotateCw className="h-3.5 w-3.5" />Resend pending</button>}</div><div className="space-y-2">{selected.documents.map(document => <div key={document.type} className="flex items-center gap-3 rounded-xl bg-secondary/45 p-3"><div className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${documentTone(document.status)}`}>{document.status === "completed" ? <Check className="h-4 w-4" /> : <FileText className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-foreground">{document.label}</p><p className="mt-0.5 text-[11px] capitalize text-muted-foreground">{document.status.replace(/_/g, " ")}{document.completedAt ? ` · ${formatDate(document.completedAt)}` : ""}</p></div>{["sent", "delivered"].includes(document.status) && document.envelopeId && <button onClick={() => { setVoidTarget({ envelopeId: document.envelopeId!, label: document.label }); setVoidReason(""); }} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-[11px] font-semibold text-muted-foreground hover:bg-background hover:text-foreground" aria-label={`Void ${document.label}`} data-testid={`void-document-${document.type}`}><XCircle className="h-3.5 w-3.5" />Void</button>}{document.status === "completed" && document.envelopeId && <button onClick={() => downloadOnboardingDocument(document.envelopeId!, `${selected.candidateName}-${document.type}.pdf`)} className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:bg-background hover:text-foreground" aria-label={`Download ${document.label}`}><Download className="h-4 w-4" /></button>}</div>)}</div>{voidTarget && <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/5 p-3" data-testid="void-document-panel"><p className="text-xs font-semibold text-foreground">Void {voidTarget.label}?</p><p className="mt-1 text-[11px] text-muted-foreground">The rep can no longer sign this agreement. A signed agreement can never be voided. The reason is written into the signature chain.</p><input value={voidReason} onChange={event => setVoidReason(event.target.value)} maxLength={500} placeholder="Reason for voiding" className="mt-2 h-9 w-full rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary" data-testid="void-document-reason" /><div className="mt-2 flex justify-end gap-2"><button onClick={() => { setVoidTarget(null); setVoidReason(""); }} className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary">Cancel</button><button onClick={() => voidMutation.mutate({ envelopeId: voidTarget.envelopeId, reason: voidReason.trim() })} disabled={voidReason.trim().length < 2 || voidMutation.isPending} className="inline-flex h-9 items-center gap-2 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white disabled:opacity-50" data-testid="confirm-void-document">{voidMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}Confirm void</button></div></div>}</div>}
+
+              {selected.milestones.approved && selected.hr.checkpoints.length > 0 && (
+                <div className="rounded-xl border border-border p-4" data-testid="hr-compliance">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><ShieldCheck className="h-4 w-4 text-primary" />HR &amp; compliance</h3>
+                      <p className="mt-1 text-xs text-muted-foreground">{selected.hr.cleared} of {selected.hr.total} gates cleared</p>
+                    </div>
+                    {selected.hr.anyFailed
+                      ? <span className="inline-flex items-center gap-1 rounded-full border border-rose-500/20 bg-rose-500/10 px-2.5 py-1 text-[11px] font-semibold text-rose-400"><ShieldAlert className="h-3.5 w-3.5" />Action needed</span>
+                      : selected.hr.allClear
+                        ? <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-semibold text-emerald-400"><CheckCircle2 className="h-3.5 w-3.5" />All clear</span>
+                        : <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/20 bg-amber-500/10 px-2.5 py-1 text-[11px] font-semibold text-amber-400"><Clock3 className="h-3.5 w-3.5" />In progress</span>}
+                  </div>
+
+                  {canReview && !pipeline.data?.gustoConfigured && (
+                    <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-secondary/50 px-3 py-2 text-[11px] text-muted-foreground">
+                      <span className="flex items-center gap-1.5"><PlugZap className="h-3.5 w-3.5" />Gusto isn’t connected — confirm employees manually or set the API keys.</span>
+                      <button onClick={() => gustoVerifyMutation.mutate()} disabled={gustoVerifyMutation.isPending} className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border px-2 font-semibold hover:bg-background">{gustoVerifyMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}Test</button>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    {selected.hr.checkpoints.map(cp => {
+                      const Icon = HR_ICON[cp.kind];
+                      const gustoLocked = cp.kind === "gusto" && !canReview;
+                      return (
+                        <div key={cp.kind} className="rounded-xl bg-secondary/45 p-3">
+                          <div className="flex items-start gap-3">
+                            <div className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${hrTone(cp)}`}><Icon className="h-4 w-4" /></div>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-xs font-semibold text-foreground">{cp.label}</p>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${hrTone(cp)}`}>{hrStatusLabel(cp.status)}</span>
+                              </div>
+                              <p className="mt-0.5 text-[11px] text-muted-foreground">{cp.description}</p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <select
+                                  value={cp.status}
+                                  disabled={gustoLocked || hrMutation.isPending}
+                                  onChange={event => hrMutation.mutate({ kind: cp.kind, body: { status: event.target.value } })}
+                                  className="h-8 rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary disabled:opacity-50"
+                                  data-testid={`hr-status-${cp.kind}`}
+                                >
+                                  {cp.statuses.map(status => <option key={status} value={status}>{hrStatusLabel(status)}</option>)}
+                                </select>
+                                {cp.kind !== "badge_photo" && (
+                                  <input
+                                    key={`${cp.kind}-${cp.updatedAt ?? ""}`}
+                                    defaultValue={cp.externalRef ?? ""}
+                                    disabled={gustoLocked}
+                                    placeholder={cp.kind === "gusto" ? "Gusto employee ID" : "Vendor case ID"}
+                                    maxLength={200}
+                                    onBlur={event => { const value = event.target.value.trim(); if (value !== (cp.externalRef ?? "")) hrMutation.mutate({ kind: cp.kind, body: { externalRef: value || null } }); }}
+                                    className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary disabled:opacity-50"
+                                  />
+                                )}
+                                {cp.kind === "badge_photo" && (
+                                  <label className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 text-xs font-semibold hover:bg-background">
+                                    {badgeMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}{cp.hasBadgePhoto ? "Replace" : "Upload photo"}
+                                    <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={event => { const file = event.target.files?.[0]; if (file) badgeMutation.mutate(file); event.target.value = ""; }} />
+                                  </label>
+                                )}
+                              </div>
+                              {cp.kind === "badge_photo" && cp.hasBadgePhoto && selected.applicationId && (
+                                <div className="mt-2"><BadgePhoto applicationId={selected.applicationId} cacheKey={cp.updatedAt ?? ""} alt={`${selected.candidateName} badge photo`} /></div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="rounded-xl border border-border p-4"><h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground"><TrendingUp className="h-4 w-4 text-primary" />Audit timeline</h3><div className="space-y-0">{selected.timeline.map((event, index) => <div key={event.label} className="flex gap-3"><div className="flex w-5 flex-col items-center"><span className={`mt-1.5 h-2 w-2 rounded-full ${event.done ? "bg-primary" : "bg-secondary ring-1 ring-border"}`} />{index < selected.timeline.length - 1 && <span className={`h-9 w-px ${event.done ? "bg-primary/40" : "bg-border"}`} />}</div><div className="pb-3"><p className={`text-xs font-medium ${event.done ? "text-foreground" : "text-muted-foreground"}`}>{event.label}</p><p className="mt-0.5 text-2xs text-muted-foreground">{event.done ? formatDate(event.at) : "Pending"}</p></div></div>)}</div></div>
 
