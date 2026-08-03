@@ -1,3 +1,7 @@
+// Fixture accounts are marked TRAINED. New accounts now owe training before the
+// field opens (server/trainingGateStore.ts); these suites are about territory,
+// RBAC, spiffs, and offboarding, so their people start on the far side of that
+// gate rather than every assertion here re-testing it.
 // ── RBAC / authorization audit ───────────────────────────────────────────────
 //
 // One organization with TWO independent teams (so cross-team writes are
@@ -56,6 +60,7 @@ function person(name: string, memberRole: string, opts: { loginRole?: string; re
   const user = storage.createUser({
     name, email, role: opts.loginRole ?? memberRole, active: true, tenantId, teamMemberId: member.id,
   } as any);
+  rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((user as any).id);
   return { userId: user.id, memberId: member.id, session: storage.createSession(user.id).id };
 }
 

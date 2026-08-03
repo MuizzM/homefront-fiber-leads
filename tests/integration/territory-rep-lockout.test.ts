@@ -1,3 +1,7 @@
+// Fixture accounts are marked TRAINED. New accounts now owe training before the
+// field opens (server/trainingGateStore.ts); these suites are about territory,
+// RBAC, spiffs, and offboarding, so their people start on the far side of that
+// gate rather than every assertion here re-testing it.
 // A rep holds ground. A rep does not MANAGE ground.
 //
 // Every territory management route is reachable by anyone with a session, so the
@@ -29,6 +33,7 @@ function person(name: string, role: string, tenantId = 1, opts: { reportsToId?: 
   const email = `${name.toLowerCase().replace(/\s+/g, ".")}.${personSeq++}@rep-lockout.example.test`;
   const member = storage.createTeamMember({ name, email, role, active: true, tenantId, reportsToId: opts.reportsToId ?? null } as any);
   const user = storage.createUser({ name, email, role, active: true, tenantId, teamMemberId: member.id } as any);
+  __gateDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((user as any).id);
   return { userId: user.id, memberId: member.id, session: storage.createSession(user.id).id };
 }
 
@@ -48,12 +53,15 @@ function square(west: number, south: number): [number, number][] {
 
 const fx: Record<string, Person> = {};
 
+let __gateDb: any;
+
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-rep-lockout-"));
   process.env.NODE_ENV = "test";
   const mod = await import("../../server/storage");
   mod.runMigrations();
   storage = mod.storage;
+  ({ rawDb: __gateDb } = await import("../../server/db"));
 
   fx.manager = person("Mona Manager", "manager");
   fx.leadA = person("Lena LeadA", "team_lead", 1, { reportsToId: fx.manager.memberId });

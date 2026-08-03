@@ -1,3 +1,7 @@
+// Fixture accounts are marked TRAINED. New accounts now owe training before the
+// field opens (server/trainingGateStore.ts); these suites are about territory,
+// RBAC, spiffs, and offboarding, so their people start on the far side of that
+// gate rather than every assertion here re-testing it.
 // The shape the manager cut is the shape the rep walks.
 //
 // A convex hull is the specific way this goes wrong, because it looks close
@@ -28,6 +32,7 @@ function person(name: string, role: string, tenantId = 1, opts: { reportsToId?: 
   const email = `${name.toLowerCase().replace(/\s+/g, ".")}@exact-poly.example.test`;
   const member = storage.createTeamMember({ name, email, role, active: true, tenantId, reportsToId: opts.reportsToId ?? null } as any);
   const user = storage.createUser({ name, email, role, active: true, tenantId, teamMemberId: member.id } as any);
+  __gateDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((user as any).id);
   return { userId: user.id, memberId: member.id, session: storage.createSession(user.id).id };
 }
 
@@ -63,12 +68,15 @@ function inTheMouth(west: number, south: number): { lat: number; lng: number } {
 let patch = 0;
 const nextWest = () => -80.9 + patch++ * 0.15;
 
+let __gateDb: any;
+
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-exact-poly-"));
   process.env.NODE_ENV = "test";
   const mod = await import("../../server/storage");
   mod.runMigrations();
   storage = mod.storage;
+  ({ rawDb: __gateDb } = await import("../../server/db"));
 
   fx.manager = person("Mia Manager", "manager");
   fx.rep = person("Rae Rep", "rep", 1, { reportsToId: fx.manager.memberId });

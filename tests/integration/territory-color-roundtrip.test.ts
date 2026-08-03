@@ -1,3 +1,7 @@
+// Fixture accounts are marked TRAINED. New accounts now owe training before the
+// field opens (server/trainingGateStore.ts); these suites are about territory,
+// RBAC, spiffs, and offboarding, so their people start on the far side of that
+// gate rather than every assertion here re-testing it.
 // The colour the admin picks has to come back out.
 //
 // "I draw a green area and the rep sees blue" had two independent causes, and
@@ -28,6 +32,7 @@ function person(name: string, role: string, tenantId = 1, opts: { reportsToId?: 
   const email = `${name.toLowerCase().replace(/\s+/g, ".")}@color-rt.example.test`;
   const member = storage.createTeamMember({ name, email, role, active: true, tenantId, reportsToId: opts.reportsToId ?? null } as any);
   const user = storage.createUser({ name, email, role, active: true, tenantId, teamMemberId: member.id } as any);
+  __gateDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((user as any).id);
   return { userId: user.id, memberId: member.id, session: storage.createSession(user.id).id };
 }
 
@@ -64,12 +69,15 @@ function freshRep(): Person {
   return person(`Ray Rep${++freshRepSeq}`, "rep", 1, { reportsToId: fx.manager.memberId });
 }
 
+let __gateDb: any;
+
 beforeAll(async () => {
   process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "hf-color-rt-"));
   process.env.NODE_ENV = "test";
   const mod = await import("../../server/storage");
   mod.runMigrations();
   storage = mod.storage;
+  ({ rawDb: __gateDb } = await import("../../server/db"));
 
   fx.manager = person("Mia Manager", "manager");
   fx.rep = person("Rae Rep", "rep", 1, { reportsToId: fx.manager.memberId });

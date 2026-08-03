@@ -41,6 +41,7 @@ import { FieldStatusBar } from "@/components/FieldStatusBar";
 import { useAuth } from "@/lib/auth";
 import { apiRequest } from "@/lib/queryClient";
 import { prefetchRoute } from "@/lib/routePrefetch";
+import { TrainingLock, useTrainingGate } from "@/components/TrainingLock";
 import { useTheme } from "@/hooks/use-theme";
 import { can, type Role as AppRole } from "@shared/capabilities";
 import { can as roleCan } from "@shared/permissions";
@@ -177,6 +178,21 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
   const role = (user?.role ?? "rep") as AppRole;
+
+  // ── Training gate ─────────────────────────────────────────────────────────
+  // A new rep sees Training and nothing else until they finish. This hides the
+  // nav and swaps the page for the lock screen; it is a COURTESY, not the lock —
+  // the server refuses the same routes independently (server/routes.ts
+  // trainingGate), so a typed URL or a replayed request is refused too.
+  const gateQ = useTrainingGate(!!user);
+  const gated = gateQ.data?.gated === true;
+  // Reachable while gated. Kept in step with TRAINING_GATE_ALLOWED_PREFIXES on
+  // the server: training itself, plus the account and paperwork lanes, because
+  // a rep who cannot open their own W-9 can never finish onboarding at all.
+  const gateOpenPath = (path: string) =>
+    path === "/training" || path.startsWith("/training/") ||
+    path === "/profile" || path === "/my-documents" || path === "/tax-and-pay";
+  const lockThisPage = gated && !gateOpenPath(location);
   // The Field Map is FULL-BLEED for every role: no mobile header, no bottom
   // tabs, no padding — the map itself carries a floating menu button that
   // fires "hfs:open-menu" to open the sidebar drawer.
@@ -249,7 +265,12 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/profile" ? "Profile"
     : NAV_ITEMS.find(item => item.href === location)?.label ?? orgName;
 
-  const visibleNav = NAV_ITEMS.filter(item => item.show(role, user?.email));
+  // While gated, the sidebar shows only what the server would actually answer.
+  // Listing links that 403 on tap is worse than hiding them: it reads as a
+  // broken app rather than a locked one.
+  const visibleNav = NAV_ITEMS
+    .filter(item => item.show(role, user?.email))
+    .filter(item => !gated || gateOpenPath(item.href));
 
   return (
     <div className="flex h-screen bg-background overflow-hidden">
@@ -424,9 +445,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         {/* Standard pages reserve space for the field tab bar. The map stays
             full-bleed and uses its own floating menu and map controls. */}
         <main className={`flex-1 overflow-hidden ${onMap || onCalling ? "" : "pb-[calc(88px+env(safe-area-inset-bottom))] md:pb-0"}`} style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-          {children}
+          {lockThisPage ? <TrainingLock /> : children}
         </main>
-        {!onMap && !onCalling && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} moreDot={canManage && pendingTerritoryCount > 0} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
+        {!onMap && !onCalling && !gated && <BottomTabs role={role} moreOpen={moreOpen} moreButtonRef={moreTriggerRef} moreDot={canManage && pendingTerritoryCount > 0} onMore={() => { setMobileOpen(false); setMoreOpen(true); }} />}
       </div>
 
       {/* The More sheet renders wherever the header does (everywhere but the
