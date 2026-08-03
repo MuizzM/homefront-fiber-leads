@@ -15,7 +15,8 @@ import {
 import { storage } from "./storage";
 import { gustoConfigured } from "./gustoAdapter";
 import { AGREEMENT_VERSION, buildAgreementSnapshot } from "./onboardingAgreementTemplates";
-import { renderSignedAgreementPdf } from "./onboardingPdf";
+import { renderAgreementPreviewPdf, renderSignedAgreementPdf } from "./onboardingPdf";
+import { loadW9Template } from "./w9Pdf";
 import {
   completeSigning,
   declineSigning,
@@ -529,6 +530,61 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       disclosure: ELECTRONIC_CONSENT_DISCLOSURE,
       consentVersion: ELECTRONIC_CONSENT_VERSION,
     });
+  });
+
+  // ── Review the REAL document, before signing anything ──────────────────────
+  // The ceremony used to show the agreement as HTML sections and only produced
+  // a PDF once the rep had already signed. So the thing a signer reviewed was a
+  // re-creation of the instrument, and the actual PDF first appeared when it was
+  // too late to decline. This serves the complete, paginated agreement — the
+  // same body the executed copy is rendered from — watermarked REVIEW COPY so a
+  // saved preview can never pass for an executed agreement.
+  //
+  // Same scope wall as /content: a rep gets their OWN document or a 404. It is
+  // deliberately available for any status a rep can legitimately look at,
+  // including already-completed ones, because "let me re-read what I signed" is
+  // a reasonable thing to want and the executed copy is a separate download.
+  app.get("/api/onboarding/documents/:id/preview.pdf", requireAuth, requireCapability("onboarding.documents.read.self"), async (req, res) => {
+    const parsed = documentIdSchema.safeParse(req.params.id);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid document ID" });
+    const record = getSigningDocument(parsed.data);
+    if (!record || record.tenantId !== tenantId(req) || record.repId !== myRepId(req)) return res.status(404).json({ error: "Document not found" });
+    try {
+      const pdf = await renderAgreementPreviewPdf(record.snapshot);
+      storage.logActivity(userId(req), "onboarding.document.preview_opened", "onboarding_document", record.id,
+        { documentType: record.documentType, contentSha256: record.contentSha256 }, req.ip);
+      res.setHeader("Content-Type", "application/pdf");
+      // INLINE, not an attachment: the point is that it opens in the viewer the
+      // rep is already looking at. A download prompt is a dead end mid-ceremony.
+      res.setHeader("Content-Disposition", `inline; filename="${record.documentType.replace(/_/g, "-")}-review.pdf"`);
+      res.setHeader("Cache-Control", "no-store");
+      res.send(pdf);
+    } catch (error: any) {
+      res.status(500).json({ error: "Could not render this document for review" });
+    }
+  });
+
+  // The OFFICIAL IRS Form W-9 — the vendored template itself, all six pages
+  // including the IRS instructions, byte-for-byte. Not a re-creation: a rep
+  // filling out a tax form signed under penalty of perjury is entitled to read
+  // the actual form the government publishes, including the certification text
+  // and the instructions that explain it, before entering a TIN.
+  //
+  // Any authenticated user in the tenant may read it. It is a public IRS
+  // document containing nobody's data — the FILLED copy is the one behind
+  // payouts.pay (see /api/me/w9/pdf and /api/team-members/:id/w9/pdf).
+  app.get("/api/onboarding/w9/blank.pdf", requireAuth, (_req, res) => {
+    try {
+      const template = loadW9Template();
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", 'inline; filename="fw9-official-irs.pdf"');
+      // The template is immutable and integrity-pinned, so it is safe to cache
+      // hard — this is the one PDF in the system that never varies by user.
+      res.setHeader("Cache-Control", "private, max-age=86400");
+      res.send(template);
+    } catch {
+      res.status(503).json({ error: "The official W-9 form is unavailable on this server", code: "W9_TEMPLATE_UNAVAILABLE" });
+    }
   });
 
   app.post("/api/onboarding/documents/:id/sign", requireAuth, requireCapability("onboarding.documents.read.self"), async (req, res) => {

@@ -9,6 +9,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
+import { PdfReviewPane } from "@/components/PdfReviewPane";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -88,6 +89,11 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
   const endRef = useRef<HTMLDivElement>(null);
   const sectionRefs = useRef<Array<HTMLElement | null>>([]);
   const [readToEnd, setReadToEnd] = useState(false);
+  // The rep reviews the REAL agreement PDF by default — the same document the
+  // executed copy is rendered from, paginated exactly as it will be filed. The
+  // text version stays one tap away because an <object> PDF is opaque to screen
+  // readers, so the accessible path must not be the PDF.
+  const [viewMode, setViewMode] = useState<"pdf" | "text">("pdf");
   const [readProgress, setReadProgress] = useState(0);
   const [sectionIndex, setSectionIndex] = useState(0);
   const [consent, setConsent] = useState(false);
@@ -209,7 +215,40 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
         {content.data && snapshot && (
           <>
-            <div className="flex items-center gap-3 border-b border-border px-5 py-2.5 flex-shrink-0" data-testid="reading-progress">
+            <div className="flex items-center gap-1.5 border-b border-border px-5 py-2 flex-shrink-0" role="tablist" aria-label="Document view">
+              {([["pdf", "Document"], ["text", "Text version"]] as const).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  role="tab"
+                  aria-selected={viewMode === mode}
+                  onClick={() => setViewMode(mode)}
+                  data-testid={`signing-view-${mode}`}
+                  className={`h-8 px-3 rounded-lg text-xs font-semibold transition-colors ${viewMode === mode ? "bg-secondary text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  {label}
+                </button>
+              ))}
+              <span className="ml-auto text-2xs text-muted-foreground">
+                {viewMode === "pdf" ? "The full agreement, exactly as it will be filed" : "Screen-reader friendly"}
+              </span>
+            </div>
+
+            {viewMode === "pdf" && (
+              <PdfReviewPane
+                url={`/api/onboarding/documents/${record!.id}/preview.pdf`}
+                fileName={`${snapshot.title.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase()}-review.pdf`}
+                title={`${snapshot.title} — full document`}
+                testId="agreement-pdf-review"
+                // Loading the complete document IS the review surface: the rep
+                // can scroll, zoom and page through every clause natively. The
+                // acknowledgment checkbox below remains the attestation — this
+                // only unblocks it, it does not stand in for it.
+                onLoaded={() => { setReadToEnd(true); setReadProgress(100); }}
+              />
+            )}
+
+            <div className={`flex items-center gap-3 border-b border-border px-5 py-2.5 flex-shrink-0 ${viewMode === "pdf" ? "hidden" : ""}`} data-testid="reading-progress">
               <div className="flex-1">
                 <div
                   className="h-1.5 rounded-full bg-muted overflow-hidden"
@@ -233,7 +272,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
             <div
               ref={scrollRef}
-              className="flex-1 overflow-y-auto px-5 sm:px-7 py-5"
+              className={`flex-1 overflow-y-auto px-5 sm:px-7 py-5 ${viewMode === "pdf" ? "hidden" : ""}`}
               tabIndex={0}
               role="document"
               aria-label={`${snapshot.title} agreement text`}
