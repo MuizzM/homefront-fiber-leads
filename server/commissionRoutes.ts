@@ -11,6 +11,8 @@ import { storage } from "./storage";
 import * as svc from "./commissionService";
 import { hourlyBlockForStatement, sumWeekSpiffsByRep } from "./hourlyPay";
 import { computeHoldback } from "@shared/commissionReserve";
+import { buildStatementDocumentFor } from "./commissionStatementDoc";
+import { renderCommissionStatementPdf } from "./commissionStatementPdf";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -361,6 +363,47 @@ export function registerCommissionRoutes(app: Express, deps: Deps) {
       if (locked && stmt.contributing_sales) { try { sales = JSON.parse(stmt.contributing_sales); } catch { sales = svc.listWeekSalesForRep(tid(req), stmt.rep_id, stmt.week_start_utc); } }
       else sales = svc.listWeekSalesForRep(tid(req), stmt.rep_id, stmt.week_start_utc);
       res.json({ statement: stmt, hourly: hourlyBlockForStatement(stmt), adjustments: svc.getStatementAdjustments(tid(req), stmt.id), sales });
+    } catch (e) { fail(res, e); }
+  });
+
+  // ── The statement document (screen + PDF) ───────────────────────────────────
+  // One assembled document, two renderings. Both go through the same scope check
+  // as GET /statements/:id — a rep sees their own, a team lead their reports, a
+  // manager the tenant. Out of scope is 403 with the same code the sibling
+  // statement reads use, so the client can treat them identically.
+  const loadDocument = (req: Request, res: Response) => {
+    const stmt = svc.getStatementById(tid(req), Number(req.params.id));
+    if (!stmt) { res.status(404).json({ error: "Not found" }); return null; }
+    if (!canReadRep((req as any).user, stmt.rep_id)) {
+      res.status(403).json({ error: "Out of scope", code: "UNAUTHORIZED_COMMISSION_ACTION" });
+      return null;
+    }
+    const doc = buildStatementDocumentFor(tid(req), stmt.id, new Date().toISOString());
+    if (!doc) { res.status(404).json({ error: "Not found" }); return null; }
+    return doc;
+  };
+
+  app.get("/api/commission/statements/:id/document", requireCapability("commission.read.self"), (req, res) => {
+    try {
+      const doc = loadDocument(req, res);
+      if (doc) res.json(doc);
+    } catch (e) { fail(res, e); }
+  });
+
+  app.get("/api/commission/statements/:id/statement.pdf", requireCapability("commission.read.self"), async (req, res) => {
+    try {
+      const doc = loadDocument(req, res);
+      if (!doc) return;
+      const pdf = await renderCommissionStatementPdf(doc);
+      // The rep's own name is in the filename, so neutralize path separators and
+      // quotes before they reach the Content-Disposition header.
+      const safeName = doc.rep.name.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "rep";
+      storage.logActivity(uid(req), "commission.statement.downloaded", "commission_statement", doc.statement.id ?? undefined,
+        { repId: doc.rep.id, week: doc.period.label }, req.ip);
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", `attachment; filename="commission-statement-${safeName}-${doc.period.startUtc.slice(0, 10)}.pdf"`);
+      res.setHeader("Cache-Control", "no-store");
+      res.send(pdf);
     } catch (e) { fail(res, e); }
   });
 
