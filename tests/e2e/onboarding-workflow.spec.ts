@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { ONBOARDING_DOCUMENT_TYPES } from "../../shared/onboardingDocuments";
 import { loginAs, mintSession } from "./helpers/auth";
+import { withSigningTriggersSuspended } from "../helpers/signingTables";
 
 const DB_PATH = process.env.E2E_DB_PATH ?? path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../data.db");
 const MARKETING_URL = process.env.E2E_MARKETING_URL ?? `http://127.0.0.1:${process.env.E2E_MARKETING_PORT ?? 5187}`;
@@ -24,9 +25,14 @@ function withDb<T>(callback: (db: Database.Database) => T): T {
 function clearFixture(db: Database.Database) {
   const user = db.prepare("SELECT id, team_member_id teamMemberId FROM users WHERE email = ?").get(CANDIDATE_EMAIL) as { id: number; teamMemberId: number | null } | undefined;
   if (user?.teamMemberId) {
-    const ids = db.prepare("SELECT id FROM onboarding_signing_documents WHERE rep_id = ?").all(user.teamMemberId) as Array<{ id: number }>;
-    for (const row of ids) db.prepare("DELETE FROM onboarding_signature_events WHERE document_id = ?").run(row.id);
-    db.prepare("DELETE FROM onboarding_signing_documents WHERE rep_id = ?").run(user.teamMemberId);
+    // The signature chain is append-only and a completed agreement is immutable
+    // at the DATABASE level (triggers), so the fixture reset suspends those
+    // triggers around its deletes and restores them verbatim afterwards.
+    withSigningTriggersSuspended(db, () => {
+      const ids = db.prepare("SELECT id FROM onboarding_signing_documents WHERE rep_id = ?").all(user.teamMemberId) as Array<{ id: number }>;
+      for (const row of ids) db.prepare("DELETE FROM onboarding_signature_events WHERE document_id = ?").run(row.id);
+      db.prepare("DELETE FROM onboarding_signing_documents WHERE rep_id = ?").run(user.teamMemberId);
+    });
   }
   db.prepare("DELETE FROM onboarding_recruiting_invites WHERE candidate_email = ?").run(CANDIDATE_EMAIL);
   db.prepare("DELETE FROM rep_applications WHERE email = ?").run(CANDIDATE_EMAIL);

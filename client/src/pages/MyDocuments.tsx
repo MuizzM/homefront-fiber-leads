@@ -26,6 +26,7 @@ interface SigningRecord {
   completedAt: string | null;
   failureReason: string | null;
   contentSha256: string;
+  completedPdfSha256?: string | null;
 }
 
 interface DocumentItem {
@@ -83,7 +84,11 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const endRef = useRef<HTMLDivElement>(null);
+  const sectionRefs = useRef<Array<HTMLElement | null>>([]);
   const [readToEnd, setReadToEnd] = useState(false);
+  const [readProgress, setReadProgress] = useState(0);
+  const [sectionIndex, setSectionIndex] = useState(0);
   const [consent, setConsent] = useState(false);
   const [acknowledge, setAcknowledge] = useState(false);
   const [intent, setIntent] = useState(false);
@@ -98,8 +103,15 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
     staleTime: Infinity,
   });
 
+  const snapshot = content.data?.snapshot;
+  // Every agreement section, plus the electronic-record disclosure that closes
+  // the document — the disclosure is part of what the rep must read.
+  const snapshotSectionCount = snapshot ? snapshot.sections.length + 1 : 0;
+
   useEffect(() => {
     setReadToEnd(false);
+    setReadProgress(0);
+    setSectionIndex(0);
     setConsent(false);
     setAcknowledge(false);
     setIntent(false);
@@ -110,8 +122,44 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
   useEffect(() => {
     const node = scrollRef.current;
-    if (content.data && node && node.scrollHeight <= node.clientHeight + 8) setReadToEnd(true);
+    if (content.data && node && node.scrollHeight <= node.clientHeight + 8) {
+      setReadToEnd(true);
+      setReadProgress(100);
+    }
   }, [content.data]);
+
+  // Reading progress is measured, not guessed: the bar tracks real scroll
+  // position and the section counter reports the heading actually under the
+  // top of the viewport, so the gate reads as "here is how much is left"
+  // instead of an unexplained disabled button.
+  const trackReading = (node: HTMLDivElement) => {
+    const scrollable = Math.max(1, node.scrollHeight - node.clientHeight);
+    const atEnd = node.scrollTop + node.clientHeight >= node.scrollHeight - 24;
+    setReadProgress(atEnd ? 100 : Math.min(100, Math.max(0, Math.round((node.scrollTop / scrollable) * 100))));
+    const containerTop = node.getBoundingClientRect().top;
+    let index = 0;
+    sectionRefs.current.forEach((element, position) => {
+      if (element && element.getBoundingClientRect().top - containerTop <= 96) index = position;
+    });
+    setSectionIndex(index);
+    if (atEnd) setReadToEnd(true);
+  };
+
+  // Keyboard and screen-reader users cannot "scroll to the bottom" the way a
+  // mouse wheel does, and a scroll container they must drag is a wall, not a
+  // gate. This jumps them to the end of the agreement and moves focus there,
+  // so the same acknowledgment is reachable without a pointer.
+  const jumpToEnd = () => {
+    const node = scrollRef.current;
+    if (node) {
+      node.scrollTop = node.scrollHeight;
+      trackReading(node);
+    }
+    setReadToEnd(true);
+    setReadProgress(100);
+    setSectionIndex(Math.max(0, (snapshotSectionCount || 1) - 1));
+    endRef.current?.focus();
+  };
 
   const sign = useMutation({
     mutationFn: () => apiRequest("POST", `/api/onboarding/documents/${record!.id}/sign`, {
@@ -124,7 +172,7 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
     onSuccess: result => {
       toast({
         title: "Agreement signed",
-        description: result.receiptSent ? "Resend emailed your completed PDF." : "Your PDF is ready in My Documents.",
+        description: `${result.receiptSent ? "Resend emailed your completed PDF." : "Your PDF is ready in My Documents."} Its SHA-256 is listed next to the download so you can verify it against the certificate page.`,
       });
       queryClient.invalidateQueries({ queryKey: ["/api/onboarding/documents/me"] });
       onClose();
@@ -143,7 +191,6 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
   });
 
   const ready = readToEnd && consent && acknowledge && intent && typedName.trim().length >= 2;
-  const snapshot = content.data?.snapshot;
 
   return (
     <Dialog open={!!record} onOpenChange={open => !open && onClose()}>
@@ -161,16 +208,35 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
 
         {content.data && snapshot && (
           <>
+            <div className="flex items-center gap-3 border-b border-border px-5 py-2.5 flex-shrink-0" data-testid="reading-progress">
+              <div className="flex-1">
+                <div
+                  className="h-1.5 rounded-full bg-muted overflow-hidden"
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={readProgress}
+                  aria-label="Agreement reading progress"
+                >
+                  <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${readProgress}%` }} />
+                </div>
+                <p className="text-2xs text-muted-foreground mt-1" aria-live="polite">
+                  Section {Math.min(sectionIndex + 1, Math.max(snapshotSectionCount, 1))} of {Math.max(snapshotSectionCount, 1)}
+                  {readToEnd ? " — you reached the end" : ""}
+                </p>
+              </div>
+              <Button variant="outline" size="sm" className="h-8 flex-shrink-0 text-xs" onClick={jumpToEnd} data-testid="skip-to-agreement-end">
+                Skip to the end
+              </Button>
+            </div>
+
             <div
               ref={scrollRef}
               className="flex-1 overflow-y-auto px-5 sm:px-7 py-5"
               tabIndex={0}
               role="document"
               aria-label={`${snapshot.title} agreement text`}
-              onScroll={event => {
-                const node = event.currentTarget;
-                if (node.scrollTop + node.clientHeight >= node.scrollHeight - 24) setReadToEnd(true);
-              }}
+              onScroll={event => trackReading(event.currentTarget)}
               data-testid="signing-document-scroll"
             >
               <div className="max-w-2xl mx-auto rounded-xl bg-white text-slate-800 border border-slate-200 shadow-sm px-5 sm:px-8 py-7">
@@ -184,34 +250,46 @@ function SigningDialog({ record, onClose }: { record: SigningRecord | null; onCl
                   <div className="rounded-lg bg-slate-50 p-3"><span className="font-bold block text-2xs text-slate-500 uppercase">Signer</span>{snapshot.signerName}<br />{snapshot.signerEmail}</div>
                 </div>
                 <div className="space-y-5">
-                  {snapshot.sections.map(section => (
-                    <section key={section.heading}>
+                  {snapshot.sections.map((section, sectionPosition) => (
+                    <section key={section.heading} ref={element => { sectionRefs.current[sectionPosition] = element; }}>
                       <h3 className="text-sm font-bold text-slate-900">{section.heading}</h3>
                       {section.paragraphs.map((paragraph, index) => <p key={index} className="text-xs leading-6 mt-2">{paragraph}</p>)}
                       {!!section.bullets?.length && <ul className="list-disc pl-5 mt-2 space-y-1.5">{section.bullets.map(bullet => <li key={bullet} className="text-xs leading-5">{bullet}</li>)}</ul>}
                     </section>
                   ))}
                 </div>
-                <section className="mt-7 pt-5 border-t border-slate-200">
+                <section className="mt-7 pt-5 border-t border-slate-200" ref={element => { sectionRefs.current[snapshot.sections.length] = element; }}>
                   <h3 className="text-sm font-bold text-slate-900">{content.data.disclosure.title}</h3>
                   {content.data.disclosure.paragraphs.map(paragraph => <p key={paragraph} className="text-xs leading-5 mt-2 text-slate-600">{paragraph}</p>)}
                 </section>
-                <div className="mt-7 rounded-lg bg-teal-50 border border-teal-200 p-3 text-xs font-semibold text-teal-900 flex items-center gap-2">
+                <div
+                  ref={endRef}
+                  tabIndex={-1}
+                  className="mt-7 rounded-lg bg-teal-50 border border-teal-200 p-3 text-xs font-semibold text-teal-900 flex items-center gap-2"
+                  data-testid="agreement-end-marker"
+                >
                   <FileCheck2 className="w-4 h-4" /> You reached the end of the agreement.
                 </div>
               </div>
             </div>
 
-            <div className="border-t border-border bg-card px-4 sm:px-6 py-4 max-h-[46vh] overflow-y-auto flex-shrink-0">
-              {!readToEnd && <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-300 mb-3">Scroll through the complete agreement before signing.</div>}
+            <div className="border-t border-border bg-card px-4 sm:px-6 py-4 max-h-[46vh] overflow-y-auto flex-shrink-0" data-testid="signature-panel">
+              {!readToEnd && <div className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-xs text-amber-300 mb-3">Scroll through the complete agreement before signing, or use “Skip to the end”.</div>}
               {!declining ? (
                 <div className="space-y-2.5 max-w-2xl mx-auto">
                   <LegalCheckbox checked={consent} onChange={setConsent} testId="esign-consent">I consent to receive and sign this agreement electronically, understand I may request a free paper copy, and confirm I can access this electronic record.</LegalCheckbox>
                   <LegalCheckbox checked={acknowledge} onChange={setAcknowledge} testId="esign-read">I have reviewed the complete agreement and the electronic-record disclosure.</LegalCheckbox>
                   <LegalCheckbox checked={intent} onChange={setIntent} testId="esign-intent">I intend my typed name below to be my electronic signature and to bind me to this agreement.</LegalCheckbox>
                   <div>
-                    <label htmlFor="typed-signature" className="text-[11px] font-semibold text-muted-foreground">Type your full legal name exactly as shown</label>
-                    <Input id="typed-signature" value={typedName} onChange={event => setTypedName(event.target.value)} placeholder={snapshot.signerName} className="mt-1.5 h-11 font-medium" autoComplete="name" data-testid="typed-signature" />
+                    {/* The expected name is NOT shown next to this field. Printing
+                        it here turned the signature into a copy-and-paste exercise:
+                        whoever was at the keyboard could produce a perfect match
+                        without knowing whose name it was. The rep types the name
+                        they know; the server still matches it (shared/onboardingDocuments). */}
+                    <label htmlFor="typed-signature" className="text-[11px] font-semibold text-muted-foreground">
+                      Type your full legal name exactly as it appears on your agreement
+                    </label>
+                    <Input id="typed-signature" value={typedName} onChange={event => setTypedName(event.target.value)} placeholder="Type your full legal name" className="mt-1.5 h-11 font-medium" autoComplete="off" data-testid="typed-signature" />
                   </div>
                   <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-2 pt-1">
                     <Button variant="ghost" className="text-red-400 hover:text-red-300" onClick={() => setDeclining(true)}><XCircle className="w-4 h-4 mr-1.5" /> Decline</Button>
@@ -299,7 +377,7 @@ export default function MyDocuments() {
               const record = document.envelope;
               const actionable = record && (record.status === "sent" || record.status === "delivered");
               return <article key={document.type} className="render-lazy p-4 flex flex-col sm:flex-row sm:items-start gap-3" data-testid={`onboarding-document-${document.type}`}>
-                <div className="flex items-start gap-3 min-w-0 flex-1"><div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${record?.status === "completed" ? "bg-emerald-500/10" : "bg-secondary"}`}>{record?.status === "completed" ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <FileText className="w-5 h-5 text-muted-foreground" />}</div><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-red-400 mt-1">{record.failureReason}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"><Clock3 className="w-3 h-3" /> Waiting for your manager</p>}</div></div>
+                <div className="flex items-start gap-3 min-w-0 flex-1"><div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${record?.status === "completed" ? "bg-emerald-500/10" : "bg-secondary"}`}>{record?.status === "completed" ? <CheckCircle2 className="w-5 h-5 text-emerald-400" /> : <FileText className="w-5 h-5 text-muted-foreground" />}</div><div className="min-w-0"><div className="flex items-center gap-2 flex-wrap"><h2 className="text-sm font-semibold">{document.label}</h2>{record && <StatusPill status={record.status} />}</div><p className="text-xs text-muted-foreground mt-1 leading-relaxed">{document.description}</p>{record?.failureReason && <p className="text-[11px] text-red-400 mt-1">{record.failureReason}</p>}{record?.status === "completed" && record.completedPdfSha256 && <p className="text-2xs text-muted-foreground font-mono mt-1.5 break-all" data-testid={`completed-pdf-sha-${document.type}`}><span className="font-sans font-semibold">Signed PDF SHA-256</span> {record.completedPdfSha256}</p>}{!record && <p className="text-[11px] text-muted-foreground mt-1 inline-flex items-center gap-1"><Clock3 className="w-3 h-3" /> Waiting for your manager</p>}</div></div>
                 <div className="flex-shrink-0 pl-[52px] sm:pl-0">{actionable && <Button size="sm" className="h-9 bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => setActiveRecord(record)} data-testid={`sign-document-${document.type}`}><FileSignature className="w-3.5 h-3.5 mr-1" /> Review &amp; sign</Button>}{record?.status === "completed" && <Button size="sm" variant="outline" className="h-9 border-border" onClick={() => download(document)}><Download className="w-3.5 h-3.5 mr-1" /> Signed PDF</Button>}</div>
               </article>;
             })}

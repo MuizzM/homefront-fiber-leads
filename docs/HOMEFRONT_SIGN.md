@@ -6,11 +6,12 @@ Home Front Sign is the portal’s first-party electronic-signature service for r
 
 - the complete agreement snapshot and its SHA-256 digest;
 - document type, version, company, signer name/email, and issue time;
-- affirmative electronic-record consent, acknowledgment of review, and intent to sign;
+- affirmative electronic-record consent, acknowledgment of review, and intent to sign, each recorded as RECEIVED from the signing request rather than asserted by the server;
 - authenticated portal user ID, server timestamp, IP address, and user agent;
+- the signer's keystrokes verbatim (`signature_typed_name`) alongside the canonical account name (`signature_name`) they were matched against — the certificate prints the typed string as the signature;
 - signature-evidence SHA-256 and completed-PDF SHA-256;
 - a downloadable signed PDF with an electronic-signature certificate;
-- a hash-chained event history covering creation, invitation, viewing, signing, and receipt delivery;
+- a hash-chained event history covering creation, invitation, viewing, re-opening, signing, voiding, and receipt delivery;
 - seven-year minimum retention timestamp, with no automatic deletion job.
 
 The agreement text is in `server/onboardingAgreementTemplates.ts`. Have qualified counsel review the terms before using them with real representatives, especially contractor classification, commission deductions, local solicitation law, and state-specific employment rules. The signing system supplies evidence and record integrity; it does not make unsuitable contract terms lawful.
@@ -43,6 +44,14 @@ Resend must show the sender domain as verified. SPF and DKIM should pass, and DM
 8. Resend emails each completed PDF. The same PDFs remain available to the rep and authorized managers. Only after all four current required agreements are complete does the server activate the field-sales team profile.
 
 Managers use **Rep Onboarding** for every onboarding action, including safe resends and signed-PDF downloads. The Team roster links back to that one operational screen instead of presenting a second document workflow. Active agreements are idempotent: approving or retrying cannot create a second active copy of the same document type or version.
+
+## Record integrity
+
+- **The signer is never shown the name they must type.** The signature field carries an instruction ("Type your full legal name exactly as it appears on your agreement"), not the expected value. Matching remains server-side and unchanged (`shared/onboardingDocuments.ts`).
+- **Database-level immutability.** SQLite triggers, not just application code, protect the record: once a document is `completed`, any UPDATE that would change `completed_pdf`, `completed_pdf_sha256`, `evidence_json`, `content_sha256`, `signature_sha256`, `document_snapshot_json`, `completed_at`, either signature-name column, or `status` is aborted; `onboarding_signature_events` rejects every UPDATE and DELETE. The completion write itself is unaffected — it runs while the row is still `sent`/`delivered`.
+- **`GET /api/onboarding/documents/:id/events`** returns the chain for one document to the owning rep or a manager with `onboarding.documents.manage`, together with a `verification` verdict (`{ok, eventCount, brokenAt?, reason?}`) recomputed from the stored rows. A non-manager receives the hash skeleton only — event type, time, and the three digests. Session forensics (IP, user agent, event payload) are projected out for anyone but a manager, the same allowlist rule the document list uses.
+- **Every view is recorded**, not only the first. A repeat open appends a `document_reopened` event, coalesced to at most one per document per five minutes so a refresh loop cannot flood the chain.
+- **`POST /api/onboarding/documents/:id/void`** (manager-only, reason required) cancels an agreement that was issued but should not be signed. It is permitted only from `sent`/`delivered`; a signed agreement returns 409 and can never be voided. A voided agreement is not signable, and the void plus its reason are appended to the chain and the activity log.
 
 ## Tenant and account safety
 

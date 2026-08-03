@@ -176,9 +176,13 @@ export default function Applications() {
   // irreversible). First tap arms the button, which auto-disarms after 3s;
   // only a second tap while armed fires the mutation.
   const [rejectArmed, setRejectArmed] = useState(false);
+  const [voidTarget, setVoidTarget] = useState<{ envelopeId: number; label: string } | null>(null);
+  const [voidReason, setVoidReason] = useState("");
   const rejectTimer = useRef<number | null>(null);
   useEffect(() => {
     setRejectArmed(false);
+    setVoidTarget(null);
+    setVoidReason("");
     return () => { if (rejectTimer.current) window.clearTimeout(rejectTimer.current); };
   }, [selectedKey]);
 
@@ -256,6 +260,22 @@ export default function Applications() {
       toast({ title: variables.action === "invite" ? "Invitation resent" : variables.action === "login" ? "New login code sent" : "Agreement email sent safely" });
     },
     onError: (error: any) => toast({ title: "Action failed", description: error.message, variant: "destructive" }),
+  });
+
+  // Voiding cancels an agreement that should never be signed as issued (wrong
+  // version, wrong rep, candidate withdrew). It is only offered for an issued,
+  // UNSIGNED agreement — a signed one has no void control at all, and the API
+  // refuses it independently.
+  const voidMutation = useMutation({
+    mutationFn: ({ envelopeId, reason }: { envelopeId: number; reason: string }) =>
+      apiRequest("POST", `/api/onboarding/documents/${envelopeId}/void`, { reason }).then(response => response.json()),
+    onSuccess: () => {
+      setVoidTarget(null);
+      setVoidReason("");
+      refresh();
+      toast({ title: "Agreement voided", description: "The rep can no longer sign it. The void and its reason are in the signature chain." });
+    },
+    onError: (error: any) => toast({ title: "Could not void", description: error.message, variant: "destructive" }),
   });
 
   const hrMutation = useMutation({
@@ -389,7 +409,7 @@ export default function Applications() {
 
               {selected.milestones.approved && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound className="h-4 w-4 text-cyan-400" />Account access</h3><span className={`text-[11px] font-semibold ${selected.milestones.loginCodeSent ? "text-emerald-400" : "text-amber-400"}`}>{selected.milestones.loginCodeSent ? "Login code sent" : "Delivery pending"}</span></div><p className="text-xs text-muted-foreground">The rep account can access My Documents while the field-sales profile stays inactive until every required agreement is signed.</p>{selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "login", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary"><RotateCw className="h-3.5 w-3.5" />Send a new login code</button>}</div>}
 
-              {selected.milestones.approved && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><FileCheck2 className="h-4 w-4 text-violet-400" />Required agreements</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.signedCount} of 4 signed</p></div>{selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "documents", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary"><RotateCw className="h-3.5 w-3.5" />Resend pending</button>}</div><div className="space-y-2">{selected.documents.map(document => <div key={document.type} className="flex items-center gap-3 rounded-xl bg-secondary/45 p-3"><div className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${documentTone(document.status)}`}>{document.status === "completed" ? <Check className="h-4 w-4" /> : <FileText className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-foreground">{document.label}</p><p className="mt-0.5 text-[11px] capitalize text-muted-foreground">{document.status.replace(/_/g, " ")}{document.completedAt ? ` · ${formatDate(document.completedAt)}` : ""}</p></div>{document.status === "completed" && document.envelopeId && <button onClick={() => downloadOnboardingDocument(document.envelopeId!, `${selected.candidateName}-${document.type}.pdf`)} className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:bg-background hover:text-foreground" aria-label={`Download ${document.label}`}><Download className="h-4 w-4" /></button>}</div>)}</div></div>}
+              {selected.milestones.approved && <div className="rounded-xl border border-border p-4"><div className="mb-3 flex items-center justify-between"><div><h3 className="flex items-center gap-2 text-sm font-semibold text-foreground"><FileCheck2 className="h-4 w-4 text-violet-400" />Required agreements</h3><p className="mt-1 text-xs text-muted-foreground">{selected.milestones.signedCount} of 4 signed</p></div>{selected.inviteId && <button onClick={() => actionMutation.mutate({ action: "documents", inviteId: selected.inviteId! })} disabled={actionMutation.isPending} className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary"><RotateCw className="h-3.5 w-3.5" />Resend pending</button>}</div><div className="space-y-2">{selected.documents.map(document => <div key={document.type} className="flex items-center gap-3 rounded-xl bg-secondary/45 p-3"><div className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${documentTone(document.status)}`}>{document.status === "completed" ? <Check className="h-4 w-4" /> : <FileText className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-foreground">{document.label}</p><p className="mt-0.5 text-[11px] capitalize text-muted-foreground">{document.status.replace(/_/g, " ")}{document.completedAt ? ` · ${formatDate(document.completedAt)}` : ""}</p></div>{["sent", "delivered"].includes(document.status) && document.envelopeId && <button onClick={() => { setVoidTarget({ envelopeId: document.envelopeId!, label: document.label }); setVoidReason(""); }} className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border px-2.5 text-[11px] font-semibold text-muted-foreground hover:bg-background hover:text-foreground" aria-label={`Void ${document.label}`} data-testid={`void-document-${document.type}`}><XCircle className="h-3.5 w-3.5" />Void</button>}{document.status === "completed" && document.envelopeId && <button onClick={() => downloadOnboardingDocument(document.envelopeId!, `${selected.candidateName}-${document.type}.pdf`)} className="grid h-8 w-8 place-items-center rounded-lg text-muted-foreground hover:bg-background hover:text-foreground" aria-label={`Download ${document.label}`}><Download className="h-4 w-4" /></button>}</div>)}</div>{voidTarget && <div className="mt-3 rounded-xl border border-rose-500/25 bg-rose-500/5 p-3" data-testid="void-document-panel"><p className="text-xs font-semibold text-foreground">Void {voidTarget.label}?</p><p className="mt-1 text-[11px] text-muted-foreground">The rep can no longer sign this agreement. A signed agreement can never be voided. The reason is written into the signature chain.</p><input value={voidReason} onChange={event => setVoidReason(event.target.value)} maxLength={500} placeholder="Reason for voiding" className="mt-2 h-9 w-full rounded-lg border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-primary" data-testid="void-document-reason" /><div className="mt-2 flex justify-end gap-2"><button onClick={() => { setVoidTarget(null); setVoidReason(""); }} className="inline-flex h-9 items-center rounded-lg border border-border px-3 text-xs font-semibold hover:bg-secondary">Cancel</button><button onClick={() => voidMutation.mutate({ envelopeId: voidTarget.envelopeId, reason: voidReason.trim() })} disabled={voidReason.trim().length < 2 || voidMutation.isPending} className="inline-flex h-9 items-center gap-2 rounded-lg bg-rose-600 px-3 text-xs font-semibold text-white disabled:opacity-50" data-testid="confirm-void-document">{voidMutation.isPending && <Loader2 className="h-3.5 w-3.5 animate-spin" />}Confirm void</button></div></div>}</div>}
 
               {selected.milestones.approved && selected.hr.checkpoints.length > 0 && (
                 <div className="rounded-xl border border-border p-4" data-testid="hr-compliance">

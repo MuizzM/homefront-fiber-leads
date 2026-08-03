@@ -3,8 +3,9 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ELECTRONIC_CONSENT_VERSION, ONBOARDING_DOCUMENT_TYPES } from "../../shared/onboardingDocuments";
+import { ELECTRONIC_CONSENT_VERSION, ONBOARDING_DOCUMENT_TYPES, canOpenSigning } from "../../shared/onboardingDocuments";
 import { buildAgreementSnapshot } from "../../server/onboardingAgreementTemplates";
+import { resetSigningTables, withSigningTriggersSuspended } from "../helpers/signingTables";
 
 let store: typeof import("../../server/onboardingDocumentStore");
 let recruitingStore: typeof import("../../server/onboardingRecruitingStore");
@@ -37,8 +38,7 @@ beforeEach(() => {
     statusText: "OK",
     json: async () => ({ id: "resend-test-email" }),
   }));
-  rawDb.prepare("DELETE FROM onboarding_signature_events").run();
-  rawDb.prepare("DELETE FROM onboarding_signing_documents").run();
+  resetSigningTables(rawDb);
   rawDb.prepare("DELETE FROM onboarding_recruiting_invites").run();
   rawDb.prepare("DELETE FROM rep_applications").run();
   rawDb.prepare("DELETE FROM users WHERE id = 100").run();
@@ -422,6 +422,186 @@ describe("first-party onboarding signing store", () => {
       stage: "active",
       milestones: { signedCount: 4, fullySigned: true, active: true },
     });
+  });
+
+  it("stores the signer's keystrokes verbatim beside the canonical account name", () => {
+    // signature_name is the profile name the typed input was MATCHED against.
+    // What the human actually typed — their capitalization, their spacing — is
+    // the signature, and it is preserved exactly. A record that kept only the
+    // canonical string would be reporting a name the server supplied.
+    const row = store.reserveSigningDocument(reservation()).row;
+    store.markDocumentsSent([row.id], "resend-typed", null, "2026-07-13T10:10:00.000Z");
+    const current = store.getSigningDocument(row.id)!;
+    const typed = "  jordan   REP ";
+    const pdf = Buffer.from("%PDF typed-name");
+    const signed = store.completeSigning({
+      id: row.id, expectedContentSha256: current.contentSha256, signatureName: current.signerName,
+      signatureTypedName: typed, signatureSha256: "e".repeat(64), consentVersion: ELECTRONIC_CONSENT_VERSION,
+      signedAt: "2026-07-13T12:00:00.000Z", signedUserId: 100, ipAddress: "127.0.0.1", userAgent: "Vitest",
+      evidence: { intentToSign: true, typedSignatureName: typed }, pdf,
+      pdfSha256: crypto.createHash("sha256").update(pdf).digest("hex"),
+    });
+    expect(signed.signatureTypedName).toBe(typed);
+    expect(signed.signatureName).toBe("Jordan Rep");
+    expect(signed.signatureTypedName).not.toBe(signed.signatureName);
+    // The typed name is the rep's own name — it travels with the public record.
+    expect(store.listRepDocuments(1, 10)[0]).toMatchObject({ signatureTypedName: typed, signatureName: "Jordan Rep" });
+  });
+
+  it("verifies the hash chain and reports exactly where a tampered event breaks it", () => {
+    const row = store.reserveSigningDocument(reservation()).row;
+    store.markDocumentsSent([row.id], "resend-chain", null, "2026-07-13T10:10:00.000Z");
+    store.markDocumentViewed(row.id, 100, "127.0.0.1", "Vitest");
+    expect(store.verifyDocumentChain(row.id)).toEqual({ ok: true, eventCount: 3 });
+
+    // Rewrite one event's payload the way an attacker with database access
+    // would (the append-only trigger has to be suspended even to attempt it).
+    const target = rawDb.prepare(
+      "SELECT id FROM onboarding_signature_events WHERE document_id = ? ORDER BY id LIMIT 1 OFFSET 1",
+    ).get(row.id) as { id: number };
+    withSigningTriggersSuspended(rawDb, () => {
+      rawDb.prepare("UPDATE onboarding_signature_events SET payload_json = ? WHERE id = ?")
+        .run(JSON.stringify({ emailProvider: "resend", emailId: "forged" }), target.id);
+    });
+    const verdict = store.verifyDocumentChain(row.id);
+    expect(verdict.ok).toBe(false);
+    expect(verdict.brokenAt).toBe(2);
+    expect(verdict.reason).toMatch(/payload/i);
+
+    // Recomputing the payload digest too is not enough — the event digest and
+    // every link after it still fail.
+    withSigningTriggersSuspended(rawDb, () => {
+      const forged = JSON.stringify({ emailProvider: "resend", emailId: "forged" });
+      rawDb.prepare("UPDATE onboarding_signature_events SET payload_sha256 = ? WHERE id = ?")
+        .run(crypto.createHash("sha256").update(forged).digest("hex"), target.id);
+    });
+    const second = store.verifyDocumentChain(row.id);
+    expect(second.ok).toBe(false);
+    expect(second.brokenAt).toBe(2);
+    expect(second.reason).toMatch(/digest/i);
+  });
+
+  it("lets the database itself refuse any change to a completed signature", () => {
+    const row = store.reserveSigningDocument(reservation()).row;
+    store.markDocumentsSent([row.id], "resend-immutable", null, "2026-07-13T10:10:00.000Z");
+    const current = store.getSigningDocument(row.id)!;
+    const pdf = Buffer.from("%PDF immutable");
+    store.completeSigning({
+      id: row.id, expectedContentSha256: current.contentSha256, signatureName: current.signerName,
+      signatureSha256: "f".repeat(64), consentVersion: ELECTRONIC_CONSENT_VERSION,
+      signedAt: "2026-07-13T12:00:00.000Z", signedUserId: 100, ipAddress: "127.0.0.1", userAgent: "Vitest",
+      evidence: { intentToSign: true }, pdf, pdfSha256: crypto.createHash("sha256").update(pdf).digest("hex"),
+    });
+
+    // App-level guards are not the last word: raw SQL against a completed row
+    // is aborted by SQLite.
+    expect(() => rawDb.prepare("UPDATE onboarding_signing_documents SET completed_pdf = ? WHERE id = ?")
+      .run(Buffer.from("%PDF swapped"), row.id)).toThrow(/immutable/i);
+    expect(() => rawDb.prepare("UPDATE onboarding_signing_documents SET evidence_json = ? WHERE id = ?")
+      .run(JSON.stringify({ intentToSign: false }), row.id)).toThrow(/immutable/i);
+    expect(() => rawDb.prepare("UPDATE onboarding_signing_documents SET completed_pdf_sha256 = ? WHERE id = ?")
+      .run("0".repeat(64), row.id)).toThrow(/immutable/i);
+    expect(() => rawDb.prepare("UPDATE onboarding_signing_documents SET signature_sha256 = ? WHERE id = ?")
+      .run("0".repeat(64), row.id)).toThrow(/immutable/i);
+    expect(() => rawDb.prepare("UPDATE onboarding_signing_documents SET document_snapshot_json = '{}' WHERE id = ?")
+      .run(row.id)).toThrow(/immutable/i);
+    // …including making a signed agreement disappear by flipping its status.
+    expect(() => rawDb.prepare("UPDATE onboarding_signing_documents SET status = 'voided', voided_at = ? WHERE id = ?")
+      .run("2026-08-01T00:00:00.000Z", row.id)).toThrow(/immutable/i);
+    expect(store.getCompletedPdf(row.id)).toEqual(pdf);
+
+    // Non-evidence bookkeeping on a completed row is still allowed — this is
+    // the path markCompletionEmail() takes after the receipt is sent.
+    store.markCompletionEmail(row.id, "resend-receipt-1");
+    expect(store.getSigningDocument(row.id)!.completionEmailId).toBe("resend-receipt-1");
+
+    // The chain itself is append-only at the database level.
+    const event = rawDb.prepare("SELECT id FROM onboarding_signature_events WHERE document_id = ? ORDER BY id LIMIT 1").get(row.id) as { id: number };
+    expect(() => rawDb.prepare("UPDATE onboarding_signature_events SET event_type = 'nothing_happened' WHERE id = ?").run(event.id))
+      .toThrow(/append-only/i);
+    expect(() => rawDb.prepare("DELETE FROM onboarding_signature_events WHERE id = ?").run(event.id))
+      .toThrow(/append-only/i);
+    expect(store.verifyDocumentChain(row.id).ok).toBe(true);
+  });
+
+  it("voids an issued agreement, refuses to void a signed one, and blocks signing afterwards", () => {
+    const row = store.reserveSigningDocument(reservation()).row;
+    store.markDocumentsSent([row.id], "resend-void", null, "2026-07-13T10:10:00.000Z");
+    const voided = store.voidSigningDocument({
+      id: row.id, actorUserId: 100, ipAddress: "127.0.0.1", userAgent: "Vitest", reason: "Issued against the wrong commission plan",
+    });
+    expect(voided.status).toBe("voided");
+    expect(voided.voidedAt).toBeTruthy();
+    expect(voided.failureReason).toBe("Issued against the wrong commission plan");
+    expect(store.listDocumentEvents(row.id).map(event => event.eventType))
+      .toEqual(["document_created", "invitation_sent", "document_voided"]);
+    expect(store.verifyDocumentChain(row.id).ok).toBe(true);
+    expect(canOpenSigning(voided.status)).toBe(false);
+    expect(() => store.voidSigningDocument({ id: row.id, actorUserId: 100, ipAddress: "127.0.0.1", userAgent: "Vitest", reason: "again" }))
+      .toThrow(/unsigned/i);
+    // A voided agreement is out of the way, so a corrected one can be issued.
+    expect(store.reserveSigningDocument(reservation()).created).toBe(true);
+
+    // A SIGNED agreement is a fact — no manager action may erase it.
+    const signedRow = store.reserveSigningDocument(reservation({ documentType: "commission_agreement" })).row;
+    store.markDocumentsSent([signedRow.id], "resend-void-2", null, "2026-07-13T10:10:00.000Z");
+    const current = store.getSigningDocument(signedRow.id)!;
+    const pdf = Buffer.from("%PDF void-refused");
+    store.completeSigning({
+      id: signedRow.id, expectedContentSha256: current.contentSha256, signatureName: current.signerName,
+      signatureSha256: "a".repeat(64), consentVersion: ELECTRONIC_CONSENT_VERSION,
+      signedAt: "2026-07-13T12:00:00.000Z", signedUserId: 100, ipAddress: "127.0.0.1", userAgent: "Vitest",
+      evidence: { intentToSign: true }, pdf, pdfSha256: crypto.createHash("sha256").update(pdf).digest("hex"),
+    });
+    expect(() => store.voidSigningDocument({ id: signedRow.id, actorUserId: 100, ipAddress: "127.0.0.1", userAgent: "Vitest", reason: "manager regret" }))
+      .toThrow(/signed agreement cannot be voided/i);
+    expect(store.getSigningDocument(signedRow.id)!.status).toBe("completed");
+  });
+
+  it("records every reopen of an agreement, coalesced so a refresh loop cannot flood the chain", () => {
+    const row = store.reserveSigningDocument(reservation()).row;
+    store.markDocumentsSent([row.id], "resend-views", null, "2026-07-13T10:10:00.000Z");
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-07-13T11:00:00.000Z"));
+      store.markDocumentViewed(row.id, 100, "127.0.0.1", "Vitest");        // first view: sent -> delivered
+      store.markDocumentViewed(row.id, 100, "127.0.0.1", "Vitest");        // refresh
+      vi.setSystemTime(new Date("2026-07-13T11:04:00.000Z"));
+      store.markDocumentViewed(row.id, 100, "127.0.0.1", "Vitest");        // still inside the window
+      expect(store.listDocumentEvents(row.id).map(event => event.eventType))
+        .toEqual(["document_created", "invitation_sent", "document_viewed"]);
+
+      vi.setSystemTime(new Date(Date.parse("2026-07-13T11:00:00.000Z") + store.REOPEN_EVENT_COALESCE_MS + 1000));
+      store.markDocumentViewed(row.id, 100, "127.0.0.1", "Vitest");        // a genuine return visit
+      expect(store.listDocumentEvents(row.id).map(event => event.eventType))
+        .toEqual(["document_created", "invitation_sent", "document_viewed", "document_reopened"]);
+      store.markDocumentViewed(row.id, 100, "127.0.0.1", "Vitest");        // …and its own refresh is coalesced too
+      expect(store.listDocumentEvents(row.id).filter(event => event.eventType === "document_reopened")).toHaveLength(1);
+      expect(store.getSigningDocument(row.id)!.status).toBe("delivered");
+      expect(store.verifyDocumentChain(row.id).ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("projects the event chain for a rep without any session forensics", () => {
+    const row = store.reserveSigningDocument(reservation()).row;
+    store.markDocumentsSent([row.id], "resend-projection", null, "2026-07-13T10:10:00.000Z");
+    store.markDocumentViewed(row.id, 100, "198.51.100.7", "SecretAgent/2.0");
+
+    const repView = store.listDocumentEvents(row.id);
+    const serialized = JSON.stringify(repView);
+    expect(serialized).not.toContain("198.51.100.7");
+    expect(serialized).not.toContain("SecretAgent");
+    for (const event of repView as any[]) {
+      expect(event.ipAddress).toBeUndefined();
+      expect(event.userAgent).toBeUndefined();
+      expect(event.payload).toBeUndefined();
+      expect(event.eventSha256).toMatch(/^[a-f0-9]{64}$/);
+    }
+    const managerView = store.listDocumentEvents(row.id, { includePrivate: true }) as any[];
+    expect(managerView[2]).toMatchObject({ ipAddress: "198.51.100.7", userAgent: "SecretAgent/2.0" });
+    expect(managerView[2].payload).toMatchObject({ contentSha256: store.getSigningDocument(row.id)!.contentSha256 });
   });
 
   it("sends a CODE-FREE approval notice — never an embedded login code", async () => {

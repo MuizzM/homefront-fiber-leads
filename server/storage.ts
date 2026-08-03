@@ -1312,6 +1312,44 @@ export function runMigrations() {
      )`,
     `CREATE INDEX IF NOT EXISTS idx_signature_events_document
        ON onboarding_signature_events(document_id, id)`,
+    // The EXACT keystrokes the signer typed into the signature field. signature_name
+    // stays the canonical profile name (back-compat, and what the matcher compared
+    // against); this column preserves the literal string the human produced, so the
+    // certificate can show the signature as written rather than a name the server
+    // supplied for them.
+    `ALTER TABLE onboarding_signing_documents ADD COLUMN signature_typed_name TEXT`,
+    // ── Database-level immutability for the signature record ─────────────────
+    // The app already refuses to re-sign a completed agreement, but "the app
+    // refuses" is not the same guarantee as "the database refuses". A signed
+    // agreement's evidence — the PDF, its digest, the evidence JSON, the bound
+    // document/signature hashes, the frozen snapshot, and the signing time — is
+    // the record a regulator would rely on, so SQLite itself rejects any change
+    // to it once status='completed'. The completion UPDATE itself is unaffected:
+    // it runs while the row is still 'sent'/'delivered', and OLD.status is what
+    // the trigger tests. Post-completion bookkeeping (completion_email_id) still
+    // passes because it touches none of the protected columns.
+    `CREATE TRIGGER IF NOT EXISTS trg_onboarding_signed_document_immutable
+       BEFORE UPDATE ON onboarding_signing_documents
+       WHEN OLD.status = 'completed' AND (
+         NEW.completed_pdf IS NOT OLD.completed_pdf
+         OR NEW.completed_pdf_sha256 IS NOT OLD.completed_pdf_sha256
+         OR NEW.evidence_json IS NOT OLD.evidence_json
+         OR NEW.content_sha256 IS NOT OLD.content_sha256
+         OR NEW.signature_sha256 IS NOT OLD.signature_sha256
+         OR NEW.document_snapshot_json IS NOT OLD.document_snapshot_json
+         OR NEW.completed_at IS NOT OLD.completed_at
+         OR NEW.signature_name IS NOT OLD.signature_name
+         OR NEW.signature_typed_name IS NOT OLD.signature_typed_name
+         OR NEW.status IS NOT OLD.status
+       )
+       BEGIN SELECT RAISE(ABORT, 'a completed onboarding signature is immutable'); END`,
+    // The hash chain is only evidence if links cannot be rewritten or dropped.
+    `CREATE TRIGGER IF NOT EXISTS trg_onboarding_signature_events_no_update
+       BEFORE UPDATE ON onboarding_signature_events
+       BEGIN SELECT RAISE(ABORT, 'onboarding_signature_events is append-only'); END`,
+    `CREATE TRIGGER IF NOT EXISTS trg_onboarding_signature_events_no_delete
+       BEFORE DELETE ON onboarding_signature_events
+       BEGIN SELECT RAISE(ABORT, 'onboarding_signature_events is append-only'); END`,
     // Recruiting invitations are sent before a candidate has an account. Keep
     // a tenant-scoped delivery record so managers can see what was sent and the
     // audit trail does not depend on transient Resend logs.

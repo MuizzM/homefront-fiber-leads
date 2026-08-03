@@ -26,8 +26,11 @@ import {
   markDocumentViewed,
   markDocumentsFailed,
   markDocumentsSent,
+  listDocumentEvents,
   reserveSigningDocument,
   toPublicRecord,
+  verifyDocumentChain,
+  voidSigningDocument,
 } from "./onboardingDocumentStore";
 import { resendConfigured, sendResendEmail } from "./resendMail";
 import { escapeHtml } from "./mail";
@@ -67,6 +70,7 @@ const signSchema = z.object({
   intentToSign: z.literal(true),
 }).strict();
 const declineSchema = z.object({ reason: z.string().trim().min(2).max(500) }).strict();
+const voidSchema = z.object({ reason: z.string().trim().min(2).max(500) }).strict();
 
 function sha256(value: string | Buffer): string {
   return crypto.createHash("sha256").update(value).digest("hex");
@@ -532,6 +536,10 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       const evidence = {
         recordId: record.recordId,
         signerName: record.signerName,
+        // The verbatim keystrokes, preserved beside the canonical account name.
+        // What the signer actually wrote is the signature; the canonical name is
+        // only what it was matched against.
+        typedSignatureName: parsedBody.data.typedName,
         signerEmail: record.signerEmail,
         signedAt,
         authenticatedUserId: uid,
@@ -540,9 +548,12 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         userAgent: userAgent(req),
         contentSha256: record.contentSha256,
         consentVersion: ELECTRONIC_CONSENT_VERSION,
-        consentToElectronicRecords: true,
-        acknowledgeRead: true,
-        intentToSign: true,
+        // Read back from the parsed request, never asserted. The schema already
+        // requires literal true, so the values are the same — but evidence must
+        // record what was RECEIVED, not what the server assumed was received.
+        consentToElectronicRecords: parsedBody.data.consentToElectronicRecords,
+        acknowledgeRead: parsedBody.data.acknowledgeRead,
+        intentToSign: parsedBody.data.intentToSign,
       };
       const signatureSha256 = sha256(JSON.stringify(evidence));
       const pdfEvidence = { ...evidence, signatureSha256 };
@@ -552,6 +563,7 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         id: record.id,
         expectedContentSha256: record.contentSha256,
         signatureName: record.signerName,
+        signatureTypedName: parsedBody.data.typedName,
         signatureSha256,
         consentVersion: ELECTRONIC_CONSENT_VERSION,
         signedAt,
@@ -577,7 +589,15 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
         storage.logActivity(uid, "onboarding.document.receipt_failed", "onboarding_document", record.id,
           { emailProvider: "resend", reason: emailError?.message || "Completion receipt failed" }, req.ip);
       }
-      res.json({ signed: true, receiptSent, activation, document: { id: completed.id, status: completed.status, completedAt: completed.completedAt } });
+      res.json({
+        signed: true,
+        receiptSent,
+        activation,
+        // The rep can hash their downloaded PDF and compare it against this and
+        // the certificate page — self-verification without asking anyone.
+        completedPdfSha256: completed.completedPdfSha256,
+        document: { id: completed.id, status: completed.status, completedAt: completed.completedAt, completedPdfSha256: completed.completedPdfSha256 },
+      });
     } catch (error: any) {
       const status = /already processed|not available|changed/.test(error?.message ?? "") ? 409 : 500;
       res.status(status).json({ error: error?.message || "Could not complete signature" });
@@ -598,6 +618,60 @@ export function registerOnboardingDocumentRoutes(app: Express, { requireAuth, re
       res.json({ declined: true, document: toPublicRecord(declined) });
     } catch (error: any) {
       res.status(409).json({ error: error?.message || "Could not decline document" });
+    }
+  });
+
+  // The hash chain existed but nothing could read it — evidence nobody can see
+  // is evidence nobody can rely on. Both audiences reach it here: the rep who
+  // signed (their own record) and a manager (any record in the tenant), with
+  // the chain re-verified on every read so "the events are listed" and "the
+  // events still hash to what was written" are never confused for each other.
+  app.get("/api/onboarding/documents/:id/events", requireAuth, (req, res) => {
+    const parsed = documentIdSchema.safeParse(req.params.id);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid document ID" });
+    const record = getSigningDocument(parsed.data);
+    if (!record || record.tenantId !== tenantId(req)) return res.status(404).json({ error: "Document not found" });
+    const role = (req as any).user?.role;
+    const isManager = can(role, "onboarding.documents.manage");
+    const ownsDocument = record.repId === myRepId(req) && can(role, "onboarding.documents.read.self");
+    if (!isManager && !ownsDocument) return res.status(403).json({ error: "Forbidden" });
+    res.json({
+      documentId: record.id,
+      recordId: record.recordId,
+      documentType: record.documentType,
+      status: record.status,
+      contentSha256: record.contentSha256,
+      // Session forensics (IP, user-agent, raw payload) are projected out for a
+      // non-manager — see PUBLIC_EVENT_KEYS in onboardingDocumentStore.
+      events: listDocumentEvents(record.id, { includePrivate: isManager }),
+      verification: verifyDocumentChain(record.id),
+    });
+  });
+
+  // Void an ISSUED-BUT-UNSIGNED agreement (wrong version, wrong rep, candidate
+  // withdrew). A completed agreement is never voidable: a signature is a fact,
+  // and no manager may erase one — that request is refused with 409.
+  app.post("/api/onboarding/documents/:id/void", requireAuth, requireCapability("onboarding.documents.manage"), (req, res) => {
+    const parsedId = documentIdSchema.safeParse(req.params.id);
+    const parsedBody = voidSchema.safeParse(req.body);
+    if (!parsedId.success || !parsedBody.success) return res.status(400).json({ error: "Provide a brief reason for voiding this agreement" });
+    const record = getSigningDocument(parsedId.data);
+    if (!record || record.tenantId !== tenantId(req)) return res.status(404).json({ error: "Document not found" });
+    if (record.status === "completed") return res.status(409).json({ error: "A signed agreement cannot be voided" });
+    if (!["sent", "delivered"].includes(record.status)) return res.status(409).json({ error: "Only an issued, unsigned agreement can be voided" });
+    try {
+      const voided = voidSigningDocument({
+        id: record.id,
+        actorUserId: userId(req),
+        ipAddress: ip(req),
+        userAgent: userAgent(req),
+        reason: parsedBody.data.reason,
+      });
+      storage.logActivity(userId(req), "onboarding.document.voided", "onboarding_document", record.id,
+        { documentType: record.documentType, recordId: record.recordId, previousStatus: record.status, reason: parsedBody.data.reason, provider: "homefront_sign" }, req.ip);
+      res.json({ voided: true, document: toPublicRecord(voided) });
+    } catch (error: any) {
+      res.status(409).json({ error: error?.message || "Could not void document" });
     }
   });
 
