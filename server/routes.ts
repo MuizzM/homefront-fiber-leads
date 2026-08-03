@@ -113,6 +113,7 @@ import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
 import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
 import { awardCampaignsForRep } from "./spiffCampaignStore";
+import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { DEFAULT_SPIFF_CONFIG, spiffAmountBand, spiffAmountLadder, spiffTriggerGuide } from "@shared/spiffEngine";
 import { registerAddressDiscoveryRoutes } from "./addressDiscovery/routes";
 import { registerCallingRoutes } from "./calling/routes";
@@ -5642,13 +5643,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     //
     // Outside the money bundle, wrapped, and idempotent on a UNIQUE key, so a
     // retry can never pay twice and a campaign failure can never fail a knock.
-    let campaignAwards: Awaited<ReturnType<typeof awardCampaignsForRep>> = [];
+    let campaignAwards: ReturnType<typeof awardCampaignsForRep> = [];
+    let milestoneAwards: ReturnType<typeof awardMilestonesForRep> = [];
     if (!superseded && parsed.data.repId != null) {
+      const bonusTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
       try {
-        const campTenant = knock.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
-        if (campTenant != null) {
+        if (bonusTenant != null) {
           campaignAwards = awardCampaignsForRep(
-            campTenant, parsed.data.repId, Date.parse(serverTs),
+            bonusTenant, parsed.data.repId, Date.parse(serverTs),
             // Per-sale campaigns key on the sale, so they only fire when this
             // knock IS one. Everything else keys on the local day.
             parsed.data.outcome === "sold" ? `knock:${knock.id}` : undefined,
@@ -5656,6 +5658,18 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         }
       } catch (e: any) {
         console.warn("[spiff-campaign] award failed (non-fatal):", e?.message);
+      }
+      // The STANDING ladder — "100 verified doors this week → $25 on your
+      // check". Separate try so a campaign failure cannot swallow a milestone
+      // the rep genuinely earned, or the other way round. It reads its own
+      // verified-door count, so a knock the geo check did not rate `verified`
+      // moves this needle by exactly nothing.
+      try {
+        if (bonusTenant != null) {
+          milestoneAwards = awardMilestonesForRep(bonusTenant, parsed.data.repId, Date.parse(serverTs));
+        }
+      } catch (e: any) {
+        console.warn("[spiff-milestone] award failed (non-fatal):", e?.message);
       }
     }
     // REVIEWER GATE: persist the CAS result ON the knock row — retries,
@@ -5668,8 +5682,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // NOTHING — 200 + marker distinguishes it from an applied knock (201).
     if (superseded) return res.status(200).json({ ...knock, superseded: true });
     // Only FRESH awards ride the response. A dedupe-replay must not re-fire the
-    // celebration for money the rep was already told about.
-    const won = campaignAwards.filter(a => a.inserted);
+    // celebration for money the rep was already told about. Milestones fold into
+    // the same list so the client has ONE thing to celebrate, not two shapes.
+    const won = [
+      ...campaignAwards.filter(a => a.inserted)
+        .map(a => ({ amountCents: a.amountCents, reason: a.reason, campaignName: a.campaignName })),
+      ...milestoneAwards.filter(a => a.inserted)
+        .map(a => ({ amountCents: a.amountCents, reason: a.reason, campaignName: "Milestone" })),
+    ];
     res.status(201).json(won.length ? { ...knock, campaignAwards: won } : knock);
   });
 

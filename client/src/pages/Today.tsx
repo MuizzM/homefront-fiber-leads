@@ -14,6 +14,7 @@ import { captureFieldFix } from "@/lib/geoFix";
 import { useKnockLogger } from "@/lib/useKnockLogger";
 import { OutcomeSheet } from "@/components/OutcomeSheet";
 import { CampaignStrip } from "@/components/CampaignBoard";
+import { MilestoneCard } from "@/components/MilestoneCard";
 import {
   pinDisplayState, STATE_COLORS, STATE_LABELS,
   nearestUnworkedLead, distanceHint, haversineMeters, todayISO, type RoutablePin,
@@ -226,8 +227,12 @@ export default function Today() {
             whether today is a grind or a coast — the contest they can still win
             in the next two hours belongs in that decision, not three taps away
             on the Spiffs tab. Renders nothing when nothing is running. */}
-        <div className="mt-4 empty:mt-0" data-testid="today-campaign">
+        <div className="mt-4 space-y-3 empty:mt-0" data-testid="today-campaign">
           <CampaignStrip />
+          {/* The standing door bonus. It is on this screen every single day,
+              which is the point — a rep with a cold week still has a number to
+              chase, and the number is the input that produces sales. */}
+          <MilestoneCard compact />
         </div>
 
         {/* Follow-ups due — surfaces the callbacks a rep owes (top of the loop). */}

@@ -175,12 +175,32 @@ function localDayBounds(tenantId: number, nowMs: number): { startMs: number; end
 
 const iso = (ms: number) => new Date(ms).toISOString();
 
+/**
+ * DISTINCT doors, and only the ones the SERVER rated `verified`.
+ *
+ * A knock-count contest pays for effort, so the counter has to be evidence of
+ * effort rather than of tapping. Two exploits it closes:
+ *
+ *   COUNT(DISTINCT lead_id) — standing at one house and logging it forty times
+ *   wins nothing. The count is doors worked, not buttons pressed.
+ *
+ *   verification_status = 'verified' — the verdict is computed server-side from
+ *   the door's own coordinates (shared/geoVerify.ts), so a rep cannot clear a
+ *   contest from the couch. `needs_review`, `invalid`, and legacy NULL do not
+ *   count: an unverifiable knock is not evidence, and paying for one teaches the
+ *   whole floor exactly which way to hold the phone.
+ *
+ * The same rule backs the standing milestone ladder — see verifiedDoorCount in
+ * server/knockMilestoneStore.ts. One definition of "a door", two features.
+ */
 function knockCount(tenantId: number, repId: number, fromMs: number, toMs: number): number {
   const row = rawDb.prepare(
-    `SELECT COUNT(*) AS n FROM knock_log k
+    `SELECT COUNT(DISTINCT k.lead_id) AS n FROM knock_log k
        JOIN leads l ON l.id = k.lead_id
       WHERE k.rep_id = ? AND l.tenant_id = ?
-        AND k.knocked_at >= ? AND k.knocked_at < ?`,
+        AND k.knocked_at >= ? AND k.knocked_at < ?
+        AND k.verification_status = 'verified'
+        AND COALESCE(k.superseded, 0) = 0`,
   ).get(repId, tenantId, iso(fromMs), iso(toMs)) as any;
   return Number(row?.n ?? 0);
 }

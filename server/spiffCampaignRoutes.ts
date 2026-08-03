@@ -22,6 +22,8 @@ import {
   validateCampaignInput, describeTrigger, CAMPAIGN_TRIGGER_KINDS,
   type CampaignTrigger,
 } from "@shared/spiffCampaign";
+import { getLadder, setLadder, repMilestoneCard, milestoneExposure } from "./knockMilestoneStore";
+import { validateLadder } from "@shared/knockMilestones";
 
 type Mw = (req: Request, res: Response, next: NextFunction) => void;
 interface Deps { requireAuth: Mw; requireCapability: (cap: any) => Mw; }
@@ -50,6 +52,44 @@ export function registerSpiffCampaignRoutes(app: Express, deps: Deps) {
     return Number.isInteger(n) && n > 0 ? n : null;
   };
   const uid = (req: Request) => (req as any).user?.id ?? null;
+
+  // ── Standing knock milestones ─────────────────────────────────────────────
+  // The always-on ladder, distinct from the time-boxed contests above: nobody
+  // launches it, it pays into the commission statement, and it is the thing a
+  // rep with a cold week can still chase on a Wednesday.
+  app.get("/api/me/milestones", requireCapability("field.app.use"), (req, res) => {
+    const tenantId = tid(req);
+    const repId = (req as any).user?.teamMemberId;
+    if (tenantId == null || repId == null) {
+      return res.json({ enabled: false, period: "week", periodLabel: "", rungs: [], progress: null });
+    }
+    res.json(repMilestoneCard(tenantId, Number(repId), Date.now()));
+  });
+
+  app.get("/api/spiff-milestones", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    res.json({ ladder: getLadder(tenantId), exposure: milestoneExposure(tenantId, Date.now()) });
+  });
+
+  app.put("/api/spiff-milestones", requireCapability("commission.structure.manage"), (req, res) => {
+    const tenantId = tid(req);
+    if (tenantId == null) return res.status(403).json({ error: "Organization required" });
+    const b = req.body ?? {};
+    const ladder = {
+      enabled: b.enabled !== false,
+      period: b.period === "day" ? "day" : "week",
+      rungs: Array.isArray(b.rungs)
+        ? b.rungs.map((r: any) => ({ doors: Math.trunc(Number(r?.doors)), rewardCents: Math.trunc(Number(r?.rewardCents)) }))
+        : [],
+    } as const;
+    // ONE validator, shared with the admin form, so the server and the UI cannot
+    // disagree about what a sane ladder is.
+    const problem = validateLadder(ladder);
+    if (problem) return res.status(400).json({ error: problem });
+    const saved = setLadder(tenantId, uid(req), ladder as any);
+    res.json({ ladder: saved, exposure: milestoneExposure(tenantId, Date.now()) });
+  });
 
   // ── Rep surface ───────────────────────────────────────────────────────────
   // The card the rep stares at between doors. Progress is computed live from

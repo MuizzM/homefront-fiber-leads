@@ -23,6 +23,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { CampaignBoard } from "@/components/CampaignBoard";
+import { MilestoneSection } from "@/components/MilestoneCard";
+import { MilestoneLadderEditor } from "@/components/MilestoneLadderEditor";
 import { CampaignLauncher } from "@/components/CampaignLauncher";
 import { useAuth } from "@/lib/auth";
 import { can, type Role as AppRole } from "@shared/capabilities";
@@ -275,6 +277,11 @@ function MySpiffs({ repKey }: { repKey: number | string }) {
           won; the board is what they can still win in the next two hours — and
           only one of those changes what they do this afternoon. */}
       <CampaignBoard />
+
+      {/* The standing ladder, under the contests. A campaign may or may not be
+          running; this one always is, which is exactly why it belongs on the
+          screen every day rather than only when someone launches something. */}
+      <MilestoneSection />
 
       <StatStrip columns={4}>
         <StatTile label="Total won" accent testId="stat-total"
@@ -644,6 +651,7 @@ export default function Spiffs() {
           "already seen" bookmark is re-read for the RIGHT person rather than
           carrying another rep's state. */}
       {canLaunch && <CampaignLauncher />}
+      {canLaunch && <MilestoneLadderEditor />}
       <MySpiffs key={String(user?.teamMemberId ?? user?.id ?? "anon")}
                 repKey={user?.teamMemberId ?? user?.id ?? "anon"} />
       {isManager && <TeamHeat isAdmin={isAdmin} />}

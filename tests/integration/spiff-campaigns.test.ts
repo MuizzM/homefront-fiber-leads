@@ -44,15 +44,27 @@ let admin: Fixture, rep: Fixture, otherRep: Fixture, plainRep: Fixture, adminB: 
 /** Log `n` knocks straight into knock_log for `rep`, all landing this morning in
  *  the org's local day. Going through the store rather than the HTTP route keeps
  *  the counter fixture independent of lead assignment/geo policy — those have
- *  their own suites, and this one is about the money. */
-function seedKnocks(repId: number, leadId: number, n: number, hourLocal = 9): void {
+ *  their own suites, and this one is about the money.
+ *
+ *  Each knock lands on its OWN door and carries a `verified` verdict, because
+ *  the campaign counter is distinct GPS-confirmed doors — 40 taps on one house,
+ *  or 40 doors the geo check could not confirm, are both worth zero. That rule
+ *  has its own suite (tests/integration/knock-milestones.test.ts); here it just
+ *  has to be satisfied so the contest logic is what is under test. */
+let seedBatch = 0;
+function seedKnocks(repId: number, _unusedLeadId: number, n: number, hourLocal = 9): void {
   const at = new Date();
   at.setHours(hourLocal, 0, 0, 0);
+  const batch = seedBatch += 1;
   for (let i = 0; i < n; i += 1) {
+    const lead = storage.createLead({
+      address: `${i + 1} Campaign Way Unit ${batch}`, city: "Testville", state: "NC", zip: "27000",
+      leadStatus: "new", tenantId: 1,
+    } as any);
     rawDb.prepare(
-      `INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, tenant_id)
-       VALUES (?,?,?,?,?,?)`,
-    ).run(leadId, repId, "not_home", 0, new Date(at.getTime() + i * 1000).toISOString(), 1);
+      `INSERT INTO knock_log (lead_id, rep_id, outcome, was_home, knocked_at, tenant_id, verification_status, superseded)
+       VALUES (?,?,?,?,?,?,'verified',0)`,
+    ).run(lead.id, repId, "not_home", 0, new Date(at.getTime() + i * 1000).toISOString(), 1);
   }
 }
 
