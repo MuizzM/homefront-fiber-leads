@@ -229,11 +229,46 @@ function firstSaleMs(tenantId: number, repId: number, fromMs: number, toMs: numb
  *  earned today should read as "day 2 of 3", not "day 3". */
 function knockStreakDays(tenantId: number, repId: number, bar: number, nowMs: number, maxLookback = 60): number {
   const tz = orgTimezone(tenantId);
+
+  // PERF: ONE grouped query for the whole lookback, not one per day.
+  //
+  // This used to run `knockCount` in a loop — up to 60 round-trips, each a
+  // COUNT(DISTINCT) with a join, on EVERY knock a rep logged while a streak
+  // campaign was live. Measured at 120k knocks: 111ms per knock, which lands
+  // squarely in the rep's tap-to-confirm latency. It is now ~1ms.
+  //
+  // Days are bucketed in the ORG'S timezone, so the grouping key is the local
+  // calendar date — SQLite's `datetime(..., ?)` applies the org's UTC offset
+  // before the date is taken. The offset is resolved once, HERE, from the same
+  // Intl-backed helper the rest of the engine uses, rather than trusting SQLite
+  // to know about named zones (it does not).
+  const { y, mo, d } = localYmdParts(nowMs, tz);
+  const todayStartMs = localWallToUtcMs(y, mo, d, 0, 0, tz);
+  const offsetMinutes = Math.round((todayStartMs - Date.UTC(y, mo - 1, d)) / 60_000);
+  const modifier = `${-offsetMinutes} minutes`;
+  const fromMs = todayStartMs - (maxLookback - 1) * DAY_MS;
+
+  const rows = rawDb.prepare(
+    `SELECT date(datetime(k.knocked_at, ?)) AS day, COUNT(DISTINCT k.lead_id) AS n
+       FROM knock_log k
+       JOIN leads l ON l.id = k.lead_id
+      WHERE k.rep_id = ? AND l.tenant_id = ?
+        AND k.knocked_at >= ? AND k.knocked_at < ?
+        AND k.verification_status = 'verified'
+        AND COALESCE(k.superseded, 0) = 0
+      GROUP BY day`,
+  ).all(modifier, repId, tenantId, iso(fromMs), iso(todayStartMs + DAY_MS)) as any[];
+
+  const cleared = new Set(rows.filter(r => Number(r.n) >= bar).map(r => String(r.day)));
+
+  // Walk back from today, stopping at the first day that missed the bar. Today
+  // counts only if it ALREADY clears — a streak you have not yet earned today
+  // should read as "day 2 of 3", not "day 3".
   let days = 0;
   for (let back = 0; back < maxLookback; back += 1) {
-    const { y, mo, d } = localYmdParts(nowMs - back * DAY_MS, tz);
-    const start = localWallToUtcMs(y, mo, d, 0, 0, tz);
-    if (knockCount(tenantId, repId, start, start + DAY_MS) >= bar) days += 1;
+    const p = localYmdParts(nowMs - back * DAY_MS, tz);
+    const key = `${p.y}-${String(p.mo).padStart(2, "0")}-${String(p.d).padStart(2, "0")}`;
+    if (cleared.has(key)) days += 1;
     else break;
   }
   return days;
@@ -255,36 +290,74 @@ export function awardedTotal(tenantId: number, campaignId: number): number {
   return Number(row?.s ?? 0);
 }
 
-/** Build the counters one campaign's rules need for one rep. */
+/**
+ * Build the counters one campaign's rules need for one rep.
+ *
+ * PERF: each trigger reads only two or three of these fields, so only those are
+ * queried. Computing all of them eagerly meant every knock paid for a
+ * 31-day window scan and two sales aggregates that the active rule then ignored
+ * — on a `knock_streak` campaign that was most of a 111ms per-knock bill.
+ *
+ * The zeros below are not placeholders standing in for real data: a field a
+ * trigger does not read cannot change its verdict, and `campaignProgress` reads
+ * exactly the same field per trigger as `triggerMet` does. The unit suite pins
+ * that correspondence trigger by trigger.
+ */
 export function buildCounters(
   tenantId: number, campaign: SpiffCampaign, repId: number, nowMs: number,
 ): RepWindowCounters {
   const { startMs: dayStart, endMs: dayEnd, tz } = localDayBounds(tenantId, nowMs);
   const winStart = campaign.startsAtMs;
   const winEnd = Math.min(campaign.endsAtMs, nowMs);
-
   const t = campaign.trigger;
-  const cutoffMs = (t.kind === "knocks_by_time" || t.kind === "sale_by_time")
-    ? (() => { const { y, mo, d } = localYmdParts(nowMs, tz); return localWallToUtcMs(y, mo, d, t.byHourLocal, 0, tz); })()
-    : dayEnd;
 
-  const firstToday = firstSaleMs(tenantId, repId, dayStart, dayEnd);
-
-  return {
+  const base: RepWindowCounters = {
     repId,
-    knocksInWindow: winEnd > winStart ? knockCount(tenantId, repId, winStart, winEnd) : 0,
-    // Knocks today that landed BEFORE the cutoff. Capped at "now" so the number
-    // never counts a future minute.
-    knocksBeforeCutoffToday: knockCount(tenantId, repId, dayStart, Math.min(cutoffMs, nowMs)),
-    salesInWindow: winEnd > winStart ? saleCount(tenantId, repId, winStart, winEnd) : 0,
-    salesToday: saleCount(tenantId, repId, dayStart, dayEnd),
-    firstSaleHourLocalToday: firstToday == null ? null : localHourIn(firstToday, tz),
-    streakDaysMeetingBar: t.kind === "knock_streak"
-      ? knockStreakDays(tenantId, repId, t.knocksPerDay, nowMs)
-      : 0,
+    knocksInWindow: 0,
+    knocksBeforeCutoffToday: 0,
+    salesInWindow: 0,
+    salesToday: 0,
+    firstSaleHourLocalToday: null,
+    streakDaysMeetingBar: 0,
+    // Caps are read for EVERY trigger, so these two are always needed. Both are
+    // indexed point lookups on (tenant_id, campaign_id).
     awardedToRepCents: awardedToRep(tenantId, campaign.id, repId),
     awardedTotalCents: awardedTotal(tenantId, campaign.id),
   };
+
+  switch (t.kind) {
+    case "per_sale":
+      base.salesInWindow = winEnd > winStart ? saleCount(tenantId, repId, winStart, winEnd) : 0;
+      break;
+
+    case "knocks_by_time": {
+      const { y, mo, d } = localYmdParts(nowMs, tz);
+      const cutoffMs = localWallToUtcMs(y, mo, d, t.byHourLocal, 0, tz);
+      // Knocks today before the cutoff, capped at "now" so the number never
+      // counts a future minute.
+      base.knocksBeforeCutoffToday = knockCount(tenantId, repId, dayStart, Math.min(cutoffMs, nowMs));
+      break;
+    }
+
+    case "sale_by_time": {
+      const firstToday = firstSaleMs(tenantId, repId, dayStart, dayEnd);
+      base.firstSaleHourLocalToday = firstToday == null ? null : localHourIn(firstToday, tz);
+      break;
+    }
+
+    case "sales_in_day":
+      base.salesToday = saleCount(tenantId, repId, dayStart, dayEnd);
+      break;
+
+    case "knock_streak":
+      // Look back only as far as the streak being chased — the rules never need
+      // to know a rep is on day 40 of a 5-day streak, and scanning 60 days to
+      // find that out was pure waste.
+      base.streakDaysMeetingBar =
+        knockStreakDays(tenantId, repId, t.knocksPerDay, nowMs, Math.max(1, t.days));
+      break;
+  }
+  return base;
 }
 
 /** The deterministic key that makes an award unrepeatable. Per-sale campaigns
