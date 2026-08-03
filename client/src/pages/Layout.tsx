@@ -31,6 +31,7 @@ import {
   GraduationCap,
   Gift,
   LayoutGrid,
+  Landmark,
 } from "lucide-react";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -89,6 +90,10 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/clock",        label: "Field Hours",   icon: Clock,        show: isFieldRole,                              group: "Field" },
   { href: "/my-commission",label: "My Commission", icon: Wallet,       show: isFieldRole,                              group: "Field" },
   { href: "/my-documents", label: "My Documents",  icon: FileSignature,show: isFieldRole,                              group: "Field" },
+  // Tax & direct deposit — the rep's own W-9 + bank details. Every field role
+  // gets paid, so every field role needs it; the server scopes each request to
+  // the caller's own rep record.
+  { href: "/tax-and-pay",  label: "Tax & Pay",     icon: Landmark,     show: isFieldRole,                              group: "Field" },
   // ── Fiber Intelligence — ONE consolidated map-first workspace (Fresh Now · Map
   //    · Coming Soon · Coverage · Operations). Old Markets/Sweeps/Scanner routes
   //    redirect here. Deep scan tools stay admin-only.
@@ -232,6 +237,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     : location === "/clock" ? "Field hours"
     : location === "/leaderboard" ? "Leaderboard"
     : location === "/my-documents" ? "Documents"
+    : location === "/tax-and-pay" ? "Tax & pay"
     : location === "/followups" ? "Follow-ups"
     : location === "/my-territory" ? "My territory"
     : onCalling ? "Calling"

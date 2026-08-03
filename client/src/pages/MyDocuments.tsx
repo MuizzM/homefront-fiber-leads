@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "wouter";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle, ArrowRight, CheckCircle2, Clock3, Download, FileCheck2,
-  FileSignature, FileText, Loader2, LockKeyhole, ShieldCheck, XCircle,
+  FileSignature, FileText, Landmark, Loader2, LockKeyhole, ShieldCheck, XCircle,
 } from "lucide-react";
 import { apiRequest } from "@/lib/queryClient";
 import { downloadOnboardingDocument } from "@/lib/onboardingDocuments";
@@ -368,6 +369,28 @@ export default function MyDocuments() {
               </Button>
             </section>
           )}
+          {/* Signing agreements is only half of onboarding — a rep cannot be
+              PAID until their W-9 and bank details are on file. That surface
+              lives on its own page; this is the signpost to it. */}
+          <Link
+            href="/tax-and-pay"
+            data-testid="link-tax-and-pay"
+            className="block rounded-2xl border border-border bg-card p-4 transition-colors hover:border-primary/40 focus-visible:border-primary/40 focus-visible:outline-none"
+          >
+            <div className="flex items-start gap-3">
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                <Landmark className="h-5 w-5" aria-hidden="true" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Before you can be paid</div>
+                <div className="mt-0.5 text-[15px] font-semibold text-foreground">Tax form &amp; direct deposit</div>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  File your IRS Form W-9 and tell us which bank account your commission lands in.
+                </p>
+              </div>
+              <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </div>
+          </Link>
           <section className="rounded-2xl bg-card border border-border p-4" aria-label="Onboarding progress">
             <div className="flex items-center justify-between gap-3"><div><div className="text-[11px] uppercase tracking-wide text-muted-foreground font-semibold">Onboarding progress</div><div className="text-lg font-semibold mt-0.5">{data.progress.completed} of {data.progress.total} signed</div></div><div className={`w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold ${percentage === 100 ? "bg-emerald-500/15 text-emerald-400" : "bg-primary/10 text-primary"}`}>{percentage}%</div></div>
             <div className="h-2 rounded-full bg-muted mt-3 overflow-hidden"><div className="h-full bg-primary rounded-full transition-all" style={{ width: `${percentage}%` }} /></div>

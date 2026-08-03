@@ -2207,6 +2207,69 @@ export function runMigrations() {
        UNIQUE(tenant_id, user_id, lesson_id))`,
     `CREATE INDEX IF NOT EXISTS idx_training_progress_user ON training_progress(tenant_id, user_id)`,
 
+    // ── PAY-A2: contractor pay plane (banking, W-9, company DFI profile) ──────
+    // APPEND-ONLY at the END of this list to minimize merge conflicts with
+    // sibling pay lanes. Secrets live in *_enc columns as AES-256-GCM
+    // ciphertext (server/payCrypto.ts); only last4-style masks are plaintext.
+    `CREATE TABLE IF NOT EXISTS rep_bank_details (
+       rep_id INTEGER PRIMARY KEY,
+       tenant_id INTEGER NOT NULL,
+       routing_enc TEXT NOT NULL,
+       account_enc TEXT NOT NULL,
+       account_type TEXT NOT NULL,
+       last4 TEXT NOT NULL,
+       status TEXT NOT NULL DEFAULT 'active',
+       created_at TEXT NOT NULL DEFAULT (datetime('now')),
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_rep_bank_details_tenant ON rep_bank_details(tenant_id)`,
+    `CREATE TABLE IF NOT EXISTS w9_forms (
+       id INTEGER PRIMARY KEY AUTOINCREMENT,
+       tenant_id INTEGER NOT NULL,
+       rep_id INTEGER NOT NULL,
+       legal_name TEXT NOT NULL,
+       business_name TEXT,
+       address_line1 TEXT NOT NULL,
+       city TEXT NOT NULL,
+       state TEXT NOT NULL,
+       zip TEXT NOT NULL,
+       tin_enc TEXT NOT NULL,
+       tin_type TEXT NOT NULL,
+       signature_name TEXT NOT NULL,
+       signature_date TEXT NOT NULL,
+       signature_ip TEXT,
+       signature_ua TEXT,
+       consent INTEGER NOT NULL DEFAULT 0,
+       pdf_path TEXT,
+       created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+    `CREATE INDEX IF NOT EXISTS idx_w9_forms_rep ON w9_forms(tenant_id, rep_id)`,
+    // W-9 hardening. These MUST exist in the raw DDL as well as shared/schema.ts
+    // — a Drizzle-only column does not exist at runtime. ALTERs are idempotent
+    // here (the "duplicate column" swallow below) so both a fresh CREATE above
+    // and an already-deployed table converge on the same shape.
+    // Line 3a: the signer's real federal tax classification. 'individual' is the
+    // backfill for rows written before the classification was captured — it is
+    // what those PDFs actually assert.
+    `ALTER TABLE w9_forms ADD COLUMN tax_classification TEXT NOT NULL DEFAULT 'individual'`,
+    `ALTER TABLE w9_forms ADD COLUMN llc_tax_class TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN other_classification TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN foreign_partners INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE w9_forms ADD COLUMN exempt_payee_code TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN fatca_exemption_code TEXT`,
+    `ALTER TABLE w9_forms ADD COLUMN account_numbers TEXT`,
+    // Part II item 2 — struck on the PDF when 1; surfaced on the W-9 status so
+    // the pay lane can flag the rep for 24% backup withholding.
+    `ALTER TABLE w9_forms ADD COLUMN subject_to_backup_withholding INTEGER NOT NULL DEFAULT 0`,
+    // What was PRINTED when a non-Latin legal name had to be transliterated.
+    `ALTER TABLE w9_forms ADD COLUMN rendered_names TEXT`,
+    `CREATE TABLE IF NOT EXISTS company_profile (
+       tenant_id INTEGER PRIMARY KEY,
+       legal_name TEXT NOT NULL,
+       ein_enc TEXT NOT NULL,
+       dfi_account_enc TEXT NOT NULL,
+       dfi_routing TEXT NOT NULL,
+       company_id TEXT NOT NULL,
+       updated_at TEXT NOT NULL DEFAULT (datetime('now')))`,
+
     // ══ CHARGEBACK RESERVE ══════════════════════════════════════════════════════
     // Per-rep overrides of the org reserve policy. BOTH nullable — NULL means
     // "inherit the org default", which every pre-existing row is, so no rep's pay

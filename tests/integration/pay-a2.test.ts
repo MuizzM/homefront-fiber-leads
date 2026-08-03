@@ -59,9 +59,12 @@ function seedQualifiedSales(tenantId: number, repId: number, n: number, prefix: 
 
 const BANK_BODY = (routing: string, account = "123456789012", accountType = "checking") =>
   ({ routing, account, accountType });
+// Form W-9 now demands the signer's ACTUAL Line 3a classification and an
+// explicit Part II item-2 answer — neither may be inferred on a tax form.
 const W9_BODY = (name: string, tin = "123456789") => ({
   legalName: name, address: { line1: "123 Main St", city: "Durham", state: "NC", zip: "27701" },
   tin, tinType: "ssn", signatureName: name, consent: true,
+  taxClassification: "individual", subjectToBackupWithholding: false,
 });
 
 beforeAll(async () => {
@@ -168,6 +171,20 @@ describe("W-9 lifecycle (ESIGN)", () => {
     expect((await res.json()).error).toMatch(/signature/i);
   });
 
+  it("refuses to guess Line 3a or the backup-withholding certification", async () => {
+    // A W-9 is signed under penalty of perjury. Defaulting either of these would
+    // make the company assert something on the signer's behalf.
+    const { taxClassification, ...noClass } = W9_BODY("Pay Rep One") as any;
+    let res = await request("/api/me/w9", rep1.session, { method: "POST", body: JSON.stringify(noClass) });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/taxClassification/);
+
+    const { subjectToBackupWithholding, ...noWithholding } = W9_BODY("Pay Rep One") as any;
+    res = await request("/api/me/w9", rep1.session, { method: "POST", body: JSON.stringify(noWithholding) });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/backup/i);
+  });
+
   it("accepts a valid W-9, encrypts the TIN, and generates the official PDF", async () => {
     const res = await request("/api/me/w9", rep1.session, { method: "POST", body: JSON.stringify(W9_BODY("Pay Rep One")) });
     expect(res.status).toBe(201);
@@ -180,10 +197,9 @@ describe("W-9 lifecycle (ESIGN)", () => {
     expect(row.consent).toBe(1);
     expect(row.signature_ip).toBeTruthy();
     expect(row.signature_ua).toBeTruthy();
-    expect(row.pdf_path).toContain(join("uploads", "w9"));
-    expect(existsSync(row.pdf_path)).toBe(true);
-    expect(statSync(row.pdf_path).size).toBeGreaterThan(50_000); // official 6-page template, filled
-    expect(readFileSync(row.pdf_path).subarray(0, 5).toString()).toBe("%PDF-");
+    // No PDF on disk: a filled W-9 carries a live SSN, so it is rendered on
+    // demand from the encrypted row and never written to the filesystem.
+    expect(row.pdf_path).toBeNull();
   });
 
   it("streams the rep's OWN W-9 PDF only", async () => {
@@ -246,6 +262,25 @@ describe("company profile (ODFI)", () => {
 });
 
 describe("NACHA export", () => {
+  // The ACH export is DISARMED by default (server/payRoutes.ts): there is no
+  // payment ledger yet, so a repeated GET would re-pay a week, and the pay
+  // ciphertext carries no key identifier. These tests exercise the generator on
+  // purpose, so they turn the switch on for their own duration only.
+  beforeAll(() => { process.env.ACH_EXPORT_ENABLED = "true"; });
+  afterAll(() => { delete process.env.ACH_EXPORT_ENABLED; });
+
+  it("is refused outright while the export is disarmed", async () => {
+    const prior = process.env.ACH_EXPORT_ENABLED;
+    delete process.env.ACH_EXPORT_ENABLED;
+    try {
+      const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr1.session);
+      expect(res.status).toBe(503);
+      expect((await res.json()).code).toBe("ACH_EXPORT_DISABLED");
+    } finally {
+      if (prior !== undefined) process.env.ACH_EXPORT_ENABLED = prior;
+    }
+  });
+
   it("strict mode 409s with named exceptions when an approved-pay rep lacks bank/W-9", async () => {
     const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr1.session);
     expect(res.status).toBe(409);
