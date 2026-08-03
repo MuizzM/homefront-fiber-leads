@@ -28,6 +28,7 @@ import {
   Landmark, Loader2, Lock, ShieldCheck,
 } from "lucide-react";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
+import { PdfReviewer } from "@/components/PdfReviewer";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -760,6 +761,7 @@ function classificationSummary(status: W9Status): string {
 function W9Filed({ status, onRefile }: { status: W9Status; onRefile: () => void }) {
   const { toast } = useToast();
   const [downloading, setDownloading] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
 
   const download = async () => {
     setDownloading(true);
@@ -822,11 +824,24 @@ function W9Filed({ status, onRefile }: { status: W9Status; onRefile: () => void 
         <Button type="button" variant="outline" onClick={onRefile} data-testid="w9-refile">
           Something changed — file a new W-9
         </Button>
+        <Button type="button" variant="outline" onClick={() => setReviewing(true)} data-testid="w9-review">
+          <FileText className="mr-2 h-4 w-4" aria-hidden="true" />
+          Review full W-9
+        </Button>
         <Button type="button" variant="outline" onClick={download} disabled={downloading} data-testid="w9-download">
           {downloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : <Download className="mr-2 h-4 w-4" aria-hidden="true" />}
           Download my copy
         </Button>
       </div>
+
+      {reviewing && (
+        <PdfReviewer
+          url="/api/me/w9/pdf"
+          title="Your Form W-9 (official IRS document)"
+          downloadName={`form-w9-${status.w9Id}.pdf`}
+          onClose={() => setReviewing(false)}
+        />
+      )}
       <p className="text-xs leading-relaxed text-muted-foreground">
         Your downloaded copy shows your full number, so it is generated fresh each time and never stored as a file.
       </p>
