@@ -1,3 +1,7 @@
+// Fixture accounts are marked TRAINED. New accounts now owe training before the
+// field opens (server/trainingGateStore.ts); these suites are about territory,
+// RBAC, spiffs, and offboarding, so their people start on the far side of that
+// gate rather than every assertion here re-testing it.
 // Hierarchy lifecycle — who may kick whom out, and what a kick actually does.
 //
 // The authority rule is strictly-above: team leads offboard their reps,
@@ -30,6 +34,7 @@ function makePerson(name: string, role: string, opts: { reportsToId?: number | n
     name, email, role: opts.loginRole ?? role, active: true,
     tenantId: 1, teamMemberId: member.id,
   } as any);
+  rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((user as any).id);
   const session = storage.createSession(user.id).id;
   return { userId: user.id, memberId: member.id, session };
 }

@@ -28,6 +28,7 @@ import { useAuth } from "@/lib/auth";
 import { FOCUS } from "@/lib/a11y";
 import { cn } from "@/lib/utils";
 import { PageHeader, SectionLabel } from "@/components/ui/page-scaffold";
+import { TrainingGateBanner, TrainingClearedBanner } from "@/components/TrainingLock";
 import PitchRecorder, { isPitchRecorderSupported } from "@/components/training/PitchRecorder";
 import {
   TRAINING_MODULES,
@@ -484,6 +485,10 @@ export default function Training() {
         />
       ) : (
         <>
+          {/* Why the rest of the app is closed, stated where the rep can act on
+              it — and the one-time "you're in" when they clear it. */}
+          <TrainingGateBanner />
+          <TrainingClearedBanner />
           <PageHeader
             icon={GraduationCap}
             title="Training"

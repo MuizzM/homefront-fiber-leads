@@ -1,3 +1,7 @@
+// Fixture accounts are marked TRAINED. New accounts now owe training before the
+// field opens (server/trainingGateStore.ts); these suites are about territory,
+// RBAC, spiffs, and offboarding, so their people start on the far side of that
+// gate rather than every assertion here re-testing it.
 // Spiff routes — the security + money-safety contract:
 //   * a rep sees ONLY their own feed; the team heat (algorithm data) is
 //     manager+; approve / mark-paid are admin-only and audited,
@@ -75,14 +79,19 @@ beforeAll(async () => {
   foreignTmId = foreignTm.id;
 
   const rep = storage.createUser({ name: "Spiff Rep", email: "rep-spiff@example.com", role: "rep", active: true, tenantId: 1, teamMemberId: repTm.id } as any);
+  rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((rep as any).id);
   const manager = storage.createUser({ name: "Spiff Manager", email: "manager-spiff@example.com", role: "manager", active: true, tenantId: 1 } as any);
+  rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((manager as any).id);
   const admin = storage.createUser({ name: "Spiff Admin", email: "admin-spiff@example.com", role: "admin", active: true, tenantId: 1 } as any);
+  rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((admin as any).id);
   const foreignAdmin = storage.createUser({ name: "Foreign Admin", email: "admin-b-spiff@example.com", role: "admin", active: true, tenantId: 2 } as any);
+  rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((foreignAdmin as any).id);
 
   // An admin who ALSO sells — the segregation-of-duties case.
   const sellingAdminTm = storage.createTeamMember({ name: "Selling Admin", role: "rep", active: true, tenantId: 1 } as any);
   sellingAdminTmId = sellingAdminTm.id;
   const sellingAdmin = storage.createUser({ name: "Selling Admin", email: "selling-admin-spiff@example.com", role: "admin", active: true, tenantId: 1, teamMemberId: sellingAdminTm.id } as any);
+  rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((sellingAdmin as any).id);
 
   repSession = storage.createSession(rep.id).id;
   managerSession = storage.createSession(manager.id).id;
@@ -425,6 +434,7 @@ describe("GET /api/spiffs/mine — money read model", () => {
   it("totals cover the whole ledger even though the feed is bounded", async () => {
     const rep = storage.createTeamMember({ name: "Long Tenure Rep", role: "rep", active: true, tenantId: 1 } as any).id;
     const user = storage.createUser({ name: "Long Tenure Rep", email: "long-spiff@example.com", role: "rep", active: true, tenantId: 1, teamMemberId: rep } as any);
+    rawDb?.prepare("UPDATE users SET training_required = 0 WHERE id = ?").run((user as any).id);
     const session = storage.createSession(user.id).id;
     let expected = 0;
     for (let i = 0; i < 120; i++) {

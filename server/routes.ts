@@ -112,6 +112,11 @@ import { resendConfigured, sendResendEmail } from "./resendMail";
 import * as commissionSvc from "./commissionService";
 import * as spiffStore from "./spiffStore";
 import { registerSpiffCampaignRoutes } from "./spiffCampaignRoutes";
+import { isTrainingGated, pathAllowedWhileGated } from "@shared/trainingGate";
+import {
+  gateStateFor, statusFor as trainingGateStatus, setTrainingRequired,
+  requiredLessons, setRequiredLessons, gatedRoster,
+} from "./trainingGateStore";
 import { awardCampaignsForRep } from "./spiffCampaignStore";
 import { awardMilestonesForRep } from "./knockMilestoneStore";
 import { armMomentumOffer, convertMomentumOffer } from "./momentumSpiffStore";
@@ -321,7 +326,41 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   // expiry forward, so a rep mid-shift is never signed out under their own taps.
   storage.touchSession(session);
   (req as any).user = user;
-  next();
+  // The training gate rides HERE rather than being registered separately,
+  // because every authenticated route in the app reaches auth through this
+  // function (directly, or via requireAdmin/requireTeamLead/requireManager/
+  // requireCapability, which all delegate to it). Hanging the gate off one
+  // choke point is the only way to be sure a route added next month is covered
+  // by default instead of by whoever remembers to add it.
+  return trainingGate(req, res, next);
+}
+
+// ── Training gate ───────────────────────────────────────────────────────────
+// A new rep finishes training before they touch the field. This middleware is
+// what makes that a LOCK rather than a hidden menu: it runs after requireAuth on
+// every /api route, so a gated rep who types a URL, replays a saved request, or
+// drives the app from a script is refused exactly as if they had tapped.
+//
+// It reads the same predicate the client nav reads (shared/trainingGate.ts), so
+// what a rep can see and what the server will answer cannot drift apart.
+//
+// Deliberately fail-OPEN on an internal error. A crash in the gate must not lock
+// the whole floor out of the app mid-shift; an untrained rep reaching the map for
+// an hour is a far smaller problem than every rep losing the map at once.
+function trainingGate(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).user;
+  if (!user) return next();
+  if (pathAllowedWhileGated(req.path)) return next();
+  try {
+    if (!isTrainingGated(gateStateFor(user))) return next();
+  } catch (e: any) {
+    console.warn("[training-gate] check failed, allowing through:", e?.message);
+    return next();
+  }
+  return res.status(403).json({
+    error: "Finish your training to unlock this.",
+    code: "TRAINING_REQUIRED",
+  });
 }
 
 // super_admin is included in every tier below: can() grants it the full ADMIN
@@ -8208,6 +8247,49 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   // the server only stores per-user progress. All reads/writes are OWN-scope —
   // the user and tenant come from the session, never from the request body, so
   // one rep can never write another rep's progress and tenant walls hold.
+  // The rep's own gate status. Reachable WHILE gated (it lives under
+  // /api/training), which it has to be — the lock screen is rendered from it.
+  app.get("/api/training/gate", requireAuth, (req: Request, res: Response) => {
+    res.json(trainingGateStatus((req as any).user));
+  });
+
+  // Who is still locked out. The manager's list for chasing a new hire through
+  // their first week.
+  app.get("/api/training/gate/roster", requireManager, (req: Request, res: Response) => {
+    const tenantId = (req as any).user?.tenantId;
+    if (tenantId == null) return res.json({ reps: [], requiredLessons: 0 });
+    res.json({ reps: gatedRoster(Number(tenantId)), requiredLessons: requiredLessons(tenantId) });
+  });
+
+  // Manual unlock / re-lock for one account. Reality outruns policy: a rep who
+  // trained in person, a rehire, a transfer. Admin-only — this is the override
+  // on a control that exists to stop untrained people working doors, so it sits
+  // with the role that answers for that.
+  app.post("/api/training/gate/:userId", requireAdmin, (req: Request, res: Response) => {
+    const tenantId = Number((req as any).user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    const targetId = Number(req.params.userId);
+    if (!Number.isInteger(targetId) || targetId <= 0) return res.status(400).json({ error: "Invalid user id" });
+    const required = req.body?.required !== false;
+    // Out of tenant reads as 404, never a refusal that confirms the id exists.
+    if (!setTrainingRequired(tenantId, (req as any).user?.id ?? null, targetId, required)) {
+      return res.status(404).json({ error: "Not found" });
+    }
+    res.json({ userId: targetId, trainingRequired: required });
+  });
+
+  // How much of the curriculum this org demands before the app opens.
+  app.put("/api/training/gate-threshold", requireAdmin, (req: Request, res: Response) => {
+    const tenantId = Number((req as any).user?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) return res.status(403).json({ error: "Organization required" });
+    try {
+      const value = setRequiredLessons(tenantId, (req as any).user?.id ?? null, Number(req.body?.requiredLessons));
+      res.json({ requiredLessons: value, totalAvailable: TOTAL_TRAINING_LESSONS });
+    } catch (e: any) {
+      res.status(e?.httpStatus === 400 ? 400 : 500).json({ error: e?.message ?? "Could not save" });
+    }
+  });
+
   app.get("/api/training/progress", requireAuth, (req: Request, res: Response) => {
     const user = (req as any).user;
     res.json({

@@ -535,6 +535,11 @@ export function runMigrations() {
     // from the env list; the env list can only REMOVE the apex by restart+env,
     // never be claimed by editing a user row.
     `ALTER TABLE users ADD COLUMN is_super_admin INTEGER NOT NULL DEFAULT 0`,
+    // Training gate: a NEW account owes training before the field opens. Defaults
+    // ON so anyone created from here forward is gated; server/trainingGateStore.ts
+    // runs a one-time backfill clearing it for everyone who already existed, so a
+    // rep who has been selling for months keeps their route.
+    `ALTER TABLE users ADD COLUMN training_required INTEGER NOT NULL DEFAULT 1`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_email ON login_attempts(email, created_at)`,
     `CREATE INDEX IF NOT EXISTS idx_login_attempts_at ON login_attempts(created_at)`,
     `CREATE TABLE IF NOT EXISTS territories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, rep_id INTEGER NOT NULL, polygon TEXT NOT NULL, color TEXT NOT NULL DEFAULT '#3b82f6', created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
