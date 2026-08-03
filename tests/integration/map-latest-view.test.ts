@@ -154,16 +154,32 @@ describe("view=latest — density grid", () => {
 });
 
 describe("view=latest — scoping preserved", () => {
-  it("a rep's filtered feed/count/windows show only their own doors", async () => {
+  it("the lens composes with rep scope: the rep's workable set, minus the footprint tag", async () => {
+    // A rep's scope is their own doors PLUS open field (no rep, no territory) —
+    // the one rule in shared/leadVisibility. Every fixture except repFiber and
+    // repDoor is open field, so the rep may work all eight; the lens then drops
+    // the three tagged fcc_fiber_d25.
+    //
+    // This test previously expected ONE door, encoding the defect it was written
+    // beside: open-field doors were knockable but never drawn as pins.
+    const workable = [ids.fiber1, ids.fiber2, ids.fresh, ids.untagged, ids.otherTag, ids.verified, ids.repFiber, ids.repDoor];
+    const afterLens = [ids.fresh, ids.untagged, ids.otherTag, ids.verified, ids.repDoor]; // the three d25 doors drop
+
     const count = await (await req("/api/leads/map/count?view=latest", fx.rep.session)).json();
-    expect(count.total).toBe(1); // repDoor only — repFiber is lens-dropped
+    expect(count.total).toBe(afterLens.length);
+    // …and the response says what the lens removed, so the field is never left
+    // guessing why a street looks empty.
+    expect(count.hiddenByView).toBe(workable.length - afterLens.length);
+
     const feed = await (await req("/api/leads/map?view=latest", fx.rep.session)).json();
-    expect(feed.pins.map((p: any) => p.id)).toEqual([ids.repDoor]);
+    expect(feed.pins.map((p: any) => p.id).sort()).toEqual([...afterLens].sort());
     const win = await (await req("/api/leads/map?bbox=-80.6,35.4,-80.1,35.6&view=latest", fx.rep.session)).json();
-    expect(win.pins.map((p: any) => p.id)).toEqual([ids.repDoor]);
-    // …and the rep's UNFILTERED count sees their footprint door too.
+    expect(win.pins.map((p: any) => p.id).sort()).toEqual([...afterLens].sort());
+
+    // Unfiltered, the rep sees every door they may work — footprint included.
     const all = await (await req("/api/leads/map/count", fx.rep.session)).json();
-    expect(all.total).toBe(2);
+    expect(all.total).toBe(workable.length);
+    expect(all.hiddenByView).toBe(0);
   });
 
   it("cross-tenant is EMPTY under the lens on every surface", async () => {

@@ -60,6 +60,7 @@ import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerr
 import { colorForRep, repColorOf } from "@shared/repColors";
 import { isTrainingLessonId, TOTAL_TRAINING_LESSONS } from "@shared/trainingContent";
 import { computeTerritoryMetrics } from "@shared/territoryMetrics";
+import { repCanWorkLead } from "@shared/leadVisibility";
 import { cachedScopeLookup } from "./territoryScopeCache";
 import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
@@ -485,17 +486,21 @@ function computeTerritoryIdsForScope(scope: number[], tenantId?: number | null):
 //
 // The tenant wall is unaffected: callers reach this only after the lead's tenant
 // has been checked, and the territory scan is tenant-filtered too.
+// The rule itself lives in shared/leadVisibility.ts and is expressed there
+// TWICE — as this predicate and as the SQL the map's set queries compose. They
+// used to be two independent hand-written copies, and they had drifted: the SQL
+// omitted the open-field branch, so a door with no rep and no territory was
+// legal to knock here and never rendered as a pin. A rep cannot knock a pin
+// that was never drawn. Both encodings are pinned against each other by tests.
 function repCanAccessLead(user: any, lead: any): boolean {
   const scope = leadVisibilityScope(user);
   if (scope === undefined) return true;
   if (!lead) return false;
-  if (lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId)) return true;
-  // Open field: no rep AND no territory → any scoped rep in the tenant may work
-  // this door. Owned leads (a rep id, or a territory the scope check below
-  // answers) are untouched by this branch.
-  if (lead.assignedRepId == null && lead.assignedTerritoryId == null) return true;
-  if (lead.assignedTerritoryId == null) return false;
-  return territoryIdsForScope(scope as number[], user?.tenantId).has(lead.assignedTerritoryId);
+  return repCanWorkLead(
+    lead,
+    scope as number[],
+    territoryIdsForScope(scope as number[], user?.tenantId),
+  );
 }
 
 // May the caller REASSIGN this lead? A scoped role (team_lead) may claim an

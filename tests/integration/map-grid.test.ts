@@ -162,15 +162,33 @@ describe("grid cells", () => {
     expect(body.cells).toHaveLength(0);
   });
 
-  it("a rep's grid counts only their own doors (scope preserved)", async () => {
+  it("a rep's grid counts the doors they may WORK — theirs plus open field, never another rep's", async () => {
+    // The grid must agree with the one visibility rule in shared/leadVisibility:
+    // a rep's own doors, doors in an area they hold, and OPEN FIELD (no rep and
+    // no territory — unowned ground in the tenant pool). This test used to
+    // assert that open field was invisible, which was the defect: those doors
+    // were legal to knock and never drawn as a pin.
     lead(1, fx.rep.memberId, 35.54, -80.44);
     lead(1, fx.manager.memberId, 35.55, -80.45);
-    const body = await (await req("/api/leads/map/grid?bbox=-81,35,-78,36&cell=0.25", fx.rep.session)).json();
+    const inBox = "bbox=-81,35,-78,36&cell=0.25";
+    const body = await (await req(`/api/leads/map/grid?${inBox}`, fx.rep.session)).json();
     const sum = body.cells.reduce((a: number, c: any) => a + c.n, 0);
-    expect(sum).toBe(1);
-    // The counted cell contains the rep's door, not the manager's.
-    expect(Math.abs(body.cells[0].lat - 35.54)).toBeLessThanOrEqual(0.125);
-    expect(Math.abs(body.cells[0].lng - -80.44)).toBeLessThanOrEqual(0.125);
+
+    // The grid is an aggregate, so compare it against the pin feed's own scope
+    // decision rather than a hand-counted constant that rots as fixtures grow.
+    const pins = await (await req("/api/leads/map?bbox=-81,35,-78,36", fx.rep.session)).json();
+    const inWindow = pins.pins.filter((p: any) =>
+      p.lat >= 35 && p.lat <= 36 && p.lng >= -81 && p.lng <= -78);
+    expect(sum).toBe(inWindow.length);
+
+    // The rep's own door is in; the manager's is not — widening open field must
+    // never widen access to somebody else's assigned ground.
+    const at = (lat: number, lng: number) => inWindow.some((p: any) =>
+      Math.abs(p.lat - lat) < 1e-6 && Math.abs(p.lng - lng) < 1e-6);
+    expect(at(35.54, -80.44), "the rep's own door").toBe(true);
+    expect(at(35.55, -80.45), "the manager's door").toBe(false);
+    // …and the open-field doors seeded earlier ARE counted.
+    expect(at(35.51, -80.41), "an open-field door").toBe(true);
   });
 
   it("the tag filter scopes the aggregate (FCC lens at state zoom)", async () => {
