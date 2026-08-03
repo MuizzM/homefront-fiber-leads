@@ -60,6 +60,7 @@ import { insertLeadSchema, insertTeamMemberSchema, insertKnockSchema, insertTerr
 import { colorForRep, repColorOf } from "@shared/repColors";
 import { isTrainingLessonId, TOTAL_TRAINING_LESSONS } from "@shared/trainingContent";
 import { computeTerritoryMetrics } from "@shared/territoryMetrics";
+import { repCanWorkLead } from "@shared/leadVisibility";
 import { cachedScopeLookup } from "./territoryScopeCache";
 import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo";
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
@@ -485,17 +486,21 @@ function computeTerritoryIdsForScope(scope: number[], tenantId?: number | null):
 //
 // The tenant wall is unaffected: callers reach this only after the lead's tenant
 // has been checked, and the territory scan is tenant-filtered too.
+// The rule itself lives in shared/leadVisibility.ts and is expressed there
+// TWICE — as this predicate and as the SQL the map's set queries compose. They
+// used to be two independent hand-written copies, and they had drifted: the SQL
+// omitted the open-field branch, so a door with no rep and no territory was
+// legal to knock here and never rendered as a pin. A rep cannot knock a pin
+// that was never drawn. Both encodings are pinned against each other by tests.
 function repCanAccessLead(user: any, lead: any): boolean {
   const scope = leadVisibilityScope(user);
   if (scope === undefined) return true;
   if (!lead) return false;
-  if (lead.assignedRepId != null && (scope as number[]).includes(lead.assignedRepId)) return true;
-  // Open field: no rep AND no territory → any scoped rep in the tenant may work
-  // this door. Owned leads (a rep id, or a territory the scope check below
-  // answers) are untouched by this branch.
-  if (lead.assignedRepId == null && lead.assignedTerritoryId == null) return true;
-  if (lead.assignedTerritoryId == null) return false;
-  return territoryIdsForScope(scope as number[], user?.tenantId).has(lead.assignedTerritoryId);
+  return repCanWorkLead(
+    lead,
+    scope as number[],
+    territoryIdsForScope(scope as number[], user?.tenantId),
+  );
 }
 
 // May the caller REASSIGN this lead? A scoped role (team_lead) may claim an
@@ -1486,7 +1491,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const view = parseMapView(req.query.view);
     if (view && typeof view === "object") return res.status(400).json({ error: view.error });
     res.set("Cache-Control", "no-store");
-    res.json({ total: storage.getLeadsMapCount(tid, repFilter, view) });
+    const total = storage.getLeadsMapCount(tid, repFilter, view);
+    // How many doors IN THIS CALLER'S SCOPE the active lens is suppressing.
+    // A lens that quietly removes assigned work is indistinguishable from an
+    // assignment that never happened — an owner assigned a block of FCC
+    // footprint doors to a rep, the rep's default "Latest fiber" lens filtered
+    // every one of them out, and the map simply looked empty. The client turns
+    // this number into a one-tap "N doors hidden — show all", so filtering is
+    // always something the field can SEE, never something it has to guess.
+    // Costs one extra indexed COUNT(*), and only when a lens is actually on.
+    const hiddenByView = view ? Math.max(0, storage.getLeadsMapCount(tid, repFilter) - total) : 0;
+    res.json({ total, hiddenByView });
   });
 
   // bbox window: minLng,minLat,maxLng,maxLat — clamped to world bounds, span-

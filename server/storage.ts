@@ -48,6 +48,7 @@ export const LIVE_COMMISSION_STATUSES = ["pending", "approved"] as const;
 import { allocateRepColor, repColorOf } from "@shared/repColors";
 import { DEFAULT_GEO_CONFIG, type GeoConfig } from "@shared/geoVerify";
 import { territoryHeldByAny, parseAssigneeIds } from "@shared/territory";
+import { repVisibilitySql } from "@shared/leadVisibility";
 import { syncAssignments } from "./territoryAssignments";
 import { bumpTerritoryVersion } from "./territoryScopeCache";
 import { INCONCLUSIVE_GIVEUP } from "@shared/scanPolicy";
@@ -3063,35 +3064,17 @@ export class Storage implements IStorage {
       params.push(MAP_LATEST_VIEW_EXCLUDED_TAG);
     }
     if (Array.isArray(assignedRep)) {
-      // Fail-closed: an empty team scope sees ZERO pins. The old early-return
-      // became an impossible predicate when the builder was extracted so the
-      // count endpoint inherits the exact same rule.
-      if (!assignedRep.length) return { where: "1 = 0", params: [] };
-      // An area can be worked by several reps, and assigned_rep_id names only
-      // ONE of them — so filtering on that column alone hid every shared door
-      // from everybody except the primary. A lead is visible when the caller
-      // holds it directly OR holds the AREA it sits in, which is where "who
-      // works this" is genuinely many-to-many (territories.assignee_ids).
+      // ONE rule, shared with the per-request access check in routes.ts — see
+      // shared/leadVisibility.ts. This used to be a second, hand-written copy
+      // that had drifted: it omitted the OPEN-FIELD branch, so a door with no
+      // rep and no territory was legal to knock and impossible to see. A rep
+      // cannot knock a pin that was never drawn.
       //
-      // EXISTS against the area rather than a join: one indexed lookup per row,
-      // no fan-out, and no duplicate pins when several reps share the area —
-      // which a join would produce and which the map must never show.
-      const ph = assignedRep.map(() => "?").join(",");
-      clauses.push(`(
-        l.assigned_rep_id IN (${ph})
-        OR EXISTS (
-          SELECT 1 FROM territories t
-           WHERE t.id = l.assigned_territory_id
-             AND (t.rep_id IN (${ph}) OR EXISTS (
-               SELECT 1 FROM json_each(COALESCE(t.assignee_ids, '[]')) je
-                WHERE je.value IN (${ph})
-             ))
-        )
-      )`);
-      params.push(...assignedRep, ...assignedRep, ...assignedRep);
+      // Fail-closed on an empty scope: the helper returns the impossible
+      // predicate, so a rep with no linked member sees zero pins, not all.
+      clauses.push(repVisibilitySql(assignedRep, "l")!);
     } else if (assignedRep != null) {
-      clauses.push("l.assigned_rep_id = ?");
-      params.push(assignedRep);
+      clauses.push(repVisibilitySql([assignedRep], "l")!);
     }
     const where = clauses.length ? clauses.join(" AND ") : "1 = 1";
     // Scope predicate shared by both statements below. The lead_status gate:

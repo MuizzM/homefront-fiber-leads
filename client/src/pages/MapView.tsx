@@ -207,6 +207,7 @@ import { territoryLabel, detailForZoom } from "@shared/territoryLabel";
 import { RepPicker } from "@/components/territory/RepPicker";
 import { MapFilterSheet } from "@/components/map/MapFilterSheet";
 import { MapViewportNotice } from "@/components/map/MapViewportNotice";
+import { MapLensNotice } from "@/components/map/MapLensNotice";
 import { MapSettingsSheet } from "@/components/map/MapSettingsSheet";
 import { MapLegend } from "@/components/map/MapLegend";
 import { FOCUS } from "@/lib/a11y";
@@ -1637,7 +1638,7 @@ export default function MapView() {
   // pins, exactly the speed win the lens exists for. Keyed by view so a lens
   // switch probes fresh instead of reusing the other view's total.
   const countView = sourceFilterToMapView(filterSource);
-  const countQuery = useQuery<{ total: number }>({
+  const countQuery = useQuery<{ total: number; hiddenByView?: number }>({
     queryKey: ["/api/leads/map/count", countView ?? "all"],
     queryFn: async () =>
       (await apiRequest("GET", `/api/leads/map/count${countView ? `?view=${countView}` : ""}`)).json(),
@@ -1646,6 +1647,16 @@ export default function MapView() {
     retry: 1,
   });
   const mapPinCount = countQuery.data;
+  // Doors the ACTIVE LENS is suppressing inside this caller's own scope. The
+  // lens is a speed tool, but a rep whose assigned FCC-footprint block is
+  // filtered out sees a blank street and concludes they were never assigned
+  // anything — so whenever the lens hides work, the map says so out loud with
+  // one tap to show it.
+  const hiddenByLens = countView ? (mapPinCount?.hiddenByView ?? 0) : 0;
+  // Dismissal is per-LENS, not permanent: switching lens (or the count moving)
+  // is a new fact about the map, and the field should be told again.
+  const [lensNoticeDismissedFor, setLensNoticeDismissedFor] = useState<string | null>(null);
+  const showLensNotice = hiddenByLens > 0 && lensNoticeDismissedFor !== filterSource;
   // No-waterfall boot: the last probe-CONFIRMED mode, persisted per identity
   // (versioned key, cross-user swept — see lib/mapPinsSnapshot). While the
   // probe is still in flight a returning big-map user runs in viewport mode
@@ -6710,6 +6721,20 @@ export default function MapView() {
               />
             );
           })()}
+
+          {/* ── Lens-hiding notice — the source lens is filtering doors out of
+                 THIS viewer's own scope. Silent filtering is the failure this
+                 fixes: an assigned FCC-footprint block behind the default
+                 "Latest fiber" lens looked to the rep exactly like never having
+                 been assigned anything at all. ── */}
+          {mapReady && showLensNotice && (
+            <MapLensNotice
+              hiddenCount={hiddenByLens}
+              lensLabel={LEAD_SOURCE_OPTIONS.find(o => o.key === filterSource)?.label ?? "this filter"}
+              onShowAll={() => setFilterSource("all")}
+              onDismiss={() => setLensNoticeDismissedFor(filterSource)}
+            />
+          )}
 
           {/* ── Search PANEL — opens only from the magnifier (no permanent bar).
                  Scoped to the org's leads via the same /api/leads data the map
