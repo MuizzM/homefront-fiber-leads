@@ -117,8 +117,13 @@ function clamp(n: number, lo: number, hi: number): number {
   return n < lo ? lo : n > hi ? hi : n;
 }
 
-/** Integer cents, never NaN, never negative. Money is only ever whole cents. */
-function cents(n: unknown): number {
+/**
+ * Coerce to a non-negative whole number — the only shape money (integer cents)
+ * or a count is ever allowed to take here. A missing/NaN/negative input reads as
+ * 0, which for a SPEND-SO-FAR or a CAP means the engine fails CLOSED (it
+ * withholds an award) rather than paying out on a malformed config.
+ */
+function wholeNonNegative(n: unknown): number {
   const v = typeof n === "number" && Number.isFinite(n) ? Math.round(n) : 0;
   return v < 0 ? 0 : v;
 }
@@ -141,14 +146,14 @@ export interface SpiffAmountBand {
  */
 export function spiffAmountBand(config: SpiffConfig = DEFAULT_SPIFF_CONFIG): SpiffAmountBand {
   if (config.amountCents != null) {
-    const flat = cents(config.amountCents);
-    return { minCents: flat, maxCents: flat, incrementCents: Math.max(1, cents(config.incrementCents) || 1), steps: 1 };
+    const flat = wholeNonNegative(config.amountCents);
+    return { minCents: flat, maxCents: flat, incrementCents: Math.max(1, wholeNonNegative(config.incrementCents) || 1), steps: 1 };
   }
-  const rawMin = cents(config.minAmountCents);
-  const rawMax = cents(config.maxAmountCents);
+  const rawMin = wholeNonNegative(config.minAmountCents);
+  const rawMax = wholeNonNegative(config.maxAmountCents);
   const minCents = Math.min(rawMin, rawMax);
   const maxCents = Math.max(rawMin, rawMax);
-  const incrementCents = Math.max(1, cents(config.incrementCents) || 1);
+  const incrementCents = Math.max(1, wholeNonNegative(config.incrementCents) || 1);
   const steps = Math.floor((maxCents - minCents) / incrementCents) + 1;
   return { minCents, maxCents, incrementCents, steps: Math.max(1, steps) };
 }
@@ -292,14 +297,14 @@ export function decideSpiff(
 
   // 1a. Anti-farming COUNT cap — the backstop that keeps every trigger below
   // from being milked. Reaching it suppresses ALL awards for the day.
-  if (config.dailyCapPerRep <= 0 || cents(perf.spiffsGrantedToday) >= config.dailyCapPerRep) {
+  if (config.dailyCapPerRep <= 0 || wholeNonNegative(perf.spiffsGrantedToday) >= config.dailyCapPerRep) {
     return NO_AWARD;
   }
   // 1b. Anti-farming MONEY cap — the one that actually bounds spend now that the
   // amount varies. If not even the band floor fits in what's left of today's
   // budget, nothing is awarded.
-  const capCents = cents(config.dailyCapCentsPerRep);
-  const remainingCents = capCents - cents(perf.spiffCentsGrantedToday);
+  const capCents = wholeNonNegative(config.dailyCapCentsPerRep);
+  const remainingCents = capCents - wholeNonNegative(perf.spiffCentsGrantedToday);
   if (remainingCents < band.minCents) return NO_AWARD;
 
   const award = (reason: SpiffReason): SpiffDecision => {

@@ -6,20 +6,25 @@
 // silently injected into pay.
 //
 // ── EXACTLY-ONCE PAYMENT (read this before touching a status) ─────────────────
-// A spiff is payable exactly once, and the ledger status is the ONLY thing that
-// says so:
+// THIS LEDGER IS THE ONLY PAYMENT RAIL FOR A SPIFF. Nothing else in the codebase
+// reads `spiffs.amount_cents` — no commission statement, no payroll export, no
+// payout batch — so a spiff becomes money at exactly one place: the
+// `approved → paid` transition below. (An earlier hourly-pay payroll CSV also
+// summed approved spiffs into a payroll `Total`, which made a spiff payable
+// twice; that whole plane was reverted, and this file is deliberately the sole
+// consumer again. If you ever add a second reader of amount_cents, you are
+// adding a second payment instruction — don't, unless it settles through
+// markSpiffPaid.)
 //
 //   earned    the algorithm awarded it. Not money yet — nobody owes anything.
-//   approved  an admin OK'd it. It is OWED, and it is what the weekly payroll
-//             export bills (server/hourlyPay.ts → sumPayableSpiffCentsByRep
-//             selects status = 'approved' and NOTHING else).
-//   paid      settled. Terminal. It leaves the payroll export permanently.
+//   approved  an admin OK'd it. It is OWED and it is queued to be paid out.
+//   paid      settled. TERMINAL. It can never be paid, re-approved, or reversed
+//             by this module again.
 //
-// So the payroll export is the single payment instruction, and marking a spiff
-// paid is what retires it from that instruction. Both transitions are
-// compare-and-swap UPDATEs (`WHERE status = <expected>` + rowcount check), so two
-// managers clicking at the same instant produce exactly one transition and
-// exactly one audit event — never a doubled payment.
+// Both transitions are compare-and-swap UPDATEs (`WHERE status = <expected>` +
+// rowcount check), so a double-click, a retried request, or two managers acting
+// at the same instant collapse into exactly one transition and exactly one audit
+// event — never a doubled payment.
 //
 // Determinism: the pure award logic lives in shared/spiffEngine.ts. Everything
 // clock-/dice-/DB-dependent lives HERE, and the "random" roll is derived from a
@@ -501,10 +506,10 @@ function runBulk(ids: number[], step: (id: number) => TransitionResult): BulkTra
 }
 
 /**
- * Every spiff this tenant currently OWES: status = 'approved'. This is the exact
- * set the weekly payroll export bills (see server/hourlyPay.ts), so it is also
- * the exact set a "mark paid" settlement should retire. Tenant-walled; `scope`
- * (undefined = whole tenant) restricts by rep, an empty scope returns nothing.
+ * Every spiff this tenant currently OWES: status = 'approved'. Approved money is
+ * the amount that still has to leave the building, and it is exactly the set a
+ * "mark paid" settlement retires. Tenant-walled; `scope` (undefined = whole
+ * tenant) restricts by rep, an empty scope returns nothing.
  */
 export function getPayableSpiffs(tenantId: number, scope: number[] | undefined): SpiffRow[] {
   if (scope !== undefined && scope.length === 0) return [];
