@@ -117,10 +117,12 @@ describe("authorizedScanAdmission is a real admission check", () => {
       const req: any = { user };
       const res: any = {
         statusCode: 200,
+        headers: {} as Record<string, string>,
+        setHeader(name: string, value: string) { this.headers[name] = value; return this; },
         status(code: number) { this.statusCode = code; return this; },
-        json(body: any) { resolve({ status: this.statusCode, body }); return this; },
+        json(body: any) { resolve({ status: this.statusCode, body, headers: this.headers }); return this; },
       };
-      authorizedScanAdmission(req, res, () => resolve({ status: 200, body: { passed: true } }));
+      authorizedScanAdmission(req, res, () => resolve({ status: 200, body: { passed: true }, headers: res.headers }));
     });
 
   it("rejects a missing session (401)", async () => {
@@ -134,11 +136,13 @@ describe("authorizedScanAdmission is a real admission check", () => {
     expect(out.body.need).toBe("scan.submit");
   });
 
-  it("admits team lead and above", async () => {
+  it("admits team lead and above (team_lead holds scan.submit per shared/capabilities)", async () => {
     for (const role of ["team_lead", "manager", "admin", "super_admin"]) {
       const out = await run({ id: 1, role });
       expect(out.status, role).toBe(200);
       expect(out.body.passed).toBe(true);
+      // The admission stamp the route contract (and scan-verdict suite) relies on.
+      expect((out as any).headers?.["X-Scan-Admission"]).toBe("queued");
     }
   });
 });
