@@ -1486,7 +1486,17 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const view = parseMapView(req.query.view);
     if (view && typeof view === "object") return res.status(400).json({ error: view.error });
     res.set("Cache-Control", "no-store");
-    res.json({ total: storage.getLeadsMapCount(tid, repFilter, view) });
+    const total = storage.getLeadsMapCount(tid, repFilter, view);
+    // How many doors IN THIS CALLER'S SCOPE the active lens is suppressing.
+    // A lens that quietly removes assigned work is indistinguishable from an
+    // assignment that never happened — an owner assigned a block of FCC
+    // footprint doors to a rep, the rep's default "Latest fiber" lens filtered
+    // every one of them out, and the map simply looked empty. The client turns
+    // this number into a one-tap "N doors hidden — show all", so filtering is
+    // always something the field can SEE, never something it has to guess.
+    // Costs one extra indexed COUNT(*), and only when a lens is actually on.
+    const hiddenByView = view ? Math.max(0, storage.getLeadsMapCount(tid, repFilter) - total) : 0;
+    res.json({ total, hiddenByView });
   });
 
   // bbox window: minLng,minLat,maxLng,maxLat — clamped to world bounds, span-
