@@ -79,9 +79,22 @@ afterAll(async () => {
   if (server) await new Promise<void>((resolve, reject) => server.close((e) => e ? reject(e) : resolve()));
 });
 
+describe("GET /api/pay/nacha capability (SEC-A fix 3: money movement = payouts.pay, never a read band)", () => {
+  it("a commission.read.all manager (read band) is refused BEFORE the kill switch", async () => {
+    const res = await request("/api/pay/nacha?weekStart=2026-07-27", managerSession);
+    expect(res.status).toBe(403);
+  });
+
+  it("the read band stays refused even with the flag explicitly enabled", async () => {
+    process.env.ACH_EXPORT_ENABLED = "true";
+    const res = await request("/api/pay/nacha?weekStart=2026-07-27", managerSession);
+    expect(res.status).toBe(403);
+  });
+});
+
 describe("GET /api/pay/nacha is OFF by default", () => {
   it("503s with ACH_EXPORT_DISABLED when the flag is unset", async () => {
-    const res = await request("/api/pay/nacha?weekStart=2026-07-27", managerSession);
+    const res = await request("/api/pay/nacha?weekStart=2026-07-27", adminSession);
     expect(res.status).toBe(503);
     const body = await res.json() as any;
     expect(body.code).toBe("ACH_EXPORT_DISABLED");
@@ -93,14 +106,14 @@ describe("GET /api/pay/nacha is OFF by default", () => {
   it("stays off for any value other than the exact string \"true\"", async () => {
     for (const value of ["1", "yes", "TRUE", "", "false"]) {
       process.env.ACH_EXPORT_ENABLED = value;
-      const res = await request("/api/pay/nacha?weekStart=2026-07-27", managerSession);
+      const res = await request("/api/pay/nacha?weekStart=2026-07-27", adminSession);
       expect(res.status, `ACH_EXPORT_ENABLED=${JSON.stringify(value)} must not enable the export`).toBe(503);
       expect((await res.json() as any).code).toBe("ACH_EXPORT_DISABLED");
     }
   });
 
   it("never emits a NACHA file body while disabled", async () => {
-    const res = await request("/api/pay/nacha?weekStart=2026-07-27", managerSession);
+    const res = await request("/api/pay/nacha?weekStart=2026-07-27", adminSession);
     const text = await res.text();
     expect(res.headers.get("content-type")).toContain("application/json");
     expect(text).not.toMatch(/^101/m);   // NACHA file header record
@@ -115,9 +128,9 @@ describe("GET /api/pay/nacha is OFF by default", () => {
 });
 
 describe("GET /api/pay/nacha with the flag explicitly enabled", () => {
-  it('generates the file again when ACH_EXPORT_ENABLED === "true"', async () => {
+  it('generates the file again when ACH_EXPORT_ENABLED === "true" (payouts.pay holder)', async () => {
     process.env.ACH_EXPORT_ENABLED = "true";
-    const res = await request("/api/pay/nacha?weekStart=2026-07-27", managerSession);
+    const res = await request("/api/pay/nacha?weekStart=2026-07-27", adminSession);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/plain");
     const text = await res.text();

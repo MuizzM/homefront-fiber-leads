@@ -34,8 +34,11 @@ function fail(res: Response, e: unknown) {
     if (e.exceptions) body.exceptions = e.exceptions;
     return res.status(e.httpStatus).json(body);
   }
-  const msg = e instanceof Error ? e.message : "Internal error";
-  return res.status(500).json({ error: msg });
+  // Error hygiene: a raw e.message can carry SQL text, table/column names, or
+  // key material context — none of it crosses the wire. Detail stays in the
+  // server log; the client gets a generic 500.
+  console.error("[pay] unhandled route error:", e instanceof Error ? e.message : e);
+  return res.status(500).json({ error: "Internal error" });
 }
 
 // ── ACH EXPORT KILL SWITCH ───────────────────────────────────────────────────
@@ -61,6 +64,9 @@ function fail(res: Response, e: unknown) {
 //      rotating PAY_CRYPTO_KEY silently makes every stored TIN and bank
 //      account undecryptable — an unrecoverable loss of the pay roster. The
 //      envelope needs a key version and a dual-key read path first.
+//      [CLOSED — payCrypto now writes v1.<kid>.iv.ct.tag and resolves the key
+//      from the envelope on read, with the legacy shape falling back to the
+//      current slot. Blockers 1–3 remain open, so the flag stays off.]
 //
 // Do NOT "temporarily" flip this to ship a payroll run: every blocker above
 // either loses money or loses the data needed to pay anyone again.
@@ -296,7 +302,11 @@ export function registerPayRoutes(app: Express, deps: Deps) {
   // code stays intact (and tested) so the remaining work is a fix, not a
   // rewrite; it simply cannot originate a real payment until the flag is set.
 
-  app.get("/api/pay/nacha", requireCapability("commission.read.all"), requireAchExportEnabled, requirePaySecrets, (req, res) => {
+  // Capability doctrine: money MOVEMENT is a write cap, never a read band.
+  // Generating a NACHA file originates real money movement, so it sits behind
+  // payouts.pay (admin only) — the same gate as the full-SSN W-9 download —
+  // not the manager oversight read band (commission.read.all).
+  app.get("/api/pay/nacha", requireCapability("payouts.pay"), requireAchExportEnabled, requirePaySecrets, (req, res) => {
     try {
       const weekReference = parseWeekRef(req.query.weekStart);
       if (!weekReference) return res.status(400).json({ error: "weekStart=YYYY-MM-DD is required" });

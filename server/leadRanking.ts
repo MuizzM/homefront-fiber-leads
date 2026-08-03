@@ -278,13 +278,28 @@ export interface RankedLead {
 }
 
 /** Rank the tenant's assignable confirmed-fresh leads. Read-only, one pool pass. */
-export function rankLeads(tenantId: number | undefined, limit: number, nowMs: number = Date.now()): RankedLead[] {
+export function rankLeads(
+  tenantId: number | undefined,
+  limit: number,
+  nowMs: number = Date.now(),
+  scope?: number | number[],
+): RankedLead[] {
   ensureIndexes();
   // 'now_active' = the address already signed with Kinetic (billing active) — never
   // point a rep at a door that already converted.
   const clauses = ["fresh_confirmed_at IS NOT NULL", "lead_status NOT IN ('sold','not_interested','now_active')"];
   const params: unknown[] = [];
   if (tenantId != null) { clauses.push("tenant_id = ?"); params.push(tenantId); } // getLeadsForMap scoping idiom
+  // Visibility scope — the SAME idiom /api/leads and /api/leads/fresh compose:
+  // a scoped caller (rep → self, team_lead → their team) sees only leads whose
+  // assigned rep is in scope. An empty scope matches nothing (fail-closed).
+  if (Array.isArray(scope)) {
+    clauses.push(scope.length ? `assigned_rep_id IN (${scope.map(() => "?").join(",")})` : "assigned_rep_id = -1");
+    params.push(...scope.map((n) => Number(n) | 0));
+  } else if (scope != null) {
+    clauses.push("assigned_rep_id = ?");
+    params.push(Number(scope) | 0);
+  }
   const pool = rawDb.prepare(`
     SELECT id, address, city, state, zip, lat, lng, tenant_id, source_scan_target_id,
            fresh_confirmed_at, fresh_confidence, assigned_rep_id, assigned_territory_id, created_at
@@ -354,7 +369,30 @@ export function rankLeads(tenantId: number | undefined, limit: number, nowMs: nu
 
 // ── Route ─────────────────────────────────────────────────────────────────────
 type Middleware = (req: Request, res: Response, next: NextFunction) => unknown;
-export interface LeadRankingRouteDeps { requireAuth?: Middleware }
+export interface LeadRankingRouteDeps {
+  requireAuth?: Middleware;
+  // The shared leadVisibilityScope from routes.ts (admin/manager → undefined =
+  // whole tenant; team_lead → their team; rep → self). Injected so this module
+  // can never drift from the list endpoints' scoping; the local fallback below
+  // encodes the identical rule for direct registration.
+  visibilityScope?: (user: any) => number | number[] | undefined;
+}
+
+// Fail-closed local copy of routes.ts leadVisibilityScope — used only when the
+// shared one isn't injected (tests registering this module standalone).
+function localVisibilityScope(user: any): number | number[] | undefined {
+  const role = user?.role;
+  if (role === "admin" || role === "manager" || role === "super_admin") return undefined;
+  if (role === "team_lead") {
+    const selfTm = user?.teamMemberId ?? null;
+    const reports = selfTm != null
+      ? storage.getTeamMembers(user?.tenantId ?? undefined).filter((m: any) => m.reportsToId === selfTm).map((m: any) => m.id)
+      : [];
+    const ids = selfTm != null ? [selfTm, ...reports] : [];
+    return ids.length ? [...new Set(ids)] : [-1];
+  }
+  return [user?.teamMemberId ?? -1];
+}
 
 // Same session-header auth as routes.ts (x-session-id → session → active user);
 // local fallback because this module registers without touching routes.ts.
@@ -371,6 +409,7 @@ function localRequireAuth(req: Request, res: Response, next: NextFunction) {
 
 export function registerLeadRankingRoutes(app: Express, deps: LeadRankingRouteDeps = {}): void {
   const requireAuth = deps.requireAuth ?? localRequireAuth;
+  const visibilityScope = deps.visibilityScope ?? localVisibilityScope;
 
   // GET /api/leads/ranked?limit=100 — rep-facing: any authenticated field user.
   // Tenant-scoped read; no diagnostics, tokens, or proxy internals in the payload.
@@ -379,10 +418,15 @@ export function registerLeadRankingRoutes(app: Express, deps: LeadRankingRouteDe
       const rawLimit = Number(req.query.limit);
       const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.floor(rawLimit), 1), MAX_LIMIT) : DEFAULT_LIMIT;
       const tenantId = req.user?.tenantId ?? getDefaultTenantId() ?? undefined;
-      const leads = rankLeads(tenantId ?? undefined, limit);
+      // Same visibility scope as every other list endpoint: a rep ranks only
+      // their own book, a team_lead only their team's — never the whole org.
+      const scope = visibilityScope(req.user);
+      const leads = rankLeads(tenantId ?? undefined, limit, Date.now(), scope);
       res.json({ count: leads.length, limit, generatedAt: new Date().toISOString(), leads });
     } catch (e: any) {
-      res.status(500).json({ error: "Lead ranking failed", detail: String(e?.message ?? e).slice(0, 200) });
+      // Error hygiene: SQL/detail stays in the server log, never on the wire.
+      console.error("[leads/ranked] failed:", e instanceof Error ? e.message : e);
+      res.status(500).json({ error: "Lead ranking failed" });
     }
   });
 }

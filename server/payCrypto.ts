@@ -11,8 +11,27 @@
 
 import { decryptSensitive, encryptSensitive, encryptionKeyReady } from "./calling/crypto";
 
+// ── Key-id envelope ──────────────────────────────────────────────────────────
+// Pay-plane ciphertext is self-describing: v1.<kid>.iv.ct.tag, where kid names
+// the key slot that encrypted it (pay = PAY_CRYPTO_KEY, calling = the legacy
+// CALLING_DATA_ENCRYPTION_KEY fallback). Reads resolve the key FROM THE
+// ENVELOPE, so rotating PAY_CRYPTO_KEY in (or later rotating it again) never
+// strands rows written under a different slot. Rows written before the
+// envelope existed keep the legacy v1.iv.ct.tag shape and decrypt via the
+// CURRENT resolution — additive/back-compatible, no re-encryption migration.
+const KEY_BY_KID = { pay: "PAY_CRYPTO_KEY", calling: "CALLING_DATA_ENCRYPTION_KEY" } as const;
+type PayKeyId = keyof typeof KEY_BY_KID;
+const KID_BY_KEY: Record<string, PayKeyId> = { PAY_CRYPTO_KEY: "pay", CALLING_DATA_ENCRYPTION_KEY: "calling" };
+
+// The CURRENT write slot: PAY_CRYPTO_KEY when configured, else the calling
+// key so a single-secret install still boots.
 export function payKeyName(): string {
   return encryptionKeyReady("PAY_CRYPTO_KEY") ? "PAY_CRYPTO_KEY" : "CALLING_DATA_ENCRYPTION_KEY";
+}
+
+// The key id stamped on every NEW write (see the envelope above).
+export function payKeyId(): PayKeyId {
+  return KID_BY_KEY[payKeyName()];
 }
 
 export function paySecretsReady(): boolean {
@@ -20,10 +39,20 @@ export function paySecretsReady(): boolean {
 }
 
 export function encryptPaySecret(plaintext: string): string {
-  return encryptSensitive(plaintext, payKeyName());
+  const keyName = payKeyName();
+  const legacy = encryptSensitive(plaintext, keyName); // v1.iv.ct.tag
+  const [version, ...rest] = legacy.split(".");
+  return [version, KID_BY_KEY[keyName], ...rest].join(".");
 }
 
 export function decryptPaySecret(payload: string): string {
+  const parts = payload.split(".");
+  if (parts.length === 5 && parts[0] === "v1") {
+    const keyName = KEY_BY_KID[parts[1] as PayKeyId];
+    if (!keyName) throw new Error("Unsupported pay envelope key id");
+    return decryptSensitive(["v1", ...parts.slice(2)].join("."), keyName);
+  }
+  // Legacy v1.iv.ct.tag — resolve against the CURRENT write slot.
   return decryptSensitive(payload, payKeyName());
 }
 

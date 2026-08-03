@@ -44,7 +44,7 @@ function request(path: string, sessionId: string, init: RequestInit = {}) {
 }
 
 let TENANT_B = 0;
-let admin1: Fixture, mgr1: Fixture, rep1: Fixture, rep2: Fixture, mgr2: Fixture;
+let admin1: Fixture, mgr1: Fixture, rep1: Fixture, rep2: Fixture, mgr2: Fixture, adminB: Fixture;
 
 // A concrete, normal commission week: Mon Jun 8 – Sun Jun 14 2026 (America/New_York).
 const WEEK_REF = "2026-06-10T12:00:00Z";
@@ -91,6 +91,7 @@ beforeAll(async () => {
   rep1 = makePerson("Pay Rep One", "rep", 1);
   rep2 = makePerson("Pay Rep Two", "rep", 1);
   mgr2 = makePerson("Pay Mgr Two", "manager", TENANT_B);
+  adminB = makePerson("Pay Admin Bee", "admin", TENANT_B);
 
   inWeekTs = new Date(Date.parse(weekBoundsFor(WEEK_REF, DEFAULT_WORKWEEK).weekStartUtc) + 3 * 3_600_000).toISOString();
 
@@ -263,9 +264,10 @@ describe("company profile (ODFI)", () => {
 
 describe("NACHA export", () => {
   // The ACH export is DISARMED by default (server/payRoutes.ts): there is no
-  // payment ledger yet, so a repeated GET would re-pay a week, and the pay
-  // ciphertext carries no key identifier. These tests exercise the generator on
-  // purpose, so they turn the switch on for their own duration only.
+  // payment ledger yet, so a repeated GET would re-pay a week. These tests
+  // exercise the generator on purpose, so they turn the switch on for their
+  // own duration only. SEC-A fix 3: generating the file is money MOVEMENT, so
+  // the route sits behind payouts.pay — the requests below run as the admin.
   beforeAll(() => { process.env.ACH_EXPORT_ENABLED = "true"; });
   afterAll(() => { delete process.env.ACH_EXPORT_ENABLED; });
 
@@ -273,7 +275,7 @@ describe("NACHA export", () => {
     const prior = process.env.ACH_EXPORT_ENABLED;
     delete process.env.ACH_EXPORT_ENABLED;
     try {
-      const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr1.session);
+      const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, admin1.session);
       expect(res.status).toBe(503);
       expect((await res.json()).code).toBe("ACH_EXPORT_DISABLED");
     } finally {
@@ -282,7 +284,7 @@ describe("NACHA export", () => {
   });
 
   it("strict mode 409s with named exceptions when an approved-pay rep lacks bank/W-9", async () => {
-    const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr1.session);
+    const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, admin1.session);
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.code).toBe("PAY_ROSTER_INCOMPLETE");
@@ -292,7 +294,7 @@ describe("NACHA export", () => {
   });
 
   it("allowPartial=1 pays the payable set and names exclusions in the header", async () => {
-    const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}&allowPartial=1`, mgr1.session);
+    const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}&allowPartial=1`, admin1.session);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/plain");
     expect(res.headers.get("content-disposition")).toContain(".ach");
@@ -309,7 +311,7 @@ describe("NACHA export", () => {
     await request("/api/me/bank", rep2.session, { method: "PUT", body: JSON.stringify(BANK_BODY(REP2_ROUTING, "9988776655", "savings")) });
     await request("/api/me/w9", rep2.session, { method: "POST", body: JSON.stringify(W9_BODY("Pay Rep Two", "987654321")) });
 
-    const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr1.session);
+    const res = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, admin1.session);
     expect(res.status).toBe(200);
     expect(res.headers.get("x-nacha-total-cents")).toBe("175000");
     const text = await res.text();
@@ -382,9 +384,13 @@ describe("NACHA export", () => {
     expect(() => nachaSvc.buildNachaFile({ ...base, fileIdModifier: "AB" })).toThrowError(/fileIdModifier/);
   });
 
-  it("is capability-gated: reps get 403, managers in another tenant see an empty run", async () => {
+  it("is capability-gated: reps AND the manager read band get 403; another tenant's payouts.pay holder sees an empty run", async () => {
     expect((await request(`/api/pay/nacha?weekStart=${WEEK_START}`, rep1.session)).status).toBe(403);
-    const other = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr2.session);
+    // SEC-A fix 3: money movement is a WRITE cap — the commission.read.all
+    // oversight band no longer reaches the export, same tenant or not.
+    expect((await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr1.session)).status).toBe(403);
+    expect((await request(`/api/pay/nacha?weekStart=${WEEK_START}`, mgr2.session)).status).toBe(403);
+    const other = await request(`/api/pay/nacha?weekStart=${WEEK_START}`, adminB.session);
     expect(other.status).toBe(409); // tenant B has no company profile yet
     expect((await other.json()).code).toBe("COMPANY_PROFILE_MISSING");
     expect((await request(`/api/pay/1099-summary?year=2026`, rep1.session)).status).toBe(403);

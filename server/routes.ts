@@ -66,7 +66,7 @@ import { pointInPolygon, polygonCovers, BOUNDARY_EPSILON_DEG } from "@shared/geo
 import { padHull, subdivideCluster, convexHull } from "@shared/opportunity";
 import { can } from "@shared/permissions";
 import { isLeadMarkOrClear, normalizeLeadMark } from "@shared/leadMark";
-import { sameTenant } from "./tenantGuard";
+import { sameTenantRead, sameTenantWrite } from "./tenantGuard";
 import { canActOnMember, HIRABLE_ROLES as SHARED_HIRABLE_ROLES, wouldCreateReportsCycle, isValidSupervisorRole, hierarchyRank } from "@shared/teamHierarchy";
 import { unassignRep, reclaimTerritory, canRepTakeAnotherArea, territoryHeldByAny, territoryUnassigned, normalizeTerritoryColor, MAX_ACTIVE_AREAS_PER_REP, type ReclaimMode, type TerritoryState, type TerritoryStatus } from "@shared/territory";
 import { OUTCOME_TO_STATUS, OUTCOME_META, deriveWasHome, isKnockOutcome, isBulkStatusOutcome, type KnockOutcome } from "@shared/knock";
@@ -620,6 +620,19 @@ function repInCallerTenant(user: any, repId: number): boolean {
   return member.tenantId === user.tenantId;
 }
 
+// Tenancy of knock-booked money comes from the KNOCK ROW (itself derived from
+// the lead at insert) — NEVER from the caller's session. Falling back to the
+// requester's tenant cross-books a sale into whatever org the requester sits
+// in. The adopted-row default is the only legitimate NULL fallback; when even
+// that is absent the sale is unbookable (the route answers 409, never a
+// cross-tenant booking).
+export function resolveKnockSaleTenant(
+  knockTenantId: number | null | undefined,
+  defaultTenantId: number | null,
+): number | null {
+  return knockTenantId ?? defaultTenantId ?? null;
+}
+
 // ── Sanitize fiber result — strip proprietary vendor fields before sending to client ──
 function evidenceBackedVerdict(r: any, persisted?: PersistKineticObservationResult | null) {
   const primary = decideFreshFiber(r);
@@ -1079,7 +1092,7 @@ export function registerRoutes(_httpServer: Server, app: Express) {
   });
   // Coming-Soon watchlist (rep-facing) + ranked fresh leads — same injected-auth pattern.
   registerComingSoonRoutes(app, { requireAuth, requireManager });
-  registerLeadRankingRoutes(app, { requireAuth });
+  registerLeadRankingRoutes(app, { requireAuth, visibilityScope: leadVisibilityScope });
 
   // ── Weekly commission (Phase 2) internal API — injects the shared auth
   // middleware so authorization matches the rest of the app. ────────────────────
@@ -2203,6 +2216,14 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       if (ALLOWED_LEAD_FIELDS.has(k)) safeUpdate[k] = k === "assignMark" ? normalizeLeadMark(v) : v;
     }
     const tid = (req as any).user?.tenantId ?? undefined;
+    // Assignment through the PATCH allowlist must pass the SAME tenant
+    // validation as /api/leads/:id/assign and bulk-assign — a foreign member id
+    // is a 404, never a cross-tenant hand-off.
+    if (Object.prototype.hasOwnProperty.call(safeUpdate, "assignedRepId") && safeUpdate.assignedRepId != null) {
+      const targetRep = Number(safeUpdate.assignedRepId);
+      if (!Number.isInteger(targetRep) || targetRep <= 0) return res.status(400).json({ error: "Invalid assignedRepId" });
+      if (!repInCallerTenant((req as any).user, targetRep)) return res.status(404).json({ error: "Rep not found" });
+    }
     // REVIEWER GATE (fin #3 / authz #2): a manager status edit advances the
     // outcome clock — without it, a stale offline knock could clobber the
     // manager's newer decision via the CAS.
@@ -4731,6 +4752,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // Scope: a team_lead may only target their own reps and may not steal
     // another team's lead. Admin/manager pass.
     if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    // Tenant: the target rep must belong to the caller's org — a foreign member
+    // id is indistinguishable from a missing one (same 404 the territory
+    // lifecycle routes return), never a cross-tenant assignment.
+    if (repId != null && !repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
     const existingLead = storage.getLeadById(Number(req.params.id));
     if (existingLead && (tid == null || existingLead.tenantId === tid) && !canReassignLead(user, existingLead)) {
       return res.status(403).json({ error: "That lead belongs to another team", code: "OUT_OF_SCOPE" });
@@ -4771,6 +4796,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     if (repId != null && !repInVisibilityScope(user, Number(repId))) return res.status(403).json({ error: "That rep is not on your team", code: "OUT_OF_SCOPE" });
+    // Tenant: the target rep must belong to the caller's org (the scope check
+    // alone passes for admin/manager, whose scope is org-wide) — a foreign
+    // member id must never receive this tenant's doors.
+    if (repId != null && !repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
     const assignedAt = repId ? new Date().toISOString() : null;
     const assignedBy = repId ? (user?.name ?? null) : null;
     const repName = repId ? (storage.getTeamMemberById(Number(repId))?.name ?? `rep #${repId}`) : null;
@@ -4903,8 +4932,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
         const id = Number(raw);
         const lead = storage.getLeadById(id);
         // Skip cross-tenant / out-of-scope leads silently (don't leak, don't act);
-        // sameTenant is the shared tenant wall, canReassignLead the bulk-assign scope.
-        if (!sameTenant(lead, tid) || !canReassignLead(user, lead!)) { skipped++; continue; }
+        // sameTenantWrite is the shared WRITE wall (a NULL-tenant lead is a
+        // default-org-admin write), canReassignLead the bulk-assign scope.
+        if (!sameTenantWrite(lead, user, getDefaultTenantId()) || !canReassignLead(user, lead!)) { skipped++; continue; }
         if (storage.updateLead(id, { assignMark: value } as any, tid)) { updated++; changed.push(id); }
       }
       return { updated, skipped, changed };
@@ -5193,7 +5223,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const u = (req as any).user;
     const lead = storage.getLeadById(Number(req.params.id));
     if (!lead) return res.status(404).json({ error: "Not found" });
-    if (u?.role !== "super_admin" && u?.tenantId != null && lead.tenantId != null && lead.tenantId !== u.tenantId) {
+    // WRITE wall (see tenantGuard.sameTenantWrite): a NULL-tenant lead is a
+    // default-org adopted row — only a default-tenant admin (or super_admin)
+    // may disposition it; every other tenant gets the same 404 as a foreign id.
+    if (!sameTenantWrite(lead, u, getDefaultTenantId())) {
       return res.status(404).json({ error: "Not found" });
     }
     if (!isKnockOutcome(req.body?.outcome)) return res.status(400).json({ error: "invalid outcome" });
@@ -5201,11 +5234,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const newStatus = OUTCOME_TO_STATUS[outcome];
     const prevStatus = lead.leadStatus ?? null;
     const at = new Date().toISOString();
+    // Scope the write by the LEAD's own tenant (NULL for adopted rows) — the
+    // wall above already authorized this actor; filtering by the caller's
+    // tenant would silently no-op on a NULL-tenant lead a default-org admin
+    // was explicitly allowed to disposition.
     const updated = storage.updateLead(lead.id, {
       leadStatus: newStatus,
       lastOutcome: outcome,
       lastOutcomeAt: at,
-    } as any, u?.tenantId ?? undefined);
+    } as any, lead.tenantId ?? undefined);
     if (!updated) return res.status(500).json({ error: "Update failed" });
     // A central mark MUST appear in History as "Central Admin marked [status]" —
     // NEVER a rep's name. The old code stamped a knock with a DERIVED rep id
@@ -5249,7 +5286,10 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     {
       const _knl = storage.getLeadById(Number(req.params.id));
       if (!_knl) return res.status(404).json({ error: "Not found" });
-      if (_knu?.role !== "super_admin" && _knu?.tenantId != null && _knl.tenantId != null && _knl.tenantId !== _knu.tenantId) {
+      // WRITE wall (tenantGuard.sameTenantWrite): knocking a NULL-tenant lead
+      // flips its status AND books money, so it is a default-org-admin write —
+      // a foreign tenant's rep/manager gets the same 404 as a foreign id.
+      if (!sameTenantWrite(_knl, _knu, getDefaultTenantId())) {
         return res.status(404).json({ error: "Not found" });
       }
       // Reps can only log knocks on leads assigned to them
@@ -5272,8 +5312,13 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       }
       // ── WEEKLY COMMISSION ENGINE (authoritative pay system) ────────────────
       if (!sup && knockRow.repId) {
-        const saleTenant = knockRow.tenantId ?? (req as any).user?.tenantId ?? getDefaultTenantId();
-        if (saleTenant != null) {
+        const saleTenant = resolveKnockSaleTenant(knockRow.tenantId, getDefaultTenantId());
+        if (saleTenant == null) {
+          const err: any = new Error("Knock has no resolvable tenant — refusing to book money");
+          err.code = "KNOCK_TENANT_UNRESOLVABLE";
+          throw err;
+        }
+        {
           if (outcome === "sold") {
             commissionSvc.recordFieldSaleFromKnock({
               tenantId: saleTenant, repId: knockRow.repId, leadId,
@@ -5464,6 +5509,12 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     try {
       superseded = runMoneyBundle(Number(req.params.id), knock, parsed.data.outcome as KnockOutcome, knockedAtTs).immediate();
     } catch (e: any) {
+      // An unbookable tenant is a CONFLICT, not a transient failure — retrying
+      // can never fix it, and booking into the caller's org is exactly the
+      // cross-tenant money move this guard exists to refuse.
+      if (e?.code === "KNOCK_TENANT_UNRESOLVABLE") {
+        return res.status(409).json({ error: "This door has no resolvable organization — the sale was not booked.", code: "KNOCK_TENANT_UNRESOLVABLE" });
+      }
       // The bundle is atomic — a money-engine failure rolls the CAS back too,
       // so nothing is half-applied. The knock row stands as history; the client
       // retry re-runs the whole bundle idempotently.
@@ -5548,11 +5599,23 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const knock = storage.getKnockById(Number(req.params.id));
     if (!knock) return res.status(404).json({ error: "Not found" });
     // Tenant wall for EVERY role (this is a WRITE and the row carries rep GPS):
-    // resolve the knock's lead and 404 across tenants.
+    // resolve the knock's lead and 404 across tenants. A DANGLING leadId (lead
+    // since removed) must never SKIP the wall — fall back to the knock row's
+    // own tenant, which createKnock stamped from the lead at insert.
     const _ktid = user?.tenantId;
     const _klead = knock.leadId != null ? storage.getLeadById(knock.leadId) : null;
-    if (_ktid && _klead && _klead.tenantId !== _ktid) return res.status(404).json({ error: "Not found" });
+    const _kwallTenant = _klead ? _klead.tenantId : ((knock as any).tenantId ?? null);
+    if (_ktid && _kwallTenant !== _ktid) return res.status(404).json({ error: "Not found" });
     if (user?.role === "rep" && knock.repId !== user.teamMemberId) return res.status(404).json({ error: "Not found" });
+    // Team scope for a team_lead (mirrors the assign/territory write guards):
+    // only knocks recorded by THEIR OWN team's reps are annotatable — never
+    // another team's field history. Manager/admin pass (undefined scope).
+    if (user?.role === "team_lead") {
+      const scope = leadVisibilityScope(user);
+      if (!Array.isArray(scope) || knock.repId == null || !scope.includes(knock.repId)) {
+        return res.status(404).json({ error: "Not found" });
+      }
+    }
     const updated = storage.updateKnockNotes(knock.id, notes);
     // The lead row did not change, but the card's History did. Guarded on
     // knock.leadId: an orphaned knock has no door to address the event to, and
@@ -5582,7 +5645,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const leadId = Number(req.params.leadId);
     const lead = storage.getLeadById(leadId);
-    if (!lead || (user?.role !== "super_admin" && user?.tenantId != null && lead.tenantId !== user.tenantId) || !repCanAccessLead(user, lead)) {
+    // WRITE wall (tenantGuard.sameTenantWrite): claiming locks the record, so a
+    // NULL-tenant lead is a default-org-admin write — invisible to other tenants.
+    if (!lead || !sameTenantWrite(lead, user, getDefaultTenantId()) || !repCanAccessLead(user, lead)) {
       return res.status(404).json({ error: "Not found" });
     }
     const result = readyToCall.claimLead({ tenantId: user.tenantId, leadId, userId: user.id, userName: user.name });
@@ -5612,7 +5677,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const leadId = Number(req.params.leadId);
     const lead = storage.getLeadById(leadId);
-    if (!lead || (user?.role !== "super_admin" && user?.tenantId != null && lead.tenantId !== user.tenantId) || !repCanAccessLead(user, lead)) {
+    // WRITE wall (tenantGuard.sameTenantWrite): an outcome flips lead state, so
+    // a NULL-tenant lead is a default-org-admin write — invisible to other tenants.
+    if (!lead || !sameTenantWrite(lead, user, getDefaultTenantId()) || !repCanAccessLead(user, lead)) {
       return res.status(404).json({ error: "Not found" });
     }
     const { outcome, notes, callbackDate, callbackTime, dialedE164, clientId } = req.body ?? {};
@@ -6045,6 +6112,15 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!Number.isInteger(tenantId)) return res.status(403).json({ error: "Organization context required" });
     const memberError = validateLoginTeamMember(teamMemberId, tenantId);
     if (memberError) return res.status(409).json(memberError);
+    // P0-1 (K3 swarm): nobody may claim a platform-apex email — same rule the
+    // PATCH path enforces. Without it a tenant admin could CREATE a fresh login
+    // on an apex email and inherit platform ownership at the next boot stamp.
+    {
+      const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
+      if (apex.includes(email) && !(req as any).user?.isSuperAdmin) {
+        return res.status(403).json({ error: "That email is reserved for platform ownership", code: "LOGIN_EMAIL_RESERVED" });
+      }
+    }
     const existing = storage.getUserByEmail(email);
     if (existing) return res.status(409).json({ error: "Email already in use" });
     // New account always joins the creating admin's org. The membership check
@@ -6079,10 +6155,37 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     // P0-1 (K3 swarm): nobody may claim a platform-apex email. The apex lives in
     // the immutable is_super_admin column now; setting one of the apex emails on
     // any account is reserved for an existing apex admin only.
+    const apexEmails = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
     if (safeUpdate.email && typeof safeUpdate.email === "string") {
-      const apex = (process.env.SUPER_ADMIN_EMAILS ?? "muizzm21@gmail.com").split(",").map(e => e.trim().toLowerCase());
-      if (apex.includes(safeUpdate.email.trim().toLowerCase()) && !(req as any).user?.isSuperAdmin) {
-        return res.status(403).json({ error: "That email is reserved for platform ownership" });
+      if (apexEmails.includes(safeUpdate.email.trim().toLowerCase()) && !(req as any).user?.isSuperAdmin) {
+        return res.status(403).json({ error: "That email is reserved for platform ownership", code: "LOGIN_EMAIL_RESERVED" });
+      }
+    }
+    // APEX IMMUTABILITY: a super-admin row is platform ownership, not org data.
+    // No tenant admin (and no apex acting on themselves through this org-scoped
+    // surface) may demote it, move its email, or switch it off.
+    //   • role change → always blocked. A demoted apex keeps is_super_admin=1
+    //     while losing the admin role the gate pairs it with — a half-apex row.
+    //   • email change → always blocked. Re-emailing apex away would erase the
+    //     ownership stamp at the NEXT boot (the stamp is authoritative on the
+    //     env list), so the re-email path itself must not exist.
+    //   • deactivation → allowed only from a DIFFERENT super admin (multi-apex
+    //     deployments); a single-apex deployment can never deactivate its apex
+    //     here, so the platform can never be left ownerless by one request.
+    if ((target as any).isSuperAdmin) {
+      if (safeUpdate.role !== undefined && safeUpdate.role !== target.role) {
+        return res.status(409).json({ error: "A platform super admin's role cannot be changed here.", code: "APEX_IMMUTABLE" });
+      }
+      if (safeUpdate.email !== undefined
+        && String(safeUpdate.email).trim().toLowerCase() !== String(target.email).trim().toLowerCase()) {
+        return res.status(409).json({ error: "A platform super admin's email cannot be changed here.", code: "APEX_IMMUTABLE" });
+      }
+      if (Object.prototype.hasOwnProperty.call(safeUpdate, "active") && !safeUpdate.active) {
+        const actor = (req as any).user;
+        const differentApex = apexEmails.length >= 2 && !!actor?.isSuperAdmin && actor?.id !== target.id;
+        if (!differentApex) {
+          return res.status(409).json({ error: "A platform super admin cannot be deactivated here.", code: "APEX_IMMUTABLE" });
+        }
       }
     }
     // Validate role if provided
@@ -6255,8 +6358,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     if (!can(user?.role, "reset_territory_pass")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
     // 404 not 403 on a foreign area: a manager should not be able to probe which
-    // territory ids exist in another org.
-    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // territory ids exist in another org. A NULL-tenant (adopted) area reads as
+    // owned by the DEFAULT tenant — invisible to every other org.
+    if (!t || !sameTenantRead(t, user?.tenantId ?? null, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
 
     const keepPendingCallbacks = req.query.keepPendingCallbacks === "true";
     const preview = previewNextPass(t.id, tid ?? null, { keepPendingCallbacks });
@@ -6277,7 +6381,9 @@ export function registerRoutes(_httpServer: Server, app: Express) {
       return res.status(403).json({ error: "not allowed" });
     }
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // WRITE wall: closing a pass rewrites an entire area's outcomes, so a
+    // NULL-tenant (adopted) area is default-org-admin only (sameTenantWrite).
+    if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
 
     const action: TerritoryPassAction = isTerritoryPassAction(req.body?.territoryAction)
       ? req.body.territoryAction : "keep";
@@ -6400,7 +6506,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // NULL-tenant (adopted) areas read as owned by the DEFAULT tenant.
+    if (!t || !sameTenantRead(t, user?.tenantId ?? null, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     if (!canManageTerritory(user, t)) return res.status(403).json({ error: "not your area" });
     res.json({
       currentPass: currentPassOf(t.id),
@@ -6472,7 +6579,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     if (!can(user?.role, "reclaim_territory")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // WRITE wall: a NULL-tenant (adopted) area is default-org-admin only.
+    if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     // Scope, not rank, is what keeps a team lead honest here: they may pull back
     // an area their OWN reps hold, never one belonging to another team. Managers
     // and admins have an undefined scope and pass straight through.
@@ -6570,7 +6678,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     if (!can(user?.role, "assign_territory")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && t.tenantId != null && t.tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // WRITE wall: a NULL-tenant (adopted) area is default-org-admin only.
+    if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     // Scope: a team_lead may only manage their own areas + assign to their own reps
     // (mirrors /assign-area). Prevents cross-team territory hijack + lead vacuuming.
     if (!canManageTerritory(user, t)) return res.status(404).json({ error: "not found" });
@@ -6622,7 +6731,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // WRITE wall: a NULL-tenant (adopted) area is default-org-admin only.
+    if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     // Every other team_lead-reachable territory route (PATCH/DELETE/assign/history)
     // gates on ownership; this one did not, so a lead could complete a RIVAL
     // team's active area and stamp a market-learning outcome from work they
@@ -6644,7 +6754,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const tid = user?.tenantId ?? undefined;
     if (!can(user?.role, "assign_territory")) return res.status(403).json({ error: "not allowed" });
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // WRITE wall: a NULL-tenant (adopted) area is default-org-admin only.
+    if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     // The target reps were already scoped below, but the AREA was not: without
     // this a team lead could share another team's area to their own reps, which
     // is a territory grab wearing an assignment's clothes.
@@ -6817,7 +6928,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const user = (req as any).user;
     const tid = user?.tenantId ?? undefined;
     const t = storage.getTerritoryById(Number(req.params.id));
-    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid)) return res.status(404).json({ error: "not found" });
+    // WRITE wall: a NULL-tenant (adopted) area is default-org-admin only.
+    if (!t || !sameTenantWrite(t, user, getDefaultTenantId())) return res.status(404).json({ error: "not found" });
     const at = new Date().toISOString();
     const outcome = scanSvc.recordTerritoryOutcome(tid ?? getDefaultTenantId(), t.id, (t as any).createdAt ?? null);
     storage.updateTerritory(t.id, { status: "archived", archivedAt: at, updatedAt: at, outcomeSnapshot: outcome ? JSON.stringify(outcome) : null } as any, tid);
@@ -6831,7 +6943,8 @@ export function registerRoutes(_httpServer: Server, app: Express) {
     const t = storage.getTerritoryById(Number(req.params.id));
     // Tenant + scope guard — the event log carries rep ids + outcome numbers; a
     // team_lead may only read areas they manage (sibling lifecycle routes do the same).
-    if (!t || (tid && (t as any).tenantId != null && (t as any).tenantId !== tid) || !canManageTerritory((req as any).user, t)) {
+    // A NULL-tenant (adopted) area reads as owned by the DEFAULT tenant.
+    if (!t || !sameTenantRead(t, tid ?? null, getDefaultTenantId()) || !canManageTerritory((req as any).user, t)) {
       return res.status(404).json({ error: "Not found" });
     }
     res.json(storage.getTerritoryEvents(Number(req.params.id)));
@@ -8249,6 +8362,13 @@ export function registerSaasRoutes(app: any) {
     const { repId, leadId, knockId, amount, saleDate, notes } = req.body;
     if (!repId || !amount || !saleDate) return res.status(400).json({ error: "repId, amount, saleDate required" });
     if (!repInCallerTenant(user, Number(repId))) return res.status(404).json({ error: "Rep not found" });
+    // Self-deal guard (mirrors the hourly punch-correction pattern): a manager
+    // linked to a team member may not BOOK money for themselves — another
+    // manager (or the admin holding payouts.pay) must do it.
+    if (user?.teamMemberId != null && Number(user.teamMemberId) === Number(repId)
+      && !hasCapability(user.role, "payouts.pay")) {
+      return res.status(403).json({ error: "You cannot book a commission for yourself", code: "COMMISSION_SELF_DEAL" });
+    }
     const comm = storage.createCommission({ repId, leadId, knockId, amount, saleDate, notes, status: "pending", approvedBy: null, paidDate: null });
     // REVIEWER GATE: if the unique index returned a PRE-EXISTING pending row,
     // say so — never audit a phantom creation with the manager's values.
@@ -8272,7 +8392,8 @@ export function registerSaasRoutes(app: any) {
     if (!parsedId.success) return res.status(400).json({ error: "Invalid commission ID" });
     // Resolve tenant ownership before validating the mutation body so a foreign
     // identifier remains indistinguishable from a missing commission.
-    if (!storage.getCommissionById(parsedId.data, tenantId)) {
+    const commission = storage.getCommissionById(parsedId.data, tenantId);
+    if (!commission) {
       return res.status(404).json({ error: "Not found" });
     }
     const parsed = z.object({
@@ -8284,6 +8405,17 @@ export function registerSaasRoutes(app: any) {
     }).strict().safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid commission update", details: parsed.error.flatten() });
+    }
+    // Self-deal guard (mirrors the hourly punch-correction pattern): a manager
+    // linked to a team member may not APPROVE or PAY their OWN commission row —
+    // approval/payment of self-booked money needs a second pair of hands (or
+    // the admin holding payouts.pay). Dispute/note movement on own rows stays
+    // allowed; booking money for OTHERS is unaffected.
+    if ((parsed.data.status === "approved" || parsed.data.status === "paid")
+      && user?.teamMemberId != null && commission.repId != null
+      && Number(user.teamMemberId) === Number(commission.repId)
+      && !hasCapability(user.role, "payouts.pay")) {
+      return res.status(403).json({ error: "You cannot approve or pay your own commission", code: "COMMISSION_SELF_DEAL" });
     }
     const result = storage.transitionLegacyCommission({
       id: parsedId.data,
